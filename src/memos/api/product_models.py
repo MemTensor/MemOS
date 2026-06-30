@@ -1246,6 +1246,72 @@ class MemOSGetKnowledgebaseFileResponse(BaseModel):
         return self.data.file_detail_list
 
 
+class ListKnowledgebaseData(BaseModel):
+    """Data model for list knowledgebase response based on actual API.
+
+    Schema kept loose (`extra="allow"`) so the SDK does not break if the
+    server adds new fields.
+    """
+
+    model_config = {"extra": "allow"}
+
+    knowledgebase_list: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="knowledgebase_list",
+        description="List of knowledgebase summaries",
+    )
+    total: int | None = Field(
+        None, description="Total knowledgebase count if returned by the server"
+    )
+    page: int | None = Field(None, description="Current page index (1-based) if returned")
+    size: int | None = Field(None, description="Page size if returned")
+
+
+class MemOSListKnowledgebaseResponse(BaseModel):
+    """Response model for list knowledgebase operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: ListKnowledgebaseData = Field(..., description="List results data")
+
+    @property
+    def knowledgebases(self) -> list[dict[str, Any]]:
+        """Convenient access to knowledgebase list."""
+        return self.data.knowledgebase_list
+
+
+class ListKnowledgebaseFileData(BaseModel):
+    """Data model for list knowledgebase-file response based on actual API.
+
+    Reuses the loose `FileDetail` model so the SDK stays compatible with
+    new server-side fields.
+    """
+
+    model_config = {"extra": "allow"}
+
+    file_detail_list: list[FileDetail] = Field(
+        default_factory=list,
+        alias="file_detail_list",
+        description="List of file details inside the knowledgebase",
+    )
+    total: int | None = Field(None, description="Total file count if returned by the server")
+    page: int | None = Field(None, description="Current page index (1-based) if returned")
+    size: int | None = Field(None, description="Page size if returned")
+
+
+class MemOSListKnowledgebaseFileResponse(BaseModel):
+    """Response model for list knowledgebase-file operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: ListKnowledgebaseFileData = Field(..., description="List results data")
+
+    @property
+    def files(self) -> list[FileDetail]:
+        """Convenient access to file list."""
+        return self.data.file_detail_list
+
+
 class MemOSAddResponse(BaseModel):
     """Response model for add message operation based on actual API."""
 

@@ -18,6 +18,8 @@ from memos.api.product_models import (
     MemOSGetMemoryResponse,
     MemOSGetMessagesResponse,
     MemOSGetTaskStatusResponse,
+    MemOSListKnowledgebaseFileResponse,
+    MemOSListKnowledgebaseResponse,
     MemOSSearchResponse,
 )
 from memos.log import get_logger
@@ -64,6 +66,14 @@ class MemOSClient:
         for param_name, param_value in params.items():
             if not param_value:
                 raise ValueError(f"{param_name} is required")
+
+    @staticmethod
+    def _validate_page_size(*, page: int, size: int, max_size: int = 100) -> None:
+        """Validate 1-based pagination params used by knowledgebase list endpoints."""
+        if not isinstance(page, int) or page < 1:
+            raise ValueError("page must be an integer >= 1")
+        if not isinstance(size, int) or size < 1 or size > max_size:
+            raise ValueError(f"size must be an integer in [1, {max_size}]")
 
     def get_message(
         self,
@@ -414,6 +424,96 @@ class MemOSClient:
                 return MemOSGetKnowledgebaseFileResponse(**response_data)
             except Exception as e:
                 logger.error(f"Failed to get knowledgebase-file (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def list_knowledgebases(
+        self, page: int = 1, size: int = 10
+    ) -> MemOSListKnowledgebaseResponse | None:
+        """
+        List knowledgebases owned by the authenticated caller.
+
+        Issue #1382 — adds the missing list endpoint so callers can enumerate
+        KB ids without having to remember them out of band.
+
+        Args:
+            page: 1-based page index. Must be >= 1.
+            size: Page size. Must be in [1, 100].
+
+        Returns:
+            ``MemOSListKnowledgebaseResponse`` on success, or ``None`` if all
+            retries were exhausted (the underlying exception is re-raised on
+            the final retry, mirroring the rest of this client).
+        """
+        # Validate pagination
+        self._validate_page_size(page=page, size=size)
+
+        url = f"{self.base_url}/list/knowledgebase"
+        payload = {
+            "page": page,
+            "size": size,
+        }
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.post(
+                    url, data=json.dumps(payload), headers=self.headers, timeout=30
+                )
+                response.raise_for_status()
+                response_data = response.json()
+
+                return MemOSListKnowledgebaseResponse(**response_data)
+            except Exception as e:
+                logger.error(f"Failed to list knowledgebase (retry {retry + 1}/3): {e}")
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
+    def list_knowledgebase_documents(
+        self,
+        knowledgebase_id: str,
+        page: int = 1,
+        size: int = 10,
+    ) -> MemOSListKnowledgebaseFileResponse | None:
+        """
+        List documents (files) inside a knowledgebase.
+
+        Issue #1382 — many downstream use cases (bulk delete, UI listing,
+        verifying ingest) need to enumerate the files of a KB without
+        knowing each ``file_id`` ahead of time.
+
+        Args:
+            knowledgebase_id: target knowledgebase identifier.
+            page: 1-based page index. Must be >= 1.
+            size: Page size. Must be in [1, 100].
+
+        Returns:
+            ``MemOSListKnowledgebaseFileResponse`` on success, or ``None``
+            if all retries were exhausted (the underlying exception is
+            re-raised on the final retry).
+        """
+        # Validate required parameters
+        self._validate_required_params(knowledgebase_id=knowledgebase_id)
+        # Validate pagination
+        self._validate_page_size(page=page, size=size)
+
+        url = f"{self.base_url}/list/knowledgebase-file"
+        payload = {
+            "knowledgebase_id": knowledgebase_id,
+            "page": page,
+            "size": size,
+        }
+
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.post(
+                    url, data=json.dumps(payload), headers=self.headers, timeout=30
+                )
+                response.raise_for_status()
+                response_data = response.json()
+
+                return MemOSListKnowledgebaseFileResponse(**response_data)
+            except Exception as e:
+                logger.error(f"Failed to list knowledgebase-file (retry {retry + 1}/3): {e}")
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
