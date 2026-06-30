@@ -340,9 +340,83 @@ export async function summarizeBedrock(
 
 // ─── Smart Dedup ───
 
-import { DEDUP_JUDGE_PROMPT, parseDedupResult } from "./openai";
-import type { DedupResult } from "./openai";
+import { DEDUP_JUDGE_PROMPT, parseDedupResult, parseTopicClassifyResult, TOPIC_CLASSIFIER_PROMPT, TOPIC_ARBITRATION_PROMPT } from "./openai";
+import type { DedupResult, TopicClassifyResult } from "./openai";
 export type { DedupResult } from "./openai";
+
+export async function classifyTopicBedrock(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<TopicClassifyResult> {
+  const model = cfg.model ?? "anthropic.claude-3-haiku-20240307-v1:0";
+  const endpoint = cfg.endpoint;
+  if (!endpoint) throw new Error("Bedrock topic-classifier requires 'endpoint'");
+
+  const url = `${endpoint}/model/${model}/converse`;
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...cfg.headers };
+
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      system: [{ text: TOPIC_CLASSIFIER_PROMPT }],
+      messages: [{ role: "user", content: [{ text: userContent }] }],
+      inferenceConfig: { temperature: 0, maxTokens: 60 },
+    }),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Bedrock topic-classifier failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { output: { message: { content: Array<{ text: string }> } } };
+  const raw = json.output?.message?.content?.[0]?.text?.trim() ?? "";
+  log.debug(`Topic classifier raw: "${raw}"`);
+  return parseTopicClassifyResult(raw, log);
+}
+
+export async function arbitrateTopicSplitBedrock(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<string> {
+  const model = cfg.model ?? "anthropic.claude-3-haiku-20240307-v1:0";
+  const endpoint = cfg.endpoint;
+  if (!endpoint) throw new Error("Bedrock topic-arbitration requires 'endpoint'");
+
+  const url = `${endpoint}/model/${model}/converse`;
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...cfg.headers };
+
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      system: [{ text: TOPIC_ARBITRATION_PROMPT }],
+      messages: [{ role: "user", content: [{ text: userContent }] }],
+      inferenceConfig: { temperature: 0, maxTokens: 10 },
+    }),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Bedrock topic-arbitration failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { output: { message: { content: Array<{ text: string }> } } };
+  const answer = json.output?.message?.content?.[0]?.text?.trim().toUpperCase() ?? "";
+  log.debug(`Topic arbitration result: "${answer}"`);
+  return answer.startsWith("NEW") ? "NEW" : "SAME";
+}
 
 export async function judgeDedupBedrock(
   newSummary: string,
