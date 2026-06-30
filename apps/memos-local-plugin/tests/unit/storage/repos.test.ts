@@ -102,6 +102,7 @@ describe("storage/repos — happy paths", () => {
           tags: [],
           vecSummary: vec([i, 0]),
           vecAction: null,
+          turnId: 0 as never,
           schemaVersion: 1,
         });
       }
@@ -119,6 +120,18 @@ describe("storage/repos — happy paths", () => {
       repos.traces.updateScore("t0", { value: -0.5, alpha: 0.6, priority: 1.5 });
       expect(repos.traces.getById("t0")!.value).toBe(-0.5);
       expect(repos.traces.getById("t0")!.priority).toBe(1.5);
+
+      // hasAnyNewerThan: cheap exists-check used by the startup
+      // dirty-closed-episode scan in memory-core.init().
+      // Regression guard for https://github.com/MemTensor/MemOS/issues/1787:
+      // the old code path called `getManyByIds(...).some(tr => tr.ts > ts)`,
+      // which hydrated every BLOB column for every trace into Node memory.
+      expect(repos.traces.hasAnyNewerThan(["t0", "t1", "t2"], 5)).toBe(true);
+      // Boundary: ts must be STRICTLY greater than the watermark.
+      expect(repos.traces.hasAnyNewerThan(["t0"], 10)).toBe(false);
+      expect(repos.traces.hasAnyNewerThan(["t2"], 29)).toBe(true);
+      expect(repos.traces.hasAnyNewerThan([], 0)).toBe(false);
+      expect(repos.traces.hasAnyNewerThan(["missing-id"], 0)).toBe(false);
     } finally {
       cleanup();
     }
@@ -139,6 +152,7 @@ describe("storage/repos — happy paths", () => {
         status: "candidate",
         sourceEpisodeIds: [],
         inducedBy: "proto",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
@@ -155,6 +169,7 @@ describe("storage/repos — happy paths", () => {
         status: "active",
         sourceEpisodeIds: [],
         inducedBy: "proto",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
@@ -175,6 +190,16 @@ describe("storage/repos — happy paths", () => {
         statusIn: ["active"],
       });
       expect(hits.map((h) => h.id)).toEqual(["p_active"]);
+
+      const textHits = repos.policies.searchByText('"active"', 5, {
+        statusIn: ["active"],
+      });
+      expect(textHits.map((h) => h.id)).toEqual(["p_active"]);
+
+      const patternHits = repos.policies.searchByPattern(["act"], 5, {
+        statusIn: ["active"],
+      });
+      expect(patternHits.map((h) => h.id)).toEqual(["p_active"]);
     } finally {
       cleanup();
     }
@@ -196,9 +221,11 @@ describe("storage/repos — happy paths", () => {
         trialsPassed: 0,
         sourcePolicyIds: [],
         sourceWorldModelIds: [],
+        evidenceAnchors: [],
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
+        version: 1,
       });
 
       expect(() =>
@@ -215,16 +242,18 @@ describe("storage/repos — happy paths", () => {
           trialsPassed: 0,
           sourcePolicyIds: [],
           sourceWorldModelIds: [],
+          evidenceAnchors: [],
           vec: null,
           createdAt: 1,
           updatedAt: 1,
+          version: 1,
         }),
       ).toThrow(/UNIQUE/i);
 
       const after = repos.skills.bumpTrial("sk1", true, 2);
-      expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 1 });
+      expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 0.5 });
       const after2 = repos.skills.bumpTrial("sk1", false, 3);
-      expect(after2.eta).toBeCloseTo(0.5);
+      expect(after2.eta).toBeCloseTo(1 / 3, 5);
     } finally {
       cleanup();
     }
@@ -299,6 +328,7 @@ describe("storage/repos — happy paths", () => {
         status: "candidate",
         sourceEpisodeIds: [],
         inducedBy: "",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: null,
         createdAt: 0,
         updatedAt: 0,

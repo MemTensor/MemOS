@@ -6,17 +6,29 @@
 import type { AgentKind, SessionId } from "../../types.js";
 import type { StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
-import { fromJsonText, toJsonText } from "./_helpers.js";
+import { fromJsonText, ownerFieldsFromRaw, ownerParamsFromRow, toJsonText } from "./_helpers.js";
 
 export interface SessionRow {
   id: SessionId;
   agent: AgentKind;
+  ownerAgentKind?: AgentKind;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
   startedAt: number;
   lastSeenAt: number;
   meta: Record<string, unknown>;
 }
 
-const COLUMNS = ["id", "agent", "started_at", "last_seen_at", "meta_json"];
+const COLUMNS = [
+  "id",
+  "agent",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
+  "started_at",
+  "last_seen_at",
+  "meta_json",
+];
 
 export function makeSessionsRepo(db: StorageDb) {
   const insert = db.prepare(
@@ -26,10 +38,10 @@ export function makeSessionsRepo(db: StorageDb) {
     buildUpdate({ table: "sessions", columns: ["id", "last_seen_at", "meta_json"] }),
   );
   const selectById = db.prepare<{ id: string }, RawSessionRow>(
-    `SELECT id, agent, started_at, last_seen_at, meta_json FROM sessions WHERE id=@id`,
+    `SELECT ${COLUMNS.join(", ")} FROM sessions WHERE id=@id`,
   );
   const selectRecent = db.prepare<{ limit: number }, RawSessionRow>(
-    `SELECT id, agent, started_at, last_seen_at, meta_json FROM sessions ORDER BY last_seen_at DESC LIMIT @limit`,
+    `SELECT ${COLUMNS.join(", ")} FROM sessions ORDER BY last_seen_at DESC LIMIT @limit`,
   );
   const deleteOlderThan = db.prepare<{ cutoff: number }>(
     `DELETE FROM sessions WHERE last_seen_at < @cutoff`,
@@ -40,6 +52,7 @@ export function makeSessionsRepo(db: StorageDb) {
       insert.run({
         id: row.id,
         agent: row.agent,
+        ...ownerParamsFromRow(row),
         started_at: row.startedAt,
         last_seen_at: row.lastSeenAt,
         meta_json: toJsonText(row.meta ?? {}),
@@ -76,6 +89,9 @@ export function makeSessionsRepo(db: StorageDb) {
 interface RawSessionRow {
   id: string;
   agent: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
   started_at: number;
   last_seen_at: number;
   meta_json: string;
@@ -85,6 +101,7 @@ function mapRow(r: RawSessionRow): SessionRow {
   return {
     id: r.id,
     agent: r.agent,
+    ...ownerFieldsFromRaw(r),
     startedAt: r.started_at,
     lastSeenAt: r.last_seen_at,
     meta: fromJsonText<Record<string, unknown>>(r.meta_json, {}),

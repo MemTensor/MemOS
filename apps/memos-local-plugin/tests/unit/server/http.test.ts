@@ -6,6 +6,10 @@
  * hermetic; the server just has to route + serialise + auth.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startHttpServer } from "../../../server/index.js";
@@ -94,6 +98,7 @@ function stubCore(): MemoryCore {
         rTask: null,
       },
     ]),
+    countEpisodes: vi.fn(async () => 2),
     timeline: vi.fn(async () => [{ id: "t1", step: 0, ts: 0 } as any]),
     listTraces: vi.fn(async () => [
       {
@@ -110,8 +115,10 @@ function stubCore(): MemoryCore {
         priority: 0.5,
       },
     ] as any),
+    countTraces: vi.fn(async () => 1),
     listApiLogs: vi.fn(async () => ({ logs: [], total: 0 })),
     listSkills: vi.fn(async () => []),
+    countSkills: vi.fn(async () => 0),
     getSkill: vi.fn(async (id) => ({
       id,
       name: "test-skill",
@@ -142,6 +149,60 @@ function stubCore(): MemoryCore {
       skills: [],
     })),
     importBundle: vi.fn(async () => ({ imported: 0, skipped: 0 })),
+    embeddingMaintenanceStats: vi.fn(async () => ({
+      dimension: 8,
+      available: true,
+      totalSlots: 2,
+      ready: 1,
+      missing: 1,
+      dimMismatch: 0,
+      needsRepair: 1,
+      byKind: {
+        trace: { totalSlots: 2, ready: 1, missing: 1, dimMismatch: 0, needsRepair: 1 },
+        policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+      },
+    })),
+    rebuildEmbeddings: vi.fn(async () => ({
+      mode: "repair",
+      processed: 1,
+      updated: 1,
+      failed: 0,
+      offset: 0,
+      nextOffset: 0,
+      done: true,
+      statsBefore: {
+        dimension: 8,
+        available: true,
+        totalSlots: 2,
+        ready: 1,
+        missing: 1,
+        dimMismatch: 0,
+        needsRepair: 1,
+        byKind: {
+          trace: { totalSlots: 2, ready: 1, missing: 1, dimMismatch: 0, needsRepair: 1 },
+          policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        },
+      },
+      statsAfter: {
+        dimension: 8,
+        available: true,
+        totalSlots: 2,
+        ready: 2,
+        missing: 0,
+        dimMismatch: 0,
+        needsRepair: 0,
+        byKind: {
+          trace: { totalSlots: 2, ready: 2, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          policy: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          world_model: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+          skill: { totalSlots: 0, ready: 0, missing: 0, dimMismatch: 0, needsRepair: 0 },
+        },
+      },
+    })),
     subscribeEvents: vi.fn(() => () => {}),
     subscribeLogs: vi.fn(() => () => {}),
     forwardLog: vi.fn(),
@@ -174,6 +235,29 @@ describe("HTTP server — REST routes", () => {
     const body = await r.json();
     expect(body).toMatchObject({ ok: true, version: "test" });
     expect(core.health).toHaveBeenCalled();
+  });
+
+  it("GET /api/v1/health includes optional bridge status", async () => {
+    await handle.close();
+    handle = await startHttpServer({
+      core,
+      bridgeStatus: () => ({
+        status: "connected",
+        lastOkAt: 123,
+        lastErrorAt: null,
+        lastError: null,
+      }),
+    }, { port: 0 });
+
+    const r = await fetch(`${handle.url}/api/v1/health`);
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body.bridge).toEqual({
+      status: "connected",
+      lastOkAt: 123,
+      lastErrorAt: null,
+      lastError: null,
+    });
   });
 
   it("POST /api/v1/sessions opens a session", async () => {
@@ -213,6 +297,33 @@ describe("HTTP server — REST routes", () => {
     );
   });
 
+  it("POST /api/v1/memory/search rejects oversized queries before retrieval", async () => {
+    const r = await fetch(`${handle.url}/api/v1/memory/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "x".repeat(513), agent: "openclaw" }),
+    });
+    expect(r.status).toBe(400);
+    expect(core.searchMemory).not.toHaveBeenCalled();
+  });
+
+  it("memory search defaults to the server agent when agent is omitted", async () => {
+    const local = await startHttpServer({ core }, { port: 0, agent: "hermes" });
+    try {
+      const r = await fetch(`${local.url}/api/v1/memory/search`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "testing" }),
+      });
+      expect(r.status).toBe(200);
+      expect(core.searchMemory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: "testing", agent: "hermes" }),
+      );
+    } finally {
+      await local.close();
+    }
+  });
+
   it("GET /api/v1/memory/trace?id=t1 returns the trace", async () => {
     const r = await fetch(`${handle.url}/api/v1/memory/trace?id=t1`);
     expect(r.status).toBe(200);
@@ -241,6 +352,70 @@ describe("HTTP server — REST routes", () => {
     expect(body.episodeIds).toEqual(["e1", "e2"]);
   });
 
+  it("GET /api/v1/episodes?status=failed filters by derived status", async () => {
+    // Mix of failed (rTask <= -0.5) and completed/active rows so the
+    // server has to actually filter — the viewer used to do this in
+    // the browser on top of one paginated page, which broke pagination.
+    (core.listEpisodeRows as any).mockResolvedValueOnce([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2 },
+      { id: "c1", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f2", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: -0.7, turnCount: 2 },
+    ]);
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=failed`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["f1", "f2"]);
+    expect(body.total).toBe(2);
+  });
+
+  it("GET /api/v1/episodes?status=failed paginates over the filtered set", async () => {
+    // 4 failed + 2 completed; pageSize=2 so the test exercises
+    // limit/offset on the filter result, not on the raw scan window.
+    (core.listEpisodeRows as any).mockResolvedValue([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2 },
+      { id: "c1", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f2", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: -0.7, turnCount: 2 },
+      { id: "f3", sessionId: "s1", startedAt: 7, endedAt: 8, status: "closed", rTask: -0.6, turnCount: 2 },
+      { id: "c2", sessionId: "s1", startedAt: 9, endedAt: 10, status: "closed", rTask: 0.5, turnCount: 2 },
+      { id: "f4", sessionId: "s1", startedAt: 11, endedAt: 12, status: "closed", rTask: -0.7, turnCount: 2 },
+    ]);
+
+    const r1 = await fetch(`${handle.url}/api/v1/episodes?status=failed&limit=2&offset=0`);
+    const b1 = (await r1.json()) as { episodes: Array<{ id: string }>; total: number; nextOffset?: number };
+    expect(b1.episodes.map((e) => e.id)).toEqual(["f1", "f2"]);
+    expect(b1.total).toBe(4);
+    expect(b1.nextOffset).toBe(2);
+
+    const r2 = await fetch(`${handle.url}/api/v1/episodes?status=failed&limit=2&offset=2`);
+    const b2 = (await r2.json()) as { episodes: Array<{ id: string }>; total: number; nextOffset?: number };
+    expect(b2.episodes.map((e) => e.id)).toEqual(["f3", "f4"]);
+    expect(b2.total).toBe(4);
+    expect(b2.nextOffset).toBeUndefined();
+  });
+
+  it("GET /api/v1/episodes?status=garbage falls back to no filter", async () => {
+    // Unknown status slugs must not 400 — the viewer's chip group
+    // uses `""` for "all", and any future slug should degrade
+    // gracefully rather than break the entire list.
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=garbage`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(body.total).toBe(2);
+  });
+
+  it("GET /api/v1/episodes?status=…&q=… combines status + preview search", async () => {
+    (core.listEpisodeRows as any).mockResolvedValue([
+      { id: "f1", sessionId: "s1", startedAt: 1, endedAt: 2, status: "closed", rTask: -0.8, turnCount: 2, preview: "deploy failed twice" },
+      { id: "f2", sessionId: "s1", startedAt: 3, endedAt: 4, status: "closed", rTask: -0.6, turnCount: 2, preview: "another failure" },
+      { id: "c1", sessionId: "s1", startedAt: 5, endedAt: 6, status: "closed", rTask: 0.5, turnCount: 2, preview: "deploy succeeded" },
+    ]);
+    const r = await fetch(`${handle.url}/api/v1/episodes?status=failed&q=deploy`);
+    const body = (await r.json()) as { episodes: Array<{ id: string }>; total: number };
+    expect(body.episodes.map((e) => e.id)).toEqual(["f1"]);
+    expect(body.total).toBe(1);
+  });
+
   it("POST /api/v1/feedback accepts explicit polarity", async () => {
     const r = await fetch(`${handle.url}/api/v1/feedback`, {
       method: "POST",
@@ -255,6 +430,24 @@ describe("HTTP server — REST routes", () => {
       polarity: "positive",
       magnitude: 0.7,
     });
+  });
+
+  it("POST /api/v1/feedback returns trace_not_found for stale trace ids", async () => {
+    (core.getTrace as any).mockResolvedValueOnce(null);
+    const r = await fetch(`${handle.url}/api/v1/feedback`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        channel: "explicit",
+        polarity: "negative",
+        magnitude: 1,
+        traceId: "trace-not-real",
+      }),
+    });
+    expect(r.status).toBe(404);
+    const body = (await r.json()) as any;
+    expect(body.error.code).toBe("trace_not_found");
+    expect(core.submitFeedback).not.toHaveBeenCalled();
   });
 
   it("GET /api/v1/traces lists newest-first traces (used by Memories panel)", async () => {
@@ -276,6 +469,9 @@ describe("HTTP server — REST routes", () => {
       offset: 0,
       sessionId: undefined,
       q: "hi",
+      groupByTurn: false,
+      ownerAgentKind: undefined,
+      ownerProfileId: undefined,
     });
   });
 
@@ -286,6 +482,19 @@ describe("HTTP server — REST routes", () => {
     expect(body.id).toBe("t-42");
     // Dispatcher strips route prefix and passes `t-42` to core.getTrace.
     expect(core.getTrace).toHaveBeenCalledWith("t-42");
+  });
+
+  it("GET /api/v1/api-logs supports multi-tool filtering", async () => {
+    const r = await fetch(
+      `${handle.url}/api/v1/api-logs?tools=memory_add,memos_search&limit=10&offset=5`,
+    );
+    expect(r.status).toBe(200);
+    expect(core.listApiLogs).toHaveBeenCalledWith({
+      toolName: undefined,
+      toolNames: ["memory_add", "memos_search"],
+      limit: 10,
+      offset: 5,
+    });
   });
 
   it("GET /api/v1/episodes/:id/timeline returns {episodeId, traces}", async () => {
@@ -342,6 +551,205 @@ describe("HTTP server — REST routes", () => {
     expect(body.imported).toBe(0);
   });
 
+  it("GET /api/v1/embeddings/maintenance returns vector health", async () => {
+    const r = await fetch(`${handle.url}/api/v1/embeddings/maintenance`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { totalSlots: number; needsRepair: number };
+    expect(body.totalSlots).toBe(2);
+    expect(body.needsRepair).toBe(1);
+    expect(core.embeddingMaintenanceStats).toHaveBeenCalled();
+  });
+
+  it("POST /api/v1/embeddings/rebuild runs a maintenance batch", async () => {
+    const r = await fetch(`${handle.url}/api/v1/embeddings/rebuild`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "rebuild", offset: 10, limit: 25 }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { updated: number; done: boolean };
+    expect(body.updated).toBe(1);
+    expect(body.done).toBe(true);
+    expect(core.rebuildEmbeddings).toHaveBeenCalledWith({
+      mode: "rebuild",
+      offset: 10,
+      limit: 25,
+    });
+  });
+
+  it("imports Hermes native MEMORY.md in batches", async () => {
+    const oldHome = process.env.HOME;
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hermes-native-"));
+    const nativeDir = path.join(tmpHome, ".hermes", "memories");
+    fs.mkdirSync(nativeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nativeDir, "MEMORY.md"),
+      "first memory\n§\nsecond memory\nwith two lines\n§\n",
+      "utf8",
+    );
+    process.env.HOME = tmpHome;
+
+    const importBundle = core.importBundle as unknown as ReturnType<typeof vi.fn>;
+    importBundle.mockImplementation(async (bundle: { traces?: unknown[] }) => ({
+      imported: bundle.traces?.length ?? 0,
+      skipped: 0,
+    }));
+
+    const local = await startHttpServer({ core }, { port: 0, agent: "hermes" });
+    try {
+      const scan = await fetch(`${local.url}/api/v1/import/hermes-native/scan`);
+      expect(scan.status).toBe(200);
+      const scanBody = (await scan.json()) as { found: boolean; total: number; path: string };
+      expect(scanBody.found).toBe(true);
+      expect(scanBody.total).toBe(2);
+      expect(scanBody.path).toMatch(/\.hermes\/memories\/MEMORY\.md$/);
+
+      const run = await fetch(`${local.url}/api/v1/import/hermes-native/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ offset: 0, limit: 1 }),
+      });
+      expect(run.status).toBe(200);
+      const runBody = (await run.json()) as {
+        total: number;
+        nextOffset: number;
+        imported: number;
+        done: boolean;
+      };
+      expect(runBody).toMatchObject({
+        total: 2,
+        nextOffset: 1,
+        imported: 1,
+        done: false,
+      });
+      expect(core.importBundle).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          version: 1,
+          traces: [
+            expect.objectContaining({
+              userText: "first memory",
+              sessionId: "se_hermes_native_memory",
+            }),
+          ],
+        }),
+      );
+    } finally {
+      await local.close();
+      importBundle.mockResolvedValue({ imported: 0, skipped: 0 });
+      if (oldHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = oldHome;
+      }
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("imports OpenClaw native session JSONL messages in batches", async () => {
+    const oldHome = process.env.HOME;
+    const oldStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "memos-openclaw-native-"));
+    const openclawHome = path.join(tmpHome, ".openclaw");
+    const sessionsDir = path.join(openclawHome, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, "s1.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "[Fri 2026-05-08 11:07 GMT+8] 记住，我喜欢吃的水果是菠萝",
+            timestamp: "2026-05-08T03:07:00.000Z",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "记住啦，你喜欢吃的水果是菠萝。" }],
+            timestamp: "2026-05-08T03:07:01.000Z",
+          },
+        }),
+        JSON.stringify({ type: "message", message: { role: "system", content: "skip me" } }),
+      ].join("\n"),
+      "utf8",
+    );
+    process.env.HOME = tmpHome;
+    process.env.OPENCLAW_STATE_DIR = openclawHome;
+
+    const importBundle = core.importBundle as unknown as ReturnType<typeof vi.fn>;
+    importBundle.mockImplementation(async (bundle: { traces?: unknown[] }) => ({
+      imported: bundle.traces?.length ?? 0,
+      skipped: 0,
+    }));
+
+    const local = await startHttpServer({ core }, { port: 0, agent: "openclaw" });
+    try {
+      const scan = await fetch(`${local.url}/api/v1/import/openclaw-native/scan`);
+      expect(scan.status).toBe(200);
+      const scanBody = (await scan.json()) as {
+        found: boolean;
+        total: number;
+        files: number;
+        sessions: number;
+        path: string;
+      };
+      expect(scanBody).toMatchObject({ found: true, total: 2, files: 1, sessions: 1 });
+      expect(scanBody.path).toMatch(/\.openclaw\/agents$/);
+
+      const run = await fetch(`${local.url}/api/v1/import/openclaw-native/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ offset: 0, limit: 2 }),
+      });
+      expect(run.status).toBe(200);
+      const runBody = (await run.json()) as {
+        total: number;
+        nextOffset: number;
+        imported: number;
+        done: boolean;
+      };
+      expect(runBody).toMatchObject({
+        total: 2,
+        nextOffset: 2,
+        imported: 2,
+        done: true,
+      });
+      expect(core.importBundle).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          version: 1,
+          traces: [
+            expect.objectContaining({
+              userText: "记住，我喜欢吃的水果是菠萝",
+              agentText: "",
+              sessionId: "se_oc_main_s1",
+            }),
+            expect.objectContaining({
+              userText: "",
+              agentText: "记住啦，你喜欢吃的水果是菠萝。",
+              sessionId: "se_oc_main_s1",
+            }),
+          ],
+        }),
+      );
+    } finally {
+      await local.close();
+      importBundle.mockResolvedValue({ imported: 0, skipped: 0 });
+      if (oldHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = oldHome;
+      }
+      if (oldStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = oldStateDir;
+      }
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   it("GET /api/v1/hub/admin returns {enabled:false} when sharing is off", async () => {
     const r = await fetch(`${handle.url}/api/v1/hub/admin`);
     expect(r.status).toBe(200);
@@ -352,7 +760,7 @@ describe("HTTP server — REST routes", () => {
   // ─── Connectivity smoke tests ─────────────────────────────────────────
   // These pin the contract between the viewer's REST client and the
   // server. Every endpoint the viewer touches (see
-  // `web/src/**/*.tsx::api.get/post/patch`) is exercised here.
+  // `viewer/src/**/*.tsx::api.get/post/patch`) is exercised here.
 
   it("GET /api/v1/overview returns the summary shape the viewer expects", async () => {
     const r = await fetch(`${handle.url}/api/v1/overview`);
@@ -401,11 +809,13 @@ describe("HTTP server — REST routes", () => {
   it("GET /api/v1/migrate/openclaw/scan returns the scan result shape", async () => {
     const r = await fetch(`${handle.url}/api/v1/migrate/openclaw/scan`);
     expect(r.status).toBe(200);
-    const body = (await r.json()) as { found: boolean; path?: string };
+    const body = (await r.json()) as { found: boolean; path?: string; agent?: string };
     // `found` is always a boolean regardless of whether the legacy DB
     // is on disk. The viewer uses this to toggle the "Run migration"
-    // button.
+    // button. The path is hard-coded to the openclaw layout.
     expect(typeof body.found).toBe("boolean");
+    expect(body.agent).toBe("openclaw");
+    if (body.path) expect(body.path).toMatch(/\.openclaw\/memos-local\/memos\.db$/);
   });
 
   it("POST /api/v1/migrate/openclaw/run returns { imported: {...} } even when empty", async () => {
@@ -418,11 +828,70 @@ describe("HTTP server — REST routes", () => {
     // OR 404 when the server reports "no legacy db". Either way the
     // viewer handles both.
     expect([200, 404]).toContain(r.status);
-    const body = (await r.json()) as { imported?: Record<string, number>; error?: unknown };
+    const body = (await r.json()) as {
+      imported?: Record<string, number>;
+      error?: { message?: string };
+    };
     if (r.status === 200) {
       expect(typeof body.imported).toBe("object");
     } else {
       expect(body.error).toBeDefined();
+      // 404 must mention the openclaw legacy path so the user knows
+      // which file we tried to read.
+      expect(body.error?.message ?? "").toMatch(/\.openclaw\//);
+    }
+  });
+
+  it("GET /api/v1/migrate/hermes/scan reports the hermes legacy path", async () => {
+    const r = await fetch(`${handle.url}/api/v1/migrate/hermes/scan`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { found: boolean; path?: string; agent?: string };
+    expect(body.agent).toBe("hermes");
+    // The hermes legacy plugin nested its data under
+    // `~/.hermes/memos-state/memos-local/memos.db` (not the openclaw
+    // layout). This test is what would have caught the original bug.
+    if (body.path) expect(body.path).toMatch(/\.hermes\/memos-state\/memos-local\/memos\.db$/);
+  });
+
+  it("POST /api/v1/migrate/hermes/run targets the hermes legacy path", async () => {
+    const r = await fetch(`${handle.url}/api/v1/migrate/hermes/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect([200, 404]).toContain(r.status);
+    const body = (await r.json()) as {
+      agent?: string;
+      path?: string;
+      error?: { message?: string };
+    };
+    if (r.status === 200) {
+      expect(body.agent).toBe("hermes");
+      expect(body.path ?? "").toMatch(/\.hermes\/memos-state\/memos-local\/memos\.db$/);
+    } else {
+      expect(body.error?.message ?? "").toMatch(/\.hermes\/memos-state\//);
+    }
+  });
+
+  it("GET /api/v1/migrate/legacy/scan picks the path from options.agent (default openclaw)", async () => {
+    const r = await fetch(`${handle.url}/api/v1/migrate/legacy/scan`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { found: boolean; path?: string; agent?: string };
+    // The default server fixture omits `options.agent`; the migrate
+    // route falls back to openclaw.
+    expect(body.agent).toBe("openclaw");
+  });
+
+  it("GET /api/v1/migrate/legacy/scan honours options.agent='hermes'", async () => {
+    const local = await startHttpServer({ core }, { port: 0, agent: "hermes" });
+    try {
+      const r = await fetch(`${local.url}/api/v1/migrate/legacy/scan`);
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { found: boolean; path?: string; agent?: string };
+      expect(body.agent).toBe("hermes");
+      if (body.path) expect(body.path).toMatch(/\.hermes\/memos-state\/memos-local\/memos\.db$/);
+    } finally {
+      await local.close();
     }
   });
 
@@ -430,6 +899,15 @@ describe("HTTP server — REST routes", () => {
     const r = await fetch(`${handle.url}/api/v1/skills/sk_1`, { method: "DELETE" });
     expect(r.status).toBe(200);
     expect(core.deleteSkill).toHaveBeenCalledWith("sk_1");
+  });
+
+  it("GET /api/v1/skills/:id returns skill detail", async () => {
+    const r = await fetch(`${handle.url}/api/v1/skills/sk_1`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { id: string; name: string };
+    expect(body.id).toBe("sk_1");
+    expect(body.name).toBe("test-skill");
+    expect(core.getSkill).toHaveBeenCalledWith("sk_1");
   });
 
   it("POST /api/v1/skills/reactivate flips an archived skill back to active", async () => {
@@ -498,6 +976,14 @@ describe("HTTP server — REST routes", () => {
     const buf = Buffer.from(await r.arrayBuffer());
     // PKZIP local-file-header magic.
     expect(buf.slice(0, 4).toString("hex")).toBe("504b0304");
+    const nameLen = buf.readUInt16LE(26);
+    const extraLen = buf.readUInt16LE(28);
+    const fileSize = buf.readUInt32LE(22);
+    const name = buf.subarray(30, 30 + nameLen).toString("utf8");
+    const start = 30 + nameLen + extraLen;
+    const md = buf.subarray(start, start + fileSize).toString("utf8");
+    expect(name).toBe("test-skill/SKILL.md");
+    expect(md).toMatch(/^---\nname: "test-skill"\ndescription: "use this when X"\n---\n/);
   });
 
   it("PATCH /api/v1/policies/:id accepts a status-only body (back-compat)", async () => {
@@ -602,6 +1088,58 @@ describe("HTTP server — REST routes", () => {
   it("wrong method returns 405 json", async () => {
     const r = await fetch(`${handle.url}/api/v1/ping`, { method: "DELETE" });
     expect(r.status).toBe(405);
+  });
+
+  // ─── Telemetry side-channel ────────────────────────────────────
+  // Replaces the previous "first GET /overview wins" trigger with
+  // a dedicated SPA-mount endpoint. See `server/routes/telemetry.ts`
+  // and `viewer/src/components/App.tsx` for the wiring rationale.
+
+  it("POST /api/v1/telemetry/viewer-opened invokes telemetry.trackViewerOpened", async () => {
+    const trackViewerOpened = vi.fn();
+    const local = await startHttpServer(
+      { core, telemetry: { trackViewerOpened } },
+      { port: 0 },
+    );
+    try {
+      const r = await fetch(`${local.url}/api/v1/telemetry/viewer-opened`, {
+        method: "POST",
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);
+      expect(trackViewerOpened).toHaveBeenCalledTimes(1);
+    } finally {
+      await local.close();
+    }
+  });
+
+  it("POST /api/v1/telemetry/viewer-opened still returns 200 when telemetry is unbound", async () => {
+    // No telemetry on `deps` — endpoint must remain a no-op success
+    // so the SPA's fire-and-forget call never surfaces an error.
+    const r = await fetch(`${handle.url}/api/v1/telemetry/viewer-opened`, {
+      method: "POST",
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it("GET /api/v1/overview no longer triggers viewer_opened (regressed to manual ping)", async () => {
+    const trackViewerOpened = vi.fn();
+    const local = await startHttpServer(
+      { core, telemetry: { trackViewerOpened } },
+      { port: 0 },
+    );
+    try {
+      // Two GETs (the viewer used to poll this) — neither should
+      // count as a viewer-mount event under the new scheme.
+      await fetch(`${local.url}/api/v1/overview`);
+      await fetch(`${local.url}/api/v1/overview`);
+      expect(trackViewerOpened).not.toHaveBeenCalled();
+    } finally {
+      await local.close();
+    }
   });
 });
 

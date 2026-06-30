@@ -89,6 +89,7 @@ export function fakeLlm(script: FakeLlmScript = {}): LlmClient {
         totalPromptTokens: 0,
         totalCompletionTokens: 0,
         lastOkAt: null,
+        lastFallbackAt: null,
         lastError: null,
       };
     },

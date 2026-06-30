@@ -115,6 +115,9 @@ export function extractAlgorithmConfig(
 ): PipelineAlgorithmConfig {
   const alg = deps.config.algorithm;
   return {
+    lightweightMemory: {
+      enabled: alg.lightweightMemory.enabled,
+    },
     capture: alg.capture,
     reward: alg.reward,
     l2Induction: {
@@ -126,6 +129,7 @@ export function extractAlgorithmConfig(
       minTraceValue: alg.l2Induction.minTraceValue,
       minEpisodesForInduction: alg.l2Induction.minEpisodesForInduction,
       inductionTraceCharCap: alg.l2Induction.traceCharCap,
+      gainEmaAlpha: alg.l2Induction.gainEmaAlpha,
     },
     l3Abstraction: alg.l3Abstraction,
     skill: alg.skill,
@@ -152,10 +156,11 @@ export function extractAlgorithmConfig(
       skillInjectionMode: alg.retrieval.skillInjectionMode,
       skillSummaryChars: alg.retrieval.skillSummaryChars,
       decayHalfLifeDays: alg.reward.decayHalfLifeDays,
-      llmFilterEnabled: alg.retrieval.llmFilterEnabled,
+      llmFilterEnabled: alg.lightweightMemory.enabled ? true : alg.retrieval.llmFilterEnabled,
       llmFilterMaxKeep: alg.retrieval.llmFilterMaxKeep,
-      llmFilterMinCandidates: alg.retrieval.llmFilterMinCandidates,
+      llmFilterMinCandidates: alg.lightweightMemory.enabled ? 1 : alg.retrieval.llmFilterMinCandidates,
       llmFilterCandidateBodyChars: alg.retrieval.llmFilterCandidateBodyChars,
+      lightweightMemory: alg.lightweightMemory.enabled,
     },
     session: {
       followUpMode: alg.session.followUpMode,
@@ -201,6 +206,7 @@ export function buildPipelineSubscribers(
 
   const captureRunner = createCaptureRunner({
     tracesRepo: deps.repos.traces,
+    embeddingRetryQueue: deps.repos.embeddingRetryQueue,
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
     embedder: deps.embedder,
     llm: deps.llm,
@@ -217,6 +223,12 @@ export function buildPipelineSubscribers(
     llm: deps.llm,
     bus: buses.reward,
     cfg: algorithm.reward,
+    evaluator: {
+      reflectionProvider: deps.reflectLlm?.provider,
+      reflectionModel: deps.reflectLlm?.model,
+      scorerProvider: deps.llm?.provider,
+      scorerModel: deps.llm?.model,
+    },
     now: deps.now,
     // Wire the live episode snapshot so the R_human scorer sees the
     // real user / assistant turns of the episode. Without this, the
@@ -313,8 +325,15 @@ export function buildPipelineSession(
   deps: PipelineDeps,
   bus: SessionEventBus,
 ): PipelineSessionSet {
-  const intent = createIntentClassifier({ llm: deps.llm ?? undefined });
-  const relation = createRelationClassifier({ llm: deps.llm ?? undefined });
+  const llmDisabled = deps.config.algorithm.lightweightMemory.enabled;
+  const intent = createIntentClassifier({
+    llm: deps.llm ?? undefined,
+    disableLlm: llmDisabled,
+  });
+  const relation = createRelationClassifier({
+    llm: deps.llm ?? undefined,
+    disableLlm: llmDisabled,
+  });
   const episodeManager = createEpisodeManager({
     sessionsRepo: adaptSessionsRepo(deps.repos.sessions),
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
@@ -328,6 +347,7 @@ export function buildPipelineSession(
     bus,
     episodeManager,
     now: deps.now,
+    lightweightMemory: llmDisabled,
   });
   return { intent, relation, sessionManager, episodeManager };
 }
@@ -340,7 +360,7 @@ export function buildRetrievalDeps(
 ): RetrievalDeps {
   const embedder = deps.embedder;
   return {
-    repos: wrapRetrievalRepos(deps.repos),
+    repos: wrapRetrievalRepos(deps.repos, deps.namespace),
     embedder: embedder
       ? {
           embed: (text, role) =>
@@ -353,6 +373,7 @@ export function buildRetrievalDeps(
             new Float32Array(0) as unknown as import("../types.js").EmbeddingVector,
         },
     config: algorithm.retrieval,
+    namespace: deps.namespace,
     now: deps.now ?? Date.now,
     llm: deps.llm,
   };

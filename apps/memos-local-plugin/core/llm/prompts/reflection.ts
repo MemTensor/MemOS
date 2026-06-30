@@ -77,7 +77,7 @@ Return JSON:
  */
 export const BATCH_REFLECTION_PROMPT: PromptDef = {
   id: "reflection.batch",
-  version: 2,
+  version: 3,
   description:
     "Score (and optionally synthesize) reflections for an entire episode in one call, with full thinking + tool-call context.",
   system: `You are reviewing every step of one AI agent episode in a single pass.
@@ -99,6 +99,21 @@ INPUT: a JSON array under "steps". Each entry has:
   write a brand-new 2–3 sentence first-person reflection for that step. When
   false, leave "reflection_text" empty for steps that came in with empty
   "reflection".
+
+The user payload may also include "host_context". That describes the host
+agent being reviewed and the separate reflection model doing this review.
+Do NOT project the reflection model's own identity/provider/capabilities onto
+the host agent. If hostModel/hostProvider are present, treat them as the
+authoritative runtime context unless the episode itself contains a correction.
+
+The user payload may also include "task_context" (string or null). When
+non-null and non-empty, it is the **episode-level task summary**: a compact
+overview of what this episode was about (e.g. initial user goal, intent
+metadata, closing assistant reply, and tools used across the episode). It
+applies to **every** step — use it to keep per-step reflections and α scores
+aligned with the overall task; it is NOT a substitute for each step's own
+"state", "outcome", or "tool_calls". When "task_context" is null or missing,
+infer the episode goal only from the "steps" timeline.
 
 For EACH input step, return one object containing:
 - "idx": copy the input idx exactly

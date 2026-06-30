@@ -1,7 +1,7 @@
 # docs/ — developer-facing documentation
 
-For *user-facing* docs (getting started, configuration, viewer tour), see
-[`site/content/docs/`](../site/content/docs/) instead.
+For *user-facing* help (getting started, configuration, viewer tour), open the
+viewer's *Help* page at runtime — it ships with the plugin's `viewer/` bundle.
 
 ## Document index
 

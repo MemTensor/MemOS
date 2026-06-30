@@ -18,11 +18,16 @@ class MemOSPlugin:
     Provides three unified registration methods. Plugin developers need only
     inherit from this class and register capabilities via self.register_*
     in init_app.
+
+    `priority` is used only when multiple installed distributions expose the
+    same logical plugin name. In that case the PluginManager keeps the highest
+    priority implementation and skips the rest.
     """
 
     name: str = "unnamed"
     version: str = "0.0.0"
     description: str = ""
+    priority: int = 0
 
     _app: FastAPI | None = None
 

@@ -25,6 +25,9 @@ const cfg: RetrievalConfig = {
   minTraceSim: 0.3,
   tagFilter: "auto",
   decayHalfLifeDays: 30,
+  llmFilterEnabled: false,
+  llmFilterMaxKeep: 4,
+  llmFilterMinCandidates: 1,
 };
 
 describe("retrieval/tier3 (with real sqlite)", () => {
@@ -44,6 +47,7 @@ describe("retrieval/tier3 (with real sqlite)", () => {
       vec: vec([1, 0, 0]),
       createdAt: NOW as never,
       updatedAt: NOW as never,
+      version: 1,
       status: "active",
     });
     handle.repos.worldModel.upsert({
@@ -59,6 +63,7 @@ describe("retrieval/tier3 (with real sqlite)", () => {
       vec: vec([0, 1, 0]),
       createdAt: NOW as never,
       updatedAt: NOW as never,
+      version: 1,
       status: "active",
     });
   });

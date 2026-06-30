@@ -38,8 +38,8 @@ export function makeSkillConfig(partial: Partial<SkillConfig> = {}): SkillConfig
     evidenceLimit: 4,
     useLlm: true,
     etaDelta: 0.1,
-    archiveEta: 0.25,
-    minEtaForRetrieval: 0.5,
+    archiveEta: 0.1,
+    minEtaForRetrieval: 0.1,
     ...partial,
   };
 }
@@ -78,6 +78,7 @@ export function seedPolicy(handle: TmpDbHandle, args: SeedPolicyArgs = {}): Poli
     status: args.status ?? "active",
     sourceEpisodeIds: [...(args.sourceEpisodeIds ?? [])],
     inducedBy: "l2.l2.induction.v1",
+    decisionGuidance: { preference: [], antiPattern: [] },
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: now,
     updatedAt: now,
@@ -98,6 +99,7 @@ export interface SeedTraceArgs {
   value?: number;
   tags?: string[];
   vec?: EmbeddingVector | null;
+  toolCalls?: TraceRow["toolCalls"];
 }
 
 export function seedTrace(handle: TmpDbHandle, args: SeedTraceArgs): TraceRow {
@@ -110,7 +112,7 @@ export function seedTrace(handle: TmpDbHandle, args: SeedTraceArgs): TraceRow {
     ts: NOW,
     userText: args.userText ?? "",
     agentText: args.agentText ?? "",
-    toolCalls: [],
+    toolCalls: args.toolCalls ?? [],
     reflection: args.reflection ?? null,
     value: args.value ?? 0.7,
     alpha: 0.6 as TraceRow["alpha"],
@@ -119,6 +121,7 @@ export function seedTrace(handle: TmpDbHandle, args: SeedTraceArgs): TraceRow {
     tags: args.tags ?? [],
     vecSummary: args.vec ?? vec([1, 0, 0]),
     vecAction: null,
+    turnId: NOW,
     schemaVersion: 1,
   };
   handle.repos.traces.insert(row);
@@ -160,6 +163,7 @@ export function seedSkill(handle: TmpDbHandle, args: SeedSkillArgs = {}): SkillR
     trialsPassed: args.trialsPassed ?? 0,
     sourcePolicyIds: [...(args.sourcePolicyIds ?? [])],
     sourceWorldModelIds: [],
+    evidenceAnchors: [],
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: (args.updatedAt ?? NOW) as SkillRow["createdAt"],
     updatedAt: (args.updatedAt ?? NOW) as SkillRow["updatedAt"],
@@ -191,6 +195,8 @@ export function makeDraft(
       { input: "pip install cryptography", expected: "cryptography installs without errors" },
     ],
     tags: ["pip", "alpine"],
+    decisionGuidance: { preference: [], antiPattern: [] },
+    tools: [],
     ...overrides,
   };
 }

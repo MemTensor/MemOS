@@ -34,6 +34,7 @@ export function makeFeedbackConfig(
     failureThreshold: 3,
     failureWindow: 5,
     valueDelta: 0.5,
+    minLowValueThreshold: 0.01,
     useLlm: true,
     attachToPolicy: true,
     cooldownMs: 60_000,
@@ -56,6 +57,7 @@ export interface SeedPolicyArgs {
   support?: number;
   gain?: number;
   sourceEpisodeIds?: readonly EpisodeId[];
+  decisionGuidance?: { preference: string[]; antiPattern: string[] };
   vec?: EmbeddingVector | null;
   updatedAt?: EpochMs;
 }
@@ -78,6 +80,7 @@ export function seedPolicy(
     status: args.status ?? "active",
     sourceEpisodeIds: [...(args.sourceEpisodeIds ?? [])],
     inducedBy: "l2.l2.induction.v1",
+    decisionGuidance: args.decisionGuidance ?? { preference: [], antiPattern: [] },
     vec: args.vec ?? vec([1, 0, 0]),
     createdAt: now,
     updatedAt: now,
@@ -120,6 +123,7 @@ export function seedTrace(handle: TmpDbHandle, args: SeedTraceArgs): TraceRow {
     tags: args.tags ?? [],
     vecSummary: args.vec ?? vec([1, 0, 0]),
     vecAction: null,
+    turnId: NOW,
     schemaVersion: 1,
   };
   handle.repos.traces.insert(row);

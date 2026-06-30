@@ -103,19 +103,31 @@ describe("session/session-manager", () => {
     expect(sm.getSession(a.id)).not.toBeNull(); // getSession reloads from repo
   });
 
-  it("closeSession abandons open episodes and emits session.closed", async () => {
+  it("closeSession pauses incomplete open episodes and emits session.closed", async () => {
+    // A clean session close is not automatically a topic boundary. If
+    // the episode has no assistant reply yet, keep it open so a later
+    // turn can be classified back into the same topic.
     const sm = makeSm();
     const session = sm.openSession({ agent: "openclaw" });
     const ep = await sm.startEpisode({ sessionId: session.id, userMessage: "long running" });
     const events: string[] = [];
     sm.bus.onAny((e) => events.push(e.kind));
-    sm.closeSession(session.id);
-    expect(episodesFake.rows.get(ep.id)?.status).toBe("closed");
-    expect(episodesFake.rows.get(ep.id)?.meta.closeReason).toBe("abandoned");
+    sm.closeSession(session.id, "client");
+    const stored = episodesFake.rows.get(ep.id);
+    expect(stored?.status).toBe("open");
+    expect(stored?.meta.topicState).toBe("paused");
+    expect(stored?.meta.pauseReason).toBe("session_closed:client");
+    // The literal session-end reason is preserved as audit metadata so
+    // logs / analytics can still tell `/new` from `/quit` apart, but
+    // it never reaches the user-facing `abandonReason` column.
+    expect(stored?.meta.sessionCloseReason).toBe("client");
+    expect(stored?.meta.abandonReason).toBeUndefined();
     expect(events).toContain("session.closed");
   });
 
-  it("shutdown finalizes all open episodes across sessions", async () => {
+  it("shutdown pauses incomplete open episodes across sessions", async () => {
+    // Process shutdown is not itself a topic boundary. Incomplete topics
+    // stay open and can be recovered on the next bootstrap.
     const sm = makeSm();
     const s1 = sm.openSession({ agent: "openclaw" });
     const s2 = sm.openSession({ agent: "hermes" });
@@ -123,8 +135,10 @@ describe("session/session-manager", () => {
     await sm.startEpisode({ sessionId: s2.id, userMessage: "task two" });
     sm.shutdown("test");
     for (const row of episodesFake.rows.values()) {
-      expect(row.status).toBe("closed");
-      expect(row.meta.closeReason).toBe("abandoned");
+      expect(row.status).toBe("open");
+      expect(row.meta.topicState).toBe("paused");
+      expect(row.meta.sessionCloseReason).toBe("shutdown:test");
+      expect(row.meta.abandonReason).toBeUndefined();
     }
   });
 

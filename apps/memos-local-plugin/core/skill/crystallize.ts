@@ -10,14 +10,24 @@
  */
 
 import type { LlmClient } from "../llm/types.js";
+import { detectModelRefusal } from "../llm/refusal.js";
 import {
   detectDominantLanguage,
   languageSteeringLine,
 } from "../llm/prompts/index.js";
 import { SKILL_CRYSTALLIZE_PROMPT } from "../llm/prompts/skill-crystallize.js";
 import type { Logger } from "../logger/types.js";
-import type { PolicyRow, SkillRow, TraceRow } from "../types.js";
+import {
+  sanitizeDerivedList,
+  sanitizeDerivedMarkdown,
+  sanitizeDerivedMarkdownList,
+  sanitizeDerivedText,
+} from "../safety/content.js";
+import type { EpisodeId, PolicyRow, SkillRow, TraceRow } from "../types.js";
+import { MemosError } from "../../agent-contract/errors.js";
+import { extractToolNames } from "./tool-names.js";
 import type {
+  SkillModelRefusalDetails,
   SkillConfig,
   SkillCrystallizationDraft,
   SkillExampleDraft,
@@ -28,8 +38,23 @@ import type {
 export interface CrystallizeInput {
   policy: PolicyRow;
   evidence: TraceRow[];
+  /**
+   * Optional negative evidence: traces from the same context that scored
+   * V < 0. Surfaced to the LLM as `counter_examples` so it can write
+   * concrete `decision_guidance.anti_pattern` lines (V7 §2.4.6 step ⑤
+   * "对比 V 分布生成动作偏好"). Caller decides how to mine these — see
+   * `core/skill/skill.ts` for the live wiring.
+   */
+  counterExamples?: TraceRow[];
   /** Names of *non-archived* skills, so the LLM can avoid collisions. */
   namingSpace: string[];
+  /**
+   * Episode that triggered this crystallization, when known. Forwarded
+   * to the LLM call so the resulting `system_model_status` audit row
+   * can be grouped with the rest of that episode's pipeline activity in
+   * the Logs viewer.
+   */
+  episodeId?: EpisodeId;
 }
 
 export interface CrystallizeDeps {
@@ -42,7 +67,7 @@ export interface CrystallizeDeps {
 
 export type CrystallizeResult =
   | { ok: true; draft: SkillCrystallizationDraft }
-  | { ok: false; skippedReason: string };
+  | { ok: false; skippedReason: string; modelRefusal?: SkillModelRefusalDetails };
 
 /**
  * Run one crystallization call and return a normalised draft.
@@ -62,7 +87,14 @@ export async function crystallizeDraft(
   }
 
   if (!config.useLlm || !llm) {
-    log.info("skill.crystallize.llm_disabled", { policyId: input.policy.id });
+    const reason = !config.useLlm
+      ? "useLlm disabled in config"
+      : "llm client is null (provider not attached?)";
+    log.warn("skill.crystallize.llm_unavailable", {
+      policyId: input.policy.id,
+      reason,
+      fallback: "skipped",
+    });
     return { ok: false, skippedReason: "llm-disabled" };
   }
 
@@ -88,23 +120,94 @@ export async function crystallizeDraft(
       ],
       {
         op: "skill.crystallize",
-        schemaHint: "skill-crystallize.v1",
+        phase: "skill",
+        episodeId: input.episodeId,
+        schemaHint: "skill-crystallize.v2",
       },
     );
+    const rawRefusal = detectModelRefusal(rsp.raw);
+    if (rawRefusal) {
+      const modelRefusal = {
+        provider: rsp.provider,
+        model: rsp.model,
+        servedBy: rsp.servedBy,
+        ...rawRefusal,
+      };
+      log.error("skill.crystallize.model_refusal", {
+        policyId: input.policy.id,
+        ...modelRefusal,
+      });
+      return { ok: false, skippedReason: "llm-refusal", modelRefusal };
+    }
     const draft = normaliseDraft(rsp.value, input);
+    const draftRefusal = detectModelRefusal(draft);
+    if (draftRefusal) {
+      const modelRefusal = {
+        provider: rsp.provider,
+        model: rsp.model,
+        servedBy: rsp.servedBy,
+        ...draftRefusal,
+      };
+      log.error("skill.crystallize.model_refusal", {
+        policyId: input.policy.id,
+        ...modelRefusal,
+      });
+      return { ok: false, skippedReason: "llm-refusal", modelRefusal };
+    }
     if (deps.validate) deps.validate(draft);
     return { ok: true, draft };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const rawPreview = rawPreviewFromError(err);
+    const refusal = rawPreview ? detectModelRefusal(rawPreview) : null;
+    if (refusal) {
+      const modelRefusal = {
+        provider: providerFromError(err) ?? llm.provider,
+        model: llm.model,
+        servedBy: llm.provider,
+        ...refusal,
+      };
+      log.error("skill.crystallize.model_refusal", {
+        policyId: input.policy.id,
+        error: message,
+        ...modelRefusal,
+      });
+      return { ok: false, skippedReason: "llm-refusal", modelRefusal };
+    }
     log.error("skill.crystallize.failed", { policyId: input.policy.id, error: message });
     return { ok: false, skippedReason: `llm-failed: ${message}` };
   }
 }
 
+function rawPreviewFromError(err: unknown): string | null {
+  if (err instanceof MemosError && typeof err.details?.rawPreview === "string") {
+    return err.details.rawPreview;
+  }
+  return null;
+}
+
+function providerFromError(err: unknown): string | null {
+  if (err instanceof MemosError && typeof err.details?.provider === "string") {
+    return err.details.provider;
+  }
+  return null;
+}
+
 /**
  * Produce a deterministic JSON payload for the LLM.
+ *
+ * V7 §2.4.6: surface the policy's structured `decisionGuidance` as a
+ * separate `repair_hints` field so the prompt schema is unambiguous —
+ * the LLM never sees our internal storage shape, and the boundary text
+ * stays a clean human-readable scope description.
+ *
+ * `counter_examples` are evidence rows with V < 0 — caller-provided
+ * (see `core/skill/skill.ts::gatherCounterExamples`); the prompt
+ * marks them optional so it's fine to omit.
  */
 function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
+  const repairHints = input.policy.decisionGuidance;
+
   const policy = {
     id: input.policy.id,
     title: input.policy.title,
@@ -127,11 +230,36 @@ function packPrompt(input: CrystallizeInput, config: SkillConfig): string {
     tags: t.tags,
   }));
 
-  const payload = {
+  const counterExamples = (input.counterExamples ?? [])
+    .slice(0, Math.max(0, config.evidenceLimit))
+    .map((t) => ({
+      id: t.id,
+      episodeId: t.episodeId,
+      reflection: t.reflection,
+      user: capString(t.userText, config.traceCharCap),
+      agent: capString(t.agentText, config.traceCharCap),
+      value: Number.isFinite(t.value) ? t.value : 0,
+      tags: t.tags,
+    }));
+
+  const evidenceTools = Array.from(extractToolNames(input.evidence));
+
+  const payload: Record<string, unknown> = {
     policy,
     evidence,
+    evidence_tools: evidenceTools,
     naming_space: input.namingSpace,
   };
+  if (counterExamples.length > 0) payload.counter_examples = counterExamples;
+  if (
+    repairHints.preference.length > 0 ||
+    repairHints.antiPattern.length > 0
+  ) {
+    payload.repair_hints = {
+      preference: repairHints.preference,
+      antiPattern: repairHints.antiPattern,
+    };
+  }
   return JSON.stringify(payload);
 }
 
@@ -147,15 +275,21 @@ function normaliseDraft(
   const rawName = String(raw.name ?? "").trim();
   const name = sanitiseName(rawName || `skill_${input.policy.id.slice(-6)}`);
   const displayTitle =
-    String(raw.display_title ?? raw.displayTitle ?? input.policy.title ?? name).trim() ||
+    sanitizeDerivedText(raw.display_title ?? raw.displayTitle ?? input.policy.title ?? name) ||
     name;
-  const summary = String(raw.summary ?? "").trim();
+  const summary = sanitizeDerivedText(raw.summary);
 
   const parameters = asArray(raw.parameters).map(coerceParameter).filter(Boolean) as SkillParameterDraft[];
-  const preconditions = asStringArray(raw.preconditions);
+  const preconditions = sanitizeDerivedMarkdownList(asStringArray(raw.preconditions));
   const steps = asArray(raw.steps).map(coerceStep).filter(Boolean) as SkillStepDraft[];
   const examples = asArray(raw.examples).map(coerceExample).filter(Boolean) as SkillExampleDraft[];
-  const tags = dedupeLc(asStringArray(raw.tags));
+  const tags = dedupeLc(sanitizeDerivedList(asStringArray(raw.tags)));
+  // V7 §2.4.6 — coerce both `decision_guidance` (preferred LLM key)
+  // and `decisionGuidance` (camelCase fallback). Caps at 5 entries each
+  // to keep the skill body skim-able and the prompt budget bounded.
+  const decisionGuidance = coerceDecisionGuidance(raw.decision_guidance ?? raw.decisionGuidance);
+
+  const tools = dedupeLc(sanitizeDerivedList(asStringArray(raw.tools)));
 
   return {
     name,
@@ -166,7 +300,24 @@ function normaliseDraft(
     steps,
     examples,
     tags,
+    decisionGuidance,
+    tools,
   };
+}
+
+function coerceDecisionGuidance(raw: unknown): {
+  preference: string[];
+  antiPattern: string[];
+} {
+  if (!raw || typeof raw !== "object") {
+    return { preference: [], antiPattern: [] };
+  }
+  const o = raw as Record<string, unknown>;
+  const pref = dedupeLc(sanitizeDerivedMarkdownList(asStringArray(o.preference))).slice(0, 5);
+  const anti = dedupeLc(
+    sanitizeDerivedMarkdownList(asStringArray(o.anti_pattern ?? o.antiPattern)),
+  ).slice(0, 5);
+  return { preference: pref, antiPattern: anti };
 }
 
 function sanitiseName(raw: string): string {
@@ -201,7 +352,7 @@ function dedupeLc(arr: string[]): string[] {
 function coerceParameter(x: unknown): SkillParameterDraft | null {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
-  const name = String(o.name ?? "").trim();
+  const name = sanitizeDerivedText(o.name);
   if (!name) return null;
   const t = String(o.type ?? "string").toLowerCase() as SkillParameterDraft["type"];
   const allowed = new Set(["string", "number", "boolean", "enum"]);
@@ -210,10 +361,10 @@ function coerceParameter(x: unknown): SkillParameterDraft | null {
     name,
     type,
     required: Boolean(o.required ?? false),
-    description: String(o.description ?? "").trim(),
+    description: sanitizeDerivedMarkdown(o.description),
   };
   if (type === "enum") {
-    out.enumValues = asStringArray(o.enum);
+    out.enumValues = sanitizeDerivedMarkdownList(asStringArray(o.enum));
   }
   return out;
 }
@@ -221,8 +372,8 @@ function coerceParameter(x: unknown): SkillParameterDraft | null {
 function coerceStep(x: unknown): SkillStepDraft | null {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
-  const title = String(o.title ?? "").trim();
-  const body = String(o.body ?? "").trim();
+  const title = sanitizeDerivedText(o.title);
+  const body = sanitizeDerivedMarkdown(o.body);
   if (!title && !body) return null;
   return { title: title || body.slice(0, 32), body };
 }
@@ -230,8 +381,8 @@ function coerceStep(x: unknown): SkillStepDraft | null {
 function coerceExample(x: unknown): SkillExampleDraft | null {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
-  const input = String(o.input ?? "").trim();
-  const expected = String(o.expected ?? "").trim();
+  const input = sanitizeDerivedMarkdown(o.input);
+  const expected = sanitizeDerivedMarkdown(o.expected);
   if (!input && !expected) return null;
   return { input, expected };
 }

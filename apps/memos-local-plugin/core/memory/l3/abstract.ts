@@ -14,6 +14,7 @@ import {
 import { L3_ABSTRACTION_PROMPT } from "../../llm/prompts/l3-abstraction.js";
 import type { LlmClient } from "../../llm/index.js";
 import type { Logger } from "../../logger/types.js";
+import { sanitizeDerivedMarkdown, sanitizeDerivedText } from "../../safety/content.js";
 import type {
   EmbeddingVector,
   EpisodeId,
@@ -36,6 +37,13 @@ export interface AbstractInput {
   cluster: PolicyCluster;
   /** Evidence traces per policy id (caller resolves these via traces repo). */
   evidenceByPolicy: Map<PolicyId, readonly TraceRow[]>;
+  /**
+   * Episode that triggered this L3 run, when known. Forwarded to the
+   * LLM call so the resulting `system_model_status` audit row can be
+   * grouped with the rest of that episode's pipeline activity in the
+   * Logs viewer.
+   */
+  episodeId?: EpisodeId;
 }
 
 export interface AbstractDeps {
@@ -54,6 +62,14 @@ export async function abstractDraft(
 ): Promise<L3AbstractionDraftResult> {
   const { llm, log, config } = deps;
   if (!config.useLlm || !llm) {
+    const reason = !config.useLlm
+      ? "useLlm disabled in config"
+      : "llm client is null (provider not attached?)";
+    log.warn("l3.abstract.llm_unavailable", {
+      clusterPolicies: input.cluster.policies.length,
+      reason,
+      fallback: "skipped",
+    });
     return { ok: false, reason: "llm_disabled" };
   }
 
@@ -81,6 +97,8 @@ export async function abstractDraft(
       ],
       {
         op: `${L3_ABSTRACTION_PROMPT.id}.v${L3_ABSTRACTION_PROMPT.version}`,
+        phase: "l3",
+        episodeId: input.episodeId,
         temperature: 0.15,
         malformedRetries: 1,
         schemaHint: `{"title":"...","domain_tags":["..."],"environment":[{"label":"...","description":"...","evidenceIds":["..."]}],"inference":[...],"constraints":[...],"body":"markdown","confidence":0..1,"supersedes_world_ids":[]}`,
@@ -138,6 +156,22 @@ export function buildWorldModelRow(args: {
     args.draft.domainTags.length > 0 ? args.draft.domainTags : args.cluster.domainTags,
   ).slice(0, 6);
 
+  // Cohesion-aware confidence shaping. The LLM proposes a `draft.confidence`
+  // based on how well its three facets (ℰ / ℐ / 𝒞) cover the evidence; we
+  // additionally dampen `loose` clusters proportionally to how spread out
+  // their members are in embedding space. Two policies that ended up in the
+  // same domain bucket but pull in opposite directions (cohesion ≈ 0.2)
+  // shouldn't claim the same retrieval-time confidence as a tight cluster
+  // (cohesion ≈ 0.9). The shrinkage is intentionally gentle (down to 0.6×
+  // for cohesion=0) so we still surface loose-but-real clusters in
+  // Tier-3, just below tighter ones.
+  const baseConfidence = clamp01(args.draft.confidence ?? 0.5);
+  const cohesionFactor =
+    args.cluster.admission === "loose"
+      ? 0.6 + 0.4 * clamp01(args.cluster.cohesion)
+      : 1.0;
+  const confidence = clamp01(baseConfidence * cohesionFactor);
+
   return {
     id: (args.id ?? (ids.world() as WorldModelId)),
     title: args.draft.title.slice(0, 160),
@@ -148,13 +182,14 @@ export function buildWorldModelRow(args: {
       constraints: args.draft.constraints,
     },
     domainTags,
-    confidence: clamp01(args.draft.confidence ?? 0.5),
+    confidence,
     policyIds: args.cluster.policies.map((p) => p.id),
     sourceEpisodeIds: Array.from(new Set(args.episodeIds)),
     inducedBy: args.inducedBy,
     vec: (args.cluster.centroidVec ?? null) as EmbeddingVector | null,
     createdAt: now,
     updatedAt: now,
+    version: 1,
     status: "active",
   };
 }
@@ -166,8 +201,18 @@ function packPrompt(
   cfg: AbstractDeps["config"],
 ): string {
   const { cluster, evidenceByPolicy } = input;
+  // ADMISSION:
+  //   strict = every member is within `clusterMinSimilarity` of the centroid.
+  //            The world model can confidently describe a single coherent
+  //            sub-problem family.
+  //   loose  = members share a domain key but their titles/triggers spread
+  //            wider in embedding space. The world model should describe the
+  //            shared *project / environment*, not a single sub-problem;
+  //            facets (ℰ/ℐ/𝒞) should be broader and less prescriptive.
+  const cohesionStr = cluster.cohesion.toFixed(2);
   const header = [
     `CLUSTER_KEY: ${cluster.key}`,
+    `ADMISSION: ${cluster.admission} (cohesion=${cohesionStr})`,
     `DOMAIN_TAGS: ${cluster.domainTags.join(", ") || "-"}`,
     `POLICIES (${cluster.policies.length}):`,
   ].join("\n");
@@ -216,12 +261,12 @@ function packPolicy(
 function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
   const triple = pickTriple(value);
   return {
-    title: String(value.title ?? "").trim(),
+    title: sanitizeDerivedText(value.title),
     domainTags: normaliseTags(value.domain_tags),
     environment: triple.environment,
     inference: triple.inference,
     constraints: triple.constraints,
-    body: typeof value.body === "string" ? (value.body as string).trim() : "",
+    body: typeof value.body === "string" ? sanitizeDerivedMarkdown(value.body) : "",
     confidence: clamp01(typeof value.confidence === "number" ? value.confidence : 0.5),
     supersedesWorldIds: Array.isArray(value.supersedes_world_ids)
       ? (value.supersedes_world_ids as unknown[])
@@ -249,8 +294,8 @@ function toEntries(raw: unknown): L3AbstractionDraftEntry[] {
     .map((r): L3AbstractionDraftEntry | null => {
       if (!r || typeof r !== "object") return null;
       const o = r as Record<string, unknown>;
-      const label = typeof o.label === "string" ? (o.label as string).trim() : "";
-      const description = typeof o.description === "string" ? (o.description as string).trim() : "";
+      const label = typeof o.label === "string" ? sanitizeDerivedText(o.label) : "";
+      const description = typeof o.description === "string" ? sanitizeDerivedMarkdown(o.description) : "";
       if (!label && !description) return null;
       const evidenceIds = Array.isArray(o.evidenceIds)
         ? (o.evidenceIds as unknown[]).filter((s): s is string => typeof s === "string")

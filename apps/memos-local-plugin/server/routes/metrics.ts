@@ -8,7 +8,7 @@
  *   GET /api/v1/metrics/tools?minutes=N  (alias: ?days=N)
  *     Per-tool call latency + success-rate table. Data source: the
  *     `api_logs` table, which records every plugin internal operation
- *     (memory_search / memory_add / policy_generate / skill_generate /
+ *     (memos_search / memory_add / policy_generate / skill_generate /
  *     world_model_generate / task_done / task_failed) with its
  *     `durationMs` and `success` flag. We also fold in any agent-side
  *     tool invocations recorded on `traces.tool_calls_json` so the
@@ -27,6 +27,13 @@ interface ToolStat {
   avgMs: number;
   p50Ms: number;
   p95Ms: number;
+  lastTs: number;
+}
+
+interface UnavailableToolStat {
+  name: string;
+  calls: number;
+  errors: number;
   lastTs: number;
 }
 
@@ -56,6 +63,9 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     const buckets = new Map<string, number[]>();
     const errors = new Map<string, number>();
     const lastTs = new Map<string, number>();
+    const unavailableCalls = new Map<string, number>();
+    const unavailableErrors = new Map<string, number>();
+    const unavailableLastTs = new Map<string, number>();
     // Per-minute time series keyed by "YYYY-MM-DDTHH:MM" → { [tool]: ms[] }
     const minuteBuckets = new Map<string, Map<string, number[]>>();
 
@@ -74,9 +84,15 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
       }
     };
 
+    const bumpUnavailable = (name: string, ok: boolean, ts: number): void => {
+      unavailableCalls.set(name, (unavailableCalls.get(name) ?? 0) + 1);
+      if (!ok) unavailableErrors.set(name, (unavailableErrors.get(name) ?? 0) + 1);
+      unavailableLastTs.set(name, Math.max(unavailableLastTs.get(name) ?? 0, ts));
+    };
+
     // 1. Plugin internal operations — from api_logs. We only surface
     // entries that represent **actual tool/handler calls the agent
-    // made or the user cares about latency for**: `memory_search`
+    // made or the user cares about latency for**: `memos_search`
     // and `memory_add`. Purely internal pipeline lifecycle events
     // (`task_done`, `task_failed`, `skill_generate`, `skill_evolve`,
     // `policy_generate`, `policy_evolve`, `world_model_generate`,
@@ -84,7 +100,7 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     // with names like "task_failed" that users don't recognise as
     // tools, and their timings reflect background work rather than
     // response latency.
-    const PUBLIC_API_LOG_TOOLS = new Set(["memory_search", "memory_add"]);
+    const PUBLIC_API_LOG_TOOLS = new Set(["memos_search", "memory_search", "memory_add"]);
     const { logs } = await deps.core.listApiLogs({ limit: 5_000, offset: 0 });
     for (const lg of logs) {
       if (lg.calledAt < sinceMs) continue;
@@ -101,8 +117,20 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
       if (tr.ts < sinceMs) continue;
       for (const tc of tr.toolCalls ?? []) {
         const name = tc.name ?? "unknown";
-        const dur = Math.max(0, (tc.endedAt ?? tr.ts) - (tc.startedAt ?? tr.ts));
-        bump(name, dur, !tc.errorCode, tc.endedAt ?? tr.ts);
+        const startedAt = tc.startedAt;
+        const endedAt = tc.endedAt;
+        if (
+          typeof startedAt !== "number" ||
+          typeof endedAt !== "number" ||
+          !Number.isFinite(startedAt) ||
+          !Number.isFinite(endedAt) ||
+          endedAt <= startedAt
+        ) {
+          bumpUnavailable(name, !tc.errorCode, tr.ts);
+          continue;
+        }
+        const dur = endedAt - startedAt;
+        bump(name, dur, !tc.errorCode, endedAt);
       }
     }
 
@@ -126,6 +154,15 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     tools.sort((a, b) => b.calls - a.calls);
     const toolNames = tools.map((t) => t.name);
 
+    const unavailableTools: UnavailableToolStat[] = [...unavailableCalls.entries()]
+      .map(([name, calls]) => ({
+        name,
+        calls,
+        errors: unavailableErrors.get(name) ?? 0,
+        lastTs: unavailableLastTs.get(name) ?? 0,
+      }))
+      .sort((a, b) => b.calls - a.calls || b.lastTs - a.lastTs);
+
     let series: Array<Record<string, unknown>> | undefined;
     if (wantSeries && minuteBuckets.size > 0) {
       const sorted = [...minuteBuckets.keys()].sort();
@@ -145,6 +182,7 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     return {
       tools,
       toolNames,
+      unavailableTools,
       series,
       windowMinutes,
       windowDays: Math.round(windowMinutes / 1440) || 1,

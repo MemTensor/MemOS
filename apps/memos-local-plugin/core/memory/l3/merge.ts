@@ -33,12 +33,15 @@ import type {
 
 export interface MergeCandidateLookup {
   findByDomainTag(tag: string): WorldModelRow[];
+  list?(opts?: { limit?: number }): WorldModelRow[];
 }
 
 export interface MergeDeps {
   lookup: MergeCandidateLookup;
   config: Pick<L3Config, "clusterMinSimilarity">;
 }
+
+const POLICY_OVERLAP_MERGE_THRESHOLD = 0.6;
 
 /**
  * Pull the small shortlist of WMs that might be the "same environment"
@@ -53,6 +56,15 @@ export function gatherMergeCandidates(
   for (const tag of cluster.domainTags) {
     for (const wm of deps.lookup.findByDomainTag(tag)) {
       if (!seen.has(wm.id)) seen.set(wm.id, wm);
+    }
+  }
+  if (deps.lookup.list) {
+    for (const wm of deps.lookup.list({ limit: 5_000 })) {
+      if (wm.status === "archived") continue;
+      const overlap = policyOverlapScore(cluster.policies.map((p) => p.id), wm.policyIds);
+      if (overlap >= POLICY_OVERLAP_MERGE_THRESHOLD && !seen.has(wm.id)) {
+        seen.set(wm.id, wm);
+      }
     }
   }
   return Array.from(seen.values());
@@ -82,6 +94,15 @@ export function chooseMergeTarget(
     return { kind: "update", target: explicit, cosineScore: 1 };
   }
 
+  const policyOverlap = pickByPolicyOverlap(cluster, candidates);
+  if (policyOverlap) {
+    return {
+      kind: "update",
+      target: policyOverlap.row,
+      cosineScore: policyOverlap.score,
+    };
+  }
+
   const clusterVec = cluster.centroidVec;
   if (!clusterVec) return { kind: "create" };
 
@@ -107,6 +128,44 @@ function pickBySupersedes(
     if (supersedes.includes(wm.id)) return wm;
   }
   return null;
+}
+
+function pickByPolicyOverlap(
+  cluster: PolicyCluster,
+  candidates: readonly WorldModelRow[],
+): { row: WorldModelRow; score: number } | null {
+  const clusterPolicyIds = cluster.policies.map((p) => p.id);
+  let best: { row: WorldModelRow; score: number; shared: number } | null = null;
+  for (const wm of candidates) {
+    if (wm.status === "archived") continue;
+    const score = policyOverlapScore(clusterPolicyIds, wm.policyIds);
+    if (score < POLICY_OVERLAP_MERGE_THRESHOLD) continue;
+    const shared = sharedPolicyCount(clusterPolicyIds, wm.policyIds);
+    if (
+      !best ||
+      score > best.score ||
+      (score === best.score && shared > best.shared) ||
+      (score === best.score && shared === best.shared && wm.confidence > best.row.confidence)
+    ) {
+      best = { row: wm, score, shared };
+    }
+  }
+  return best;
+}
+
+function policyOverlapScore(left: readonly PolicyId[], right: readonly PolicyId[]): number {
+  if (left.length === 0 || right.length === 0) return 0;
+  const shared = sharedPolicyCount(left, right);
+  return shared / Math.min(left.length, right.length);
+}
+
+function sharedPolicyCount(left: readonly PolicyId[], right: readonly PolicyId[]): number {
+  const rightSet = new Set(right);
+  let shared = 0;
+  for (const id of new Set(left)) {
+    if (rightSet.has(id)) shared += 1;
+  }
+  return shared;
 }
 
 // ─── Field merging (for "update" decisions) ─────────────────────────────────

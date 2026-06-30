@@ -57,12 +57,17 @@ export interface EpisodeTurn {
   meta?: Record<string, unknown>;
 }
 
+export type EpisodeTurnInput = Omit<EpisodeTurn, "id" | "ts"> & {
+  /** Adapter-provided event time. Defaults to the server receive time. */
+  ts?: EpochMs;
+};
+
 export interface EpisodeStartInput {
   sessionId: SessionId;
   /** Pre-minted id (adapters sometimes pre-allocate). */
   id?: EpisodeId;
   /** The initial user query. Required — empty episodes are a programming error. */
-  initialTurn: Omit<EpisodeTurn, "id" | "ts">;
+  initialTurn: EpisodeTurnInput;
   /** Optional adapter-provided hints (e.g. sub-agent depth, tool allowlist). */
   meta?: Record<string, unknown>;
 }
@@ -180,6 +185,14 @@ export interface RelationInput {
   gapMs?: number;
   /** Domain/tag signals from the previous episode (capture.tagger output). */
   prevTags?: readonly string[];
+  /**
+   * Previous episode id (the one being asked "should we keep this open").
+   * Forwarded to the LLM call as `episodeId` so the resulting
+   * `system_model_status` audit row can be grouped with that episode's
+   * pipeline activity in the Logs viewer — semantically the classifier
+   * is "scoring whether to terminate prevEpisodeId".
+   */
+  prevEpisodeId?: EpisodeId;
 }
 
 // ─── Event bus ──────────────────────────────────────────────────────────────

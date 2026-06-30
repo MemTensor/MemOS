@@ -18,6 +18,7 @@ export {
   listHeuristicRules,
   type IntentClassifier,
   type IntentClassifierOptions,
+  type IntentClassifyOptions,
 } from "./intent-classifier.js";
 export {
   createRelationClassifier,

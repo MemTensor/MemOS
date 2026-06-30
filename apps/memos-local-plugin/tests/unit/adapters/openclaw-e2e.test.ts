@@ -1,6 +1,6 @@
 /**
  * End-to-end integration of the OpenClaw adapter, exercising the full
- * memory_add → memory_search → injection round trip.
+ * memory_add → memos_search → injection round trip.
  *
  * The intent is to fail loudly whenever any of the following silently
  * regress (which they did, twice, in earlier iterations):
@@ -132,7 +132,7 @@ function silentLogger(): HostLogger {
   };
 }
 
-function buildDeps(h: TmpDbHandle): PipelineDeps {
+function buildDeps(h: TmpDbHandle, embedder: Embedder | null = semanticFakeEmbedder(384)): PipelineDeps {
   return {
     agent: "openclaw",
     home: resolveHome("openclaw", "/tmp/memos-e2e-test"),
@@ -141,14 +141,15 @@ function buildDeps(h: TmpDbHandle): PipelineDeps {
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: semanticFakeEmbedder(DEFAULT_CONFIG.embedding.dimensions),
+    embedder,
     log: rootLogger.child({ channel: "test.adapters.openclaw.e2e" }),
+    namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
   };
 }
 
-function buildCore(): MemoryCore {
-  pipeline = createPipeline(buildDeps(db!));
+function buildCore(embedder?: Embedder | null): MemoryCore {
+  pipeline = createPipeline(buildDeps(db!, embedder));
   const mc = createMemoryCore(
     pipeline,
     resolveHome("openclaw", "/tmp/memos-e2e-test"),
@@ -278,11 +279,11 @@ describe("OpenClaw adapter — end-to-end memory chain", () => {
     expect(block).toContain("<memos_context>");
     expect(block).toContain("</memos_context>");
     // It must contain *some* real content — either an actual hit
-    // ("游泳") or the cold-start hint mentioning `memory_search`. The
+    // ("游泳") or the cold-start hint mentioning `memos_search`. The
     // failing regression we test against was emitting only metadata
     // labels (e.g. `[trace] trace · V=0.09`) with no body.
     const hasUserSwimText = block.includes("游泳");
-    const hasReadableHint = block.includes("memory_search") || block.includes("conversation history");
+    const hasReadableHint = block.includes("memos_search") || block.includes("conversation history");
     expect(hasUserSwimText || hasReadableHint).toBe(true);
     // Negative assertion — the regression-style metadata-only line
     // would look like `[trace] trace · V=` but never carry text.
@@ -298,7 +299,7 @@ describe("OpenClaw adapter — end-to-end memory chain", () => {
     }
   });
 
-  it("memory_search via MemoryCore returns hits readable by the viewer", async () => {
+  it("memos_search via MemoryCore returns hits readable by the viewer", async () => {
     // The viewer hits `/api/v1/memory/search` which proxies to
     // `MemoryCore.searchMemory`. Verify the path returns hits that
     // include the actual snippet text (not just refIds).
@@ -332,6 +333,38 @@ describe("OpenClaw adapter — end-to-end memory chain", () => {
     expect(search.hits.length).toBeGreaterThan(0);
     const allText = search.hits.map((h) => h.snippet).join("\n");
     expect(allText).toContain("榴莲");
+  });
+
+  it("retrieves freshly captured text through keyword fallback when embeddings are unavailable", async () => {
+    const mc = buildCore(null);
+    await mc.init();
+    const bridge = createOpenClawBridge({ agent: "openclaw", core: mc, log: silentLogger() });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "记住：我喜欢蓝莓酸奶", messages: [] },
+      ctx({ sessionKey: "keyword-thread" }),
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "记住：我喜欢蓝莓酸奶" },
+          { role: "assistant", content: "好的，我记住了。" },
+        ],
+        durationMs: 80,
+      },
+      ctx({ sessionKey: "keyword-thread" }),
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const search = await mc.searchMemory({
+      agent: "openclaw",
+      query: "蓝莓酸奶",
+      topK: { tier1: 0, tier2: 5, tier3: 0 },
+    });
+
+    expect(search.hits.length).toBeGreaterThan(0);
+    expect(search.hits.map((h) => h.snippet).join("\n")).toContain("蓝莓酸奶");
   });
 
   it("toolCalls captured during agent_end are written into the trace row", async () => {
@@ -439,7 +472,7 @@ describe("OpenClaw adapter — end-to-end memory chain", () => {
 
   it("listTraces returns newest-first traces with a readable summary (Memories panel)", async () => {
     // What the Memories viewer actually calls (see
-    // `web/src/views/MemoriesView.tsx`). The contract for this
+    // `viewer/src/views/MemoriesView.tsx`). The contract for this
     // endpoint is:
     //   - Newest trace comes first.
     //   - Each trace has SOME renderable text — either `summary`

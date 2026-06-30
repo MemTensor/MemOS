@@ -23,7 +23,8 @@
  *     for us, and on hard failure capture.ts falls back to per-step.
  *
  * Wire format ↔ prompt:
- *   Send `{steps: [{idx, state, action, outcome, reflection, synth_allowed}]}`.
+ *   Send `{ host_context?, task_context?, steps: [{idx, state, action, outcome, reflection, synth_allowed}] }`.
+ *   `task_context` is episode-level task summary (nullable string).
  *   Receive `{scores: [{idx, reflection_text, alpha, usable, reason}]}`.
  *   See `core/llm/prompts/reflection.ts :: BATCH_REFLECTION_PROMPT`.
  */
@@ -36,6 +37,7 @@ import {
 } from "../llm/prompts/index.js";
 import { BATCH_REFLECTION_PROMPT } from "../llm/prompts/reflection.js";
 import { rootLogger } from "../logger/index.js";
+import { sanitizeDerivedText } from "../safety/content.js";
 import type { NormalizedStep, ReflectionScore } from "./types.js";
 
 export interface BatchScoreInput {
@@ -54,6 +56,9 @@ export interface BatchScoreOptions {
    * (text→null, α→0, source→none) — preserves the per-step contract.
    */
   synthReflections: boolean;
+  episodeId?: string;
+  phase?: string;
+  taskSummary?: string | null;
   /**
    * Cap per-field text we shovel into the prompt. Default 1_200 chars per
    * `state`/`outcome`, 1_500 per `action`. Mirrors per-step prompts.
@@ -118,6 +123,8 @@ export async function batchScoreReflections(
   const fieldChars = { ...DEFAULT_FIELD_CHARS, ...(opts.perFieldChars ?? {}) };
 
   const payload = {
+    host_context: batchHostContext(inputs, llm),
+    task_context: opts.taskSummary?.trim().slice(0, 1_200) || null,
     steps: inputs.map((input, i) => ({
       idx: i,
       state: clip(input.step.userText, fieldChars.state),
@@ -156,6 +163,8 @@ export async function batchScoreReflections(
     ],
     {
       op: BATCH_OP_TAG,
+      episodeId: opts.episodeId,
+      phase: opts.phase,
       schemaHint:
         '{"scores": [{"idx": int, "reflection_text": "str", "alpha": 0..1, "usable": bool, "reason": "str"}]}',
       validate: (v) => validateBatchPayload(v, inputs.length),
@@ -178,10 +187,11 @@ export async function batchScoreReflections(
       return disabledScoreFor(input);
     }
     const incomingText = (input.existingReflection ?? "").trim();
-    const llmText = typeof raw.reflection_text === "string" ? raw.reflection_text.trim() : "";
+    const llmText = typeof raw.reflection_text === "string" ? sanitizeDerivedText(raw.reflection_text) : "";
     const usable = Boolean(raw.usable);
     const rawAlpha = clamp01(numOrZero(raw.alpha));
     const alpha = usable ? rawAlpha : 0;
+    const reason = typeof raw.reason === "string" ? sanitizeDerivedText(raw.reason) : null;
 
     let finalText: string | null;
     let source: ReflectionScore["source"];
@@ -204,6 +214,7 @@ export async function batchScoreReflections(
       text: finalText,
       alpha,
       usable: usable && finalText !== null,
+      reason,
       source,
       model: rsp.servedBy,
     };
@@ -220,6 +231,26 @@ export async function batchScoreReflections(
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
+
+function batchHostContext(
+  inputs: ReadonlyArray<BatchScoreInput>,
+  llm: LlmClient,
+): Record<string, string> | undefined {
+  const hints = inputs
+    .map((input) => input.step.meta.contextHints)
+    .find((value): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value),
+    );
+  const out: Record<string, string> = {
+    reflectionProvider: llm.provider,
+    reflectionModel: llm.model,
+  };
+  for (const key of ["agentIdentity", "hostProvider", "hostModel", "hostApiMode", "hostBaseUrl"]) {
+    const value = hints?.[key];
+    if (typeof value === "string" && value.trim()) out[key] = value.trim();
+  }
+  return out;
+}
 
 function disabledScoreFor(input: BatchScoreInput): ReflectionScore {
   const text = (input.existingReflection ?? "").trim();

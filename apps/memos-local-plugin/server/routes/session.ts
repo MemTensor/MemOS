@@ -9,10 +9,24 @@
 import type {
   AgentKind,
   EpisodeId,
+  EpisodeListItemDTO,
   SessionId,
 } from "../../agent-contract/dto.js";
+import {
+  deriveEpisodeStatus,
+  parseTaskStatusFilter,
+} from "../../agent-contract/episode-status.js";
 import type { ServerDeps } from "../types.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
+
+/**
+ * Upper bound for the in-memory scan window when the request applies
+ * a status / preview filter. The episode table is small in practice
+ * (≤ a few thousand rows per workspace), so a single bulk fetch +
+ * in-memory filter is far simpler than pushing the derivation rules
+ * down into SQL — and matches what `countEpisodes` already does.
+ */
+const FILTER_SCAN_LIMIT = 5_000;
 
 export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("POST /api/v1/sessions", async (ctx) => {
@@ -57,28 +71,92 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
 
   routes.set("GET /api/v1/episodes", async (ctx) => {
     const sessionId = (ctx.url.searchParams.get("sessionId") as SessionId | null) ?? undefined;
+    const ownerAgentKind = (ctx.url.searchParams.get("ownerAgentKind") || undefined) as
+      | AgentKind
+      | undefined;
+    const ownerProfileId = ctx.url.searchParams.get("ownerProfileId") || undefined;
+    const q = (ctx.url.searchParams.get("q") || "").trim().toLowerCase();
+    const status = parseTaskStatusFilter(ctx.url.searchParams.get("status"));
     const rawLimit = numberOrUndefined(ctx.url.searchParams.get("limit"));
     const rawOffset = numberOrUndefined(ctx.url.searchParams.get("offset"));
     const limit = rawLimit && rawLimit > 0 ? rawLimit : 50;
     const offset = rawOffset && rawOffset >= 0 ? rawOffset : 0;
-    // Return the rich row shape — the viewer's task list needs
-    // session id / status / turn count / preview. The old `ids`-only
-    // variant is still available under the `episode.list` JSON-RPC
-    // method and via `?shape=ids`.
+
+    // The legacy `?shape=ids` path is unaffected by `status` /
+    // preview filtering — JSON-RPC callers ask for raw ids only.
     if (ctx.url.searchParams.get("shape") === "ids") {
+      const total = await deps.core.countEpisodes({
+        sessionId,
+        ownerAgentKind,
+        ownerProfileId,
+        includeAllNamespaces: true,
+      });
       const episodeIds = await deps.core.listEpisodes({ sessionId, limit, offset });
       return {
         episodeIds,
         limit,
         offset,
+        total,
         nextOffset: episodeIds.length === limit ? offset + limit : undefined,
       };
     }
-    const episodes = await deps.core.listEpisodeRows({ sessionId, limit, offset });
+
+    // Filtered path (q OR status): scan a wide window and apply
+    // both filters in memory, then paginate over the *filtered* set.
+    // This guarantees `total` / `nextOffset` reflect what the viewer
+    // actually shows — without it the chip-group filter on the
+    // Tasks page reported "no matches" while the pager still claimed
+    // there were more pages worth of data. `ownerAgentKind` /
+    // `ownerProfileId` are passed straight to core so the multi-agent
+    // namespace filter still wins before the in-memory derivation.
+    if (q || status) {
+      let rows = await deps.core.listEpisodeRows({
+        sessionId,
+        limit: FILTER_SCAN_LIMIT,
+        offset: 0,
+        ownerAgentKind,
+        ownerProfileId,
+        includeAllNamespaces: true,
+      });
+      if (q) {
+        rows = rows.filter(
+          (ep: EpisodeListItemDTO) => !!ep.preview && ep.preview.toLowerCase().includes(q),
+        );
+      }
+      if (status) {
+        rows = rows.filter((ep: EpisodeListItemDTO) => deriveEpisodeStatus(ep) === status);
+      }
+      const paged = rows.slice(offset, offset + limit);
+      return {
+        episodes: paged,
+        limit,
+        offset,
+        total: rows.length,
+        nextOffset: rows.length > offset + limit ? offset + limit : undefined,
+      };
+    }
+
+    // Default (unfiltered) path: rely on the dedicated count query so
+    // we don't pay for a 5 k-row scan on every viewer page-flip.
+    const total = await deps.core.countEpisodes({
+      sessionId,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
+    const episodes = await deps.core.listEpisodeRows({
+      sessionId,
+      limit,
+      offset,
+      ownerAgentKind,
+      ownerProfileId,
+      includeAllNamespaces: true,
+    });
     return {
       episodes,
       limit,
       offset,
+      total,
       nextOffset: episodes.length === limit ? offset + limit : undefined,
     };
   });
