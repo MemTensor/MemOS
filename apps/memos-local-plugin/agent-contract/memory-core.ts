@@ -161,6 +161,27 @@ export type Unsubscribe = () => void;
 export interface MemoryCore {
   // ── lifecycle ──
   init(): Promise<void>;
+  /**
+   * Await the background startup-recovery work scheduled by `init()`.
+   *
+   * `init()` returns as soon as the cheap, synchronous DB classification
+   * of orphan episodes is done; the slow reflect/reward/L2 path on stale
+   * orphans and dirty-closed episodes runs in the background so the HTTP
+   * viewer can start serving immediately
+   * (https://github.com/MemTensor/MemOS/issues/1776).
+   *
+   * Callers that need to observe the side effects of recovery — tests,
+   * scripted maintenance tools, graceful shutdown — await this promise.
+   * Production adapters (`adapters/openclaw`, `bridge.cts`) intentionally
+   * skip the await so server.started is not gated on LLM round-trips.
+   *
+   * Resolves immediately if there was nothing to recover, or if `init()`
+   * was never called. Never rejects — recovery errors are logged to
+   * `init.orphan_recovery.flush_failed` and
+   * `init.background_recovery_failed` and swallowed so they cannot wedge
+   * shutdown.
+   */
+  waitForStartupRecovery?(): Promise<void>;
   shutdown(): Promise<void>;
   health(): Promise<CoreHealth>;
   /** Late-bind ARMS telemetry (called after config is available). */

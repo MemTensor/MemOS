@@ -485,6 +485,16 @@ export function createMemoryCore(
   let telemetry = options.telemetry ?? null;
   let initialized = false;
   let shutDown = false;
+  /**
+   * Background promise for the slow part of `init()`'s orphan recovery
+   * (reflect → reward → L2 induce on stale orphans + dirty-closed
+   * rescore). Tracked so `waitForStartupRecovery()` and `shutdown()` can
+   * await it. Defaults to a resolved promise — empty DB or no orphans
+   * means no extra waiting is needed. See
+   * https://github.com/MemTensor/MemOS/issues/1776 for the regression
+   * this dodges (server.started was gated on ~100 s of LLM round-trips).
+   */
+  let startupRecoveryPromise: Promise<void> = Promise.resolve();
   /** Per-episode monotonic step counter for tool outcomes. */
   const toolStepByEpisode = new Map<string, number>();
   let hubRuntime: HubRuntime | null = null;
@@ -879,6 +889,19 @@ export function createMemoryCore(
     // not evidence that the topic ended; the next user turn gets routed
     // through relation classification. Only hard-stale open topics are
     // finalized here so the pipeline eventually catches up.
+    //
+    // The synchronous part — lightweight close + recent-topic meta
+    // updates + classification — stays inline because it's pure DB work
+    // and the next turn relies on the resulting `topicState`. The slow
+    // part — `recoverOpenEpisodesAsSessionEnd` and
+    // `recoverDirtyClosedEpisodes`, both of which fan out into reflect →
+    // reward → L2 → LLM round-trips — is moved to a background promise so
+    // `init()` returns in milliseconds and the HTTP viewer can start
+    // accepting requests immediately. See
+    // https://github.com/MemTensor/MemOS/issues/1776 for the original 100 s
+    // startup regression.
+    let staleForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
+    let dirtyClosedForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
     try {
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
@@ -908,19 +931,38 @@ export function createMemoryCore(
             recoveredAtStartup: nowMs,
           });
         }
-        if (stale.length > 0) {
-          await recoverOpenEpisodesAsSessionEnd(stale);
-        }
+        staleForBackground = stale;
       }
-      const dirtyClosed = handle.repos.episodes
+      dirtyClosedForBackground = handle.repos.episodes
         .list({ status: "closed", limit: 500 })
         .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
-      if (dirtyClosed.length > 0) {
-        await recoverDirtyClosedEpisodes(dirtyClosed);
-      }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
         err: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    if (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0) {
+      const staleSnapshot = staleForBackground;
+      const dirtyClosedSnapshot = dirtyClosedForBackground;
+      log.info("init.background_recovery_started", {
+        staleCount: staleSnapshot.length,
+        dirtyClosedCount: dirtyClosedSnapshot.length,
+      });
+      startupRecoveryPromise = (async () => {
+        if (staleSnapshot.length > 0) {
+          await recoverOpenEpisodesAsSessionEnd(staleSnapshot);
+        }
+        if (dirtyClosedSnapshot.length > 0) {
+          await recoverDirtyClosedEpisodes(dirtyClosedSnapshot);
+        }
+      })().catch((err) => {
+        // `waitForStartupRecovery` is contracted to never reject — log
+        // and swallow so a failed reflect listener can't surface as an
+        // unhandled rejection at the bridge level.
+        log.warn("init.background_recovery_failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
       });
     }
 
@@ -1418,10 +1460,25 @@ export function createMemoryCore(
     data: Record<string, unknown>,
   ): void {}
 
+  async function waitForStartupRecovery(): Promise<void> {
+    // Contract: never rejects. The `.catch` in init() already converted
+    // any failure into a warn-level log, so awaiting here is safe.
+    await startupRecoveryPromise;
+  }
+
   async function shutdown(): Promise<void> {
     if (shutDown) return;
     shutDown = true;
     try {
+      // Drain the background orphan recovery before tearing down the
+      // SQLite handle / bus subscribers. If we shut down mid-flight the
+      // in-flight reflect → reward → L2 listeners would write to a
+      // closed DB and surface as SQLITE_MISUSE noise in tests + CI.
+      try {
+        await startupRecoveryPromise;
+      } catch {
+        /* startupRecoveryPromise already swallows; defensive only */
+      }
       try {
         await hubRuntime?.stop();
       } catch (err) {
@@ -4496,6 +4553,7 @@ export function createMemoryCore(
 
   return {
     init,
+    waitForStartupRecovery,
     shutdown,
     health,
     bindTelemetry(t: import("../telemetry/index.js").Telemetry) { telemetry = t; },

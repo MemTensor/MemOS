@@ -1233,6 +1233,11 @@ algorithm:
       pkgVersion: "orphan-test-recover",
     });
     await core.init();
+    // init() now schedules the slow reflect/reward/L2 part on a
+    // background promise; opt into the legacy "wait for everything"
+    // semantics so the meta-update assertions below are deterministic.
+    // See https://github.com/MemTensor/MemOS/issues/1776.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const unscored = readDb
@@ -1394,6 +1399,10 @@ algorithm:
       pkgVersion: "dirty-rescore-recover",
     });
     await core.init();
+    // recoverDirtyClosedEpisodes runs on the background recovery promise
+    // post-issue-1776; opt in so the meta_json assertions below see the
+    // post-rescore state.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const episode = readDb
@@ -1488,6 +1497,10 @@ algorithm:
       pkgVersion: "missing-reward-recover",
     });
     await core.init();
+    // recoverDirtyClosedEpisodes runs on the background recovery promise
+    // post-issue-1776; opt in so the meta_json assertions below see the
+    // post-rescore state.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const episode = readDb
@@ -1504,5 +1517,182 @@ algorithm:
     expect(meta.recoveryReason).toBe("dirty_reward_rescore");
     expect(meta.reward?.traceCount).toBe(1);
     expect(meta.reward?.traceIds).toEqual(["tr_missing_reward"]);
+  });
+
+  // https://github.com/MemTensor/MemOS/issues/1776 — orphan recovery must
+  // not gate HTTP server start. These tests pin the new lifecycle
+  // contract: init() returns fast and the slow reflect/reward/L2 work
+  // runs on a background promise that `waitForStartupRecovery` and
+  // `shutdown` can await.
+  describe("issue #1776 — non-blocking startup recovery", () => {
+    it("init() returns quickly even when stale orphans need recovery", async () => {
+      home = await makeTmpHome({
+        agent: "openclaw",
+        configYaml: FULL_MEMORY_CONFIG_YAML,
+      });
+      const seeder = await bootstrapMemoryCore({
+        agent: "openclaw",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "fast-init-seed",
+      });
+      await seeder.init();
+      await seeder.shutdown();
+
+      // Seed 3 stale orphans: each has a trace + an `endedAt` >5 hours
+      // ago so they fall through the STALE_EPISODE_TIMEOUT_MS gate and
+      // hit `recoverOpenEpisodesAsSessionEnd` in the background.
+      const Sqlite = (await import("better-sqlite3")).default;
+      const writeDb = new Sqlite(home.home.dbFile);
+      const oldTs = Date.now() - 6 * 60 * 60 * 1000; // 6 h ago
+      writeDb
+        .prepare(
+          `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("se_fast", "openclaw", oldTs, oldTs, "{}");
+      for (const epId of ["ep_fast_1", "ep_fast_2", "ep_fast_3"]) {
+        writeDb
+          .prepare(
+            `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, NULL, '[]', NULL, 'open', '{}')`,
+          )
+          .run(epId, "se_fast", oldTs);
+      }
+      writeDb.close();
+
+      core = await bootstrapMemoryCore({
+        agent: "openclaw",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "fast-init-recover",
+      });
+      const initStart = Date.now();
+      await core.init();
+      const initDurationMs = Date.now() - initStart;
+
+      // 500 ms is a generous bound: pure DB classification is sub-10 ms
+      // in practice, and the old synchronous path took >1 s even without
+      // an LLM because of the `handle.flush()` round-trip.
+      expect(initDurationMs).toBeLessThan(500);
+
+      await core.waitForStartupRecovery?.();
+    });
+
+    it("waitForStartupRecovery() resolves only after background work settles", async () => {
+      home = await makeTmpHome({
+        agent: "openclaw",
+        configYaml: FULL_MEMORY_CONFIG_YAML,
+      });
+      const seeder = await bootstrapMemoryCore({
+        agent: "openclaw",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "wait-recovery-seed",
+      });
+      await seeder.init();
+      await seeder.shutdown();
+
+      const Sqlite = (await import("better-sqlite3")).default;
+      const writeDb = new Sqlite(home.home.dbFile);
+      const oldTs = Date.now() - 6 * 60 * 60 * 1000;
+      writeDb
+        .prepare(
+          `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("se_wait", "openclaw", oldTs, oldTs, "{}");
+      writeDb
+        .prepare(
+          `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, NULL, '[]', ?, 'open', '{}')`,
+        )
+        .run("ep_wait", "se_wait", oldTs, 0.5);
+      writeDb.close();
+
+      core = await bootstrapMemoryCore({
+        agent: "openclaw",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "wait-recovery-recover",
+      });
+      await core.init();
+
+      // Right after init(), the orphan should still be open: background
+      // recovery has been scheduled but hasn't necessarily run yet.
+      // Then waitForStartupRecovery resolves, and the close is observed.
+      await core.waitForStartupRecovery?.();
+
+      const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+      const row = readDb
+        .prepare("SELECT status, meta_json FROM episodes WHERE id = ?")
+        .get("ep_wait") as { status: string; meta_json: string } | undefined;
+      readDb.close();
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("closed");
+      const meta = JSON.parse(row!.meta_json) as { closeReason?: string };
+      expect(meta.closeReason).toBe("finalized");
+    });
+
+    it("waitForStartupRecovery() is a safe no-op when there are no orphans", async () => {
+      home = await makeTmpHome({
+        agent: "openclaw",
+        configYaml: FULL_MEMORY_CONFIG_YAML,
+      });
+      core = await bootstrapMemoryCore({
+        agent: "openclaw",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "no-orphan-init",
+      });
+      await core.init();
+      await expect(core.waitForStartupRecovery?.()).resolves.toBeUndefined();
+    });
+
+    it("shutdown() awaits the background recovery before tearing down", async () => {
+      home = await makeTmpHome({
+        agent: "openclaw",
+        configYaml: FULL_MEMORY_CONFIG_YAML,
+      });
+      const seeder = await bootstrapMemoryCore({
+        agent: "openclaw",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "shutdown-await-seed",
+      });
+      await seeder.init();
+      await seeder.shutdown();
+
+      const Sqlite = (await import("better-sqlite3")).default;
+      const writeDb = new Sqlite(home.home.dbFile);
+      const oldTs = Date.now() - 6 * 60 * 60 * 1000;
+      writeDb
+        .prepare(
+          `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("se_shutdown", "openclaw", oldTs, oldTs, "{}");
+      writeDb
+        .prepare(
+          `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, NULL, '[]', ?, 'open', '{}')`,
+        )
+        .run("ep_shutdown", "se_shutdown", oldTs, 0.5);
+      writeDb.close();
+
+      const local = await bootstrapMemoryCore({
+        agent: "openclaw",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "shutdown-await-recover",
+      });
+      await local.init();
+      // Don't call waitForStartupRecovery — shutdown() must do it for us.
+      await local.shutdown();
+
+      // After shutdown, the episode must have been closed by the
+      // background recovery (otherwise the DB would have been torn down
+      // mid-flight).
+      const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+      const row = readDb
+        .prepare("SELECT status FROM episodes WHERE id = ?")
+        .get("ep_shutdown") as { status: string } | undefined;
+      readDb.close();
+      expect(row?.status).toBe("closed");
+    });
   });
 });
