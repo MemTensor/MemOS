@@ -514,6 +514,7 @@ All optional — shown with defaults:
     "recall": {
       "maxResultsDefault": 6,     // Default search results
       "maxResultsMax": 20,        // Max search results
+      "autoRecallMaxResults": 6,  // Optional: override max results for the auto-recall hook only. Defaults to `maxResultsDefault`. Set lower (e.g. 3 or 5) to reduce auto-injected tokens while keeping `memory_search` results richer.
       "minScoreDefault": 0.45,    // Default min score threshold
       "minScoreFloor": 0.35,      // Lowest allowed min score
       "rrfK": 60,                 // RRF fusion constant
