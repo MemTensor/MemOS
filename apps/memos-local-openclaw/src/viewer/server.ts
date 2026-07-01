@@ -928,6 +928,20 @@ export class ViewerServer {
     const dateFrom = url.searchParams.get("dateFrom") ?? undefined;
     const dateTo = url.searchParams.get("dateTo") ?? undefined;
 
+    // Issue #1372: honor `limit` and `minScore` query params.
+    // - `limit` is clamped to [1, 100]; default 20 to match the historical
+    //   FTS-fallback slice so behavior is unchanged when the client omits it.
+    // - `minScore` is clamped to [0.35, 1]; default 0.64 preserves the
+    //   previous semantic-similarity gate.
+    const rawLimit = Number(url.searchParams.get("limit"));
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(100, Math.max(1, Math.floor(rawLimit)))
+      : 20;
+    const rawMinScore = Number(url.searchParams.get("minScore"));
+    const minScore = Number.isFinite(rawMinScore) && rawMinScore > 0
+      ? Math.max(0.35, Math.min(1, rawMinScore))
+      : 0.64;
+
     const passesFilter = (r: any): boolean => {
       if (role && r.role !== role) return false;
       if (session && r.session_key !== session) return false;
@@ -962,7 +976,7 @@ export class ViewerServer {
       }
     }
 
-    const SEMANTIC_THRESHOLD = 0.64;
+    const SEMANTIC_THRESHOLD = minScore;
     const VECTOR_TIMEOUT_MS = 8000;
     let vectorResults: any[] = [];
     let scoreMap = new Map<string, number>();
@@ -1001,7 +1015,7 @@ export class ViewerServer {
       if (!seenIds.has(r.id)) { seenIds.add(r.id); merged.push(r); }
     }
 
-    const results = merged.length > 0 ? merged : ftsResults.slice(0, 20);
+    const results = (merged.length > 0 ? merged : ftsResults).slice(0, limit);
 
     this.store.recordViewerEvent("search");
     this.jsonResponse(res, {
@@ -1010,6 +1024,8 @@ export class ViewerServer {
       vectorCount: vectorResults.length,
       ftsCount: ftsResults.length,
       total: results.length,
+      limit,
+      minScore,
     });
   }
 
