@@ -179,6 +179,10 @@ def timed_with_status(
                 if fallback is not None and callable(fallback):
                     result = fallback(e, *args, **kwargs)
                     return result
+                # No fallback: re-raise so callers see the real error instead
+                # of a silent None return. The `finally` block still runs and
+                # emits the [TIMER_WITH_STATUS] FAILED log line before the
+                # exception propagates.
                 raise
             finally:
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
