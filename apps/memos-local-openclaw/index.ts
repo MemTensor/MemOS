@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
 import type { HostModelsConfig } from "./src/openclaw-api";
+import { isPathInside } from "./src/path-utils";
 import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
@@ -181,17 +182,6 @@ const memosLocalPlugin = {
     }
 
     const pluginDir = detectPluginDir(moduleDir);
-
-    function normalizeFsPath(p: string): string {
-      return path.resolve(p).replace(/^\\\\\?\\/, "").toLowerCase();
-    }
-
-    function isPathInside(baseDir: string, targetPath: string): boolean {
-      const baseNorm = normalizeFsPath(baseDir);
-      const targetNorm = normalizeFsPath(targetPath);
-      const rel = path.relative(baseNorm, targetNorm);
-      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-    }
 
     function runNpm(args: string[]) {
       const { spawnSync } = localRequire("child_process") as typeof import("node:child_process");
