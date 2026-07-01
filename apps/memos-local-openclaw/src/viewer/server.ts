@@ -3892,14 +3892,34 @@ export class ViewerServer {
       }
       return vec.length;
     }
-    const resp = await fetch(embUrl, {
+    const requestBody = { input: ["test embedding vector"], model: model || "text-embedding-3-small" };
+    let resp = await fetch(embUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify({ input: ["test embedding vector"], model: model || "text-embedding-3-small" }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(15_000),
     });
     if (!resp.ok) {
       const txt = await resp.text();
+      if (/input[_ -]?type/i.test(txt) && /required/i.test(txt)) {
+        resp = await fetch(embUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...requestBody, input_type: "query" }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (resp.ok) {
+          const json = await resp.json() as any;
+          const data = json?.data;
+          const vec = Array.isArray(data) && data.length > 0 ? data[0]?.embedding : undefined;
+          if (!Array.isArray(vec) || vec.length === 0) {
+            throw new Error(
+              `API returned empty embedding vector (got ${JSON.stringify(vec)?.slice(0, 100)})`,
+            );
+          }
+          return vec.length;
+        }
+      }
       throw new Error(`${resp.status}: ${txt}`);
     }
     const json = await resp.json() as any;
