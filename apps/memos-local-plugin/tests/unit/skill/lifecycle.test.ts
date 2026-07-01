@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 
-import { applyFeedback, recomputeEta, shouldArchiveIdle } from "../../../core/skill/lifecycle.js";
+import {
+  applyFeedback,
+  recomputeEta,
+  shouldArchiveIdle,
+  shouldPromoteCandidate,
+} from "../../../core/skill/lifecycle.js";
 import type { PolicyRow, SkillRow } from "../../../core/types.js";
 import { makeSkillConfig, NOW } from "./_helpers.js";
 
@@ -108,5 +113,27 @@ describe("skill/lifecycle", () => {
     const cfg = makeSkillConfig({ minEtaForRetrieval: 0.6 });
     const s = mkSkill({ status: "active", eta: 0.4, updatedAt: 0 as SkillRow["updatedAt"] });
     expect(shouldArchiveIdle(s, 1000, cfg, 10_000)).toBe(true);
+  });
+
+  it("auto-promotes untried non-repair candidates whose η reaches retrieval floor", () => {
+    const cfg = makeSkillConfig({ minEtaForRetrieval: 0.5 });
+
+    expect(
+      shouldPromoteCandidate(mkSkill({ status: "candidate", eta: 0.6 }), cfg, {
+        repairOrigin: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPromoteCandidate(mkSkill({ status: "candidate", eta: 0.6 }), cfg, {
+        repairOrigin: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPromoteCandidate(
+        mkSkill({ status: "candidate", eta: 0.6, trialsAttempted: 1 }),
+        cfg,
+        { repairOrigin: false },
+      ),
+    ).toBe(false);
   });
 });

@@ -14,6 +14,7 @@ import type { PatternSignature } from "../../../core/memory/l2/types.js";
 import {
   makeDraft,
   makeSkillConfig,
+  seedSkill,
   seedPolicy,
   seedSessionOnly,
   seedTrace,
@@ -152,6 +153,69 @@ describe("skill/subscriber", () => {
 
     const r = await sub.runOnce({ trigger: "manual", policyId: policy.id });
     expect(r.crystallized).toBe(1);
+    sub.dispose();
+  });
+
+  it("lifecycleTick promotes untried non-repair candidates but leaves repair-origin candidates for trials", () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const l2Bus = createL2EventBus();
+    const rewardBus = createRewardEventBus();
+    const bus = createSkillEventBus();
+    const events: unknown[] = [];
+    bus.onAny((e) => events.push(e));
+
+    const policy = seedPolicy(h, {
+      id: "po_auto" as PolicyId,
+      gain: 0.4,
+      support: 4,
+    });
+    const repairPolicy = seedPolicy(h, {
+      id: "po_repair" as PolicyId,
+      gain: 0.4,
+      support: 4,
+    });
+    h.repos.policies.upsert({
+      ...repairPolicy,
+      experienceType: "repair_instruction",
+    });
+    const eligible = seedSkill(h, {
+      id: "sk_auto" as never,
+      eta: 0.6,
+      trialsAttempted: 0,
+      sourcePolicyIds: [policy.id],
+    });
+    const repair = seedSkill(h, {
+      id: "sk_repair" as never,
+      eta: 0.6,
+      trialsAttempted: 0,
+      sourcePolicyIds: [repairPolicy.id],
+    });
+
+    const sub = attachSkillSubscriber({
+      l2Bus,
+      rewardBus,
+      bus,
+      repos: h.repos,
+      embedder: null,
+      llm: null,
+      log: rootLogger.child({ channel: "core.skill.subscriber" }),
+      config: makeSkillConfig({ minEtaForRetrieval: 0.5 }),
+    });
+
+    sub.lifecycleTick();
+
+    expect(h.repos.skills.getById(eligible.id)!.status).toBe("active");
+    expect(h.repos.skills.getById(repair.id)!.status).toBe("candidate");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "skill.status.changed",
+        skillId: eligible.id,
+        previous: "candidate",
+        next: "active",
+        transition: "promoted",
+      }),
+    );
     sub.dispose();
   });
 });

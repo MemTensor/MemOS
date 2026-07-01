@@ -201,6 +201,17 @@ export function shouldArchiveIdle(
   return skill.eta < cfg.minEtaForRetrieval;
 }
 
+export function shouldPromoteCandidate(
+  skill: SkillRow,
+  cfg: SkillConfig,
+  opts: { repairOrigin: boolean },
+): boolean {
+  if (skill.status !== "candidate") return false;
+  if (skill.trialsAttempted > 0) return false;
+  if (opts.repairOrigin) return false;
+  return skill.eta >= cfg.minEtaForRetrieval;
+}
+
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0;
   if (n < 0) return 0;

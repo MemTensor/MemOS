@@ -33,6 +33,8 @@ import type {
   SkillTrigger,
 } from "./types.js";
 import type { SkillId } from "../types.js";
+import type { PolicyRow, SkillRow } from "../types.js";
+import { shouldPromoteCandidate } from "./lifecycle.js";
 
 export interface SkillSubscriberDeps
   extends Omit<RunSkillDeps, "log" | "bus"> {
@@ -46,6 +48,7 @@ export interface SkillSubscriberHandle {
   dispose(): void;
   runOnce(input: Omit<RunSkillInput, "trigger"> & { trigger?: SkillTrigger }): Promise<RunSkillResult>;
   applyFeedback(skillId: SkillId, kind: SkillFeedbackKind, magnitude?: number): void;
+  lifecycleTick(): void;
   /**
    * Await any in-flight scheduled run. Primarily useful in tests where we
    * want to assert on the effects of an event-driven run after the bus has
@@ -155,6 +158,33 @@ export function attachSkillSubscriber(
     applySkillFeedback(skillId, kind, runDeps, magnitude);
   }
 
+  function lifecycleTick(): void {
+    const now = Date.now();
+    const candidates = deps.repos.skills.list({ status: "candidate", limit: 500 });
+    for (const skill of candidates) {
+      if (!shouldPromoteCandidate(skill, deps.config, {
+        repairOrigin: isRepairOriginSkill(skill, deps.repos.policies),
+      })) {
+        continue;
+      }
+      deps.repos.skills.setStatus(skill.id, "active", now as SkillRow["updatedAt"]);
+      deps.bus.emit({
+        kind: "skill.status.changed",
+        at: now,
+        skillId: skill.id,
+        previous: skill.status,
+        next: "active",
+        transition: "promoted",
+      });
+      log.info("skill.candidate.auto_promoted", {
+        skillId: skill.id,
+        eta: skill.eta,
+        support: skill.support,
+        gain: skill.gain,
+      });
+    }
+  }
+
   function resolveTrialsForReward(evt: Extract<RewardEvent, { kind: "reward.updated" }>): void {
     const rTask = evt.result.rHuman;
     const outcome =
@@ -207,5 +237,24 @@ export function attachSkillSubscriber(
     }
   }
 
-  return { dispose, runOnce, applyFeedback, flush };
+  return { dispose, runOnce, applyFeedback, lifecycleTick, flush };
+}
+
+function isRepairOriginSkill(
+  skill: SkillRow,
+  policies: { getById(id: PolicyRow["id"]): PolicyRow | null },
+): boolean {
+  for (const policyId of skill.sourcePolicyIds) {
+    const policy = policies.getById(policyId);
+    if (!policy) continue;
+    if (
+      policy.experienceType === "repair_validated" ||
+      policy.experienceType === "repair_instruction" ||
+      policy.experienceType === "failure_avoidance" ||
+      policy.experienceType === "verifier_feedback"
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

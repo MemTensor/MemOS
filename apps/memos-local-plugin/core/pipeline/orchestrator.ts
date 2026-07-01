@@ -1367,6 +1367,9 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     await subs.l3.drain();
     await nextTick();
     await subs.skills.flush();
+    subs.skills.lifecycleTick();
+    await nextTick();
+    await subs.skills.flush();
     await subs.feedback.flush();
     await embeddingRetryWorker.flush();
   }
