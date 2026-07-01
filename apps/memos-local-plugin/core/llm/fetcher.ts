@@ -61,6 +61,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
           attempt,
           transient,
           durationMs: ms,
+          body: truncateLogBody(text),
         });
         if (transient && attempt <= opts.maxRetries) {
           opts.onRetry?.(attempt);
@@ -137,6 +138,7 @@ export async function httpPostStream(opts: {
   provider: LlmProviderName;
   log: LlmProviderLogger;
 }): Promise<Response> {
+  const start = Date.now();
   const signal = mergeSignals(opts.signal, AbortSignal.timeout(opts.timeoutMs));
   const resp = await fetch(opts.url, {
     method: "POST",
@@ -150,6 +152,12 @@ export async function httpPostStream(opts: {
   });
   if (!resp.ok) {
     const text = await safeText(resp);
+    opts.log.warn("http.non_ok", {
+      status: resp.status,
+      transient: resp.status >= 500 || resp.status === 429,
+      durationMs: Date.now() - start,
+      body: truncateLogBody(text),
+    });
     throw new MemosError(
       errCodeForStatus(resp.status),
       `HTTP ${resp.status} from ${opts.provider} (stream)`,
@@ -215,6 +223,10 @@ async function safeText(resp: Response): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+function truncateLogBody(text: string | undefined): string | undefined {
+  return text?.slice(0, 512);
 }
 
 function isTransientError(err: unknown): boolean {
