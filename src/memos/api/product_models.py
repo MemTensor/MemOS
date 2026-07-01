@@ -478,18 +478,16 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Filter conditions ====
-    # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Filter for the memory, example:
-        {
-            "`and` or `or`": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to retrieved memories. "
+            "Use memory metadata fields such as id, created_at, user_id, or session_id. "
+            "Combine clauses with `and` / `or`, and use comparison operators such as "
+            "`gt`, `gte`, `lt`, `lte`, `eq`, or `ne` when supported by the backend. "
+            "Example: {'and': [{'session_id': 'session-1'}, "
+            "{'created_at': {'gt': '2024-01-01'}}]}."
+        ),
     )
 
     # ==== Extended capabilities ====
