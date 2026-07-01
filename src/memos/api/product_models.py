@@ -73,7 +73,9 @@ class CreateCubeRequest(BaseRequest):
 
     cube_name: str = Field(..., description="Human-readable name for the memory cube")
     owner_id: str = Field(..., description="User ID of the cube owner")
-    cube_path: str | None = Field(None, description="File system path where cube data will be stored")
+    cube_path: str | None = Field(
+        None, description="File system path where cube data will be stored"
+    )
     cube_id: str | None = Field(
         None,
         description=(
@@ -420,6 +422,14 @@ class APISearchRequest(BaseRequest):
         ),
     )
 
+    rerank: bool = Field(
+        True,
+        description=(
+            "Whether to apply the textual memory reranker during search. "
+            "Set false to return retrieval-order candidates before post-search dedup/formatting."
+        ),
+    )
+
     pref_top_k: int = Field(
         6,
         ge=0,
@@ -460,6 +470,11 @@ class APISearchRequest(BaseRequest):
         3,
         ge=0,
         description="Number of skill memories to retrieve (top-K). Default: 3.",
+    )
+
+    context_format: str = Field(
+        "memory",
+        description="Optional search context format passed through to installed plugins.",
     )
 
     # ==== Filter conditions ====
