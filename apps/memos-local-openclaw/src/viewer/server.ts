@@ -14,7 +14,7 @@ import { vectorSearch } from "../storage/vector";
 import { TaskProcessor } from "../ingest/task-processor";
 import { RecallEngine } from "../recall/engine";
 import { SkillEvolver } from "../skill/evolver";
-import { resolveConfig } from "../config";
+import { resolveConfig, deepResolveEnv } from "../config";
 import { getHubStatus } from "../client/connector";
 import { type ResolvedHubClient, hubGetMemoryDetail, hubListMemories, hubListTasks, hubListSkills, hubRequestJson, hubSearchMemories, hubSearchSkills, hubUpdateUsername, normalizeHubUrl, resolveHubClient } from "../client/hub";
 import { buildSkillBundleForHub, fetchHubSkillBundle, restoreSkillBundleFromHub } from "../client/skill-sync";
@@ -1934,6 +1934,42 @@ export class ViewerServer {
     return path.join(ocHome, "openclaw.json");
   }
 
+  /**
+   * Read openclaw.json without env-var resolution. Used by serveConfig (UI editor needs to
+   * see raw `${VAR}` literals so saves don't accidentally leak resolved secrets back into
+   * the config file). Returns `null` when the file is missing or unreadable.
+   */
+  private readOpenClawRawConfig(): Record<string, any> | null {
+    try {
+      const cfgPath = this.getOpenClawConfigPath();
+      if (!fs.existsSync(cfgPath)) return null;
+      return JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read openclaw.json and apply `${VAR}` env-var resolution. Use this whenever the
+   * resulting value is consumed by something that actually contacts the network
+   * (apiKey/endpoint/baseUrl). Returns `null` when the file is missing or unreadable.
+   */
+  private readOpenClawResolvedConfig(): Record<string, any> | null {
+    const raw = this.readOpenClawRawConfig();
+    if (!raw) return null;
+    return deepResolveEnv(raw);
+  }
+
+  /**
+   * Read this plugin's section from openclaw.json with `${VAR}` env vars resolved.
+   * Used by migration / model tests that need real apiKey strings.
+   */
+  private readPluginConfigResolved(): Record<string, any> {
+    const raw = this.readOpenClawResolvedConfig();
+    if (!raw) return {};
+    return this.getPluginEntryConfig(raw);
+  }
+
   private getPluginEntryConfig(raw: any): Record<string, unknown> {
     const entries = raw?.plugins?.entries ?? {};
     return entries["memos-local-openclaw-plugin"]?.config
@@ -3514,12 +3550,14 @@ export class ViewerServer {
 
   private serveFallbackModel(res: http.ServerResponse): void {
     try {
-      const cfgPath = this.getOpenClawConfigPath();
-      if (!fs.existsSync(cfgPath)) {
+      // Resolve ${VAR} env-vars so providers.<id>.{baseUrl,apiKey} that reference
+      // process env (e.g. apiKey="${OPENAI_API_KEY}") evaluate before we report
+      // the fallback model as available.
+      const raw = this.readOpenClawResolvedConfig();
+      if (!raw) {
         this.jsonResponse(res, { available: false });
         return;
       }
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
       const agentModel: string | undefined = raw?.agents?.defaults?.model?.primary;
       if (!agentModel) {
         this.jsonResponse(res, { available: false });
@@ -3786,6 +3824,11 @@ export class ViewerServer {
     if (provider === "local") {
       return 384;
     }
+    // Resolve ${VAR} env-var literals: the UI forwards the raw value pulled from
+    // openclaw.json verbatim (see serveConfig), so we must expand here before hitting
+    // the network — otherwise Bearer headers contain the literal "${MY_KEY}" string.
+    endpoint = deepResolveEnv(endpoint || "");
+    apiKey = deepResolveEnv(apiKey || "");
     const baseUrl = (endpoint || "https://api.openai.com/v1").replace(/\/+$/, "");
     const embUrl = baseUrl.endsWith("/embeddings") ? baseUrl : `${baseUrl}/embeddings`;
     const headers: Record<string, string> = {
@@ -3853,6 +3896,10 @@ export class ViewerServer {
   }
 
   private async testChatModel(provider: string, model: string, endpoint: string, apiKey: string): Promise<void> {
+    // Same env-var expansion as testEmbeddingModel: openclaw.json values such as
+    // "${OPENAI_API_KEY}" must be resolved before hitting the network.
+    endpoint = deepResolveEnv(endpoint || "");
+    apiKey = deepResolveEnv(apiKey || "");
     const baseUrl = (endpoint || "https://api.openai.com/v1").replace(/\/+$/, "");
     if (provider === "anthropic") {
       const url = endpoint || "https://api.anthropic.com/v1/messages";
@@ -4199,16 +4246,12 @@ export class ViewerServer {
     let totalSkipped = 0;
     let totalErrors = 0;
 
-    const cfgPath = this.getOpenClawConfigPath();
-    let summarizerCfg: any;
-    try {
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-      const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
-                        raw?.plugins?.entries?.["memos-local"]?.config ??
-                        raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
-                        raw?.plugins?.entries?.["memos-lite"]?.config ?? {};
-      summarizerCfg = pluginCfg.summarizer;
-    } catch { /* no config */ }
+    // Build the migration Summarizer from the env-resolved plugin config so any
+    // apiKey/endpoint of the form "${OPENAI_API_KEY}" is expanded against process.env
+    // before the LLM call. Without this the migration's summarizer hits remote APIs
+    // with literal "${VAR}" Bearer tokens and 401s out.
+    const pluginCfg = this.readPluginConfigResolved();
+    const summarizerCfg = (pluginCfg as any)?.summarizer;
 
     const summarizer = new Summarizer(summarizerCfg, this.log);
 
