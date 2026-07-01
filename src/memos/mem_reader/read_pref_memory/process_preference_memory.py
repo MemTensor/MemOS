@@ -39,7 +39,9 @@ def _extract_explicit_preference(qa_pair_str: str, llm) -> list[dict[str, Any]] 
         response = llm.generate([{"role": "user", "content": prompt}])
         if not response:
             logger.info(
-                f"[prefer_extractor]: (Error) LLM response content is {response} when extracting explicit preference"
+                "[prefer_extractor]: (Error) LLM response content is %s when extracting "
+                "explicit preference",
+                response,
             )
             return None
         response = response.strip().replace("```json", "").replace("```", "").strip()
@@ -68,7 +70,9 @@ def _extract_implicit_preference(qa_pair_str: str, llm) -> list[dict[str, Any]] 
         response = llm.generate([{"role": "user", "content": prompt}])
         if not response:
             logger.info(
-                f"[prefer_extractor]: (Error) LLM response content is {response} when extracting implicit preference"
+                "[prefer_extractor]: (Error) LLM response content is %s when extracting "
+                "implicit preference",
+                response,
             )
             return None
         response = response.strip().replace("```json", "").replace("```", "").strip()
@@ -135,6 +139,8 @@ def _create_preference_memory_item(
     # Extract sources from fast_item
     sources = getattr(fast_item.metadata, "sources", []) if fast_item else []
 
+    preference = _normalized_preference(preference_data)
+
     # Create metadata
     metadata = TreeNodeTextualMemoryMetadata(
         memory_type="PreferenceMemory",
@@ -150,7 +156,7 @@ def _create_preference_memory_item(
         background="",
         # Preference-specific fields
         preference_type=preference_type,
-        preference=preference_data.get("preference", ""),
+        preference=preference,
         reasoning=preference_data.get("reasoning", ""),
         topic=preference_data.get("topic", ""),
         # User-specific fields
@@ -160,6 +166,11 @@ def _create_preference_memory_item(
 
     # Create and return memory item
     return TextualMemoryItem(id=str(uuid.uuid4()), memory=context_summary, metadata=metadata)
+
+
+def _normalized_preference(preference_data: dict[str, Any]) -> str:
+    preference = preference_data.get("preference")
+    return preference.strip() if isinstance(preference, str) else ""
 
 
 def _process_single_chunk_explicit(
@@ -180,10 +191,8 @@ def _process_single_chunk_explicit(
 
     memories = []
     for pref in explicit_pref:
-        normalized_pref = _normalize_preference_data(pref)
-        if not normalized_pref:
+        if not _normalized_preference(pref):
             continue
-
         memory = _create_preference_memory_item(
             preference_data=normalized_pref,
             preference_type="explicit_preference",
@@ -215,10 +224,8 @@ def _process_single_chunk_implicit(
 
     memories = []
     for pref in implicit_pref:
-        normalized_pref = _normalize_preference_data(pref)
-        if not normalized_pref:
+        if not _normalized_preference(pref):
             continue
-
         memory = _create_preference_memory_item(
             preference_data=normalized_pref,
             preference_type="implicit_preference",
@@ -302,7 +309,11 @@ def process_preference_fine(
                 except Exception as e:
                     task_type, chunk = futures[future]
                     logger.warning(
-                        f"[process_preference_fine] Error processing {task_type} chunk, original text: {chunk}: {e}"
+                        "[process_preference_fine] Error processing %s chunk, original text: "
+                        "%s: %s",
+                        task_type,
+                        chunk,
+                        e,
                     )
                     continue
 
