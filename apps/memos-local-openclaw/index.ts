@@ -5,7 +5,6 @@
  * Provides: memory_search, memory_get, memory_timeline, task_summary, skill_get, skill_install, memory_viewer
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import * as fs from "fs";
 import * as path from "path";
@@ -34,6 +33,9 @@ import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
 import { parseJsonOrJson5 } from "./src/shared/json5";
 import { patchOpenclawAllowFile } from "./src/shared/openclaw-config";
+
+
+type OpenClawPluginApi = any;
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
