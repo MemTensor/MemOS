@@ -172,6 +172,19 @@ class MemosBridgeClient:
     ) -> dict[str, Any]:
         if self._closed:
             raise BridgeError("transport_closed", "bridge client is closed")
+        # Fast-fail path: if the subprocess has already exited, do NOT
+        # write to a dead pipe (the OS may buffer the write for a while
+        # and the caller would then park for the full timeout waiting for
+        # a reader thread that has already returned). Surface
+        # `transport_closed` immediately so upstream retry / reconnect
+        # logic can kick in. See issue #1722.
+        poll = getattr(self._proc, "poll", None)
+        exit_code = poll() if callable(poll) else None
+        if exit_code is not None:
+            raise BridgeError(
+                "transport_closed",
+                f"bridge subprocess exited (code={exit_code})",
+            )
         with self._lock:
             rpc_id = self._next_id
             self._next_id += 1
@@ -239,11 +252,22 @@ class MemosBridgeClient:
 
     def close(self) -> None:
         if self._closed:
+            # Even if the reader thread already flipped `_closed` (subprocess
+            # exit → `_abort_pending`), the caller's explicit close should
+            # still tear down the subprocess so nothing lingers.
+            self._teardown_process()
             return
         with self._host_handlers_cv:
             self._closed = True
             self._host_handlers_cv.notify_all()
 
+        self._teardown_process()
+
+        # Clean up any request that was still pending when close() was
+        # called explicitly (e.g. shutdown before the subprocess exited).
+        self._abort_pending("bridge closed")
+
+    def _teardown_process(self) -> None:
         pid = self.pid
 
         # 1. Close stdin (triggers bridge's graceful exit)
@@ -274,87 +298,110 @@ class MemosBridgeClient:
                 except subprocess.TimeoutExpired:
                     logger.error("MemOS: bridge process %d could not be killed", pid)
 
-        # 5. Clean up pending requests
-        with self._lock:
-            for entry in list(self._pending.values()):
-                entry["error"] = {
-                    "code": -32000,
-                    "message": "bridge closed",
-                    "data": {"code": "transport_closed"},
-                }
-                entry["event"].set()
-            self._pending.clear()
-
     # ─── Internals ──
 
     def _read_loop(self) -> None:
         assert self._proc.stdout is not None
-        for line in self._proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                logger.debug("bridge: malformed line: %r", line[:120])
-                continue
-            if "id" in msg and msg["id"] is not None and ("result" in msg or "error" in msg):
-                self._resolve(msg)
-                continue
-            if msg.get("method") == "events.notify":
-                for cb in list(self._events):
-                    try:
-                        cb(msg.get("params") or {})
-                    except Exception:
-                        logger.debug("event listener threw", exc_info=True)
-                continue
-            if msg.get("method") == "logs.forward":
-                for cb in list(self._logs):
-                    try:
-                        cb(msg.get("params") or {})
-                    except Exception:
-                        logger.debug("log listener threw", exc_info=True)
-                continue
-            # Reverse-direction request: the bridge is asking the
-            # adapter to do something (e.g. run a fallback LLM call
-            # via `host.llm.complete`). Dispatch to the registered
-            # handler and write the response back synchronously.
-            method = msg.get("method")
-            rpc_id = msg.get("id")
-            if (
-                isinstance(method, str)
-                and rpc_id is not None
-                and "result" not in msg
-                and "error" not in msg
-            ):
-                handler = self._host_handler_for(method)
-                if handler is None:
-                    self._send_response(
-                        rpc_id,
-                        error={
-                            "code": -32601,
-                            "message": f"method not found: {method}",
-                            "data": {"code": "unknown_method"},
-                        },
-                    )
+        exit_reason = "bridge subprocess exited"
+        try:
+            for line in self._proc.stdout:
+                line = line.strip()
+                if not line:
                     continue
-                params = msg.get("params") or {}
-                if not isinstance(params, dict):
-                    params = {}
                 try:
-                    result = handler(params)
-                    self._send_response(rpc_id, result=result)
-                except Exception as err:
-                    logger.warning("host handler %s failed: %s", method, err)
-                    self._send_response(
-                        rpc_id,
-                        error={
-                            "code": -32000,
-                            "message": str(err) or err.__class__.__name__,
-                            "data": {"code": "host_handler_failed"},
-                        },
-                    )
-                continue
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.debug("bridge: malformed line: %r", line[:120])
+                    continue
+                if "id" in msg and msg["id"] is not None and ("result" in msg or "error" in msg):
+                    self._resolve(msg)
+                    continue
+                if msg.get("method") == "events.notify":
+                    for cb in list(self._events):
+                        try:
+                            cb(msg.get("params") or {})
+                        except Exception:
+                            logger.debug("event listener threw", exc_info=True)
+                    continue
+                if msg.get("method") == "logs.forward":
+                    for cb in list(self._logs):
+                        try:
+                            cb(msg.get("params") or {})
+                        except Exception:
+                            logger.debug("log listener threw", exc_info=True)
+                    continue
+                # Reverse-direction request: the bridge is asking the
+                # adapter to do something (e.g. run a fallback LLM call
+                # via `host.llm.complete`). Dispatch to the registered
+                # handler and write the response back synchronously.
+                method = msg.get("method")
+                rpc_id = msg.get("id")
+                if (
+                    isinstance(method, str)
+                    and rpc_id is not None
+                    and "result" not in msg
+                    and "error" not in msg
+                ):
+                    handler = self._host_handler_for(method)
+                    if handler is None:
+                        self._send_response(
+                            rpc_id,
+                            error={
+                                "code": -32601,
+                                "message": f"method not found: {method}",
+                                "data": {"code": "unknown_method"},
+                            },
+                        )
+                        continue
+                    params = msg.get("params") or {}
+                    if not isinstance(params, dict):
+                        params = {}
+                    try:
+                        result = handler(params)
+                        self._send_response(rpc_id, result=result)
+                    except Exception as err:
+                        logger.warning("host handler %s failed: %s", method, err)
+                        self._send_response(
+                            rpc_id,
+                            error={
+                                "code": -32000,
+                                "message": str(err) or err.__class__.__name__,
+                                "data": {"code": "host_handler_failed"},
+                            },
+                        )
+                    continue
+        except Exception as err:
+            exit_reason = f"bridge read loop crashed: {err}"
+            logger.debug("bridge: read loop raised %s", err, exc_info=True)
+        finally:
+            # Whether we exited cleanly (stdout EOF because the subprocess
+            # died) or via an exception, every JSON-RPC waiter parked in
+            # `request()` MUST be woken with a `transport_closed` error —
+            # otherwise callers park for their full timeout waiting for a
+            # response that will never arrive. Issue #1722.
+            self._abort_pending(exit_reason)
+
+    def _abort_pending(self, reason: str) -> None:
+        """Wake every parked JSON-RPC waiter with a `transport_closed` error.
+
+        Called from the reader thread's `finally` block (subprocess exit
+        or stream error) so callers don't have to wait the full per-
+        request timeout to learn that the bridge is gone. Also idempotent
+        with `close()` — the second run just finds `self._pending` empty.
+        """
+        with self._host_handlers_cv:
+            self._closed = True
+            self._host_handlers_cv.notify_all()
+        with self._lock:
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for entry in pending:
+            entry["error"] = {
+                "code": -32000,
+                "message": reason,
+                "data": {"code": "transport_closed"},
+            }
+            entry["event"].set()
 
     def _host_handler_for(
         self,

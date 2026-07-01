@@ -1280,7 +1280,7 @@ class MemTensorProvider(MemoryProvider):
                 }
                 if bool(args.get("sessionScope", False)):
                     params["sessionId"] = self._session_id
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.search",
                     params,
                 )
@@ -1298,7 +1298,7 @@ class MemTensorProvider(MemoryProvider):
                 method = methods.get(kind)
                 if method is None:
                     return json.dumps({"error": f"unknown memory kind: {kind}"})
-                item = self._bridge.request(
+                item = self._bridge_request_with_retry(
                     method, {"id": item_id, "namespace": self._runtime_namespace()}
                 )
                 if not item:
@@ -1343,7 +1343,7 @@ class MemTensorProvider(MemoryProvider):
                     }
                 )
             if tool_name == "memos_timeline":
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.timeline",
                     {
                         "episodeId": args.get("episodeId", self._episode_id),
@@ -1358,12 +1358,12 @@ class MemTensorProvider(MemoryProvider):
                 params = {"limit": limit, "namespace": self._runtime_namespace()}
                 if args.get("status"):
                     params["status"] = args["status"]
-                return json.dumps(self._bridge.request("skill.list", params))
+                return json.dumps(self._bridge_request_with_retry("skill.list", params))
             if tool_name == "memos_environment":
                 query = (args.get("query") or "").strip()
                 limit = self._int_arg(args, "limit", 5, 1, 30)
                 if not query:
-                    resp = self._bridge.request(
+                    resp = self._bridge_request_with_retry(
                         "memory.list_world_models",
                         {"limit": limit, "offset": 0, "namespace": self._runtime_namespace()},
                     )
@@ -1379,7 +1379,7 @@ class MemTensorProvider(MemoryProvider):
                             "queried": False,
                         }
                     )
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.search",
                     {
                         "agent": "hermes",
@@ -1412,7 +1412,7 @@ class MemTensorProvider(MemoryProvider):
                 skill_id = (args.get("id") or "").strip()
                 if not skill_id:
                     return json.dumps({"error": "missing id"})
-                skill = self._bridge.request(
+                skill = self._bridge_request_with_retry(
                     "skill.get",
                     {
                         "id": skill_id,
@@ -1785,6 +1785,38 @@ class MemTensorProvider(MemoryProvider):
             self._bridge = None
             return False
 
+    def _bridge_request_with_retry(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Call the bridge with a single reconnect+retry on `transport_closed`.
+
+        Mirrors the retry pattern `sync_turn` already uses so read-path
+        memory tools (`memos_search`, `memos_get`, …) also recover from a
+        stale bridge instead of surfacing a bare error on the first
+        attempt. Any other error is re-raised for the caller to handle.
+        See issue #1722.
+        """
+        assert self._bridge is not None
+        call_kwargs: dict[str, Any] = {"timeout": timeout} if timeout is not None else {}
+        try:
+            return self._bridge.request(method, params, **call_kwargs)
+        except Exception as err:
+            if not self._is_transport_closed(err):
+                raise
+            logger.warning(
+                "MemOS: bridge transport closed during %s; reconnecting and retrying once — %s",
+                method,
+                err,
+            )
+        # One reconnect, one retry, then surface whatever comes back.
+        self._reconnect_bridge(self._session_id, timeout=30.0)
+        assert self._bridge is not None
+        return self._bridge.request(method, params, **call_kwargs)
+
     def _start_bridge_keepalive(self) -> None:
         if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
             return
@@ -1798,8 +1830,11 @@ class MemTensorProvider(MemoryProvider):
                     assert self._bridge is not None
                     self._bridge.request("core.health", {}, timeout=10.0)
                 except Exception as err:
-                    if self._is_transport_closed(err):
-                        logger.info("MemOS: bridge keepalive reconnecting after transport close")
+                    if self._should_reconnect_after_keepalive_failure(err):
+                        logger.info(
+                            "MemOS: bridge keepalive reconnecting after health failure — %s",
+                            err,
+                        )
                         with contextlib.suppress(Exception):
                             self._reconnect_bridge(self._session_id, timeout=10.0)
                     else:
@@ -1811,6 +1846,35 @@ class MemTensorProvider(MemoryProvider):
             name="memos-bridge-keepalive",
         )
         self._bridge_keepalive_thread.start()
+
+    def _should_reconnect_after_keepalive_failure(self, err: Exception) -> bool:
+        """Decide whether a `core.health` failure warrants a reconnect.
+
+        Historically we only reconnected on `transport_closed`. Issue
+        #1722 showed that a hung bridge surfaces as `BridgeError("timeout",
+        …)` while the pipe is still nominally open, so the client never
+        recovered. Reconnect for:
+
+        - the historical `transport_closed` case,
+        - `BridgeError("timeout", …)` (the health probe timing out means
+          the bridge is not answering anything),
+        - any error observed while the subprocess is already dead
+          (`Popen.poll()` returns a non-`None` exit code).
+        """
+        if self._is_transport_closed(err):
+            return True
+        if isinstance(err, BridgeError) and err.code == "timeout":
+            return True
+        bridge = self._bridge
+        if bridge is not None:
+            proc = getattr(bridge, "_proc", None)
+            poll = getattr(proc, "poll", None)
+            try:
+                if callable(poll) and poll() is not None:
+                    return True
+            except Exception:  # pragma: no cover — defensive
+                pass
+        return False
 
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None
