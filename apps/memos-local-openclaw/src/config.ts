@@ -4,11 +4,11 @@ import { OpenClawAPIClient, type HostModelsConfig } from "./openclaw-api";
 
 const ENV_RE = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
 
-function resolveEnvVars(value: string): string {
+export function resolveEnvVars(value: string): string {
   return value.replace(ENV_RE, (_, name) => process.env[name] ?? "");
 }
 
-function deepResolveEnv<T>(obj: T): T {
+export function deepResolveEnv<T>(obj: T): T {
   if (typeof obj === "string") return resolveEnvVars(obj) as unknown as T;
   if (Array.isArray(obj)) return obj.map(deepResolveEnv) as unknown as T;
   if (obj && typeof obj === "object") {
