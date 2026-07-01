@@ -94,5 +94,6 @@ def search_text_memories(
         include_preference_memory=search_req.include_preference,
         pref_mem_top_k=search_req.pref_top_k,
         dedup=search_req.dedup,
+        rerank=search_req.rerank,
         include_embedding=include_embedding,
     )

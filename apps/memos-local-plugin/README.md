@@ -69,10 +69,21 @@ Upgrading or uninstalling the plugin **never** touches `data/`, `skills/`,
 
 ## Quick start
 
-Use the installer script to deploy or upgrade the plugin. Do not install the
-package directly with `npm install`; the script downloads the package, deploys it
-to the right agent directory, installs production dependencies, writes the
-initial `config.yaml`, and restarts the agent runtime when needed.
+> [!IMPORTANT]
+> **Do not run `npm install -g @memtensor/memos-local-plugin`.**
+> This package is a Hermes / OpenClaw plugin, not a standalone CLI. A global
+> npm install only downloads the published tarball into your `node_modules`
+> tree; it does not deploy the plugin to the agent home (`~/.hermes/plugins/`
+> or `~/.openclaw/plugins/`), does not write `config.yaml`, and does not start
+> the bridge / viewer. The tarball also intentionally ships **built artifacts
+> only** (`dist/` + `viewer/dist/`) — the `viewer/` source, `vite.config.ts`,
+> `website/`, tests, etc. live in this repository, not in the npm package.
+> Use the `install.sh` / `install.ps1` installer below; it is the only
+> supported install path.
+
+The installer downloads the package from npm, deploys it to the right agent
+directory, installs production dependencies, writes the initial `config.yaml`,
+and restarts the agent runtime when needed.
 
 From this repository:
 
@@ -96,6 +107,28 @@ tarball path instead of a registry version:
 npm pack
 bash install.sh --version ./memtensor-memos-local-plugin-1.0.0-beta.1.tgz
 ```
+
+On Windows, run `install.ps1` from PowerShell instead of `install.sh`; the
+flags and behavior match.
+
+### Troubleshooting
+
+**`npm install -g @memtensor/memos-local-plugin` says "not found" or "404".**
+You are likely on an old version of this README, or trying to install the
+package as if it were a standalone CLI. The package is published under the
+`@memtensor` scope on the public npm registry, but it is intended to be pulled
+in by `install.sh`, not installed globally. Use `bash install.sh` as shown
+above.
+
+**I cloned this repo and the `web/` or `site/` directory only contains a
+README.md (no `src/`, no `vite.config.ts`, no `index.html`).**
+Those directory names are stale. The runtime viewer source lives in `viewer/`
+(formerly `web/`), and the unfinished marketing-site scaffolding at `site/`
+has been removed entirely. If you see a `web/` or `site/` directory with only
+a README, you are looking at a published npm tarball (which only ships
+`viewer/dist/`), not a fresh `git clone` of this repository. Clone the repo
+to get the full source tree, or just run `install.sh` to deploy the prebuilt
+viewer.
 
 ## Configuration
 
