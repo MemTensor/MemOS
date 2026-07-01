@@ -19,21 +19,65 @@ class CompositeCubeView(MemCubeView):
     """
     A composite view over multiple logical cubes.
 
-    For now (fast mode), it simply fan-out writes to all cubes;
-    later we can add smarter routing / slow mode here.
+    By default, writes keep the legacy fan-out behavior. If request metadata
+    explicitly names a target cube or responsibility, writes are routed only to
+    matching cube views and fall back to fan-out when nothing matches.
     """
 
     cube_views: list[SingleCubeView]
     logger: Any
 
+    def _request_info(self, request: Any) -> dict[str, Any]:
+        info = getattr(request, "info", None)
+        return info if isinstance(info, dict) else {}
+
+    def _view_responsibilities(self, view: SingleCubeView) -> set[str]:
+        values: set[str] = set()
+        for attr in ("responsibility", "responsibilities"):
+            raw = getattr(view, attr, None)
+            if isinstance(raw, str):
+                values.add(raw)
+            elif isinstance(raw, (list, tuple, set)):
+                values.update(str(item) for item in raw if item)
+        return values
+
+    def _route_views(self, request: Any) -> list[SingleCubeView]:
+        info = self._request_info(request)
+        target_cube_id = info.get("target_cube_id") or info.get("cube_id")
+        if target_cube_id:
+            routed = [view for view in self.cube_views if view.cube_id == target_cube_id]
+            if routed:
+                return routed
+            self.logger.warning(
+                "[CompositeCubeView] target cube %s not found; fallback to fan-out",
+                target_cube_id,
+            )
+
+        responsibility = info.get("responsibility") or info.get("cube_responsibility")
+        if responsibility:
+            routed = [
+                view
+                for view in self.cube_views
+                if responsibility in self._view_responsibilities(view)
+            ]
+            if routed:
+                return routed
+            self.logger.warning(
+                "[CompositeCubeView] responsibility %s not matched; fallback to fan-out",
+                responsibility,
+            )
+
+        return self.cube_views
+
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         all_results: list[dict[str, Any]] = []
-        cube_count = len(self.cube_views)
+        target_views = self._route_views(add_req)
+        cube_count = len(target_views)
 
         with timed_stage("add", "multi_cube", cube_count=cube_count):
-            for idx, view in enumerate(self.cube_views):
+            for idx, view in enumerate(target_views):
                 self.logger.info(
-                    "[CompositeCubeView] fan-out add to cube=%s (%d/%d)",
+                    "[CompositeCubeView] route add to cube=%s (%d/%d)",
                     view.cube_id,
                     idx + 1,
                     cube_count,
@@ -66,13 +110,22 @@ class CompositeCubeView(MemCubeView):
             }
 
             for future in as_completed(future_to_view):
+                view = future_to_view[future]
                 cube_result = future.result()
-                merged_results["text_mem"].extend(cube_result.get("text_mem", []))
-                merged_results["act_mem"].extend(cube_result.get("act_mem", []))
-                merged_results["para_mem"].extend(cube_result.get("para_mem", []))
-                merged_results["pref_mem"].extend(cube_result.get("pref_mem", []))
-                merged_results["tool_mem"].extend(cube_result.get("tool_mem", []))
-                merged_results["skill_mem"].extend(cube_result.get("skill_mem", []))
+                memory_keys = (
+                    "text_mem",
+                    "act_mem",
+                    "para_mem",
+                    "pref_mem",
+                    "tool_mem",
+                    "skill_mem",
+                )
+                for key in memory_keys:
+                    memories = cube_result.get(key, [])
+                    for memory in memories:
+                        if isinstance(memory, dict):
+                            memory.setdefault("cube_id", view.cube_id)
+                    merged_results[key].extend(memories)
                 note = cube_result.get("pref_note")
                 if note:
                     if merged_results["pref_note"]:
@@ -84,9 +137,10 @@ class CompositeCubeView(MemCubeView):
 
     def feedback_memories(self, feedback_req: APIFeedbackRequest) -> list[dict[str, Any]]:
         all_results: list[dict[str, Any]] = []
+        target_views = self._route_views(feedback_req)
 
-        for view in self.cube_views:
-            self.logger.info(f"[CompositeCubeView] fan-out add to cube={view.cube_id}")
+        for view in target_views:
+            self.logger.info(f"[CompositeCubeView] route feedback to cube={view.cube_id}")
             results = view.feedback_memories(feedback_req)
             all_results.extend(results)
 
