@@ -305,6 +305,14 @@ export interface MemosLocalConfig {
   recall?: {
     maxResultsDefault?: number;
     maxResultsMax?: number;
+    /**
+     * Override the maximum number of candidates the `before_prompt_build`
+     * auto-recall hook fetches per source (local + Hub). When undefined the
+     * hook falls back to `maxResultsDefault`. Use this to make auto-recall
+     * leaner (e.g. 3 or 5) without shrinking the result set of explicit
+     * `memory_search` tool calls. See issue #1514.
+     */
+    autoRecallMaxResults?: number;
     minScoreDefault?: number;
     minScoreFloor?: number;
     rrfK?: number;

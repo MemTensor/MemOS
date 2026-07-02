@@ -60,6 +60,10 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
     recall: {
       maxResultsDefault: cfg.recall?.maxResultsDefault ?? DEFAULTS.maxResultsDefault,
       maxResultsMax: cfg.recall?.maxResultsMax ?? DEFAULTS.maxResultsMax,
+      // Optional override for the `before_prompt_build` auto-recall hook.
+      // Left undefined when the user does not configure it so the hook can
+      // fall through to `maxResultsDefault` at call time (issue #1514).
+      autoRecallMaxResults: cfg.recall?.autoRecallMaxResults,
       minScoreDefault: cfg.recall?.minScoreDefault ?? DEFAULTS.minScoreDefault,
       minScoreFloor: cfg.recall?.minScoreFloor ?? DEFAULTS.minScoreFloor,
       rrfK: cfg.recall?.rrfK ?? DEFAULTS.rrfK,
