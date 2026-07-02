@@ -10,21 +10,17 @@
  *     `"module": "CommonJS"`, which contain `Object.defineProperty(exports, ...)`
  *     and `require(...)`. Node 22+ then refused to load them.
  *
- * Permanent fix — source-only publish + ESM-flavoured tsconfig:
- *   1. `package.json.files` may not ship `dist/`, `dist/**`, or any
- *      bare `.js`/`.mjs` file. Anything JS-shaped that ships must use
- *      the explicit `.cjs` extension so Node interprets it as CommonJS
- *      regardless of the `type: "module"` setting.
- *   2. `package.json.main` (and `openclaw.extensions`) must point at a
- *      `.ts` source file (loaded by OpenClaw via tsx) or a `.cjs` file —
- *      never a bare `.js` file, which would resolve as ESM and crash on
- *      CommonJS-flavoured output.
+ * Permanent fix — ESM-flavoured tsconfig + ESM dist publish:
+ *   1. `package.json.files` must ship the built `dist/` output that
+ *      `prepack` produces, plus explicit `.cjs` scripts for CommonJS helpers.
+ *   2. `package.json.main` and `openclaw.extensions` point at `dist/index.js`;
+ *      because package.json has `type: "module"`, that file must be true ESM
+ *      output, never CommonJS-flavoured output.
  *   3. `tsconfig.json` must not emit CommonJS-flavoured `.js` (`module`
  *      must be one of the ESM variants), and `moduleResolution` must be
  *      compatible with ESM emit without rewriting every relative import
  *      to add an explicit `.js` extension.
- *   4. If a `dist/index.js` ever appears in the workspace (e.g. a stale
- *      local build), it must not contain CommonJS export markers.
+ *   4. `dist/index.js` must not contain CommonJS export markers.
  */
 
 import { describe, expect, it } from "vitest";
@@ -62,65 +58,41 @@ describe("issue #1733 — ESM module format does not regress", () => {
     ).toBe("module");
   });
 
-  it("package.json.files does not ship a `dist` directory (would re-introduce v0.2.3 CJS/ESM conflict)", () => {
+  it("package.json.files ships the built dist directory", () => {
     const pkg = readPackageJson();
     const files: unknown[] = Array.isArray(pkg.files) ? pkg.files : [];
-    const offenders = files.filter((entry) => {
-      if (typeof entry !== "string") return false;
-      const normalized = entry.replace(/\\/g, "/").replace(/^\.\//, "");
-      return (
-        normalized === "dist" ||
-        normalized === "dist/" ||
-        normalized.startsWith("dist/") ||
-        normalized.startsWith("dist\\")
-      );
-    });
-    expect(
-      offenders,
-      `Shipping dist/* in an ESM package re-introduces issue #1733: ${offenders.join(", ")}`,
-    ).toEqual([]);
+    expect(files).toContain("dist");
   });
 
-  it("package.json.files only ships .ts source or explicit .cjs scripts (never bare .js / .mjs)", () => {
+  it("package.json.files only ships dist output or explicit .cjs scripts", () => {
     const pkg = readPackageJson();
     const files: unknown[] = Array.isArray(pkg.files) ? pkg.files : [];
     const offenders = files.filter((entry) => {
       if (typeof entry !== "string") return false;
       const ext = extname(entry).toLowerCase();
-      return ext === ".js" || ext === ".mjs";
+      if (ext !== ".js" && ext !== ".mjs") return false;
+      const normalized = entry.replace(/\\/g, "/").replace(/^\.\//, "");
+      return !normalized.startsWith("dist/");
     });
     expect(
       offenders,
-      `A bare .js file in an ESM package gets loaded as ESM. ` +
-        `If it contains CommonJS (exports/require) Node will throw the v0.2.3 error. ` +
-        `Rename to .cjs (or .ts if loaded via tsx). Offenders: ${offenders.join(", ")}`,
+      `Only built dist ESM files may ship as bare .js/.mjs. ` +
+        `CommonJS helpers must use .cjs. Offenders: ${offenders.join(", ")}`,
     ).toEqual([]);
   });
 
-  it("package.json.main points at a TypeScript source file (loaded by OpenClaw/tsx) or an explicit .cjs script", () => {
+  it("package.json.main points at the built ESM entry", () => {
     const pkg = readPackageJson();
     const main = pkg.main;
     expect(typeof main).toBe("string");
-    const ext = extname(main as string).toLowerCase();
-    expect(
-      [".ts", ".cjs"].includes(ext),
-      `package.json.main="${main}" must use .ts or .cjs. ` +
-        `A .js entry under "type": "module" is exactly what broke v0.2.3.`,
-    ).toBe(true);
+    expect(main).toBe("dist/index.js");
   });
 
-  it("openclaw extensions only reference .ts entries (so OpenClaw loads via tsx, not Node's ESM loader)", () => {
+  it("openclaw extensions reference the built ESM entry", () => {
     const pkg = readPackageJson();
     const extensions = pkg.openclaw?.extensions;
     expect(Array.isArray(extensions)).toBe(true);
-    for (const entry of extensions as unknown[]) {
-      expect(typeof entry).toBe("string");
-      const ext = extname(entry as string).toLowerCase();
-      expect(
-        [".ts", ".cjs"].includes(ext),
-        `openclaw.extensions entry "${entry}" must be .ts or .cjs to avoid Node's strict .js→ESM resolution.`,
-      ).toBe(true);
-    }
+    expect(extensions).toEqual(["./dist/index.js"]);
   });
 
   it("tsconfig.json emits ESM, not CommonJS (would re-create the v0.2.3 conflict on local builds)", () => {
@@ -168,9 +140,8 @@ describe("issue #1733 — ESM module format does not regress", () => {
   });
 
   it("compiled output (if any) does not contain CommonJS export markers", () => {
-    // The plugin is source-only published — there is normally no dist/ at all.
-    // But if a developer happened to run `npm run build` locally, sanity-check
-    // that the output is not CJS-shaped. We do not force a build here.
+    // npm prepack runs `npm run build`, so the published package includes dist.
+    // If a developer has not built locally yet, skip this source-tree-only check.
     const distEntry = join(pluginRoot, "dist", "index.js");
     if (!existsSync(distEntry)) {
       // Source-only publish is the happy path; nothing to check.

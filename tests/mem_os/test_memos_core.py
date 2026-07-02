@@ -795,3 +795,146 @@ class TestMOSErrorHandling:
         assert result["text_mem"] == []
         assert result["act_mem"] == []
         assert result["para_mem"] == []
+
+
+class TestShareCubeWithUser:
+    """Regression tests for share_cube_with_user (issue #1901).
+
+    The original implementation called ``_validate_cube_access(cube_id,
+    target_user_id)``, which both (a) swapped the positional arguments and
+    (b) validated the wrong user.  Every well-formed call therefore failed
+    with ``ValueError: User '<cube_id>' does not exist or is inactive`` even
+    though the calling user owned the cube.  These tests pin down the correct
+    semantics: validate the *current* user against the cube being shared,
+    then delegate the share to ``user_manager.add_user_to_cube``.
+    """
+
+    def _build_mos(
+        self,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+    ):
+        mock_llm_factory.from_config.return_value = mock_llm
+        mock_reader_factory.from_config.return_value = mock_mem_reader
+        mock_user_manager_class.return_value = mock_user_manager
+        return MOSCore(MOSConfig(**mock_config))
+
+    @patch("memos.mem_os.core.UserManager")
+    @patch("memos.mem_os.core.MemReaderFactory")
+    @patch("memos.mem_os.core.LLMFactory")
+    def test_share_cube_validates_current_user_not_target(
+        self,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+    ):
+        """Cube access must be validated against the *current* user.
+
+        Regression for #1901: previously the cube_id was passed where the
+        user_id was expected, causing ``_validate_user_exists`` to reject
+        every call because the cube UUID is obviously not a registered user.
+        """
+        mock_user_manager.validate_user.return_value = True
+        mock_user_manager.validate_user_cube_access.return_value = True
+        mock_user_manager.add_user_to_cube.return_value = True
+
+        mos = self._build_mos(
+            mock_llm_factory,
+            mock_reader_factory,
+            mock_user_manager_class,
+            mock_config,
+            mock_llm,
+            mock_mem_reader,
+            mock_user_manager,
+        )
+
+        cube_id = "cube-uuid-1234"
+        target_user_id = "target_user"
+
+        result = mos.share_cube_with_user(cube_id=cube_id, target_user_id=target_user_id)
+
+        assert result is True
+        # The cube-access check must be made against the *current* user,
+        # not the cube_id and not the target user.
+        mock_user_manager.validate_user_cube_access.assert_called_once_with(mos.user_id, cube_id)
+        # And the actual sharing must add the *target* user to the cube.
+        mock_user_manager.add_user_to_cube.assert_called_once_with(target_user_id, cube_id)
+
+    @patch("memos.mem_os.core.UserManager")
+    @patch("memos.mem_os.core.MemReaderFactory")
+    @patch("memos.mem_os.core.LLMFactory")
+    def test_share_cube_raises_when_current_user_lacks_access(
+        self,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+    ):
+        """If the current user doesn't have access to the cube, refuse to share.
+
+        The error message must reference the current user, not the cube_id
+        (which was the misleading symptom in #1901).
+        """
+        mock_user_manager.validate_user.return_value = True
+        mock_user_manager.validate_user_cube_access.return_value = False
+
+        mos = self._build_mos(
+            mock_llm_factory,
+            mock_reader_factory,
+            mock_user_manager_class,
+            mock_config,
+            mock_llm,
+            mock_mem_reader,
+            mock_user_manager,
+        )
+
+        with pytest.raises(ValueError, match="test_user"):
+            mos.share_cube_with_user(cube_id="cube-uuid-1234", target_user_id="target_user")
+
+        mock_user_manager.add_user_to_cube.assert_not_called()
+
+    @patch("memos.mem_os.core.UserManager")
+    @patch("memos.mem_os.core.MemReaderFactory")
+    @patch("memos.mem_os.core.LLMFactory")
+    def test_share_cube_raises_when_target_user_missing(
+        self,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+    ):
+        """Target user must exist; ``validate_user`` is consulted independently."""
+        # validate_user is used twice: once during MOSCore.__init__ for
+        # ``self.user_id`` (must succeed) and once for the target user (fail).
+        mock_user_manager.validate_user.side_effect = lambda uid: uid == "test_user"
+        mock_user_manager.validate_user_cube_access.return_value = True
+
+        mos = self._build_mos(
+            mock_llm_factory,
+            mock_reader_factory,
+            mock_user_manager_class,
+            mock_config,
+            mock_llm,
+            mock_mem_reader,
+            mock_user_manager,
+        )
+
+        with pytest.raises(ValueError, match="Target user 'missing_user'"):
+            mos.share_cube_with_user(cube_id="cube-uuid-1234", target_user_id="missing_user")
+
+        mock_user_manager.add_user_to_cube.assert_not_called()
