@@ -70,19 +70,22 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 // ─── PID file singleton guard ───────────────────────────────────────────
 // Prevents bridge process accumulation: each new bridge that wants to
 // own the viewer port kills the previous holder via its PID file.
-// `--no-viewer` (headless) bridges skip this PID file entirely — they don't
-// need the port and should coexist with the daemon that owns it.
+// `--no-viewer` (headless) bridges use a SEPARATE PID file so they can
+// reap their own predecessors without colliding with the viewer daemon
+// that owns the port. Without the headless reap, every Hermes turn that
+// respawns the Python adapter leaks an old bridge.cjs (issue #1910).
 
 const PID_FILENAME = "bridge.pid";
+const STDIO_PID_FILENAME = "bridge-stdio.pid";
 
-function pidFilePath(agent: string): string {
+function pidFilePath(agent: string, filename: string = PID_FILENAME): string {
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
     process.env.HOME ?? "/tmp",
     agentHome,
     "memos-plugin",
     "daemon",
-    PID_FILENAME,
+    filename,
   );
 }
 
@@ -146,13 +149,23 @@ async function main(): Promise<void> {
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
   const pidPath = pidFilePath(args.agent);
+  const stdioPidPath = pidFilePath(args.agent, STDIO_PID_FILENAME);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
+    // Headless bridges own a separate PID slot; remove it on exit too.
+    if (args.noViewer) removePidFile(stdioPidPath);
   };
   if (ownsViewerPort) {
     killExistingBridge(pidPath);
     writePidFile(pidPath);
+  }
+  if (args.noViewer) {
+    // Reap any previous --no-viewer bridge for this agent. This is the
+    // headless counterpart to the viewer-port singleton above and the
+    // Node-side defense against issue #1910 (bridge process leak).
+    killExistingBridge(stdioPidPath);
+    writePidFile(stdioPidPath);
   }
 
   // Lazy-import ESM core. Using dynamic import so this file remains
@@ -169,6 +182,9 @@ async function main(): Promise<void> {
   const { startHttpServer } = (await importEsm(
     runtimeModule("server/http.ts", "dist/server/http.js")
   )) as typeof import("./server/http.js");
+  const { isHermesChatRunning } = (await importEsm(
+    runtimeModule("bridge/hermes-process.ts", "dist/bridge/hermes-process.js")
+  )) as typeof import("./bridge/hermes-process.js");
 
   const rootDir = pluginRoot();
   const pkgVersion = require(path.join(rootDir, "package.json")).version;
@@ -246,9 +262,27 @@ async function main(): Promise<void> {
     ? resolveHome(args.agent, args.home)
     : undefined;
 
+  // Derive profileId dynamically from MEMOS_HOME.
+  // MEMOS_HOME points to <hermes-home>/memos-plugin, so parent dir is hermes-home.
+  // e.g. /root/.hermes/profiles/nova/memos-plugin → profile = "nova"
+  //      /root/.hermes/memos-plugin → profile = "default"
+  const deriveProfileId = (): string => {
+    const memosHome = process.env.MEMOS_HOME;
+    if (memosHome) {
+      const hermesHome = memosHome.replace(/memos-plugin\/?$/, "");
+      const match = /\/profiles\/([^/]+)\/?$/.exec(hermesHome);
+      if (match?.[1]) {
+        const cleaned = match[1].toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+        if (cleaned) return cleaned;
+      }
+      if (hermesHome.endsWith("/.hermes")) return "default";
+    }
+    return "default";
+  };
+  const resolvedProfileId = deriveProfileId();
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
-    namespace: { agentKind: args.agent, profileId: "default" },
+    namespace: { agentKind: args.agent, profileId: resolvedProfileId },
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
     home: resolvedHome,
@@ -269,6 +303,7 @@ async function main(): Promise<void> {
       ? createBridgeStatusTracker(
           path.join(home.root, BRIDGE_STATUS_FILE),
           args.daemon,
+          isHermesChatRunning,
         )
       : null;
 
@@ -565,7 +600,11 @@ function classifyErrorCode(err: unknown): string {
   return "unknown";
 }
 
-function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
+function createBridgeStatusTracker(
+  statusFile: string,
+  daemon: boolean,
+  isHermesChatRunning: () => boolean,
+): {
   snapshot(): BridgeStatusSnapshot;
   markConnected(): void;
   markDisconnected(message: string): void;
@@ -677,18 +716,6 @@ function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
       };
     },
   };
-}
-
-function isHermesChatRunning(): boolean {
-  try {
-    const out = childProcess.execFileSync("pgrep", ["-f", "hermes chat"], {
-      encoding: "utf8",
-      timeout: 1000,
-    });
-    return out.trim().length > 0;
-  } catch {
-    return false;
-  }
 }
 
 void main().catch((err) => {

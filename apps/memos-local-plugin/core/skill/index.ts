@@ -27,6 +27,7 @@ export {
   applyFeedback,
   recomputeEta,
   shouldArchiveIdle,
+  shouldPromoteCandidate,
   type LifecycleUpdate,
 } from "./lifecycle.js";
 export {
