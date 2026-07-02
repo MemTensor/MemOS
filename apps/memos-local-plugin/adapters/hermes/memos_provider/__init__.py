@@ -48,6 +48,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -88,6 +89,34 @@ _TOOL_FAILURE_REPAIR_HINT = (
     "`memos_search` for relevant past experience before deciding what to do next."
 )
 _TOOL_FAILURE_HINT_THRESHOLD = 3
+
+
+def _long_rpc_timeout_default() -> float:
+    """Resolve the timeout used for long-running JSON-RPC calls.
+
+    After 1-2 hours of Hermes use the memory / capture / reflection
+    pipeline grows past the 30s JSON-RPC default and surfaces as
+    ``[timeout] memory.search did not respond within 30.0s`` and
+    ``[timeout] turn.end did not respond within 30.0s`` in the host
+    logs (issue #2028). ``feedback.submit`` already opts into 75s;
+    ``sync_turn``'s ``_ensure_bridge`` also uses 75s. Aligning the
+    heavy retrieval / capture RPCs with the same 75s ceiling gives
+    the pipeline enough headroom without turning genuinely hung
+    calls into an indefinite wait. The value is overridable via
+    ``MEMOS_HERMES_LONG_RPC_TIMEOUT`` for site-specific tuning; any
+    unparseable / non-positive value falls back to the default.
+    """
+    raw = os.environ.get("MEMOS_HERMES_LONG_RPC_TIMEOUT", "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 75.0
+    if value <= 0:
+        return 75.0
+    return value
+
+
+_LONG_RPC_TIMEOUT = _long_rpc_timeout_default()
 
 _HERMES_INTERNAL_REVIEW_PREFIXES = (
     "review the conversation above and consider saving to memory if appropriate.",
@@ -304,6 +333,13 @@ class MemTensorProvider(MemoryProvider):
         is deferred to ``_ensure_episode()`` (called from the first
         ``on_turn_start``), so the actual user message can be passed as
         the episode's initial text instead of a generic placeholder.
+
+        Idempotency (issue #1910): the host occasionally re-enters
+        ``initialize()`` on the same provider instance (plugin reload,
+        session restart). Without the close-before-spawn guard below the
+        previous ``MemosBridgeClient`` would be replaced by reference
+        only, orphaning the previous Node subprocess and accumulating
+        a fresh ``bridge.cjs`` per turn.
         """
         # Hermes can call `initialize()` multiple times across a single
         # parent process (e.g. on reconnect or a new session). Each call
@@ -328,6 +364,17 @@ class MemTensorProvider(MemoryProvider):
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
+        if self._bridge is not None:
+            prev_pid = getattr(self._bridge, "pid", "?")
+            logger.info(
+                "MemOS: initialize() invoked while bridge already exists; "
+                "closing previous bridge (pid=%s) before respawn",
+                prev_pid,
+            )
+            old_bridge = self._bridge
+            self._bridge = None
+            with contextlib.suppress(Exception):
+                old_bridge.close()
         try:
             ensure_bridge_running()
         except Exception as err:
@@ -1302,6 +1349,7 @@ class MemTensorProvider(MemoryProvider):
                 resp = self._bridge.request(
                     "memory.search",
                     params,
+                    timeout=_LONG_RPC_TIMEOUT,
                 )
                 return json.dumps({"hits": resp.get("hits", [])})
             if tool_name == "memos_get":
@@ -1406,6 +1454,7 @@ class MemTensorProvider(MemoryProvider):
                         "query": query,
                         "topK": {"tier1": 0, "tier2": 0, "tier3": limit},
                     },
+                    timeout=_LONG_RPC_TIMEOUT,
                 )
                 hits = [
                     h
@@ -1848,6 +1897,7 @@ class MemTensorProvider(MemoryProvider):
                 },
                 "ts": int(time.time() * 1000),
             },
+            timeout=_LONG_RPC_TIMEOUT,
         )
         # Stash the real episode id the pipeline auto-created (V7
         # §0.1 may have boundary-cut the previous episode and started
@@ -1894,7 +1944,7 @@ class MemTensorProvider(MemoryProvider):
         }
         if agent_thinking:
             payload["agentThinking"] = agent_thinking
-        result = self._bridge.request("turn.end", payload)
+        result = self._bridge.request("turn.end", payload, timeout=_LONG_RPC_TIMEOUT)
         # Capture the trace ID for feedback submission
         if result and isinstance(result, dict):
             trace_ids = result.get("traceIds", [])

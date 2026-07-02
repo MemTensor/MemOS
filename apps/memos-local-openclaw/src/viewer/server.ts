@@ -3823,7 +3823,7 @@ export class ViewerServer {
 
                   discardBackup();
                   this.log.info(`update-install: success! Updated to ${newVersion}`);
-                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install");
+                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install", 250);
                 });
               });
             });
@@ -4969,12 +4969,11 @@ export class ViewerServer {
     statusCode = 200,
   ): void {
     res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(data), () => {
-      setTimeout(() => {
-        this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
-        try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-      }, delayMs);
-    });
+    res.end(JSON.stringify(data));
+    setTimeout(() => {
+      this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
+      try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+    }, delayMs);
   }
 
   private jsonResponse(res: http.ServerResponse, data: unknown, statusCode = 200): void {

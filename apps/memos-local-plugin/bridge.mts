@@ -1,14 +1,18 @@
 /**
- * Bridge entry point (CommonJS).
+ * Bridge entry point (pure ESM).
  *
  * Started by non-TypeScript hosts (e.g. the Hermes Python client) via:
  *
- *   node_modules/.bin/tsx bridge.cts --agent=hermes --no-viewer
+ *   node dist/bridge.mjs --agent=hermes --no-viewer
  *
- * The `.cts` extension is intentional: it lets the file be required
- * from CommonJS environments that spawn Node with `require("...")`
- * semantics. Internally we re-export the ESM implementation via
- * `import()`.
+ * This file is the pure-ESM successor of `bridge.cts` / `dist/bridge.cjs`
+ * — it exists to eliminate the CommonJS → ESM trampoline that became
+ * fragile on Node ≥ 22 (issue #1736). The package is `"type": "module"`,
+ * so a `.mjs` entry can statically `import` peer modules and use
+ * `import.meta.url` for path resolution, with no `new Function()`
+ * trampoline and no `require(file://URL)` indirection. The legacy
+ * `bridge.cts` is preserved for backwards compatibility; the Python
+ * launcher prefers the new entry whenever `dist/bridge.mjs` exists.
  *
  * Viewer lifecycle
  * ================
@@ -24,14 +28,13 @@
  * still work). There's no port-sharing or auto-promotion logic —
  * each agent has its own bookmarkable URL.
  */
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const path = require("node:path") as typeof import("node:path");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const fs = require("node:fs") as typeof import("node:fs");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const childProcess = require("node:child_process") as typeof import("node:child_process");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const url = require("node:url") as typeof import("node:url");
+import * as childProcess from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
 const BRIDGE_STATUS_STALE_MS = 20_000;
@@ -70,22 +73,19 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 // ─── PID file singleton guard ───────────────────────────────────────────
 // Prevents bridge process accumulation: each new bridge that wants to
 // own the viewer port kills the previous holder via its PID file.
-// `--no-viewer` (headless) bridges use a SEPARATE PID file so they can
-// reap their own predecessors without colliding with the viewer daemon
-// that owns the port. Without the headless reap, every Hermes turn that
-// respawns the Python adapter leaks an old bridge.cjs (issue #1910).
+// `--no-viewer` (headless) bridges skip this PID file entirely — they don't
+// need the port and should coexist with the daemon that owns it.
 
 const PID_FILENAME = "bridge.pid";
-const STDIO_PID_FILENAME = "bridge-stdio.pid";
 
-function pidFilePath(agent: string, filename: string = PID_FILENAME): string {
+function pidFilePath(agent: string): string {
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
     process.env.HOME ?? "/tmp",
     agentHome,
     "memos-plugin",
     "daemon",
-    filename,
+    PID_FILENAME,
   );
 }
 
@@ -149,45 +149,29 @@ async function main(): Promise<void> {
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
   const pidPath = pidFilePath(args.agent);
-  const stdioPidPath = pidFilePath(args.agent, STDIO_PID_FILENAME);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
-    // Headless bridges own a separate PID slot; remove it on exit too.
-    if (args.noViewer) removePidFile(stdioPidPath);
   };
   if (ownsViewerPort) {
     killExistingBridge(pidPath);
     writePidFile(pidPath);
   }
-  if (args.noViewer) {
-    // Reap any previous --no-viewer bridge for this agent. This is the
-    // headless counterpart to the viewer-port singleton above and the
-    // Node-side defense against issue #1910 (bridge process leak).
-    killExistingBridge(stdioPidPath);
-    writePidFile(stdioPidPath);
-  }
 
-  // Lazy-import ESM core. Using dynamic import so this file remains
-  // CommonJS and stays `require`-able.
-  const { bootstrapMemoryCoreFull } = (await importEsm(
-    runtimeModule("core/pipeline/index.ts", "dist/core/pipeline/index.js")
-  )) as typeof import("./core/pipeline/index.js");
-  const { startStdioServer, waitForShutdown } = (await importEsm(
-    runtimeModule("bridge/stdio.ts", "dist/bridge/stdio.js")
-  )) as typeof import("./bridge/stdio.js");
-  const { memoryBuffer, rootLogger } = (await importEsm(
-    runtimeModule("core/logger/index.ts", "dist/core/logger/index.js")
-  )) as typeof import("./core/logger/index.js");
-  const { startHttpServer } = (await importEsm(
-    runtimeModule("server/http.ts", "dist/server/http.js")
-  )) as typeof import("./server/http.js");
-  const { isHermesChatRunning } = (await importEsm(
-    runtimeModule("bridge/hermes-process.ts", "dist/bridge/hermes-process.js")
-  )) as typeof import("./bridge/hermes-process.js");
+  // Lazy-import core modules from the sibling tree. With a pure-ESM
+  // entry there's no CJS↔ESM boundary to cross — the specifiers below
+  // are plain relative paths that Node's loader resolves directly.
+  // tsx rewrites `.js` → `.ts` at runtime when this file is executed
+  // from source via `tsx bridge.mts`.
+  const { bootstrapMemoryCoreFull } = await import("./core/pipeline/index.js");
+  const { startStdioServer, waitForShutdown } = await import("./bridge/stdio.js");
+  const { memoryBuffer, rootLogger } = await import("./core/logger/index.js");
+  const { startHttpServer } = await import("./server/http.js");
 
   const rootDir = pluginRoot();
-  const pkgVersion = require(path.join(rootDir, "package.json")).version;
+  const pkgVersion = JSON.parse(
+    fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+  ).version as string;
 
   // ─── Host LLM bridge (reverse RPC, lazy-bound to stdio) ────────
   // We need to register the bridge BEFORE bootstrap creates the
@@ -199,7 +183,7 @@ async function main(): Promise<void> {
   // `core.init()` so startup recovery can also use host fallback.
   //
   // Routing through `bootstrapMemoryCoreFull({ hostLlmBridge })`
-  // (instead of having `bridge.cts` call `registerHostLlmBridge`
+  // (instead of having this file call `registerHostLlmBridge`
   // directly) avoids a subtle ESM module-identity issue: the static
   // `import` chain inside `core/llm/client.ts` and the dynamic
   // `await import(...)` here resolve to the same file URL but Node
@@ -249,14 +233,10 @@ async function main(): Promise<void> {
       },
     };
 
-  const { Telemetry } = (await importEsm(
-    runtimeModule("core/telemetry/index.ts", "dist/core/telemetry/index.js")
-  )) as typeof import("./core/telemetry/index.js");
+  const { Telemetry } = await import("./core/telemetry/index.js");
 
   // Resolve home early so we can use resolveHome with explicit defaultHome
-  const { resolveHome } = (await importEsm(
-    runtimeModule("core/config/paths.ts", "dist/core/config/paths.js")
-  )) as typeof import("./core/config/paths.js");
+  const { resolveHome } = await import("./core/config/paths.js");
 
   const resolvedHome = args.home
     ? resolveHome(args.agent, args.home)
@@ -285,7 +265,6 @@ async function main(): Promise<void> {
       ? createBridgeStatusTracker(
           path.join(home.root, BRIDGE_STATUS_FILE),
           args.daemon,
-          isHermesChatRunning,
         )
       : null;
 
@@ -295,9 +274,9 @@ async function main(): Promise<void> {
   // plugin_error events" actively misleading. Both handlers are
   // best-effort and re-emit (or `process.exit(1)`) so we don't
   // alter the existing crash semantics, only add observability.
-  // Only registered for `bridge.cts` (the dedicated process); the
-  // OpenClaw adapter runs inside the host process and must not steal
-  // its global error hooks.
+  // Only registered for the dedicated bridge process; the OpenClaw
+  // adapter runs inside the host process and must not steal its
+  // global error hooks.
   process.on("uncaughtException", (err) => {
     try {
       telemetry.trackError("uncaught_exception", classifyErrorCode(err));
@@ -534,28 +513,12 @@ async function main(): Promise<void> {
 }
 
 function pluginRoot(): string {
-  // Source entry: <root>/bridge.cts. Built entry: <root>/dist/bridge.cjs.
+  // Source entry: <root>/bridge.mts. Built entry: <root>/dist/bridge.mjs.
   if (fs.existsSync(path.join(__dirname, "package.json"))) return __dirname;
   const parent = path.resolve(__dirname, "..");
   if (fs.existsSync(path.join(parent, "package.json"))) return parent;
   return __dirname;
 }
-
-function runtimeModule(sourceRel: string, distRel: string): string {
-  const root = pluginRoot();
-  const distAbs = path.resolve(root, distRel);
-  const sourceAbs = path.resolve(root, sourceRel);
-  return pathToEsmUrl(fs.existsSync(distAbs) ? distAbs : sourceAbs);
-}
-
-function pathToEsmUrl(abs: string): string {
-  return url.pathToFileURL(abs).href;
-}
-
-const importEsm = new Function(
-  "specifier",
-  "return import(specifier)",
-) as (specifier: string) => Promise<unknown>;
 
 /**
  * Best-effort error classification for ARMS `plugin_error.error_type`.
@@ -582,11 +545,7 @@ function classifyErrorCode(err: unknown): string {
   return "unknown";
 }
 
-function createBridgeStatusTracker(
-  statusFile: string,
-  daemon: boolean,
-  isHermesChatRunning: () => boolean,
-): {
+function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
   snapshot(): BridgeStatusSnapshot;
   markConnected(): void;
   markDisconnected(message: string): void;
@@ -698,6 +657,18 @@ function createBridgeStatusTracker(
       };
     },
   };
+}
+
+function isHermesChatRunning(): boolean {
+  try {
+    const out = childProcess.execFileSync("pgrep", ["-f", "hermes chat"], {
+      encoding: "utf8",
+      timeout: 1000,
+    });
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 void main().catch((err) => {
