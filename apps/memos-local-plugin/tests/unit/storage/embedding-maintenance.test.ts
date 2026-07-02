@@ -1,289 +1,374 @@
 /**
- * Unit tests for the SQL-only embedding-maintenance count helper.
+ * SQL-only embedding maintenance stats.
  *
- * Issue #1929 — `GET /api/v1/embeddings/maintenance` used to load every
- * vector BLOB into JS just to count nulls and dimension mismatches.
- * `embeddingMaintenanceCounts` replaces that with pure SQL `COUNT(*)`
- * queries; these tests pin the bucket semantics + filter rules.
+ * Regression + spec pin for issue #1929: `/api/v1/embeddings/maintenance`
+ * used to paginate every trace/policy/world_model/skill row through JS just
+ * to inspect vector byte lengths, hydrating hundreds of MB of BLOBs into the
+ * Node heap and blocking the event loop for minutes on production DBs.
+ *
+ * The new helper `embeddingMaintenanceCounts()` MUST count purely with SQL
+ * (`COUNT(*)` + `SUM(CASE WHEN ... LENGTH(vec) ...)`), preserving the two
+ * pre-fix semantic filters:
+ *   - short-text traces are skipped (mirrors `shouldTraceHaveEmbeddings`)
+ *   - `lightweight_memory`-tagged traces don't get counted for `vec_action`
  */
+
 import { describe, expect, it } from "vitest";
 
 import { encodeVector } from "../../../core/storage/vector.js";
-import { embeddingMaintenanceCounts } from "../../../core/storage/repos/index.js";
-import { makeTmpDb } from "../../helpers/tmp-db.js";
-import type { PolicyRow, SkillRow, TraceRow, WorldModelRow } from "../../../core/types.js";
+import {
+  embeddingMaintenanceCounts,
+  inferStoredEmbeddingByteLen,
+} from "../../../core/storage/repos/index.js";
+import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
+import type {
+  EpisodeId,
+  SessionId,
+  SkillId,
+  TraceId,
+  WorldModelId,
+} from "../../../core/types.js";
 
 const DIM = 4;
-const EXPECTED_BYTE_LEN = DIM * 4; // Float32 = 4 bytes per element
+const EXPECTED_BYTE_LEN = DIM * 4;
 
-function vec(values: number[]): Float32Array {
-  return new Float32Array(values);
+function fullVec(): Float32Array {
+  return new Float32Array([0.1, 0.2, 0.3, 0.4]);
 }
 
-function vecBlob(values: number[]): Float32Array {
-  // Same as `vec` — kept as a named alias so the test reads like
-  // "this is the BLOB shape we expect the SQL helper to see".
-  return new Float32Array(values);
+function shortVec(): Float32Array {
+  return new Float32Array([9]);
 }
 
-function ensureTraceParents(repos: ReturnType<typeof makeTmpDb>["repos"]): void {
-  // traces FK → episodes / sessions; seed those once per test to keep the
-  // per-trace seed helper noise-free.
-  if (!repos.sessions.getById("s0")) {
-    repos.sessions.upsert({
-      id: "s0",
-      agent: "openclaw",
-      startedAt: 1_700_000_000_000,
-      lastSeenAt: 1_700_000_000_000,
-      meta: {},
-    });
-  }
-  if (!repos.episodes.getById("e0" as never)) {
-    repos.episodes.insert({
-      id: "e0" as never,
-      sessionId: "s0" as never,
-      startedAt: 1_700_000_000_000,
-      endedAt: null,
-      traceIds: [],
-      rTask: null,
-      status: "open",
-    });
-  }
+function seedSessionAndEpisode(handle: TmpDbHandle): void {
+  handle.repos.sessions.upsert({
+    id: "se" as SessionId,
+    agent: "openclaw",
+    ownerAgentKind: "openclaw",
+    ownerProfileId: "main",
+    ownerWorkspaceId: null,
+    startedAt: 1_700_000_000_000,
+    lastSeenAt: 1_700_000_000_000,
+    meta: {},
+  });
+  handle.repos.episodes.insert({
+    id: "ep" as EpisodeId,
+    sessionId: "se" as SessionId,
+    ownerAgentKind: "openclaw",
+    ownerProfileId: "main",
+    ownerWorkspaceId: null,
+    startedAt: 1_700_000_000_000,
+    endedAt: null,
+    traceIds: [],
+    rTask: null,
+    status: "open",
+    meta: {},
+  });
 }
 
 function seedTrace(
-  repos: ReturnType<typeof makeTmpDb>["repos"],
+  handle: TmpDbHandle,
   id: string,
-  overrides: Partial<TraceRow>,
+  opts: {
+    userText: string;
+    agentText: string;
+    tags?: string[];
+    vecSummary?: Float32Array | null;
+    vecAction?: Float32Array | null;
+  },
 ): void {
-  ensureTraceParents(repos);
-  const base: TraceRow = {
-    id,
-    episodeId: "e0",
-    sessionId: "s0",
+  handle.repos.traces.insert({
+    id: id as TraceId,
+    episodeId: "ep" as EpisodeId,
+    sessionId: "se" as SessionId,
+    ownerAgentKind: "openclaw",
+    ownerProfileId: "main",
+    ownerWorkspaceId: null,
     ts: 1_700_000_000_000,
-    userText: "user message that is comfortably longer than ten chars",
-    agentText: "agent reply that is also comfortably long",
+    userText: opts.userText,
+    agentText: opts.agentText,
+    summary: "summary text",
+    share: null,
     toolCalls: [],
+    agentThinking: null,
     reflection: null,
     value: 0,
     alpha: 0,
     rHuman: null,
     priority: 0,
-    tags: [],
+    tags: opts.tags ?? [],
     errorSignatures: [],
-    vecSummary: vec([0, 0, 0, 0]),
-    vecAction: vec([0, 0, 0, 0]),
-    turnId: 1_700_000_000_000 as never,
+    vecSummary: opts.vecSummary ?? null,
+    vecAction: opts.vecAction ?? null,
+    turnId: 1_700_000_000_000,
     schemaVersion: 1,
-    ...overrides,
-  } as TraceRow;
-  repos.traces.insert(base);
+  } as never);
 }
 
-function seedPolicy(
-  repos: ReturnType<typeof makeTmpDb>["repos"],
-  id: string,
-  vector: Float32Array | null,
-): void {
-  const row: PolicyRow = {
-    id,
+function seedPolicy(handle: TmpDbHandle, id: string, vec: Float32Array | null): void {
+  handle.repos.policies.upsert({
+    id: id as never,
     title: id,
     trigger: "",
     procedure: "",
     verification: "",
     boundary: "",
-    support: 1,
+    support: 0,
     gain: 0,
     status: "candidate",
     sourceEpisodeIds: [],
-    inducedBy: "test",
+    inducedBy: "proto",
     decisionGuidance: { preference: [], antiPattern: [] },
-    vec: vector,
-    createdAt: 1_700_000_000_000 as never,
-    updatedAt: 1_700_000_000_000 as never,
-  } as PolicyRow;
-  repos.policies.upsert(row);
+    vec,
+    createdAt: 1,
+    updatedAt: 1,
+  });
 }
 
 function seedWorldModel(
-  repos: ReturnType<typeof makeTmpDb>["repos"],
+  handle: TmpDbHandle,
   id: string,
-  vector: Float32Array | null,
+  vec: Float32Array | null,
 ): void {
-  const row: WorldModelRow = {
-    id,
+  handle.repos.worldModel.upsert({
+    id: id as WorldModelId,
     title: id,
-    body: "world model",
+    body: "world body text",
     structure: { environment: [], inference: [], constraints: [] },
     domainTags: [],
-    confidence: 0.5,
+    confidence: 0.9,
     policyIds: [],
     sourceEpisodeIds: [],
-    inducedBy: "test",
-    vec: vector,
-    createdAt: 1_700_000_000_000 as never,
-    updatedAt: 1_700_000_000_000 as never,
+    inducedBy: "",
+    vec,
+    createdAt: 1,
+    updatedAt: 1,
     version: 1,
     status: "active",
-  } as WorldModelRow;
-  repos.worldModel.upsert(row);
+  });
 }
 
-function seedSkill(
-  repos: ReturnType<typeof makeTmpDb>["repos"],
-  id: string,
-  vector: Float32Array | null,
-): void {
-  const row: SkillRow = {
-    id,
+function seedSkill(handle: TmpDbHandle, id: string, vec: Float32Array | null): void {
+  handle.repos.skills.insert({
+    id: id as SkillId,
     name: id,
-    status: "active",
-    invocationGuide: "",
+    status: "candidate",
+    invocationGuide: "guide",
     procedureJson: null,
-    eta: 0.5,
-    support: 1,
+    eta: 0,
+    support: 0,
     gain: 0,
     trialsAttempted: 0,
     trialsPassed: 0,
     sourcePolicyIds: [],
     sourceWorldModelIds: [],
     evidenceAnchors: [],
-    vec: vector,
-    createdAt: 1_700_000_000_000 as never,
-    updatedAt: 1_700_000_000_000 as never,
+    vec,
+    createdAt: 1,
+    updatedAt: 1,
     version: 1,
-  } as SkillRow;
-  repos.skills.upsert(row);
+  });
 }
 
-describe("storage/repos — embeddingMaintenanceCounts", () => {
+describe("storage/repos — embeddingMaintenanceCounts (issue #1929)", () => {
   it("counts ready / missing / dimMismatch per kind without decoding BLOBs", () => {
-    const { db, repos, cleanup } = makeTmpDb();
+    const handle = makeTmpDb();
     try {
-      // ── Traces ────────────────────────────────────────────────────
-      // Two ready summary/action slots.
-      seedTrace(repos, "tr_ready", {
-        vecSummary: vec([1, 1, 1, 1]),
-        vecAction: vec([2, 2, 2, 2]),
+      seedSessionAndEpisode(handle);
+
+      // traces
+      // - tr_ready: qualifying, has both summary+action vectors at correct dim
+      seedTrace(handle, "tr_ready", {
+        userText: "hello world what is up",
+        agentText: "here is the answer",
+        vecSummary: fullVec(),
+        vecAction: fullVec(),
       });
-      // Missing summary + missing action.
-      seedTrace(repos, "tr_missing", {
+      // - tr_missing: qualifying, no vectors at all
+      seedTrace(handle, "tr_missing", {
+        userText: "hello world what is up",
+        agentText: "another answer here",
         vecSummary: null,
         vecAction: null,
       });
-      // Dimension mismatch on summary, correct on action.
-      seedTrace(repos, "tr_dim_mismatch", {
-        vecSummary: vec([1, 2]),
-        vecAction: vec([3, 3, 3, 3]),
+      // - tr_dim_mismatch: qualifying, but vec dims wrong
+      seedTrace(handle, "tr_dim_mismatch", {
+        userText: "hello world what is up",
+        agentText: "yet another answer",
+        vecSummary: shortVec(),
+        vecAction: shortVec(),
       });
-
-      // ── Short-text trace (should be filtered out — matches
-      //   shouldTraceHaveEmbeddings) ─────────────────────────────────
-      seedTrace(repos, "tr_short", {
+      // - tr_short: NOT qualifying (both texts <10, sum <20) — should be excluded
+      seedTrace(handle, "tr_short", {
         userText: "hi",
         agentText: "ok",
         vecSummary: null,
         vecAction: null,
       });
-
-      // ── Lightweight-memory trace (vec_action slot excluded) ───────
-      seedTrace(repos, "tr_lightweight", {
+      // - tr_lightweight: qualifying for vec_summary but NOT vec_action
+      seedTrace(handle, "tr_lightweight", {
+        userText: "hello world what is up",
+        agentText: "the lightweight answer",
         tags: ["lightweight_memory"],
-        vecSummary: vec([1, 1, 1, 1]),
+        vecSummary: fullVec(),
         vecAction: null,
       });
 
-      // ── Policies / world_model / skills ──────────────────────────
-      seedPolicy(repos, "p_ready", vec([1, 1, 1, 1]));
-      seedPolicy(repos, "p_missing", null);
-      seedPolicy(repos, "p_dim", vec([1, 2, 3])); // dimension mismatch
+      // policies
+      seedPolicy(handle, "po_ready", fullVec());
+      seedPolicy(handle, "po_missing", null);
+      seedPolicy(handle, "po_dim", shortVec());
 
-      seedWorldModel(repos, "wm_ready", vec([2, 2, 2, 2]));
-      seedWorldModel(repos, "wm_missing", null);
+      // world_model
+      seedWorldModel(handle, "wm_ready", fullVec());
+      seedWorldModel(handle, "wm_missing", null);
 
-      seedSkill(repos, "sk_ready", vec([3, 3, 3, 3]));
+      // skills
+      seedSkill(handle, "sk_ready", fullVec());
+      seedSkill(handle, "sk_dim", shortVec());
 
-      const counts = embeddingMaintenanceCounts(db, {
+      const counts = embeddingMaintenanceCounts(handle.db, {
         expectedByteLen: EXPECTED_BYTE_LEN,
       });
 
-      // Trace bucket:
-      //   summary slots qualifying: tr_ready, tr_missing, tr_dim_mismatch, tr_lightweight = 4
-      //   action slots qualifying:  tr_ready, tr_missing, tr_dim_mismatch  = 3 (lightweight excluded)
-      //   short-text trace excluded from BOTH slot counts.
-      //   ready summary: tr_ready, tr_lightweight = 2
-      //   ready action:  tr_ready, tr_dim_mismatch = 2
-      //   missing summary: tr_missing = 1
-      //   missing action:  tr_missing = 1 (lightweight excluded)
-      //   dimMismatch summary: tr_dim_mismatch = 1
-      expect(counts.trace.totalSlots).toBe(7);
-      expect(counts.trace.ready).toBe(4);
-      expect(counts.trace.missing).toBe(2);
-      expect(counts.trace.dimMismatch).toBe(1);
+      // trace bucket:
+      //   summary qualifying rows: tr_ready, tr_missing, tr_dim_mismatch, tr_lightweight  = 4
+      //   action  qualifying rows: tr_ready, tr_missing, tr_dim_mismatch                  = 3
+      //   totalSlots = 4 + 3                                                              = 7
+      //   ready       = tr_ready(summary+action) + tr_lightweight(summary)                = 3
+      //   missing     = tr_missing(summary+action)                                        = 2
+      //   dimMismatch = tr_dim_mismatch(summary+action)                                   = 2
+      expect(counts.trace).toEqual({
+        totalSlots: 7,
+        ready: 3,
+        missing: 2,
+        dimMismatch: 2,
+      });
 
-      // Policy bucket: 1 ready, 1 missing, 1 dim mismatch
-      expect(counts.policy.totalSlots).toBe(3);
-      expect(counts.policy.ready).toBe(1);
-      expect(counts.policy.missing).toBe(1);
-      expect(counts.policy.dimMismatch).toBe(1);
+      expect(counts.policy).toEqual({
+        totalSlots: 3,
+        ready: 1,
+        missing: 1,
+        dimMismatch: 1,
+      });
 
-      // World model: 1 ready, 1 missing
-      expect(counts.world_model.totalSlots).toBe(2);
-      expect(counts.world_model.ready).toBe(1);
-      expect(counts.world_model.missing).toBe(1);
+      expect(counts.world_model).toEqual({
+        totalSlots: 2,
+        ready: 1,
+        missing: 1,
+        dimMismatch: 0,
+      });
 
-      // Skill: 1 ready, 0 missing
-      expect(counts.skill.totalSlots).toBe(1);
-      expect(counts.skill.ready).toBe(1);
-      expect(counts.skill.missing).toBe(0);
+      expect(counts.skill).toEqual({
+        totalSlots: 2,
+        ready: 1,
+        missing: 0,
+        dimMismatch: 1,
+      });
     } finally {
-      cleanup();
+      handle.cleanup();
     }
   });
 
   it("falls back to 'any non-null = ready' when expectedByteLen is 0", () => {
-    const { db, repos, cleanup } = makeTmpDb();
+    const handle = makeTmpDb();
     try {
-      seedTrace(repos, "tr_a", { vecSummary: vec([1, 2]), vecAction: null });
-      seedTrace(repos, "tr_b", { vecSummary: vec([1, 2, 3, 4]), vecAction: vec([5, 6, 7, 8]) });
+      seedSessionAndEpisode(handle);
+      // A brand-new install with no embedder probe yet: dimension unknown.
+      // Any stored BLOB (short or full) should count as ready.
+      seedTrace(handle, "tr_full", {
+        userText: "hello world what is up",
+        agentText: "here is the answer",
+        vecSummary: fullVec(),
+        vecAction: shortVec(),
+      });
+      seedTrace(handle, "tr_missing", {
+        userText: "hello world what is up",
+        agentText: "another answer here",
+        vecSummary: null,
+        vecAction: null,
+      });
 
-      const counts = embeddingMaintenanceCounts(db, { expectedByteLen: 0 });
-      // No expected length → every non-null vector counts as ready
-      // and dimMismatch is always zero.
-      expect(counts.trace.ready).toBe(3); // tr_a.summary + tr_b.summary + tr_b.action
-      expect(counts.trace.missing).toBe(1); // tr_a.action
+      const counts = embeddingMaintenanceCounts(handle.db, { expectedByteLen: 0 });
+
+      // Both slots for tr_full count as ready regardless of BLOB length.
+      expect(counts.trace.ready).toBe(2);
       expect(counts.trace.dimMismatch).toBe(0);
+      expect(counts.trace.missing).toBe(2);
+      expect(counts.trace.totalSlots).toBe(4);
     } finally {
-      cleanup();
+      handle.cleanup();
     }
   });
 
   it("returns zero counts for an empty database", () => {
-    const { db, cleanup } = makeTmpDb();
+    const handle = makeTmpDb();
     try {
-      const counts = embeddingMaintenanceCounts(db, {
+      const counts = embeddingMaintenanceCounts(handle.db, {
         expectedByteLen: EXPECTED_BYTE_LEN,
       });
-      expect(counts.trace.totalSlots).toBe(0);
-      expect(counts.policy.totalSlots).toBe(0);
-      expect(counts.world_model.totalSlots).toBe(0);
-      expect(counts.skill.totalSlots).toBe(0);
-      for (const bucket of Object.values(counts)) {
-        expect(bucket.ready).toBe(0);
-        expect(bucket.missing).toBe(0);
-        expect(bucket.dimMismatch).toBe(0);
-      }
+      expect(counts.trace).toEqual({
+        totalSlots: 0,
+        ready: 0,
+        missing: 0,
+        dimMismatch: 0,
+      });
+      expect(counts.policy).toEqual({
+        totalSlots: 0,
+        ready: 0,
+        missing: 0,
+        dimMismatch: 0,
+      });
+      expect(counts.world_model).toEqual({
+        totalSlots: 0,
+        ready: 0,
+        missing: 0,
+        dimMismatch: 0,
+      });
+      expect(counts.skill).toEqual({
+        totalSlots: 0,
+        ready: 0,
+        missing: 0,
+        dimMismatch: 0,
+      });
     } finally {
-      cleanup();
+      handle.cleanup();
     }
   });
 
-  it("uses BLOB byte length for dimension comparison (encoded by encodeVector)", () => {
-    // Sanity check: the stored BLOB byte length must equal `dim * 4`
-    // so the SQL `LENGTH(vec) <> @expected_byte_len` comparison works.
-    const float32 = vecBlob([1, 2, 3, 4]);
-    const buf = encodeVector(float32);
-    expect(buf.byteLength).toBe(EXPECTED_BYTE_LEN);
+  it("infers stored byte length from the mode of trace vec_summary BLOBs", () => {
+    const handle = makeTmpDb();
+    try {
+      seedSessionAndEpisode(handle);
+      // Three rows at 4-dim, one at 1-dim → mode = 16 bytes.
+      seedTrace(handle, "tr_a", {
+        userText: "hello world what is up",
+        agentText: "here is the answer",
+        vecSummary: fullVec(),
+      });
+      seedTrace(handle, "tr_b", {
+        userText: "hello world what is up",
+        agentText: "another answer here",
+        vecSummary: fullVec(),
+      });
+      seedTrace(handle, "tr_c", {
+        userText: "hello world what is up",
+        agentText: "yet another answer",
+        vecSummary: fullVec(),
+      });
+      seedTrace(handle, "tr_odd", {
+        userText: "hello world what is up",
+        agentText: "the outlier answer",
+        vecSummary: shortVec(),
+      });
+
+      expect(inferStoredEmbeddingByteLen(handle.db)).toBe(EXPECTED_BYTE_LEN);
+    } finally {
+      handle.cleanup();
+    }
+  });
+
+  it("uses BLOB byte length for dimension comparison", () => {
+    expect(encodeVector(fullVec()).byteLength).toBe(EXPECTED_BYTE_LEN);
   });
 });

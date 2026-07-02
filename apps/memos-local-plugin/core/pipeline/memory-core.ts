@@ -80,10 +80,12 @@ import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
 import {
+  makeRepos,
   embeddingMaintenanceCounts,
   inferStoredEmbeddingByteLen,
-  makeRepos,
+  FLOAT32_BYTES,
 } from "../storage/repos/index.js";
+import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -116,15 +118,6 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
-/**
- * Float32 byte width. Stored vector BLOBs are little-endian Float32
- * arrays produced by `encodeVector(Float32Array)`; their byte length
- * is `dimensions * FLOAT32_BYTES_PER_ELEMENT`. The SQL fast path of
- * `computeEmbeddingMaintenanceStats` compares stored BLOB byte length
- * against `configuredDimension * FLOAT32_BYTES_PER_ELEMENT`.
- */
-const FLOAT32_BYTES_PER_ELEMENT = 4;
-
 export interface BootstrapOptions {
   agent: AgentKind;
   namespace?: RuntimeNamespace;
@@ -4079,17 +4072,19 @@ export function createMemoryCore(
     // header, never the payload — so we keep the same per-bucket
     // semantics without touching a single vector byte.
     const configuredDimension = handle.embedder?.dimensions ?? 0;
-    const inferredByteLen = configuredDimension > 0
-      ? configuredDimension * FLOAT32_BYTES_PER_ELEMENT
+    const expectedByteLenFromEmbedder = configuredDimension > 0
+      ? configuredDimension * FLOAT32_BYTES
+      : 0;
+    // When the embedder has not been probed yet, fall back to the most common
+    // stored BLOB byte length (mirrors the pre-fix `inferStoredEmbeddingDimension`
+    // path, but computed via SQL `GROUP BY LENGTH(vec_summary)` — never touches
+    // the BLOB bodies).
+    const expectedByteLen = expectedByteLenFromEmbedder > 0
+      ? expectedByteLenFromEmbedder
       : inferStoredEmbeddingByteLen(handle.db);
-    const dimension = configuredDimension > 0
-      ? configuredDimension
-      : Math.floor(inferredByteLen / FLOAT32_BYTES_PER_ELEMENT);
+    const dimension = expectedByteLen > 0 ? expectedByteLen / FLOAT32_BYTES : 0;
 
-    const raw = embeddingMaintenanceCounts(handle.db, {
-      expectedByteLen: inferredByteLen,
-    });
-
+    const raw = embeddingMaintenanceCounts(handle.db, { expectedByteLen });
     const byKind: EmbeddingMaintenanceStats["byKind"] = {
       trace: addNeedsRepair(raw.trace),
       policy: addNeedsRepair(raw.policy),
@@ -4112,17 +4107,11 @@ export function createMemoryCore(
     };
   }
 
-  function addNeedsRepair(bucket: {
-    totalSlots: number;
-    ready: number;
-    missing: number;
-    dimMismatch: number;
-  }): EmbeddingMaintenanceStats["byKind"]["trace"] {
+  function addNeedsRepair(
+    bucket: EmbeddingCountsBucket,
+  ): EmbeddingCountsBucket & { needsRepair: number } {
     return {
-      totalSlots: bucket.totalSlots,
-      ready: bucket.ready,
-      missing: bucket.missing,
-      dimMismatch: bucket.dimMismatch,
+      ...bucket,
       needsRepair: bucket.missing + bucket.dimMismatch,
     };
   }
