@@ -21,6 +21,7 @@ import { buildSkillBundleForHub, fetchHubSkillBundle, restoreSkillBundleFromHub 
 import type { Logger, Chunk, PluginContext, MemosLocalConfig } from "../types";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
+import { parseJsonOrJson5 } from "../shared/json5";
 
 export interface MigrationStepFailureCounts {
   summarization: number;
@@ -649,7 +650,7 @@ export class ViewerServer {
     try {
       const cfgPath = this.getOpenClawConfigPath();
       if (fs.existsSync(cfgPath)) {
-        const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
         const entries = raw?.plugins?.entries ?? {};
         const pluginCfg = entries["memos-local-openclaw-plugin"]?.config
           ?? entries["memos-local"]?.config ?? {};
@@ -1959,7 +1960,7 @@ export class ViewerServer {
     try {
       const cfgPath = this.getOpenClawConfigPath();
       if (!fs.existsSync(cfgPath)) return null;
-      return JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      return parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, any>;
     } catch {
       return null;
     }
@@ -3073,7 +3074,7 @@ export class ViewerServer {
         this.jsonResponse(res, {});
         return;
       }
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
       const entries = raw?.plugins?.entries ?? {};
       const pluginEntry = entries["memos-local-openclaw-plugin"]?.config
         ?? entries["memos-local"]?.config
@@ -3105,7 +3106,7 @@ export class ViewerServer {
         const cfgPath = this.getOpenClawConfigPath();
         let raw: Record<string, unknown> = {};
         if (fs.existsSync(cfgPath)) {
-          raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, unknown>;
         }
 
         if (!raw.plugins) raw.plugins = {};
@@ -4070,7 +4071,7 @@ export class ViewerServer {
       let hasSummarizer = false;
       if (fs.existsSync(cfgPath)) {
         try {
-          const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
           const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
                             raw?.plugins?.entries?.["memos-local"]?.config ??
                             raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??

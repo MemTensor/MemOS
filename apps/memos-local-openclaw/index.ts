@@ -33,7 +33,8 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
-import { ensureToolsAllowEntry } from "./src/openclaw-config";
+import { parseJsonOrJson5 } from "./src/shared/json5";
+import { patchOpenclawAllowFile } from "./src/shared/openclaw-config";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -340,8 +341,8 @@ const memosLocalPlugin = {
     const configPath = path.join(stateDir, "state", "memos-local", "config.json");
     if (Object.keys(pluginCfg).length === 0 && fs.existsSync(configPath)) {
       try {
-        const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        pluginCfg = fileConfig;
+        const fileConfig = parseJsonOrJson5(fs.readFileSync(configPath, "utf-8"));
+        pluginCfg = fileConfig as Record<string, unknown>;
         api.logger.info(`memos-local: loaded config from ${configPath}`);
       } catch (e) {
         api.logger.warn(`memos-local: failed to load config from ${configPath}: ${e}`);
@@ -399,15 +400,17 @@ const memosLocalPlugin = {
       ctx.log.warn(`memos-local: could not write to managed skills dir: ${e}`);
     }
 
-    // Ensure plugin tools are enabled in openclaw.json tools.allow
+    // Ensure plugin tools are enabled in openclaw.json tools.allow.
+    // openclaw.json is JSON5 (supports // comments / single-quoted strings /
+    // trailing commas) — the patcher tolerates all of these (see issue #1543).
     try {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
-        const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const patched = ensureToolsAllowEntry(raw, "group:plugins");
-        if (patched !== raw) {
-          fs.writeFileSync(openclawJsonPath, patched, "utf-8");
+        const result = patchOpenclawAllowFile(openclawJsonPath);
+        if (result.changed) {
           ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
+        } else if (result.reason) {
+          ctx.log.debug(`memos-local: tools.allow not patched (${result.reason})`);
         }
       }
     } catch (e) {
