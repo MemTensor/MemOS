@@ -118,7 +118,6 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
-
 export interface BootstrapOptions {
   agent: AgentKind;
   namespace?: RuntimeNamespace;
@@ -617,6 +616,14 @@ export function createMemoryCore(
     }
   }
 
+  function scheduleStartupRecovery(label: string, task: () => Promise<void>): void {
+    void task().catch((err) => {
+      log.debug(`${label}.failed`, {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
   function makeHubRuntime(config: ResolvedConfig): HubRuntime {
     return createHubRuntime({
       repos: handle.repos,
@@ -915,14 +922,18 @@ export function createMemoryCore(
           });
         }
         if (stale.length > 0) {
-          await recoverOpenEpisodesAsSessionEnd(stale);
+          scheduleStartupRecovery("startup.open_recovery", async () => {
+            await recoverOpenEpisodesAsSessionEnd(stale);
+          });
         }
       }
       const dirtyClosed = handle.repos.episodes
         .list({ status: "closed", limit: 500 })
         .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
       if (dirtyClosed.length > 0) {
-        await recoverDirtyClosedEpisodes(dirtyClosed);
+        scheduleStartupRecovery("startup.dirty_closed_recovery", async () => {
+          await recoverDirtyClosedEpisodes(dirtyClosed);
+        });
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
@@ -1300,7 +1311,20 @@ export function createMemoryCore(
     if (!reward || typeof reward !== "object") return false;
     const traceCount = (reward as { traceCount?: unknown }).traceCount;
     if (typeof traceCount === "number") {
-      return traceCount !== (ep.traceIds?.length ?? 0);
+      // Compare against the count of trace IDs that ACTUALLY exist in the
+      // traces table, not the raw length of `ep.traceIds`. Otherwise a
+      // single "ghost" trace ID lingering in `trace_ids_json` (deleted
+      // trace row, manual cleanup, partial migration) keeps the episode
+      // dirty forever and triggers a rescore every 10 minutes —
+      // https://github.com/MemTensor/MemOS/issues/1966 (590 wasted calls
+      // / ~14.5 RMB in the reporter's case). `countExisting` is a single
+      // `SELECT COUNT(*)` per chunk, so it stays cheap even on big DBs.
+      const traceIds = (ep.traceIds ?? []) as TraceId[];
+      const existingCount =
+        traceIds.length === 0
+          ? 0
+          : handle.repos.traces.countExisting(traceIds);
+      return traceCount !== existingCount;
     }
 
     // Backward compatibility for episodes scored before reward coverage
@@ -1458,10 +1482,20 @@ export function createMemoryCore(
       /* fall through to in-memory */
     }
 
+    // The Overview cards' source of truth for "what model is this slot
+    // running?" is config.yaml (= the Settings page). Runtime stats
+    // (lastOkAt / lastError / fallback timestamps) still come from the
+    // in-memory facades — that's the right split: the slot label is
+    // user intent, the colour/error reflects whether the runtime has
+    // actually been able to talk to the configured upstream. See #1596.
+    const effectiveConfig = diskConfig ?? handle.config;
+
     const llmInfo = llmHealth(handle.llm, latestTraceTs());
     const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    applyConfiguredModelDisplay(effectiveConfig, llmInfo, embedderInfo);
+
     const skillEvolverInfo = resolveSkillEvolver(
-      diskConfig ?? handle.config,
+      effectiveConfig,
       // Prefer the dedicated reflect LLM stats so an independently
       // configured skill-evolver model reports its OWN failures
       // instead of inheriting the (possibly healthy) summary LLM's
@@ -1469,6 +1503,7 @@ export function createMemoryCore(
       // skillEvolver blank — bootstrap aliases reflectLlm to llm
       // in that case anyway.
       handle.reflectLlm ?? handle.llm,
+      llmInfo,
       latestTraceTs(),
     );
 
@@ -1480,21 +1515,6 @@ export function createMemoryCore(
     // are still null. Now the card colour is driven purely by
     // in-memory stats — if you want to inspect past failures, head
     // to LogsView → 系统 tag.
-
-    // Override model names from disk config if they differ from the
-    // in-memory client (user saved new settings but hasn't restarted).
-    if (diskConfig) {
-      const diskLlm = diskConfig.llm as { model?: string; provider?: string } | undefined;
-      if (diskLlm?.model && diskLlm.model !== llmInfo.model) {
-        llmInfo.model = diskLlm.model;
-        if (diskLlm.provider) llmInfo.provider = diskLlm.provider;
-      }
-      const diskEmb = diskConfig.embedding as { model?: string; provider?: string } | undefined;
-      if (diskEmb?.model && diskEmb.model !== embedderInfo.model) {
-        embedderInfo.model = diskEmb.model;
-        if (diskEmb.provider) embedderInfo.provider = diskEmb.provider;
-      }
-    }
 
     applyPersistedModelStatus(handle.repos, "llm", llmInfo);
     applyPersistedModelStatus(handle.repos, "embedding", embedderInfo);
@@ -4038,6 +4058,19 @@ export function createMemoryCore(
   };
 
   function computeEmbeddingMaintenanceStats(): EmbeddingMaintenanceStats {
+    // SQL-only fast path (issue #1929).
+    //
+    // The previous implementation paginated `traces` / `policies` /
+    // `world_model` / `skills` end-to-end via `repos.<table>.list()`,
+    // which hydrates the full row — BLOB vector columns included —
+    // through `mapRow()`. On a production deployment with ~93K rows
+    // and ~270 MB of vector BLOBs that single call blocked the Node
+    // event loop for 4+ minutes at 100% CPU.
+    //
+    // `embeddingMaintenanceCounts` runs five `SELECT COUNT(*) +
+    // SUM(CASE WHEN ...)` queries — `LENGTH(blob)` reads only the BLOB
+    // header, never the payload — so we keep the same per-bucket
+    // semantics without touching a single vector byte.
     const configuredDimension = handle.embedder?.dimensions ?? 0;
     const expectedByteLenFromEmbedder = configuredDimension > 0
       ? configuredDimension * FLOAT32_BYTES
@@ -4058,7 +4091,6 @@ export function createMemoryCore(
       world_model: addNeedsRepair(raw.world_model),
       skill: addNeedsRepair(raw.skill),
     };
-
     const totalSlots = sumEmbeddingStats(byKind, "totalSlots");
     const ready = sumEmbeddingStats(byKind, "ready");
     const missing = sumEmbeddingStats(byKind, "missing");
@@ -5342,6 +5374,7 @@ function embedderHealth(
 function resolveSkillEvolver(
   config: PipelineHandle["config"],
   llm: PipelineHandle["llm"],
+  inheritedLlmInfo: CoreHealth["llm"],
   fallbackTs: number | null,
 ): CoreHealth["skillEvolver"] {
   const evolver = (config as { skillEvolver?: { provider?: string; model?: string } })
@@ -5363,16 +5396,60 @@ function resolveSkillEvolver(
       lastError: s?.lastError ?? null,
     };
   }
-  const fallback = llmHealth(llm, fallbackTs);
+  // Inherited skillEvolver mirrors the (already-disk-aware) llm slot,
+  // so the Overview's three model cards never disagree about what the
+  // current Settings say. Runtime stats still come from the llm
+  // client; we just copy whatever the Overview will show for the LLM
+  // slot itself. See #1596.
   return {
-    available: fallback.available,
-    provider: fallback.provider,
-    model: fallback.model,
+    available: inheritedLlmInfo.available,
+    provider: inheritedLlmInfo.provider,
+    model: inheritedLlmInfo.model,
     inherited: true,
-    lastOkAt: fallback.lastOkAt,
-    lastFallbackAt: fallback.lastFallbackAt,
-    lastError: fallback.lastError,
+    lastOkAt: inheritedLlmInfo.lastOkAt,
+    lastFallbackAt: inheritedLlmInfo.lastFallbackAt,
+    lastError: inheritedLlmInfo.lastError,
   };
+  // Reserved for future signature change — keep fallbackTs parameter
+  // so callers passing `latestTraceTs()` don't need to change.
+  void fallbackTs;
+}
+
+/**
+ * Patch the llm + embedder health snapshots so their `model` and
+ * `provider` fields reflect what's currently in `config.yaml` — i.e.
+ * what the Settings page shows. The runtime stats (available,
+ * lastOkAt, lastError) stay sourced from the in-memory facade because
+ * those represent "did the upstream actually answer", which only the
+ * runtime can know. See #1596: Overview cards used to lag behind a
+ * Settings save when only the provider changed (model name unchanged),
+ * or when the user cleared a model name back to empty.
+ */
+function applyConfiguredModelDisplay(
+  config: PipelineHandle["config"],
+  llmInfo: CoreHealth["llm"],
+  embedderInfo: CoreHealth["embedder"],
+): void {
+  const cfg = config as {
+    llm?: { model?: unknown; provider?: unknown };
+    embedding?: { model?: unknown; provider?: unknown };
+  };
+  if (cfg.llm) {
+    if (typeof cfg.llm.model === "string") {
+      llmInfo.model = cfg.llm.model;
+    }
+    if (typeof cfg.llm.provider === "string" && cfg.llm.provider.length > 0) {
+      llmInfo.provider = cfg.llm.provider;
+    }
+  }
+  if (cfg.embedding) {
+    if (typeof cfg.embedding.model === "string") {
+      embedderInfo.model = cfg.embedding.model;
+    }
+    if (typeof cfg.embedding.provider === "string" && cfg.embedding.provider.length > 0) {
+      embedderInfo.provider = cfg.embedding.provider;
+    }
+  }
 }
 
 function writeApiLog(

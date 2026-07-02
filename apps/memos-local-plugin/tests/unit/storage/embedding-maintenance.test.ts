@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { encodeVector } from "../../../core/storage/vector.js";
 import {
   embeddingMaintenanceCounts,
   inferStoredEmbeddingByteLen,
@@ -365,5 +366,9 @@ describe("storage/repos — embeddingMaintenanceCounts (issue #1929)", () => {
     } finally {
       handle.cleanup();
     }
+  });
+
+  it("uses BLOB byte length for dimension comparison", () => {
+    expect(encodeVector(fullVec()).byteLength).toBe(EXPECTED_BYTE_LEN);
   });
 });
