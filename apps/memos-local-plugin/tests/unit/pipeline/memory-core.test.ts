@@ -8,7 +8,7 @@
 
 import net from "node:net";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMemoryCore,
@@ -42,6 +42,34 @@ algorithm:
   lightweightMemory:
     enabled: false
 `;
+
+async function readEpisodeRewardState(
+  dbFile: string,
+  episodeId: string,
+): Promise<{ r_task: number | null; meta_json: string } | undefined> {
+  const Sqlite = (await import("better-sqlite3")).default;
+  const readDb = new Sqlite(dbFile, { readonly: true });
+  try {
+    return readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get(episodeId) as { r_task: number | null; meta_json: string } | undefined;
+  } finally {
+    readDb.close();
+  }
+}
+
+async function waitForRecoveredEpisode(
+  dbFile: string,
+  episodeId: string,
+): Promise<{ r_task: number | null; meta_json: string }> {
+  let episode: { r_task: number | null; meta_json: string } | undefined;
+  await vi.waitFor(async () => {
+    episode = await readEpisodeRewardState(dbFile, episodeId);
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBe(0);
+  }, { timeout: 2_000, interval: 20 });
+  return episode!;
+}
 
 function configWithLightweightMemory(enabled: boolean): typeof DEFAULT_CONFIG {
   return {
@@ -1395,14 +1423,7 @@ algorithm:
     });
     await core.init();
 
-    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
-    const episode = readDb
-      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
-      .get("ep_dirty") as { r_task: number | null; meta_json: string } | undefined;
-    readDb.close();
-
-    expect(episode).toBeDefined();
-    expect(episode!.r_task).toBe(0);
+    const episode = await waitForRecoveredEpisode(home.home.dbFile, "ep_dirty");
     const meta = JSON.parse(episode!.meta_json) as {
       rewardDirty?: unknown;
       recoveryReason?: string;
@@ -1489,14 +1510,7 @@ algorithm:
     });
     await core.init();
 
-    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
-    const episode = readDb
-      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
-      .get("ep_missing_reward") as { r_task: number | null; meta_json: string } | undefined;
-    readDb.close();
-
-    expect(episode).toBeDefined();
-    expect(episode!.r_task).toBe(0);
+    const episode = await waitForRecoveredEpisode(home.home.dbFile, "ep_missing_reward");
     const meta = JSON.parse(episode!.meta_json) as {
       recoveryReason?: string;
       reward?: { traceCount?: number; traceIds?: string[] };

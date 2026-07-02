@@ -623,6 +623,14 @@ export function createMemoryCore(
     }
   }
 
+  function scheduleStartupRecovery(label: string, task: () => Promise<void>): void {
+    void task().catch((err) => {
+      log.debug(`${label}.failed`, {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
   function makeHubRuntime(config: ResolvedConfig): HubRuntime {
     return createHubRuntime({
       repos: handle.repos,
@@ -921,14 +929,18 @@ export function createMemoryCore(
           });
         }
         if (stale.length > 0) {
-          await recoverOpenEpisodesAsSessionEnd(stale);
+          scheduleStartupRecovery("startup.open_recovery", async () => {
+            await recoverOpenEpisodesAsSessionEnd(stale);
+          });
         }
       }
       const dirtyClosed = handle.repos.episodes
         .list({ status: "closed", limit: 500 })
         .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
       if (dirtyClosed.length > 0) {
-        await recoverDirtyClosedEpisodes(dirtyClosed);
+        scheduleStartupRecovery("startup.dirty_closed_recovery", async () => {
+          await recoverDirtyClosedEpisodes(dirtyClosed);
+        });
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
