@@ -1,16 +1,54 @@
-import { describe, it, expect, vi } from "vitest";
-import { embedLocal } from "../src/embedding/local";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../src/types";
 
-describe("embedLocal memory leak fix", () => {
-  const mockLogger: Logger = {
+const mockTransformers = vi.hoisted(() => {
+  const disposeOutput = vi.fn();
+  const disposeExtractor = vi.fn();
+  const extractor = vi.fn(async () => ({
+    data: new Float32Array(384).fill(0.5),
+    dispose: disposeOutput,
+  }));
+  Object.assign(extractor, { dispose: disposeExtractor });
+  return {
+    disposeOutput,
+    disposeExtractor,
+    extractor,
+    pipeline: vi.fn(async () => extractor),
+  };
+});
+
+vi.mock("@huggingface/transformers", () => ({
+  pipeline: mockTransformers.pipeline,
+}));
+
+function createLogger(): Logger {
+  return {
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   };
+}
+
+async function loadEmbedLocal() {
+  vi.resetModules();
+  return import("../src/embedding/local");
+}
+
+describe("embedLocal memory leak fix", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.MEMOS_EMBED_RESET_AFTER_CALLS;
+  });
+
+  afterEach(() => {
+    delete process.env.MEMOS_EMBED_RESET_AFTER_CALLS;
+    vi.restoreAllMocks();
+  });
 
   it("should dispose tensor output after each embedding call", async () => {
+    const { embedLocal } = await loadEmbedLocal();
+    const mockLogger = createLogger();
     const texts = ["test embedding 1", "test embedding 2"];
 
     const result = await embedLocal(texts, mockLogger);
@@ -27,9 +65,15 @@ describe("embedLocal memory leak fix", () => {
         expect(isFinite(value)).toBe(true);
       });
     });
+
+    expect(mockTransformers.pipeline).toHaveBeenCalledTimes(1);
+    expect(mockTransformers.extractor).toHaveBeenCalledTimes(2);
+    expect(mockTransformers.disposeOutput).toHaveBeenCalledTimes(2);
   });
 
   it("should handle multiple consecutive calls without crashing", async () => {
+    const { embedLocal } = await loadEmbedLocal();
+    const mockLogger = createLogger();
     // Simulate multiple embedding calls that would trigger the leak
     const calls = 10;
 
@@ -40,13 +84,15 @@ describe("embedLocal memory leak fix", () => {
     }
 
     // If we reached here without OOM, the tensor disposal is working
-    expect(true).toBe(true);
+    expect(mockTransformers.pipeline).toHaveBeenCalledTimes(1);
+    expect(mockTransformers.disposeOutput).toHaveBeenCalledTimes(calls);
   });
 
   it("should reset pipeline after RESET_AFTER_CALLS threshold", async () => {
     // Set a low threshold for testing
-    const originalEnv = process.env.MEMOS_EMBED_RESET_AFTER_CALLS;
     process.env.MEMOS_EMBED_RESET_AFTER_CALLS = "5";
+    const { embedLocal } = await loadEmbedLocal();
+    const mockLogger = createLogger();
 
     // This will trigger a reset after 5 calls
     const calls = 6;
@@ -60,21 +106,13 @@ describe("embedLocal memory leak fix", () => {
     expect(mockLogger.debug).toHaveBeenCalledWith(
       expect.stringContaining("Reached 5 embedding calls")
     );
-
-    // Restore env
-    if (originalEnv !== undefined) {
-      process.env.MEMOS_EMBED_RESET_AFTER_CALLS = originalEnv;
-    } else {
-      delete process.env.MEMOS_EMBED_RESET_AFTER_CALLS;
-    }
+    expect(mockTransformers.disposeExtractor).toHaveBeenCalledTimes(1);
   });
 
   it("should allow disabling periodic reset via env variable", async () => {
-    const originalEnv = process.env.MEMOS_EMBED_RESET_AFTER_CALLS;
     process.env.MEMOS_EMBED_RESET_AFTER_CALLS = "0";
-
-    // Clear previous mock calls
-    vi.clearAllMocks();
+    const { embedLocal } = await loadEmbedLocal();
+    const mockLogger = createLogger();
 
     // Run many calls - should not trigger reset
     for (let i = 0; i < 100; i++) {
@@ -85,12 +123,6 @@ describe("embedLocal memory leak fix", () => {
     expect(mockLogger.debug).not.toHaveBeenCalledWith(
       expect.stringContaining("Reached")
     );
-
-    // Restore env
-    if (originalEnv !== undefined) {
-      process.env.MEMOS_EMBED_RESET_AFTER_CALLS = originalEnv;
-    } else {
-      delete process.env.MEMOS_EMBED_RESET_AFTER_CALLS;
-    }
+    expect(mockTransformers.disposeExtractor).not.toHaveBeenCalled();
   });
 });
