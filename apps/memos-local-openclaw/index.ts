@@ -1903,8 +1903,9 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
 
-        if (query.length < 2) {
-          ctx.log.debug("auto-recall: extracted query too short, skipping");
+        const minQueryLength = ctx.config.recall?.autoRecallMinQueryLength ?? DEFAULTS.autoRecallMinQueryLength;
+        if (query.length < minQueryLength) {
+          ctx.log.debug(`auto-recall: query too short (len=${query.length} < minQueryLength=${minQueryLength}), skipping`);
           return;
         }
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
