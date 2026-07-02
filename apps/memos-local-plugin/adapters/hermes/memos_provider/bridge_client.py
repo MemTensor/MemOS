@@ -32,6 +32,18 @@ logger = logging.getLogger(__name__)
 
 HOST_HANDLER_WAIT_SECONDS = 5.0
 
+# ─── Module-level singleton tracker ─────────────────────────────────────
+# Each entry maps a ``(agent, no_viewer)`` key to the most-recent active
+# ``MemosBridgeClient`` for that slot. When a new client is constructed
+# for an existing key, the previous client is closed synchronously so the
+# Node-side ``bridge.cjs`` subprocess does not leak.
+#
+# This is the Python-side guard against issue #1910 (bridge process leak:
+# every turn spawns new bridge.cjs). Defence in depth on the Node side
+# lives in ``bridge.cts`` via ``bridge-stdio.pid``.
+_ACTIVE_CLIENTS: dict[tuple[str, bool], MemosBridgeClient] = {}
+_ACTIVE_CLIENTS_LOCK = threading.Lock()
+
 
 def _installed_node_binary(plugin_root: Path) -> str | None:
     marker = plugin_root / ".memos-node-bin"
@@ -177,6 +189,40 @@ class MemosBridgeClient:
         )
         self._stderr_reader.start()
 
+        # Singleton tracking (issue #1910). Register ourselves as the
+        # active client for ``(agent, no_viewer)`` and reap any previous
+        # holder synchronously so its subprocess does not leak. The reap
+        # happens AFTER our reader threads are running, so the previous
+        # client's ``close()`` (which closes stdin and waits for exit)
+        # cannot interfere with our own startup.
+        self._singleton_agent = agent
+        self._singleton_no_viewer = bool(no_viewer)
+        previous = self._register_active()
+        if previous is not None and previous is not self:
+            prev_pid = getattr(previous, "pid", "?")
+            logger.info(
+                "MemOS: closing previous bridge client (pid=%s) before adopting new one (pid=%s)",
+                prev_pid,
+                self.pid,
+            )
+            with contextlib.suppress(Exception):
+                previous.close()
+
+    def _register_active(self) -> MemosBridgeClient | None:
+        """Register self as the active singleton; return the displaced client."""
+        key = (self._singleton_agent, self._singleton_no_viewer)
+        with _ACTIVE_CLIENTS_LOCK:
+            previous = _ACTIVE_CLIENTS.get(key)
+            _ACTIVE_CLIENTS[key] = self
+        return previous
+
+    def _unregister_active(self) -> None:
+        """Remove self from the active registry if we are still the current entry."""
+        key = (self._singleton_agent, self._singleton_no_viewer)
+        with _ACTIVE_CLIENTS_LOCK:
+            if _ACTIVE_CLIENTS.get(key) is self:
+                _ACTIVE_CLIENTS.pop(key, None)
+
     @property
     def pid(self) -> int:
         """Return the PID of the bridge subprocess."""
@@ -264,6 +310,12 @@ class MemosBridgeClient:
         with self._host_handlers_cv:
             self._closed = True
             self._host_handlers_cv.notify_all()
+
+        # Drop self from the module-level singleton tracker (issue #1910)
+        # BEFORE the potentially-slow stdin/SIGTERM/SIGKILL dance. We
+        # only evict the registry slot if we still own it — a newer
+        # client that displaced us must remain reachable.
+        self._unregister_active()
 
         pid = self.pid
 

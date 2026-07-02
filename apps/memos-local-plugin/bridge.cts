@@ -70,19 +70,22 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 // ─── PID file singleton guard ───────────────────────────────────────────
 // Prevents bridge process accumulation: each new bridge that wants to
 // own the viewer port kills the previous holder via its PID file.
-// `--no-viewer` (headless) bridges skip this PID file entirely — they don't
-// need the port and should coexist with the daemon that owns it.
+// `--no-viewer` (headless) bridges use a SEPARATE PID file so they can
+// reap their own predecessors without colliding with the viewer daemon
+// that owns the port. Without the headless reap, every Hermes turn that
+// respawns the Python adapter leaks an old bridge.cjs (issue #1910).
 
 const PID_FILENAME = "bridge.pid";
+const STDIO_PID_FILENAME = "bridge-stdio.pid";
 
-function pidFilePath(agent: string): string {
+function pidFilePath(agent: string, filename: string = PID_FILENAME): string {
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
     process.env.HOME ?? "/tmp",
     agentHome,
     "memos-plugin",
     "daemon",
-    PID_FILENAME,
+    filename,
   );
 }
 
@@ -146,13 +149,23 @@ async function main(): Promise<void> {
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
   const pidPath = pidFilePath(args.agent);
+  const stdioPidPath = pidFilePath(args.agent, STDIO_PID_FILENAME);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
+    // Headless bridges own a separate PID slot; remove it on exit too.
+    if (args.noViewer) removePidFile(stdioPidPath);
   };
   if (ownsViewerPort) {
     killExistingBridge(pidPath);
     writePidFile(pidPath);
+  }
+  if (args.noViewer) {
+    // Reap any previous --no-viewer bridge for this agent. This is the
+    // headless counterpart to the viewer-port singleton above and the
+    // Node-side defense against issue #1910 (bridge process leak).
+    killExistingBridge(stdioPidPath);
+    writePidFile(stdioPidPath);
   }
 
   // Lazy-import ESM core. Using dynamic import so this file remains
