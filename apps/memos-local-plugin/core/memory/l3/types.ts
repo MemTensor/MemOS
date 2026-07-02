@@ -75,6 +75,35 @@ export interface PolicyCluster {
   centroidVec: Float32Array | null;
   /** Average gain across the cluster (rough heuristic for priority). */
   avgGain: number;
+  /**
+   * Mean cosine of the cluster's policies against the centroid, in [0, 1].
+   * 1.0 = all policies' vectors coincide; 0 = orthogonal.
+   * Reported even for `loose` clusters so downstream `abstract.ts` can
+   * dampen confidence when cohesion is low.
+   */
+  cohesion: number;
+  /**
+   * Cluster admission mode:
+   *
+   *   - `"strict"` — every member's cosine to the centroid is
+   *     ≥ `clusterMinSimilarity`. This is the original V7 §2.4.1
+   *     formation criterion.
+   *
+   *   - `"loose"` — the strict subset was too small (< minPolicies),
+   *     but the underlying domain-key bucket is itself ≥ minPolicies,
+   *     so we accept the whole bucket as a fallback cluster. Domain
+   *     keys come from `domainKeyOf()` and already encode "same primary
+   *     tech tag + tool family", which is a meaningful weak signal that
+   *     the policies operate in the same problem area even when their
+   *     LLM-generated titles drift apart in embedding space.
+   *
+   * `abstract.ts` uses this to:
+   *   - lower the persisted `confidence` for `loose` clusters,
+   *   - hint to the LLM in the abstraction prompt that the policies
+   *     may not share a single sub-problem and to widen the world
+   *     model's `environment` / `inference` scope accordingly.
+   */
+  admission: "strict" | "loose";
 }
 
 // ─── LLM draft ─────────────────────────────────────────────────────────────

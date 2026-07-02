@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from memos.context.context import get_current_api_path
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
 from memos.mem_scheduler.schemas.task_schemas import (
@@ -28,6 +29,9 @@ class BaseSchedulerWebLogMixin:
             if self.rabbitmq_config is None:
                 return
             try:
+                current_api_path = get_current_api_path()
+                if current_api_path and not getattr(message, "api_path", None):
+                    message.api_path = current_api_path
                 logger.info(
                     "[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish %s",
                     message.model_dump_json(indent=2),

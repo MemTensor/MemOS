@@ -3,7 +3,7 @@
 This document is the living blueprint for `@memtensor/memos-local-plugin`. It
 covers the layering, the agent-agnostic core, the contract layer, the per-agent
 adapters, the runtime services (server + bridge), the viewer, and the supporting
-docs/site/test infrastructure.
+docs/test infrastructure.
 
 > If a module disagrees with this document, fix the document **or** the module.
 > Don't let them drift.
@@ -74,12 +74,13 @@ docs/site/test infrastructure.
             ┌──────────────────┐        ┌──────────────────┐
             │   server/ (HTTP) │        │   bridge.cts     │
             │   /api · /events │        │   JSON-RPC daemon │
-            │   serves web/dist│        │   used by Hermes  │
+            │   serves viewer/ │        │   used by Hermes  │
+            │       dist       │        │                   │
             └────────┬─────────┘        └──────────────────┘
                      │
                      ▼
             ┌──────────────────────────┐
-            │       web/ (viewer)      │
+            │      viewer/             │
             │  Overview · Traces · …   │
             │  Logs · Settings · …     │
             └──────────────────────────┘
@@ -151,7 +152,6 @@ GET    /api/skills          list + lifecycle
 POST   /api/feedback        explicit user feedback
 GET    /api/retrieval/preview run a tier1+2+3 retrieval against an arbitrary query
 GET    /api/hub/*           team-sharing surface
-GET    /api/changelog       lists site/content/releases/*.md (read-only)
 GET    /api/logs/tail       channelled, paginated, with `?level=&channel=&limit=`
 GET    /events              SSE: every CoreEvent + every log line (after redact)
 ```
@@ -167,7 +167,7 @@ heavyweight client today.
 Standard OpenClaw plugin. Imports `core/` directly. Provides:
 
 - `plugin.ts` — `definePluginEntry` wiring; passes config + paths into `createMemoryCore`.
-- `tools.ts` — `memory_search`, `memory_get`, `memory_timeline` tool definitions.
+- `tools.ts` — `memos_search`, `memos_get`, `memos_timeline` tool definitions.
 - `hooks.ts` — `onConversationTurn`, `onShutdown`, etc.
 - `host-llm-bridge.ts` — when `llm.fallback_to_host: true`, route LLM calls
   through the OpenClaw host's LLM rather than failing.
@@ -185,7 +185,7 @@ Python package. Implements Hermes' `MemoryProvider` interface and proxies to
 - `memos_provider/log_forwarder.py` — forward Python-side logs back over the
   bridge so everything ends up in the same `logs/` directory.
 
-### 3.7 `web/`
+### 3.7 `viewer/`
 
 Vite app, served at runtime by `server/static.ts`. Ten views map 1:1 to the
 algorithm's observable surface:
@@ -203,16 +203,7 @@ algorithm's observable surface:
 | Logs         | Channelled, level-filtered, real-time + tail                  |
 | Settings     | Config editor (writes back to `config.yaml`)                  |
 
-### 3.8 `site/`
-
-Local-only static site (Vite, separate config). Hosts:
-
-- The product landing page.
-- User-facing docs (`site/content/docs/*.md`).
-- All published release notes (`site/content/releases/<version>.md`), indexed
-  by `site/scripts/build-index.ts`, gated by `release:check` in CI.
-
-### 3.9 `templates/`
+### 3.8 `templates/`
 
 Plain files copied — never edited at runtime — by `install.sh`:
 
@@ -220,9 +211,9 @@ Plain files copied — never edited at runtime — by `install.sh`:
 - `config.hermes.yaml`
 - `README.user.md`
 
-### 3.10 `docs/`
+### 3.9 `docs/`
 
-Developer-facing docs that are too detailed for the marketing site:
+Developer-facing docs:
 
 - `ALGORITHM.md` — the V7 spec, restated and indexed against the code.
 - `DATA-MODEL.md` — every table, every column, every index.
@@ -246,7 +237,7 @@ to this codebase:
 | Trigger                                           | What runs                                  | Where it lands                             |
 |---------------------------------------------------|--------------------------------------------|--------------------------------------------|
 | New user turn arrives (`onConversationTurn`)      | `turnStartRetrieve` — full Tier-1+2+3      | Prepended as `memos_context` to this turn  |
-| LLM asks for `memory_search` / `memory_timeline`  | `toolDrivenRetrieve` — Tier-1+2, no Tier-3 | Returned as the tool's result               |
+| LLM asks for `memos_search` / `memos_timeline`  | `toolDrivenRetrieve` — Tier-1+2, no Tier-3 | Returned as the tool's result               |
 | LLM asks for `skill.<name>` directly              | `skillInvokeRetrieve` — the named skill    | Returned as the tool's result (cached)      |
 | SubAgent starts (`onSubAgentStart`)               | `subAgentRetrieve` — Tier-1+2 scoped to sub-agent role | Prepended to the sub-agent's first turn |
 | Decision-repair signal fires (see §4.3)           | `repairRetrieve` — targeted preference/anti-pattern lookup | Prepended to the **next** LLM step |
@@ -284,7 +275,7 @@ agent.turn(input)
               │     └── tier3 (world-model, top-K=2)
               └── returns InjectionPacket to adapter
    ─── agent.execute
-         ├── (optional) tool call: memory_search
+         ├── (optional) tool call: memos_search
          │     └── orchestrator.toolDrivenRetrieve (lightweight; no tier3)
          ├── (optional) tool call: skill.<name>
          │     └── orchestrator.skillInvokeRetrieve (single skill, cached)
@@ -396,9 +387,7 @@ Common helpers:
 ## 7. Release & versioning
 
 - SemVer.
-- Every published version requires a `site/content/releases/<version>.md`
-  (enforced by `npm run release:check`, run in CI).
-- `CHANGELOG.md` at the project root is regenerated from those files.
+- `CHANGELOG.md` at the project root is hand-maintained per release.
 - `core/update-check/` lets the running plugin notify users when a newer npm
   version is available.
 

@@ -10,6 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createCaptureEventBus } from "../../../core/capture/events.js";
 import { createCaptureRunner, type CaptureRunner } from "../../../core/capture/capture.js";
+import type { Embedder } from "../../../core/embedding/types.js";
 import { REFLECTION_SCORE_PROMPT } from "../../../core/llm/prompts/reflection.js";
 import type {
   CaptureConfig,
@@ -26,7 +27,7 @@ import type {
   EpisodeTurn,
 } from "../../../core/session/types.js";
 import { retrievalFor } from "../../../core/session/heuristics.js";
-import type { EpochMs, EpisodeId, SessionId } from "../../../core/types.js";
+import type { EpochMs, EpisodeId, SessionId, TraceId, TraceRow } from "../../../core/types.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
@@ -130,6 +131,37 @@ function episodeSnapshot(opts: {
   };
 }
 
+function traceRow(opts: {
+  id: string;
+  ts: number;
+  userText?: string;
+  agentText?: string;
+  toolCalls?: TraceRow["toolCalls"];
+}): TraceRow {
+  return {
+    id: opts.id as TraceId,
+    episodeId: "ep_1" as EpisodeId,
+    sessionId: "se_1" as SessionId,
+    ts: opts.ts as EpochMs,
+    userText: opts.userText ?? "",
+    agentText: opts.agentText ?? "",
+    summary: null,
+    toolCalls: opts.toolCalls ?? [],
+    reflection: null,
+    agentThinking: null,
+    value: 0,
+    alpha: 0,
+    rHuman: null,
+    priority: 0.5,
+    tags: [],
+    errorSignatures: [],
+    vecSummary: null,
+    vecAction: null,
+    turnId: 1_000 as EpochMs,
+    schemaVersion: 1,
+  };
+}
+
 describe("capture/pipeline (end-to-end)", () => {
   beforeAll(() => initTestLogger());
 
@@ -168,17 +200,66 @@ describe("capture/pipeline (end-to-end)", () => {
     tmp.cleanup();
   });
 
-  function buildRunner(overrides: Partial<CaptureConfig> = {}, llm: ReturnType<typeof fakeLlm> | null = null): CaptureRunner {
+  function buildRunner(
+    overrides: Partial<CaptureConfig> = {},
+    llm: ReturnType<typeof fakeLlm> | null = null,
+    embedder: Embedder | null = fakeEmbedder({ dimensions: 8 }),
+  ): CaptureRunner {
     return createCaptureRunner({
       tracesRepo: tmp.repos.traces,
+      embeddingRetryQueue: tmp.repos.embeddingRetryQueue,
       episodesRepo,
-      embedder: fakeEmbedder({ dimensions: 8 }),
+      embedder,
       llm,
       reflectLlm: llm,
       bus,
       cfg: baseConfig(overrides),
     });
   }
+
+  it("lightweight capture merges one turn into one memory with summary-only embedding", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "capture.summarize": { summary: "looked up sales and reported final answer" },
+      },
+    });
+    const embedder = fakeEmbedder({ dimensions: 8 });
+    const runner = buildRunner({ alphaScoring: true, synthReflections: true }, llm, embedder);
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", JSON.stringify({ total: 42 }), 1_100, {
+          tool: "db_query",
+          input: { sql: "select total from sales" },
+          output: { total: 42 },
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "current sales are 42", 1_200),
+      ],
+    });
+
+    const result = await runner.runLightweight({ episode: ep });
+    const rows = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+
+    expect(result.traceIds).toHaveLength(1);
+    expect(result.llmCalls.summarize).toBe(1);
+    expect(result.llmCalls.reflectionSynth).toBe(0);
+    expect(result.llmCalls.alphaScoring).toBe(0);
+    expect(embedder.stats().requests).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.userText).toBe("look up current sales");
+    expect(rows[0]!.agentText).toBe("current sales are 42");
+    expect(rows[0]!.toolCalls).toHaveLength(1);
+    expect(rows[0]!.summary).toBe("looked up sales and reported final answer");
+    expect(rows[0]!.tags).toContain("lightweight_memory");
+    expect(rows[0]!.vecSummary).toBeInstanceOf(Float32Array);
+    expect(rows[0]!.vecAction).toBeNull();
+    expect(tmp.repos.embeddingRetryQueue.countByStatus("pending")).toBe(0);
+    expect(seen.map((e) => e.kind)).toEqual(["capture.started", "capture.lite.done"]);
+  });
 
   it("writes one trace per step with α=0 when alpha disabled and no reflection present", async () => {
     const runner = buildRunner({ alphaScoring: false });
@@ -203,6 +284,117 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(persisted!.priority).toBe(0.5);
     expect(persisted!.vecSummary).toBeInstanceOf(Float32Array);
     expect(persisted!.vecAction).toBeInstanceOf(Float32Array);
+  });
+
+  it("preserves existing episode trace order when tools have no reliable startedAt", async () => {
+    const runner = buildRunner({ alphaScoring: false });
+    const rows: TraceRow[] = [
+      traceRow({
+        id: "tr_web",
+        ts: 3_000,
+        userText: "look up current sales",
+        toolCalls: [{ name: "web_search", input: undefined, output: "[web_search]" }],
+      }),
+      traceRow({
+        id: "tr_terminal",
+        ts: 1_100,
+        toolCalls: [{
+          name: "terminal",
+          input: undefined,
+          output: JSON.stringify({ output: "ok" }),
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }],
+      }),
+      traceRow({ id: "tr_final", ts: 4_000, agentText: "final answer" }),
+    ];
+    for (const row of rows) tmp.repos.traces.insert(row);
+    episodesRepo.updateTraceIds("ep_1" as EpisodeId, rows.map((row) => row.id));
+
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", "[web_search]", 3_000, { tool: "web_search" }),
+        turn("tool", JSON.stringify({ output: "ok" }), 1_100, {
+          tool: "terminal",
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "final answer", 4_000),
+        turn("user", "thanks", 5_000),
+        turn("assistant", "you are welcome", 5_100),
+      ],
+    });
+    ep.traceIds = rows.map((row) => row.id);
+
+    const lite = await runner.runLite({ episode: ep });
+
+    expect(lite.traceIds).toHaveLength(1);
+    const episode = tmp.repos.episodes.getById("ep_1" as EpisodeId)!;
+    expect(episode.traceIds).toEqual([...rows.map((row) => row.id), lite.traceIds[0]]);
+  });
+
+  it("places newly inserted older conversation steps before the final assistant trace", async () => {
+    const runner = buildRunner({ alphaScoring: false });
+    const finalTrace = traceRow({ id: "tr_final", ts: 2_000, agentText: "final answer" });
+    tmp.repos.traces.insert(finalTrace);
+    episodesRepo.updateTraceIds("ep_1" as EpisodeId, [finalTrace.id]);
+
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", JSON.stringify({ success: true }), 1_100, {
+          tool: "browser_navigate",
+          input: { url: "https://example.com" },
+          output: { success: true },
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "final answer", 2_000),
+      ],
+    });
+    ep.traceIds = [finalTrace.id];
+
+    const lite = await runner.runLite({ episode: ep });
+
+    expect(lite.traceIds).toHaveLength(1);
+    expect(tmp.repos.episodes.getById("ep_1" as EpisodeId)!.traceIds).toEqual([
+      lite.traceIds[0],
+      finalTrace.id,
+    ]);
+  });
+
+  it("skips duplicate tool rows with the same action signature during capture persist", async () => {
+    const runner = buildRunner({ alphaScoring: false });
+    const toolMeta = {
+      tool: "browser_navigate",
+      input: { url: "https://example.com" },
+      output: { success: true },
+      startedAt: 1_050,
+      endedAt: 1_100,
+    };
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", JSON.stringify({ success: true }), 1_100, toolMeta),
+        turn("tool", JSON.stringify({ success: true }), 1_200, toolMeta),
+        turn("assistant", "final answer", 2_000),
+      ],
+    });
+
+    const lite = await runner.runLite({ episode: ep });
+    const rows = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+
+    expect(lite.traceIds).toHaveLength(2);
+    expect(rows.filter((row) => row.toolCalls[0]?.name === "browser_navigate")).toHaveLength(1);
+    expect(rows.filter((row) => row.agentText === "final answer")).toHaveLength(1);
+    expect(tmp.repos.episodes.getById("ep_1" as EpisodeId)!.traceIds).toEqual(lite.traceIds);
   });
 
   it("passes through adapter-provided reflection and stores α from LLM", async () => {
@@ -231,6 +423,7 @@ describe("capture/pipeline (end-to-end)", () => {
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toContain("shell tool");
     expect(t.alpha).toBeCloseTo(0.8, 5);
+    expect(result.traces[0]?.reflection.reason).toBe("concrete");
   });
 
   it("clamps α to 0 when LLM marks reflection unusable", async () => {
@@ -350,6 +543,7 @@ describe("capture/pipeline (end-to-end)", () => {
     // chain. Two starts + one done is the correct topology.
     expect(seen.map((e) => e.kind)).toEqual([
       "capture.started",
+      "capture.lite.done",
       "capture.started",
       "capture.done",
     ]);
@@ -379,5 +573,35 @@ describe("capture/pipeline (end-to-end)", () => {
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.vecSummary).toBeNull();
     expect(t.vecAction).toBeNull();
+    expect(tmp.repos.embeddingRetryQueue.countByStatus("pending")).toBe(0);
+  });
+
+  it("embedder failure queues missing trace vectors for retry", async () => {
+    const runner = buildRunner(
+      { embedTraces: true, alphaScoring: false },
+      null,
+      fakeEmbedder({ dimensions: 8, throwWith: new Error("embedder offline") }),
+    );
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [turn("user", "q", 1_000), turn("assistant", "a", 1_100)],
+    });
+
+    const result = await runCapture(runner, ep);
+    const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
+
+    expect(t.vecSummary).toBeNull();
+    expect(t.vecAction).toBeNull();
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stage: "embed",
+          message: "embedding retry queued for missing trace vectors",
+          detail: { queued: 2 },
+        }),
+      ]),
+    );
+    expect(tmp.repos.embeddingRetryQueue.countByStatus("pending")).toBe(2);
   });
 });

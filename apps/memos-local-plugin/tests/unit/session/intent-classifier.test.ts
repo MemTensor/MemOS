@@ -39,6 +39,7 @@ function fakeLlm(handler: (input: unknown) => unknown | Promise<unknown>): LlmCl
       totalPromptTokens: 0,
       totalCompletionTokens: 0,
       lastOkAt: null,
+      lastFallbackAt: null,
       lastError: null,
     }),
     resetStats: () => {},

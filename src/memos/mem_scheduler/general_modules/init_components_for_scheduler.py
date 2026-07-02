@@ -285,10 +285,7 @@ def init_components() -> dict[str, Any]:
     plugin_manager.init_components(plugin_context)
 
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
-    mem_reader = MemReaderFactory.from_config(
-        mem_reader_config,
-        graph_db=graph_db,
-    )
+    mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
     reranker = RerankerFactory.from_config(reranker_config)
     feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
     internet_retriever = InternetRetrieverFactory.from_config(

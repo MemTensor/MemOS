@@ -68,14 +68,159 @@ export function createLlmClientWithProvider(
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
   let lastOkAt: number | null = null;
+  let lastFallbackAt: number | null = null;
   let lastError: { at: number; message: string } | null = null;
 
-  function markOk(): void {
-    lastOkAt = Date.now();
-    lastError = null;
+  // ─── Circuit breaker state (issue #1897) ─────────────────────────────────
+  // Per-client breaker that trips on terminal provider errors (401/402/403,
+  // "insufficient balance", "invalid api key", "unauthorized", "account
+  // suspended", "billing"). Short-circuits subsequent calls inside the
+  // facade so the broken provider is not contacted again until cool-down
+  // elapses. Half-open: the next call after `circuitOpenUntil` probes the
+  // provider; success closes the breaker, terminal failure re-opens it.
+  const breakerCfg = config.circuitBreaker ?? {};
+  const breakerEnabled = breakerCfg.enabled !== false;
+  const breakerCooldownMs = Math.max(30_000, breakerCfg.cooldownMs ?? 300_000);
+  const breakerIsTerminal = breakerCfg.isTerminal ?? defaultIsTerminal;
+  const breakerNow = breakerCfg.now ?? Date.now;
+  let circuitOpenUntil: number | null = null;
+  let circuitOpenedReason: string | null = null;
+  let lastCircuitOpenStatusAt: number | null = null;
+
+  function breakerIsOpen(): boolean {
+    if (!breakerEnabled) return false;
+    if (circuitOpenUntil === null) return false;
+    if (breakerNow() >= circuitOpenUntil) {
+      // Cool-down elapsed → transition to half-open. We do NOT clear
+      // `circuitOpenUntil` yet so the very first probe attempt that
+      // races with the cool-down boundary doesn't fall through to "no
+      // breaker" twice. The next call's success/failure handler resets
+      // or re-opens the breaker explicitly.
+      return false;
+    }
+    return true;
   }
-  function markFail(err: unknown): void {
-    lastError = { at: Date.now(), message: summarizeErrMessage(err) };
+
+  function breakerTrip(err: unknown): void {
+    if (!breakerEnabled) return;
+    circuitOpenUntil = breakerNow() + breakerCooldownMs;
+    circuitOpenedReason = summarizeErrMessage(err);
+    // Reset the coalescer so the first suppressed call after a fresh
+    // trip always emits a `circuit_open` row.
+    lastCircuitOpenStatusAt = null;
+    facadeLog.warn("circuit_breaker.trip", {
+      provider: provider.name,
+      model: config.model,
+      until: circuitOpenUntil,
+      reason: circuitOpenedReason,
+    });
+  }
+
+  function breakerRecordSuccess(): void {
+    if (!breakerEnabled) return;
+    if (circuitOpenUntil !== null) {
+      facadeLog.info("circuit_breaker.close", {
+        provider: provider.name,
+        model: config.model,
+      });
+    }
+    circuitOpenUntil = null;
+    circuitOpenedReason = null;
+    lastCircuitOpenStatusAt = null;
+  }
+
+  /**
+   * Emit a coalesced `circuit_open` audit row. At most one row per
+   * `cooldownMs/12` window per client — bounds audit-row spam while
+   * still surfacing the suppressed-call event in the Logs viewer.
+   * The first suppressed call after a fresh trip always emits.
+   */
+  function maybeEmitCircuitOpenStatus(opts: LlmCallOptions | undefined, op: string): void {
+    if (!config.onStatus) return;
+    const at = breakerNow();
+    const coalesceWindow = Math.max(5_000, Math.floor(breakerCooldownMs / 12));
+    if (
+      lastCircuitOpenStatusAt !== null &&
+      at - lastCircuitOpenStatusAt < coalesceWindow
+    ) {
+      return;
+    }
+    lastCircuitOpenStatusAt = at;
+    try {
+      config.onStatus({
+        status: "circuit_open",
+        provider: provider.name,
+        model: config.model,
+        message: circuitOpenedReason ?? "(unknown reason)",
+        at,
+        durationMs: 0,
+        op,
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
+    } catch {
+      /* status sink errors are non-fatal */
+    }
+  }
+
+  function throwBreakerOpen(): never {
+    throw makeBreakerOpenError();
+  }
+
+  function makeBreakerOpenError(): MemosError {
+    const until = circuitOpenUntil ?? breakerNow();
+    return new MemosError(
+      ERROR_CODES.LLM_UNAVAILABLE,
+      `circuit_open: ${circuitOpenedReason ?? "terminal provider error"}`,
+      {
+        circuitOpen: true,
+        until,
+        provider: provider.name,
+        model: config.model,
+      },
+    );
+  }
+
+  function canUseHostFallback(): boolean {
+    return (
+      config.fallbackToHost === true &&
+      provider.name !== "host" &&
+      getHostLlmBridge() !== null
+    );
+  }
+
+  /**
+   * Mark a successful primary-provider call. We **do not** clear
+   * `lastError` / `lastFallbackAt` here — the viewer picks the most
+   * recent event by timestamp to colour the overview card, so an
+   * earlier failure that already produced a `system_error` row stays
+   * visible until a later success out-dates it.
+   */
+  function markOk(): number {
+    lastOkAt = Date.now();
+    return lastOkAt;
+  }
+  /**
+   * Mark a primary-provider failure that was rescued by the host LLM
+   * bridge (yellow card). The original primary error is still kept on
+   * `lastError` so the viewer can show *why* fallback kicked in, and
+   * `lastFallbackAt` tracks when fallback happened so the timestamp
+   * comparison renders yellow instead of red.
+   */
+  function markFallback(err: unknown): number {
+    const at = Date.now();
+    lastFallbackAt = at;
+    lastError = { at, message: summarizeErrMessage(err) };
+    return at;
+  }
+  /**
+   * Mark a terminal failure — either no fallback configured or the
+   * host fallback also failed (red card).
+   */
+  function markFail(err: unknown): number {
+    const at = Date.now();
+    lastError = { at, message: summarizeErrMessage(err) };
+    return at;
   }
 
   function normalizeMessages(input: LlmMessage[] | string): LlmMessage[] {
@@ -124,7 +269,23 @@ export function createLlmClientWithProvider(
     opts: LlmCallOptions | undefined,
     op: string,
   ): Promise<{ completion: LlmCompletion }> {
+    // ── Circuit breaker short-circuit ──
+    // When the breaker is open we never reach the primary provider, so
+    // no request is generated against the broken paid API. We still
+    // emit (coalesced) `circuit_open` status rows so the Logs viewer /
+    // Overview can surface that suppression is happening.
+    if (breakerIsOpen()) {
+      maybeEmitCircuitOpenStatus(opts, op);
+      if (canUseHostFallback()) {
+        return callHostFallback(makeBreakerOpenError(), messages, input, opts, op, {
+          keepBreakerOpen: true,
+          notifyError: false,
+        });
+      }
+      throwBreakerOpen();
+    }
     requests++;
+    const startedAt = Date.now();
     try {
       const raw = await provider.complete(messages, input, makeCtx(opts, asProviderLog(providerLog)));
       const completion: LlmCompletion = {
@@ -137,37 +298,52 @@ export function createLlmClientWithProvider(
         durationMs: raw.durationMs,
       };
       record(completion, op, messages);
-      markOk();
+      const okAt = markOk();
+      breakerRecordSuccess();
+      notifyStatus({
+        status: "ok",
+        provider: provider.name,
+        model: config.model,
+        at: okAt,
+        durationMs: completion.durationMs,
+        op,
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
       return { completion };
     } catch (err) {
       if (shouldFallback(err, config, provider.name)) {
-        const hostProv = new HostLlmProvider();
+        const primaryTerminal = breakerIsTerminal(err);
+        if (primaryTerminal) breakerTrip(err);
         try {
-          const res = await hostProv.complete(messages, input, makeCtx(opts, asProviderLog(rootLogger.child({ channel: "llm.host" }))));
-          hostFallbacks++;
-          facadeLog.warn("host.fallback", {
-            from: provider.name,
-            op,
-            reason: summarizeErr(err),
+          return await callHostFallback(err, messages, input, opts, op, {
+            keepBreakerOpen: primaryTerminal,
+            notifyError: true,
           });
-          const completion: LlmCompletion = {
-            text: res.text,
-            provider: provider.name,
-            model: config.model,
-            finishReason: res.finishReason,
-            usage: res.usage,
-            servedBy: "host_fallback",
-            durationMs: res.durationMs,
-          };
-          record(completion, op, messages);
-          markOk();
-          return { completion };
         } catch (hostErr) {
           failures++;
-          markFail(hostErr);
+          const failAt = markFail(hostErr);
           facadeLog.error("host.fallback_failed", {
             primary: summarizeErr(err),
             host: summarizeErr(hostErr),
+          });
+          // Primary AND host bridge both failed. Trip on a terminal
+          // primary error (the one the operator typically needs to fix
+          // — host bridge failures are usually transient stdio issues).
+          if (breakerIsTerminal(err)) breakerTrip(err);
+          notifyOnError(hostErr);
+          notifyStatus({
+            status: "error",
+            provider: provider.name,
+            model: config.model,
+            message: summarizeErrMessage(hostErr),
+            code: hostErr instanceof MemosError ? hostErr.code : undefined,
+            at: failAt,
+            durationMs: Date.now() - startedAt,
+            fallbackProvider: "host",
+            op,
+            episodeId: opts?.episodeId,
+            phase: opts?.phase,
           });
           throw hostErr instanceof MemosError
             ? hostErr
@@ -178,7 +354,21 @@ export function createLlmClientWithProvider(
         }
       }
       failures++;
-      markFail(err);
+      const failAt = markFail(err);
+      if (breakerIsTerminal(err)) breakerTrip(err);
+      notifyOnError(err);
+      notifyStatus({
+        status: "error",
+        provider: provider.name,
+        model: config.model,
+        message: summarizeErrMessage(err),
+        code: err instanceof MemosError ? err.code : undefined,
+        at: failAt,
+        durationMs: Date.now() - startedAt,
+        op,
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
       throw err instanceof MemosError
         ? err
         : new MemosError(
@@ -186,6 +376,48 @@ export function createLlmClientWithProvider(
             `${provider.name} failed: ${(err as Error).message ?? String(err)}`,
             { provider: provider.name },
           );
+    }
+  }
+
+  /**
+   * Forward a terminal failure to the bootstrap-supplied sink (if any).
+   * Wrapped so a buggy sink can never replace the original error the
+   * caller is about to receive. Skipped silently when no sink is set.
+   */
+  function notifyOnError(err: unknown): void {
+    if (!config.onError) return;
+    try {
+      config.onError({
+        provider: provider.name,
+        model: config.model,
+        message: summarizeErrMessage(err),
+        code: err instanceof MemosError ? err.code : undefined,
+        at: Date.now(),
+      });
+    } catch {
+      /* sink errors are non-fatal */
+    }
+  }
+
+  function notifyStatus(detail: {
+    status: "ok" | "fallback" | "error";
+    provider: string;
+    model: string;
+    message?: string;
+    code?: string;
+    at?: number;
+    durationMs?: number;
+    fallbackProvider?: string;
+    fallbackModel?: string;
+    op?: string;
+    episodeId?: string;
+    phase?: string;
+  }): void {
+    if (!config.onStatus) return;
+    try {
+      config.onStatus(detail);
+    } catch {
+      /* status sink errors are non-fatal */
     }
   }
 
@@ -290,6 +522,12 @@ export function createLlmClientWithProvider(
     const call = buildCallInput(opts, opts?.jsonMode === true);
     const ctx = makeCtx(opts, asProviderLog(providerLog));
 
+    // Short-circuit stream calls when the breaker is open. We do not
+    // count a suppressed call against `requests` (no network hit).
+    if (breakerIsOpen()) {
+      maybeEmitCircuitOpenStatus(opts, opts?.op ?? "stream");
+      throwBreakerOpen();
+    }
     requests++;
     const start = Date.now();
     let acc = "";
@@ -322,13 +560,91 @@ export function createLlmClientWithProvider(
       });
       if (usage?.promptTokens) totalPromptTokens += usage.promptTokens;
       if (usage?.completionTokens) totalCompletionTokens += usage.completionTokens;
-      markOk();
+      const okAt = markOk();
+      breakerRecordSuccess();
+      notifyStatus({
+        status: "ok",
+        provider: provider.name,
+        model: config.model,
+        at: okAt,
+        durationMs: Date.now() - start,
+        op: opts?.op ?? "stream",
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
     } catch (err) {
       failures++;
-      markFail(err);
+      const failAt = markFail(err);
+      if (breakerIsTerminal(err)) breakerTrip(err);
       facadeLog.error("stream.failed", { err: summarizeErr(err) });
+      notifyOnError(err);
+      notifyStatus({
+        status: "error",
+        provider: provider.name,
+        model: config.model,
+        message: summarizeErrMessage(err),
+        code: err instanceof MemosError ? err.code : undefined,
+        at: failAt,
+        durationMs: Date.now() - start,
+        op: opts?.op ?? "stream",
+        episodeId: opts?.episodeId,
+        phase: opts?.phase,
+      });
       throw err;
     }
+  }
+
+  async function callHostFallback(
+    primaryErr: unknown,
+    messages: LlmMessage[],
+    input: ProviderCallInput,
+    opts: LlmCallOptions | undefined,
+    op: string,
+    behavior: { keepBreakerOpen: boolean; notifyError: boolean },
+  ): Promise<{ completion: LlmCompletion }> {
+    const hostProv = new HostLlmProvider();
+    const res = await hostProv.complete(
+      messages,
+      input,
+      makeCtx(opts, asProviderLog(rootLogger.child({ channel: "llm.host" }))),
+    );
+    hostFallbacks++;
+    facadeLog.warn("host.fallback", {
+      from: provider.name,
+      op,
+      reason: summarizeErr(primaryErr),
+    });
+    const completion: LlmCompletion = {
+      text: res.text,
+      provider: provider.name,
+      model: config.model,
+      finishReason: res.finishReason,
+      usage: res.usage,
+      servedBy: "host_fallback",
+      durationMs: res.durationMs,
+    };
+    record(completion, op, messages);
+    // The primary provider is still broken even though the host bridge
+    // saved this call. Keep the breaker open for terminal primary
+    // errors so later calls can go straight to host fallback without
+    // touching the paid provider again.
+    const fallbackAt = markFallback(primaryErr);
+    if (!behavior.keepBreakerOpen) breakerRecordSuccess();
+    if (behavior.notifyError) notifyOnError(primaryErr);
+    notifyStatus({
+      status: "fallback",
+      provider: provider.name,
+      model: config.model,
+      message: summarizeErrMessage(primaryErr),
+      code: primaryErr instanceof MemosError ? primaryErr.code : undefined,
+      at: fallbackAt,
+      durationMs: completion.durationMs,
+      fallbackProvider: "host",
+      op,
+      episodeId: opts?.episodeId,
+      phase: opts?.phase,
+    });
+    return { completion };
   }
 
   const client: LlmClient = {
@@ -347,7 +663,11 @@ export function createLlmClientWithProvider(
         totalPromptTokens,
         totalCompletionTokens,
         lastOkAt,
+        lastFallbackAt,
         lastError,
+        circuitOpen: breakerIsOpen(),
+        circuitOpenUntil,
+        circuitOpenedReason,
       };
     },
     resetStats(): void {
@@ -358,7 +678,11 @@ export function createLlmClientWithProvider(
       totalPromptTokens = 0;
       totalCompletionTokens = 0;
       lastOkAt = null;
+      lastFallbackAt = null;
       lastError = null;
+      circuitOpenUntil = null;
+      circuitOpenedReason = null;
+      lastCircuitOpenStatusAt = null;
     },
     async close(): Promise<void> {
       await provider.close?.();
@@ -372,6 +696,10 @@ export function createLlmClientWithProvider(
     timeoutMs: config.timeoutMs,
     maxRetries: config.maxRetries,
     fallbackToHost: config.fallbackToHost,
+    circuitBreaker: {
+      enabled: breakerEnabled,
+      cooldownMs: breakerCooldownMs,
+    },
   });
 
   return client;
@@ -409,6 +737,40 @@ function shouldFallback(err: unknown, config: LlmConfig, providerName: LlmProvid
     err.code === ERROR_CODES.LLM_UNAVAILABLE ||
     err.code === ERROR_CODES.LLM_RATE_LIMITED ||
     err.code === ERROR_CODES.LLM_TIMEOUT
+  );
+}
+
+/**
+ * Default circuit-breaker classifier for terminal provider errors.
+ *
+ * A "terminal" error is one that will keep failing until the operator
+ * intervenes (top up balance, fix API key, fix model name). Retrying
+ * such an error just burns paid quota and pollutes the audit log, so
+ * the breaker opens and short-circuits further calls for the cool-
+ * down window. Issue #1897 reports the symptom — ~12,900 paid LLM
+ * requests in 24 h against a key with insufficient balance.
+ *
+ * Detection sources, in order:
+ *   1. `MemosError(LLM_UNAVAILABLE)` with `details.status` ∈ 401/402/403
+ *      — set by `core/llm/fetcher.ts::httpPostJson` for non-ok HTTP
+ *      responses.
+ *   2. Well-known lowercase phrases in the error message (so providers
+ *      that return 400 for "Insufficient Balance" — looking at you,
+ *      DeepSeek — are still recognized).
+ */
+function defaultIsTerminal(err: unknown): boolean {
+  if (!(err instanceof MemosError)) return false;
+  if (err.code !== ERROR_CODES.LLM_UNAVAILABLE) return false;
+  const status = Number((err.details as { status?: unknown } | undefined)?.status);
+  if (status === 401 || status === 402 || status === 403) return true;
+  const msg = (err.message ?? "").toLowerCase();
+  return (
+    msg.includes("insufficient balance") ||
+    msg.includes("invalid api key") ||
+    msg.includes("invalid_api_key") ||
+    msg.includes("unauthorized") ||
+    msg.includes("account suspended") ||
+    msg.includes("billing")
   );
 }
 

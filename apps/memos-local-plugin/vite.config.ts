@@ -2,17 +2,17 @@ import { defineConfig } from "vite";
 import preact from "@preact/preset-vite";
 import path from "node:path";
 
-// Vite config for the runtime viewer (web/).
-// Output goes to web/dist and is served at runtime by server/static.ts.
+// Vite config for the runtime viewer (viewer/).
+// Output goes to viewer/dist and is served at runtime by server/static.ts.
 
 export default defineConfig({
-  root: "web",
+  root: "viewer",
   publicDir: "public",
   plugins: [preact()],
-  // Relative asset URLs so the same bundle can be served from `/`,
-  // `/openclaw/`, or `/hermes/` (multi-agent hub routing). Without
-  // `base: "./"`, Vite emits `/assets/index-abc.js` which 404s when
-  // the viewer is loaded under `/openclaw/`.
+  // Relative asset URLs. Each agent owns its own port and serves the
+  // SPA at root, so absolute `/assets/...` would also work — we keep
+  // `./` so legacy bookmarks at `/openclaw/...` (which the server
+  // rewrites to `/...`) still find the right asset path inside HTML.
   base: "./",
   build: {
     outDir: "dist",
@@ -33,7 +33,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@contract": path.resolve(__dirname, "agent-contract"),
-      "@web": path.resolve(__dirname, "web/src"),
+      "@viewer": path.resolve(__dirname, "viewer/src"),
     },
   },
 });

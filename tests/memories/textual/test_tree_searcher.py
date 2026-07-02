@@ -82,6 +82,28 @@ def test_searcher_fast_path(mock_searcher):
     assert all(isinstance(item, TextualMemoryItem) for item in result)
 
 
+def test_searcher_can_skip_rerank_per_request(mock_searcher):
+    parsed_goal = MagicMock()
+    parsed_goal.memories = ["Cats are cute"]
+    parsed_goal.rephrased_query = None
+    mock_searcher.task_goal_parser.parse.return_value = parsed_goal
+    mock_searcher.embedder.embed.return_value = [[0.1] * 5, [0.2] * 5]
+    mock_searcher.graph_retriever.retrieve.return_value = [make_item("wm1", 0.9)[0]]
+
+    result = mock_searcher.search(
+        query="Tell me about cats",
+        top_k=1,
+        info={"test": True},
+        mode="fast",
+        memory_type="WorkingMemory",
+        rerank=False,
+    )
+
+    mock_searcher.reranker.rerank.assert_not_called()
+    assert len(result) == 1
+    assert result[0].memory == "wm1"
+
+
 def test_searcher_fine_mode_triggers_reasoner(mock_searcher):
     parsed_goal = MagicMock()
     parsed_goal.memories = ["Cats"]

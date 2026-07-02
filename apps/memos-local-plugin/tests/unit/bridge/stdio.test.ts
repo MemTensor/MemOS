@@ -13,6 +13,7 @@ import { PassThrough } from "node:stream";
 import {
   createStdioClient,
   startStdioServer,
+  waitForShutdown,
 } from "../../../bridge/stdio.js";
 import type { MemoryCore } from "../../../agent-contract/memory-core.js";
 
@@ -99,7 +100,7 @@ function wire() {
     logToStderr: false,
   });
   const client = createStdioClient(serverOut, clientOut);
-  return { core, server, client };
+  return { core, server, client, clientOut };
 }
 
 describe("stdio transport", () => {
@@ -135,5 +136,27 @@ describe("stdio transport", () => {
     expect(received.map((r) => r.method)).toEqual(
       expect.arrayContaining(["events.notify", "logs.forward"]),
     );
+  });
+
+  it("marks the server disconnected when stdin ends", async () => {
+    const { server, clientOut } = wire();
+    expect(server.connected).toBe(true);
+
+    clientOut.end();
+    await server.done;
+
+    expect(server.connected).toBe(false);
+  });
+
+  it("waitForShutdown closes transport without waiting for stdin end", async () => {
+    const { server, core } = wire();
+    const finished = await Promise.race([
+      waitForShutdown(core, server).then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 200)),
+    ]);
+
+    expect(finished).toBe(true);
+    expect(server.connected).toBe(false);
+    expect(core.shutdown).toHaveBeenCalled();
   });
 });

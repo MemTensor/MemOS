@@ -30,6 +30,11 @@ describe("embedding/normalize", () => {
     expect(enforceDim(v, 3, { provider: "x", model: "y" })).toEqual([1, 2, 3]);
   });
 
+  it("enforceDim preserves provider length in auto mode", () => {
+    const v = [1, 2, 3, 4, 5];
+    expect(enforceDim(v, 0, { provider: "x", model: "y" })).toBe(v);
+  });
+
   it("enforceDim throws MemosError when provider returns too few dims", () => {
     try {
       enforceDim([1, 2], 4, { provider: "x", model: "y" });
@@ -76,6 +81,16 @@ describe("embedding/normalize", () => {
     expect(out[0]![0]).toBeCloseTo(0.6, 5);
     expect(out[0]![1]).toBeCloseTo(0.8, 5);
     expect(out[1]![0]).toBeCloseTo(1.0, 5);
+  });
+
+  it("postProcess infers provider dimensions in auto mode", () => {
+    const out = postProcess([[1, 0, 0, 0]], {
+      dimensions: 0,
+      provider: "p",
+      model: "m",
+      normalize: true,
+    });
+    expect(out[0]).toHaveLength(4);
   });
 
   it("postProcess can skip normalization", () => {

@@ -7,7 +7,7 @@
  * The unparameterised endpoints `/api/v1/memory/trace?id=…` live on
  * for backward compatibility.
  */
-import type { EpisodeId, SessionId } from "../../agent-contract/dto.js";
+import type { EpisodeId, SessionId, TraceDTO } from "../../agent-contract/dto.js";
 import type { ServerDeps } from "../types.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
@@ -17,6 +17,8 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
    *   ?limit=50         (max 500)
    *   &offset=0
    *   &sessionId=<id>   (optional filter)
+   *   &ownerAgentKind=<kind>   (optional namespace filter)
+   *   &ownerProfileId=<id>     (optional namespace filter)
    *   &q=<substring>    (optional case-insensitive summary/text filter)
    *
    * Returns: { traces: TraceDTO[], limit, offset, nextOffset? }
@@ -32,18 +34,49 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
     const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
     const offset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const sessionId = params.get("sessionId") || undefined;
+    const namespace = parseNamespace(params.get("namespace"));
+    const ownerAgentKind = params.get("ownerAgentKind") || namespace?.ownerAgentKind || undefined;
+    const ownerProfileId = params.get("ownerProfileId") || namespace?.ownerProfileId || undefined;
     const q = params.get("q") || undefined;
-    const traces = await deps.core.listTraces({
-      limit,
+    // When `groupByTurn=true`, pagination treats each (episodeId, turnId)
+    // pair as one "memory" — matching the viewer's grouped display where
+    // a user query + its tool steps + final reply collapse into one card.
+    const groupByTurn = params.get("groupByTurn") === "true";
+    const includeTotal = params.get("includeTotal") !== "false";
+    const listLimit = includeTotal ? limit : limit + 1;
+    const rawTraces = await deps.core.listTraces({
+      limit: listLimit,
       offset,
       sessionId: sessionId as SessionId | undefined,
+      ownerAgentKind,
+      ownerProfileId,
       q,
+      groupByTurn,
     });
+    const { traces, hasMore } = trimTracePage(rawTraces, limit, groupByTurn);
+    const total = includeTotal
+      ? await deps.core.countTraces({
+          sessionId: sessionId as SessionId | undefined,
+          ownerAgentKind,
+          ownerProfileId,
+          q,
+          groupByTurn,
+        })
+      : undefined;
+    // When grouping, `traces.length === limit` is no longer a reliable
+    // "has more" signal (a single turn can yield many traces). Use the
+    // total count instead to detect a next page.
+    const nextOffset = includeTotal
+      ? groupByTurn
+        ? offset + limit < (total ?? 0) ? offset + limit : undefined
+        : traces.length === limit ? offset + limit : undefined
+      : hasMore ? offset + limit : undefined;
     return {
       traces,
       limit,
       offset,
-      nextOffset: traces.length === limit ? offset + limit : undefined,
+      total,
+      nextOffset,
     };
   });
 
@@ -155,4 +188,39 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
     const traces = await deps.core.timeline({ episodeId: id });
     return { episodeId: id, traces };
   });
+}
+
+function trimTracePage(
+  traces: TraceDTO[],
+  limit: number,
+  groupByTurn: boolean,
+): { traces: TraceDTO[]; hasMore: boolean } {
+  if (!groupByTurn) {
+    return {
+      traces: traces.slice(0, limit),
+      hasMore: traces.length > limit,
+    };
+  }
+  const turnOrder = new Map<string, number>();
+  const kept: TraceDTO[] = [];
+  for (const trace of traces) {
+    const key = `${trace.episodeId ?? "_"}:${trace.turnId}`;
+    let index = turnOrder.get(key);
+    if (index === undefined) {
+      index = turnOrder.size;
+      turnOrder.set(key, index);
+    }
+    if (index < limit) kept.push(trace);
+  }
+  return {
+    traces: kept,
+    hasMore: turnOrder.size > limit,
+  };
+}
+
+function parseNamespace(value: string | null): { ownerAgentKind: string; ownerProfileId: string } | null {
+  if (!value) return null;
+  const [ownerAgentKind, ownerProfileId] = value.split("/", 2).map((part) => part.trim());
+  if (!ownerAgentKind || !ownerProfileId) return null;
+  return { ownerAgentKind, ownerProfileId };
 }

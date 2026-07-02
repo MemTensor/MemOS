@@ -23,6 +23,7 @@ import type {
   AgentKind,
   EpisodeId,
   RetrievalResultDTO,
+  RuntimeNamespace,
   SessionId,
   ToolCallDTO,
   TurnInputDTO,
@@ -39,9 +40,13 @@ import type {
   HostLogger,
   PluginHookAgentContext,
   PluginHookSessionContext,
+  PluginHookSubagentContext,
   PluginHookToolContext,
   SessionEndEvent,
   SessionStartEvent,
+  SubagentEndedEvent,
+  SubagentSpawnedEvent,
+  ToolResultPersistEvent,
 } from "./openclaw-api.js";
 
 // ─── Message flattening ────────────────────────────────────────────────────
@@ -66,6 +71,7 @@ import type {
 
 const TOOL_RESULT_ROLES = new Set([
   "toolResult",      // pi-ai canonical
+  "toolresult",      // lower-case gateway/UI normalizer variants
   "tool",            // OpenAI legacy
   "tool_result",     // some Anthropic SDKs / older bridges
   "tool_response",   // older variants
@@ -152,13 +158,13 @@ export function flattenMessages(input: unknown[] | undefined): FlatMessage[] {
           textBuf += (textBuf ? "\n" : "") + b.text;
         } else if (type === "thinking" && typeof b.thinking === "string") {
           thinkingBuf += (thinkingBuf ? "\n\n" : "") + b.thinking;
-        } else if (type === "toolCall") {
+        } else if (isToolCallBlockType(type)) {
           inlineToolCalls.push({
             role: "tool_call",
             content: "",
             toolName: typeof b.name === "string" ? b.name : "unknown",
-            toolCallId: typeof b.id === "string" ? b.id : undefined,
-            toolInput: b.arguments,
+            toolCallId: pickToolCallId(b, m),
+            toolInput: pickToolInput(b),
             ts,
           });
         } else if (!type && typeof b.text === "string") {
@@ -242,6 +248,63 @@ export function flattenMessages(input: unknown[] | undefined): FlatMessage[] {
   return out;
 }
 
+function isToolCallBlockType(type: string): boolean {
+  const normalized = type.trim().toLowerCase();
+  return (
+    normalized === "toolcall" ||
+    normalized === "tool_call" ||
+    normalized === "tooluse" ||
+    normalized === "tool_use" ||
+    normalized === "functioncall" ||
+    normalized === "function_call"
+  );
+}
+
+function pickToolCallId(
+  block: Record<string, unknown>,
+  message?: Record<string, unknown>,
+): string | undefined {
+  return firstString(
+    block.id,
+    block.toolCallId,
+    block.tool_call_id,
+    block.callId,
+    block.call_id,
+    block.toolUseId,
+    block.tool_use_id,
+    message?.toolCallId,
+    message?.tool_call_id,
+  );
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function pickToolInput(block: Record<string, unknown>): unknown {
+  if ("arguments" in block) return block.arguments;
+  if ("args" in block) return block.args;
+  if ("input" in block) return block.input;
+  if (typeof block.partialJson === "string") {
+    try {
+      return JSON.parse(block.partialJson);
+    } catch {
+      return block.partialJson;
+    }
+  }
+  if (typeof block.partialArgs === "string") {
+    try {
+      return JSON.parse(block.partialArgs);
+    } catch {
+      return block.partialArgs;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Extract the visible text from a `Message.content` value, supporting
  * both the pi-ai shapes (string OR `(TextContent|ImageContent)[]`) and
@@ -309,6 +372,18 @@ const OPENCLAW_BOOT_SIGNATURES: readonly string[] = [
   "A new session was started via /new",
   "A new session was started via /reset",
   "BEGIN_QUOTED_NOTES",
+  // V7 — heartbeat / cron / async-exec wakeup prompts. OpenClaw
+  // synthesises these as if they were user input so the agent comes
+  // out of idle and processes the side-channel event. They are NOT
+  // user-typed content; capturing them as an L1 trace pollutes the
+  // Memories panel and creates phantom episodes (one per heartbeat).
+  // Source signatures live in OpenClaw `infra/heartbeat-events-filter.ts`
+  // and `auto-reply/reply/session-reset-prompt.ts`.
+  "An async command you ran earlier has completed",
+  "A scheduled reminder has been triggered",
+  "A scheduled cron event was triggered",
+  "Run the following periodic tasks",
+  "When reading HEARTBEAT.md",
 ];
 
 const OPENCLAW_SENTINEL_REPLIES = new Set([
@@ -335,6 +410,7 @@ export function isOpenClawBootstrapMessage(raw: string): boolean {
   const text = raw.trim();
   if (text.length === 0) return true;
   if (OPENCLAW_SENTINEL_REPLIES.has(text)) return true;
+  if (isOpenClawSubagentAnnouncementPrompt(text)) return false;
   for (const sig of OPENCLAW_BOOT_SIGNATURES) {
     if (text.startsWith(sig)) return true;
     if (text.includes(sig)) {
@@ -346,6 +422,12 @@ export function isOpenClawBootstrapMessage(raw: string): boolean {
     }
   }
   return false;
+}
+
+function isOpenClawSubagentAnnouncementPrompt(raw: string): boolean {
+  const text = raw.trim();
+  return text.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") &&
+    text.includes("A completed subagent task is ready for user delivery");
 }
 
 /**
@@ -402,7 +484,7 @@ function stripOpenClawUserEnvelope(raw: string): string {
     "",
   );
   text = text.replace(
-    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memory_search[^\n]*)*/gi,
+    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memos_search[^\n]*)*/gi,
     "",
   );
 
@@ -433,6 +515,28 @@ function stripOpenClawUserEnvelope(raw: string): string {
   // 5. Inline envelope tags OpenClaw leaves behind.
   text = text.replace(/\[message_id:\s*[a-f0-9-]+\]/gi, "");
   text = text.replace(/\[\[reply_to_current\]\]/gi, "");
+
+  // 6. Line-level OpenClaw side-channel injections. OpenClaw appends
+  // accumulated system events to the top of synthesised user prompts,
+  // each line prefixed with `System (untrusted): [ts] …` (see
+  // `openclaw/src/auto-reply/reply/session-system-events.ts`). It also
+  // appends a `Current time: …` footer (`appendCronStyleCurrentTimeLine`)
+  // and an `[Untrusted …]` envelope on inbound messages. Drop these
+  // lines wholesale — they're never user-typed content, and leaving
+  // them in pollutes the Memories panel + tricks the relation
+  // classifier into thinking the user actually said them.
+  text = text
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return true; // keep blank lines so paragraph breaks survive
+      if (/^System(?:\s+\(untrusted\))?:/.test(t)) return false;
+      if (/^Current time:/i.test(t)) return false;
+      if (/^\[Untrusted\b/.test(t)) return false;
+      if (/^When reading HEARTBEAT\.md/i.test(t)) return false;
+      return true;
+    })
+    .join("\n");
 
   return text.trim();
 }
@@ -481,8 +585,25 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
   const userText = messages[lastUserIdx].content.trim();
   const tail = messages.slice(lastUserIdx + 1);
 
-  const pendingCalls = new Map<string, Partial<ToolCallDTO> & { _id?: string }>();
+  type PendingToolCall = Partial<ToolCallDTO> & { _id?: string };
+  const pendingCalls = new Map<string, PendingToolCall[]>();
   const toolCalls: ToolCallDTO[] = [];
+
+  const enqueuePendingCall = (key: string, stub: PendingToolCall): void => {
+    const queue = pendingCalls.get(key);
+    if (queue) {
+      queue.push(stub);
+    } else {
+      pendingCalls.set(key, [stub]);
+    }
+  };
+  const takePendingCall = (key: string): PendingToolCall | undefined => {
+    const queue = pendingCalls.get(key);
+    if (!queue || queue.length === 0) return undefined;
+    const stub = queue.shift();
+    if (queue.length === 0) pendingCalls.delete(key);
+    return stub;
+  };
 
   // Two separate buffers accumulate content not yet assigned to a tool.
   //
@@ -516,7 +637,7 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
       pendingAssistant = [];
 
       const key = m.toolCallId ?? m.toolName;
-      pendingCalls.set(key, {
+      enqueuePendingCall(key, {
         _id: m.toolCallId,
         name: m.toolName,
         input: m.toolInput,
@@ -527,7 +648,7 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
     }
     if (m.role === "tool_result") {
       const key = m.toolCallId ?? m.toolName ?? "";
-      const stub = pendingCalls.get(key);
+      const stub = key ? takePendingCall(key) : undefined;
       const errorCode = stub
         ? m.errorCode ?? (m.isError ? "tool_error" : undefined)
         : m.errorCode ?? (m.isError ? "tool_error" : undefined);
@@ -536,25 +657,28 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
         input: stub?.input,
         output: m.content || undefined,
         errorCode,
+        toolCallId: stub?._id ?? m.toolCallId,
         startedAt: stub?.startedAt ?? (m.ts ?? now),
         endedAt: m.ts ?? now,
         thinkingBefore: stub?.thinkingBefore,
       });
-      if (key) pendingCalls.delete(key);
       continue;
     }
   }
 
-  for (const stub of pendingCalls.values()) {
-    if (!stub.name) continue;
-    toolCalls.push({
-      name: stub.name,
-      input: stub.input,
-      output: undefined,
-      startedAt: stub.startedAt ?? now,
-      endedAt: now,
-      thinkingBefore: stub.thinkingBefore,
-    });
+  for (const queue of pendingCalls.values()) {
+    for (const stub of queue) {
+      if (!stub.name) continue;
+      toolCalls.push({
+        name: stub.name,
+        input: stub.input,
+        output: undefined,
+        toolCallId: stub._id,
+        startedAt: stub.startedAt ?? now,
+        endedAt: now,
+        thinkingBefore: stub.thinkingBefore,
+      });
+    }
   }
 
   const agentThinking = pendingThinking.join("\n\n").trim();
@@ -564,6 +688,56 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
     agentThinking: agentThinking || undefined,
     toolCalls,
   };
+}
+
+function mergeToolCalls(
+  captured: readonly ToolCallDTO[],
+  observed: readonly ToolCallDTO[],
+): ToolCallDTO[] {
+  if (observed.length === 0) return [...captured];
+  const out = captured.map((tc) => ({ ...tc }));
+  for (const obs of observed) {
+    const idx = out.findIndex((existing) => toolCallsMatch(existing, obs));
+    if (idx >= 0) {
+      out[idx] = mergeToolCall(out[idx]!, obs);
+    } else {
+      out.push({ ...obs });
+    }
+  }
+  return out.sort((a, b) => {
+    const at = a.startedAt ?? a.endedAt ?? 0;
+    const bt = b.startedAt ?? b.endedAt ?? 0;
+    return at - bt;
+  });
+}
+
+function mergeToolCall(existing: ToolCallDTO, observed: ToolCallDTO): ToolCallDTO {
+  return {
+    ...observed,
+    ...existing,
+    input: existing.input ?? observed.input,
+    output: existing.output ?? observed.output,
+    errorCode: existing.errorCode ?? observed.errorCode,
+    toolCallId: existing.toolCallId ?? observed.toolCallId,
+    startedAt: existing.startedAt ?? observed.startedAt,
+    endedAt: existing.endedAt ?? observed.endedAt,
+    thinkingBefore: existing.thinkingBefore ?? observed.thinkingBefore,
+    assistantTextBefore: existing.assistantTextBefore ?? observed.assistantTextBefore,
+  };
+}
+
+function toolCallsMatch(a: ToolCallDTO, b: ToolCallDTO): boolean {
+  if (a.toolCallId && b.toolCallId) return a.toolCallId === b.toolCallId;
+  if (a.toolCallId || b.toolCallId) return false;
+  return a.name === b.name && stableStringify(a.input) === stableStringify(b.input);
+}
+
+function stableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 // ─── Session identity ──────────────────────────────────────────────────────
@@ -577,6 +751,23 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
  */
 export function bridgeSessionId(agentId: string, sessionKey: string): SessionId {
   return `openclaw::${agentId}::${sessionKey}`;
+}
+
+function namespaceFromAgentCtx(ctx: {
+  agentId?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+  agentDir?: string;
+}): RuntimeNamespace {
+  const profileId = (ctx.agentId || "main").trim() || "main";
+  const workspacePath = ctx.workspaceDir || ctx.agentDir || undefined;
+  return {
+    agentKind: "openclaw",
+    profileId,
+    profileLabel: profileId,
+    workspacePath,
+    sessionKey: ctx.sessionKey,
+  };
 }
 
 /**
@@ -597,20 +788,26 @@ export function isEphemeralSessionKey(sessionKey: string | undefined): boolean {
   return sessionKey.startsWith("temp:");
 }
 
+function isExplicitOneShotSessionKey(sessionKey: string | undefined): boolean {
+  return typeof sessionKey === "string" && sessionKey.includes(":explicit:");
+}
+
 // ─── Prompt injection rendering ────────────────────────────────────────────
 
 const CONTEXT_OPEN = "<memos_context>";
 const CONTEXT_CLOSE = "</memos_context>";
+const OPENCLAW_CONTEXT_CHAR_CAP = 6_000;
+const TOOL_FAILURE_REPAIR_HINT =
+  "This tool has failed multiple times in a row. You may want to call `memos_search` for relevant past experience before deciding what to do next.";
+const TOOL_FAILURE_HINT_THRESHOLD = 3;
 
 /**
  * Render the retrieval result as a prompt-prependable block.
  *
- * When the store is cold (no hits), we still emit a short "memory
- * tools are available" hint — the legacy `memos-local-openclaw`
- * adapter does the same via `noRecallHint`, and without it the LLM
- * has no reason to call `memory_search` at the start of a
- * conversation. The hint is kept *small* so repeated turns don't
- * bloat the system prompt.
+ * Callers may opt into a short cold-start hint when the store has no
+ * hits. The automatic OpenClaw before-prompt path disables that hint so
+ * no-hit turns continue with the user's prompt instead of injecting
+ * extra context.
  */
 export function renderContextBlock(
   packet: RetrievalResultDTO | null,
@@ -623,14 +820,29 @@ export function renderContextBlock(
   }
   if (opts.hintWhenEmpty === false) return "";
   // Cold-start hint — mirrors the legacy adapter's behaviour so the
-  // model is nudged to reach for `memory_search` even on the first
+  // model is nudged to reach for `memos_search` even on the first
   // turn of a fresh session.
   const hint = [
     "No prior memories matched this query — the store may simply be cold.",
-    "You can still call `memory_search` (semantic) or `memory_timeline`",
-    "(by episodeId) if you expect there to be relevant past context.",
+    "You can still call `memos_search` with a shorter or rephrased query",
+    "if you expect there to be relevant past context.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
+}
+
+function capContextBlock(block: string): { block: string; truncated: boolean } {
+  if (block.length <= OPENCLAW_CONTEXT_CHAR_CAP) {
+    return { block, truncated: false };
+  }
+  const suffix = `\n\n[Memory context truncated to ${OPENCLAW_CONTEXT_CHAR_CAP} characters.]\n${CONTEXT_CLOSE}`;
+  const prefix = block.startsWith(`${CONTEXT_OPEN}\n`) ? `${CONTEXT_OPEN}\n` : "";
+  const bodyStart = prefix.length;
+  const bodyBudget = Math.max(0, OPENCLAW_CONTEXT_CHAR_CAP - prefix.length - suffix.length);
+  const body = block.slice(bodyStart, bodyStart + bodyBudget).trimEnd();
+  return {
+    block: `${prefix}${body}${suffix}`,
+    truncated: true,
+  };
 }
 
 // ─── Bridge factory ────────────────────────────────────────────────────────
@@ -665,6 +877,12 @@ export interface BridgeHandle {
     ctx: PluginHookToolContext,
   ) => Promise<void>;
 
+  /** Handler for `tool_result_persist` — append repeated-failure hint. */
+  handleToolResultPersist: (
+    event: ToolResultPersistEvent,
+    ctx: PluginHookToolContext,
+  ) => { message?: unknown } | void;
+
   /** Handler for `session_start`. */
   handleSessionStart: (
     event: SessionStartEvent,
@@ -677,9 +895,97 @@ export interface BridgeHandle {
     ctx: PluginHookSessionContext,
   ) => Promise<void>;
 
+  /** Handler for `subagent_spawned` — cache delegation metadata. */
+  handleSubagentSpawned: (
+    event: SubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => void;
+
+  /** Handler for `subagent_ended` — clear cached delegation metadata. */
+  handleSubagentEnded: (
+    event: SubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
+  ) => Promise<void>;
+
   /** Snapshot for tests. */
   trackedSessions: () => number;
   trackedToolCalls: () => number;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function toolFailureStreakKey(
+  toolName: string,
+  event: ToolResultPersistEvent,
+  ctx: PluginHookToolContext,
+): string {
+  const run = ctx.runId ?? event.runId ?? ctx.sessionId ?? ctx.sessionKey ?? "global";
+  return `${run}:${toolName}`;
+}
+
+function clearToolFailureStreaksForTurn(
+  streaks: Map<string, number>,
+  ctx: { runId?: string; sessionId?: string; sessionKey?: string },
+): void {
+  const prefix = `${ctx.runId ?? ctx.sessionId ?? ctx.sessionKey ?? "global"}:`;
+  for (const key of streaks.keys()) {
+    if (key.startsWith(prefix)) streaks.delete(key);
+  }
+}
+
+function toolResultPersistFailed(event: ToolResultPersistEvent): boolean {
+  if (event.error) return true;
+  const msg = asRecord(event.message);
+  if (msg) {
+    if (msg.isError === true || msg.error === true) return true;
+    if (typeof msg.error === "string" && msg.error.trim()) return true;
+    const details = asRecord(msg.details);
+    if (details?.isError === true || details?.error === true) return true;
+    if (typeof details?.error === "string" && details.error.trim()) return true;
+  }
+  const result = asRecord(event.result);
+  if (result?.isError === true || result?.error === true) return true;
+  if (typeof result?.error === "string" && result.error.trim()) return true;
+  return false;
+}
+
+function appendFailureHintToToolResultMessage(message: unknown): unknown {
+  const msg = asRecord(message);
+  if (!msg) return message;
+  const content = msg.content;
+  if (typeof content === "string") {
+    if (content.includes(TOOL_FAILURE_REPAIR_HINT)) return message;
+    return { ...msg, content: appendFailureHint(content) };
+  }
+  if (Array.isArray(content)) {
+    let idx = -1;
+    for (let i = content.length - 1; i >= 0; i--) {
+      const p = asRecord(content[i]);
+      if (p?.type === "text" && typeof p.text === "string") {
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 0) {
+      const part = asRecord(content[idx])!;
+      const text = String(part.text);
+      if (text.includes(TOOL_FAILURE_REPAIR_HINT)) return message;
+      const next = [...content];
+      next[idx] = { ...part, text: appendFailureHint(text) };
+      return { ...msg, content: next };
+    }
+    return { ...msg, content: [...content, { type: "text", text: TOOL_FAILURE_REPAIR_HINT }] };
+  }
+  return message;
+}
+
+function appendFailureHint(content: string): string {
+  const trimmed = content.trimEnd();
+  return `${trimmed}${trimmed ? "\n\n" : ""}${TOOL_FAILURE_REPAIR_HINT}`;
 }
 
 export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
@@ -689,27 +995,163 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   const messageCursor = new Map<SessionId, number>();
   // Per-session last-known user text (for tool-outcome context hashing).
   const lastUserTextBySession = new Map<SessionId, string>();
-  // Per-session open episode id (populated by the core after onTurnStart).
-  const openEpisodeBySession = new Map<SessionId, EpisodeId>();
+  // Per-session latest episode binding (populated by the core after
+  // onTurnStart). The keyed side map lets a delayed `agent_end` find and
+  // clear its own turn without deleting a newer turn's mapping.
+  type EpisodeBinding = {
+    sessionId: SessionId;
+    episodeId: EpisodeId;
+    seq: number;
+    keys: string[];
+  };
+  const latestEpisodeBySession = new Map<SessionId, EpisodeBinding>();
+  const episodeBindingByTurnKey = new Map<string, EpisodeBinding>();
+  let episodeBindingSeq = 0;
   // Per-toolCallId start timestamps so `after_tool_call` can compute duration
   // when the host doesn't populate `durationMs`.
-  const toolCallStartedAt = new Map<string, { ts: number; sessionId: SessionId }>();
+  const toolCallStartedAt = new Map<string, {
+    ts: number;
+    sessionId: SessionId;
+    runId?: string;
+    toolName?: string;
+    params?: Record<string, unknown>;
+  }>();
+  const toolFailureStreaks = new Map<string, number>();
+  type ObservedToolCall = ToolCallDTO & { runId?: string; order: number };
+  const observedToolCallsBySession = new Map<SessionId, ObservedToolCall[]>();
+  let observedToolCallSeq = 0;
+  const spawnedSubagents = new Map<string, {
+    event: SubagentSpawnedEvent;
+    ctx: PluginHookSubagentContext;
+    ts: number;
+    parentSessionId?: SessionId;
+    parentEpisodeId?: EpisodeId;
+  }>();
+  const pendingSubagentSessions = new Set<SessionId>();
+
+  function rememberObservedToolCall(
+    sessionId: SessionId,
+    runId: string | undefined,
+    tc: ToolCallDTO,
+  ): void {
+    const list = observedToolCallsBySession.get(sessionId) ?? [];
+    list.push({ ...tc, runId, order: ++observedToolCallSeq });
+    observedToolCallsBySession.set(sessionId, list.slice(-200));
+  }
+
+  function takeObservedToolCalls(
+    sessionId: SessionId,
+    runId: string | undefined,
+  ): ToolCallDTO[] {
+    const list = observedToolCallsBySession.get(sessionId) ?? [];
+    if (list.length === 0) return [];
+
+    const matched: ObservedToolCall[] = [];
+    const rest: ObservedToolCall[] = [];
+    for (const tc of list) {
+      const sameRun = runId ? tc.runId === runId || !tc.runId : true;
+      if (sameRun) matched.push(tc);
+      else rest.push(tc);
+    }
+
+    if (rest.length > 0) observedToolCallsBySession.set(sessionId, rest);
+    else observedToolCallsBySession.delete(sessionId);
+
+    return matched
+      .slice()
+      .sort((a, b) => (a.startedAt ?? a.order) - (b.startedAt ?? b.order))
+      .map(({ runId: _runId, order: _order, ...tc }) => tc);
+  }
 
   async function ensureSession(
     agentId: string | undefined,
     sessionKey: string | undefined,
+    namespace?: RuntimeNamespace,
   ): Promise<SessionId> {
     const effectiveAgent = agentId ?? "main";
     const effectiveKey = sessionKey ?? "default";
     const sid = bridgeSessionId(effectiveAgent, effectiveKey);
-    await opts.core.openSession({ agent: opts.agent, sessionId: sid });
+    await opts.core.openSession({
+      agent: opts.agent,
+      sessionId: sid,
+      namespace,
+      meta: namespace ? { namespace } : undefined,
+    });
     return sid;
+  }
+
+  function turnBindingKeys(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+    userText?: string,
+  ): string[] {
+    const keys: string[] = [];
+    if (ctx.runId) keys.push(`${sessionId}\0run\0${ctx.runId}`);
+    const text = userText?.trim();
+    if (text) keys.push(`${sessionId}\0user\0${text}`);
+    return keys;
+  }
+
+  function rememberEpisodeBinding(
+    sessionId: SessionId,
+    episodeId: EpisodeId,
+    ctx: { runId?: string },
+    userText: string | undefined,
+    seq: number = ++episodeBindingSeq,
+  ): EpisodeBinding {
+    const binding: EpisodeBinding = {
+      sessionId,
+      episodeId,
+      seq,
+      keys: turnBindingKeys(sessionId, ctx, userText),
+    };
+    latestEpisodeBySession.set(sessionId, binding);
+    for (const key of binding.keys) {
+      episodeBindingByTurnKey.set(key, binding);
+    }
+    return binding;
+  }
+
+  function findEpisodeBinding(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+    userText?: string,
+  ): EpisodeBinding | undefined {
+    for (const key of turnBindingKeys(sessionId, ctx, userText)) {
+      const binding = episodeBindingByTurnKey.get(key);
+      if (binding) return binding;
+    }
+    return latestEpisodeBySession.get(sessionId);
+  }
+
+  function forgetEpisodeBinding(binding: EpisodeBinding | undefined): void {
+    if (!binding) return;
+    for (const key of binding.keys) {
+      if (episodeBindingByTurnKey.get(key)?.seq === binding.seq) {
+        episodeBindingByTurnKey.delete(key);
+      }
+    }
+    if (latestEpisodeBySession.get(binding.sessionId)?.seq === binding.seq) {
+      latestEpisodeBySession.delete(binding.sessionId);
+    }
+  }
+
+  function forgetSessionBindings(sessionId: SessionId): void {
+    latestEpisodeBySession.delete(sessionId);
+    for (const [key, binding] of episodeBindingByTurnKey.entries()) {
+      if (binding.sessionId === sessionId) episodeBindingByTurnKey.delete(key);
+    }
+  }
+
+  function currentEpisodeId(sessionId: SessionId): EpisodeId | undefined {
+    return latestEpisodeBySession.get(sessionId)?.episodeId;
   }
 
   async function handleBeforePrompt(
     event: BeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<BeforePromptBuildResult | void> {
+    const startedAt = now();
     try {
       // Ephemeral sub-agents (slug generator, internal probes) share
       // the plugin host and would otherwise open a throwaway episode
@@ -740,19 +1182,34 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         });
         return;
       }
+      if (isOpenClawSubagentAnnouncementPrompt(rawPrompt)) {
+        opts.log.debug("memos.onTurnStart.skipped_subagent_announcement", {
+          sessionKey: ctx.sessionKey,
+          agentId: ctx.agentId,
+        });
+        return;
+      }
       const prompt = stripOpenClawUserEnvelope(rawPrompt);
       if (!prompt) return;
 
-      const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey);
+      const namespace = namespaceFromAgentCtx(ctx);
+      const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
+      clearToolFailureStreaksForTurn(toolFailureStreaks, {
+        runId: ctx.runId,
+        sessionId: ctx.sessionId ?? sessionId,
+        sessionKey: ctx.sessionKey,
+      });
       lastUserTextBySession.set(sessionId, prompt);
 
       const turn: TurnInputDTO = {
         agent: opts.agent,
+        namespace,
         sessionId,
         userText: prompt,
         ts: now(),
         contextHints: {
           agentId: ctx.agentId,
+          namespace,
           sessionKey: ctx.sessionKey,
           sessionId: ctx.sessionId,
           runId: ctx.runId,
@@ -768,8 +1225,22 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       const routedSessionId = (packet.query.sessionId ?? sessionId) as SessionId;
       const routedEpisodeId = packet.query.episodeId as EpisodeId | undefined;
       if (routedEpisodeId) {
-        openEpisodeBySession.set(routedSessionId, routedEpisodeId);
+        const seq = ++episodeBindingSeq;
+        rememberEpisodeBinding(routedSessionId, routedEpisodeId, ctx, prompt, seq);
+        if (routedSessionId !== sessionId) {
+          rememberEpisodeBinding(sessionId, routedEpisodeId, ctx, prompt, seq);
+        }
       }
+
+      const renderedBlock = renderContextBlock(packet, {
+        // Avoid making OpenClaw do a second tool-driven search when
+        // auto-recall found nothing. A no-hit turn should simply
+        // continue with the user's prompt; tools remain available if
+        // the model independently decides to use them.
+        hintWhenEmpty: false,
+      });
+      const { block, truncated } = capContextBlock(renderedBlock);
+      const durationMs = now() - startedAt;
 
       opts.log.info("memos.onTurnStart", {
         sessionKey: ctx.sessionKey,
@@ -778,9 +1249,18 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         episodeId: routedEpisodeId,
         hits: packet.hits.length,
         tierLatencyMs: packet.tierLatencyMs,
+        durationMs,
+        contextChars: block.length,
+        injected: block.length > 0,
+        truncated,
       });
+      opts.log.info(
+        `memos.onTurnStart returned hits=${packet.hits.length} ` +
+          `durationMs=${durationMs} contextChars=${block.length} ` +
+          `injected=${block.length > 0 ? "yes" : "no"} ` +
+          `truncated=${truncated ? "yes" : "no"}`,
+      );
 
-      const block = renderContextBlock(packet, { hintWhenEmpty: true });
       if (!block) return;
       return { prependContext: block + "\n\n" };
     } catch (err) {
@@ -800,6 +1280,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       // trace / episode, so there's nothing to persist here either.
       return;
     }
+    const namespace = namespaceFromAgentCtx(ctx);
     const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
     const allMessages = Array.isArray(event.messages) ? event.messages : [];
 
@@ -868,33 +1349,49 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         });
         return;
       }
+      const toolCalls = mergeToolCalls(
+        turn.toolCalls,
+        takeObservedToolCalls(sessionId, ctx.runId),
+      );
+      const isSubagentAnnouncement = isOpenClawSubagentAnnouncementPrompt(turn.userText);
+      const hasSubagentSpawn = toolCalls.some((tc) => tc.name === "sessions_spawn");
 
       // Resolve (or lazily open) the target episode. Three cases:
       //   1. `before_prompt_build` already ran this turn → we have the
-      //      routed episodeId in `openEpisodeBySession`.
+      //      routed episode binding for this run/user turn.
       //   2. The host skipped `before_prompt_build` (e.g. /new with no
       //      prompt build) → create an episode on the fly so the write
       //      path has a real row to hang traces on.
       //   3. Any failure here falls back to opening a new episode —
       //      better to capture under a fresh id than to drop the turn.
-      let episodeId = openEpisodeBySession.get(sessionId);
+      let binding = findEpisodeBinding(sessionId, ctx, turn.userText);
+      let episodeId = binding?.episodeId;
       if (!episodeId) {
-        await opts.core.openSession({ agent: opts.agent, sessionId });
+        if (isSubagentAnnouncement) {
+          opts.log.info("memos.agent_end.skipped", {
+            reason: "subagent_announcement_without_parent_episode",
+            sessionKey: ctx.sessionKey,
+          });
+          return;
+        }
+        await opts.core.openSession({ agent: opts.agent, sessionId, namespace, meta: { namespace } });
         episodeId = await opts.core.openEpisode({
           sessionId,
           userMessage: turn.userText,
         });
-        openEpisodeBySession.set(sessionId, episodeId);
+        binding = rememberEpisodeBinding(sessionId, episodeId, ctx, turn.userText);
       }
 
       const turnResult: TurnResultDTO = {
         agent: opts.agent,
+        namespace,
         sessionId,
         episodeId,
         agentText: turn.agentText,
         agentThinking: turn.agentThinking,
-        toolCalls: turn.toolCalls,
+        toolCalls,
         reflection: turn.reflection,
+        contextHints: { namespace },
         ts: now(),
       };
 
@@ -905,7 +1402,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         sessionId,
         traceId: res.traceId,
         episodeId: res.episodeId,
-        tools: turn.toolCalls.length,
+        tools: toolCalls.length,
         success: event.success,
         durationMs: event.durationMs,
       });
@@ -913,7 +1410,20 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       // Close the episode mapping so the next turn opens a fresh one
       // (V7 §0.1 routes multi-turn continuation through the relation
       // classifier, not through stickiness in this cache).
-      openEpisodeBySession.delete(sessionId);
+      if (hasSubagentSpawn) {
+        pendingSubagentSessions.add(sessionId);
+      } else {
+        pendingSubagentSessions.delete(sessionId);
+        forgetEpisodeBinding(binding);
+      }
+
+      if (isExplicitOneShotSessionKey(ctx.sessionKey) && !hasSubagentSpawn) {
+        await opts.core.closeSession(sessionId);
+        messageCursor.delete(sessionId);
+        forgetSessionBindings(sessionId);
+        observedToolCallsBySession.delete(sessionId);
+        lastUserTextBySession.delete(sessionId);
+      }
     } catch (err) {
       opts.log.warn("memos.onTurnEnd.failed", {
         err: err instanceof Error ? err.message : String(err),
@@ -923,13 +1433,20 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   }
 
   function handleBeforeToolCall(
-    _event: BeforeToolCallEvent,
+    event: BeforeToolCallEvent,
     ctx: PluginHookToolContext,
   ): void {
-    if (!ctx.toolCallId) return;
+    const toolCallId = ctx.toolCallId ?? event.toolCallId;
+    if (!toolCallId) return;
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
-    toolCallStartedAt.set(ctx.toolCallId, { ts: now(), sessionId });
+    toolCallStartedAt.set(toolCallId, {
+      ts: now(),
+      sessionId,
+      runId: ctx.runId ?? event.runId,
+      toolName: ctx.toolName ?? event.toolName,
+      params: event.params,
+    });
   }
 
   async function handleAfterToolCall(
@@ -939,8 +1456,9 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
-      const started = ctx.toolCallId ? toolCallStartedAt.get(ctx.toolCallId) : undefined;
-      if (ctx.toolCallId) toolCallStartedAt.delete(ctx.toolCallId);
+      const toolCallId = ctx.toolCallId ?? event.toolCallId;
+      const started = toolCallId ? toolCallStartedAt.get(toolCallId) : undefined;
+      if (toolCallId) toolCallStartedAt.delete(toolCallId);
 
       const endedAt = now();
       const durationMs =
@@ -949,11 +1467,22 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           : started
           ? Math.max(0, endedAt - started.ts)
           : 0;
+      const toolName = event.toolName || started?.toolName || ctx.toolName || "unknown";
+      const startedAt = started?.ts;
+      rememberObservedToolCall(sessionId, ctx.runId ?? event.runId ?? started?.runId, {
+        name: toolName,
+        input: event.params ?? started?.params,
+        output: event.result,
+        errorCode: event.error,
+        toolCallId,
+        startedAt,
+        endedAt,
+      });
 
       opts.core.recordToolOutcome({
         sessionId,
-        episodeId: openEpisodeBySession.get(sessionId),
-        tool: event.toolName,
+        episodeId: currentEpisodeId(sessionId),
+        tool: toolName,
         success: !event.error,
         errorCode: event.error,
         durationMs,
@@ -966,13 +1495,34 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     }
   }
 
+  function handleToolResultPersist(
+    event: ToolResultPersistEvent,
+    ctx: PluginHookToolContext,
+  ): { message?: unknown } | void {
+    if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    const toolName = event.toolName || ctx.toolName || "unknown";
+    const key = toolFailureStreakKey(toolName, event, ctx);
+    if (!toolResultPersistFailed(event)) {
+      toolFailureStreaks.delete(key);
+      return;
+    }
+
+    const nextCount = (toolFailureStreaks.get(key) ?? 0) + 1;
+    toolFailureStreaks.set(key, nextCount);
+    if (nextCount < TOOL_FAILURE_HINT_THRESHOLD) return;
+
+    const message = appendFailureHintToToolResultMessage(event.message);
+    if (message === event.message) return;
+    return { message };
+  }
+
   async function handleSessionStart(
     event: SessionStartEvent,
     ctx: PluginHookSessionContext,
   ): Promise<void> {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
-      await ensureSession(ctx.agentId, ctx.sessionKey);
+      await ensureSession(ctx.agentId, ctx.sessionKey, namespaceFromAgentCtx(ctx));
       opts.log.debug("memos.session.started", {
         sessionId: event.sessionId,
         sessionKey: ctx.sessionKey,
@@ -992,9 +1542,18 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
+      if (pendingSubagentSessions.has(sessionId)) {
+        opts.log.debug("memos.session.end.deferred_for_subagent", {
+          sessionId,
+          sessionKey: ctx.sessionKey,
+          reason: event.reason,
+        });
+        return;
+      }
       await opts.core.closeSession(sessionId);
       messageCursor.delete(sessionId);
-      openEpisodeBySession.delete(sessionId);
+      forgetSessionBindings(sessionId);
+      observedToolCallsBySession.delete(sessionId);
       lastUserTextBySession.delete(sessionId);
       opts.log.debug("memos.session.ended", {
         sessionId: event.sessionId,
@@ -1009,13 +1568,68 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     }
   }
 
+  function handleSubagentSpawned(
+    event: SubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ): void {
+    const key = event.runId || event.childSessionKey || ctx.childSessionKey;
+    if (!key) return;
+    const parentAgentId = (ctx as { agentId?: string }).agentId ?? event.agentId ?? "main";
+    const parentSessionKey = ctx.requesterSessionKey ?? (ctx as { sessionKey?: string }).sessionKey;
+    const parentSessionId = parentSessionKey
+      ? bridgeSessionId(parentAgentId, parentSessionKey)
+      : undefined;
+    spawnedSubagents.set(key, {
+      event,
+      ctx,
+      ts: now(),
+      parentSessionId,
+      parentEpisodeId: parentSessionId ? currentEpisodeId(parentSessionId) : undefined,
+    });
+    if (parentSessionId) pendingSubagentSessions.add(parentSessionId);
+    opts.log.debug("memos.subagent.spawned", {
+      runId: event.runId,
+      childSessionKey: event.childSessionKey,
+      requesterSessionKey: ctx.requesterSessionKey,
+      label: event.label,
+      mode: event.mode,
+    });
+  }
+
+  async function handleSubagentEnded(
+    event: SubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    try {
+      const cached =
+        (event.runId ? spawnedSubagents.get(event.runId) : undefined) ??
+        spawnedSubagents.get(event.targetSessionKey);
+      if (event.runId) spawnedSubagents.delete(event.runId);
+      spawnedSubagents.delete(event.targetSessionKey);
+      opts.log.info("memos.subagent.ended", {
+        sessionId: cached?.parentSessionId,
+        episodeId: cached?.parentEpisodeId,
+        childSessionKey: event.targetSessionKey,
+        outcome: event.outcome,
+        reason: event.reason,
+      });
+    } catch (err) {
+      opts.log.warn("memos.subagent.end.failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return {
     handleBeforePrompt,
     handleAgentEnd,
     handleBeforeToolCall,
     handleAfterToolCall,
+    handleToolResultPersist,
     handleSessionStart,
     handleSessionEnd,
+    handleSubagentSpawned,
+    handleSubagentEnded,
     trackedSessions: () => messageCursor.size,
     trackedToolCalls: () => toolCallStartedAt.size,
   };

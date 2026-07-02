@@ -5,11 +5,16 @@ import {
   buildPageClauses,
   fromJsonText,
   joinWhere,
+  ownerFieldsFromRaw,
+  ownerParamsFromRow,
   toJsonText,
 } from "./_helpers.js";
 
 const COLUMNS = [
   "id",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
   "ts",
   "context_hash",
   "preference",
@@ -35,6 +40,7 @@ export function makeDecisionRepairsRepo(db: StorageDb) {
     insert(row: DecisionRepairRow): void {
       insert.run({
         id: row.id,
+        ...ownerParamsFromRow(row),
         ts: row.ts,
         context_hash: row.contextHash,
         preference: row.preference,
@@ -69,6 +75,9 @@ export function makeDecisionRepairsRepo(db: StorageDb) {
 
 interface RawRepairRow {
   id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
   ts: number;
   context_hash: string;
   preference: string;
@@ -81,6 +90,7 @@ interface RawRepairRow {
 function mapRow(r: RawRepairRow): DecisionRepairRow {
   return {
     id: r.id,
+    ...ownerFieldsFromRaw(r),
     ts: r.ts,
     contextHash: r.context_hash,
     preference: r.preference,

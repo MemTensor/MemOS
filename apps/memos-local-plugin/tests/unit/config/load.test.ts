@@ -18,7 +18,7 @@ describe("config/loadConfig", () => {
     expect(result.fromDisk).toBe(false);
     expect(result.warnings.some((w) => w.includes("not found"))).toBe(true);
     expect(result.config.viewer.port).toBe(DEFAULT_CONFIG.viewer.port);
-    expect(result.config.embedding.dimensions).toBe(DEFAULT_CONFIG.embedding.dimensions);
+    expect(result.config.embedding.provider).toBe(DEFAULT_CONFIG.embedding.provider);
   });
 
   it("merges YAML over defaults and preserves unspecified branches", async () => {
@@ -79,6 +79,99 @@ viewer:
     expect(cfg.viewer.port).toBe(1234);
     expect(cfg.llm.temperature).toBe(0.7);
     expect(cfg.algorithm.skill.minSupport).toBe(DEFAULT_CONFIG.algorithm.skill.minSupport);
+  });
+
+  it("defaults lightweight memory mode on and accepts explicit opt-out", () => {
+    const base = resolveConfig({});
+    expect(base.algorithm.lightweightMemory.enabled).toBe(true);
+
+    const cfg = resolveConfig({
+      algorithm: { lightweightMemory: { enabled: false } },
+    });
+    expect(cfg.algorithm.lightweightMemory.enabled).toBe(false);
+  });
+
+  it("does not expose embedding dimensions as user config", () => {
+    const cfg = resolveConfig({
+      embedding: {
+        provider: "openai_compatible",
+        model: "bge-m3",
+        endpoint: "https://example.test/v1",
+      },
+    });
+    expect("dimensions" in cfg.embedding).toBe(false);
+  });
+
+  it("ignores legacy/manual embedding dimensions", () => {
+    const cfg = resolveConfig({
+      embedding: {
+        provider: "openai_compatible",
+        model: "bge-m3",
+        dimensions: 1024,
+      },
+    });
+    expect("dimensions" in cfg.embedding).toBe(false);
+  });
+
+  // ─── Issue #1929 — vectorScanMaxAgeMs contract ──────────────────────
+  // The schema must reject obviously bad values (negative, larger than
+  // a year, or non-numbers) so a "dirty" `PATCH /api/v1/config` cannot
+  // poison the on-disk YAML. A subsequent `GET /api/v1/config` therefore
+  // always returns a value in [0, 31_536_000_000] (the default 0 stays
+  // because the rejected patch never reaches `writer.ts`'s atomic
+  // rename — see `core/config/writer.ts::patchConfig`).
+  describe("retrieval.vectorScanMaxAgeMs", () => {
+    const MAX_MS = 31_536_000_000;
+
+    it("defaults to 0 (no time-window bound) on a bare config", () => {
+      const cfg = resolveConfig({});
+      expect(cfg.algorithm.retrieval.vectorScanMaxAgeMs).toBe(0);
+    });
+
+    it.each([
+      ["one day", 86_400_000],
+      ["thirty days", 30 * 86_400_000],
+      ["max", MAX_MS],
+      ["zero", 0],
+    ])("accepts %s (%d ms)", (_label, value) => {
+      const cfg = resolveConfig({
+        algorithm: { retrieval: { vectorScanMaxAgeMs: value } },
+      });
+      expect(cfg.algorithm.retrieval.vectorScanMaxAgeMs).toBe(value);
+    });
+
+    it.each([
+      ["negative_1", -1],
+      ["negative_60s", -60_000],
+      ["negative_one_day", -86_400_000],
+      ["max_plus_1", MAX_MS + 1],
+      ["max_plus_one_day", MAX_MS + 86_400_000],
+      ["hundred_x_max", MAX_MS * 100],
+    ])("rejects out-of-range value (%s)", (_label, value) => {
+      expect(() =>
+        resolveConfig({ algorithm: { retrieval: { vectorScanMaxAgeMs: value } } }),
+      ).toThrow(/schema validation/);
+    });
+
+    it.each([
+      ["string_number", "100"],
+      ["string_text", "abc"],
+      ["none_value", null],
+      ["dict_value", { x: 1 }],
+      ["list_value", [1, 2, 3]],
+      ["nan_string", "NaN"],
+      ["inf_string", "Infinity"],
+      ["bool_true", true],
+      ["bool_false", false],
+    ])("rejects invalid type (%s)", (_label, value) => {
+      expect(() =>
+        resolveConfig({
+          algorithm: {
+            retrieval: { vectorScanMaxAgeMs: value as unknown as number },
+          },
+        }),
+      ).toThrow(/schema validation/);
+    });
   });
 });
 

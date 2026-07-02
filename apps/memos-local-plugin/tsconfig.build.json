@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "core/**/*.ts",
+    "agent-contract/**/*.ts",
+    "server/**/*.ts",
+    "bridge/**/*.ts",
+    "adapters/openclaw/**/*.ts",
+    "scripts/**/*.ts",
+    "bridge.cts",
+    "bridge.mts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "viewer",
+    "adapters/hermes",
+    "tests"
+  ]
+}

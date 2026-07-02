@@ -6,7 +6,9 @@
  *      crystallize.
  *   2. `policy.gain >= minGain` — rewards have shown positive lift.
  *   3. `policy.support >= minSupport` — enough *distinct* episodes back it.
- *   4. It is not already represented by a non-archived skill, OR the existing
+ *   4. Feedback-derived avoidance policies must have at least one success
+ *      anchor before they can crystallize into a Skill.
+ *   5. It is not already represented by a non-archived skill, OR the existing
  *      skill was built before the policy's latest `updatedAt` (→ rebuild).
  *
  * The check returns a structured verdict per policy so the orchestrator can
@@ -88,6 +90,14 @@ function decide(
       reason: `policy.support=${policy.support}<${cfg.minSupport}`,
     };
   }
+  if (!hasSuccessAnchor(policy)) {
+    return {
+      policy,
+      existingSkill: existing,
+      action: "skip",
+      reason: "policy has no success anchor",
+    };
+  }
 
   if (existing && existing.status !== "archived") {
     if (existing.updatedAt >= policy.updatedAt) {
@@ -112,6 +122,16 @@ function decide(
     action: "crystallize",
     reason: "policy satisfies minSupport + minGain + status",
   };
+}
+
+function hasSuccessAnchor(policy: PolicyRow): boolean {
+  if (policy.skillEligible === false) return false;
+  const type = policy.experienceType ?? "success_pattern";
+  if (type === "failure_avoidance" || type === "repair_instruction" || type === "preference") {
+    return false;
+  }
+  const polarity = policy.evidencePolarity ?? "positive";
+  return polarity === "positive" || polarity === "mixed";
 }
 
 function fmt(n: number): string {

@@ -122,6 +122,7 @@ export function attachSkillSubscriber(
     log.debug("trigger.reward.updated", {
       episodeId: evt.result.episodeId,
     });
+    resolveTrialsForReward(evt);
     triggerRun("reward.updated");
   });
 
@@ -152,6 +153,51 @@ export function attachSkillSubscriber(
     magnitude?: number,
   ): void {
     applySkillFeedback(skillId, kind, runDeps, magnitude);
+  }
+
+  function resolveTrialsForReward(evt: Extract<RewardEvent, { kind: "reward.updated" }>): void {
+    const rTask = evt.result.rHuman;
+    const outcome =
+      rTask >= 0.5 ? "pass" :
+      rTask <= -0.5 ? "fail" :
+      "unknown";
+    const trials = deps.repos.skillTrials.listPendingForEpisode(evt.result.episodeId);
+    if (trials.length === 0) return;
+    for (const trial of trials) {
+      const evidence = {
+        source: "reward.updated",
+        episodeId: evt.result.episodeId,
+        rTask,
+        threshold: { pass: 0.5, fail: -0.5 },
+        reason:
+          outcome === "pass"
+            ? "rTask >= 0.5"
+            : outcome === "fail"
+              ? "rTask <= -0.5"
+              : "-0.5 < rTask < 0.5",
+      };
+      const changed = deps.repos.skillTrials.resolve(
+        trial.id,
+        outcome,
+        evt.result.completedAt,
+        evidence,
+      );
+      if (!changed) continue;
+      if (outcome === "pass" || outcome === "fail") {
+        applySkillFeedback(
+          trial.skillId,
+          outcome === "pass" ? "trial.pass" : "trial.fail",
+          runDeps,
+        );
+      }
+      log.info("skill.trial.resolved", {
+        trialId: trial.id,
+        skillId: trial.skillId,
+        episodeId: evt.result.episodeId,
+        outcome,
+        rTask,
+      });
+    }
   }
 
   async function flush(): Promise<void> {

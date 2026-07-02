@@ -34,24 +34,25 @@ apps/memos-local-plugin/
 ├── adapters/openclaw/   # In-process TS adapter for OpenClaw
 ├── adapters/hermes/     # Python adapter that talks to bridge.cts
 ├── templates/           # config.yaml templates copied to the user's home on install
-├── web/                 # Runtime viewer (Vite, served by server/)
-├── site/                # Local-only marketing site + docs + release notes
+├── viewer/              # Runtime viewer (Vite, served by server/)
 ├── docs/                # Developer-facing docs (algorithm, data model, prompts, …)
 ├── scripts/             # Build / packaging / release helpers
 └── tests/               # unit / integration / e2e (vitest)
 ```
 
-For the full structural breakdown read [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+For the full structural breakdown read `[ARCHITECTURE.md](./ARCHITECTURE.md)`.
 
 ## Where data lives
 
 The source code never writes to the user's home directly. At install time,
 `install.sh` creates a per-agent home folder for runtime state:
 
-| Agent    | Code installed to                              | Runtime data + config in                     |
-|----------|------------------------------------------------|----------------------------------------------|
-| OpenClaw | `~/.openclaw/plugins/memos-local-plugin/`      | `~/.openclaw/memos-plugin/`                  |
-| Hermes   | `~/.hermes/plugins/memos-local-plugin/`        | `~/.hermes/memos-plugin/`                    |
+
+| Agent    | Code installed to                         | Runtime data + config in    |
+| -------- | ----------------------------------------- | --------------------------- |
+| OpenClaw | `~/.openclaw/plugins/memos-local-plugin/` | `~/.openclaw/memos-plugin/` |
+| Hermes   | `~/.hermes/plugins/memos-local-plugin/`   | `~/.hermes/memos-plugin/`   |
+
 
 Inside the runtime folder:
 
@@ -68,63 +69,136 @@ Upgrading or uninstalling the plugin **never** touches `data/`, `skills/`,
 
 ## Quick start
 
-```bash
-# 1) Install the npm package
-npm install -g @memtensor/memos-local-plugin
+> [!IMPORTANT]
+> **Do not run `npm install -g @memtensor/memos-local-plugin`.**
+> This package is a Hermes / OpenClaw plugin, not a standalone CLI. A global
+> npm install only downloads the published tarball into your `node_modules`
+> tree; it does not deploy the plugin to the agent home (`~/.hermes/plugins/`
+> or `~/.openclaw/plugins/`), does not write `config.yaml`, and does not start
+> the bridge / viewer. The tarball also intentionally ships **built artifacts
+> only** (`dist/` + `viewer/dist/`) — the `viewer/` source, `vite.config.ts`,
+> `website/`, tests, etc. live in this repository, not in the npm package.
+> Use the `install.sh` / `install.ps1` installer below; it is the only
+> supported install path.
 
-# 2) Run the install script for your agent
-memos-local-plugin install openclaw      # or: hermes
-# (this is a thin wrapper around install.sh)
+The installer downloads the package from npm, deploys it to the right agent
+directory, installs production dependencies, writes the initial `config.yaml`,
+and restarts the agent runtime when needed.
 
-# 3) Edit your config (optional)
-$EDITOR ~/.openclaw/memos-plugin/config.yaml
-
-# 4) Open the viewer (started automatically by the agent on first turn)
-open http://127.0.0.1:18910/
-```
-
-For the full hands-on walkthrough see [`site/content/docs/getting-started.md`](./site/content/docs/getting-started.md).
-
-## Validating end-to-end
-
-Once everything is up, follow the scripted checklist in
-[`docs/FRONTEND-VALIDATION.md`](./docs/FRONTEND-VALIDATION.md): each line is
-"say X to the agent, expect Y on the viewer". Use it to convince yourself the
-loop (capture → reward → induce → crystallize → retrieve) is actually working.
-
-## Local development
+From this repository:
 
 ```bash
-# 1) Install workspace deps
-npm install
-
-# 2) Run unit tests
-npm test
-
-# 3) Develop the viewer
-npm run web:dev
-
-# 4) Develop the marketing/docs site (local preview only)
-npm run site:dev
-
-# 5) Type-check the whole core
-npm run lint
+cd apps/memos-local-plugin
+bash install.sh --version 2.0.0
 ```
 
-## Releasing
-
-Every published version must ship with a release-note markdown:
+Or run against the latest published package:
 
 ```bash
-npm run release:new -- 2.0.0-beta.2
-# edits site/content/releases/2.0.0-beta.2.md
-npm run release:index            # regenerates site/content/releases/index.json
-npm run release:check            # CI: package.json version <-> release md
-npm publish
+bash install.sh
 ```
 
-See [`docs/RELEASE-PROCESS.md`](./docs/RELEASE-PROCESS.md).
+The installer auto-detects OpenClaw and Hermes. In an interactive terminal it
+asks which agent to install for; in non-interactive environments it installs for
+the detected agent(s). To test a local package before publishing, pass the
+tarball path instead of a registry version:
 
-## License
+```bash
+npm pack
+bash install.sh --version ./memtensor-memos-local-plugin-1.0.0-beta.1.tgz
+```
 
-MIT
+On Windows, run `install.ps1` from PowerShell instead of `install.sh`; the
+flags and behavior match.
+
+### Troubleshooting
+
+**`npm install -g @memtensor/memos-local-plugin` says "not found" or "404".**
+You are likely on an old version of this README, or trying to install the
+package as if it were a standalone CLI. The package is published under the
+`@memtensor` scope on the public npm registry, but it is intended to be pulled
+in by `install.sh`, not installed globally. Use `bash install.sh` as shown
+above.
+
+**I cloned this repo and the `web/` or `site/` directory only contains a
+README.md (no `src/`, no `vite.config.ts`, no `index.html`).**
+Those directory names are stale. The runtime viewer source lives in `viewer/`
+(formerly `web/`), and the unfinished marketing-site scaffolding at `site/`
+has been removed entirely. If you see a `web/` or `site/` directory with only
+a README, you are looking at a published npm tarball (which only ships
+`viewer/dist/`), not a fresh `git clone` of this repository. Clone the repo
+to get the full source tree, or just run `install.sh` to deploy the prebuilt
+viewer.
+
+## Configuration
+
+The plugin reads its configuration from `config.yaml` in the runtime directory. The location is resolved in the following priority order:
+
+1. **`MEMOS_HOME` environment variable** — points to the runtime root directory (e.g., `/opt/data/.hermes/memos-plugin`)
+2. **`MEMOS_CONFIG_FILE` environment variable** — points directly to the config file (e.g., `/opt/data/.hermes/memos-plugin/config.yaml`)
+3. **`--home` CLI flag** (bridge.cts only) — specifies the runtime root directory
+4. **Default path** — `~/.hermes/memos-plugin/` or `~/.openclaw/memos-plugin/` based on the agent
+
+### Docker Deployment
+
+When running the daemon in a Docker container, you must explicitly specify the config location if it differs from the default path. There are three ways to do this:
+
+#### Option 1: Environment Variable (Recommended)
+
+Set `MEMOS_HOME` to point to the runtime directory:
+
+```dockerfile
+ENV MEMOS_HOME=/opt/data/home/.hermes/memos-plugin
+CMD ["node", "bridge.cts", "--agent=hermes", "--daemon"]
+```
+
+#### Option 2: CLI Flag
+
+Pass `--home` directly to the bridge command:
+
+```dockerfile
+CMD ["node", "bridge.cts", "--agent=hermes", "--daemon", "--home=/opt/data/home/.hermes/memos-plugin"]
+```
+
+#### Option 3: Config File Path
+
+Set `MEMOS_CONFIG_FILE` to point directly to the config file:
+
+```dockerfile
+ENV MEMOS_CONFIG_FILE=/opt/data/home/.hermes/memos-plugin/config.yaml
+CMD ["node", "bridge.cts", "--agent=hermes", "--daemon"]
+```
+
+### Example Docker Deployment
+
+For the Hermes Agent Docker image:
+
+```dockerfile
+FROM nousresearch/hermes-agent:latest
+
+# Install memos-local-plugin
+RUN bash -c "$(curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh)"
+
+# Set the config location
+ENV MEMOS_HOME=/opt/data/.hermes/memos-plugin
+
+# Start daemon in background, then run Hermes
+CMD node /opt/data/.hermes/plugins/memos-local-plugin/bridge.cts --agent=hermes --daemon && hermes chat
+```
+
+### Troubleshooting
+
+If you see warnings like:
+
+```
+config file not found at /opt/data/.hermes/memos-plugin/config.yaml; using defaults
+```
+
+This means the bridge process is looking in the wrong location. Check:
+
+1. Verify your `config.yaml` exists: `ls -la ~/.hermes/memos-plugin/config.yaml`
+2. Set `MEMOS_HOME` or use `--home` to point to the correct directory
+3. Ensure the path matches the location where `install.sh` created the config
+
+When config is missing, the plugin falls back to defaults (local embedding, no LLM provider), which will break summarization and reflection features.
+

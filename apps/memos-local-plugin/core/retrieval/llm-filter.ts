@@ -24,18 +24,48 @@ import type { LlmClient } from "../llm/index.js";
 import type { Logger } from "../logger/types.js";
 import { RETRIEVAL_FILTER_PROMPT } from "../llm/prompts/index.js";
 import type { RankedCandidate } from "./ranker.js";
-import type { RetrievalConfig, TierCandidate } from "./types.js";
+import type { RetrievalConfig, TraceCandidate } from "./types.js";
 
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
+const MIN_FILTER_OUTPUT_TOKENS = 160;
+const MAX_FILTER_OUTPUT_TOKENS = 2048;
+
+/**
+ * A trace whose `agentText` falls under this length, with no LLM summary
+ * or reflection to back it up, is treated as a near-duplicate question
+ * trace (issue #1913). The rescue path keeps these *behind* informative
+ * candidates so the answer-bearing trace surfaces first.
+ */
+const INFORMATIVE_AGENT_TEXT_MIN_CHARS = 20;
+
+/**
+ * Short acknowledgement / scaffold replies that the filter prompt
+ * rightly classes as "scaffolding chatter". When the LLM filter empties
+ * the kept set we still need to make a rescue call — these strings let
+ * us prefer informative replies over plain acks. Bounded list, exact
+ * matches only after trimming surrounding punctuation / whitespace.
+ */
+const SHORT_ACK_PATTERNS: readonly RegExp[] = [
+  /^(ok|okay|sure|got it|noted|understood|alright|will do|copy|copy that|thanks|thank you|✓|✅|👍)[\s.!]*$/i,
+  /^(记住了|已记住|已经记住|好的|明白|收到|了解|谢谢)[\s。!]*$/,
+];
 
 export interface FilterInput {
   query: string;
   ranked: readonly RankedCandidate[];
+  /**
+   * Episode this retrieval is happening for (typically the active or
+   * just-opening episode). Forwarded to the LLM call so the resulting
+   * `system_model_status` audit row can be grouped with the rest of
+   * that episode's pipeline activity in the Logs viewer.
+   */
+  episodeId?: string;
 }
 
 export interface FilterDeps {
   llm: LlmClient | null;
   log: Logger;
+  timeoutMs?: number;
   config: Pick<
     RetrievalConfig,
     | "llmFilterEnabled"
@@ -57,8 +87,15 @@ export interface FilterResult {
     | "no_llm"
     | "below_threshold"
     | "empty_query"
+    | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
+    // The LLM returned an empty selection over a non-empty ranked list
+    // (issue #1913 — repeated question traces crowding the hit set).
+    // We rescued the top-K best-scoring candidates so the agent always
+    // sees a packet when retrieval succeeded; `sufficient` is forced
+    // to `false` so downstream callers know the injection is weak.
+    | "llm_filtered_refilled"
     // The LLM was supposed to run but the call failed / parsed badly.
     // We applied a mechanical relevance cutoff (top-K above
     // `relativeThresholdFloor · topRelevance`) instead of dumping the
@@ -67,7 +104,7 @@ export interface FilterResult {
   /**
    * The LLM's self-report on whether the *kept* candidates are enough
    * to answer `query`, or whether the caller should widen recall /
-   * run a follow-up `memory_search`. `null` when the filter didn't
+   * run a follow-up `memos_search`. `null` when the filter didn't
    * run (disabled / passthrough / failure paths).
    */
   sufficient: boolean | null;
@@ -109,6 +146,7 @@ export async function llmFilterCandidates(
 
   try {
     const rsp = await deps.llm.completeJson<{
+      ranked?: unknown;
       selected?: unknown;
       sufficient?: unknown;
     }>(
@@ -124,43 +162,56 @@ ${list}`,
       ],
       {
         op: `retrieval.${RETRIEVAL_FILTER_PROMPT.id}.v${RETRIEVAL_FILTER_PROMPT.version}`,
+        phase: "retrieve",
+        episodeId: input.episodeId,
         temperature: 0,
-        // Short output — indices + one bool. Kept tight so a misbehaving
-        // model can't blow budgets.
-        maxTokens: 160,
+        timeoutMs: deps.timeoutMs,
+        // Output is only ordered indices + one bool, but the list can
+        // legitimately be as long as the ranked candidates.
+        maxTokens: filterOutputTokenBudget(ranked.length),
         malformedRetries: 1,
       },
     );
-    const raw = (rsp.value?.selected ?? []) as unknown;
+    const raw = (rsp.value?.ranked ?? rsp.value?.selected ?? []) as unknown;
     const sufficient = coerceBool(rsp.value?.sufficient);
     if (!Array.isArray(raw)) {
       deps.log.debug("llm_filter.malformed", { got: typeof raw });
       return safeCutoff(ranked, deps);
     }
-    const keepIndices = new Set<number>();
+    const orderedIndices: number[] = [];
+    const seenIndices = new Set<number>();
     for (const v of raw) {
       const n = typeof v === "number" ? v : Number(v);
       if (!Number.isFinite(n)) continue;
       const zero = Math.floor(n) - 1;
       if (zero < 0 || zero >= ranked.length) continue;
-      keepIndices.add(zero);
-      if (keepIndices.size >= deps.config.llmFilterMaxKeep) break;
+      if (seenIndices.has(zero)) continue;
+      seenIndices.add(zero);
+      orderedIndices.push(zero);
     }
+    const cappedIndices = orderedIndices.slice(
+      0,
+      Math.max(0, deps.config.llmFilterMaxKeep),
+    );
+    const keepIndices = new Set(cappedIndices);
     if (keepIndices.size === 0) {
-      // Model asked us to drop everything — honoured. Surface this
-      // explicitly so the Logs page can show "LLM found nothing
-      // relevant" instead of silently injecting a partial packet.
-      return {
-        kept: [],
-        dropped: [...ranked],
-        outcome: "llm_filtered",
-        sufficient: sufficient ?? false,
-      };
+      // Issue #1913: the model asked us to drop everything. Honouring
+      // that verbatim used to collapse `turn.start` injection to "" even
+      // when retrieval was healthy — the failure mode is a hit set
+      // dominated by near-duplicate question traces from prior
+      // sessions, where each candidate individually looks like
+      // "surface-similar wrong sub-problem" to the filter prompt.
+      // Instead, rescue the top-K best-scoring candidates (preferring
+      // informative traces over pure-question / ack-only chatter) so
+      // the agent always sees a packet when retrieval succeeded.
+      // `safeCutoff`'s sibling escape hatch (`llmFilterMaxKeep === 0`)
+      // is honoured so operators can still ask for hard drop.
+      return rescueFromEmptySelection(ranked, deps, sufficient);
     }
-    const kept: RankedCandidate[] = [];
+    const kept = cappedIndices.map((i) => ranked[i]!);
     const dropped: RankedCandidate[] = [];
     ranked.forEach((r, i) => {
-      (keepIndices.has(i) ? kept : dropped).push(r);
+      if (!keepIndices.has(i)) dropped.push(r);
     });
     return {
       kept,
@@ -178,11 +229,107 @@ ${list}`,
   }
 }
 
+function filterOutputTokenBudget(candidateCount: number): number {
+  return Math.min(
+    MAX_FILTER_OUTPUT_TOKENS,
+    Math.max(MIN_FILTER_OUTPUT_TOKENS, candidateCount * 8 + 80),
+  );
+}
+
 function passthrough(
   ranked: readonly RankedCandidate[],
   outcome: FilterResult["outcome"],
 ): FilterResult {
   return { kept: [...ranked], dropped: [], outcome, sufficient: null };
+}
+
+/**
+ * Issue #1913 rescue path. Invoked when the LLM relevance filter
+ * returned `selected: []` for a *non-empty* ranked candidate list — the
+ * most common cause is a hit set dominated by near-duplicate question
+ * traces from previous sessions, where the filter prompt's "drop
+ * scaffolding chatter" / "drop surface-similar wrong sub-problem"
+ * rubric is applied to every candidate.
+ *
+ * Strategy: keep the top-K best-scoring candidates, preferring
+ * informative traces (skill / episode / experience / world-model, or a
+ * trace whose `agentText`/`summary`/`reflection` carries real content)
+ * over pure-question chatter. We do NOT re-query the LLM — the rescue
+ * is a single O(n) partition + slice. Outcome label is
+ * `"llm_filtered_refilled"` so the Logs viewer can show "LLM collapsed,
+ * safety net fired" distinct from a normal `"llm_filtered"`.
+ *
+ * Escape hatch: `llmFilterMaxKeep === 0` skips the rescue entirely and
+ * honours the "drop everything" request (matches existing `safeCutoff`
+ * semantics for the same config value).
+ */
+function rescueFromEmptySelection(
+  ranked: readonly RankedCandidate[],
+  deps: FilterDeps,
+  sufficient: boolean | null,
+): FilterResult {
+  const keepCap = Math.max(0, deps.config.llmFilterMaxKeep);
+  if (keepCap === 0 || ranked.length === 0) {
+    return {
+      kept: [],
+      dropped: [...ranked],
+      outcome: "llm_filtered",
+      sufficient: sufficient ?? false,
+    };
+  }
+  const informative: RankedCandidate[] = [];
+  const chatter: RankedCandidate[] = [];
+  for (const r of ranked) {
+    if (isInformativeCandidate(r)) informative.push(r);
+    else chatter.push(r);
+  }
+  // Preserve ranker order within each bucket; informative first so the
+  // answer-bearing trace surfaces even when the ranker placed it below
+  // surface-similar question traces.
+  const ordered = [...informative, ...chatter];
+  const kept = ordered.slice(0, Math.min(keepCap, ordered.length));
+  const keptSet = new Set(kept);
+  const dropped = ranked.filter((r) => !keptSet.has(r));
+  deps.log.debug("llm_filter.collapsed_refill", {
+    ranked: ranked.length,
+    rescued: kept.length,
+    informative: informative.length,
+    chatter: chatter.length,
+    filteredAll: true,
+  });
+  return {
+    kept,
+    dropped,
+    outcome: "llm_filtered_refilled",
+    sufficient: sufficient ?? false,
+  };
+}
+
+/**
+ * Returns true when a ranked candidate carries content the agent can
+ * actually use. Skills, episodes, experiences, and world-models always
+ * count. Traces count when their `summary` or `reflection` is non-empty
+ * or their `agentText` is longer than a short acknowledgement.
+ *
+ * Used by the rescue path (and intentionally only there) to bias the
+ * rescued set toward traces with informative assistant text. False
+ * negatives (an informative trace mistakenly labelled chatter) still
+ * get rescued because they sit in the second half of the ordered list.
+ */
+function isInformativeCandidate(r: RankedCandidate): boolean {
+  const c = r.candidate;
+  if (c.refKind !== "trace") return true;
+  const t = c as TraceCandidate;
+  if ((t.summary?.trim().length ?? 0) > 0) return true;
+  if ((t.reflection?.trim().length ?? 0) > 0) return true;
+  const agent = t.agentText?.trim() ?? "";
+  if (agent.length === 0) return false;
+  if (isShortAck(agent)) return false;
+  return agent.length >= INFORMATIVE_AGENT_TEXT_MIN_CHARS;
+}
+
+function isShortAck(text: string): boolean {
+  return SHORT_ACK_PATTERNS.some((re) => re.test(text));
 }
 
 /**
@@ -216,7 +363,15 @@ function safeCutoff(
     0,
   );
   const cutoff = topScore > 0 ? topScore * ratio : 0;
-  const keepCap = Math.max(1, deps.config.llmFilterMaxKeep);
+  const keepCap = Math.max(0, deps.config.llmFilterMaxKeep);
+  if (keepCap === 0) {
+    return {
+      kept: [],
+      dropped: [...ranked],
+      outcome: "llm_failed_safe_cutoff",
+      sufficient: null,
+    };
+  }
   const kept: RankedCandidate[] = [];
   const dropped: RankedCandidate[] = [];
   for (const c of ranked) {
@@ -247,30 +402,21 @@ function coerceBool(v: unknown): boolean | null {
 
 /**
  * Render a ranked candidate into a single labelled string for the LLM.
- * Much richer than the old 240-char summary — now includes time, role,
- * tags, which channels surfaced the row, and the ranker's score. This
- * mirrors what openclaw's `filterRelevant` receives and lets the model
- * reason over "fresh vs stale", "skill vs memory", "keyword vs vector
- * hit" without guessing.
+ * Keep this intentionally content-focused: the filter should judge the
+ * candidate's semantic usefulness, not anchor on retrieval internals like
+ * timestamps, channels, tags, or ranker scores.
  */
 function describeCandidate(r: RankedCandidate, bodyChars: number): string {
   const c = r.candidate;
-  const meta = metaOf(r, c);
   switch (c.tier) {
     case "tier1": {
       const skill = c as {
         skillName?: string;
         invocationGuide?: string;
-        eta?: number;
-        status?: string;
       };
-      const head = `${skill.skillName ?? "(skill)"}${
-        typeof skill.eta === "number"
-          ? ` · η=${skill.eta.toFixed(2)}`
-          : ""
-      }${skill.status ? ` · ${skill.status}` : ""}`;
+      const head = skill.skillName ?? "(skill)";
       const hint = squashBody(skill.invocationGuide ?? "", bodyChars);
-      return `[SKILL ${meta}] ${head}${hint ? `\n   ${hint}` : ""}`;
+      return `[SKILL] ${head}${hint ? `\n   ${hint}` : ""}`;
     }
     case "tier2": {
       if (c.refKind === "trace") {
@@ -288,54 +434,45 @@ function describeCandidate(r: RankedCandidate, bodyChars: number): string {
         if (tr.reflection?.trim())
           parts.push(`[note] ${tr.reflection.trim()}`);
         const body = squashBody(parts.join(" "), bodyChars);
-        return `[TRACE ${meta}] ${body}`;
+        return `[TRACE] ${body}`;
+      }
+      if (c.refKind === "experience") {
+        const ex = c as {
+          title?: string;
+          trigger?: string;
+          procedure?: string;
+          verification?: string;
+          experienceType?: string;
+          evidencePolarity?: string;
+        };
+        const parts = [
+          ex.title,
+          ex.experienceType ? `type=${ex.experienceType}` : null,
+          ex.evidencePolarity ? `evidence=${ex.evidencePolarity}` : null,
+          ex.trigger,
+          ex.procedure,
+          ex.verification,
+        ].filter(Boolean).join(" ");
+        const body = squashBody(parts, bodyChars);
+        return `[EXPERIENCE] ${body}`;
       }
       const ep = c as { summary?: string };
       const body = squashBody(ep.summary ?? "", bodyChars);
-      return `[EPISODE ${meta}] ${body}`;
+      return `[EPISODE] ${body}`;
     }
     case "tier3": {
       const wm = c as { title?: string; body?: string };
       const head = wm.title ?? "(world-model)";
       const body = squashBody(wm.body ?? "", bodyChars);
-      return `[WORLD-MODEL ${meta}] ${head}${body ? `\n   ${body}` : ""}`;
+      return `[WORLD-MODEL] ${head}${body ? `\n   ${body}` : ""}`;
     }
     default:
-      return `[UNKNOWN ${meta}]`;
+      return "[UNKNOWN]";
   }
-}
-
-function metaOf(r: RankedCandidate, c: TierCandidate): string {
-  const bits: string[] = [];
-  if (typeof c.ts === "number" && c.ts > 0) {
-    bits.push(`time=${formatTime(c.ts)}`);
-  }
-  if (Array.isArray((c as { tags?: readonly string[] }).tags)) {
-    const tags = ((c as { tags?: readonly string[] }).tags ?? [])
-      .filter(Boolean)
-      .slice(0, 6);
-    if (tags.length) bits.push(`tags=[${tags.join(",")}]`);
-  }
-  const channels = (c.channels ?? [])
-    .map((ch) => ch.channel)
-    .filter(Boolean)
-    .slice(0, 4);
-  if (channels.length) bits.push(`via=${channels.join("+")}`);
-  const score = r.score ?? r.relevance;
-  if (Number.isFinite(score)) bits.push(`score=${score.toFixed(3)}`);
-  return bits.join(" ");
 }
 
 function squashBody(s: string, max: number): string {
   const cleaned = s.replace(/\s+/g, " ").trim();
   if (cleaned.length <= max) return cleaned;
   return cleaned.slice(0, Math.max(0, max - 1)) + "…";
-}
-
-function formatTime(ts: number): string {
-  try {
-    return new Date(ts).toISOString().slice(0, 16).replace("T", " ");
-  } catch {
-    return String(ts);
-  }
 }

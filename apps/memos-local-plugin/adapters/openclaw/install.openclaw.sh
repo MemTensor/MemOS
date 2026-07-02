@@ -6,8 +6,8 @@
 # specific bits:
 #
 #   1. Install node_modules inside $PREFIX (one-time, idempotent).
-#   2. Build the viewer + site bundles so the HTTP server has static
-#      assets to serve.
+#   2. Build the viewer bundle so the HTTP server has static assets
+#      to serve.
 #
 # We never touch the OpenClaw host process itself — the plugin loads
 # on demand when the host's plugin manager discovers $PREFIX.
@@ -35,12 +35,10 @@ else
   warn "npm not found on PATH; skipping dependency install. The plugin will not run until you provide node_modules."
 fi
 
-# ── 2. viewer + site bundles ──────────────────────────────────────────────────
+# ── 2. viewer bundle ──────────────────────────────────────────────────────────
 if [[ -x "./node_modules/.bin/vite" ]]; then
-  log "Building viewer bundle → web/dist/"
+  log "Building viewer bundle → viewer/dist/"
   ./node_modules/.bin/vite build --config vite.config.ts >/dev/null
-  log "Building site bundle → site/dist/"
-  ( cd site && ../node_modules/.bin/vite build >/dev/null )
 else
   warn "vite not found in node_modules; skipping bundle build"
 fi
@@ -49,4 +47,3 @@ log "OpenClaw adapter install complete."
 log "  Plugin code:   $PREFIX"
 log "  Runtime data:  $HOME_DIR"
 log "  Viewer:        http://127.0.0.1:18910/"
-log "  Site:          http://127.0.0.1:18910/site/"
