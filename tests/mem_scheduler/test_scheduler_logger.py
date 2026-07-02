@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from unittest.mock import Mock, MagicMock
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
@@ -26,6 +28,7 @@ class TestSchedulerLoggerModule:
 
     def create_memory_item(self, memory_id: str, content: str, memory_type: str = "LongTermMemory") -> TextualMemoryItem:
         """Helper to create a TextualMemoryItem."""
+        item_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, memory_id))
         metadata = TreeNodeTextualMemoryMetadata(
             key=f"key_{memory_id}",
             memory_type=memory_type,
@@ -34,7 +37,7 @@ class TestSchedulerLoggerModule:
             tags=[],
         )
         return TextualMemoryItem(
-            id=memory_id,
+            id=item_id,
             memory=content,
             metadata=metadata,
         )
@@ -82,7 +85,9 @@ class TestSchedulerLoggerModule:
 
         # Verify that memcube_log_content contains only the delta (1 added memory)
         assert len(log_item.memcube_log_content) == 1
-        assert log_item.memcube_log_content[0]["ref_id"] == "mem_4"
+        assert log_item.memcube_log_content[0]["ref_id"] == str(
+            uuid.uuid5(uuid.NAMESPACE_DNS, "mem_4")
+        )
 
     def test_log_working_memory_replacement_no_changes(self):
         """Test that no log is created when there are no memory changes."""
