@@ -18,6 +18,7 @@ import { DEFAULT_CONFIG } from "../../../core/config/defaults.js";
 import { resolveHome } from "../../../core/config/paths.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
+import { fakeLlm } from "../../helpers/fake-llm.js";
 import type { CoreEvent } from "../../../agent-contract/events.js";
 import type { TurnInputDTO, TurnResultDTO } from "../../../agent-contract/dto.js";
 
