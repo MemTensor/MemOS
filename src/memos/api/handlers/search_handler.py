@@ -32,6 +32,7 @@ logger = get_logger(__name__)
 _ENV_CONTEXT_RECALL = "MEMOS_DREAM_CONTEXT_RECALL"
 _ENV_CONTEXT_RECALL_TOP_K = "MEMOS_DREAM_CONTEXT_RECALL_TOP_K"
 _DEFAULT_CONTEXT_RECALL_TOP_K = 2
+_MISSING_EMBEDDING_BATCH_SIZE = 10
 
 
 def _env_enabled(name: str, default: str = "off") -> bool:
@@ -590,10 +591,13 @@ class SearchHandler(BaseHandler):
             missing_documents.append(mem.get("memory", ""))
 
         if missing_indices:
-            computed = self.searcher.embedder.embed(missing_documents)
-            for idx, embedding in zip(missing_indices, computed, strict=False):
-                embeddings[idx] = embedding
-                memories[idx]["metadata"]["embedding"] = embedding
+            for start in range(0, len(missing_documents), _MISSING_EMBEDDING_BATCH_SIZE):
+                batch_documents = missing_documents[start : start + _MISSING_EMBEDDING_BATCH_SIZE]
+                batch_indices = missing_indices[start : start + _MISSING_EMBEDDING_BATCH_SIZE]
+                computed = self.searcher.embedder.embed(batch_documents)
+                for idx, embedding in zip(batch_indices, computed, strict=False):
+                    embeddings[idx] = embedding
+                    memories[idx]["metadata"]["embedding"] = embedding
 
         return embeddings
 
