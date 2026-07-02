@@ -316,6 +316,16 @@ export interface RetrievalConfig {
   llmFilterCandidateBodyChars?: number;
   /** Low-cost mode: retrieve raw trace memories only. */
   lightweightMemory?: boolean;
+  /**
+   * Tier-2 vector scan time-window bound (ms). When > 0, the cosine
+   * scan path only considers `traces` rows whose `ts` is within the
+   * last `vectorScanMaxAgeMs` milliseconds. Set to `0` to disable
+   * (legacy full-table brute-force scan). See
+   * https://github.com/MemTensor/MemOS/issues/1929 for the original
+   * starvation report and `core/config/schema.ts` for the YAML
+   * binding + validation rules.
+   */
+  vectorScanMaxAgeMs?: number;
 }
 
 /**
