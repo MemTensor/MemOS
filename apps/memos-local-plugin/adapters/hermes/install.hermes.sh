@@ -48,16 +48,19 @@ else
 fi
 
 # ── 3. wire up Python provider ────────────────────────────────────────────────
-# Hermes discovers providers from $PREFIX. Symlinking the Python package
-# to a discoverable path (if HERMES_PLUGINS_DIR is set) avoids asking the
-# user to edit PYTHONPATH manually.
+# Hermes source-tree upgrades can replace the checkout-local
+# plugins/memory directory, so always maintain a user-level link too.
+USER_HERMES_PLUGINS_DIR="${HOME}/.hermes/plugins/memory"
+mkdir -p "$USER_HERMES_PLUGINS_DIR"
+ln -sfn "$PREFIX/adapters/hermes/memos_provider" "$USER_HERMES_PLUGINS_DIR/memtensor"
+log "Linked Python provider → $USER_HERMES_PLUGINS_DIR/memtensor"
+
 if [[ -n "${HERMES_PLUGINS_DIR:-}" ]]; then
   mkdir -p "$HERMES_PLUGINS_DIR"
-  ln -sfn "$PREFIX/adapters/hermes/memos_provider" "$HERMES_PLUGINS_DIR/memos_provider"
-  log "Linked Python provider → $HERMES_PLUGINS_DIR/memos_provider"
+  ln -sfn "$PREFIX/adapters/hermes/memos_provider" "$HERMES_PLUGINS_DIR/memtensor"
+  log "Linked Python provider → $HERMES_PLUGINS_DIR/memtensor"
 else
-  log "HERMES_PLUGINS_DIR not set; skipping Python provider symlink. You can manually link:"
-  log "  ln -s \"$PREFIX/adapters/hermes/memos_provider\" <hermes-plugins>/memos_provider"
+  log "HERMES_PLUGINS_DIR not set; user-level provider link was created."
 fi
 
 log "Hermes adapter install complete."
