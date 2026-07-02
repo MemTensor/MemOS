@@ -150,6 +150,22 @@ const pluginConfigSchema = {
   },
 };
 
+/**
+ * Narrow view of the OpenClaw plugin API surface that this plugin uses for memory
+ * registration. Hoisted to module scope (rather than inlined at the call site) so that
+ * future maintainers can see exactly which host methods the feature detection covers,
+ * and so nobody accidentally reaches for other `OpenClawPluginApi` members through the
+ * narrowed reference. See issue #1559.
+ *
+ * - `registerMemoryPromptSection` was introduced in OpenClaw 2026.3.31.
+ * - `registerMemoryCapability` is the legacy umbrella call that the plugin used to rely
+ *   on; kept here purely so older gateways still work.
+ */
+interface MemoryRegistrationApi {
+  registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+  registerMemoryCapability?: (capability: { promptBuilder: typeof buildMemoryPromptSection }) => void;
+}
+
 const memosLocalPlugin = {
   id: "memos-local-openclaw-plugin",
   name: "MemOS Local Memory",
@@ -164,18 +180,26 @@ const memosLocalPlugin = {
     // with three focused registrars. We only need the prompt-section builder here, so we
     // feature-detect the new API and fall back to the legacy call for older gateways.
     // See: https://github.com/MemTensor/MemOS/issues/1559
-    const memoryApi = api as unknown as {
-      registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
-      registerMemoryCapability?: (capability: { promptBuilder: typeof buildMemoryPromptSection }) => void;
-    };
+    const memoryApi = api as unknown as MemoryRegistrationApi;
     if (typeof memoryApi.registerMemoryPromptSection === "function") {
       memoryApi.registerMemoryPromptSection(buildMemoryPromptSection);
     } else if (typeof memoryApi.registerMemoryCapability === "function") {
       memoryApi.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
     } else {
-      api.logger.warn(
-        "memos-local: neither api.registerMemoryPromptSection nor api.registerMemoryCapability is available; memory prompt section will not be injected.",
-      );
+      // Neither registrar exists — the plugin has effectively lost its recall path and
+      // the AI will silently never surface memories. Escalate above warn so operators
+      // notice immediately in production log dashboards rather than while debugging
+      // broken recall behavior weeks later.
+      const message =
+        "memos-local: neither api.registerMemoryPromptSection nor api.registerMemoryCapability " +
+        "is available; memory prompt section will not be injected. The plugin may be " +
+        "incompatible with this OpenClaw gateway version.";
+      const errorLog = (api.logger as { error?: (msg: string) => void }).error;
+      if (typeof errorLog === "function") {
+        errorLog.call(api.logger, message);
+      } else {
+        api.logger.warn(message);
+      }
     }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));

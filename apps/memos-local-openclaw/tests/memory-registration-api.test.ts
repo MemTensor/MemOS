@@ -5,7 +5,9 @@
  *
  *   1. Prefer the new API when the host exposes it (OpenClaw 2026.3.31+).
  *   2. Fall back to the legacy API when only that is available (older gateways).
- *   3. Not throw when neither method exists — instead log a warning and continue.
+ *   3. Not throw when neither method exists — instead escalate to `logger.error`
+ *      (or `logger.warn` as a last-resort fallback for hosts that lack `error`)
+ *      and continue, so the misconfiguration surfaces in production dashboards.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -103,7 +105,7 @@ function makeBaseApi(overrides: Record<string, unknown>) {
     pluginConfig: {},
     config: {},
     resolvePath: () => "/tmp/memos-openclaw-reg",
-    logger: { info() {}, warn() {} },
+    logger: { info() {}, warn() {}, error() {} },
     registerTool: () => {},
     registerService: () => {},
     on: () => {},
@@ -148,13 +150,37 @@ describe("issue #1559 — memory registration API compatibility", () => {
     expect(capability.promptBuilder).toBeInstanceOf(Function);
   });
 
-  it("does not throw when neither memory-registration method exists", async () => {
+  it("does not throw and logs at error level when neither memory-registration method exists", async () => {
+    setupMocks();
+    const info = vi.fn();
+    const warn = vi.fn();
+    const error = vi.fn();
+
+    const pluginModule = await import("../plugin-impl");
+    expect(() => {
+      pluginModule.default.register(makeBaseApi({
+        logger: { info, warn, error },
+      }) as any);
+    }).not.toThrow();
+
+    // The misconfiguration is fatal for recall, so it must escalate to error rather
+    // than being buried in a warn log where operators are more likely to miss it.
+    expect(error).toHaveBeenCalled();
+    const errorMsg = error.mock.calls.map((c) => String(c[0])).join(" ");
+    expect(errorMsg).toMatch(/registerMemoryPromptSection|registerMemoryCapability/);
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringMatching(/registerMemoryPromptSection|registerMemoryCapability/),
+    );
+  });
+
+  it("falls back to warn when the host logger lacks an error method", async () => {
     setupMocks();
     const warn = vi.fn();
 
     const pluginModule = await import("../plugin-impl");
     expect(() => {
       pluginModule.default.register(makeBaseApi({
+        // Simulate an older host whose HostLogger shape has no `error`.
         logger: { info() {}, warn },
       }) as any);
     }).not.toThrow();
