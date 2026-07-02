@@ -168,6 +168,27 @@ const pluginConfigSchema = {
   },
 };
 
+/**
+ * Narrow view of the OpenClaw plugin API surface that this plugin uses for memory
+ * registration. Hoisted to module scope (rather than inlined at the call site) so that
+ * future maintainers can see exactly which host methods the feature detection covers,
+ * and so nobody accidentally reaches for other `OpenClawPluginApi` members through the
+ * narrowed reference. See issue #1559.
+ *
+ * - `registerMemoryPromptSection` was introduced in OpenClaw 2026.3.31.
+ * - `registerMemoryCapability` is the legacy umbrella call that the plugin used to rely
+ *   on; kept here purely so older gateways still work.
+ */
+interface MemoryRegistrationApi {
+  registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+  registerMemoryCapability?: (capability: { promptBuilder: typeof buildMemoryPromptSection }) => void;
+}
+
+interface ExtendedLogger {
+  warn(msg: string): void;
+  error?(msg: string): void;
+}
+
 const memosLocalPlugin = {
   id: "memos-local-openclaw-plugin",
   name: "MemOS Local Memory",
@@ -179,30 +200,27 @@ const memosLocalPlugin = {
 
   register(api: OpenClawPluginApi) {
     // OpenClaw 2026.3.31 split the legacy `registerMemoryCapability` facade
-    // into three focused registration methods. We prefer the new API when
-    // the host exposes it; otherwise we fall back to the legacy
-    // capability registration so older hosts still load. Either method
-    // being missing is non-fatal — the plugin must remain load-safe.
-    //
-    // See: https://github.com/MemTensor/MemOS/issues/1559
-    const hostApi = api as OpenClawPluginApi & {
-      registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
-      registerMemoryFlushPlan?: (resolver: unknown) => void;
-      registerMemoryRuntime?: (runtime: unknown) => void;
-    };
+    // into focused registration methods. Prefer the new prompt-section API,
+    // then fall back to the legacy capability registration so older hosts
+    // still load.
+    const memoryApi = api as OpenClawPluginApi & MemoryRegistrationApi;
 
-    if (typeof hostApi.registerMemoryPromptSection === "function") {
-      hostApi.registerMemoryPromptSection(buildMemoryPromptSection);
-    } else if (typeof hostApi.registerMemoryCapability === "function") {
-      hostApi.registerMemoryCapability({
-        promptBuilder: buildMemoryPromptSection,
-      });
+    if (typeof memoryApi.registerMemoryPromptSection === "function") {
+      memoryApi.registerMemoryPromptSection(buildMemoryPromptSection);
+    } else if (typeof memoryApi.registerMemoryCapability === "function") {
+      memoryApi.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
     } else {
-      hostApi.logger?.warn?.(
+      const message =
         "memos-local: host SDK exposes neither registerMemoryPromptSection " +
-          "nor registerMemoryCapability — memory prompt section will not be " +
-          "installed. Plugin continues without a system prompt prelude.",
-      );
+        "nor registerMemoryCapability; memory prompt section will not be " +
+        "installed. The plugin may be incompatible with this OpenClaw gateway version.";
+      const logger = api.logger as ExtendedLogger;
+      if (typeof logger.error === "function") {
+        logger.error(message);
+      } else {
+        logger.warn(message);
+      }
+      throw new Error(message);
     }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
