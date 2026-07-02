@@ -923,5 +923,143 @@ class ViewerDaemonTests(unittest.TestCase):
             popen.assert_not_called()
 
 
+class BridgeOkCacheTests(unittest.TestCase):
+    """Regression tests for issue #1797.
+
+    `ensure_bridge_running(probe_only=True)` used to cache a `False`
+    result permanently. These tests pin down the new contract: cache
+    entries have a TTL, and a running MemOS bridge on :18800 is a
+    fallback signal that Node works on this host even if a transient
+    `_node_available()` call failed.
+    """
+
+    def setUp(self) -> None:
+        # Make sure each test starts from a clean module-level cache.
+        daemon_manager_mod._bridge_ok = None
+        daemon_manager_mod._bridge_ok_at = 0.0
+        # Pretend the compiled bridge script exists so the "script
+        # missing" early-return does not steal the test.
+        self._script_patch = patch.object(
+            daemon_manager_mod,
+            "_bridge_script",
+            return_value=Path("/fake/bridge.cjs"),
+        )
+        self._script_patch.start()
+        self._exists_patch = patch.object(Path, "exists", return_value=True)
+        self._exists_patch.start()
+
+    def tearDown(self) -> None:
+        self._exists_patch.stop()
+        self._script_patch.stop()
+        daemon_manager_mod._bridge_ok = None
+        daemon_manager_mod._bridge_ok_at = 0.0
+
+    def test_probe_only_when_cache_empty_revalidates(self) -> None:
+        with (
+            patch.object(daemon_manager_mod, "_node_available", return_value=True) as node,
+            patch.object(daemon_manager_mod, "_probe_viewer") as probe,
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+            node.assert_called_once()
+            probe.assert_not_called()
+
+    def test_cached_false_returns_immediately_within_ttl(self) -> None:
+        # Seed the cache with a fresh False as if a transient failure occurred.
+        now = 1_000_000.0
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=False),
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="free"),
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+
+        # Within TTL, _node_available must NOT be called again — the cached
+        # False is returned directly.
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now + 1.0),
+            patch.object(daemon_manager_mod, "_node_available") as node,
+            patch.object(daemon_manager_mod, "_probe_viewer") as probe,
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+            node.assert_not_called()
+            probe.assert_not_called()
+
+    def test_cached_false_expires_after_ttl_and_recovers(self) -> None:
+        now = 2_000_000.0
+        # Seed cache with a False at t=now.
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=False),
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="free"),
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+
+        # After TTL + 1s, Node is now reachable. probe_only=True must
+        # revalidate and switch the cache to True.
+        with (
+            patch.object(
+                daemon_manager_mod.time,
+                "time",
+                return_value=now + daemon_manager_mod.BRIDGE_OK_TTL_SEC + 1.0,
+            ),
+            patch.object(daemon_manager_mod, "_node_available", return_value=True),
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+        # And the value is cached.
+        self.assertTrue(daemon_manager_mod._bridge_ok)
+
+    def test_running_bridge_overrides_failed_node_probe(self) -> None:
+        # A live MemOS bridge is definitive proof Node worked; trust it
+        # even if `_node_available` returns False (e.g. env-var race).
+        now = 3_000_000.0
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=False),
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="running_memos"),
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+        self.assertTrue(daemon_manager_mod._bridge_ok)
+        self.assertEqual(daemon_manager_mod._bridge_ok_at, now)
+
+    def test_shutdown_bridge_resets_cache_and_timestamp(self) -> None:
+        now = 4_000_000.0
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=True),
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+
+        self.assertIsNotNone(daemon_manager_mod._bridge_ok)
+        self.assertGreater(daemon_manager_mod._bridge_ok_at, 0.0)
+
+        daemon_manager_mod.shutdown_bridge()
+        self.assertIsNone(daemon_manager_mod._bridge_ok)
+        self.assertEqual(daemon_manager_mod._bridge_ok_at, 0.0)
+
+        # After reset, the next probe must call `_node_available` again.
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now + 1.0),
+            patch.object(daemon_manager_mod, "_node_available", return_value=True) as node,
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+            node.assert_called_once()
+
+    def test_full_call_always_revalidates(self) -> None:
+        # `probe_only=False` (called from `MemTensorProvider.initialize`)
+        # must bypass the cache and refresh.
+        now = 5_000_000.0
+        # Pre-seed a stale True.
+        daemon_manager_mod._bridge_ok = True
+        daemon_manager_mod._bridge_ok_at = now - 1.0
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=False) as node,
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="free"),
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_bridge_running())
+            node.assert_called_once()
+        self.assertFalse(daemon_manager_mod._bridge_ok)
+
+
 if __name__ == "__main__":
     unittest.main()
