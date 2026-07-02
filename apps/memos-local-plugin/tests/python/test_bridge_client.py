@@ -164,10 +164,20 @@ class RecordingBridge:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+        # Kwargs captured per call — used by tests that assert on the
+        # per-request `timeout` kwarg the provider now passes for
+        # long-running operations (memory.search / turn.start / turn.end).
+        self.call_kwargs: list[dict] = []
 
-    def request(self, method: str, params: dict | None = None) -> dict | None:
+    def request(
+        self,
+        method: str,
+        params: dict | None = None,
+        **kwargs,
+    ) -> dict | None:
         payload = params or {}
         self.calls.append((method, payload))
+        self.call_kwargs.append(dict(kwargs))
         if method == "memory.search":
             return {
                 "hits": [
@@ -620,7 +630,7 @@ class MemTensorProviderTests(unittest.TestCase):
                 return {}
 
         class RetryFailBridge:
-            def request(self, method, params=None):
+            def request(self, method, params=None, **_kwargs):
                 if method == "session.open":
                     return {"sessionId": (params or {}).get("sessionId", "sess")}
                 if method == "turn.start":
@@ -657,7 +667,7 @@ class MemTensorProviderTests(unittest.TestCase):
             def close(self):
                 self.closed = True
 
-            def request(self, method, params=None):
+            def request(self, method, params=None, **_kwargs):
                 if method == "turn.end":
                     raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
                 return {}
@@ -742,6 +752,90 @@ class MemTensorProviderTests(unittest.TestCase):
             loaded = yaml.safe_load(cfg_path.read_text())
             self.assertEqual(loaded["viewer"]["port"], 18920)
             self.assertEqual(loaded["llm"]["provider"], "openai_compatible")
+
+    # ─── Long-operation RPC timeouts (issue #2028) ──────────────────────
+    #
+    # After 1-2 hours of Hermes use the memory / capture / reflection
+    # pipeline legitimately needs more than the 30s JSON-RPC default,
+    # which surfaced as:
+    #     [timeout] memory.search did not respond within 30.0s
+    #     [timeout] turn.end did not respond within 30.0s
+    # `feedback.submit` already opts into 75s, and `sync_turn` already
+    # opts into a 75s `_ensure_bridge`, but the actual `memory.search`
+    # and `turn.start` / `turn.end` requests still fell back to 30s.
+    # These tests pin the fix.
+
+    _EXPECTED_LONG_TIMEOUT = 75.0
+
+    def test_memos_search_uses_long_rpc_timeout(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+
+        p.handle_tool_call("memos_search", {"query": "yesterday"})
+        method, _params = bridge.calls[-1]
+        self.assertEqual(method, "memory.search")
+        kwargs = bridge.call_kwargs[-1]
+        self.assertIn("timeout", kwargs)
+        self.assertGreaterEqual(
+            kwargs["timeout"],
+            self._EXPECTED_LONG_TIMEOUT,
+            "memory.search must not fall back to the 30s JSON-RPC default; "
+            "large memories legitimately need more time (issue #2028).",
+        )
+
+    def test_memos_environment_search_uses_long_rpc_timeout(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+
+        # memos_environment routes to memory.search when a query is passed.
+        p.handle_tool_call("memos_environment", {"query": "install path"})
+        method, _params = bridge.calls[-1]
+        self.assertEqual(method, "memory.search")
+        kwargs = bridge.call_kwargs[-1]
+        self.assertGreaterEqual(kwargs.get("timeout", 0.0), self._EXPECTED_LONG_TIMEOUT)
+
+    def test_sync_turn_uses_long_rpc_timeout_for_turn_end(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+        p._episode_id = "ep-1"  # skip the turn.start prelude
+
+        p.sync_turn("what did we do?", "we tested memory")
+        methods = [m for m, _ in bridge.calls]
+        self.assertIn("turn.end", methods)
+        end_index = methods.index("turn.end")
+        end_kwargs = bridge.call_kwargs[end_index]
+        self.assertIn("timeout", end_kwargs)
+        self.assertGreaterEqual(
+            end_kwargs["timeout"],
+            self._EXPECTED_LONG_TIMEOUT,
+            "turn.end must not fall back to the 30s JSON-RPC default; "
+            "the V7 capture/reflection pipeline grows past 30s in long "
+            "sessions (issue #2028).",
+        )
+
+    def test_prefetch_uses_long_rpc_timeout_for_turn_start(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+
+        p.prefetch("what did I do yesterday?", session_id="hermes:session:1")
+        methods = [m for m, _ in bridge.calls]
+        self.assertIn("turn.start", methods)
+        start_index = methods.index("turn.start")
+        start_kwargs = bridge.call_kwargs[start_index]
+        self.assertGreaterEqual(
+            start_kwargs.get("timeout", 0.0),
+            self._EXPECTED_LONG_TIMEOUT,
+            "turn.start suffers the same long-tail latency as turn.end and "
+            "must share the long RPC timeout (issue #2028).",
+        )
 
 
 class ViewerDaemonTests(unittest.TestCase):
