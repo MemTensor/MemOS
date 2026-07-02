@@ -85,6 +85,7 @@ import {
   inferStoredEmbeddingByteLen,
   FLOAT32_BYTES,
 } from "../storage/repos/index.js";
+import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -4079,7 +4080,7 @@ export function createMemoryCore(
     ready: number;
     missing: number;
     dimMismatch: number;
-  }): EmbeddingMaintenanceStats["byKind"]["trace"] {
+  }): EmbeddingCountsBucket & { needsRepair: number } {
     return {
       ...bucket,
       needsRepair: bucket.missing + bucket.dimMismatch,
