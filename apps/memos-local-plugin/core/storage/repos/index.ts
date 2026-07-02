@@ -5,6 +5,13 @@
  */
 
 import type { StorageDb } from "../types.js";
+import {
+  embeddingMaintenanceCounts,
+  inferStoredEmbeddingByteLen,
+  FLOAT32_BYTES,
+  type EmbeddingCounts,
+  type EmbeddingCountsBucket,
+} from "./embedding_maintenance.js";
 import { makeApiLogsRepo } from "./api_logs.js";
 import { makeAuditRepo } from "./audit.js";
 import { makeCandidatePoolRepo } from "./candidate_pool.js";
@@ -84,3 +91,16 @@ export { makeSkillsRepo } from "./skills.js";
 export { makeTracePolicyLinksRepo } from "./trace-policy-links.js";
 export { makeTracesRepo } from "./traces.js";
 export { makeWorldModelRepo } from "./world_model.js";
+
+/**
+ * SQL-only embedding maintenance stats — see `./embedding_maintenance.ts`
+ * for the design rationale. Regression pin for issue #1929: the old JS
+ * path hydrated 270 MB of BLOBs per request; this SQL fast path uses
+ * `LENGTH(vec)` alone and never touches the buffers.
+ */
+export {
+  embeddingMaintenanceCounts,
+  inferStoredEmbeddingByteLen,
+  FLOAT32_BYTES,
+};
+export type { EmbeddingCounts, EmbeddingCountsBucket };
