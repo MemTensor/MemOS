@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
 import type { HostModelsConfig } from "./src/openclaw-api";
+import { isPathInside } from "./src/path-utils";
 import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
@@ -31,6 +32,7 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { ensureToolsAllowEntry } from "./src/openclaw-config";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -94,7 +96,11 @@ const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
   return lines;
 };
 
-function normalizeAutoRecallQuery(rawPrompt: string): string {
+const INSTRUCTIONAL_PROMPT_MAX_LEN = 300;
+const SYSTEM_ROLE_PROMPT_RE = /^You are\b/i;
+const HERMES_SKILL_REVIEW_RE = /Review the conversation above/i;
+
+export function normalizeAutoRecallQuery(rawPrompt: string): string {
   let query = rawPrompt.trim();
 
   const senderTag = "Sender (untrusted metadata):";
@@ -124,6 +130,17 @@ function normalizeAutoRecallQuery(rawPrompt: string): string {
 
   query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
   query = query.replace(CONTINUE_PROMPT_RE, "").trim();
+
+  // Drop instructional prompts (system role prompts, Hermes skill-review prompts,
+  // over-long instruction blobs). These shapes are not user search intents — passing
+  // them to FTS5 fails the sanitize step and wastes a downstream LLM filter call.
+  if (
+    query.length > INSTRUCTIONAL_PROMPT_MAX_LEN
+    || SYSTEM_ROLE_PROMPT_RE.test(query)
+    || HERMES_SKILL_REVIEW_RE.test(query)
+  ) {
+    return "";
+  }
 
   return query;
 }
@@ -181,17 +198,6 @@ const memosLocalPlugin = {
     }
 
     const pluginDir = detectPluginDir(moduleDir);
-
-    function normalizeFsPath(p: string): string {
-      return path.resolve(p).replace(/^\\\\\?\\/, "").toLowerCase();
-    }
-
-    function isPathInside(baseDir: string, targetPath: string): boolean {
-      const baseNorm = normalizeFsPath(baseDir);
-      const targetNorm = normalizeFsPath(targetPath);
-      const rel = path.relative(baseNorm, targetNorm);
-      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-    }
 
     function runNpm(args: string[]) {
       const { spawnSync } = localRequire("child_process") as typeof import("node:child_process");
@@ -356,18 +362,10 @@ const memosLocalPlugin = {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
         const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const cfg = JSON.parse(raw);
-        const allow: string[] | undefined = cfg?.tools?.allow;
-        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
-          const lastEntry = JSON.stringify(allow[allow.length - 1]);
-          const patched = raw.replace(
-            new RegExp(`(${lastEntry})(\\s*\\])`),
-            `$1,\n      "group:plugins"$2`,
-          );
-          if (patched !== raw && patched.includes("group:plugins")) {
-            fs.writeFileSync(openclawJsonPath, patched, "utf-8");
-            ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
-          }
+        const patched = ensureToolsAllowEntry(raw, "group:plugins");
+        if (patched !== raw) {
+          fs.writeFileSync(openclawJsonPath, patched, "utf-8");
+          ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
         }
       }
     } catch (e) {
