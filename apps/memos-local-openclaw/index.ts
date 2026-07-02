@@ -166,6 +166,17 @@ interface MemoryRegistrationApi {
   registerMemoryCapability?: (capability: { promptBuilder: typeof buildMemoryPromptSection }) => void;
 }
 
+/**
+ * Extended logger view for hosts whose `HostLogger` type does not yet declare
+ * `error()`. Grouped here with the other feature-detected shapes so all
+ * type-escape hatches live in one place and can be dropped once the SDK
+ * publishes matching types.
+ */
+interface ExtendedLogger {
+  warn(msg: string): void;
+  error?(msg: string): void;
+}
+
 const memosLocalPlugin = {
   id: "memos-local-openclaw-plugin",
   name: "MemOS Local Memory",
@@ -180,7 +191,11 @@ const memosLocalPlugin = {
     // with three focused registrars. We only need the prompt-section builder here, so we
     // feature-detect the new API and fall back to the legacy call for older gateways.
     // See: https://github.com/MemTensor/MemOS/issues/1559
-    const memoryApi = api as unknown as MemoryRegistrationApi;
+    //
+    // Intersection cast (rather than `as unknown as …`) keeps the rest of `api`'s
+    // typed surface intact — we're saying "the host may additionally expose these
+    // optional registrars", not throwing the whole type away.
+    const memoryApi = api as OpenClawPluginApi & MemoryRegistrationApi;
     if (typeof memoryApi.registerMemoryPromptSection === "function") {
       memoryApi.registerMemoryPromptSection(buildMemoryPromptSection);
     } else if (typeof memoryApi.registerMemoryCapability === "function") {
@@ -188,18 +203,20 @@ const memosLocalPlugin = {
     } else {
       // Neither registrar exists — the plugin has effectively lost its recall path and
       // the AI will silently never surface memories. Escalate above warn so operators
-      // notice immediately in production log dashboards rather than while debugging
-      // broken recall behavior weeks later.
+      // notice immediately in production log dashboards, then throw so the rest of
+      // register() (stores, workers, tools) does not spin up in a permanently broken
+      // state where the plugin *appears* healthy while recall is silently dead.
       const message =
         "memos-local: neither api.registerMemoryPromptSection nor api.registerMemoryCapability " +
         "is available; memory prompt section will not be injected. The plugin may be " +
         "incompatible with this OpenClaw gateway version.";
-      const errorLog = (api.logger as { error?: (msg: string) => void }).error;
-      if (typeof errorLog === "function") {
-        errorLog.call(api.logger, message);
+      const logger = api.logger as ExtendedLogger;
+      if (typeof logger.error === "function") {
+        logger.error(message);
       } else {
-        api.logger.warn(message);
+        logger.warn(message);
       }
+      throw new Error(message);
     }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));

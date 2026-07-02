@@ -5,9 +5,10 @@
  *
  *   1. Prefer the new API when the host exposes it (OpenClaw 2026.3.31+).
  *   2. Fall back to the legacy API when only that is available (older gateways).
- *   3. Not throw when neither method exists — instead escalate to `logger.error`
- *      (or `logger.warn` as a last-resort fallback for hosts that lack `error`)
- *      and continue, so the misconfiguration surfaces in production dashboards.
+ *   3. Fail loudly (log at error + throw) when neither method exists — so the
+ *      rest of register() does not spin up in a permanently broken state and
+ *      operators see the incompatibility immediately in production dashboards.
+ *      Falls back to `logger.warn` when the host lacks `.error`.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -150,7 +151,7 @@ describe("issue #1559 — memory registration API compatibility", () => {
     expect(capability.promptBuilder).toBeInstanceOf(Function);
   });
 
-  it("does not throw and logs at error level when neither memory-registration method exists", async () => {
+  it("logs at error level and throws when neither memory-registration method exists", async () => {
     setupMocks();
     const info = vi.fn();
     const warn = vi.fn();
@@ -161,10 +162,12 @@ describe("issue #1559 — memory registration API compatibility", () => {
       pluginModule.default.register(makeBaseApi({
         logger: { info, warn, error },
       }) as any);
-    }).not.toThrow();
+    }).toThrow(/registerMemoryPromptSection|registerMemoryCapability/);
 
     // The misconfiguration is fatal for recall, so it must escalate to error rather
-    // than being buried in a warn log where operators are more likely to miss it.
+    // than being buried in a warn log where operators are more likely to miss it,
+    // and throwing prevents register() from proceeding to spin up stores/workers/tools
+    // in a state where the plugin looks healthy but recall is silently dead.
     expect(error).toHaveBeenCalled();
     const errorMsg = error.mock.calls.map((c) => String(c[0])).join(" ");
     expect(errorMsg).toMatch(/registerMemoryPromptSection|registerMemoryCapability/);
@@ -173,7 +176,7 @@ describe("issue #1559 — memory registration API compatibility", () => {
     );
   });
 
-  it("falls back to warn when the host logger lacks an error method", async () => {
+  it("falls back to warn (and still throws) when the host logger lacks an error method", async () => {
     setupMocks();
     const warn = vi.fn();
 
@@ -183,7 +186,7 @@ describe("issue #1559 — memory registration API compatibility", () => {
         // Simulate an older host whose HostLogger shape has no `error`.
         logger: { info() {}, warn },
       }) as any);
-    }).not.toThrow();
+    }).toThrow(/registerMemoryPromptSection|registerMemoryCapability/);
 
     expect(warn).toHaveBeenCalled();
     const warnMsg = warn.mock.calls.map((c) => String(c[0])).join(" ");
