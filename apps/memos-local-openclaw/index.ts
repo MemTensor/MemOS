@@ -1906,6 +1906,9 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
+    // Track current session to detect cross-session memories
+    let currentSessionKey: string | null = null;
+
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
@@ -1923,7 +1926,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
       const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
-      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
+      const incomingSessionKey = hookCtx?.sessionKey ?? "default";
+      ctx.log.info(`auto-recall: agentId=${recallAgentId} sessionKey=${incomingSessionKey} (from hookCtx)`);
 
       const recallT0 = performance.now();
       let recallQuery = "";
@@ -1934,6 +1938,13 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
         const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
+
+        // Detect if this is a new session
+        const isNewSession = currentSessionKey !== incomingSessionKey || NEW_SESSION_PROMPT_RE.test(rawPrompt);
+        if (isNewSession && currentSessionKey !== null) {
+          ctx.log.info(`auto-recall: new session detected (prev=${currentSessionKey}, curr=${incomingSessionKey})`);
+        }
+        currentSessionKey = incomingSessionKey;
 
         const minQueryLength = ctx.config.recall?.autoRecallMinQueryLength ?? DEFAULTS.autoRecallMinQueryLength;
         if (query.length < minQueryLength) {
@@ -2079,10 +2090,18 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         filteredHits = deduplicateHits(filteredHits);
         ctx.log.debug(`auto-recall: merged ${allRawHits.length} → ${beforeDedup} relevant → ${filteredHits.length} after dedup, sufficient=${sufficient}`);
 
+        // Check if any memories are from a different session
+        const hasCrossSessionMemories = filteredHits.some(h =>
+          h.source.sessionKey && h.source.sessionKey !== incomingSessionKey
+        );
+        ctx.log.debug(`auto-recall: isNewSession=${isNewSession}, hasCrossSessionMemories=${hasCrossSessionMemories}`);
+
         const lines = filteredHits.map((h, i) => {
           const excerpt = h.original_excerpt;
+          const isCrossSession = h.source.sessionKey && h.source.sessionKey !== incomingSessionKey;
+          const sessionTag = isCrossSession ? " [from previous session]" : "";
           const oTag = h.origin === "local-shared" ? " [本机共享]" : h.origin === "hub-memory" ? " [团队缓存]" : "";
-          const parts: string[] = [`${i + 1}. [${h.source.role}]${oTag}`];
+          const parts: string[] = [`${i + 1}. [${h.source.role}]${sessionTag}${oTag}`];
           if (excerpt) parts.push(`   ${excerpt}`);
           parts.push(`   chunkId="${h.ref.chunkId}"`);
           if (h.taskId) {
@@ -2107,15 +2126,32 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         tips.push("- Need more surrounding dialogue → call `memory_timeline(chunkId=\"...\")` to expand context around a hit");
         const tipsText = "\n\nAvailable follow-up tools:\n" + tips.join("\n");
 
+        // Use different instructions based on whether memories are from current or previous sessions
         const contextParts = [
           "## User's conversation history (from memory system)",
           "",
-          "IMPORTANT: The following are facts from previous conversations with this user.",
-          "You MUST treat these as established knowledge and use them directly when answering.",
-          "Do NOT say you don't know or don't have information if the answer is in these memories.",
-          "",
-          lines.join("\n\n"),
         ];
+
+        if (hasCrossSessionMemories || isNewSession) {
+          contextParts.push(
+            "IMPORTANT: The following memories are from PREVIOUS SESSIONS.",
+            "Treat them as BACKGROUND KNOWLEDGE ONLY:",
+            "- Do NOT act on them unprompted or proactively respond based solely on these memories",
+            "- WAIT for the user's explicit instruction before taking any action",
+            "- These memories provide context, but the user must initiate the conversation",
+            "- If you reference these memories, explicitly note they are from a previous session (e.g., \"根据之前的会话...\" or \"Based on a previous conversation...\")",
+            "",
+          );
+        } else {
+          contextParts.push(
+            "IMPORTANT: The following are facts from previous conversations with this user.",
+            "You MUST treat these as established knowledge and use them directly when answering.",
+            "Do NOT say you don't know or don't have information if the answer is in these memories.",
+            "",
+          );
+        }
+
+        contextParts.push(lines.join("\n\n"));
         if (tipsText) contextParts.push(tipsText);
 
         // ─── Skill auto-recall ───
