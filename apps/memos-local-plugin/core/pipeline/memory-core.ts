@@ -94,6 +94,7 @@ import {
   registerHostLlmBridge,
   type HostLlmBridge,
 } from "../llm/host-bridge.js";
+import type { ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";

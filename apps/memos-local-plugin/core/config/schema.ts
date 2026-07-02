@@ -49,6 +49,22 @@ const EmbeddingSchema = Type.Object({
   }, { default: {} }),
 }, { default: {} });
 
+const ReasoningSchema = Type.Object({
+  /**
+   * OpenRouter-compatible reasoning toggle. Omit the whole block to keep
+   * the provider/model default.
+   */
+  enabled: Type.Optional(Bool(true)),
+  /** Optional provider effort hint for reasoning-capable models. */
+  effort: Type.Optional(Type.Union([
+    Type.Literal("low"),
+    Type.Literal("medium"),
+    Type.Literal("high"),
+  ])),
+  /** Optional token budget for reasoning-capable providers. */
+  maxTokens: Type.Optional(NumberInRange(0, 0)),
+}, { default: {} });
+
 const LlmSchema = Type.Object({
   provider: Type.Union([
     Type.Literal(""),
@@ -617,4 +633,5 @@ export const ConfigSchema = Type.Object({
   logging: LoggingSchema,
 }, { default: {} });
 
+export type ReasoningConfig = Static<typeof ReasoningSchema>;
 export type ResolvedConfig = Static<typeof ConfigSchema>;

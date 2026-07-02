@@ -15,6 +15,13 @@ export type LlmProviderName =
   | "bedrock"
   | "host";
 
+export interface ReasoningConfig {
+  enabled?: boolean;
+  effort?: "low" | "medium" | "high";
+  maxTokens?: number;
+  [key: string]: unknown;
+}
+
 /**
  * Resolved LLM config, post-defaults. Subset of `ResolvedConfig.llm` so
  * the client is unit-testable without the whole config object.
@@ -32,6 +39,8 @@ export interface LlmConfig {
   providerIgnore?: string[];
   /** OpenRouter provider routing — preferred order. */
   providerOrder?: string[];
+  /** OpenRouter-compatible reasoning controls. Omit for model defaults. */
+  reasoning?: ReasoningConfig;
   /** Optional per-call default. Default: 1024. */
   maxTokens?: number;
   /** Extra HTTP headers for outgoing requests. */
