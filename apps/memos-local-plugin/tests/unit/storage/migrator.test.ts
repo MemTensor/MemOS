@@ -154,4 +154,49 @@ describe("storage/migrator", () => {
       db.close();
     }
   });
+
+  it("namespace-visibility migration does not rewrite existing NULL share_scope rows (regression #1787)", () => {
+    // Regression test for https://github.com/MemTensor/MemOS/issues/1787:
+    // The namespace-visibility migration originally issued
+    // `UPDATE traces SET share_scope='private' WHERE share_scope IS NULL`
+    // against the entire traces table. On databases >500 MB that UPDATE
+    // held the bootstrap transaction in CPU-bound row rewriting (re-validating
+    // JSON CHECK constraints) for many minutes, manifesting as a bridge hang.
+    //
+    // The fix removed the bulk UPDATE. This test verifies that rows with
+    // NULL share_scope stay NULL after migration (the application layer
+    // treats NULL as 'private' via COALESCE).
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      runMigrations(db);
+      // Seed test rows: two with NULL share_scope, two with explicit values.
+      db.exec(`
+        INSERT INTO traces (
+          id, session_id, ts, role, value, priority, embedding, share_scope
+        ) VALUES
+          ('t-null-a', 'session-1', 10, 'user', 0.0, 0.0, X'', NULL),
+          ('t-null-b', 'session-1', 20, 'assistant', 0.0, 0.0, X'', NULL),
+          ('t-private', 'session-1', 30, 'user', 0.0, 0.0, X'', 'private'),
+          ('t-public', 'session-1', 40, 'assistant', 0.0, 0.0, X'', 'public')
+      `);
+      const rows = db
+        .prepare<unknown, { id: string; share_scope: string | null }>(
+          `SELECT id, share_scope FROM traces ORDER BY id`,
+        )
+        .all();
+      // The crucial assertion: NULL stays NULL. If the legacy bulk
+      // UPDATE were still in place the two `t-null-*` rows would have
+      // been rewritten to 'private'. Non-NULL rows are untouched.
+      expect(rows).toEqual([
+        { id: "t-null-a", share_scope: null },
+        { id: "t-null-b", share_scope: null },
+        { id: "t-private", share_scope: "private" },
+        { id: "t-public", share_scope: "public" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
 });
