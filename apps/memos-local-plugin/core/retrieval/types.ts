@@ -737,6 +737,7 @@ export interface RetrievalStats {
     | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
+    | "llm_filtered_refilled"
     | "llm_failed_safe_cutoff";
   llmFilterSufficient?: boolean;
   llmFilterKept?: number;
