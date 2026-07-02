@@ -33,7 +33,8 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
-import { ensureToolsAllowEntry } from "./src/openclaw-config";
+import { parseJsonOrJson5 } from "./src/shared/json5";
+import { patchOpenclawAllowFile } from "./src/shared/openclaw-config";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -168,6 +169,27 @@ const pluginConfigSchema = {
   },
 };
 
+/**
+ * Narrow view of the OpenClaw plugin API surface that this plugin uses for memory
+ * registration. Hoisted to module scope (rather than inlined at the call site) so that
+ * future maintainers can see exactly which host methods the feature detection covers,
+ * and so nobody accidentally reaches for other `OpenClawPluginApi` members through the
+ * narrowed reference. See issue #1559.
+ *
+ * - `registerMemoryPromptSection` was introduced in OpenClaw 2026.3.31.
+ * - `registerMemoryCapability` is the legacy umbrella call that the plugin used to rely
+ *   on; kept here purely so older gateways still work.
+ */
+interface MemoryRegistrationApi {
+  registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+  registerMemoryCapability?: (capability: { promptBuilder: typeof buildMemoryPromptSection }) => void;
+}
+
+interface ExtendedLogger {
+  warn(msg: string): void;
+  error?(msg: string): void;
+}
+
 const memosLocalPlugin = {
   id: "memos-local-openclaw-plugin",
   name: "MemOS Local Memory",
@@ -179,30 +201,27 @@ const memosLocalPlugin = {
 
   register(api: OpenClawPluginApi) {
     // OpenClaw 2026.3.31 split the legacy `registerMemoryCapability` facade
-    // into three focused registration methods. We prefer the new API when
-    // the host exposes it; otherwise we fall back to the legacy
-    // capability registration so older hosts still load. Either method
-    // being missing is non-fatal — the plugin must remain load-safe.
-    //
-    // See: https://github.com/MemTensor/MemOS/issues/1559
-    const hostApi = api as OpenClawPluginApi & {
-      registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
-      registerMemoryFlushPlan?: (resolver: unknown) => void;
-      registerMemoryRuntime?: (runtime: unknown) => void;
-    };
+    // into focused registration methods. Prefer the new prompt-section API,
+    // then fall back to the legacy capability registration so older hosts
+    // still load.
+    const memoryApi = api as OpenClawPluginApi & MemoryRegistrationApi;
 
-    if (typeof hostApi.registerMemoryPromptSection === "function") {
-      hostApi.registerMemoryPromptSection(buildMemoryPromptSection);
-    } else if (typeof hostApi.registerMemoryCapability === "function") {
-      hostApi.registerMemoryCapability({
-        promptBuilder: buildMemoryPromptSection,
-      });
+    if (typeof memoryApi.registerMemoryPromptSection === "function") {
+      memoryApi.registerMemoryPromptSection(buildMemoryPromptSection);
+    } else if (typeof memoryApi.registerMemoryCapability === "function") {
+      memoryApi.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
     } else {
-      hostApi.logger?.warn?.(
+      const message =
         "memos-local: host SDK exposes neither registerMemoryPromptSection " +
-          "nor registerMemoryCapability — memory prompt section will not be " +
-          "installed. Plugin continues without a system prompt prelude.",
-      );
+        "nor registerMemoryCapability; memory prompt section will not be " +
+        "installed. The plugin may be incompatible with this OpenClaw gateway version.";
+      const logger = api.logger as ExtendedLogger;
+      if (typeof logger.error === "function") {
+        logger.error(message);
+      } else {
+        logger.warn(message);
+      }
+      throw new Error(message);
     }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -322,8 +341,8 @@ const memosLocalPlugin = {
     const configPath = path.join(stateDir, "state", "memos-local", "config.json");
     if (Object.keys(pluginCfg).length === 0 && fs.existsSync(configPath)) {
       try {
-        const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        pluginCfg = fileConfig;
+        const fileConfig = parseJsonOrJson5(fs.readFileSync(configPath, "utf-8"));
+        pluginCfg = fileConfig as Record<string, unknown>;
         api.logger.info(`memos-local: loaded config from ${configPath}`);
       } catch (e) {
         api.logger.warn(`memos-local: failed to load config from ${configPath}: ${e}`);
@@ -381,15 +400,17 @@ const memosLocalPlugin = {
       ctx.log.warn(`memos-local: could not write to managed skills dir: ${e}`);
     }
 
-    // Ensure plugin tools are enabled in openclaw.json tools.allow
+    // Ensure plugin tools are enabled in openclaw.json tools.allow.
+    // openclaw.json is JSON5 (supports // comments / single-quoted strings /
+    // trailing commas) — the patcher tolerates all of these (see issue #1543).
     try {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
-        const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const patched = ensureToolsAllowEntry(raw, "group:plugins");
-        if (patched !== raw) {
-          fs.writeFileSync(openclawJsonPath, patched, "utf-8");
+        const result = patchOpenclawAllowFile(openclawJsonPath);
+        if (result.changed) {
           ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
+        } else if (result.reason) {
+          ctx.log.debug(`memos-local: tools.allow not patched (${result.reason})`);
         }
       }
     } catch (e) {

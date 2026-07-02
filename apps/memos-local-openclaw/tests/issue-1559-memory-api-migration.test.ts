@@ -10,7 +10,7 @@ import memosLocalPlugin from "../index";
  *      exposes it (new SDK).
  *   2. Fall back to `api.registerMemoryCapability({ promptBuilder })` when
  *      only the legacy method exists (older SDK).
- *   3. Never crash when neither method is exposed.
+ *   3. Fail loudly when neither method is exposed.
  */
 
 function makeBaseApi(extra: Record<string, any>) {
@@ -72,11 +72,22 @@ describe("OpenClaw 2026.3.31 memory-API migration (issue #1559)", () => {
     expect(typeof capabilityArg.promptBuilder).toBe("function");
   });
 
-  it("does not crash when neither memory-registration API is present", () => {
-    const api = makeBaseApi({});
-    // The host that triggered #1559 had registerMemoryCapability undefined;
-    // a future host could conceivably drop both methods. Plugin must remain
-    // load-safe and surface a warning rather than throwing.
-    expect(() => memosLocalPlugin.register(api)).not.toThrow();
+  it("throws when neither memory-registration API is present", () => {
+    const error = vi.fn();
+    const warn = vi.fn();
+    const api = makeBaseApi({
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn,
+        error,
+      },
+    });
+
+    expect(() => memosLocalPlugin.register(api)).toThrow(
+      /registerMemoryPromptSection|registerMemoryCapability/,
+    );
+    expect(error).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 });
