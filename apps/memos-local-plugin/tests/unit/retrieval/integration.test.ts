@@ -374,7 +374,7 @@ describe("retrieval/integration", () => {
     expect(res.stats.llmFilterKept).toBeGreaterThan(0);
   });
 
-  it("lightweight mode returns no memories when summarizer filter is unavailable", async () => {
+  it("lightweight mode keeps local memories when the summarizer filter is unavailable", async () => {
     const res = await turnStartRetrieve(
       {
         ...makeDeps(handle),
@@ -397,9 +397,48 @@ describe("retrieval/integration", () => {
 
     expect(res.stats.tier2Count).toBeGreaterThan(0);
     expect(res.stats.llmFilterOutcome).toBe("no_llm");
-    expect(res.stats.llmFilterKept).toBe(0);
-    expect(res.packet.snippets).toEqual([]);
-    expect(res.stats.emptyPacket).toBe(true);
+    expect(res.stats.llmFilterKept).toBeGreaterThan(0);
+    expect(res.packet.snippets.length).toBeGreaterThan(0);
+    expect(res.stats.emptyPacket).toBe(false);
+  });
+
+  it("turn_start rescues injection when LLM filter empties the kept set (#1913)", async () => {
+    // Repro for issue #1913: when the LLM relevance filter returns
+    // `selected: []` for a non-empty ranked list (the case where the
+    // top hits are all near-duplicate question traces), the packet
+    // used to collapse to an empty injection. The rescue path keeps
+    // the top-K best-scoring candidates so the agent still gets a
+    // packet, and surfaces `llm_filtered_refilled` so the Logs viewer
+    // can show the safety net fired.
+    const llm: any = {
+      completeJson: async () => ({
+        value: { selected: [], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_current" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+    );
+
+    expect(res.packet.snippets.length).toBeGreaterThan(0);
+    expect(res.packet.rendered.length).toBeGreaterThan(0);
+    expect(res.stats.llmFilterOutcome).toBe("llm_filtered_refilled");
+    expect(res.stats.emptyPacket).toBe(false);
   });
 
   it("skill_invoke is tier1-heavy", async () => {

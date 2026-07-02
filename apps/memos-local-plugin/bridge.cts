@@ -42,6 +42,7 @@ interface BridgeArgs {
   noViewer: boolean;
   tcpPort?: number;
   agent: "openclaw" | "hermes";
+  home?: string;
 }
 
 type BridgeStatus = "connected" | "reconnecting" | "disconnected" | "unknown";
@@ -61,6 +62,7 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
     else if (raw.startsWith("--tcp=")) args.tcpPort = Number(raw.slice(6));
     else if (raw === "--agent=hermes") args.agent = "hermes";
     else if (raw === "--agent=openclaw") args.agent = "openclaw";
+    else if (raw.startsWith("--home=")) args.home = raw.slice(7);
   }
   return args;
 }
@@ -167,6 +169,9 @@ async function main(): Promise<void> {
   const { startHttpServer } = (await importEsm(
     runtimeModule("server/http.ts", "dist/server/http.js")
   )) as typeof import("./server/http.js");
+  const { isHermesChatRunning } = (await importEsm(
+    runtimeModule("bridge/hermes-process.ts", "dist/bridge/hermes-process.js")
+  )) as typeof import("./bridge/hermes-process.js");
 
   const rootDir = pluginRoot();
   const pkgVersion = require(path.join(rootDir, "package.json")).version;
@@ -235,11 +240,21 @@ async function main(): Promise<void> {
     runtimeModule("core/telemetry/index.ts", "dist/core/telemetry/index.js")
   )) as typeof import("./core/telemetry/index.js");
 
+  // Resolve home early so we can use resolveHome with explicit defaultHome
+  const { resolveHome } = (await importEsm(
+    runtimeModule("core/config/paths.ts", "dist/core/config/paths.js")
+  )) as typeof import("./core/config/paths.js");
+
+  const resolvedHome = args.home
+    ? resolveHome(args.agent, args.home)
+    : undefined;
+
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     namespace: { agentKind: args.agent, profileId: "default" },
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
+    home: resolvedHome,
   });
 
   const telemetry = new Telemetry(
@@ -257,6 +272,7 @@ async function main(): Promise<void> {
       ? createBridgeStatusTracker(
           path.join(home.root, BRIDGE_STATUS_FILE),
           args.daemon,
+          isHermesChatRunning,
         )
       : null;
 
@@ -553,7 +569,11 @@ function classifyErrorCode(err: unknown): string {
   return "unknown";
 }
 
-function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
+function createBridgeStatusTracker(
+  statusFile: string,
+  daemon: boolean,
+  isHermesChatRunning: () => boolean,
+): {
   snapshot(): BridgeStatusSnapshot;
   markConnected(): void;
   markDisconnected(message: string): void;
@@ -665,18 +685,6 @@ function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
       };
     },
   };
-}
-
-function isHermesChatRunning(): boolean {
-  try {
-    const out = childProcess.execFileSync("pgrep", ["-f", "hermes chat"], {
-      encoding: "utf8",
-      timeout: 1000,
-    });
-    return out.trim().length > 0;
-  } catch {
-    return false;
-  }
 }
 
 void main().catch((err) => {

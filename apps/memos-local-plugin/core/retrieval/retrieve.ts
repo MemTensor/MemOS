@@ -313,7 +313,9 @@ async function runAll(
               patternTerms: compiled.patternTerms,
               includeLowValue: plan.includeLowValue,
               excludeSessionId:
-                ctx.reason === "turn_start" && sessionId ? sessionId : undefined,
+                ctx.reason === "turn_start" && sessionId && !deps.config.lightweightMemory
+                  ? sessionId
+                  : undefined,
             },
           )
         : Promise.resolve({ traces: [], episodes: [] });
@@ -383,11 +385,10 @@ async function runAll(
     // Mechanical retrieval produces high-recall but low-precision
     // candidates. A small LLM round-trip (see `llm-filter.ts`) prunes
     // items that share surface keywords with the query but aren't
-    // actually relevant. Full mode fails open to preserve recall;
-    // lightweight mode fails closed because it promises summarizer-LLM
-    // screened raw memories only.
-    const queryText =
-      (ctx as { userText?: string }).userText ?? compiled.text ?? "";
+    // actually relevant. If the LLM is unavailable, the filter helper
+    // keeps the mechanical ranking so local lightweight memories remain
+    // searchable in offline/default installs.
+    const queryText = (ctx as { userText?: string }).userText ?? compiled.text ?? "";
     const filterResult = opts.skipLlmFilter
       ? {
           kept: mechanicalRanked,
@@ -403,19 +404,10 @@ async function runAll(
             config: deps.config,
           },
         );
-    const filtered =
-      !opts.skipLlmFilter &&
-      deps.config.lightweightMemory &&
-      !llmFilterSucceeded(filterResult.outcome)
-        ? {
-            ...filterResult,
-            kept: [],
-            dropped: [...filterResult.dropped, ...filterResult.kept],
-          }
-        : filterResult;
+    const filtered = filterResult;
     log.debug("llm_filter.done", {
       outcome: filtered.outcome,
-      enforced: deps.config.lightweightMemory && filtered !== filterResult,
+      enforced: false,
       sufficient: filtered.sufficient,
       raw: rawCandidateCount,
       afterThreshold: mechanicalRanked.length,
@@ -635,10 +627,6 @@ function round(n: number, d: number): number {
   if (!Number.isFinite(n)) return n;
   const f = 10 ** d;
   return Math.round(n * f) / f;
-}
-
-function llmFilterSucceeded(outcome: string): boolean {
-  return outcome === "llm_kept_all" || outcome === "llm_filtered";
 }
 
 /** Thin façade so pipelines can `new Retriever(deps)` if they prefer OO. */
