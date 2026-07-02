@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
+import { parseOpenClawConfig } from "../src/shared/openclaw-config";
 
 const TASK_SUMMARY_PROMPT = `You create a DETAILED task summary from a multi-turn conversation. This summary will be the ONLY record of this conversation, so it must preserve ALL important information.
 
@@ -52,7 +53,7 @@ function parseTitleFromSummary(summary: string): { title: string; body: string }
 
 async function main() {
   const configPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-  const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  const config = parseOpenClawConfig(fs.readFileSync(configPath, "utf-8")) as any;
   const memosConfig = config.plugins?.entries?.["memos-local"]?.config
     ?? config.plugins?.configs?.["memos-local"]?.config;
   const cfg = memosConfig?.summarizer;

@@ -16,6 +16,7 @@ import { SqliteStore } from "../src/storage/sqlite";
 import { Embedder } from "../src/embedding";
 import { RecallEngine } from "../src/recall/engine";
 import { buildContext } from "../src/config";
+import { parseOpenClawConfig } from "../src/shared/openclaw-config";
 
 const RUN_ID = Date.now();
 const AGENT_A = "iso-test-alpha";
@@ -61,7 +62,7 @@ async function main() {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
   const stateDir = path.join(home, ".openclaw");
   const cfgPath = path.join(stateDir, "openclaw.json");
-  const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  const raw = parseOpenClawConfig(fs.readFileSync(cfgPath, "utf-8")) as any;
   const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ?? {};
 
   // ── Step 1: Ingest data with different owners ──

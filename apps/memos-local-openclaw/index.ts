@@ -31,6 +31,7 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { parseOpenClawConfig } from "./src/shared/openclaw-config";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -351,12 +352,15 @@ const memosLocalPlugin = {
       ctx.log.warn(`memos-local: could not write to managed skills dir: ${e}`);
     }
 
-    // Ensure plugin tools are enabled in openclaw.json tools.allow
+    // Ensure plugin tools are enabled in openclaw.json tools.allow.
+    // Users routinely author openclaw.json in JSON5 style (line comments,
+    // trailing commas, mixed quoting); parse tolerantly so we don't crash
+    // the whole plugin init on config style — see issue #1543.
     try {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
         const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const cfg = JSON.parse(raw);
+        const cfg = parseOpenClawConfig(raw) as any;
         const allow: string[] | undefined = cfg?.tools?.allow;
         if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
           const lastEntry = JSON.stringify(allow[allow.length - 1]);
@@ -367,6 +371,10 @@ const memosLocalPlugin = {
           if (patched !== raw && patched.includes("group:plugins")) {
             fs.writeFileSync(openclawJsonPath, patched, "utf-8");
             ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
+          } else {
+            ctx.log.warn(
+              "memos-local: could not auto-patch tools.allow (likely due to comments or non-standard quoting); please add \"group:plugins\" to tools.allow manually.",
+            );
           }
         }
       }

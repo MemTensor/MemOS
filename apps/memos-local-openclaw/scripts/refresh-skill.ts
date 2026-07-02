@@ -16,15 +16,16 @@ if (!skillId) {
 }
 
 import * as fs from "fs";
+import { parseOpenClawConfig } from "../src/shared/openclaw-config";
 
 const home = process.env.HOME ?? "/tmp";
 const stateDir = `${home}/.openclaw`;
 const workspaceDir = `${home}/.openclaw/workspace`;
 
-// Read plugin config from openclaw.json
+// Read plugin config from openclaw.json (tolerates JSON5 comments / quoting).
 let pluginConfig: Record<string, unknown> | undefined;
 try {
-  const oc = JSON.parse(fs.readFileSync(`${stateDir}/openclaw.json`, "utf-8"));
+  const oc = parseOpenClawConfig(fs.readFileSync(`${stateDir}/openclaw.json`, "utf-8")) as any;
   pluginConfig = oc?.plugins?.entries?.["memos-local"]?.config;
 } catch {}
 

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { SummarizerConfig, SummaryProvider, Logger, OpenClawAPI } from "../../types";
+import { parseOpenClawConfig } from "../../shared/openclaw-config";
 import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, classifyTopicOpenAI, arbitrateTopicSplitOpenAI, filterRelevantOpenAI, judgeDedupOpenAI, parseFilterResult, parseDedupResult, parseTopicClassifyResult } from "./openai";
 import type { FilterResult, DedupResult, TopicClassifyResult } from "./openai";
 export type { FilterResult, DedupResult, TopicClassifyResult } from "./openai";
@@ -66,7 +67,7 @@ function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
       || path.join(process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw"), "openclaw.json");
     if (!fs.existsSync(cfgPath)) return undefined;
 
-    const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    const raw = parseOpenClawConfig(fs.readFileSync(cfgPath, "utf-8")) as any;
 
     const agentModel: string | undefined = raw?.agents?.defaults?.model?.primary;
     if (!agentModel) return undefined;

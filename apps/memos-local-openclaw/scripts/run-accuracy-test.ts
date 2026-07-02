@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { initPlugin, type MemosLocalPlugin } from "../src/index";
+import { parseOpenClawConfig } from "../src/shared/openclaw-config";
 
 // ─── CLI args ───
 
@@ -38,7 +39,7 @@ function loadConfig() {
   if (!fs.existsSync(cfgPath)) {
     throw new Error(`OpenClaw config not found: ${cfgPath}`);
   }
-  const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  const raw = parseOpenClawConfig(fs.readFileSync(cfgPath, "utf-8")) as any;
   return raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ?? {};
 }
 
