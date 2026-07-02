@@ -25,6 +25,7 @@ import {
   runSkill,
   type RunSkillDeps,
 } from "./skill.js";
+import { shouldPromoteCandidate } from "./lifecycle.js";
 import type {
   RunSkillInput,
   RunSkillResult,
@@ -33,6 +34,7 @@ import type {
   SkillTrigger,
 } from "./types.js";
 import type { SkillId } from "../types.js";
+import { now as nowMs } from "../time.js";
 
 export interface SkillSubscriberDeps
   extends Omit<RunSkillDeps, "log" | "bus"> {
@@ -46,6 +48,7 @@ export interface SkillSubscriberHandle {
   dispose(): void;
   runOnce(input: Omit<RunSkillInput, "trigger"> & { trigger?: SkillTrigger }): Promise<RunSkillResult>;
   applyFeedback(skillId: SkillId, kind: SkillFeedbackKind, magnitude?: number): void;
+  lifecycleTick(): Promise<void>;
   /**
    * Await any in-flight scheduled run. Primarily useful in tests where we
    * want to assert on the effects of an event-driven run after the bus has
@@ -210,14 +213,19 @@ export function attachSkillSubscriber(
   /** Periodic lifecycle pass: promote eligible candidate skills to active. */
   async function lifecycleTick(): Promise<void> {
     const candidates = deps.repos.skills.list({ status: "candidate", limit: 500 });
-    const minEta = deps.config.minEtaForRetrieval ?? 0.1;
     for (const s of candidates) {
-      if (s.status !== "candidate") continue;
-      if (s.repairOrigin) continue;
-      if ((s.eta ?? 0) < minEta) continue;
-      deps.repos.skills.setStatus(s.id, "active");
+      if (!shouldPromoteCandidate(s, deps.config)) continue;
+      const at = nowMs();
+      deps.repos.skills.setStatus(s.id, "active", at);
       log.info("skill.auto_promoted", { skillId: s.id, name: s.name, eta: s.eta });
-      try { deps.bus?.emit({ kind: "skill.status.changed", skillId: s.id, from: "candidate", to: "active", reason: "auto_lifecycle" }); } catch { /* best-effort */ }
+      deps.bus.emit({
+        kind: "skill.status.changed",
+        at,
+        skillId: s.id,
+        previous: "candidate",
+        next: "active",
+        transition: "promoted",
+      });
     }
   }
 
