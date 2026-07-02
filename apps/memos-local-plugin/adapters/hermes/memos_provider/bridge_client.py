@@ -48,9 +48,27 @@ def _installed_node_binary(plugin_root: Path) -> str | None:
 
 
 def _bridge_script(plugin_root: Path) -> Path:
-    compiled = plugin_root / "dist" / "bridge.cjs"
-    if compiled.exists():
-        return compiled
+    """Pick the bridge entrypoint, preferring pure ESM over the CJS trampoline.
+
+    Resolution order (issue #1736):
+        1. ``dist/bridge.mjs`` — pure ESM compiled output, the only entry
+           that avoids the CJS↔ESM bridge that fails on Node ≥ 22.
+        2. ``dist/bridge.cjs`` — legacy CommonJS compiled output, kept for
+           installations whose ``dist/`` predates the ESM entrypoint.
+        3. ``bridge.mts`` — pure ESM TypeScript source for ``tsx``-driven
+           local development.
+        4. ``bridge.cts`` — legacy CommonJS TypeScript source. Returned
+           as the last-resort default so error messages stay stable when
+           none of the candidates exist.
+    """
+    candidates = (
+        plugin_root / "dist" / "bridge.mjs",
+        plugin_root / "dist" / "bridge.cjs",
+        plugin_root / "bridge.mts",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     return plugin_root / "bridge.cts"
 
 
@@ -114,16 +132,19 @@ class MemosBridgeClient:
         script = str(script_path)
         env = {**os.environ, **(extra_env or {})}
 
-        # Prefer the compiled CommonJS bridge from packaged installs. The raw
-        # TypeScript entry remains as a development fallback and needs `tsx`
-        # for stripping types plus `.js` → `.ts` import resolution. On Windows
-        # the `.bin/tsx` file is a shell shim, so use tsx's real JS entrypoint
-        # whenever we have to launch the source entry through a specific Node.
+        # Prefer the compiled JavaScript bridge — the new pure ESM
+        # ``dist/bridge.mjs`` (issue #1736) or the legacy ``dist/bridge.cjs``
+        # — both run on plain ``node`` without any loader. The raw
+        # TypeScript entries remain as a development fallback and need
+        # ``tsx`` for stripping types plus ``.js`` → ``.ts`` import
+        # resolution. On Windows the ``.bin/tsx`` file is a shell shim,
+        # so use tsx's real JS entrypoint whenever we have to launch the
+        # source entry through a specific Node.
         tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
         bridge_args = [script, f"--agent={agent}"]
         if no_viewer:
             bridge_args.append("--no-viewer")
-        if script_path.suffix == ".cjs":
+        if script_path.suffix in (".mjs", ".cjs"):
             cmd = [node, *bridge_args]
         elif tsx_cli.exists():
             cmd = [node, str(tsx_cli), *bridge_args]

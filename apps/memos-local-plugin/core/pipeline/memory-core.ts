@@ -1294,7 +1294,20 @@ export function createMemoryCore(
     if (!reward || typeof reward !== "object") return false;
     const traceCount = (reward as { traceCount?: unknown }).traceCount;
     if (typeof traceCount === "number") {
-      return traceCount !== (ep.traceIds?.length ?? 0);
+      // Compare against the count of trace IDs that ACTUALLY exist in the
+      // traces table, not the raw length of `ep.traceIds`. Otherwise a
+      // single "ghost" trace ID lingering in `trace_ids_json` (deleted
+      // trace row, manual cleanup, partial migration) keeps the episode
+      // dirty forever and triggers a rescore every 10 minutes —
+      // https://github.com/MemTensor/MemOS/issues/1966 (590 wasted calls
+      // / ~14.5 RMB in the reporter's case). `countExisting` is a single
+      // `SELECT COUNT(*)` per chunk, so it stays cheap even on big DBs.
+      const traceIds = (ep.traceIds ?? []) as TraceId[];
+      const existingCount =
+        traceIds.length === 0
+          ? 0
+          : handle.repos.traces.countExisting(traceIds);
+      return traceCount !== existingCount;
     }
 
     // Backward compatibility for episodes scored before reward coverage

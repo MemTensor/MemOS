@@ -48,6 +48,46 @@ describe("resolveConfig", () => {
     });
   });
 
+  describe("recall.autoRecallMaxResults", () => {
+    it("leaves autoRecallMaxResults undefined when no recall config is provided (fall-through to maxResultsDefault)", () => {
+      const resolved = resolveConfig(undefined, "/tmp/memos-config-recall-default");
+
+      // Default policy: auto-recall path inherits maxResultsDefault when not overridden.
+      expect(resolved.recall?.maxResultsDefault).toBe(6);
+      expect(resolved.recall?.autoRecallMaxResults).toBeUndefined();
+    });
+
+    it("preserves an explicit autoRecallMaxResults value when set", () => {
+      const resolved = resolveConfig(
+        {
+          recall: {
+            maxResultsDefault: 6,
+            autoRecallMaxResults: 3,
+          },
+        } as any,
+        "/tmp/memos-config-recall-override",
+      );
+
+      expect(resolved.recall?.maxResultsDefault).toBe(6);
+      expect(resolved.recall?.autoRecallMaxResults).toBe(3);
+    });
+
+    it("allows independent control: maxResultsDefault for memory_search, autoRecallMaxResults for auto-recall", () => {
+      const resolved = resolveConfig(
+        {
+          recall: {
+            maxResultsDefault: 10,
+            autoRecallMaxResults: 5,
+          },
+        } as any,
+        "/tmp/memos-config-recall-split",
+      );
+
+      expect(resolved.recall?.maxResultsDefault).toBe(10);
+      expect(resolved.recall?.autoRecallMaxResults).toBe(5);
+    });
+  });
+
   it("preserves explicit user providers when host capabilities are enabled", () => {
     const resolved = resolveConfig(
       {
