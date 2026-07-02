@@ -1,8 +1,7 @@
 import pytest
 from unittest.mock import Mock, MagicMock
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
-from memos.memories.textual.tree import TextualMemoryItem
-from memos.memories.textual.schemas import TextualMemoryMetadata
+from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 
 
 class TestSchedulerLoggerModule:
@@ -27,10 +26,10 @@ class TestSchedulerLoggerModule:
 
     def create_memory_item(self, memory_id: str, content: str, memory_type: str = "LongTermMemory") -> TextualMemoryItem:
         """Helper to create a TextualMemoryItem."""
-        metadata = TextualMemoryMetadata(
+        metadata = TreeNodeTextualMemoryMetadata(
             key=f"key_{memory_id}",
             memory_type=memory_type,
-            status="active",
+            status="activated",
             confidence=0.9,
             tags=[],
         )
