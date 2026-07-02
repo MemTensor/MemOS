@@ -19,10 +19,10 @@
 </p>
 
 <p align="center">
-  <strong>🎯 +43.70% Accuracy vs. OpenAI Memory</strong><br/>
-  <strong>🏆 Top-tier Long-term Memory + Personalization</strong><br/>
-  <strong>💰 Saves 35.24% Memory Tokens</strong><br/>
-  <sub>LoCoMo 75.80 • LongMemEval +40.43% • PrefEval-10 +2568% • PersonaMem +40.75%</sub>
+  <strong>🏆 Leading Performance Across Agent and User Memory Benchmarks</strong><br/>
+  <strong>🤖 OpenClaw Task Completion Improves from 36.63% to 50.87%</strong><br/>
+  <strong>🎯 92.34 on LoCoMo and 93.40 on LongMemEval</strong><br/>
+  <strong>📊 Unified Evaluation Across 14 Commercial Memory Products</strong>
   <!-- <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/github_api_free_banner.gif" alt="MemOS Free API Banner">
   </a> -->
@@ -70,6 +70,9 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
 
 
 ### News
+
+- **2026-07-02** · 🏆 **MemOS Advances Agent and User Memory Benchmarks**
+  With MemOS, **OpenClaw** improves average task completion from **36.63% to 50.87%** across five agent tasks. MemOS also achieves **92.34 on LoCoMo** and **93.40 on LongMemEval**, and leads in **OmniMemEval**, a unified evaluation of 14 commercial memory products across ten datasets.
 
 - **2026-05-09** · 🧠 **memos-local-plugin 2.0**
   Official local memory plugin for **Hermes Agent** and **OpenClaw**. One core powers self-evolving memory across L1 traces, L2 policies, L3 world models, and crystallized Skills, with local-first storage and feedback-driven retrieval.
@@ -263,6 +266,120 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
     ```
     
 <br>
+
+
+## FAQ
+
+### What is MemOS?
+
+MemOS is a **Memory Operating System** for LLMs and AI agents that unifies store/retrieve/manage for long-term memory. It enables context-aware and personalized interactions with knowledge base (KB), multi-modal memory, tool memory, and enterprise-grade optimizations built in.
+
+### What are the benchmark results?
+
+MemOS achieves **92.34 on LoCoMo** and **93.40 on LongMemEval** for User Memory, while improving **OpenClaw** average task completion from **36.63% to 50.87%** across five Agent Memory tasks. For details, see [OmniMemEval](https://github.com/MemTensor/OmniMemEval), our unified evaluation framework for benchmarking 14 commercial memory products across ten datasets.
+
+
+### How does MemOS compare to other memory solutions?
+
+| Feature | MemOS | mem0 | LangChain Memory | Letta |
+|---------|-------|------|------------------|-------|
+| Multi-Modal Memory | ✅ Text/Images/Tools | ❌ Text only | ❌ Text only | ❌ Text only |
+| Knowledge Base | ✅ Multi-Cube KB | ❌ No KB | ⚠️ RAG only | ❌ No KB |
+| Memory Feedback | ✅ Natural language | ❌ No | ❌ No | ❌ No |
+| Graph Memory | ✅ Inspectable/Editable | ❌ Black-box | ❌ Black-box | ❌ Limited |
+| Async Ingestion | ✅ MemScheduler | ❌ No | ❌ No | ❌ No |
+| Open Source | ✅ Apache 2.0 | ✅ MIT | ✅ Apache | ✅ MIT |
+| ArXiv Paper | ✅ 2507.03724 | ❌ No | ❌ No | ❌ No |
+
+### What are the key features?
+
+| Feature | Description |
+|---------|-------------|
+| **Unified Memory API** | Single API for add/retrieve/edit/delete, graph-structured, inspectable |
+| **Multi-Modal Memory** | Text, images, tool traces, personas retrieved together |
+| **Multi-Cube KB** | Composable memory cubes for users/projects/agents |
+| **Async Ingestion** | MemScheduler with millisecond latency |
+| **Memory Feedback** | Natural-language correction/supplement/replacement |
+| **Self-evolving Memory** | L1 traces, L2 policies, L3 world model, crystallized Skills |
+
+### What deployment options are available?
+
+| Option | Description |
+|--------|-------------|
+| **Cloud API** | Hosted service at memos.openmem.net |
+| **Self-Hosted** | Local/private deployment via Docker |
+| **Quick Mode** | Lightweight deployment |
+| **Full Mode** | Complete deployment |
+
+### How do I get started with Cloud API?
+
+1. Sign up at [MemOS dashboard](https://memos-dashboard.openmem.net/)
+2. Go to **API Keys** and copy your key
+3. Use the Cloud API for memory operations
+
+See [Cloud Getting Started](https://memos-docs.openmem.net/memos_cloud/quick_start/).
+
+### How do I self-host MemOS?
+
+```bash
+# Clone
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+
+# Install dependencies
+pip install -r ./docker/requirements.txt
+
+# Configure .env (OPENAI_API_KEY, etc.)
+cp docker/.env.example MemOS/.env
+
+# Start service
+# See docs for full setup
+```
+
+### What LLM providers are supported?
+
+| Provider | Setting |
+|----------|---------|
+| OpenAI | `MOS_CHAT_MODEL_PROVIDER=openai` |
+| Azure OpenAI | `MOS_CHAT_MODEL_PROVIDER=azure` |
+| Qwen (DashScope) | `MOS_CHAT_MODEL_PROVIDER=qwen` |
+| DeepSeek | `MOS_CHAT_MODEL_PROVIDER=deepseek` |
+| MiniMax | `MOS_CHAT_MODEL_PROVIDER=minimax` |
+| Ollama | `MOS_CHAT_MODEL_PROVIDER=ollama` |
+| HuggingFace | `MOS_CHAT_MODEL_PROVIDER=huggingface` |
+| vLLM | `MOS_CHAT_MODEL_PROVIDER=vllm` |
+
+### What plugins are available?
+
+| Plugin | Purpose |
+|--------|---------|
+| **memos-local-plugin 2.0** | Local-first memory for Hermes Agent & OpenClaw |
+| **OpenClaw Cloud Plugin** | Hosted memory service, 72% token reduction |
+| **OpenClaw Local Plugin** | 100% on-device SQLite memory |
+
+### What is the memory architecture?
+
+| Layer | Purpose |
+|-------|---------|
+| **L1 Traces** | Raw interaction history |
+| **L2 Policies** | Learned preferences/behaviors |
+| **L3 World Model** | User understanding |
+| **Crystallized Skills** | Reusable patterns |
+
+### What license does MemOS use?
+
+Apache 2.0 License (see [LICENSE](./LICENSE)).
+
+### Where can I get help?
+
+| Resource | Link |
+|----------|------|
+| Documentation | [memos-docs.openmem.net](https://memos-docs.openmem.net/home/overview/) |
+| ArXiv Paper | [2507.03724](https://arxiv.org/abs/2507.03724) |
+| Discord | [Join Server](https://discord.gg/Txbx3gebZR) |
+| X/Twitter | [@MemOS_dev](https://x.com/MemOS_dev) |
+| GitHub Issues | [Submit issues](https://github.com/MemTensor/MemOS/issues) |
+| Awesome-AI-Memory | [IAAR-Shanghai/Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory) |
 
 ## 📚 Resources
 

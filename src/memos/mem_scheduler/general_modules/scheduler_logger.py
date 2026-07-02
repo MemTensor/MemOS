@@ -2,8 +2,8 @@ import hashlib
 
 from collections.abc import Callable
 
-from memos.log import get_logger
 from memos.context.context import get_current_api_path
+from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
