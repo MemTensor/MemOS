@@ -57,6 +57,10 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
     storage: {
       dbPath: cfg.storage?.dbPath ?? path.join(stateDir, "memos-local", "memos.db"),
     },
+    autoRecall: {
+      excludeCron: cfg.autoRecall?.excludeCron ?? true,
+      excludeSessionKeyPatterns: cfg.autoRecall?.excludeSessionKeyPatterns ?? [],
+    },
     recall: {
       maxResultsDefault: cfg.recall?.maxResultsDefault ?? DEFAULTS.maxResultsDefault,
       maxResultsMax: cfg.recall?.maxResultsMax ?? DEFAULTS.maxResultsMax,
