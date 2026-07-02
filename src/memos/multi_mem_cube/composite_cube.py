@@ -37,7 +37,7 @@ class CompositeCubeView(MemCubeView):
             raw = getattr(view, attr, None)
             if isinstance(raw, str):
                 values.add(raw)
-            elif isinstance(raw, (list, tuple, set)):
+            elif isinstance(raw, list | tuple | set):
                 values.update(str(item) for item in raw if item)
         return values
 
