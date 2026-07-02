@@ -184,6 +184,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             if config.general_llm is not None
             else self.llm
         )
+        preference_extractor_llm_config = getattr(config, "preference_extractor_llm", None)
+        self.preference_extractor_llm = (
+            LLMFactory.from_config(preference_extractor_llm_config)
+            if preference_extractor_llm_config is not None
+            else self.general_llm
+        )
         self.qwen_llm = None
         qwen_llm_config = getattr(config, "qwen_llm", None)
         if qwen_llm_config:
@@ -287,7 +293,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if not response_json:
             return {
-                "memory_list": [
+                "memory list": [
                     {
                         "key": mem_str[:10],
                         "memory_type": "UserMemory",
