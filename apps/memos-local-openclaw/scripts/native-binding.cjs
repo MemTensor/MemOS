@@ -1,5 +1,8 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
+
 function errorMessage(error) {
   if (error && typeof error.message === "string") return error.message;
   return String(error || "Unknown native binding error");
@@ -26,7 +29,32 @@ function validateNativeBinding(bindingPath, loadBinding = defaultLoadBinding) {
   }
 }
 
+function quarantineNativeBinding(bindingPath, fsImpl = fs, now = Date.now()) {
+  if (!bindingPath || !fsImpl.existsSync(bindingPath)) {
+    return { ok: false, quarantinedPath: "", reason: "missing" };
+  }
+
+  const parsed = path.parse(bindingPath);
+  const quarantinedPath = path.join(
+    parsed.dir,
+    `${parsed.name}.abi-mismatch-${now}${parsed.ext}`,
+  );
+
+  try {
+    fsImpl.renameSync(bindingPath, quarantinedPath);
+    return { ok: true, quarantinedPath, reason: "renamed" };
+  } catch (error) {
+    try {
+      fsImpl.unlinkSync(bindingPath);
+      return { ok: true, quarantinedPath: "", reason: "removed" };
+    } catch {
+      return { ok: false, quarantinedPath: "", reason: errorMessage(error) };
+    }
+  }
+}
+
 module.exports = {
   defaultLoadBinding,
+  quarantineNativeBinding,
   validateNativeBinding,
 };
