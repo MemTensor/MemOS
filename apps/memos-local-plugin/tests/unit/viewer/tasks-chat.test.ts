@@ -128,7 +128,7 @@ describe("flattenChat", () => {
       id: "tr_skill",
       ts: T0 + 1_000,
       turnId: T0,
-      toolCalls: [{ name: "skill_get", input: { id: "sk_1" } }],
+      toolCalls: [{ name: "memos_skill_get", input: { id: "sk_1" } }],
     });
     const delegate = trace({
       id: "tr_delegate",
@@ -143,7 +143,7 @@ describe("flattenChat", () => {
     expect(msgs.map((m) => m.role)).toEqual(["user", "tool", "tool"]);
     expect(msgs[0]!.text).toBe("今年杭州五一游客多吗");
     expect(msgs[0]!.traceId).toBe("tr_delegate");
-    expect(msgs[1]!.toolName).toBe("skill_get");
+    expect(msgs[1]!.toolName).toBe("memos_skill_get");
     expect(msgs[2]!.toolName).toBe("delegate_task");
   });
 

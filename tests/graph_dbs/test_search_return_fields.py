@@ -8,6 +8,7 @@ need for N+1 get_node() calls.
 
 import uuid
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -194,6 +195,37 @@ class TestPolarDBExtractFieldsFromProperties:
         """Invalid JSON returns empty dict without raising."""
         result = polardb_instance._extract_fields_from_properties("not-json", ["memory"])
         assert result == {}
+
+    def test_get_by_metadata_accepts_status_filter(self, polardb_instance):
+        """PolarDB get_by_metadata honors the BaseGraphDB status contract."""
+        polardb_instance.db_name = "test_db"
+        polardb_instance.config = {"user_name": "default_user"}
+        polardb_instance._build_user_name_and_kb_ids_conditions_cypher = MagicMock(
+            return_value=["n.user_name = 'cube-a'"]
+        )
+        polardb_instance._build_filter_conditions_cypher = MagicMock(return_value="")
+
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [('"node-1"',)]
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cursor
+
+        @contextmanager
+        def fake_connection():
+            yield conn
+
+        polardb_instance._get_connection = fake_connection
+
+        ids = polardb_instance.get_by_metadata(
+            [{"field": "memory_type", "op": "=", "value": "DreamDiary"}],
+            user_name="cube-a",
+            status="activated",
+        )
+
+        query = cursor.execute.call_args[0][0]
+        assert "n.status = 'activated'" in query
+        assert "n.memory_type = 'DreamDiary'" in query
+        assert ids == ["node-1"]
 
 
 class TestFieldNameValidation:

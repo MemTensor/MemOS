@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "2.0.15"
+version = "2.0.20"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -61,6 +61,9 @@ issues = "https://github.com/MemTensor/MemOS/issues"
 
 [project.scripts]
 memos = "memos.cli:main"
+
+[project.entry-points."memos.plugins"]
+dream = "memos.dream:CommunityDreamPlugin"
 
 [project.optional-dependencies]
 # These are optional dependencies for various features of MemoryOS.

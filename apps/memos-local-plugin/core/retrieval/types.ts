@@ -270,7 +270,7 @@ export interface RetrievalConfig {
   /**
    * V7 §2.6 Tier-1 rendering mode.
    *   - "summary" (default): inject `name + η + first-line summary +
-   *     a `skill_get(id="…")` invocation hint`. Lets the host model
+   *     a `memos_skill_get(id="…")` invocation hint`. Lets the host model
    *     pull the full procedure on demand instead of bloating every
    *     prompt with skills it may never use.
    *   - "full":    inline the full `invocationGuide` body (legacy).
@@ -314,6 +314,18 @@ export interface RetrievalConfig {
    * window pays for itself).
    */
   llmFilterCandidateBodyChars?: number;
+  /** Low-cost mode: retrieve raw trace memories only. */
+  lightweightMemory?: boolean;
+  /**
+   * Tier-2 vector scan time-window bound (ms). When > 0, the cosine
+   * scan path only considers `traces` rows whose `ts` is within the
+   * last `vectorScanMaxAgeMs` milliseconds. Set to `0` to disable
+   * (legacy full-table brute-force scan). See
+   * https://github.com/MemTensor/MemOS/issues/1929 for the original
+   * starvation report and `core/config/schema.ts` for the YAML
+   * binding + validation rules.
+   */
+  vectorScanMaxAgeMs?: number;
 }
 
 /**
@@ -688,9 +700,13 @@ export interface RetrievalResult {
 
 export interface RetrievalStats {
   reason: RetrievalReason;
+  /** Injection scheduler scenario, when turn-start routing was planned. */
+  scenarioId?: string;
   agent: AgentKind;
   sessionId: SessionId;
   episodeId?: EpisodeId;
+  /** Tier gates requested by the scheduler/retrieval entry before config caps. */
+  plannedTiers?: { tier1: boolean; tier2: boolean; tier3: boolean };
   tier1Count: number;
   tier2Count: number;
   tier3Count: number;
@@ -727,8 +743,11 @@ export interface RetrievalStats {
     | "no_llm"
     | "below_threshold"
     | "empty_query"
+    | "skipped_by_scheduler"
+    | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
+    | "llm_filtered_refilled"
     | "llm_failed_safe_cutoff";
   llmFilterSufficient?: boolean;
   llmFilterKept?: number;
@@ -748,6 +767,8 @@ export interface RetrievalStats {
     | "structural",
     number
   >>;
+  /** Trace + episode rows dropped after rank (same `episodeId`). */
+  dedupedByEpisodeCount?: number;
 }
 
 /** Discriminated context union — one per entry point in `retrieve.ts`. */

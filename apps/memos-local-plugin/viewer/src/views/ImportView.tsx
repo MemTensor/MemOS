@@ -297,7 +297,7 @@ function NativeImportCard({ kind }: { kind: NativeImportKind }) {
       while (offset < knownScan.total && !stopRef.current) {
         const r = await api.post<NativeImportBatchResult>(
           `${cfg.endpoint}/run`,
-          { offset, limit: 25 },
+          { offset, limit: 100 },
         );
         imported += r.imported;
         skipped += r.skipped;

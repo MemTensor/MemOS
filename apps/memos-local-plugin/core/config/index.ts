@@ -48,7 +48,11 @@ export async function loadConfig(home: ResolvedHome): Promise<LoadConfigResult> 
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") {
-      warnings.push(`config file not found at ${home.configFile}; using defaults`);
+      warnings.push(
+        `config file not found at ${home.configFile}; using defaults. ` +
+        `To fix: set MEMOS_HOME or MEMOS_CONFIG_FILE env var, or use --home CLI flag. ` +
+        `See: https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin#configuration`
+      );
     } else if (MemosError.is(err)) {
       throw err;
     } else {

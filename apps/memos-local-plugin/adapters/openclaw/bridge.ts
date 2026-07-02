@@ -46,6 +46,7 @@ import type {
   SessionStartEvent,
   SubagentEndedEvent,
   SubagentSpawnedEvent,
+  ToolResultPersistEvent,
 } from "./openclaw-api.js";
 
 // ─── Message flattening ────────────────────────────────────────────────────
@@ -483,7 +484,7 @@ function stripOpenClawUserEnvelope(raw: string): string {
     "",
   );
   text = text.replace(
-    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memory_search[^\n]*)*/gi,
+    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memos_search[^\n]*)*/gi,
     "",
   );
 
@@ -795,16 +796,18 @@ function isExplicitOneShotSessionKey(sessionKey: string | undefined): boolean {
 
 const CONTEXT_OPEN = "<memos_context>";
 const CONTEXT_CLOSE = "</memos_context>";
+const OPENCLAW_CONTEXT_CHAR_CAP = 6_000;
+const TOOL_FAILURE_REPAIR_HINT =
+  "This tool has failed multiple times in a row. You may want to call `memos_search` for relevant past experience before deciding what to do next.";
+const TOOL_FAILURE_HINT_THRESHOLD = 3;
 
 /**
  * Render the retrieval result as a prompt-prependable block.
  *
- * When the store is cold (no hits), we still emit a short "memory
- * tools are available" hint — the legacy `memos-local-openclaw`
- * adapter does the same via `noRecallHint`, and without it the LLM
- * has no reason to call `memory_search` at the start of a
- * conversation. The hint is kept *small* so repeated turns don't
- * bloat the system prompt.
+ * Callers may opt into a short cold-start hint when the store has no
+ * hits. The automatic OpenClaw before-prompt path disables that hint so
+ * no-hit turns continue with the user's prompt instead of injecting
+ * extra context.
  */
 export function renderContextBlock(
   packet: RetrievalResultDTO | null,
@@ -817,14 +820,29 @@ export function renderContextBlock(
   }
   if (opts.hintWhenEmpty === false) return "";
   // Cold-start hint — mirrors the legacy adapter's behaviour so the
-  // model is nudged to reach for `memory_search` even on the first
+  // model is nudged to reach for `memos_search` even on the first
   // turn of a fresh session.
   const hint = [
     "No prior memories matched this query — the store may simply be cold.",
-    "You can still call `memory_search` with a shorter or rephrased query",
+    "You can still call `memos_search` with a shorter or rephrased query",
     "if you expect there to be relevant past context.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
+}
+
+function capContextBlock(block: string): { block: string; truncated: boolean } {
+  if (block.length <= OPENCLAW_CONTEXT_CHAR_CAP) {
+    return { block, truncated: false };
+  }
+  const suffix = `\n\n[Memory context truncated to ${OPENCLAW_CONTEXT_CHAR_CAP} characters.]\n${CONTEXT_CLOSE}`;
+  const prefix = block.startsWith(`${CONTEXT_OPEN}\n`) ? `${CONTEXT_OPEN}\n` : "";
+  const bodyStart = prefix.length;
+  const bodyBudget = Math.max(0, OPENCLAW_CONTEXT_CHAR_CAP - prefix.length - suffix.length);
+  const body = block.slice(bodyStart, bodyStart + bodyBudget).trimEnd();
+  return {
+    block: `${prefix}${body}${suffix}`,
+    truncated: true,
+  };
 }
 
 // ─── Bridge factory ────────────────────────────────────────────────────────
@@ -859,6 +877,12 @@ export interface BridgeHandle {
     ctx: PluginHookToolContext,
   ) => Promise<void>;
 
+  /** Handler for `tool_result_persist` — append repeated-failure hint. */
+  handleToolResultPersist: (
+    event: ToolResultPersistEvent,
+    ctx: PluginHookToolContext,
+  ) => { message?: unknown } | void;
+
   /** Handler for `session_start`. */
   handleSessionStart: (
     event: SessionStartEvent,
@@ -886,6 +910,82 @@ export interface BridgeHandle {
   /** Snapshot for tests. */
   trackedSessions: () => number;
   trackedToolCalls: () => number;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function toolFailureStreakKey(
+  toolName: string,
+  event: ToolResultPersistEvent,
+  ctx: PluginHookToolContext,
+): string {
+  const run = ctx.runId ?? event.runId ?? ctx.sessionId ?? ctx.sessionKey ?? "global";
+  return `${run}:${toolName}`;
+}
+
+function clearToolFailureStreaksForTurn(
+  streaks: Map<string, number>,
+  ctx: { runId?: string; sessionId?: string; sessionKey?: string },
+): void {
+  const prefix = `${ctx.runId ?? ctx.sessionId ?? ctx.sessionKey ?? "global"}:`;
+  for (const key of streaks.keys()) {
+    if (key.startsWith(prefix)) streaks.delete(key);
+  }
+}
+
+function toolResultPersistFailed(event: ToolResultPersistEvent): boolean {
+  if (event.error) return true;
+  const msg = asRecord(event.message);
+  if (msg) {
+    if (msg.isError === true || msg.error === true) return true;
+    if (typeof msg.error === "string" && msg.error.trim()) return true;
+    const details = asRecord(msg.details);
+    if (details?.isError === true || details?.error === true) return true;
+    if (typeof details?.error === "string" && details.error.trim()) return true;
+  }
+  const result = asRecord(event.result);
+  if (result?.isError === true || result?.error === true) return true;
+  if (typeof result?.error === "string" && result.error.trim()) return true;
+  return false;
+}
+
+function appendFailureHintToToolResultMessage(message: unknown): unknown {
+  const msg = asRecord(message);
+  if (!msg) return message;
+  const content = msg.content;
+  if (typeof content === "string") {
+    if (content.includes(TOOL_FAILURE_REPAIR_HINT)) return message;
+    return { ...msg, content: appendFailureHint(content) };
+  }
+  if (Array.isArray(content)) {
+    let idx = -1;
+    for (let i = content.length - 1; i >= 0; i--) {
+      const p = asRecord(content[i]);
+      if (p?.type === "text" && typeof p.text === "string") {
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 0) {
+      const part = asRecord(content[idx])!;
+      const text = String(part.text);
+      if (text.includes(TOOL_FAILURE_REPAIR_HINT)) return message;
+      const next = [...content];
+      next[idx] = { ...part, text: appendFailureHint(text) };
+      return { ...msg, content: next };
+    }
+    return { ...msg, content: [...content, { type: "text", text: TOOL_FAILURE_REPAIR_HINT }] };
+  }
+  return message;
+}
+
+function appendFailureHint(content: string): string {
+  const trimmed = content.trimEnd();
+  return `${trimmed}${trimmed ? "\n\n" : ""}${TOOL_FAILURE_REPAIR_HINT}`;
 }
 
 export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
@@ -916,6 +1016,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     toolName?: string;
     params?: Record<string, unknown>;
   }>();
+  const toolFailureStreaks = new Map<string, number>();
   type ObservedToolCall = ToolCallDTO & { runId?: string; order: number };
   const observedToolCallsBySession = new Map<SessionId, ObservedToolCall[]>();
   let observedToolCallSeq = 0;
@@ -1050,6 +1151,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     event: BeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<BeforePromptBuildResult | void> {
+    const startedAt = now();
     try {
       // Ephemeral sub-agents (slug generator, internal probes) share
       // the plugin host and would otherwise open a throwaway episode
@@ -1092,6 +1194,11 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
 
       const namespace = namespaceFromAgentCtx(ctx);
       const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
+      clearToolFailureStreaksForTurn(toolFailureStreaks, {
+        runId: ctx.runId,
+        sessionId: ctx.sessionId ?? sessionId,
+        sessionKey: ctx.sessionKey,
+      });
       lastUserTextBySession.set(sessionId, prompt);
 
       const turn: TurnInputDTO = {
@@ -1125,6 +1232,16 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         }
       }
 
+      const renderedBlock = renderContextBlock(packet, {
+        // Avoid making OpenClaw do a second tool-driven search when
+        // auto-recall found nothing. A no-hit turn should simply
+        // continue with the user's prompt; tools remain available if
+        // the model independently decides to use them.
+        hintWhenEmpty: false,
+      });
+      const { block, truncated } = capContextBlock(renderedBlock);
+      const durationMs = now() - startedAt;
+
       opts.log.info("memos.onTurnStart", {
         sessionKey: ctx.sessionKey,
         agentId: ctx.agentId,
@@ -1132,9 +1249,18 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         episodeId: routedEpisodeId,
         hits: packet.hits.length,
         tierLatencyMs: packet.tierLatencyMs,
+        durationMs,
+        contextChars: block.length,
+        injected: block.length > 0,
+        truncated,
       });
+      opts.log.info(
+        `memos.onTurnStart returned hits=${packet.hits.length} ` +
+          `durationMs=${durationMs} contextChars=${block.length} ` +
+          `injected=${block.length > 0 ? "yes" : "no"} ` +
+          `truncated=${truncated ? "yes" : "no"}`,
+      );
 
-      const block = renderContextBlock(packet, { hintWhenEmpty: true });
       if (!block) return;
       return { prependContext: block + "\n\n" };
     } catch (err) {
@@ -1369,6 +1495,27 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     }
   }
 
+  function handleToolResultPersist(
+    event: ToolResultPersistEvent,
+    ctx: PluginHookToolContext,
+  ): { message?: unknown } | void {
+    if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    const toolName = event.toolName || ctx.toolName || "unknown";
+    const key = toolFailureStreakKey(toolName, event, ctx);
+    if (!toolResultPersistFailed(event)) {
+      toolFailureStreaks.delete(key);
+      return;
+    }
+
+    const nextCount = (toolFailureStreaks.get(key) ?? 0) + 1;
+    toolFailureStreaks.set(key, nextCount);
+    if (nextCount < TOOL_FAILURE_HINT_THRESHOLD) return;
+
+    const message = appendFailureHintToToolResultMessage(event.message);
+    if (message === event.message) return;
+    return { message };
+  }
+
   async function handleSessionStart(
     event: SessionStartEvent,
     ctx: PluginHookSessionContext,
@@ -1478,6 +1625,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     handleAgentEnd,
     handleBeforeToolCall,
     handleAfterToolCall,
+    handleToolResultPersist,
     handleSessionStart,
     handleSessionEnd,
     handleSubagentSpawned,

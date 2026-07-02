@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
 import type { HostModelsConfig } from "./src/openclaw-api";
+import { isPathInside } from "./src/path-utils";
 import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
@@ -31,6 +32,7 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { ensureToolsAllowEntry } from "./src/openclaw-config";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -94,7 +96,11 @@ const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
   return lines;
 };
 
-function normalizeAutoRecallQuery(rawPrompt: string): string {
+const INSTRUCTIONAL_PROMPT_MAX_LEN = 300;
+const SYSTEM_ROLE_PROMPT_RE = /^You are\b/i;
+const HERMES_SKILL_REVIEW_RE = /Review the conversation above/i;
+
+export function normalizeAutoRecallQuery(rawPrompt: string): string {
   let query = rawPrompt.trim();
 
   const senderTag = "Sender (untrusted metadata):";
@@ -124,6 +130,17 @@ function normalizeAutoRecallQuery(rawPrompt: string): string {
 
   query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
   query = query.replace(CONTINUE_PROMPT_RE, "").trim();
+
+  // Drop instructional prompts (system role prompts, Hermes skill-review prompts,
+  // over-long instruction blobs). These shapes are not user search intents — passing
+  // them to FTS5 fails the sanitize step and wastes a downstream LLM filter call.
+  if (
+    query.length > INSTRUCTIONAL_PROMPT_MAX_LEN
+    || SYSTEM_ROLE_PROMPT_RE.test(query)
+    || HERMES_SKILL_REVIEW_RE.test(query)
+  ) {
+    return "";
+  }
 
   return query;
 }
@@ -160,9 +177,32 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    api.registerMemoryCapability({
-      promptBuilder: buildMemoryPromptSection,
-    });
+    // OpenClaw 2026.3.31 split the legacy `registerMemoryCapability` facade
+    // into three focused registration methods. We prefer the new API when
+    // the host exposes it; otherwise we fall back to the legacy
+    // capability registration so older hosts still load. Either method
+    // being missing is non-fatal — the plugin must remain load-safe.
+    //
+    // See: https://github.com/MemTensor/MemOS/issues/1559
+    const hostApi = api as OpenClawPluginApi & {
+      registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+      registerMemoryFlushPlan?: (resolver: unknown) => void;
+      registerMemoryRuntime?: (runtime: unknown) => void;
+    };
+
+    if (typeof hostApi.registerMemoryPromptSection === "function") {
+      hostApi.registerMemoryPromptSection(buildMemoryPromptSection);
+    } else if (typeof hostApi.registerMemoryCapability === "function") {
+      hostApi.registerMemoryCapability({
+        promptBuilder: buildMemoryPromptSection,
+      });
+    } else {
+      hostApi.logger?.warn?.(
+        "memos-local: host SDK exposes neither registerMemoryPromptSection " +
+          "nor registerMemoryCapability — memory prompt section will not be " +
+          "installed. Plugin continues without a system prompt prelude.",
+      );
+    }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const localRequire = createRequire(import.meta.url);
@@ -181,17 +221,6 @@ const memosLocalPlugin = {
     }
 
     const pluginDir = detectPluginDir(moduleDir);
-
-    function normalizeFsPath(p: string): string {
-      return path.resolve(p).replace(/^\\\\\?\\/, "").toLowerCase();
-    }
-
-    function isPathInside(baseDir: string, targetPath: string): boolean {
-      const baseNorm = normalizeFsPath(baseDir);
-      const targetNorm = normalizeFsPath(targetPath);
-      const rel = path.relative(baseNorm, targetNorm);
-      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-    }
 
     function runNpm(args: string[]) {
       const { spawnSync } = localRequire("child_process") as typeof import("node:child_process");
@@ -356,18 +385,10 @@ const memosLocalPlugin = {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
         const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const cfg = JSON.parse(raw);
-        const allow: string[] | undefined = cfg?.tools?.allow;
-        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
-          const lastEntry = JSON.stringify(allow[allow.length - 1]);
-          const patched = raw.replace(
-            new RegExp(`(${lastEntry})(\\s*\\])`),
-            `$1,\n      "group:plugins"$2`,
-          );
-          if (patched !== raw && patched.includes("group:plugins")) {
-            fs.writeFileSync(openclawJsonPath, patched, "utf-8");
-            ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
-          }
+        const patched = ensureToolsAllowEntry(raw, "group:plugins");
+        if (patched !== raw) {
+          fs.writeFileSync(openclawJsonPath, patched, "utf-8");
+          ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
         }
       }
     } catch (e) {
@@ -1889,9 +1910,20 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
 
         // ── Phase 1: Local search ∥ Hub search (parallel) ──
-        const arLocalP = engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
+        // Issue #1514: previously hardcoded maxResults: 10 here, which made
+        // `recall.maxResultsDefault` and the new `recall.autoRecallMaxResults`
+        // ineffective for the auto-recall path. Resolution order:
+        //   1. `recall.autoRecallMaxResults` (explicit auto-recall cap)
+        //   2. `recall.maxResultsDefault`    (shared default with memory_search)
+        //   3. literal 10                    (defensive — `resolveConfig`
+        //      always fills `maxResultsDefault`, so this fires only if a
+        //      caller built a context without going through `resolveConfig`).
+        const recallCfg = ctx.config.recall ?? {};
+        const autoRecallMax = recallCfg.autoRecallMaxResults ?? recallCfg.maxResultsDefault ?? 10;
+
+        const arLocalP = engine.search({ query, maxResults: autoRecallMax, minScore: 0.45, ownerFilter: recallOwnerFilter });
         const arHubP = ctx.config?.sharing?.enabled
-          ? hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" })
+          ? hubSearchMemories(store, ctx, { query, maxResults: autoRecallMax, scope: "all" })
               .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
           : Promise.resolve({ hits: [] as any[], meta: {} });
 
@@ -2382,6 +2414,29 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     let serviceStarted = false;
 
+    // Hub client connection is split out from startServiceCore so it can be
+    // attempted eagerly at plugin-load time, regardless of how the host
+    // chooses to launch the plugin. Some hosts (notably the QClaw desktop
+    // app) load the plugin without calling service.start(), which used to
+    // mean Hub connection never happened (see GitHub issue #1612).
+    //
+    // The guard makes this safe to call from multiple entry points: the
+    // service.start() callback (gateway CLI path) and the eager fire at the
+    // end of register() (QClaw desktop path) both funnel through here and
+    // only one attempt actually runs.
+    let hubClientConnectAttempted = false;
+    const connectClientToHubIfNeeded = async () => {
+      if (hubClientConnectAttempted) return;
+      if (!ctx.config.sharing?.enabled || ctx.config.sharing.role !== "client") return;
+      hubClientConnectAttempted = true;
+      try {
+        const session = await connectToHub(store, ctx.config, ctx.log);
+        api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
+      } catch (err) {
+        api.logger.warn(`memos-local: Hub connection failed: ${err}`);
+      }
+    };
+
     const startServiceCore = async () => {
       if (serviceStarted) return;
       serviceStarted = true;
@@ -2391,14 +2446,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         api.logger.info(`memos-local: hub started at ${hubUrl}`);
       }
 
-      if (ctx.config.sharing?.enabled && ctx.config.sharing.role === "client") {
-        try {
-          const session = await connectToHub(store, ctx.config, ctx.log);
-          api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
-        } catch (err) {
-          api.logger.warn(`memos-local: Hub connection failed: ${err}`);
-        }
-      }
+      await connectClientToHubIfNeeded();
 
       try {
         const viewerUrl = await viewer.start();
@@ -2436,6 +2484,16 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         store.close();
         api.logger.info("memos-local: stopped");
       },
+    });
+
+    // Eager Hub client connection: kick off the Hub login as soon as the
+    // plugin is registered, independent of the host's service lifecycle.
+    // This guarantees team sharing works in hosts that load the plugin
+    // without calling service.start() (e.g. the QClaw desktop app — see
+    // GitHub issue #1612). The setTimeout(0) fallback below still handles
+    // viewer startup; this fire-and-forget call does not block register().
+    connectClientToHubIfNeeded().catch((err) => {
+      api.logger.warn(`memos-local: eager Hub connection failed: ${err}`);
     });
 
     // Fallback: OpenClaw may load this plugin via deferred reload after
