@@ -1,5 +1,5 @@
 /**
- * Logs view — structured trail of `memory_search` and `memory_add`
+ * Logs view — structured trail of `memos_search` and `memory_add`
  * calls. Mirrors the legacy `memos-local-openclaw` v1 logs page so
  * each row shows the retrieved / filtered candidates (with scores
  * and origin tags) for search and the per-turn stored items for
@@ -24,6 +24,7 @@ import type { ApiLogDTO } from "../api/types";
 
 type ToolFilter =
   | ""
+  | "memos_search"
   | "memory_search"
   | "memory_add"
   | "skill_generate"
@@ -48,7 +49,7 @@ type ToolFilter =
 type LogTag =
   | ""
   | "memory_add"
-  | "memory_search"
+  | "memos_search"
   | "task"
   | "skill"
   | "policy"
@@ -64,7 +65,7 @@ type LogTag =
 const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
   { v: "", k: "common.all" },
   { v: "memory_add", k: "logs.tag.memoryAdd" },
-  { v: "memory_search", k: "logs.tag.memorySearch" },
+  { v: "memos_search", k: "logs.tag.memorySearch" },
   { v: "task", k: "logs.tag.task" },
   { v: "skill", k: "logs.tag.skill" },
   { v: "policy", k: "logs.tag.policy" },
@@ -74,7 +75,7 @@ const LOG_TAGS: Array<{ v: LogTag; k: string }> = [
 ];
 
 const BASIC_LOG_TAGS = LOG_TAGS.filter((tag) =>
-  tag.v === "" || tag.v === "memory_add" || tag.v === "memory_search"
+  tag.v === "" || tag.v === "memory_add" || tag.v === "memos_search"
 );
 
 /**
@@ -85,7 +86,7 @@ const BASIC_LOG_TAGS = LOG_TAGS.filter((tag) =>
 const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
   "": [],
   memory_add: ["memory_add"],
-  memory_search: ["memory_search"],
+  memos_search: ["memos_search", "memory_search"],
   task: ["task_done", "task_failed"],
   skill: ["skill_generate", "skill_evolve"],
   policy: ["policy_generate", "policy_evolve"],
@@ -96,6 +97,7 @@ const ALLOWED_TOOLS: Record<LogTag, readonly ToolFilter[]> = {
 
 const BASIC_LOG_TOOLS = [
   "memory_add",
+  "memos_search",
   "memory_search",
 ] as const satisfies readonly ToolFilter[];
 
@@ -120,7 +122,7 @@ type ViewMode = "chain" | "list";
 
 function allowedToolsForTag(tag: LogTag, detailedLogs: boolean): readonly ToolFilter[] {
   if (detailedLogs) return ALLOWED_TOOLS[tag];
-  if (tag === "memory_add" || tag === "memory_search") return ALLOWED_TOOLS[tag];
+  if (tag === "memory_add" || tag === "memos_search") return ALLOWED_TOOLS[tag];
   return BASIC_LOG_TOOLS;
 }
 
@@ -154,7 +156,7 @@ export function LogsView() {
 
   useEffect(() => {
     if (detailedLogs) return;
-    if (tag !== "" && tag !== "memory_add" && tag !== "memory_search") {
+    if (tag !== "" && tag !== "memory_add" && tag !== "memos_search") {
       setTag("");
     }
     if (failuresOnly) setFailuresOnly(false);
@@ -547,7 +549,7 @@ function LogDetailBody({
   input: unknown;
   output: unknown;
 }) {
-  if (log.toolName === "memory_search") {
+  if (log.toolName === "memos_search" || log.toolName === "memory_search") {
     return <MemorySearchDetail input={input} output={output} />;
   }
   if (log.toolName === "memory_add") {
@@ -573,7 +575,7 @@ function LogDetailBody({
   return <GenericDetail input={input} output={output} />;
 }
 
-// ─── memory_search template ─────────────────────────────────────────────
+// ─── memos_search template ─────────────────────────────────────────────
 
 interface SearchInput {
   query?: string;
@@ -605,6 +607,17 @@ interface RetrievalStatsPayload {
   channelHits?: Record<string, number>;
   queryTokens?: number;
   queryTags?: string[];
+  localReturned?: number;
+  hubReturned?: number;
+  hubKept?: number;
+  finalReturned?: number;
+  finalFilter?: {
+    outcome?: string;
+    kept?: number;
+    dropped?: number;
+    sufficient?: boolean | null;
+    deduped?: number;
+  };
   embedding?: {
     attempted?: boolean;
     ok?: boolean;
@@ -639,6 +652,7 @@ function MemorySearchDetail({
   const hub = out.hubCandidates ?? [];
   const filtered = out.filtered ?? [];
   const dropped = out.droppedByLlm ?? [];
+  const totalCandidates = candidates.length + hub.length;
   return (
     <div class="vstack" style="gap:var(--sp-4)">
       {inp.query && (
@@ -680,7 +694,7 @@ function MemorySearchDetail({
             count={filtered.length}
             rows={filtered}
             emptyLabel={
-              candidates.length > 0
+              totalCandidates > 0
                 ? t("logs.search.noneRelevant")
                 : t("logs.search.noCandidates")
             }
@@ -707,6 +721,12 @@ function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
   const lf = stats.llmFilter ?? {};
   const kept = lf.kept;
   const outcome = lf.outcome ?? "unknown";
+  const finalFilter = stats.finalFilter;
+  const localFilterDeferred = outcome === "deferred_to_final";
+  const finalLlmRan = finalFilter?.outcome === "llm_kept_all" ||
+    finalFilter?.outcome === "llm_filtered" ||
+    finalFilter?.outcome === "llm_filtered_refilled" ||
+    finalFilter?.outcome === "llm_failed_safe_cutoff";
   const fmtNum = (n: number | undefined, digits = 3) =>
     typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
   const channelEntries = Object.entries(stats.channelHits ?? {}).filter(
@@ -734,9 +754,31 @@ function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
           <span class="pill pill--failed">dropped≥floor {dropped}</span>
         )}
         {typeof kept === "number" && (
-          <span class="pill pill--active">llm kept {kept}</span>
+          <span class="pill pill--active">
+            {localFilterDeferred ? "local candidates" : "local llm kept"} {kept}
+          </span>
         )}
+        {typeof stats.hubReturned === "number" && stats.hubReturned > 0 && (
+          <span class="pill pill--active">hub {stats.hubReturned}</span>
+        )}
+        {typeof stats.hubKept === "number" && stats.hubReturned !== stats.hubKept && (
+          <span class="pill pill--active">hub kept {stats.hubKept}</span>
+        )}
+        {typeof stats.finalReturned === "number" && (
+          <span class="pill pill--info">final {stats.finalReturned}</span>
+        )}
+        {finalFilter && (
+          <span class="pill pill--active">
+            {finalLlmRan ? "final llm kept" : "final kept"} {finalFilter.kept ?? 0}
+          </span>
+        )}
+        {finalFilter?.deduped ? (
+          <span class="pill pill--failed">deduped {finalFilter.deduped}</span>
+        ) : null}
         <span class="pill">outcome {outcome}</span>
+        {finalFilter?.outcome && finalFilter.outcome !== outcome && (
+          <span class="pill">final outcome {finalFilter.outcome}</span>
+        )}
         {lf.sufficient !== null && lf.sufficient !== undefined && (
           <span class={`pill ${lf.sufficient ? "pill--active" : "pill--failed"}`}>
             sufficient {String(lf.sufficient)}
@@ -1311,7 +1353,7 @@ function parseJson(s: string): unknown {
  * the id.
  *
  * Precedence per tool:
- *   - memory_search  → the query + kept/total counts
+ *   - memos_search  → the query + final/local+Hub counts
  *   - memory_add     → first 3 per-turn summaries (already meaningful)
  *   - skill_*        → `output.name` (e.g. "write_python_function_with_types")
  *   - policy_*       → `output.title` (e.g. "Write Python function …")
@@ -1323,10 +1365,12 @@ function buildSummary(log: ApiLogDTO, input: unknown, output: unknown): string {
   const inp = (input ?? {}) as Record<string, unknown>;
   const out = (output ?? {}) as Record<string, unknown>;
 
-  if (log.toolName === "memory_search") {
+  if (log.toolName === "memos_search" || log.toolName === "memory_search") {
     const q = (inp.query as string | undefined) ?? "(empty)";
     const kept = (out.filtered as unknown[] | undefined)?.length ?? 0;
-    const totalN = (out.candidates as unknown[] | undefined)?.length ?? 0;
+    const totalN =
+      ((out.candidates as unknown[] | undefined)?.length ?? 0) +
+      ((out.hubCandidates as unknown[] | undefined)?.length ?? 0);
     return `"${truncate(q, 60)}" — kept ${kept}/${totalN}`;
   }
   if (log.toolName === "memory_add") {
@@ -1528,7 +1572,7 @@ function buildChainEvent(log: ApiLogDTO): ChainEvent {
   let stagePhase: string | undefined;
   let infraKind: ChainEvent["infraKind"];
 
-  if (log.toolName === "memory_search") {
+  if (log.toolName === "memos_search" || log.toolName === "memory_search") {
     stage = "retrieval";
     sessionId = pickStr(inp.sessionId);
     episodeId = pickStr(inp.episodeId);

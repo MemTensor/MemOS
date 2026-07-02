@@ -119,7 +119,8 @@ Bookkeeping (`CaptureResult.llmCalls`):
 
 Stable prompt fingerprint:
 
-- `op = capture.reflection.batch.v1` (see `BATCH_OP_TAG` constant).
+- `op = capture.reflection.batch.v3` (see `BATCH_OP_TAG` constant; version
+  matches `BATCH_REFLECTION_PROMPT.version`).
   Bumping `BATCH_REFLECTION_PROMPT.version` changes the op tag so audit
   rows remain attributable.
 

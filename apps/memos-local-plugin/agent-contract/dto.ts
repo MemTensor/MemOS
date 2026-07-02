@@ -9,7 +9,7 @@
 
 export type AgentKind = "openclaw" | "hermes" | string;
 
-export type ShareScope = "private" | "local" | "public" | "hub";
+export type ShareScope = "private" | "public" | "hub";
 
 export interface RuntimeNamespace {
   agentKind: AgentKind;
@@ -430,9 +430,9 @@ export interface SkillDTO extends OwnershipDTO {
   } | null;
   /** Last user edit through the viewer's edit modal. */
   editedAt?: EpochMs;
-  /** Number of successful `skill_get` calls that loaded this skill. */
+  /** Number of successful `memos_skill_get` calls that loaded this skill. */
   usageCount?: number;
-  /** Last successful `skill_get` time. */
+  /** Last successful `memos_skill_get` time. */
   lastUsedAt?: EpochMs | null;
 }
 
@@ -565,6 +565,8 @@ export interface RetrievalHitDTO {
   ownerProfileId?: string;
   ownerWorkspaceId?: string | null;
   shareScope?: ShareScope;
+  /** Original source trace id when a result is a Hub projection of a local trace. */
+  sourceTraceId?: string;
 }
 
 export interface RetrievalResultDTO {
@@ -602,7 +604,7 @@ export interface ToolDrivenCtx {
   namespace?: RuntimeNamespace;
   sessionId: SessionId;
   episodeId?: EpisodeId;
-  /** Which memory tool was called (memory_search / memory_timeline / …). */
+  /** Which memory tool was called (memos_search / memos_timeline / …). */
   tool: string;
   /** The tool's input arguments verbatim. */
   args: Record<string, unknown>;

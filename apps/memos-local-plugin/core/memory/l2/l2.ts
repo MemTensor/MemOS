@@ -34,7 +34,7 @@ import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
 import { buildPolicyRow, induceDraft } from "./induce.js";
-import { applyGain, computeGain } from "./gain.js";
+import { applyGain, computeGain, nextStatus, smoothGain } from "./gain.js";
 import { signatureOf } from "./signature.js";
 import { tracePolicySimilarity } from "./similarity.js";
 import type {
@@ -48,7 +48,7 @@ import type {
 } from "./types.js";
 
 export interface RunL2Deps {
-  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "traces">;
+  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "tracePolicyLinks" | "traces">;
   db: Parameters<typeof makeCandidatePool>[0]["db"];
   llm: LlmClient | null;
   log: Logger;
@@ -94,6 +94,19 @@ export async function runL2(
     if (!tr) continue;
     a.signature = signatureOf(tr);
     if (a.matchedPolicyId) {
+      try {
+        repos.tracePolicyLinks.link({
+          traceId: a.traceId,
+          policyId: a.matchedPolicyId,
+          episodeId: input.episodeId,
+          now: input.now ?? Date.now(),
+        });
+      } catch (err) {
+        warnings.push(stageWarn("trace-policy-link", err, {
+          traceId: a.traceId,
+          policyId: a.matchedPolicyId,
+        }));
+      }
       emit(bus, {
         kind: "l2.trace.associated",
         episodeId: input.episodeId,
@@ -187,6 +200,20 @@ export async function runL2(
         const evidence = inductionEvidenceByPolicy.get(dup.id) ?? new Set<string>();
         for (const id of bucket.evidenceTraceIds) evidence.add(id);
         inductionEvidenceByPolicy.set(dup.id, evidence);
+        for (const traceId of bucket.evidenceTraceIds) {
+          const trace = traces.find((t) => t.id === traceId);
+          if (!trace) continue;
+          try {
+            repos.tracePolicyLinks.link({
+              traceId,
+              policyId: dup.id,
+              episodeId: trace.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: dup.id }));
+          }
+        }
         continue;
       }
 
@@ -241,6 +268,23 @@ export async function runL2(
           duplicate.id,
           new Set(bucket.evidenceTraceIds as string[]),
         );
+        for (const traceId of bucket.evidenceTraceIds) {
+          const trace = traces.find((t) => t.id === traceId);
+          if (!trace) continue;
+          try {
+            repos.tracePolicyLinks.link({
+              traceId,
+              policyId: duplicate.id,
+              episodeId: trace.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, {
+              traceId,
+              policyId: duplicate.id,
+            }));
+          }
+        }
         inductions.push({
           signature: bucket.signature,
           policyId: duplicate.id,
@@ -275,6 +319,23 @@ export async function runL2(
           policy.id,
           new Set(bucket.evidenceTraceIds as string[]),
         );
+        for (const traceId of bucket.evidenceTraceIds) {
+          const trace = traces.find((t) => t.id === traceId);
+          if (!trace) continue;
+          try {
+            repos.tracePolicyLinks.link({
+              traceId,
+              policyId: policy.id,
+              episodeId: trace.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, {
+              traceId,
+              policyId: policy.id,
+            }));
+          }
+        }
         inductions.push({
           signature: bucket.signature,
           policyId: policy.id,
@@ -323,6 +384,10 @@ export async function runL2(
       if (inductionIds) {
         for (const id of inductionIds) withIds.add(id);
       }
+      const newSupportIds = new Set(withIds);
+      for (const id of repos.tracePolicyLinks.getWithTraceIds(policy.id)) {
+        withIds.add(id);
+      }
 
       // Gain is computed over ALL traces currently in scope — the
       // current episode's traces PLUS the induction evidence traces
@@ -332,29 +397,40 @@ export async function runL2(
       // gain. Pull missing induction traces from the repo.
       const traceById = new Map<string, TraceRow>();
       for (const t of input.traces) traceById.set(t.id, t);
-      if (inductionIds) {
-        for (const id of inductionIds) {
-          if (traceById.has(id)) continue;
-          const t = repos.traces.getById(id as TraceRow["id"]);
-          if (t) traceById.set(t.id, t);
+      for (const id of withIds) {
+        if (traceById.has(id)) continue;
+        const t = repos.traces.getById(id as TraceRow["id"]);
+        if (t) traceById.set(t.id, t);
+      }
+      for (const episodeId of repos.tracePolicyLinks.getLinkedEpisodeIds(policy.id)) {
+        for (const t of repos.traces.list({ episodeId, limit: 50, newestFirst: true })) {
+          traceById.set(t.id, t);
         }
       }
-      const allTraces = Array.from(traceById.values());
+      const allTraces = Array.from(traceById.values())
+        .sort((a, b) => b.ts - a.ts || b.id.localeCompare(a.id));
 
-      const withTraces: TraceRow[] = allTraces.filter((t) => withIds.has(t.id));
-      const withoutTraces: TraceRow[] = allTraces.filter((t) => !withIds.has(t.id));
+      const withTraces: TraceRow[] = allTraces.filter((t) => withIds.has(t.id)).slice(0, 50);
+      const withoutTraces: TraceRow[] = allTraces.filter((t) => !withIds.has(t.id)).slice(0, 50);
 
-      const gain = computeGain(
+      const rawGain = computeGain(
         { policyId: policy.id, withTraces, withoutTraces },
         { tauSoftmax: config.tauSoftmax },
       );
+      const smoothedGainValue = smoothGain({
+        newGain: rawGain.gain,
+        currentGain: policy.gain,
+        alpha: config.gainEmaAlpha,
+        isFirst: policy.support === 0,
+      });
+      const gain = { ...rawGain, gain: smoothedGainValue };
 
       // `deltaSupport` must reflect only the *new* positive evidence
       // we just observed — both fresh associations AND the induction
       // evidence for a newly-minted policy. Previously only `withIds`
       // from associations contributed, so a new policy's support
       // stayed at 0 until someone re-associated in a later round.
-      const deltaSupport = withIds.size;
+      const deltaSupport = newSupportIds.size;
 
       const persisted = applyGain({
         gain,
@@ -377,6 +453,47 @@ export async function runL2(
       });
     }
     timings.gain = Date.now() - t0;
+  }
+
+  // ─── Step 5: Re-evaluate untouched candidates ────────────────────────
+  // A candidate policy that was induced in a previous episode but no longer
+  // matches any trace will never enter `touched` and therefore never have
+  // `nextStatus()` run against it. Without this sweep, it stays `candidate`
+  // forever even though its stored gain/support already satisfy the
+  // promotion thresholds.
+  {
+    const untouchedCandidates = repos.policies.list({ status: "candidate" });
+    for (const policy of untouchedCandidates) {
+      if (touched.has(policy.id)) continue; // already handled in Step 4
+      const next = nextStatus({
+        currentStatus: policy.status,
+        support: policy.support,
+        gain: policy.gain,
+        thresholds,
+      });
+      if (next !== policy.status) {
+        repos.policies.updateStats(policy.id, {
+          support: policy.support,
+          gain: policy.gain,
+          status: next,
+          updatedAt: input.now ?? Date.now(),
+        });
+        emit(bus, {
+          kind: "l2.policy.updated",
+          episodeId: input.episodeId,
+          policyId: policy.id,
+          status: next,
+          support: policy.support,
+          gain: policy.gain,
+        });
+        log.info("run.recheck_candidate_promoted", {
+          policyId: policy.id,
+          status: next,
+          support: policy.support,
+          gain: policy.gain,
+        });
+      }
+    }
   }
 
   timings.persist = 0; // reserved for future split

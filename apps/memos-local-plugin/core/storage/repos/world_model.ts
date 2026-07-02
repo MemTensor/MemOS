@@ -1,5 +1,6 @@
 import type {
   EmbeddingVector,
+  ShareScope,
   WorldModelId,
   WorldModelRow,
   WorldModelStructure,
@@ -292,7 +293,7 @@ export function makeWorldModelRepo(db: StorageDb) {
     updateShare(
       id: WorldModelId,
       share: {
-        scope: "private" | "local" | "public" | "hub" | null;
+        scope: ShareScope | null;
         target?: string | null;
         sharedAt?: number | null;
       },
@@ -425,7 +426,7 @@ function mapRow(r: RawWorldRow): WorldModelRow {
     share:
       r.share_scope != null
         ? {
-            scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub",
+            scope: normalizeShareForStorage(r.share_scope) as ShareScope,
             target: r.share_target,
             sharedAt: r.shared_at,
           }

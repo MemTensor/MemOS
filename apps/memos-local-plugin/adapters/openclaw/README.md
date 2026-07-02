@@ -13,8 +13,8 @@ adapter exposes a `register(api)` function that wires our
 
 - **Turn hooks**: `before_prompt_build` → `onTurnStart`,
   `agent_end` → `onTurnEnd`.
-- **Memory tools**: `memory_search`, `memory_get`, `memory_timeline`,
-  `skill_list`, `skill_get` — all thin wrappers around `MemoryCore`.
+- **Memory tools**: `memos_search`, `memos_get`, `memos_timeline`,
+  `memos_skill_list`, `memos_skill_get` — all thin wrappers around `MemoryCore`.
 - **Tool-outcome observation**: every tool call's success/failure is
   forwarded to `recordToolOutcome` so decision-repair can react on the
   next turn.

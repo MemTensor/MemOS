@@ -4,7 +4,7 @@ Implements the ``agent.memory_provider.MemoryProvider`` interface exposed
 by the hermes-agent host (see
 ``hermes-agent/agent/memory_provider.py``). All heavy lifting lives in the
 Node.js ``memos-local-plugin`` core; this adapter is a thin Python client
-that speaks JSON-RPC 2.0 over stdio to ``bridge.cts``.
+that speaks JSON-RPC 2.0 over stdio to the packaged Node bridge.
 
 Discovery
 ---------
@@ -48,9 +48,11 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import re
 import sys
 import threading
+import weakref
 import time
 
 from pathlib import Path
@@ -64,7 +66,7 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
-from daemon_manager import ensure_bridge_running  # noqa: E402
+from daemon_manager import ensure_bridge_running, ensure_viewer_daemon  # noqa: E402
 
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
@@ -83,6 +85,39 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "memos-local-hermes"
 PLUGIN_VERSION = "2.0.0-beta.1"
+_TOOL_FAILURE_REPAIR_HINT = (
+    "This tool has failed multiple times in a row. You may want to call "
+    "`memos_search` for relevant past experience before deciding what to do next."
+)
+_TOOL_FAILURE_HINT_THRESHOLD = 3
+
+
+def _long_rpc_timeout_default() -> float:
+    """Resolve the timeout used for long-running JSON-RPC calls.
+
+    After 1-2 hours of Hermes use the memory / capture / reflection
+    pipeline grows past the 30s JSON-RPC default and surfaces as
+    ``[timeout] memory.search did not respond within 30.0s`` and
+    ``[timeout] turn.end did not respond within 30.0s`` in the host
+    logs (issue #2028). ``feedback.submit`` already opts into 75s;
+    ``sync_turn``'s ``_ensure_bridge`` also uses 75s. Aligning the
+    heavy retrieval / capture RPCs with the same 75s ceiling gives
+    the pipeline enough headroom without turning genuinely hung
+    calls into an indefinite wait. The value is overridable via
+    ``MEMOS_HERMES_LONG_RPC_TIMEOUT`` for site-specific tuning; any
+    unparseable / non-positive value falls back to the default.
+    """
+    raw = os.environ.get("MEMOS_HERMES_LONG_RPC_TIMEOUT", "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 75.0
+    if value <= 0:
+        return 75.0
+    return value
+
+
+_LONG_RPC_TIMEOUT = _long_rpc_timeout_default()
 
 _HERMES_INTERNAL_REVIEW_PREFIXES = (
     "review the conversation above and consider saving to memory if appropriate.",
@@ -239,6 +274,7 @@ class MemTensorProvider(MemoryProvider):
 
     def __init__(self) -> None:
         self._bridge: MemosBridgeClient | None = None
+        self._reconnect_lock = threading.Lock()
         self._session_id: str = ""
         self._episode_id: str = ""
         self._hermes_home: str = ""
@@ -271,6 +307,7 @@ class MemTensorProvider(MemoryProvider):
         self._skip_current_turn = False
         # Track the last trace ID for feedback submission
         self._last_trace_id: str = ""
+        self._tool_failure_streaks: dict[str, int] = {}
 
     # ─── Identity ─────────────────────────────────────────────────────────
 
@@ -297,26 +334,69 @@ class MemTensorProvider(MemoryProvider):
         is deferred to ``_ensure_episode()`` (called from the first
         ``on_turn_start``), so the actual user message can be passed as
         the episode's initial text instead of a generic placeholder.
+
+        Idempotency (issue #1910): the host occasionally re-enters
+        ``initialize()`` on the same provider instance (plugin reload,
+        session restart). Without the close-before-spawn guard below the
+        previous ``MemosBridgeClient`` would be replaced by reference
+        only, orphaning the previous Node subprocess and accumulating
+        a fresh ``bridge.cjs`` per turn.
         """
+        # Hermes can call `initialize()` multiple times across a single
+        # parent process (e.g. on reconnect or a new session). Each call
+        # spawns a fresh `MemosBridgeClient` (and therefore a new
+        # `--no-viewer` Node subprocess); if we simply overwrite
+        # `self._bridge` we leak the old subprocess — its parent stays
+        # alive so `_reap_stale_headless_bridges_locked` never collects
+        # it. Close the previous bridge first, mirroring the safe pattern
+        # already used by `_reconnect_bridge()`. See #1927.
+        previous_bridge = self._bridge
+        if previous_bridge is not None:
+            old_pid = getattr(previous_bridge, "pid", "?")
+            logger.info(
+                "MemOS: closing previous bridge (pid=%s) before re-init",
+                old_pid,
+            )
+            with contextlib.suppress(Exception):
+                previous_bridge.close()
+            self._bridge = None
+
         self._session_id = session_id or self._session_id
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
+        if self._bridge is not None:
+            prev_pid = getattr(self._bridge, "pid", "?")
+            logger.info(
+                "MemOS: initialize() invoked while bridge already exists; "
+                "closing previous bridge (pid=%s) before respawn",
+                prev_pid,
+            )
+            old_bridge = self._bridge
+            self._bridge = None
+            with contextlib.suppress(Exception):
+                old_bridge.close()
         try:
             ensure_bridge_running()
         except Exception as err:
             logger.warning("MemOS: failed to start bridge — %s", err)
             return
         try:
-            self._bridge = MemosBridgeClient()
+            ensure_viewer_daemon()
+        except Exception as err:
+            logger.warning("MemOS: viewer daemon check failed — %s", err)
+        new_bridge: MemosBridgeClient | None = None
+        try:
+            new_bridge = MemosBridgeClient()
             # Register the fallback LLM handler BEFORE we open the
             # session so it is available the very first time the
             # plugin's facade asks for help (e.g. on the first
             # `turn.start` retrieval call).
-            self._bridge.register_host_handler(
+            new_bridge.register_host_handler(
                 "host.llm.complete",
                 self._handle_host_llm_complete,
             )
+            self._bridge = new_bridge
             self._open_session(session_id)
             logger.info(
                 "MemOS: bridge ready session=%s platform=%s (episode deferred)",
@@ -325,6 +405,9 @@ class MemTensorProvider(MemoryProvider):
             )
         except Exception as err:
             logger.warning("MemOS: bridge init failed — %s", err)
+            if new_bridge is not None:
+                with contextlib.suppress(Exception):
+                    new_bridge.close()
             self._bridge = None
         # Register a Hermes plugin hook to capture tool calls as they
         # happen. The `post_tool_call` hook fires after every tool
@@ -337,14 +420,14 @@ class MemTensorProvider(MemoryProvider):
     def system_prompt_block(self) -> str:  # type: ignore[override]
         return (
             "# MemOS Memory\n"
-            "Persistent long-term memory is active. Call `memory_search`, "
-            "`memory_get`, `memory_timeline`, `memory_environment`, "
-            "`skill_list`, or `skill_get` when prior context or learned "
+            "Persistent long-term memory is active. Call `memos_search`, "
+            "`memos_get`, `memos_timeline`, `memos_environment`, "
+            "`memos_skill_list`, or `memos_skill_get` when prior context or learned "
             "procedures would help. Relevant memories are automatically "
             "injected at the start of every turn.\n\n"
             "**Not the same as repo skills:** Hermes' `<available_skills>` / "
             "`skill_view(name=…)` load **repository SKILL.md** files. "
-            "`skill_get` / `skill_list` refer to **MemOS-crystallized** "
+            "`memos_skill_get` / `memos_skill_list` refer to **MemOS-crystallized** "
             "skills (learned from your runs). If both apply, you may use "
             "both: repo skills for product conventions, MemOS skills for "
             "workflows proven on *your* past tasks."
@@ -415,10 +498,79 @@ class MemTensorProvider(MemoryProvider):
             mgr = get_plugin_manager()
             mgr._hooks.setdefault("post_tool_call", []).append(self._on_post_tool_call)
             mgr._hooks.setdefault("post_llm_call", []).append(self._on_post_llm_call)
+            mgr._hooks.setdefault("transform_tool_result", []).append(
+                self._on_transform_tool_result
+            )
             self._hook_registered = True
-            logger.debug("MemOS: registered post_tool_call + post_llm_call hooks")
+            logger.debug(
+                "MemOS: registered post_tool_call + post_llm_call + transform_tool_result hooks"
+            )
         except Exception as err:
             logger.debug("MemOS: could not register tool hook — %s", err)
+
+    def _on_transform_tool_result(
+        self,
+        tool_name: str = "",
+        arguments: dict | None = None,
+        result: str = "",
+        task_id: str | None = None,
+        **kwargs: Any,
+    ) -> str | None:
+        """Append a small repair hint after repeated same-turn tool failures."""
+        session_id = str(kwargs.get("session_id") or kwargs.get("sessionId") or "")
+        if not self._matches_session(session_id):
+            return None
+
+        tool = str(tool_name or kwargs.get("toolName") or "unknown_tool")
+        if not self._tool_result_failed(result, kwargs):
+            self._tool_failure_streaks.pop(tool, None)
+            return None
+
+        count = self._tool_failure_streaks.get(tool, 0) + 1
+        self._tool_failure_streaks[tool] = count
+        if count < _TOOL_FAILURE_HINT_THRESHOLD:
+            return None
+        if _TOOL_FAILURE_REPAIR_HINT in (result or ""):
+            return None
+        text = (result or "").rstrip()
+        return f"{text}\n\n{_TOOL_FAILURE_REPAIR_HINT}" if text else _TOOL_FAILURE_REPAIR_HINT
+
+    @staticmethod
+    def _tool_result_failed(result: str, payload: dict[str, Any]) -> bool:
+        for key in ("is_error", "isError", "error", "failed"):
+            value = payload.get(key)
+            if value is True:
+                return True
+            if isinstance(value, str) and value.strip():
+                return True
+        try:
+            parsed = json.loads(result or "")
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            error = parsed.get("error")
+            if error is True:
+                return True
+            if isinstance(error, str) and error.strip():
+                return True
+            if parsed.get("is_error") is True or parsed.get("isError") is True:
+                return True
+        normalized = " ".join((result or "").strip().lower().split())
+        if not normalized:
+            return False
+        failure_prefixes = (
+            "error:",
+            "failed:",
+            "failure:",
+            "exception:",
+            "traceback ",
+            "traceback:",
+            "command failed",
+            "tool failed",
+        )
+        if normalized.startswith(failure_prefixes):
+            return True
+        return " traceback (most recent call last)" in normalized
 
     def _on_post_tool_call(
         self,
@@ -756,6 +908,7 @@ class MemTensorProvider(MemoryProvider):
         # belong only to this turn.
         self._turn_thinking = ""
         self._tool_calls = []
+        self._tool_failure_streaks = {}
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:  # type: ignore[override]
         """Inject relevant memories ahead of the next model call.
@@ -1060,7 +1213,7 @@ class MemTensorProvider(MemoryProvider):
     def get_tool_schemas(self) -> list[dict[str, Any]]:  # type: ignore[override]
         return [
             {
-                "name": "memory_search",
+                "name": "memos_search",
                 "description": (
                     "Search the local MemOS memory (traces, policies, world models, skills). "
                     "Prefer this before claiming prior context is unavailable."
@@ -1088,7 +1241,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "memory_get",
+                "name": "memos_get",
                 "description": (
                     "Fetch the full body of a memory item by id. `kind` can be "
                     '"trace" (default), "policy", or "world_model".'
@@ -1107,7 +1260,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "memory_timeline",
+                "name": "memos_timeline",
                 "description": "Return the ordered traces for an episode id.",
                 "parameters": {
                     "type": "object",
@@ -1119,7 +1272,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "skill_list",
+                "name": "memos_skill_list",
                 "description": (
                     "List callable skills the agent can invoke. Filter by status "
                     "(candidate | active | archived)."
@@ -1141,7 +1294,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "memory_environment",
+                "name": "memos_environment",
                 "description": (
                     "Return accumulated environment knowledge (L3 world models): "
                     "structural facts, behavioral rules, and project constraints."
@@ -1163,7 +1316,7 @@ class MemTensorProvider(MemoryProvider):
                 },
             },
             {
-                "name": "skill_get",
+                "name": "memos_skill_get",
                 "description": "Return the full invocation guide for a crystallized skill.",
                 "parameters": {
                     "type": "object",
@@ -1177,7 +1330,7 @@ class MemTensorProvider(MemoryProvider):
         if not self._bridge:
             return json.dumps({"error": "bridge not connected"})
         try:
-            if tool_name == "memory_search":
+            if tool_name == "memos_search":
                 query = (args.get("query") or "").strip()
                 if not query:
                     return json.dumps({"error": "missing query"})
@@ -1197,9 +1350,10 @@ class MemTensorProvider(MemoryProvider):
                 resp = self._bridge.request(
                     "memory.search",
                     params,
+                    timeout=_LONG_RPC_TIMEOUT,
                 )
                 return json.dumps({"hits": resp.get("hits", [])})
-            if tool_name == "memory_get":
+            if tool_name == "memos_get":
                 item_id = (args.get("id") or "").strip()
                 if not item_id:
                     return json.dumps({"error": "missing id"})
@@ -1256,7 +1410,7 @@ class MemTensorProvider(MemoryProvider):
                         "meta": meta,
                     }
                 )
-            if tool_name == "memory_timeline":
+            if tool_name == "memos_timeline":
                 resp = self._bridge.request(
                     "memory.timeline",
                     {
@@ -1267,13 +1421,13 @@ class MemTensorProvider(MemoryProvider):
                 limit = self._int_arg(args, "limit", 20, 1, 100)
                 traces = resp.get("traces", [])[:limit]
                 return json.dumps({"traces": traces})
-            if tool_name == "skill_list":
+            if tool_name == "memos_skill_list":
                 limit = self._int_arg(args, "limit", 10, 1, 50)
                 params = {"limit": limit, "namespace": self._runtime_namespace()}
                 if args.get("status"):
                     params["status"] = args["status"]
                 return json.dumps(self._bridge.request("skill.list", params))
-            if tool_name == "memory_environment":
+            if tool_name == "memos_environment":
                 query = (args.get("query") or "").strip()
                 limit = self._int_arg(args, "limit", 5, 1, 30)
                 if not query:
@@ -1301,6 +1455,7 @@ class MemTensorProvider(MemoryProvider):
                         "query": query,
                         "topK": {"tier1": 0, "tier2": 0, "tier3": limit},
                     },
+                    timeout=_LONG_RPC_TIMEOUT,
                 )
                 hits = [
                     h
@@ -1322,7 +1477,7 @@ class MemTensorProvider(MemoryProvider):
                         "queried": True,
                     }
                 )
-            if tool_name == "skill_get":
+            if tool_name == "memos_skill_get":
                 skill_id = (args.get("id") or "").strip()
                 if not skill_id:
                     return json.dumps({"error": "missing id"})
@@ -1423,19 +1578,36 @@ class MemTensorProvider(MemoryProvider):
         with contextlib.suppress(Exception):
             self._bridge.request("session.close", {"sessionId": self._session_id})
 
+    def __del__(self) -> None:
+        # Safety net — if shutdown() was never called (e.g. caller forgot,
+        # Hermes agent routed model change with self.agent = None), clean
+        # up the bridge subprocess and keepalive thread on GC.
+        if self._bridge is not None or (
+            self._bridge_keepalive_thread is not None
+            and self._bridge_keepalive_thread.is_alive()
+        ):
+            logger.warning(
+                "MemOS: __del__ cleaning up leaked provider "
+                "— shutdown() was never called"
+            )
+            with contextlib.suppress(Exception):
+                self.shutdown()
+
     def shutdown(self) -> None:  # type: ignore[override]
         self._bridge_keepalive_stop.set()
         if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
-            self._bridge_keepalive_thread.join(timeout=2.0)
+            self._bridge_keepalive_thread.join(
+                timeout=12.0
+            )  # Increased to cover health check timeout (10s) + margin
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=5.0)
         if self._bridge:
+            pid = getattr(self._bridge, "pid", "?")
+            logger.info("MemOS: shutting down bridge (pid=%s)", pid)
             with contextlib.suppress(Exception):
                 self._bridge.close()
             self._bridge = None
-        # DON'T call shutdown_bridge() — the bridge process stays alive
-        # as a daemon if its viewer is running, so the memory panel
-        # remains accessible between `hermes chat` sessions.
+            logger.info("MemOS: bridge shutdown complete (pid=%s)", pid)
 
     # ─── Host LLM bridge (fallback for plugin-side model failures) ────────
 
@@ -1637,17 +1809,49 @@ class MemTensorProvider(MemoryProvider):
         return "broken pipe" in msg or "bridge closed" in msg or "transport_closed" in msg
 
     def _reconnect_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> None:
-        old_bridge = self._bridge
-        if old_bridge:
-            with contextlib.suppress(Exception):
-                old_bridge.close()
-        ensure_bridge_running()
-        self._bridge = MemosBridgeClient()
-        self._bridge.register_host_handler(
-            "host.llm.complete",
-            self._handle_host_llm_complete,
-        )
-        self._open_session(session_id, timeout=timeout)
+        # Don't reconnect if we're shutting down
+        if self._bridge_keepalive_stop.is_set():
+            logger.debug("MemOS: skipping reconnect during shutdown")
+            return
+
+        with self._reconnect_lock:
+            # Double-check after acquiring lock
+            if self._bridge_keepalive_stop.is_set():
+                logger.debug("MemOS: skipping reconnect during shutdown (after lock)")
+                return
+
+            old_bridge = self._bridge
+            old_pid = getattr(old_bridge, "pid", None) if old_bridge else None
+
+            if old_bridge:
+                logger.info("MemOS: closing old bridge (pid=%s)", old_pid)
+                with contextlib.suppress(Exception):
+                    old_bridge.close()
+                logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
+
+            ensure_bridge_running()
+            try:
+                ensure_viewer_daemon()
+            except Exception as err:
+                logger.warning("MemOS: viewer daemon check failed during reconnect — %s", err)
+            new_bridge: MemosBridgeClient | None = None
+            try:
+                new_bridge = MemosBridgeClient()
+                logger.info("MemOS: new bridge created (pid=%s)", getattr(new_bridge, "pid", "?"))
+
+                new_bridge.register_host_handler(
+                    "host.llm.complete",
+                    self._handle_host_llm_complete,
+                )
+                self._bridge = new_bridge
+                self._open_session(session_id, timeout=timeout)
+            except Exception:
+                if new_bridge is not None:
+                    with contextlib.suppress(Exception):
+                        new_bridge.close()
+                if self._bridge is new_bridge:
+                    self._bridge = None
+                raise
 
     def _ensure_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> bool:
         if self._bridge:
@@ -1670,20 +1874,37 @@ class MemTensorProvider(MemoryProvider):
             return
         self._bridge_keepalive_stop.clear()
 
+        _self_ref = weakref.ref(self)
+
         def _run() -> None:
-            while not self._bridge_keepalive_stop.wait(5.0):
-                if not self._ensure_bridge(self._session_id, timeout=10.0):
+            while True:
+                # Stop signal set (e.g. shutdown called by another thread).
+                # When self is garbage-collected the weakref resolves to None
+                # and we exit gracefully instead of keeping the thread + bridge
+                # subprocess alive forever.
+                provider = _self_ref()
+                if provider is None:
+                    break
+                if provider._bridge_keepalive_stop.wait(5.0):
+                    break
+                if not provider._ensure_bridge(provider._session_id, timeout=10.0):
                     continue
                 try:
-                    assert self._bridge is not None
-                    self._bridge.request("core.health", {}, timeout=10.0)
+                    assert provider._bridge is not None
+                    provider._bridge.request("core.health", {}, timeout=10.0)
                 except Exception as err:
-                    if self._is_transport_closed(err):
-                        logger.info("MemOS: bridge keepalive reconnecting after transport close")
+                    if provider._is_transport_closed(err):
+                        logger.info(
+                            "MemOS: bridge keepalive reconnecting after transport close"
+                        )
                         with contextlib.suppress(Exception):
-                            self._reconnect_bridge(self._session_id, timeout=10.0)
+                            provider._reconnect_bridge(
+                                provider._session_id, timeout=10.0
+                            )
                     else:
-                        logger.debug("MemOS: bridge keepalive failed — %s", err)
+                        logger.debug(
+                            "MemOS: bridge keepalive failed — %s", err
+                        )
 
         self._bridge_keepalive_thread = threading.Thread(
             target=_run,
@@ -1709,6 +1930,7 @@ class MemTensorProvider(MemoryProvider):
                 },
                 "ts": int(time.time() * 1000),
             },
+            timeout=_LONG_RPC_TIMEOUT,
         )
         # Stash the real episode id the pipeline auto-created (V7
         # §0.1 may have boundary-cut the previous episode and started
@@ -1755,7 +1977,7 @@ class MemTensorProvider(MemoryProvider):
         }
         if agent_thinking:
             payload["agentThinking"] = agent_thinking
-        result = self._bridge.request("turn.end", payload)
+        result = self._bridge.request("turn.end", payload, timeout=_LONG_RPC_TIMEOUT)
         # Capture the trace ID for feedback submission
         if result and isinstance(result, dict):
             trace_ids = result.get("traceIds", [])

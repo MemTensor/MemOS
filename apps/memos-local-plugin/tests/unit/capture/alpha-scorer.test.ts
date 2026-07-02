@@ -123,4 +123,29 @@ describe("capture/alpha-scorer", () => {
     await scoreReflection(llm, { step: step(), reflectionText: "r" });
     expect(captured).toEqual([op]);
   });
+
+  it("injects downstream preview without breaking JSON scoring", async () => {
+    let userPrompt = "";
+    const llm = fakeLlm({
+      completeJson: {
+        [op]: (input) => {
+          const messages = input as Array<{ role: string; content: string }>;
+          userPrompt = messages.find((m) => m.role === "user")?.content ?? "";
+          return { alpha: 0.5, usable: true, reason: "ok" };
+        },
+      },
+    });
+    const out = await scoreReflection(llm, {
+      step: step(),
+      reflectionText: "I checked the first fact before using the downstream evidence.",
+      downstream: [
+        { offset: 1, kind: "text", text: "action: next step used the result" },
+        { offset: 2, kind: "tooluse", toolNames: ["shell"], toolOutput: "ok" },
+      ],
+    });
+    expect(out.alpha).toBe(0.5);
+    expect(userPrompt).toContain("[step+1] type=text");
+    expect(userPrompt).toContain("[step+2] type=tooluse");
+    expect(userPrompt).toContain("tool_output: ok");
+  });
 });

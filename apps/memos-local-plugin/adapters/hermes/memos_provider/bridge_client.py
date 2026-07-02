@@ -1,9 +1,10 @@
 """JSON-RPC 2.0 over stdio client for the MemOS bridge.
 
-Spawns ``node bridge.cts --agent=hermes`` as a subprocess and communicates
-via line-delimited JSON messages on its stdin/stdout. Responses are
-matched by ``id``. Notifications (events + logs) are forwarded to
-registered callbacks on a reader thread.
+Spawns the packaged bridge subprocess (compiled ``dist/bridge.cjs`` when
+available, otherwise the source ``bridge.cts`` through ``tsx``) and communicates
+via line-delimited JSON messages on its stdin/stdout. Responses are matched by
+``id``. Notifications (events + logs) are forwarded to registered callbacks on a
+reader thread.
 
 The client is *blocking* by design — callers wanting async behaviour
 should wrap requests in a thread pool.
@@ -29,6 +30,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+HOST_HANDLER_WAIT_SECONDS = 5.0
+
+# ─── Module-level singleton tracker ─────────────────────────────────────
+# Each entry maps a ``(agent, no_viewer)`` key to the most-recent active
+# ``MemosBridgeClient`` for that slot. When a new client is constructed
+# for an existing key, the previous client is closed synchronously so the
+# Node-side ``bridge.cjs`` subprocess does not leak.
+#
+# This is the Python-side guard against issue #1910 (bridge process leak:
+# every turn spawns new bridge.cjs). Defence in depth on the Node side
+# lives in ``bridge.cts`` via ``bridge-stdio.pid``.
+_ACTIVE_CLIENTS: dict[tuple[str, bool], MemosBridgeClient] = {}
+_ACTIVE_CLIENTS_LOCK = threading.Lock()
+
 
 def _installed_node_binary(plugin_root: Path) -> str | None:
     marker = plugin_root / ".memos-node-bin"
@@ -39,6 +54,31 @@ def _installed_node_binary(plugin_root: Path) -> str | None:
     if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
         return candidate
     return None
+
+
+def _bridge_script(plugin_root: Path) -> Path:
+    """Pick the bridge entrypoint, preferring pure ESM over the CJS trampoline.
+
+    Resolution order (issue #1736):
+        1. ``dist/bridge.mjs`` — pure ESM compiled output, the only entry
+           that avoids the CJS↔ESM bridge that fails on Node ≥ 22.
+        2. ``dist/bridge.cjs`` — legacy CommonJS compiled output, kept for
+           installations whose ``dist/`` predates the ESM entrypoint.
+        3. ``bridge.mts`` — pure ESM TypeScript source for ``tsx``-driven
+           local development.
+        4. ``bridge.cts`` — legacy CommonJS TypeScript source. Returned
+           as the last-resort default so error messages stay stable when
+           none of the candidates exist.
+    """
+    candidates = (
+        plugin_root / "dist" / "bridge.mjs",
+        plugin_root / "dist" / "bridge.cjs",
+        plugin_root / "bridge.mts",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return plugin_root / "bridge.cts"
 
 
 class BridgeError(RuntimeError):
@@ -70,6 +110,7 @@ class MemosBridgeClient:
         bridge_path: str | None = None,
         node_binary: str | None = None,
         agent: str = "hermes",
+        no_viewer: bool = True,
         extra_env: dict[str, str] | None = None,
     ) -> None:
         self._lock = threading.Lock()
@@ -85,6 +126,7 @@ class MemosBridgeClient:
         # handler returns a JSON-serialisable value or raises to
         # surface a JSON-RPC error back to the bridge.
         self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
+        self._host_handlers_cv = threading.Condition()
         self._closed = False
 
         plugin_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -95,30 +137,33 @@ class MemosBridgeClient:
             or shutil.which("node")
             or "node"
         )
-        script = bridge_path or str(plugin_root / "bridge.cts")
+        script_path = Path(bridge_path) if bridge_path else _bridge_script(plugin_root)
+        script = str(script_path)
         env = {**os.environ, **(extra_env or {})}
 
-        # The plugin ships raw TypeScript (no precompiled `dist/`). Node's
-        # own `--experimental-strip-types` strips type annotations but does
-        # not rewrite `.js` import specifiers to the corresponding `.ts`
-        # files on disk — and the source tree uses `.js` extensions in
-        # every import per the TSC / bundler convention. We therefore
-        # launch the bridge via the bundled `tsx` CLI, which handles
-        # both jobs (strip types + extension rewrite). On Windows the
-        # `.bin/tsx` file is a POSIX shell shim; invoking it as
-        # `node .bin/tsx` makes Node parse shell syntax as JavaScript.
-        # Use tsx's real JS entrypoint when we are launching through a
-        # specific Node binary.
+        # Prefer the compiled JavaScript bridge — the new pure ESM
+        # ``dist/bridge.mjs`` (issue #1736) or the legacy ``dist/bridge.cjs``
+        # — both run on plain ``node`` without any loader. The raw
+        # TypeScript entries remain as a development fallback and need
+        # ``tsx`` for stripping types plus ``.js`` → ``.ts`` import
+        # resolution. On Windows the ``.bin/tsx`` file is a shell shim,
+        # so use tsx's real JS entrypoint whenever we have to launch the
+        # source entry through a specific Node.
         tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
-        if tsx_cli.exists():
-            cmd = [node, str(tsx_cli), script, f"--agent={agent}"]
+        bridge_args = [script, f"--agent={agent}"]
+        if no_viewer:
+            bridge_args.append("--no-viewer")
+        if script_path.suffix in (".mjs", ".cjs"):
+            cmd = [node, *bridge_args]
+        elif tsx_cli.exists():
+            cmd = [node, str(tsx_cli), *bridge_args]
         else:
             # Fallback path: `node --import tsx` reproduces the same loader
             # inline. Requires tsx to be resolvable as a package from the
             # plugin root — true whenever node_modules exists. If tsx is
             # genuinely missing the child will fail fast with a loader
             # error the stderr reader will surface.
-            cmd = [node, "--import", "tsx", script, f"--agent={agent}"]
+            cmd = [node, "--import", "tsx", *bridge_args]
         self._proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -143,6 +188,45 @@ class MemosBridgeClient:
             name="memos-bridge-stderr",
         )
         self._stderr_reader.start()
+
+        # Singleton tracking (issue #1910). Register ourselves as the
+        # active client for ``(agent, no_viewer)`` and reap any previous
+        # holder synchronously so its subprocess does not leak. The reap
+        # happens AFTER our reader threads are running, so the previous
+        # client's ``close()`` (which closes stdin and waits for exit)
+        # cannot interfere with our own startup.
+        self._singleton_agent = agent
+        self._singleton_no_viewer = bool(no_viewer)
+        previous = self._register_active()
+        if previous is not None and previous is not self:
+            prev_pid = getattr(previous, "pid", "?")
+            logger.info(
+                "MemOS: closing previous bridge client (pid=%s) before adopting new one (pid=%s)",
+                prev_pid,
+                self.pid,
+            )
+            with contextlib.suppress(Exception):
+                previous.close()
+
+    def _register_active(self) -> MemosBridgeClient | None:
+        """Register self as the active singleton; return the displaced client."""
+        key = (self._singleton_agent, self._singleton_no_viewer)
+        with _ACTIVE_CLIENTS_LOCK:
+            previous = _ACTIVE_CLIENTS.get(key)
+            _ACTIVE_CLIENTS[key] = self
+        return previous
+
+    def _unregister_active(self) -> None:
+        """Remove self from the active registry if we are still the current entry."""
+        key = (self._singleton_agent, self._singleton_no_viewer)
+        with _ACTIVE_CLIENTS_LOCK:
+            if _ACTIVE_CLIENTS.get(key) is self:
+                _ACTIVE_CLIENTS.pop(key, None)
+
+    @property
+    def pid(self) -> int:
+        """Return the PID of the bridge subprocess."""
+        return int(getattr(self._proc, "pid", 0) or 0)
 
     # ─── Public API ──
 
@@ -216,20 +300,54 @@ class MemosBridgeClient:
         heavy work (e.g. an LLM call) are still expected to return
         within the bridge-side timeout (default 60 s).
         """
-        self._host_handlers[method] = handler
+        with self._host_handlers_cv:
+            self._host_handlers[method] = handler
+            self._host_handlers_cv.notify_all()
 
     def close(self) -> None:
         if self._closed:
             return
-        self._closed = True
+        with self._host_handlers_cv:
+            self._closed = True
+            self._host_handlers_cv.notify_all()
+
+        # Drop self from the module-level singleton tracker (issue #1910)
+        # BEFORE the potentially-slow stdin/SIGTERM/SIGKILL dance. We
+        # only evict the registry slot if we still own it — a newer
+        # client that displaced us must remain reachable.
+        self._unregister_active()
+
+        pid = self.pid
+
+        # 1. Close stdin (triggers bridge's graceful exit)
         with contextlib.suppress(Exception):
             self._proc.stdin.close()
-        # DON'T wait() or kill() the bridge process. If it has an
-        # active viewer (HTTP server), it will stay alive as a daemon
-        # so the memory panel remains accessible between `hermes chat`
-        # sessions. If it's headless (viewer port was taken), it will
-        # notice stdin EOF and exit on its own.
-        # unblock any pending waiters
+
+        # 2. Wait for process to exit gracefully (up to 5 seconds)
+        try:
+            self._proc.wait(timeout=5.0)
+            logger.debug("MemOS: bridge process %d exited gracefully", pid)
+        except subprocess.TimeoutExpired:
+            # 3. If still running, send SIGTERM
+            logger.warning(
+                "MemOS: bridge process %d did not exit after stdin close, sending SIGTERM", pid
+            )
+            try:
+                self._proc.terminate()  # Send SIGTERM
+                self._proc.wait(timeout=5.0)  # Increased from 2.0 to 5.0 for viewer cleanup
+                logger.debug("MemOS: bridge process %d terminated", pid)
+            except subprocess.TimeoutExpired:
+                # 4. Last resort: SIGKILL
+                logger.error(
+                    "MemOS: bridge process %d did not respond to SIGTERM, sending SIGKILL", pid
+                )
+                self._proc.kill()  # Send SIGKILL
+                try:
+                    self._proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    logger.error("MemOS: bridge process %d could not be killed", pid)
+
+        # 5. Clean up pending requests
         with self._lock:
             for entry in list(self._pending.values()):
                 entry["error"] = {
@@ -282,7 +400,7 @@ class MemosBridgeClient:
                 and "result" not in msg
                 and "error" not in msg
             ):
-                handler = self._host_handlers.get(method)
+                handler = self._host_handler_for(method)
                 if handler is None:
                     self._send_response(
                         rpc_id,
@@ -310,6 +428,28 @@ class MemosBridgeClient:
                         },
                     )
                 continue
+
+    def _host_handler_for(
+        self,
+        method: str,
+        *,
+        timeout: float = HOST_HANDLER_WAIT_SECONDS,
+    ) -> Callable[[dict[str, Any]], Any] | None:
+        """Return a reverse-RPC handler, waiting briefly during startup.
+
+        The Node bridge now starts stdio before ``core.init()`` so host LLM
+        fallback can run during startup recovery. On a fast machine that
+        reverse request can arrive just before ``initialize()`` registers
+        ``host.llm.complete``. Waiting here turns that sub-millisecond race
+        into the intended handshake while still returning ``unknown_method``
+        for genuinely unsupported methods.
+        """
+        with self._host_handlers_cv:
+            self._host_handlers_cv.wait_for(
+                lambda: method in self._host_handlers or self._closed,
+                timeout=timeout,
+            )
+            return self._host_handlers.get(method)
 
     def _send_response(
         self,
