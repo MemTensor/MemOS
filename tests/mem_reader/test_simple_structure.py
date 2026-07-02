@@ -179,6 +179,66 @@ class TestSimpleStructMemReader(unittest.TestCase):
         msgs = build_chat_extraction_messages("plain prompt without marker")
         self.assertEqual(msgs, [{"role": "user", "content": "plain prompt without marker"}])
 
+    def test_get_llm_response_fallback_key_matches_consumer(self):
+        """Regression test for issue #1355.
+
+        When the LLM response cannot be parsed as JSON, `_get_llm_response`
+        is expected to return a fallback dict whose ``"memory list"`` (with
+        a single space) entry contains one salvaged ``UserMemory`` item built
+        from the raw user input. Downstream consumers in
+        ``_process_chat_data`` read ``resp.get("memory list", [])`` — if the
+        fallback uses the wrong key (e.g. ``"memory_list"`` with an
+        underscore) the salvaged memory is silently dropped and the request
+        produces zero memories despite returning HTTP 200.
+        """
+        # Force `_safe_parse` to return None so the fallback branch is taken.
+        self.reader.llm.generate.return_value = "not-valid-json"
+        self.reader.config.remove_prompt_example = False
+
+        resp = self.reader._get_llm_response("test memory content", custom_tags=None)
+
+        # The fallback must use the "memory list" (with space) key the
+        # rest of the pipeline reads; verify the salvaged item shape too.
+        salvaged = resp.get("memory list", [])
+        self.assertEqual(
+            len(salvaged),
+            1,
+            f"Fallback memory list must contain exactly one salvaged item, got: {resp!r}",
+        )
+        self.assertEqual(salvaged[0]["value"], "test memory content")
+        self.assertEqual(salvaged[0]["memory_type"], "UserMemory")
+
+    def test_process_chat_data_fine_yields_node_when_llm_unparseable(self):
+        """Regression test for issue #1355 (end-to-end of the reader stage).
+
+        With Kimi-style outputs that fail strict JSON parsing,
+        ``_process_chat_data`` (fine mode) should still emit a fallback
+        ``TextualMemoryItem`` so that the upstream `/product/add` request
+        ultimately writes at least one node to Neo4j instead of returning
+        200 with zero stored memories.
+        """
+        # Embedder produces a stable embedding for the salvaged item.
+        self.reader.embedder.embed = MagicMock(return_value=[[0.1, 0.2, 0.3]])
+        # LLM returns garbage so `_safe_parse` returns None and the fallback
+        # in `_get_llm_response` is exercised.
+        self.reader.llm.generate.return_value = "I cannot produce JSON sorry"
+        self.reader.config.remove_prompt_example = False
+
+        scene_data_info = [{"role": "user", "content": "test memory content"}]
+        info = {"user_id": "user1", "session_id": "session1"}
+
+        result = self.reader._process_chat_data(scene_data_info, info, mode="fine")
+
+        self.assertIsInstance(result, list)
+        self.assertEqual(
+            len(result),
+            1,
+            "fine-mode _process_chat_data must produce one salvaged memory "
+            "item when LLM output is unparseable (bug #1355)",
+        )
+        self.assertIsInstance(result[0], TextualMemoryItem)
+        self.assertIn("test memory content", result[0].memory)
+
 
 if __name__ == "__main__":
     unittest.main()
