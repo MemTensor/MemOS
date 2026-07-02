@@ -13,11 +13,13 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
 import type { HostModelsConfig } from "./src/openclaw-api";
+import { isPathInside } from "./src/path-utils";
 import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
 import { IngestWorker } from "./src/ingest/worker";
 import { RecallEngine } from "./src/recall/engine";
+import { shouldSkipAutoRecallForSession } from "./src/recall/session-policy";
 import { captureMessages, stripInboundMetadata } from "./src/capture";
 import { DEFAULTS } from "./src/types";
 import type { SearchHit } from "./src/types";
@@ -31,6 +33,7 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { ensureToolsAllowEntry } from "./src/openclaw-config";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -94,7 +97,11 @@ const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
   return lines;
 };
 
-function normalizeAutoRecallQuery(rawPrompt: string): string {
+const INSTRUCTIONAL_PROMPT_MAX_LEN = 300;
+const SYSTEM_ROLE_PROMPT_RE = /^You are\b/i;
+const HERMES_SKILL_REVIEW_RE = /Review the conversation above/i;
+
+export function normalizeAutoRecallQuery(rawPrompt: string): string {
   let query = rawPrompt.trim();
 
   const senderTag = "Sender (untrusted metadata):";
@@ -124,6 +131,17 @@ function normalizeAutoRecallQuery(rawPrompt: string): string {
 
   query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
   query = query.replace(CONTINUE_PROMPT_RE, "").trim();
+
+  // Drop instructional prompts (system role prompts, Hermes skill-review prompts,
+  // over-long instruction blobs). These shapes are not user search intents — passing
+  // them to FTS5 fails the sanitize step and wastes a downstream LLM filter call.
+  if (
+    query.length > INSTRUCTIONAL_PROMPT_MAX_LEN
+    || SYSTEM_ROLE_PROMPT_RE.test(query)
+    || HERMES_SKILL_REVIEW_RE.test(query)
+  ) {
+    return "";
+  }
 
   return query;
 }
@@ -160,9 +178,32 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    api.registerMemoryCapability({
-      promptBuilder: buildMemoryPromptSection,
-    });
+    // OpenClaw 2026.3.31 split the legacy `registerMemoryCapability` facade
+    // into three focused registration methods. We prefer the new API when
+    // the host exposes it; otherwise we fall back to the legacy
+    // capability registration so older hosts still load. Either method
+    // being missing is non-fatal — the plugin must remain load-safe.
+    //
+    // See: https://github.com/MemTensor/MemOS/issues/1559
+    const hostApi = api as OpenClawPluginApi & {
+      registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+      registerMemoryFlushPlan?: (resolver: unknown) => void;
+      registerMemoryRuntime?: (runtime: unknown) => void;
+    };
+
+    if (typeof hostApi.registerMemoryPromptSection === "function") {
+      hostApi.registerMemoryPromptSection(buildMemoryPromptSection);
+    } else if (typeof hostApi.registerMemoryCapability === "function") {
+      hostApi.registerMemoryCapability({
+        promptBuilder: buildMemoryPromptSection,
+      });
+    } else {
+      hostApi.logger?.warn?.(
+        "memos-local: host SDK exposes neither registerMemoryPromptSection " +
+          "nor registerMemoryCapability — memory prompt section will not be " +
+          "installed. Plugin continues without a system prompt prelude.",
+      );
+    }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const localRequire = createRequire(import.meta.url);
@@ -181,17 +222,6 @@ const memosLocalPlugin = {
     }
 
     const pluginDir = detectPluginDir(moduleDir);
-
-    function normalizeFsPath(p: string): string {
-      return path.resolve(p).replace(/^\\\\\?\\/, "").toLowerCase();
-    }
-
-    function isPathInside(baseDir: string, targetPath: string): boolean {
-      const baseNorm = normalizeFsPath(baseDir);
-      const targetNorm = normalizeFsPath(targetPath);
-      const rel = path.relative(baseNorm, targetNorm);
-      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-    }
 
     function runNpm(args: string[]) {
       const { spawnSync } = localRequire("child_process") as typeof import("node:child_process");
@@ -356,18 +386,10 @@ const memosLocalPlugin = {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
         const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const cfg = JSON.parse(raw);
-        const allow: string[] | undefined = cfg?.tools?.allow;
-        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
-          const lastEntry = JSON.stringify(allow[allow.length - 1]);
-          const patched = raw.replace(
-            new RegExp(`(${lastEntry})(\\s*\\])`),
-            `$1,\n      "group:plugins"$2`,
-          );
-          if (patched !== raw && patched.includes("group:plugins")) {
-            fs.writeFileSync(openclawJsonPath, patched, "utf-8");
-            ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
-          }
+        const patched = ensureToolsAllowEntry(raw, "group:plugins");
+        if (patched !== raw) {
+          fs.writeFileSync(openclawJsonPath, patched, "utf-8");
+          ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
         }
       }
     } catch (e) {
@@ -1867,6 +1889,16 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
+      // ─── Cron / excluded-session gate (GitHub #1311) ───────────────
+      // Skip auto-recall (and skill auto-recall) entirely for OpenClaw
+      // cron sessions by default. The cron prompt is the spec — recalling
+      // prior meta-discussion about the cron contaminates the next run.
+      const recallSessionKey = hookCtx?.sessionKey ?? (event as any)?.sessionKey;
+      if (shouldSkipAutoRecallForSession(recallSessionKey, ctx.config.autoRecall)) {
+        ctx.log.info(`auto-recall: skipping (cron/excluded session: "${recallSessionKey}")`);
+        return;
+      }
+
       const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
       const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
@@ -1882,16 +1914,28 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
 
-        if (query.length < 2) {
-          ctx.log.debug("auto-recall: extracted query too short, skipping");
+        const minQueryLength = ctx.config.recall?.autoRecallMinQueryLength ?? DEFAULTS.autoRecallMinQueryLength;
+        if (query.length < minQueryLength) {
+          ctx.log.debug(`auto-recall: query too short (len=${query.length} < minQueryLength=${minQueryLength}), skipping`);
           return;
         }
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
 
         // ── Phase 1: Local search ∥ Hub search (parallel) ──
-        const arLocalP = engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
+        // Issue #1514: previously hardcoded maxResults: 10 here, which made
+        // `recall.maxResultsDefault` and the new `recall.autoRecallMaxResults`
+        // ineffective for the auto-recall path. Resolution order:
+        //   1. `recall.autoRecallMaxResults` (explicit auto-recall cap)
+        //   2. `recall.maxResultsDefault`    (shared default with memory_search)
+        //   3. literal 10                    (defensive — `resolveConfig`
+        //      always fills `maxResultsDefault`, so this fires only if a
+        //      caller built a context without going through `resolveConfig`).
+        const recallCfg = ctx.config.recall ?? {};
+        const autoRecallMax = recallCfg.autoRecallMaxResults ?? recallCfg.maxResultsDefault ?? 10;
+
+        const arLocalP = engine.search({ query, maxResults: autoRecallMax, minScore: 0.45, ownerFilter: recallOwnerFilter });
         const arHubP = ctx.config?.sharing?.enabled
-          ? hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" })
+          ? hubSearchMemories(store, ctx, { query, maxResults: autoRecallMax, scope: "all" })
               .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
           : Promise.resolve({ hits: [] as any[], meta: {} });
 
