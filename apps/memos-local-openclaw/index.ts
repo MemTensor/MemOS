@@ -177,9 +177,32 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    api.registerMemoryCapability({
-      promptBuilder: buildMemoryPromptSection,
-    });
+    // OpenClaw 2026.3.31 split the legacy `registerMemoryCapability` facade
+    // into three focused registration methods. We prefer the new API when
+    // the host exposes it; otherwise we fall back to the legacy
+    // capability registration so older hosts still load. Either method
+    // being missing is non-fatal — the plugin must remain load-safe.
+    //
+    // See: https://github.com/MemTensor/MemOS/issues/1559
+    const hostApi = api as OpenClawPluginApi & {
+      registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+      registerMemoryFlushPlan?: (resolver: unknown) => void;
+      registerMemoryRuntime?: (runtime: unknown) => void;
+    };
+
+    if (typeof hostApi.registerMemoryPromptSection === "function") {
+      hostApi.registerMemoryPromptSection(buildMemoryPromptSection);
+    } else if (typeof hostApi.registerMemoryCapability === "function") {
+      hostApi.registerMemoryCapability({
+        promptBuilder: buildMemoryPromptSection,
+      });
+    } else {
+      hostApi.logger?.warn?.(
+        "memos-local: host SDK exposes neither registerMemoryPromptSection " +
+          "nor registerMemoryCapability — memory prompt section will not be " +
+          "installed. Plugin continues without a system prompt prelude.",
+      );
+    }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     const localRequire = createRequire(import.meta.url);
