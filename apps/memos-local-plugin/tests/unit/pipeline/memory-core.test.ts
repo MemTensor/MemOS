@@ -1891,4 +1891,111 @@ algorithm:
     // still complete the recovery before closing the DB handle.
     await expect(fastCore.shutdown()).resolves.toBeUndefined();
   });
+
+  it("does not rescore a closed episode whose only mismatch is a ghost trace ID (#1966)", async () => {
+    // Regression guard for https://github.com/MemTensor/MemOS/issues/1966.
+    // A dangling ID in trace_ids_json must not make reward coverage look dirty
+    // forever; only trace rows that still exist should count.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "ghost-trace-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 1_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_ghost", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_ghost",
+        "se_ghost",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_real", "tr_ghost"]),
+        0.6,
+        JSON.stringify({
+          closeReason: "finalized",
+          reward: {
+            rHuman: 0.6,
+            scoredAt: ts + 2,
+            traceCount: 1,
+            traceIds: ["tr_real"],
+            source: "heuristic",
+          },
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_real",
+        "ep_ghost",
+        "se_ghost",
+        ts,
+        "请讲一下回归任务的损失函数选择。",
+        "对连续目标变量常用 MSE 或 MAE；存在重尾噪声时用 Huber。",
+        "回归任务损失函数",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "ghost-trace-recover",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_ghost") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBeCloseTo(0.6);
+    const meta = JSON.parse(episode!.meta_json) as {
+      rewardDirty?: unknown;
+      recoveryReason?: string;
+      reward?: { rHuman?: number; traceCount?: number; traceIds?: string[] };
+    };
+    expect(meta.recoveryReason).toBeUndefined();
+    expect(meta.reward?.rHuman).toBeCloseTo(0.6);
+    expect(meta.reward?.traceCount).toBe(1);
+    expect(meta.reward?.traceIds).toEqual(["tr_real"]);
+  });
 });

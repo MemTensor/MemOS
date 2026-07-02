@@ -50,18 +50,19 @@ export class OpenAiLlmProvider implements LlmProvider {
     ctx: LlmProviderCtx,
   ): Promise<ProviderCompletion> {
     const { config, log, signal } = ctx;
-    if (!config.apiKey) {
-      throw new MemosError(
-        ERROR_CODES.LLM_UNAVAILABLE,
-        "openai_compatible provider requires config.llm.apiKey",
-        { provider: this.name },
-      );
-    }
     const url = normalizeEndpoint(
       config.endpoint && config.endpoint.length > 0
         ? config.endpoint
         : "https://api.openai.com/v1/chat/completions",
     );
+    const isLocal = isLocalhostOrPrivateUrl(url);
+    if (!config.apiKey && !isLocal) {
+      throw new MemosError(
+        ERROR_CODES.LLM_UNAVAILABLE,
+        "openai_compatible provider requires config.llm.apiKey (or use a local endpoint)",
+        { provider: this.name },
+      );
+    }
     const model = config.model && config.model.length > 0 ? config.model : "gpt-4o-mini";
 
     const body: Record<string, unknown> = {
@@ -73,13 +74,16 @@ export class OpenAiLlmProvider implements LlmProvider {
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
 
+    const headers: Record<string, string> = {};
+    if (config.apiKey) {
+      headers.Authorization = `Bearer ${config.apiKey}`;
+    }
+    Object.assign(headers, config.headers);
+
     const { json, durationMs } = await httpPostJson<OaResp>({
       url,
       body,
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        ...config.headers,
-      },
+      headers,
       timeoutMs: config.timeoutMs,
       maxRetries: config.maxRetries,
       signal,
@@ -109,18 +113,19 @@ export class OpenAiLlmProvider implements LlmProvider {
     ctx: LlmProviderCtx,
   ): AsyncGenerator<LlmStreamChunk> {
     const { config, log, signal } = ctx;
-    if (!config.apiKey) {
-      throw new MemosError(
-        ERROR_CODES.LLM_UNAVAILABLE,
-        "openai_compatible provider requires config.llm.apiKey",
-        { provider: this.name },
-      );
-    }
     const url = normalizeEndpoint(
       config.endpoint && config.endpoint.length > 0
         ? config.endpoint
         : "https://api.openai.com/v1/chat/completions",
     );
+    const isLocal = isLocalhostOrPrivateUrl(url);
+    if (!config.apiKey && !isLocal) {
+      throw new MemosError(
+        ERROR_CODES.LLM_UNAVAILABLE,
+        "openai_compatible provider requires config.llm.apiKey (or use a local endpoint)",
+        { provider: this.name },
+      );
+    }
     const model = config.model && config.model.length > 0 ? config.model : "gpt-4o-mini";
 
     const body: Record<string, unknown> = {
@@ -133,13 +138,16 @@ export class OpenAiLlmProvider implements LlmProvider {
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
 
+    const headers: Record<string, string> = {};
+    if (config.apiKey) {
+      headers.Authorization = `Bearer ${config.apiKey}`;
+    }
+    Object.assign(headers, config.headers);
+
     const resp = await httpPostStream({
       url,
       body,
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        ...config.headers,
-      },
+      headers,
       timeoutMs: config.timeoutMs,
       signal,
       provider: this.name,
@@ -210,4 +218,26 @@ function mapFinish(reason: string | undefined): ProviderCompletion["finishReason
     default:
       return "other";
   }
+}
+
+/**
+ * Return true if the URL points to localhost or a private-network address.
+ * Used to relax the apiKey requirement for local/self-hosted inference servers.
+ */
+function isLocalhostOrPrivateUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.toLowerCase();
+    if (h === "localhost" || h === "127.0.0.1" || h === "::1") return true;
+    // Private ranges: 10.x, 172.16-31.x, 192.168.x
+    if (h.startsWith("10.") || h.startsWith("192.168.")) return true;
+    const m = h.match(/^172\.(\d+)\./);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n >= 16 && n <= 31) return true;
+    }
+  } catch {
+    // Malformed URL — let the caller handle it.
+  }
+  return false;
 }

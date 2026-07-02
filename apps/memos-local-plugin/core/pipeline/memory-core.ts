@@ -79,7 +79,11 @@ import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
-import { makeRepos } from "../storage/repos/index.js";
+import {
+  embeddingMaintenanceCounts,
+  inferStoredEmbeddingByteLen,
+  makeRepos,
+} from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -112,6 +116,14 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
+/**
+ * Float32 byte width. Stored vector BLOBs are little-endian Float32
+ * arrays produced by `encodeVector(Float32Array)`; their byte length
+ * is `dimensions * FLOAT32_BYTES_PER_ELEMENT`. The SQL fast path of
+ * `computeEmbeddingMaintenanceStats` compares stored BLOB byte length
+ * against `configuredDimension * FLOAT32_BYTES_PER_ELEMENT`.
+ */
+const FLOAT32_BYTES_PER_ELEMENT = 4;
 
 export interface BootstrapOptions {
   agent: AgentKind;
@@ -1414,7 +1426,20 @@ export function createMemoryCore(
     if (!reward || typeof reward !== "object") return false;
     const traceCount = (reward as { traceCount?: unknown }).traceCount;
     if (typeof traceCount === "number") {
-      return traceCount !== (ep.traceIds?.length ?? 0);
+      // Compare against the count of trace IDs that ACTUALLY exist in the
+      // traces table, not the raw length of `ep.traceIds`. Otherwise a
+      // single "ghost" trace ID lingering in `trace_ids_json` (deleted
+      // trace row, manual cleanup, partial migration) keeps the episode
+      // dirty forever and triggers a rescore every 10 minutes —
+      // https://github.com/MemTensor/MemOS/issues/1966 (590 wasted calls
+      // / ~14.5 RMB in the reporter's case). `countExisting` is a single
+      // `SELECT COUNT(*)` per chunk, so it stays cheap even on big DBs.
+      const traceIds = (ep.traceIds ?? []) as TraceId[];
+      const existingCount =
+        traceIds.length === 0
+          ? 0
+          : handle.repos.traces.countExisting(traceIds);
+      return traceCount !== existingCount;
     }
 
     // Backward compatibility for episodes scored before reward coverage
@@ -1613,10 +1638,20 @@ export function createMemoryCore(
       /* fall through to in-memory */
     }
 
+    // The Overview cards' source of truth for "what model is this slot
+    // running?" is config.yaml (= the Settings page). Runtime stats
+    // (lastOkAt / lastError / fallback timestamps) still come from the
+    // in-memory facades — that's the right split: the slot label is
+    // user intent, the colour/error reflects whether the runtime has
+    // actually been able to talk to the configured upstream. See #1596.
+    const effectiveConfig = diskConfig ?? handle.config;
+
     const llmInfo = llmHealth(handle.llm, latestTraceTs());
     const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    applyConfiguredModelDisplay(effectiveConfig, llmInfo, embedderInfo);
+
     const skillEvolverInfo = resolveSkillEvolver(
-      diskConfig ?? handle.config,
+      effectiveConfig,
       // Prefer the dedicated reflect LLM stats so an independently
       // configured skill-evolver model reports its OWN failures
       // instead of inheriting the (possibly healthy) summary LLM's
@@ -1624,6 +1659,7 @@ export function createMemoryCore(
       // skillEvolver blank — bootstrap aliases reflectLlm to llm
       // in that case anyway.
       handle.reflectLlm ?? handle.llm,
+      llmInfo,
       latestTraceTs(),
     );
 
@@ -1635,21 +1671,6 @@ export function createMemoryCore(
     // are still null. Now the card colour is driven purely by
     // in-memory stats — if you want to inspect past failures, head
     // to LogsView → 系统 tag.
-
-    // Override model names from disk config if they differ from the
-    // in-memory client (user saved new settings but hasn't restarted).
-    if (diskConfig) {
-      const diskLlm = diskConfig.llm as { model?: string; provider?: string } | undefined;
-      if (diskLlm?.model && diskLlm.model !== llmInfo.model) {
-        llmInfo.model = diskLlm.model;
-        if (diskLlm.provider) llmInfo.provider = diskLlm.provider;
-      }
-      const diskEmb = diskConfig.embedding as { model?: string; provider?: string } | undefined;
-      if (diskEmb?.model && diskEmb.model !== embedderInfo.model) {
-        embedderInfo.model = diskEmb.model;
-        if (diskEmb.provider) embedderInfo.provider = diskEmb.provider;
-      }
-    }
 
     applyPersistedModelStatus(handle.repos, "llm", llmInfo);
     applyPersistedModelStatus(handle.repos, "embedding", embedderInfo);
@@ -4193,24 +4214,37 @@ export function createMemoryCore(
   };
 
   function computeEmbeddingMaintenanceStats(): EmbeddingMaintenanceStats {
+    // SQL-only fast path (issue #1929).
+    //
+    // The previous implementation paginated `traces` / `policies` /
+    // `world_model` / `skills` end-to-end via `repos.<table>.list()`,
+    // which hydrates the full row — BLOB vector columns included —
+    // through `mapRow()`. On a production deployment with ~93K rows
+    // and ~270 MB of vector BLOBs that single call blocked the Node
+    // event loop for 4+ minutes at 100% CPU.
+    //
+    // `embeddingMaintenanceCounts` runs five `SELECT COUNT(*) +
+    // SUM(CASE WHEN ...)` queries — `LENGTH(blob)` reads only the BLOB
+    // header, never the payload — so we keep the same per-bucket
+    // semantics without touching a single vector byte.
     const configuredDimension = handle.embedder?.dimensions ?? 0;
-    const allSlots = collectEmbeddingSlots();
-    const dimension = configuredDimension > 0 ? configuredDimension : inferStoredEmbeddingDimension(allSlots);
-    const byKind = emptyEmbeddingStatsByKind();
-    for (const slot of allSlots) {
-      const bucket = byKind[slot.kind];
-      bucket.totalSlots++;
-      if (!slot.vec) {
-        bucket.missing++;
-      } else if (dimension > 0 && slot.vec.length !== dimension) {
-        bucket.dimMismatch++;
-      } else {
-        bucket.ready++;
-      }
-    }
-    for (const bucket of Object.values(byKind)) {
-      bucket.needsRepair = bucket.missing + bucket.dimMismatch;
-    }
+    const inferredByteLen = configuredDimension > 0
+      ? configuredDimension * FLOAT32_BYTES_PER_ELEMENT
+      : inferStoredEmbeddingByteLen(handle.db);
+    const dimension = configuredDimension > 0
+      ? configuredDimension
+      : Math.floor(inferredByteLen / FLOAT32_BYTES_PER_ELEMENT);
+
+    const raw = embeddingMaintenanceCounts(handle.db, {
+      expectedByteLen: inferredByteLen,
+    });
+
+    const byKind: EmbeddingMaintenanceStats["byKind"] = {
+      trace: addNeedsRepair(raw.trace),
+      policy: addNeedsRepair(raw.policy),
+      world_model: addNeedsRepair(raw.world_model),
+      skill: addNeedsRepair(raw.skill),
+    };
     const totalSlots = sumEmbeddingStats(byKind, "totalSlots");
     const ready = sumEmbeddingStats(byKind, "ready");
     const missing = sumEmbeddingStats(byKind, "missing");
@@ -4227,6 +4261,21 @@ export function createMemoryCore(
     };
   }
 
+  function addNeedsRepair(bucket: {
+    totalSlots: number;
+    ready: number;
+    missing: number;
+    dimMismatch: number;
+  }): EmbeddingMaintenanceStats["byKind"]["trace"] {
+    return {
+      totalSlots: bucket.totalSlots,
+      ready: bucket.ready,
+      missing: bucket.missing,
+      dimMismatch: bucket.dimMismatch,
+      needsRepair: bucket.missing + bucket.dimMismatch,
+    };
+  }
+
   async function ensureEmbeddingDimensionKnown(): Promise<void> {
     if (!handle.embedder || handle.embedder.dimensions > 0) return;
     try {
@@ -4239,23 +4288,6 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
-  }
-
-  function inferStoredEmbeddingDimension(slots: readonly EmbeddingSlot[]): number {
-    const counts = new Map<number, number>();
-    for (const slot of slots) {
-      if (!slot.vec) continue;
-      counts.set(slot.vec.length, (counts.get(slot.vec.length) ?? 0) + 1);
-    }
-    let bestDim = 0;
-    let bestCount = 0;
-    for (const [dim, count] of counts) {
-      if (count > bestCount) {
-        bestDim = dim;
-        bestCount = count;
-      }
-    }
-    return bestDim;
   }
 
   function shouldTraceHaveEmbeddings(row: TraceRow): boolean {
@@ -4365,22 +4397,6 @@ export function createMemoryCore(
 
   function isLightweightMemoryTrace(row: TraceRow): boolean {
     return row.tags.includes("lightweight_memory");
-  }
-
-  function emptyEmbeddingStatsByKind(): EmbeddingMaintenanceStats["byKind"] {
-    const empty = () => ({
-      totalSlots: 0,
-      ready: 0,
-      missing: 0,
-      dimMismatch: 0,
-      needsRepair: 0,
-    });
-    return {
-      trace: empty(),
-      policy: empty(),
-      world_model: empty(),
-      skill: empty(),
-    };
   }
 
   function sumEmbeddingStats(
@@ -5519,6 +5535,7 @@ function embedderHealth(
 function resolveSkillEvolver(
   config: PipelineHandle["config"],
   llm: PipelineHandle["llm"],
+  inheritedLlmInfo: CoreHealth["llm"],
   fallbackTs: number | null,
 ): CoreHealth["skillEvolver"] {
   const evolver = (config as { skillEvolver?: { provider?: string; model?: string } })
@@ -5540,16 +5557,60 @@ function resolveSkillEvolver(
       lastError: s?.lastError ?? null,
     };
   }
-  const fallback = llmHealth(llm, fallbackTs);
+  // Inherited skillEvolver mirrors the (already-disk-aware) llm slot,
+  // so the Overview's three model cards never disagree about what the
+  // current Settings say. Runtime stats still come from the llm
+  // client; we just copy whatever the Overview will show for the LLM
+  // slot itself. See #1596.
   return {
-    available: fallback.available,
-    provider: fallback.provider,
-    model: fallback.model,
+    available: inheritedLlmInfo.available,
+    provider: inheritedLlmInfo.provider,
+    model: inheritedLlmInfo.model,
     inherited: true,
-    lastOkAt: fallback.lastOkAt,
-    lastFallbackAt: fallback.lastFallbackAt,
-    lastError: fallback.lastError,
+    lastOkAt: inheritedLlmInfo.lastOkAt,
+    lastFallbackAt: inheritedLlmInfo.lastFallbackAt,
+    lastError: inheritedLlmInfo.lastError,
   };
+  // Reserved for future signature change — keep fallbackTs parameter
+  // so callers passing `latestTraceTs()` don't need to change.
+  void fallbackTs;
+}
+
+/**
+ * Patch the llm + embedder health snapshots so their `model` and
+ * `provider` fields reflect what's currently in `config.yaml` — i.e.
+ * what the Settings page shows. The runtime stats (available,
+ * lastOkAt, lastError) stay sourced from the in-memory facade because
+ * those represent "did the upstream actually answer", which only the
+ * runtime can know. See #1596: Overview cards used to lag behind a
+ * Settings save when only the provider changed (model name unchanged),
+ * or when the user cleared a model name back to empty.
+ */
+function applyConfiguredModelDisplay(
+  config: PipelineHandle["config"],
+  llmInfo: CoreHealth["llm"],
+  embedderInfo: CoreHealth["embedder"],
+): void {
+  const cfg = config as {
+    llm?: { model?: unknown; provider?: unknown };
+    embedding?: { model?: unknown; provider?: unknown };
+  };
+  if (cfg.llm) {
+    if (typeof cfg.llm.model === "string") {
+      llmInfo.model = cfg.llm.model;
+    }
+    if (typeof cfg.llm.provider === "string" && cfg.llm.provider.length > 0) {
+      llmInfo.provider = cfg.llm.provider;
+    }
+  }
+  if (cfg.embedding) {
+    if (typeof cfg.embedding.model === "string") {
+      embedderInfo.model = cfg.embedding.model;
+    }
+    if (typeof cfg.embedding.provider === "string" && cfg.embedding.provider.length > 0) {
+      embedderInfo.provider = cfg.embedding.provider;
+    }
+  }
 }
 
 function writeApiLog(
