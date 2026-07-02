@@ -102,30 +102,11 @@ export async function abstractDraft(
         temperature: 0.15,
         malformedRetries: 1,
         schemaHint: `{"title":"...","domain_tags":["..."],"environment":[{"label":"...","description":"...","evidenceIds":["..."]}],"inference":[...],"constraints":[...],"body":"markdown","confidence":0..1,"supersedes_world_ids":[]}`,
-        validate: (v) => {
-          const o = v as Record<string, unknown>;
-          if (typeof o.title !== "string" || !(o.title as string).trim()) {
-            throw new MemosError(
-              ERROR_CODES.LLM_OUTPUT_MALFORMED,
-              "l3.abstraction: 'title' must be a non-empty string",
-              { got: o.title },
-            );
-          }
-          const triple = ["environment", "inference", "constraints"];
-          for (const k of triple) {
-            if (!Array.isArray(o[k])) {
-              throw new MemosError(
-                ERROR_CODES.LLM_OUTPUT_MALFORMED,
-                `l3.abstraction: '${k}' must be an array`,
-                { got: o[k] },
-              );
-            }
-          }
-        },
       },
     );
 
     const draft = normaliseDraft(rsp.value);
+    assertDraftMinimallyUsable(draft);
     if (deps.validate) deps.validate(draft);
     return { ok: true, draft };
   } catch (err) {
@@ -260,13 +241,15 @@ function packPolicy(
 
 function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
   const triple = pickTriple(value);
+  const domainTags = normaliseTags(value.domain_tags);
+  const body = typeof value.body === "string" ? sanitizeDerivedMarkdown(value.body) : "";
   return {
-    title: sanitizeDerivedText(value.title),
-    domainTags: normaliseTags(value.domain_tags),
+    title: deriveTitle(value.title, triple, body, domainTags),
+    domainTags,
     environment: triple.environment,
     inference: triple.inference,
     constraints: triple.constraints,
-    body: typeof value.body === "string" ? sanitizeDerivedMarkdown(value.body) : "",
+    body,
     confidence: clamp01(typeof value.confidence === "number" ? value.confidence : 0.5),
     supersedesWorldIds: Array.isArray(value.supersedes_world_ids)
       ? (value.supersedes_world_ids as unknown[])
@@ -289,17 +272,27 @@ function pickTriple(value: Record<string, unknown>): {
 }
 
 function toEntries(raw: unknown): L3AbstractionDraftEntry[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
+  const items = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+  return items
     .map((r): L3AbstractionDraftEntry | null => {
+      if (typeof r === "string") {
+        const description = sanitizeDerivedMarkdown(r);
+        return description ? { label: "", description, evidenceIds: undefined } : null;
+      }
       if (!r || typeof r !== "object") return null;
       const o = r as Record<string, unknown>;
-      const label = typeof o.label === "string" ? sanitizeDerivedText(o.label) : "";
-      const description = typeof o.description === "string" ? sanitizeDerivedMarkdown(o.description) : "";
+      const label = firstText(o, ["label", "name", "title", "heading", "key"]);
+      const description = firstMarkdown(o, [
+        "description",
+        "body",
+        "text",
+        "content",
+        "detail",
+        "summary",
+        "value",
+      ]);
       if (!label && !description) return null;
-      const evidenceIds = Array.isArray(o.evidenceIds)
-        ? (o.evidenceIds as unknown[]).filter((s): s is string => typeof s === "string")
-        : undefined;
+      const evidenceIds = normaliseEvidenceIds(o.evidenceIds ?? o.evidence_ids ?? o.evidence);
       return { label, description, evidenceIds };
     })
     .filter((e): e is L3AbstractionDraftEntry => e !== null)
@@ -328,13 +321,86 @@ function buildBody(draft: L3AbstractionDraft): string {
 }
 
 function normaliseTags(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(/[,;\n]/)
+      : raw == null
+        ? []
+        : [raw];
   return dedupeStrings(
-    (raw as unknown[])
-      .filter((s): s is string => typeof s === "string")
+    values
+      .map((value) => {
+        if (typeof value === "string") return value;
+        if (value && typeof value === "object") {
+          return firstText(value as Record<string, unknown>, ["label", "name", "tag", "value", "key"]);
+        }
+        return "";
+      })
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length > 0 && s.length < 24),
   ).slice(0, 6);
+}
+
+function firstText(o: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const cleaned = sanitizeDerivedText(o[key]);
+    if (cleaned) return cleaned;
+  }
+  return "";
+}
+
+function firstMarkdown(o: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const cleaned = sanitizeDerivedMarkdown(o[key]);
+    if (cleaned) return cleaned;
+  }
+  return "";
+}
+
+function normaliseEvidenceIds(raw: unknown): string[] | undefined {
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(/[,;\n]/)
+      : [];
+  const ids = values
+    .map((value) => sanitizeDerivedText(value))
+    .filter((value) => value.length > 0);
+  return ids.length > 0 ? dedupeStrings(ids) : undefined;
+}
+
+function deriveTitle(
+  rawTitle: unknown,
+  triple: ReturnType<typeof pickTriple>,
+  body: string,
+  domainTags: readonly string[],
+): string {
+  const title = sanitizeDerivedText(rawTitle);
+  if (title) return title.slice(0, 160);
+  for (const bucket of [triple.inference, triple.environment, triple.constraints]) {
+    for (const entry of bucket) {
+      const candidate = entry.label || entry.description;
+      if (candidate) return sanitizeDerivedText(candidate).slice(0, 160);
+    }
+  }
+  const bodyLine = body
+    .split(/\r?\n/)
+    .map((line) => sanitizeDerivedText(line.replace(/^#+\s*/, "")))
+    .find((line) => line.length > 0);
+  if (bodyLine) return bodyLine.slice(0, 160);
+  return domainTags.join(" ").slice(0, 160);
+}
+
+function assertDraftMinimallyUsable(draft: L3AbstractionDraft): void {
+  const hasEntries =
+    draft.environment.length > 0 || draft.inference.length > 0 || draft.constraints.length > 0;
+  if (draft.title || draft.body || draft.domainTags.length > 0 || hasEntries) return;
+  throw new MemosError(
+    ERROR_CODES.LLM_OUTPUT_MALFORMED,
+    "l3.abstraction: empty draft after normalisation",
+    {},
+  );
 }
 
 function dedupeStrings(arr: readonly string[]): string[] {
