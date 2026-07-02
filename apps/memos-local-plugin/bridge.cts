@@ -169,6 +169,9 @@ async function main(): Promise<void> {
   const { startHttpServer } = (await importEsm(
     runtimeModule("server/http.ts", "dist/server/http.js")
   )) as typeof import("./server/http.js");
+  const { isHermesChatRunning } = (await importEsm(
+    runtimeModule("bridge/hermes-process.ts", "dist/bridge/hermes-process.js")
+  )) as typeof import("./bridge/hermes-process.js");
 
   const rootDir = pluginRoot();
   const pkgVersion = require(path.join(rootDir, "package.json")).version;
@@ -269,6 +272,7 @@ async function main(): Promise<void> {
       ? createBridgeStatusTracker(
           path.join(home.root, BRIDGE_STATUS_FILE),
           args.daemon,
+          isHermesChatRunning,
         )
       : null;
 
@@ -565,7 +569,11 @@ function classifyErrorCode(err: unknown): string {
   return "unknown";
 }
 
-function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
+function createBridgeStatusTracker(
+  statusFile: string,
+  daemon: boolean,
+  isHermesChatRunning: () => boolean,
+): {
   snapshot(): BridgeStatusSnapshot;
   markConnected(): void;
   markDisconnected(message: string): void;
@@ -677,20 +685,6 @@ function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
       };
     },
   };
-}
-
-const HERMES_CHAT_PROCESS_PATTERN = "hermes(?:\\s+\\S+)*\\s+chat\\b";
-
-function isHermesChatRunning(): boolean {
-  try {
-    const out = childProcess.execFileSync("pgrep", ["-f", HERMES_CHAT_PROCESS_PATTERN], {
-      encoding: "utf8",
-      timeout: 1000,
-    });
-    return out.trim().length > 0;
-  } catch {
-    return false;
-  }
 }
 
 void main().catch((err) => {
