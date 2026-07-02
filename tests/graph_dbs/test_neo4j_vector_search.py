@@ -363,10 +363,14 @@ class TestSourcesDoubleSerializationRegression:
 # ──────────────────────────────────────────────────────────────────────────────
 # Integration tests (require a running Neo4j 5.18+ with vector index)
 #
-# Activate by setting environment variables:
-#   NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+# Opt in explicitly by setting `NEO4J_INTEGRATION_TESTS=1` **and** providing
+# `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`. The explicit opt-in flag is
+# required so that unit runs do not fail with `neo4j.exceptions.ServiceUnavailable`
+# just because those connection variables happen to be present in the shell
+# (e.g. from a nearby production config).
 #
-# Run:
+# To run: set NEO4J_INTEGRATION_TESTS=1 together with NEO4J_URI / NEO4J_USER /
+# NEO4J_PASSWORD, then invoke
 #   pytest tests/graph_dbs/test_neo4j_vector_search.py -k Integration -v
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -380,8 +384,19 @@ def _neo4j_package_available():
         return False
 
 
-_neo4j_configured = _neo4j_package_available() and all(
-    os.getenv(k) for k in ("NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD")
+def _neo4j_integration_opt_in() -> bool:
+    """Explicit opt-in flag for the Neo4j integration test class.
+
+    Truthy values: '1', 'true', 'yes', 'on' (case-insensitive).
+    """
+    flag = os.getenv("NEO4J_INTEGRATION_TESTS", "").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
+_neo4j_configured = (
+    _neo4j_package_available()
+    and _neo4j_integration_opt_in()
+    and all(os.getenv(k) for k in ("NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD"))
 )
 _TEST_RUN_ID = uuid.uuid4().hex[:8]
 _TARGET_USER = f"__test_target_{_TEST_RUN_ID}"
@@ -410,7 +425,10 @@ def _make_unit_vector(
 @pytest.fixture(scope="module")
 def integration_config():
     if not _neo4j_configured:
-        pytest.skip("Neo4j not configured (need NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)")
+        pytest.skip(
+            "Neo4j integration tests not enabled "
+            "(need NEO4J_INTEGRATION_TESTS=1 plus NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)"
+        )
     return Neo4jGraphDBConfig(
         uri=os.getenv("NEO4J_URI"),
         user=os.getenv("NEO4J_USER"),
@@ -430,7 +448,7 @@ def integration_db(integration_config):
     return Neo4jGraphDB(integration_config)
 
 
-@pytest.mark.skipif(not _neo4j_configured, reason="Neo4j not configured")
+@pytest.mark.skipif(not _neo4j_configured, reason="Neo4j integration tests not enabled")
 class TestNeo4jPreFilterIntegration:
     """
     Integration test: pre-filtered vector search in a multi-user shared database.
