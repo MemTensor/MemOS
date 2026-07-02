@@ -4075,12 +4075,9 @@ export function createMemoryCore(
     };
   }
 
-  function addNeedsRepair(bucket: {
-    totalSlots: number;
-    ready: number;
-    missing: number;
-    dimMismatch: number;
-  }): EmbeddingCountsBucket & { needsRepair: number } {
+  function addNeedsRepair(
+    bucket: EmbeddingCountsBucket,
+  ): EmbeddingCountsBucket & { needsRepair: number } {
     return {
       ...bucket,
       needsRepair: bucket.missing + bucket.dimMismatch,

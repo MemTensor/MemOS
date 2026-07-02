@@ -5,13 +5,6 @@
  */
 
 import type { StorageDb } from "../types.js";
-import {
-  embeddingMaintenanceCounts,
-  inferStoredEmbeddingByteLen,
-  FLOAT32_BYTES,
-  type EmbeddingCounts,
-  type EmbeddingCountsBucket,
-} from "./embedding_maintenance.js";
 import { makeApiLogsRepo } from "./api_logs.js";
 import { makeAuditRepo } from "./audit.js";
 import { makeCandidatePoolRepo } from "./candidate_pool.js";
@@ -102,5 +95,5 @@ export {
   embeddingMaintenanceCounts,
   inferStoredEmbeddingByteLen,
   FLOAT32_BYTES,
-};
-export type { EmbeddingCounts, EmbeddingCountsBucket };
+} from "./embedding_maintenance.js";
+export type { EmbeddingCounts, EmbeddingCountsBucket } from "./embedding_maintenance.js";
