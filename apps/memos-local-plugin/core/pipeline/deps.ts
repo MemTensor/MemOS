@@ -148,6 +148,7 @@ export function extractAlgorithmConfig(
       minTraceSim: alg.retrieval.minTraceSim,
       tagFilter: alg.retrieval.tagFilter,
       keywordTopK: alg.retrieval.keywordTopK,
+      ftsTokenizer: deps.config.storage.ftsTokenizer,
       relativeThresholdFloor: alg.retrieval.relativeThresholdFloor,
       skillEtaBlend: alg.retrieval.skillEtaBlend,
       smartSeed: alg.retrieval.smartSeed,
