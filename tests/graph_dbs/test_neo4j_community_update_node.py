@@ -12,28 +12,33 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from memos.configs.graph_db import Neo4jGraphDBConfig
-from memos.configs.vec_db import QdrantConfig
+from memos.configs.graph_db import Neo4jCommunityGraphDBConfig
+from memos.configs.vec_db import VectorDBConfigFactory
 
 
 @pytest.fixture
 def qdrant_config():
-    return QdrantConfig(
-        url="http://localhost:6333",
-        collection_name="test_collection",
-        embedding_dimension=1536,
+    return VectorDBConfigFactory(
+        backend="qdrant",
+        config={
+            "url": "http://localhost:6333",
+            "collection_name": "test_collection",
+            "vector_dimension": 1536,
+            "distance_metric": "cosine",
+        },
     )
 
 
 @pytest.fixture
 def neo4j_community_config(qdrant_config):
-    return Neo4jGraphDBConfig(
+    return Neo4jCommunityGraphDBConfig(
         uri="bolt://localhost:7687",
         user="neo4j",
         password="test",
         db_name="test_memory_db",
         auto_create=False,
         use_multi_db=False,
+        user_name="test_user",
         vec_config=qdrant_config,
     )
 
