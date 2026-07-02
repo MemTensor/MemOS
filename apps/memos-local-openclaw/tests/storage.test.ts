@@ -137,6 +137,51 @@ describe("SqliteStore", () => {
     const recent0 = store.getRecentEmbeddings(0);
     expect(recent0.length).toBe(1);
   });
+
+  it("ftsSearch excludes the chunks whose session_key matches excludeSessionKey", () => {
+    store.insertChunk(makeChunk({ id: "c1", sessionKey: "sess-current", content: "Deploy the application to production", summary: "deployment" }));
+    store.insertChunk(makeChunk({ id: "c2", sessionKey: "sess-other", content: "Deploy the application to production", summary: "deployment" }));
+
+    const all = store.ftsSearch("deploy production", 10);
+    expect(all.map((r) => r.chunkId).sort()).toEqual(["c1", "c2"]);
+
+    const filtered = store.ftsSearch("deploy production", 10, undefined, "sess-current");
+    expect(filtered.map((r) => r.chunkId)).toEqual(["c2"]);
+  });
+
+  it("ftsSearch with excludeSessionKey + ownerFilter applies both filters", () => {
+    store.insertChunk(makeChunk({ id: "c1", sessionKey: "sess-current", owner: "agent:main", content: "Deploy production runbook" }));
+    store.insertChunk(makeChunk({ id: "c2", sessionKey: "sess-other", owner: "agent:main", content: "Deploy production runbook" }));
+    store.insertChunk(makeChunk({ id: "c3", sessionKey: "sess-other", owner: "agent:bot", content: "Deploy production runbook" }));
+
+    const filtered = store.ftsSearch("deploy production", 10, ["agent:main"], "sess-current");
+    expect(filtered.map((r) => r.chunkId)).toEqual(["c2"]);
+  });
+
+  it("patternSearch excludes the chunks whose session_key matches excludeSessionKey", () => {
+    store.insertChunk(makeChunk({ id: "c1", sessionKey: "sess-current", content: "唐波是工程师" }));
+    store.insertChunk(makeChunk({ id: "c2", sessionKey: "sess-other", content: "唐波是工程师" }));
+
+    const all = store.patternSearch(["唐波"], { limit: 10 });
+    expect(all.map((r) => r.chunkId).sort()).toEqual(["c1", "c2"]);
+
+    const filtered = store.patternSearch(["唐波"], { limit: 10, excludeSessionKey: "sess-current" });
+    expect(filtered.map((r) => r.chunkId)).toEqual(["c2"]);
+  });
+
+  it("getAllEmbeddings + getRecentEmbeddings exclude chunks matching excludeSessionKey", () => {
+    const base = Date.now() - 5000;
+    store.insertChunk(makeChunk({ id: "c1", sessionKey: "sess-current", createdAt: base }));
+    store.upsertEmbedding("c1", [0.1, 0.2, 0.3]);
+    store.insertChunk(makeChunk({ id: "c2", sessionKey: "sess-other", createdAt: base + 1000 }));
+    store.upsertEmbedding("c2", [0.4, 0.5, 0.6]);
+
+    const allFiltered = store.getAllEmbeddings(undefined, "sess-current");
+    expect(allFiltered.map((r) => r.chunkId)).toEqual(["c2"]);
+
+    const recentFiltered = store.getRecentEmbeddings(10, undefined, "sess-current");
+    expect(recentFiltered.map((r) => r.chunkId)).toEqual(["c2"]);
+  });
 });
 
 describe("SqliteStore hub sharing schema", () => {
@@ -527,6 +572,24 @@ describe("vectorSearch", () => {
     expect(cappedHits.length).toBeLessThanOrEqual(2);
     const cappedIds = new Set(cappedHits.map((h) => h.chunkId));
     expect(cappedIds.size).toBeLessThanOrEqual(2);
+  });
+
+  it("with excludeSessionKey filters out chunks belonging to that session", () => {
+    const base = Date.now() - 5000;
+    store.insertChunk(makeChunk({ id: "c-cur", sessionKey: "sess-current", createdAt: base }));
+    store.upsertEmbedding("c-cur", [1, 0, 0, 0]);
+    store.insertChunk(makeChunk({ id: "c-oth", sessionKey: "sess-other", createdAt: base + 1000 }));
+    store.upsertEmbedding("c-oth", [1, 0, 0, 0]);
+
+    const queryVec = [1, 0, 0, 0];
+    const all = vectorSearch(store, queryVec, 10);
+    expect(all.map((h) => h.chunkId).sort()).toEqual(["c-cur", "c-oth"]);
+
+    const filtered = vectorSearch(store, queryVec, 10, undefined, undefined, "sess-current");
+    expect(filtered.map((h) => h.chunkId)).toEqual(["c-oth"]);
+
+    const filteredWithCap = vectorSearch(store, queryVec, 10, 5, undefined, "sess-current");
+    expect(filteredWithCap.map((h) => h.chunkId)).toEqual(["c-oth"]);
   });
 });
 
