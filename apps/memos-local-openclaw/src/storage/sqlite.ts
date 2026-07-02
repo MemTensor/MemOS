@@ -1275,7 +1275,7 @@ export class SqliteStore {
 
   // ─── FTS Search ───
 
-  ftsSearch(query: string, limit: number, ownerFilter?: string[]): Array<{ chunkId: string; score: number }> {
+  ftsSearch(query: string, limit: number, ownerFilter?: string[], excludeSessionKey?: string): Array<{ chunkId: string; score: number }> {
     const sanitized = sanitizeFtsQuery(query);
     if (!sanitized) return [];
 
@@ -1291,6 +1291,11 @@ export class SqliteStore {
         const placeholders = ownerFilter.map(() => "?").join(",");
         sql += ` AND c.owner IN (${placeholders})`;
         params.push(...ownerFilter);
+      }
+
+      if (excludeSessionKey) {
+        sql += ` AND c.session_key != ?`;
+        params.push(excludeSessionKey);
       }
 
       sql += ` ORDER BY rank LIMIT ?`;
@@ -1312,7 +1317,7 @@ export class SqliteStore {
 
   // ─── Pattern Search (LIKE-based, for CJK text where FTS tokenization is weak) ───
 
-  patternSearch(patterns: string[], opts: { role?: string; limit?: number; ownerFilter?: string[] } = {}): Array<{ chunkId: string; content: string; role: string; createdAt: number }> {
+  patternSearch(patterns: string[], opts: { role?: string; limit?: number; ownerFilter?: string[]; excludeSessionKey?: string } = {}): Array<{ chunkId: string; content: string; role: string; createdAt: number }> {
     if (patterns.length === 0) return [];
     const limit = opts.limit ?? 10;
 
@@ -1329,13 +1334,19 @@ export class SqliteStore {
       params.push(...opts.ownerFilter);
     }
 
+    let sessionClause = "";
+    if (opts.excludeSessionKey) {
+      sessionClause = ` AND c.session_key != ?`;
+      params.push(opts.excludeSessionKey);
+    }
+
     params.push(limit);
 
     try {
       const rows = this.db.prepare(`
         SELECT c.id as chunk_id, c.content, c.role, c.created_at
         FROM chunks c
-        WHERE (${whereClause})${roleClause}${ownerClause} AND c.dedup_status = 'active'
+        WHERE (${whereClause})${roleClause}${ownerClause}${sessionClause} AND c.dedup_status = 'active'
         ORDER BY c.created_at DESC
         LIMIT ?
       `).all(...params) as Array<{ chunk_id: string; content: string; role: string; created_at: number }>;
@@ -1379,7 +1390,7 @@ export class SqliteStore {
 
   // ─── Vector Search ───
 
-  getAllEmbeddings(ownerFilter?: string[]): Array<{ chunkId: string; vector: number[] }> {
+  getAllEmbeddings(ownerFilter?: string[], excludeSessionKey?: string): Array<{ chunkId: string; vector: number[] }> {
     let sql = `SELECT e.chunk_id, e.vector, e.dimensions FROM embeddings e
        JOIN chunks c ON c.id = e.chunk_id
        WHERE c.dedup_status = 'active'`;
@@ -1391,6 +1402,11 @@ export class SqliteStore {
       params.push(...ownerFilter);
     }
 
+    if (excludeSessionKey) {
+      sql += ` AND c.session_key != ?`;
+      params.push(excludeSessionKey);
+    }
+
     const rows = this.db.prepare(sql).all(...params) as Array<{ chunk_id: string; vector: Buffer; dimensions: number }>;
 
     return rows.map((r) => ({
@@ -1399,8 +1415,8 @@ export class SqliteStore {
     }));
   }
 
-  getRecentEmbeddings(limit: number, ownerFilter?: string[]): Array<{ chunkId: string; vector: number[] }> {
-    if (limit <= 0) return this.getAllEmbeddings(ownerFilter);
+  getRecentEmbeddings(limit: number, ownerFilter?: string[], excludeSessionKey?: string): Array<{ chunkId: string; vector: number[] }> {
+    if (limit <= 0) return this.getAllEmbeddings(ownerFilter, excludeSessionKey);
 
     let sql = `SELECT e.chunk_id, e.vector, e.dimensions
        FROM chunks c
@@ -1412,6 +1428,11 @@ export class SqliteStore {
       const placeholders = ownerFilter.map(() => "?").join(",");
       sql += ` AND c.owner IN (${placeholders})`;
       params.push(...ownerFilter);
+    }
+
+    if (excludeSessionKey) {
+      sql += ` AND c.session_key != ?`;
+      params.push(excludeSessionKey);
     }
 
     sql += ` ORDER BY c.created_at DESC LIMIT ?`;

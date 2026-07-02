@@ -14,13 +14,14 @@ import { vectorSearch } from "../storage/vector";
 import { TaskProcessor } from "../ingest/task-processor";
 import { RecallEngine } from "../recall/engine";
 import { SkillEvolver } from "../skill/evolver";
-import { resolveConfig } from "../config";
+import { resolveConfig, deepResolveEnv } from "../config";
 import { getHubStatus } from "../client/connector";
 import { type ResolvedHubClient, hubGetMemoryDetail, hubListMemories, hubListTasks, hubListSkills, hubRequestJson, hubSearchMemories, hubSearchSkills, hubUpdateUsername, normalizeHubUrl, resolveHubClient } from "../client/hub";
 import { buildSkillBundleForHub, fetchHubSkillBundle, restoreSkillBundleFromHub } from "../client/skill-sync";
 import type { Logger, Chunk, PluginContext, MemosLocalConfig } from "../types";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
+import { parseJsonOrJson5 } from "../shared/json5";
 
 export interface MigrationStepFailureCounts {
   summarization: number;
@@ -649,7 +650,7 @@ export class ViewerServer {
     try {
       const cfgPath = this.getOpenClawConfigPath();
       if (fs.existsSync(cfgPath)) {
-        const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
         const entries = raw?.plugins?.entries ?? {};
         const pluginCfg = entries["memos-local-openclaw-plugin"]?.config
           ?? entries["memos-local"]?.config ?? {};
@@ -928,6 +929,20 @@ export class ViewerServer {
     const dateFrom = url.searchParams.get("dateFrom") ?? undefined;
     const dateTo = url.searchParams.get("dateTo") ?? undefined;
 
+    // Issue #1372: honor `limit` and `minScore` query params.
+    // - `limit` is clamped to [1, 100]; default 20 to match the historical
+    //   FTS-fallback slice so behavior is unchanged when the client omits it.
+    // - `minScore` is clamped to [0.35, 1]; default 0.64 preserves the
+    //   previous semantic-similarity gate.
+    const rawLimit = Number(url.searchParams.get("limit"));
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(100, Math.max(1, Math.floor(rawLimit)))
+      : 20;
+    const rawMinScore = Number(url.searchParams.get("minScore"));
+    const minScore = Number.isFinite(rawMinScore) && rawMinScore > 0
+      ? Math.max(0.35, Math.min(1, rawMinScore))
+      : 0.64;
+
     const passesFilter = (r: any): boolean => {
       if (role && r.role !== role) return false;
       if (session && r.session_key !== session) return false;
@@ -962,7 +977,7 @@ export class ViewerServer {
       }
     }
 
-    const SEMANTIC_THRESHOLD = 0.64;
+    const SEMANTIC_THRESHOLD = minScore;
     const VECTOR_TIMEOUT_MS = 8000;
     let vectorResults: any[] = [];
     let scoreMap = new Map<string, number>();
@@ -1001,7 +1016,7 @@ export class ViewerServer {
       if (!seenIds.has(r.id)) { seenIds.add(r.id); merged.push(r); }
     }
 
-    const results = merged.length > 0 ? merged : ftsResults.slice(0, 20);
+    const results = (merged.length > 0 ? merged : ftsResults).slice(0, limit);
 
     this.store.recordViewerEvent("search");
     this.jsonResponse(res, {
@@ -1010,6 +1025,8 @@ export class ViewerServer {
       vectorCount: vectorResults.length,
       ftsCount: ftsResults.length,
       total: results.length,
+      limit,
+      minScore,
     });
   }
 
@@ -1934,6 +1951,42 @@ export class ViewerServer {
     const home = process.env.HOME || process.env.USERPROFILE || "";
     const ocHome = process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
     return path.join(ocHome, "openclaw.json");
+  }
+
+  /**
+   * Read openclaw.json without env-var resolution. Used by serveConfig (UI editor needs to
+   * see raw `${VAR}` literals so saves don't accidentally leak resolved secrets back into
+   * the config file). Returns `null` when the file is missing or unreadable.
+   */
+  private readOpenClawRawConfig(): Record<string, any> | null {
+    try {
+      const cfgPath = this.getOpenClawConfigPath();
+      if (!fs.existsSync(cfgPath)) return null;
+      return parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, any>;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read openclaw.json and apply `${VAR}` env-var resolution. Use this whenever the
+   * resulting value is consumed by something that actually contacts the network
+   * (apiKey/endpoint/baseUrl). Returns `null` when the file is missing or unreadable.
+   */
+  private readOpenClawResolvedConfig(): Record<string, any> | null {
+    const raw = this.readOpenClawRawConfig();
+    if (!raw) return null;
+    return deepResolveEnv(raw);
+  }
+
+  /**
+   * Read this plugin's section from openclaw.json with `${VAR}` env vars resolved.
+   * Used by migration / model tests that need real apiKey strings.
+   */
+  private readPluginConfigResolved(): Record<string, any> {
+    const raw = this.readOpenClawResolvedConfig();
+    if (!raw) return {};
+    return this.getPluginEntryConfig(raw);
   }
 
   private getPluginEntryConfig(raw: any): Record<string, unknown> {
@@ -3023,7 +3076,7 @@ export class ViewerServer {
         this.jsonResponse(res, {});
         return;
       }
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
       const entries = raw?.plugins?.entries ?? {};
       const pluginEntry = entries["memos-local-openclaw-plugin"]?.config
         ?? entries["memos-local"]?.config
@@ -3055,7 +3108,7 @@ export class ViewerServer {
         const cfgPath = this.getOpenClawConfigPath();
         let raw: Record<string, unknown> = {};
         if (fs.existsSync(cfgPath)) {
-          raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, unknown>;
         }
 
         if (!raw.plugins) raw.plugins = {};
@@ -3516,12 +3569,14 @@ export class ViewerServer {
 
   private serveFallbackModel(res: http.ServerResponse): void {
     try {
-      const cfgPath = this.getOpenClawConfigPath();
-      if (!fs.existsSync(cfgPath)) {
+      // Resolve ${VAR} env-vars so providers.<id>.{baseUrl,apiKey} that reference
+      // process env (e.g. apiKey="${OPENAI_API_KEY}") evaluate before we report
+      // the fallback model as available.
+      const raw = this.readOpenClawResolvedConfig();
+      if (!raw) {
         this.jsonResponse(res, { available: false });
         return;
       }
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
       const agentModel: string | undefined = raw?.agents?.defaults?.model?.primary;
       if (!agentModel) {
         this.jsonResponse(res, { available: false });
@@ -3771,7 +3826,7 @@ export class ViewerServer {
 
                   discardBackup();
                   this.log.info(`update-install: success! Updated to ${newVersion}`);
-                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install");
+                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install", 250);
                 });
               });
             });
@@ -3788,6 +3843,11 @@ export class ViewerServer {
     if (provider === "local") {
       return 384;
     }
+    // Resolve ${VAR} env-var literals: the UI forwards the raw value pulled from
+    // openclaw.json verbatim (see serveConfig), so we must expand here before hitting
+    // the network — otherwise Bearer headers contain the literal "${MY_KEY}" string.
+    endpoint = deepResolveEnv(endpoint || "");
+    apiKey = deepResolveEnv(apiKey || "");
     const baseUrl = (endpoint || "https://api.openai.com/v1").replace(/\/+$/, "");
     const embUrl = baseUrl.endsWith("/embeddings") ? baseUrl : `${baseUrl}/embeddings`;
     const headers: Record<string, string> = {
@@ -3855,6 +3915,10 @@ export class ViewerServer {
   }
 
   private async testChatModel(provider: string, model: string, endpoint: string, apiKey: string): Promise<void> {
+    // Same env-var expansion as testEmbeddingModel: openclaw.json values such as
+    // "${OPENAI_API_KEY}" must be resolved before hitting the network.
+    endpoint = deepResolveEnv(endpoint || "");
+    apiKey = deepResolveEnv(apiKey || "");
     const baseUrl = (endpoint || "https://api.openai.com/v1").replace(/\/+$/, "");
     if (provider === "anthropic") {
       const url = endpoint || "https://api.anthropic.com/v1/messages";
@@ -4009,7 +4073,7 @@ export class ViewerServer {
       let hasSummarizer = false;
       if (fs.existsSync(cfgPath)) {
         try {
-          const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
           const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
                             raw?.plugins?.entries?.["memos-local"]?.config ??
                             raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
@@ -4201,16 +4265,12 @@ export class ViewerServer {
     let totalSkipped = 0;
     let totalErrors = 0;
 
-    const cfgPath = this.getOpenClawConfigPath();
-    let summarizerCfg: any;
-    try {
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-      const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
-                        raw?.plugins?.entries?.["memos-local"]?.config ??
-                        raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
-                        raw?.plugins?.entries?.["memos-lite"]?.config ?? {};
-      summarizerCfg = pluginCfg.summarizer;
-    } catch { /* no config */ }
+    // Build the migration Summarizer from the env-resolved plugin config so any
+    // apiKey/endpoint of the form "${OPENAI_API_KEY}" is expanded against process.env
+    // before the LLM call. Without this the migration's summarizer hits remote APIs
+    // with literal "${VAR}" Bearer tokens and 401s out.
+    const pluginCfg = this.readPluginConfigResolved();
+    const summarizerCfg = (pluginCfg as any)?.summarizer;
 
     const summarizer = new Summarizer(summarizerCfg, this.log);
 
@@ -4912,12 +4972,11 @@ export class ViewerServer {
     statusCode = 200,
   ): void {
     res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(data), () => {
-      setTimeout(() => {
-        this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
-        try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-      }, delayMs);
-    });
+    res.end(JSON.stringify(data));
+    setTimeout(() => {
+      this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
+      try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+    }, delayMs);
   }
 
   private jsonResponse(res: http.ServerResponse, data: unknown, statusCode = 200): void {

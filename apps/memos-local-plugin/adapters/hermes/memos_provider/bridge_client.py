@@ -32,6 +32,18 @@ logger = logging.getLogger(__name__)
 
 HOST_HANDLER_WAIT_SECONDS = 5.0
 
+# ─── Module-level singleton tracker ─────────────────────────────────────
+# Each entry maps a ``(agent, no_viewer)`` key to the most-recent active
+# ``MemosBridgeClient`` for that slot. When a new client is constructed
+# for an existing key, the previous client is closed synchronously so the
+# Node-side ``bridge.cjs`` subprocess does not leak.
+#
+# This is the Python-side guard against issue #1910 (bridge process leak:
+# every turn spawns new bridge.cjs). Defence in depth on the Node side
+# lives in ``bridge.cts`` via ``bridge-stdio.pid``.
+_ACTIVE_CLIENTS: dict[tuple[str, bool], MemosBridgeClient] = {}
+_ACTIVE_CLIENTS_LOCK = threading.Lock()
+
 
 def _installed_node_binary(plugin_root: Path) -> str | None:
     marker = plugin_root / ".memos-node-bin"
@@ -45,9 +57,27 @@ def _installed_node_binary(plugin_root: Path) -> str | None:
 
 
 def _bridge_script(plugin_root: Path) -> Path:
-    compiled = plugin_root / "dist" / "bridge.cjs"
-    if compiled.exists():
-        return compiled
+    """Pick the bridge entrypoint, preferring pure ESM over the CJS trampoline.
+
+    Resolution order (issue #1736):
+        1. ``dist/bridge.mjs`` — pure ESM compiled output, the only entry
+           that avoids the CJS↔ESM bridge that fails on Node ≥ 22.
+        2. ``dist/bridge.cjs`` — legacy CommonJS compiled output, kept for
+           installations whose ``dist/`` predates the ESM entrypoint.
+        3. ``bridge.mts`` — pure ESM TypeScript source for ``tsx``-driven
+           local development.
+        4. ``bridge.cts`` — legacy CommonJS TypeScript source. Returned
+           as the last-resort default so error messages stay stable when
+           none of the candidates exist.
+    """
+    candidates = (
+        plugin_root / "dist" / "bridge.mjs",
+        plugin_root / "dist" / "bridge.cjs",
+        plugin_root / "bridge.mts",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     return plugin_root / "bridge.cts"
 
 
@@ -111,16 +141,19 @@ class MemosBridgeClient:
         script = str(script_path)
         env = {**os.environ, **(extra_env or {})}
 
-        # Prefer the compiled CommonJS bridge from packaged installs. The raw
-        # TypeScript entry remains as a development fallback and needs `tsx`
-        # for stripping types plus `.js` → `.ts` import resolution. On Windows
-        # the `.bin/tsx` file is a shell shim, so use tsx's real JS entrypoint
-        # whenever we have to launch the source entry through a specific Node.
+        # Prefer the compiled JavaScript bridge — the new pure ESM
+        # ``dist/bridge.mjs`` (issue #1736) or the legacy ``dist/bridge.cjs``
+        # — both run on plain ``node`` without any loader. The raw
+        # TypeScript entries remain as a development fallback and need
+        # ``tsx`` for stripping types plus ``.js`` → ``.ts`` import
+        # resolution. On Windows the ``.bin/tsx`` file is a shell shim,
+        # so use tsx's real JS entrypoint whenever we have to launch the
+        # source entry through a specific Node.
         tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
         bridge_args = [script, f"--agent={agent}"]
         if no_viewer:
             bridge_args.append("--no-viewer")
-        if script_path.suffix == ".cjs":
+        if script_path.suffix in (".mjs", ".cjs"):
             cmd = [node, *bridge_args]
         elif tsx_cli.exists():
             cmd = [node, str(tsx_cli), *bridge_args]
@@ -156,6 +189,40 @@ class MemosBridgeClient:
         )
         self._stderr_reader.start()
 
+        # Singleton tracking (issue #1910). Register ourselves as the
+        # active client for ``(agent, no_viewer)`` and reap any previous
+        # holder synchronously so its subprocess does not leak. The reap
+        # happens AFTER our reader threads are running, so the previous
+        # client's ``close()`` (which closes stdin and waits for exit)
+        # cannot interfere with our own startup.
+        self._singleton_agent = agent
+        self._singleton_no_viewer = bool(no_viewer)
+        previous = self._register_active()
+        if previous is not None and previous is not self:
+            prev_pid = getattr(previous, "pid", "?")
+            logger.info(
+                "MemOS: closing previous bridge client (pid=%s) before adopting new one (pid=%s)",
+                prev_pid,
+                self.pid,
+            )
+            with contextlib.suppress(Exception):
+                previous.close()
+
+    def _register_active(self) -> MemosBridgeClient | None:
+        """Register self as the active singleton; return the displaced client."""
+        key = (self._singleton_agent, self._singleton_no_viewer)
+        with _ACTIVE_CLIENTS_LOCK:
+            previous = _ACTIVE_CLIENTS.get(key)
+            _ACTIVE_CLIENTS[key] = self
+        return previous
+
+    def _unregister_active(self) -> None:
+        """Remove self from the active registry if we are still the current entry."""
+        key = (self._singleton_agent, self._singleton_no_viewer)
+        with _ACTIVE_CLIENTS_LOCK:
+            if _ACTIVE_CLIENTS.get(key) is self:
+                _ACTIVE_CLIENTS.pop(key, None)
+
     @property
     def pid(self) -> int:
         """Return the PID of the bridge subprocess."""
@@ -172,6 +239,18 @@ class MemosBridgeClient:
     ) -> dict[str, Any]:
         if self._closed:
             raise BridgeError("transport_closed", "bridge client is closed")
+        # Layer 2 (#2028): if the subprocess has already exited, bail
+        # BEFORE writing to the pipe. Otherwise the write silently
+        # buffers into a dead pipe and the caller parks on the full
+        # per-request timeout.
+        exit_code = None
+        with contextlib.suppress(Exception):
+            exit_code = self._proc.poll()
+        if exit_code is not None:
+            raise BridgeError(
+                "transport_closed",
+                f"bridge subprocess exited (code={exit_code})",
+            )
         with self._lock:
             rpc_id = self._next_id
             self._next_id += 1
@@ -244,6 +323,12 @@ class MemosBridgeClient:
             self._closed = True
             self._host_handlers_cv.notify_all()
 
+        # Drop self from the module-level singleton tracker (issue #1910)
+        # BEFORE the potentially-slow stdin/SIGTERM/SIGKILL dance. We
+        # only evict the registry slot if we still own it — a newer
+        # client that displaced us must remain reachable.
+        self._unregister_active()
+
         pid = self.pid
 
         # 1. Close stdin (triggers bridge's graceful exit)
@@ -275,86 +360,113 @@ class MemosBridgeClient:
                     logger.error("MemOS: bridge process %d could not be killed", pid)
 
         # 5. Clean up pending requests
+        self._abort_pending("bridge closed")
+
+    # ─── Internals ──
+
+    def _abort_pending(self, reason: str) -> None:
+        """Wake every parked JSON-RPC waiter with `transport_closed`.
+
+        Called from both `close()` and the `_read_loop` `finally:`
+        block, so any pending request sees a real transport error
+        immediately instead of parking on its per-request timeout.
+        Also flips `_closed` and notifies host-handler waiters so a
+        second `request()` fails fast.
+        """
+        with self._host_handlers_cv:
+            self._closed = True
+            self._host_handlers_cv.notify_all()
         with self._lock:
             for entry in list(self._pending.values()):
                 entry["error"] = {
                     "code": -32000,
-                    "message": "bridge closed",
+                    "message": reason,
                     "data": {"code": "transport_closed"},
                 }
                 entry["event"].set()
             self._pending.clear()
 
-    # ─── Internals ──
-
     def _read_loop(self) -> None:
         assert self._proc.stdout is not None
-        for line in self._proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                logger.debug("bridge: malformed line: %r", line[:120])
-                continue
-            if "id" in msg and msg["id"] is not None and ("result" in msg or "error" in msg):
-                self._resolve(msg)
-                continue
-            if msg.get("method") == "events.notify":
-                for cb in list(self._events):
-                    try:
-                        cb(msg.get("params") or {})
-                    except Exception:
-                        logger.debug("event listener threw", exc_info=True)
-                continue
-            if msg.get("method") == "logs.forward":
-                for cb in list(self._logs):
-                    try:
-                        cb(msg.get("params") or {})
-                    except Exception:
-                        logger.debug("log listener threw", exc_info=True)
-                continue
-            # Reverse-direction request: the bridge is asking the
-            # adapter to do something (e.g. run a fallback LLM call
-            # via `host.llm.complete`). Dispatch to the registered
-            # handler and write the response back synchronously.
-            method = msg.get("method")
-            rpc_id = msg.get("id")
-            if (
-                isinstance(method, str)
-                and rpc_id is not None
-                and "result" not in msg
-                and "error" not in msg
-            ):
-                handler = self._host_handler_for(method)
-                if handler is None:
-                    self._send_response(
-                        rpc_id,
-                        error={
-                            "code": -32601,
-                            "message": f"method not found: {method}",
-                            "data": {"code": "unknown_method"},
-                        },
-                    )
+        try:
+            for line in self._proc.stdout:
+                line = line.strip()
+                if not line:
                     continue
-                params = msg.get("params") or {}
-                if not isinstance(params, dict):
-                    params = {}
                 try:
-                    result = handler(params)
-                    self._send_response(rpc_id, result=result)
-                except Exception as err:
-                    logger.warning("host handler %s failed: %s", method, err)
-                    self._send_response(
-                        rpc_id,
-                        error={
-                            "code": -32000,
-                            "message": str(err) or err.__class__.__name__,
-                            "data": {"code": "host_handler_failed"},
-                        },
-                    )
-                continue
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.debug("bridge: malformed line: %r", line[:120])
+                    continue
+                if "id" in msg and msg["id"] is not None and ("result" in msg or "error" in msg):
+                    self._resolve(msg)
+                    continue
+                if msg.get("method") == "events.notify":
+                    for cb in list(self._events):
+                        try:
+                            cb(msg.get("params") or {})
+                        except Exception:
+                            logger.debug("event listener threw", exc_info=True)
+                    continue
+                if msg.get("method") == "logs.forward":
+                    for cb in list(self._logs):
+                        try:
+                            cb(msg.get("params") or {})
+                        except Exception:
+                            logger.debug("log listener threw", exc_info=True)
+                    continue
+                # Reverse-direction request: the bridge is asking the
+                # adapter to do something (e.g. run a fallback LLM call
+                # via `host.llm.complete`). Dispatch to the registered
+                # handler and write the response back synchronously.
+                method = msg.get("method")
+                rpc_id = msg.get("id")
+                if (
+                    isinstance(method, str)
+                    and rpc_id is not None
+                    and "result" not in msg
+                    and "error" not in msg
+                ):
+                    handler = self._host_handler_for(method)
+                    if handler is None:
+                        self._send_response(
+                            rpc_id,
+                            error={
+                                "code": -32601,
+                                "message": f"method not found: {method}",
+                                "data": {"code": "unknown_method"},
+                            },
+                        )
+                        continue
+                    params = msg.get("params") or {}
+                    if not isinstance(params, dict):
+                        params = {}
+                    try:
+                        result = handler(params)
+                        self._send_response(rpc_id, result=result)
+                    except Exception as err:
+                        logger.warning("host handler %s failed: %s", method, err)
+                        self._send_response(
+                            rpc_id,
+                            error={
+                                "code": -32000,
+                                "message": str(err) or err.__class__.__name__,
+                                "data": {"code": "host_handler_failed"},
+                            },
+                        )
+                    continue
+        except Exception:
+            # Any unexpected exception in the reader loop still needs
+            # to fall through to the `finally:` cleanup so callers
+            # don't park on 30 s timeouts.
+            logger.debug("bridge reader thread crashed", exc_info=True)
+        finally:
+            # Layer 1 (#2028): the reader thread is the only signal
+            # that the Node subprocess has stopped answering. On any
+            # exit — normal EOF or exception — abort pending waiters
+            # immediately so callers get `transport_closed` in < 1 s
+            # instead of waiting for each 30 s per-request timeout.
+            self._abort_pending("bridge subprocess exited")
 
     def _host_handler_for(
         self,
