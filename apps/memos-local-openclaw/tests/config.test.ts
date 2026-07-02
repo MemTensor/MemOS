@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveConfig } from "../src/config";
+import { DEFAULTS } from "../src/types";
 
 describe("resolveConfig", () => {
   it("injects openclaw providers into existing blocks when host capabilities are enabled", () => {
@@ -86,5 +87,24 @@ describe("resolveConfig", () => {
         hostCompletion: true,
       },
     });
+  });
+
+  it("threads recall.autoRecallTimeoutMs through to the resolved recall block", () => {
+    const resolved = resolveConfig(
+      {
+        recall: {
+          autoRecallTimeoutMs: 2500,
+        },
+      },
+      "/tmp/memos-config-test",
+    );
+
+    expect(resolved.recall.autoRecallTimeoutMs).toBe(2500);
+  });
+
+  it("falls back to the default autoRecallTimeoutMs when not configured", () => {
+    const resolved = resolveConfig({}, "/tmp/memos-config-test");
+
+    expect(resolved.recall.autoRecallTimeoutMs).toBe(DEFAULTS.autoRecallTimeoutMs);
   });
 });
