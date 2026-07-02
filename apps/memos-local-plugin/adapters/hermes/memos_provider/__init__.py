@@ -52,8 +52,8 @@ import os
 import re
 import sys
 import threading
-import weakref
 import time
+import weakref
 
 from pathlib import Path
 from typing import Any
@@ -1583,12 +1583,10 @@ class MemTensorProvider(MemoryProvider):
         # Hermes agent routed model change with self.agent = None), clean
         # up the bridge subprocess and keepalive thread on GC.
         if self._bridge is not None or (
-            self._bridge_keepalive_thread is not None
-            and self._bridge_keepalive_thread.is_alive()
+            self._bridge_keepalive_thread is not None and self._bridge_keepalive_thread.is_alive()
         ):
             logger.warning(
-                "MemOS: __del__ cleaning up leaked provider "
-                "— shutdown() was never called"
+                "MemOS: __del__ cleaning up leaked provider — shutdown() was never called"
             )
             with contextlib.suppress(Exception):
                 self.shutdown()
@@ -1894,17 +1892,11 @@ class MemTensorProvider(MemoryProvider):
                     provider._bridge.request("core.health", {}, timeout=10.0)
                 except Exception as err:
                     if provider._is_transport_closed(err):
-                        logger.info(
-                            "MemOS: bridge keepalive reconnecting after transport close"
-                        )
+                        logger.info("MemOS: bridge keepalive reconnecting after transport close")
                         with contextlib.suppress(Exception):
-                            provider._reconnect_bridge(
-                                provider._session_id, timeout=10.0
-                            )
+                            provider._reconnect_bridge(provider._session_id, timeout=10.0)
                     else:
-                        logger.debug(
-                            "MemOS: bridge keepalive failed — %s", err
-                        )
+                        logger.debug("MemOS: bridge keepalive failed — %s", err)
 
         self._bridge_keepalive_thread = threading.Thread(
             target=_run,
