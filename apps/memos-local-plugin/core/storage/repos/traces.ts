@@ -139,6 +139,60 @@ export function makeTracesRepo(db: StorageDb) {
       return false;
     },
 
+    /**
+     * Count how many of the given IDs actually exist in the `traces` table.
+     *
+     * Used by the reward-dirty check
+     * (https://github.com/MemTensor/MemOS/issues/1966) to tolerate "ghost"
+     * trace IDs — entries that linger in `episodes.trace_ids_json` but whose
+     * backing trace row was deleted (manual cleanup, schema migration, etc.).
+     * Without this, comparing `reward.traceCount` against
+     * `episode.traceIds.length` triggers an infinite rescore loop whenever
+     * `length` includes ghosts that the reward pipeline already filtered out.
+     *
+     * Uses a single `SELECT COUNT(*)` per chunk so the cost is independent of
+     * row size — embedding BLOBs and `tool_calls_json` are never read.
+     */
+    countExisting(ids: readonly TraceId[]): number {
+      if (ids.length === 0) return 0;
+      // De-duplicate so the count reflects distinct IDs, matching the
+      // semantics of `getManyByIds(ids).length` which also dedupes.
+      const dedup = Array.from(new Set(ids));
+      const CHUNK_SIZE = 900;
+      let total = 0;
+      for (let i = 0; i < dedup.length; i += CHUNK_SIZE) {
+        const chunk = dedup.slice(i, i + CHUNK_SIZE);
+        const placeholders = buildInClause(chunk.length);
+        const sql = `SELECT COUNT(*) AS n FROM traces WHERE id ${placeholders}`;
+        const row = db
+          .prepare<readonly string[], { n: number }>(sql)
+          .get(chunk);
+        total += row?.n ?? 0;
+      }
+      return total;
+    },
+
+    /**
+     * Return the subset of `ids` that actually exist in the `traces` table,
+     * preserving the input order and de-duplicating. Companion to
+     * `countExisting`; used by `episodes.appendTrace` to strip ghost IDs at
+     * write time (#1966).
+     */
+    filterExistingIds(ids: readonly TraceId[]): TraceId[] {
+      if (ids.length === 0) return [];
+      const dedup = Array.from(new Set(ids));
+      const existing = new Set<string>();
+      const CHUNK_SIZE = 900;
+      for (let i = 0; i < dedup.length; i += CHUNK_SIZE) {
+        const chunk = dedup.slice(i, i + CHUNK_SIZE);
+        const placeholders = buildInClause(chunk.length);
+        const sql = `SELECT id FROM traces WHERE id ${placeholders}`;
+        const rows = db.prepare<readonly string[], { id: string }>(sql).all(chunk);
+        for (const r of rows) existing.add(r.id);
+      }
+      return dedup.filter((id) => existing.has(id));
+    },
+
     list(filter: TraceListFilter = {}): TraceRow[] {
       const tr = timeRangeWhere(filter, "ts");
       const fragments: string[] = [];
