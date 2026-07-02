@@ -1,62 +1,97 @@
 {
-  "name": "@memtensor/memos-local-hermes-plugin",
-  "version": "1.0.2",
-  "description": "MemTensor Local memory plugin for Hermes Agent",
+  "name": "@memtensor/memos-local-plugin",
+  "version": "2.0.5",
+  "description": "Reflect2Evolve memory plugin: layered L1/L2/L3 memory, reflection-weighted value backprop, cross-task policy induction, skill crystallization, three-tier retrieval. Adapters for OpenClaw and Hermes Agent via a shared algorithm core.",
   "type": "module",
-  "main": "index.ts",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/MemTensor/MemOS.git",
-    "directory": "apps/memos-local-plugin"
-  },
-  "publishConfig": {
-    "access": "public"
+  "main": "dist/core/index.js",
+  "types": "dist/core/index.d.ts",
+  "openclaw": {
+    "id": "memos-local-plugin",
+    "kind": "memory",
+    "extensions": [
+      "./dist/adapters/openclaw/index.js"
+    ],
+    "installDependencies": true
   },
   "files": [
-    "index.ts",
+    "dist",
+    "telemetry.credentials.json",
+    "openclaw.plugin.json",
     "bridge.cts",
-    "src",
-    "adapters",
-    "prebuilds",
+    "bridge.mts",
+    "bridge/**/*.ts",
+    "core/**/*.ts",
+    "core/storage/migrations/*.sql",
+    "agent-contract/**/*.ts",
+    "server/**/*.ts",
+    "adapters/openclaw/**/*.ts",
+    "adapters/openclaw/*.sh",
+    "adapters/hermes/*.sh",
+    "adapters/hermes/plugin.yaml",
+    "adapters/hermes/memos_provider/*.py",
+    "templates/*.yaml",
+    "templates/README.user.md",
+    "viewer/dist",
+    "scripts/postinstall.cjs",
     "install.sh",
+    "install.ps1",
     "tsconfig.json",
-    ".env.example",
-    "README.md"
+    "!**/ALGORITHMS.md",
+    "!**/README.md",
+    "!**/__pycache__",
+    "!**/*.pyc",
+    "!**/.gitkeep",
+    "!**/*.map",
+    "!dist/tests",
+    "!dist/tests/**"
   ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "prepack": "rm -rf adapters/hermes/__pycache__ adapters/openharness/scripts/__pycache__ adapters/hermes/bridge_path.txt adapters/openharness/scripts/bridge_path.txt && echo 'prepack cleanup done'",
-    "prepublishOnly": "echo 'Source + prebuilds publish — no tsc dist needed.'"
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-runtime-assets.cjs",
+    "build:viewer": "vite build --config vite.config.ts",
+    "build:package": "npm run build && npm run build:viewer",
+    "prepack": "npm run build:package",
+    "dev": "tsc -p tsconfig.json --watch",
+    "viewer:dev": "vite --config vite.config.ts",
+    "bridge": "tsx bridge.cts",
+    "bridge:daemon": "tsx bridge.cts --daemon",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "postinstall": "node scripts/postinstall.cjs"
   },
   "keywords": [
-    "memtensor",
     "memory",
-    "memos",
-    "rag",
-    "local",
+    "agent",
+    "reflect2evolve",
+    "self-evolution",
+    "skill-crystallization",
+    "openclaw",
     "hermes"
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0 <25.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.0",
+    "@preact/signals": "^2.9.0",
     "@sinclair/typebox": "^0.34.48",
-    "better-sqlite3": "^12.6.3",
-    "posthog-node": "^5.28.0",
-    "puppeteer": "^24.38.0",
-    "semver": "^7.7.4",
+    "better-sqlite3": "^12.10.0",
+    "preact": "^10.29.1",
     "tsx": "^4.21.0",
-    "uuid": "^10.0.0"
+    "uuid": "^10.0.0",
+    "yaml": "^2.6.0"
   },
   "devDependencies": {
+    "@preact/preset-vite": "^2.10.5",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
-    "@types/semver": "^7.7.1",
     "@types/uuid": "^10.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vite": "^5.4.10",
+    "vitest": "^2.1.9"
   }
 }

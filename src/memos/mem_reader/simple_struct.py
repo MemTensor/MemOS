@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from memos import log
 from memos.chunkers import ChunkerFactory
+from memos.configs.llm import LLMConfigFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
@@ -183,6 +184,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             if config.general_llm is not None
             else self.llm
         )
+        self.qwen_llm = None
+        qwen_llm_config = getattr(config, "qwen_llm", None)
+        if qwen_llm_config:
+            try:
+                if isinstance(qwen_llm_config, dict):
+                    qwen_llm_config = LLMConfigFactory.model_validate(qwen_llm_config)
+                self.qwen_llm = LLMFactory.from_config(qwen_llm_config)
+            except Exception as e:
+                logger.warning(f"[LLM] Qwen initialization failed: {e}")
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
         self.save_rawfile = self.chunker.config.save_rawfile

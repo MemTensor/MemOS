@@ -1,0 +1,440 @@
+/**
+ * `SessionManager` — the only surface adapters and the orchestrator see.
+ *
+ * Responsibilities:
+ *   - Open / close sessions. A session is the long-lived logical
+ *     connection between an agent and this plugin.
+ *   - Start episodes (classifies intent, writes the row, emits events).
+ *   - Add turns to the currently-open episode for a session.
+ *   - Finalize / abandon episodes.
+ *   - Prune idle sessions / force-close open episodes on shutdown.
+ *   - Provide small readers for the viewer (listSessions, listEpisodes).
+ *
+ * The manager is per-process. There is no distributed coordination —
+ * OpenClaw / Hermes run one plugin instance at a time.
+ */
+
+import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
+import type { AgentKind, EpisodeId, SessionId } from "../../agent-contract/dto.js";
+import { ids } from "../id.js";
+import { withCtx } from "../logger/context.js";
+import { rootLogger } from "../logger/index.js";
+import type { EpochMs } from "../types.js";
+import { createEpisodeManager, type EpisodeManager } from "./episode-manager.js";
+import { createSessionEventBus } from "./events.js";
+import type { IntentClassifier } from "./intent-classifier.js";
+import type { EpisodesRepo, SessionRepo } from "./persistence.js";
+import type {
+  EpisodeFinalizeInput,
+  EpisodeSnapshot,
+  EpisodeStartInput,
+  EpisodeTurn,
+  EpisodeTurnInput,
+  IntentDecision,
+  SessionEventBus,
+  SessionOpenInput,
+  SessionSnapshot,
+} from "./types.js";
+
+export interface SessionManagerDeps {
+  sessionsRepo: SessionRepo;
+  episodesRepo: EpisodesRepo;
+  intentClassifier: IntentClassifier;
+  now?: () => EpochMs;
+  /** Idle cutoff in ms. Used by `pruneIdle`. Default 24h. */
+  idleCutoffMs?: number;
+  /** Injected bus (for tests) or new if absent. */
+  bus?: SessionEventBus;
+  /** Injected episode manager (for tests). */
+  episodeManager?: EpisodeManager;
+  /** Lightweight memory mode closes technical episodes without reflect/reward semantics. */
+  lightweightMemory?: boolean;
+}
+
+export interface StartEpisodeInput {
+  sessionId: SessionId;
+  /** Pre-minted id. Optional. */
+  id?: EpisodeId;
+  /** First user message. Required. */
+  userMessage: string;
+  /** Adapter-provided event time for the first user turn. */
+  ts?: EpochMs;
+  meta?: Record<string, unknown>;
+}
+
+export interface SessionManager {
+  readonly bus: SessionEventBus;
+
+  openSession(input: SessionOpenInput): SessionSnapshot;
+  closeSession(id: SessionId, reason?: string): void;
+  getSession(id: SessionId): SessionSnapshot | null;
+  listSessions(limit?: number): SessionSnapshot[];
+  pruneIdle(now?: EpochMs): SessionId[];
+
+  startEpisode(input: StartEpisodeInput): Promise<EpisodeSnapshot>;
+  addTurn(episodeId: EpisodeId, turn: EpisodeTurnInput): EpisodeTurn;
+  finalizeEpisode(episodeId: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot;
+  abandonEpisode(episodeId: EpisodeId, reason: string): EpisodeSnapshot;
+  discardEmptyEpisode(episodeId: EpisodeId, reason: string): EpisodeSnapshot | null;
+  /** V7 §0.1 "revision" path — reopen a previously-closed episode. */
+  reopenEpisode(
+    episodeId: EpisodeId,
+    reason: import("./types.js").TurnRelation,
+  ): EpisodeSnapshot;
+  hydrateEpisode(snapshot: EpisodeSnapshot): EpisodeSnapshot;
+  attachTraceIds(episodeId: EpisodeId, traceIds: string[]): void;
+  patchEpisodeMeta(episodeId: EpisodeId, metaPatch: Record<string, unknown>): EpisodeSnapshot;
+
+  getEpisode(id: EpisodeId): EpisodeSnapshot | null;
+  listEpisodes(sessionId: SessionId): EpisodeSnapshot[];
+  listOpenEpisodes(): EpisodeSnapshot[];
+
+  /** Shutdown path. Abandons any open episodes and closes all sessions. */
+  shutdown(reason: string): void;
+}
+
+export function createSessionManager(deps: SessionManagerDeps): SessionManager {
+  const now = deps.now ?? Date.now;
+  const log = rootLogger.child({ channel: "core.session" });
+  const bus = deps.bus ?? createSessionEventBus();
+  const epm = deps.episodeManager ?? createEpisodeManager({
+    sessionsRepo: deps.sessionsRepo,
+    episodesRepo: deps.episodesRepo,
+    now,
+    bus,
+  });
+
+  // Known-alive sessions (includes ones we've only seen via touch / DB row
+  // reloads). Populated on demand in `getSession` too.
+  const live = new Map<SessionId, SessionSnapshot>();
+
+  function snapshotFor(row: ReturnType<SessionRepo["getById"]> & object): SessionSnapshot {
+    return {
+      id: row.id,
+      agent: row.agent,
+      startedAt: row.startedAt,
+      lastSeenAt: row.lastSeenAt,
+      meta: row.meta,
+      openEpisodeCount: epm.listForSession(row.id).filter((e) => e.status === "open").length,
+    };
+  }
+
+  function openSession(input: SessionOpenInput): SessionSnapshot {
+    const ts = now();
+    const id = input.id ?? (ids.session() as SessionId);
+    deps.sessionsRepo.upsertIfMissing({
+      id,
+      agent: input.agent,
+      ownerAgentKind: stringMeta(input.meta, "ownerAgentKind") ?? input.agent,
+      ownerProfileId: stringMeta(input.meta, "ownerProfileId") ?? "default",
+      ownerWorkspaceId: stringMeta(input.meta, "ownerWorkspaceId") ?? null,
+      startedAt: ts,
+      lastSeenAt: ts,
+      meta: input.meta ?? {},
+    });
+    if (input.meta && Object.keys(input.meta).length > 0) {
+      deps.sessionsRepo.touchLastSeen(id, ts, input.meta);
+    }
+    const row = deps.sessionsRepo.getById(id);
+    if (!row) {
+      throw new MemosError(ERROR_CODES.INTERNAL, "sessions.upsert inserted row but getById returned null", {
+        sessionId: id,
+      });
+    }
+    const snap = snapshotFor(row);
+    live.set(id, snap);
+    log.info("session.opened", {
+      sessionId: id,
+      agent: input.agent,
+      startedAt: row.startedAt,
+      new: row.startedAt === ts,
+    });
+    bus.emit({ kind: "session.started", session: snap });
+    return { ...snap };
+  }
+
+  function closeSession(id: SessionId, reason = "explicit"): void {
+    for (const ep of epm.listForSession(id)) {
+      if (ep.status !== "open") continue;
+      // V7 §0.2 — a user-initiated session close (`/new`, `/quit`, the
+      // host shutting down cleanly) is **normal lifecycle**, NOT
+      // episode abandonment. Finalize the episode so the capture +
+      // reward pipelines run as if the user had completed their task:
+      //
+      //   - substantial conversations get LLM-scored → "已完成" badge
+      //   - trivial / single-turn episodes get re-stamped to
+      //     `closeReason="abandoned"` by reward.ts itself with a clear
+      //     human-readable `abandonReason` ("对话轮次不足，N 轮…")
+      //
+      // Crucially, this keeps the technical `session_closed:client`
+      // string out of the user-facing TasksView "已跳过" badge — that
+      // string was the source of the "为什么 /new 后立刻显示已跳过"
+      // confusion. True crash-orphans get a separate recovery path
+      // at plugin bootstrap (see `recoverOrphanedEpisodes` in
+      // `core/pipeline/memory-core.ts`).
+      if (deps.lightweightMemory && ep.meta.lightweightMemory === true) {
+        epm.finalize(ep.id, {
+          patchMeta: {
+            lightweightMemory: true,
+            sessionCloseReason: reason,
+          },
+        });
+        continue;
+      }
+      if (reason.startsWith("shutdown:")) {
+        epm.patchMeta(ep.id, {
+          topicState: "paused",
+          pauseReason: `session_closed:${reason}`,
+          sessionCloseReason: reason,
+        });
+        continue;
+      }
+      if (isCompletedExchange(ep)) {
+        epm.finalize(ep.id, {
+          patchMeta: { sessionCloseReason: reason },
+        });
+        continue;
+      }
+      epm.patchMeta(ep.id, {
+        topicState: "paused",
+        pauseReason: `session_closed:${reason}`,
+        sessionCloseReason: reason,
+      });
+    }
+    live.delete(id);
+    log.info("session.closed", { sessionId: id, reason });
+    bus.emit({ kind: "session.closed", sessionId: id, reason });
+  }
+
+  function getSession(id: SessionId): SessionSnapshot | null {
+    const cached = live.get(id);
+    if (cached) return { ...cached };
+    const row = deps.sessionsRepo.getById(id);
+    if (!row) return null;
+    const snap = snapshotFor(row);
+    live.set(id, snap);
+    return { ...snap };
+  }
+
+  function listSessions(limit = 50): SessionSnapshot[] {
+    return deps.sessionsRepo.listRecent(limit).map((r) => snapshotFor(r));
+  }
+
+  function pruneIdle(nowTs: EpochMs = now()): SessionId[] {
+    const cutoff = nowTs - (deps.idleCutoffMs ?? 24 * 60 * 60 * 1000);
+    const stale: SessionId[] = [];
+    for (const [id, snap] of live.entries()) {
+      if (snap.lastSeenAt < cutoff) {
+        const openEps = epm.listForSession(id).filter((e) => e.status === "open");
+        if (openEps.length > 0) continue; // don't evict while we're mid-episode
+        stale.push(id);
+      }
+    }
+    for (const id of stale) {
+      live.delete(id);
+      bus.emit({ kind: "session.idle_pruned", sessionId: id, idleMs: nowTs - (getSession(id)?.lastSeenAt ?? nowTs) });
+    }
+    if (stale.length > 0) log.info("session.pruned", { count: stale.length });
+    return stale;
+  }
+
+  async function startEpisode(input: StartEpisodeInput): Promise<EpisodeSnapshot> {
+    const session = getSession(input.sessionId);
+    if (!session) {
+      throw new MemosError(ERROR_CODES.SESSION_NOT_FOUND, `session ${input.sessionId} not found`, {
+        sessionId: input.sessionId,
+      });
+    }
+
+    // Pre-allocate the episode id BEFORE the intent classifier runs so
+    // its LLM call (`session.intent.classify`) can stamp the resulting
+    // `system_model_status` audit row with this episode. Without this,
+    // the call fires before any id exists and the row shows up as a
+    // stand-alone entry in the Logs viewer chain view, divorced from
+    // the rest of the episode's pipeline activity.
+    //
+    // Safety:
+    //   - id minting is a pure string generation (no DB write yet);
+    //     the row is inserted later by `epm.start` which honours the
+    //     pre-supplied id (`input.id ?? ids.episode()` in
+    //     `episode-manager.ts:start`), so there is no double-mint.
+    //   - `IntentClassifier.classify` catches all internal errors and
+    //     returns a fallback decision instead of throwing, so the
+    //     pre-allocated id will reach the insert path on every
+    //     happy-path completion.
+    //   - Wall-clock timing of the `episodes` insert is unchanged —
+    //     the classify await dominates either way.
+    const episodeId = (input.id ?? ids.episode()) as EpisodeId;
+    const intent = await deps.intentClassifier.classify(input.userMessage, {
+      episodeId,
+    });
+
+    // Wrap the write+emit in a log context so downstream listeners inherit
+    // the correlation ids without having to know them.
+    return withCtx(
+      { sessionId: input.sessionId, episodeId },
+      () => {
+        const startInput: EpisodeStartInput = {
+          sessionId: input.sessionId,
+          id: episodeId,
+          initialTurn: { role: "user", content: input.userMessage, ts: input.ts, meta: input.meta },
+          meta: input.meta,
+        };
+        const snap = epm.start(startInput, intent);
+        // Update cached open count.
+        const cached = live.get(input.sessionId);
+        if (cached) cached.openEpisodeCount++;
+        log.info("episode.begun", {
+          episodeId,
+          sessionId: input.sessionId,
+          intent: intent.kind,
+          intentConfidence: intent.confidence,
+          retrieval: intent.retrieval,
+        });
+        return snap;
+      },
+    );
+  }
+
+  function decrementOpenCount(sessionId: SessionId): void {
+    const cached = live.get(sessionId);
+    if (cached && cached.openEpisodeCount > 0) cached.openEpisodeCount--;
+  }
+
+  function finalizeEpisode(id: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot {
+    const snap = epm.finalize(id, input);
+    decrementOpenCount(snap.sessionId);
+    return snap;
+  }
+
+  function abandonEpisode(id: EpisodeId, reason: string): EpisodeSnapshot {
+    const snap = epm.abandon(id, reason);
+    decrementOpenCount(snap.sessionId);
+    return snap;
+  }
+
+  function discardEmptyEpisode(id: EpisodeId, reason: string): EpisodeSnapshot | null {
+    const before = epm.get(id);
+    const snap = epm.discardEmpty(id, reason);
+    if (before) decrementOpenCount(before.sessionId);
+    return snap;
+  }
+
+  function reopenEpisode(
+    id: EpisodeId,
+    reason: import("./types.js").TurnRelation,
+  ): EpisodeSnapshot {
+    const before = epm.get(id);
+    const snap = epm.reopen(id, reason);
+    // If we reopened a closed one, bump the open count back up.
+    if (before && before.status === "closed" && snap.status === "open") {
+      const cached = live.get(snap.sessionId);
+      if (cached) cached.openEpisodeCount++;
+    }
+    return snap;
+  }
+
+  function hydrateEpisode(snapshot: EpisodeSnapshot): EpisodeSnapshot {
+    const snap = epm.hydrate(snapshot);
+    const session = getSession(snap.sessionId);
+    if (session && snap.status === "open") {
+      const cached = live.get(snap.sessionId);
+      if (cached) {
+        cached.openEpisodeCount = epm
+          .listForSession(snap.sessionId)
+          .filter((e) => e.status === "open").length;
+      }
+    }
+    return snap;
+  }
+
+  function shutdown(reason: string): void {
+    log.info("shutdown.begin", { reason });
+    // Process-wide shutdown is normal lifecycle (host stopping cleanly,
+    // not a topic boundary). Pause open episodes so a restarted host can
+    // classify the next user turn against the same topic instead of
+    // prematurely triggering reflect/reward.
+    //
+    // First catch episodes whose session was already pruned from
+    // `live` (race: idle prune → process exit). closeSession's per-
+    // session loop wouldn't find them otherwise.
+    for (const ep of epm.listOpen()) {
+      if (!live.has(ep.sessionId)) {
+        if (isCompletedExchange(ep)) {
+          if (deps.lightweightMemory && ep.meta.lightweightMemory === true) {
+            finalizeEpisode(ep.id, {
+              patchMeta: {
+                lightweightMemory: true,
+                sessionCloseReason: `shutdown:${reason}`,
+              },
+            });
+            continue;
+          }
+          finalizeEpisode(ep.id, {
+            patchMeta: { sessionCloseReason: `shutdown:${reason}` },
+          });
+          continue;
+        }
+        if (isDiscardableEmptyEpisode(ep)) {
+          epm.discardEmpty(ep.id, `shutdown:${reason}`);
+          continue;
+        }
+        epm.patchMeta(ep.id, {
+          topicState: "paused",
+          pauseReason: `shutdown:${reason}`,
+          sessionCloseReason: `shutdown:${reason}`,
+        });
+      }
+    }
+    // Then close every still-live session — closeSession's loop
+    // finalizes any remaining open episodes.
+    for (const id of Array.from(live.keys())) {
+      closeSession(id, `shutdown:${reason}`);
+    }
+    log.info("shutdown.done", { reason });
+  }
+
+  function isCompletedExchange(ep: EpisodeSnapshot): boolean {
+    if (ep.traceIds.length > 0) return true;
+    return ep.turns.some((t) => t.role === "assistant" && t.content.trim().length > 0);
+  }
+
+  return {
+    bus,
+    openSession,
+    closeSession,
+    getSession,
+    listSessions,
+    pruneIdle,
+
+    startEpisode,
+    addTurn: epm.addTurn,
+    finalizeEpisode,
+    abandonEpisode,
+    discardEmptyEpisode,
+    reopenEpisode,
+    hydrateEpisode,
+    attachTraceIds: epm.attachTraceIds,
+    patchEpisodeMeta: epm.patchMeta,
+
+    getEpisode: epm.get,
+    listEpisodes: epm.listForSession,
+    listOpenEpisodes: epm.listOpen,
+
+    shutdown,
+  };
+}
+
+function stringMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = meta?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isDiscardableEmptyEpisode(ep: EpisodeSnapshot): boolean {
+  if (ep.traceIds.length > 0) return false;
+  return !ep.turns.some((t) => t.role === "assistant" && t.content.trim().length > 0);
+}
+
+// Re-export helpers tests will want to use.
+export type { IntentDecision } from "./types.js";
+export type { AgentKind };

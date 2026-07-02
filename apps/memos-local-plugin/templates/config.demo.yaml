@@ -1,0 +1,64 @@
+# config.demo.yaml — demo-only `algorithm.*` overrides
+# ---------------------------------------------------------------------
+# This file is INTENTIONALLY NOT installed by `install.sh`.
+# It is copied/merged manually by demo scripts (e.g. the TaskCLI walkthrough
+# in `docs/DEMO_TaskCLI_OpenClaw_演示.md`) when an operator wants to see the
+# full L1/L2/L3/Skill chain unfold inside ~9 turns instead of waiting for
+# the production thresholds to accumulate evidence over days/weeks.
+#
+# As of the 2026-04 default-tuning pass, **most of what this template used
+# to carry has been folded into `core/config/defaults.ts`** because the
+# original "production" defaults were too strict for any realistic
+# interactive usage (single-success-path corpora collapsed the V7 contrast
+# gain to ≈ 0). The remaining overrides below are genuine demo-only knobs:
+# they shorten thresholds further so a 9-turn scripted demo can show
+# everything in <15 minutes, but each one is documented as not appropriate
+# for production.
+#
+# Apply (when running the TaskCLI demo):
+#   cp ~/.openclaw/memos-plugin/config.yaml ~/.openclaw/memos-plugin/config.yaml.bak
+#   yq -y '. * load("apps/memos-local-plugin/templates/config.demo.yaml")' \
+#     ~/.openclaw/memos-plugin/config.yaml > /tmp/merged.yaml \
+#     && mv /tmp/merged.yaml ~/.openclaw/memos-plugin/config.yaml
+#   chmod 600 ~/.openclaw/memos-plugin/config.yaml
+#   openclaw gateway restart
+#
+# Restore (after demo):
+#   mv ~/.openclaw/memos-plugin/config.yaml.bak ~/.openclaw/memos-plugin/config.yaml
+#   openclaw gateway restart
+# ---------------------------------------------------------------------
+
+algorithm:
+  reward:
+    # Production default 2 / 80. Demo turns are short and may have a
+    # single user→agent exchange, so we relax both floors so reward
+    # actually fires on every turn.
+    minExchangesForCompletion: 1
+    minContentCharsForCompletion: 40
+
+  retrieval:
+    # Production default 0.35 / 1. Loosen so even partial-match traces
+    # surface in the demo's small corpus.
+    minTraceSim: 0.25
+    llmFilterMinCandidates: 2
+
+  l2Induction:
+    # Production default 0.01 (already low after 2026-04). Demo pushes
+    # it lower so even the very first turn's traces feed induction.
+    minTraceValue: 0.005
+
+  l3Abstraction:
+    # Production default 0.6 — works for homogeneous corpora. The demo
+    # spans storage / pytest / CLI sub-problems; relax to keep them in
+    # a single project-level cluster.
+    clusterMinSimilarity: 0.5
+    cooldownDays: 0  # production 1; demo can re-run abstraction back-to-back
+
+  skill:
+    # Production default 2 / 0.02 / 3. Demo wants the very first
+    # qualifying policy to crystallize and graduate inside the same
+    # session, so we drop everything to 1.
+    minSupport: 1
+    minGain: 0.0
+    candidateTrials: 1
+    cooldownMs: 0
