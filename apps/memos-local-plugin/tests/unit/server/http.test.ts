@@ -237,6 +237,13 @@ describe("HTTP server — REST routes", () => {
     expect(core.health).toHaveBeenCalled();
   });
 
+  it("strips /memos reverse-proxy prefix before route dispatch", async () => {
+    const r = await fetch(`${handle.url}/memos/api/v1/health`);
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body).toMatchObject({ ok: true, version: "test" });
+  });
+
   it("GET /api/v1/health includes optional bridge status", async () => {
     await handle.close();
     handle = await startHttpServer({
