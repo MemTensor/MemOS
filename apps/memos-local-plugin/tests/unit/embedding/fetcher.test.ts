@@ -22,6 +22,7 @@ describe("embedding/fetcher", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   function mockFetch(responses: Array<Response | Error>) {
@@ -78,6 +79,30 @@ describe("embedding/fetcher", () => {
       log: nullLogger(),
       maxRetries: 1,
     });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors Retry-After seconds before retrying transient responses", async () => {
+    vi.useFakeTimers();
+    const f = mockFetch([
+      new Response("rate limited", { status: 429, headers: { "Retry-After": "2" } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+
+    const req = httpPostJson<{ ok: number }>({
+      url: "https://x",
+      body: {},
+      provider: "cohere",
+      log: nullLogger(),
+      maxRetries: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(req).resolves.toEqual({ ok: 1 });
     expect(f).toHaveBeenCalledTimes(2);
   });
 

@@ -29,7 +29,10 @@ function mockFetch(replies: Array<Response | Error>) {
 
 describe("llm/fetcher", () => {
   beforeAll(() => initTestLogger());
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
 
   it("returns parsed JSON on 200", async () => {
     mockFetch([new Response(JSON.stringify({ a: 1 }), { status: 200 })]);
@@ -58,6 +61,60 @@ describe("llm/fetcher", () => {
       provider: "anthropic",
       log: nullLog(),
     });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors Retry-After seconds before retrying transient responses", async () => {
+    vi.useFakeTimers();
+    const f = mockFetch([
+      new Response("slow down", { status: 429, headers: { "Retry-After": "2" } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+
+    const req = httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 5_000,
+      maxRetries: 1,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(req).resolves.toMatchObject({ json: { ok: 1 } });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors Retry-After HTTP-date before retrying transient responses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const f = mockFetch([
+      new Response("try later", {
+        status: 503,
+        headers: { "Retry-After": "Thu, 01 Jan 2026 00:00:03 GMT" },
+      }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+
+    const req = httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 5_000,
+      maxRetries: 1,
+      provider: "anthropic",
+      log: nullLog(),
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(req).resolves.toMatchObject({ json: { ok: 1 } });
     expect(f).toHaveBeenCalledTimes(2);
   });
 

@@ -54,7 +54,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
           durationMs: Date.now() - start,
         });
         if (transient && attempt <= maxRetries) {
-          await backoff(attempt);
+          await backoff(attempt, retryAfterMs(resp));
           continue;
         }
         throw new MemosError(
@@ -123,10 +123,20 @@ function isTransientError(err: unknown): boolean {
   return false;
 }
 
-async function backoff(attempt: number): Promise<void> {
+function retryAfterMs(resp: Response): number | undefined {
+  const raw = resp.headers.get("retry-after");
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const dateMs = Date.parse(raw);
+  if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+  return undefined;
+}
+
+async function backoff(attempt: number, retryAfter: number | undefined = undefined): Promise<void> {
   const base = 200;
   const jitter = Math.floor(Math.random() * 100);
-  const ms = base * 2 ** (attempt - 1) + jitter;
+  const ms = retryAfter ?? base * 2 ** (attempt - 1) + jitter;
   await new Promise((r) => setTimeout(r, ms));
 }
 
