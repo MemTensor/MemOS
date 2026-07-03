@@ -18,6 +18,7 @@
     "telemetry.credentials.json",
     "openclaw.plugin.json",
     "bridge.cts",
+    "bridge.mts",
     "bridge/**/*.ts",
     "core/**/*.ts",
     "core/storage/migrations/*.sql",
