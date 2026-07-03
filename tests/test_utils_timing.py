@@ -318,7 +318,8 @@ class TestTimedWithStatusRegression:
             raise RuntimeError("bad")
 
         with caplog.at_level(logging.INFO):
-            fail_func()
+            with pytest.raises(RuntimeError, match="bad"):
+                fail_func()
         logs = _collect_timer_with_status_logs(caplog)
         assert len(logs) == 1
         assert "status: FAILED" in logs[0]
