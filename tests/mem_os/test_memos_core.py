@@ -740,6 +740,37 @@ class TestMOSSystemPrompt:
         assert "## Memories:" not in prompt
 
 
+class TestShareCubeWithUser:
+    """Test cube sharing access validation."""
+
+    @patch("memos.mem_os.core.UserManager")
+    @patch("memos.mem_os.core.MemReaderFactory")
+    @patch("memos.mem_os.core.LLMFactory")
+    def test_share_cube_validates_current_user_access(
+        self,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+    ):
+        """Sharing validates the current user's cube access before adding the target user."""
+        mock_llm_factory.from_config.return_value = mock_llm
+        mock_reader_factory.from_config.return_value = mock_mem_reader
+        mock_user_manager_class.return_value = mock_user_manager
+        mock_user_manager.add_user_to_cube.return_value = True
+
+        mos = MOSCore(MOSConfig(**mock_config))
+        result = mos.share_cube_with_user("cube_1", "target_user")
+
+        assert result is True
+        mock_user_manager.validate_user_cube_access.assert_called_with("test_user", "cube_1")
+        mock_user_manager.validate_user.assert_called_with("target_user")
+        mock_user_manager.add_user_to_cube.assert_called_with("target_user", "cube_1")
+
+
 class TestMOSErrorHandling:
     """Test MOS error handling."""
 
