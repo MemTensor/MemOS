@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "2.0.20"
+version = "2.0.22"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -89,6 +89,8 @@ mem-user = [
 
 # MemReader
 mem-reader = [
+    # chonkie>=1.6 pulls numpy>=2.0; any environment that also has scipy
+    # installed must use scipy>=1.13 (older scipy pins numpy<1.27). See #1342.
     "chonkie (>=1.0.7,<2.0.0)",  # Sentence chunking library
     "markitdown[docx,pdf,pptx,xls,xlsx] (>=0.1.1,<0.2.0)",  # Markdown parser for various file formats
     "langchain-text-splitters (>=1.0.0,<2.0.0)", # markdown chunk for langchain
@@ -193,7 +195,9 @@ zep-cloud = "^2.15.0"
 rouge-score = "^0.1.2"
 nltk = "^3.9.1"
 bert-score = "^0.3.13"
-scipy = "^1.10.1"
+# scipy 1.13+ supports numpy 2.x. Older scipy (1.10/1.11/1.12) pins numpy<1.27
+# which collides with chonkie>=1.6 (requires numpy>=2.0.0) — see issue #1342.
+scipy = "^1.13.0"
 python-dotenv = "^1.1.1"
 langgraph = "^0.5.1"
 
