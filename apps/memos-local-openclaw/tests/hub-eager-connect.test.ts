@@ -144,6 +144,7 @@ async function loadPluginWithMocks(opts: {
     resolvePath: () => "/tmp/memos-eager-hub",
     logger: { info() {}, warn() {} },
     registerTool: () => {},
+    registerMemoryPromptSection: () => {},
     registerMemoryCapability: () => {},
     registerService: (service: any) => { opts.captureService?.(service); },
     on: () => {},

@@ -274,6 +274,12 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // hits before injection.
       llmFilterMinCandidates: 2,
       llmFilterCandidateBodyChars: 500,
+      // Default 0 — no time-window bound, keeping the legacy
+      // brute-force scan behaviour for fresh installs that haven't
+      // grown past the threshold where the bound starts paying off.
+      // Operators with >50K traces are expected to flip this on (we
+      // suggest 86_400_000 = 24h, or 2_592_000_000 = 30 days).
+      vectorScanMaxAgeMs: 0,
     },
   },
   hub: {

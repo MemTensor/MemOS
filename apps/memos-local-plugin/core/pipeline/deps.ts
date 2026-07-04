@@ -161,6 +161,7 @@ export function extractAlgorithmConfig(
       llmFilterMinCandidates: alg.lightweightMemory.enabled ? 1 : alg.retrieval.llmFilterMinCandidates,
       llmFilterCandidateBodyChars: alg.retrieval.llmFilterCandidateBodyChars,
       lightweightMemory: alg.lightweightMemory.enabled,
+      vectorScanMaxAgeMs: alg.retrieval.vectorScanMaxAgeMs,
     },
     session: {
       followUpMode: alg.session.followUpMode,
