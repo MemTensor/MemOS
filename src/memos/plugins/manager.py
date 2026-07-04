@@ -39,7 +39,14 @@ class PluginManager:
     @classmethod
     def _is_plugin_enabled(cls, plugin: MemOSPlugin) -> bool:
         disabled = cls._parse_plugin_names(os.getenv("MEMOS_DISABLED_PLUGINS"))
-        return plugin.name not in disabled
+        if plugin.name in disabled:
+            return False
+
+        if plugin.enabled_by_default:
+            return True
+
+        enabled = cls._parse_plugin_names(os.getenv("MEMOS_ENABLED_PLUGINS"))
+        return plugin.name in enabled
 
     @staticmethod
     def _select_plugin_winners(
@@ -121,7 +128,7 @@ class PluginManager:
         for plugin_name, plugin in winners.items():
             if not self._is_plugin_enabled(plugin):
                 logger.info(
-                    "Plugin discovered but disabled: %s v%s (MEMOS_DISABLED_PLUGINS)",
+                    "Plugin discovered but disabled: %s v%s",
                     plugin.name,
                     plugin.version,
                 )

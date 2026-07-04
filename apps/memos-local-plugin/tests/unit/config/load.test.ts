@@ -133,6 +133,67 @@ viewer:
     });
     expect("dimensions" in cfg.embedding).toBe(false);
   });
+
+  // ─── Issue #1929 — vectorScanMaxAgeMs contract ──────────────────────
+  // The schema must reject obviously bad values (negative, larger than
+  // a year, or non-numbers) so a "dirty" `PATCH /api/v1/config` cannot
+  // poison the on-disk YAML. A subsequent `GET /api/v1/config` therefore
+  // always returns a value in [0, 31_536_000_000] (the default 0 stays
+  // because the rejected patch never reaches `writer.ts`'s atomic
+  // rename — see `core/config/writer.ts::patchConfig`).
+  describe("retrieval.vectorScanMaxAgeMs", () => {
+    const MAX_MS = 31_536_000_000;
+
+    it("defaults to 0 (no time-window bound) on a bare config", () => {
+      const cfg = resolveConfig({});
+      expect(cfg.algorithm.retrieval.vectorScanMaxAgeMs).toBe(0);
+    });
+
+    it.each([
+      ["one day", 86_400_000],
+      ["thirty days", 30 * 86_400_000],
+      ["max", MAX_MS],
+      ["zero", 0],
+    ])("accepts %s (%d ms)", (_label, value) => {
+      const cfg = resolveConfig({
+        algorithm: { retrieval: { vectorScanMaxAgeMs: value } },
+      });
+      expect(cfg.algorithm.retrieval.vectorScanMaxAgeMs).toBe(value);
+    });
+
+    it.each([
+      ["negative_1", -1],
+      ["negative_60s", -60_000],
+      ["negative_one_day", -86_400_000],
+      ["max_plus_1", MAX_MS + 1],
+      ["max_plus_one_day", MAX_MS + 86_400_000],
+      ["hundred_x_max", MAX_MS * 100],
+    ])("rejects out-of-range value (%s)", (_label, value) => {
+      expect(() =>
+        resolveConfig({ algorithm: { retrieval: { vectorScanMaxAgeMs: value } } }),
+      ).toThrow(/schema validation/);
+    });
+
+    it.each([
+      ["string_number", "100"],
+      ["string_text", "abc"],
+      ["none_value", null],
+      ["dict_value", { x: 1 }],
+      ["list_value", [1, 2, 3]],
+      ["nan_string", "NaN"],
+      ["inf_string", "Infinity"],
+      ["bool_true", true],
+      ["bool_false", false],
+    ])("rejects invalid type (%s)", (_label, value) => {
+      expect(() =>
+        resolveConfig({
+          algorithm: {
+            retrieval: { vectorScanMaxAgeMs: value as unknown as number },
+          },
+        }),
+      ).toThrow(/schema validation/);
+    });
+  });
 });
 
 describe("config/loadConfig MEMOS_HOME override", () => {
