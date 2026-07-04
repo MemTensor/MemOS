@@ -979,6 +979,10 @@ class APIConfig:
                     "general_llm": APIConfig.get_memreader_general_llm_config(),
                     # Image parser LLM (requires vision model)
                     "image_parser_llm": APIConfig.get_image_parser_llm_config(),
+                    # Preference extractor LLM. Reader falls back to general_llm when unset.
+                    "preference_extractor_llm": APIConfig.get_preference_extractor_llm_config()
+                    if os.getenv("PREFERENCE_EXTRACTOR_MODEL")
+                    else None,
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
@@ -1108,6 +1112,10 @@ class APIConfig:
                     "general_llm": APIConfig.get_memreader_general_llm_config(),
                     # Image parser LLM (requires vision model)
                     "image_parser_llm": APIConfig.get_image_parser_llm_config(),
+                    # Preference extractor LLM. Reader falls back to general_llm when unset.
+                    "preference_extractor_llm": APIConfig.get_preference_extractor_llm_config()
+                    if os.getenv("PREFERENCE_EXTRACTOR_MODEL")
+                    else None,
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",

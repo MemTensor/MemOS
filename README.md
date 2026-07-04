@@ -19,10 +19,10 @@
 </p>
 
 <p align="center">
-  <strong>🎯 +43.70% Accuracy vs. OpenAI Memory</strong><br/>
-  <strong>🏆 Top-tier Long-term Memory + Personalization</strong><br/>
-  <strong>💰 Saves 35.24% Memory Tokens</strong><br/>
-  <sub>LoCoMo 75.80 • LongMemEval +40.43% • PrefEval-10 +2568% • PersonaMem +40.75%</sub>
+  <strong>🏆 Leading Performance Across Agent and User Memory Benchmarks</strong><br/>
+  <strong>🤖 OpenClaw Task Completion Improves from 36.63% to 50.87%</strong><br/>
+  <strong>🎯 92.34 on LoCoMo and 93.40 on LongMemEval</strong><br/>
+  <strong>📊 Unified Evaluation Across 14 Commercial Memory Products</strong>
   <!-- <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/github_api_free_banner.gif" alt="MemOS Free API Banner">
   </a> -->
@@ -70,6 +70,9 @@ Your lobsters and Hermes Agents now have **the best** memory system — choose *
 
 
 ### News
+
+- **2026-07-02** · 🏆 **MemOS Advances Agent and User Memory Benchmarks**
+  With MemOS, **OpenClaw** improves average task completion from **36.63% to 50.87%** across five agent tasks. MemOS also achieves **92.34 on LoCoMo** and **93.40 on LongMemEval**, and leads in **OmniMemEval**, a unified evaluation of 14 commercial memory products across ten datasets.
 
 - **2026-05-09** · 🧠 **memos-local-plugin 2.0**
   Official local memory plugin for **Hermes Agent** and **OpenClaw**. One core powers self-evolving memory across L1 traces, L2 policies, L3 world models, and crystallized Skills, with local-first storage and feedback-driven retrieval.
@@ -273,14 +276,8 @@ MemOS is a **Memory Operating System** for LLMs and AI agents that unifies store
 
 ### What are the benchmark results?
 
-| Benchmark | MemOS Result | Improvement |
-|-----------|--------------|-------------|
-| LoCoMo | 75.80 | - |
-| LongMemEval | +40.43% vs baseline | - |
-| PrefEval-10 | +2568% | - |
-| PersonaMem | +40.75% | - |
-| **vs OpenAI Memory** | +43.70% Accuracy | - |
-| **Token Savings** | 35.24% | - |
+MemOS achieves **92.34 on LoCoMo** and **93.40 on LongMemEval** for User Memory, while improving **OpenClaw** average task completion from **36.63% to 50.87%** across five Agent Memory tasks. For details, see [OmniMemEval](https://github.com/MemTensor/OmniMemEval), our unified evaluation framework for benchmarking 14 commercial memory products across ten datasets.
+
 
 ### How does MemOS compare to other memory solutions?
 
