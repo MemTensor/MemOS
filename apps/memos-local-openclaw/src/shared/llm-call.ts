@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { SummarizerConfig, SummaryProvider, Logger, PluginContext, OpenClawAPI } from "../types";
+import { parseJsonOrJson5 } from "./json5";
 
 /**
  * Resolve a SecretInput (string | SecretRef) to a plain string.
@@ -54,7 +55,7 @@ export function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | unde
       || path.join(process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw"), "openclaw.json");
     if (!fs.existsSync(cfgPath)) return undefined;
 
-    const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
 
     const agentModel: string | undefined = raw?.agents?.defaults?.model?.primary;
     if (!agentModel) return undefined;

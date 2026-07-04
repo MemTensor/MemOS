@@ -34,7 +34,8 @@ import { serveStatic } from "./middleware/static.js";
 import type { ServerDeps, ServerHandle, ServerOptions } from "./types.js";
 
 type AgentName = "openclaw" | "hermes";
-const AGENT_NAMES: readonly AgentName[] = ["openclaw", "hermes"];
+type AgentPrefix = AgentName | "memos";
+const AGENT_PREFIXES: readonly AgentPrefix[] = ["openclaw", "hermes", "memos"];
 
 /**
  * Well-known per-agent viewer port. The picker page links to the
@@ -146,11 +147,11 @@ async function dispatch(
   //     downgrade because cross-port redirects are inherently a "follow
   //     this link" gesture; the SPA bundle on the other port re-issues
   //     mutations from form state, not from the original POST body.)
-  for (const name of AGENT_NAMES) {
+  for (const name of AGENT_PREFIXES) {
     const prefix = `/${name}`;
     if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
       const tail = pathname.slice(prefix.length) || "/";
-      if (name === selfAgent) {
+      if (name === "memos" || name === selfAgent) {
         pathname = tail;
         break;
       }
