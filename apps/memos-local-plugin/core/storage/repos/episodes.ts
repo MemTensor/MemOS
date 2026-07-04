@@ -121,7 +121,13 @@ export function makeEpisodesRepo(db: StorageDb) {
     },
 
     appendTrace(id: EpisodeId, traceIds: string[]): void {
-      appendTrace.run({ id, trace_ids_json: toJsonText(traceIds) });
+      // Strip ghost trace IDs (entries that do not exist in the `traces`
+      // table) before persisting. Otherwise a single orphan ID lingering in
+      // `trace_ids_json` keeps the reward dirty-check tripping in a loop
+      // (#1966 — 590 wasted rescore calls in 5 days). The filter preserves
+      // input order and de-duplicates.
+      const validated = filterTraceIdsToExisting(db, traceIds);
+      appendTrace.run({ id, trace_ids_json: toJsonText(validated) });
     },
 
     removeTraceIds(id: EpisodeId, traceIds: readonly string[]): void {
@@ -218,4 +224,27 @@ function mapRow(r: RawEpisodeRow): EpisodeRow & EpisodeMetaRow {
     status: r.status,
     meta: fromJsonText<Record<string, unknown>>(r.meta_json, {}),
   };
+}
+
+/**
+ * Return the subset of `traceIds` that have a backing row in the `traces`
+ * table, preserving input order and de-duplicating. Empty array short-circuits.
+ *
+ * Lives in `episodes.ts` so the repo is self-contained — it does not import
+ * `traces.ts` to avoid a circular module. Uses the same chunking strategy as
+ * `traces.filterExistingIds` to stay under SQLite's bound-parameter limit.
+ */
+function filterTraceIdsToExisting(db: StorageDb, traceIds: string[]): string[] {
+  if (!traceIds || traceIds.length === 0) return [];
+  const dedup = Array.from(new Set(traceIds));
+  const existing = new Set<string>();
+  const CHUNK_SIZE = 900;
+  for (let i = 0; i < dedup.length; i += CHUNK_SIZE) {
+    const chunk = dedup.slice(i, i + CHUNK_SIZE);
+    const placeholders = chunk.map(() => "?").join(",");
+    const sql = `SELECT id FROM traces WHERE id IN (${placeholders})`;
+    const rows = db.prepare<readonly string[], { id: string }>(sql).all(chunk);
+    for (const r of rows) existing.add(r.id);
+  }
+  return dedup.filter((id) => existing.has(id));
 }
