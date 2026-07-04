@@ -233,7 +233,14 @@ export async function judgeNewTopicOpenAI(
     body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
-      max_tokens: 10,
+      // NOTE: must stay >= 60. MiniMax's gateway (api.minimaxi.com) rejects
+      // chat-completion requests with very small max_tokens (e.g. 10) by
+      // returning an HTML 404 page before the request ever reaches the
+      // model. 60 matches classifyTopicOpenAI below — already proven to
+      // work against MiniMax-M2.7-highspeed — and is plenty for a one-word
+      // NEW/SAME reply plus any reasoning preamble the model may emit.
+      // See issue #1315.
+      max_tokens: 60,
       messages: [
         { role: "system", content: TOPIC_JUDGE_PROMPT },
         { role: "user", content: userContent },
@@ -336,7 +343,9 @@ export async function arbitrateTopicSplitOpenAI(
     body: JSON.stringify(buildRequestBody(cfg, {
       model,
       temperature: 0,
-      max_tokens: 10,
+      // NOTE: must stay >= 60. See note in judgeNewTopicOpenAI above —
+      // MiniMax's gateway returns HTML 404 for max_tokens: 10. Issue #1315.
+      max_tokens: 60,
       messages: [
         { role: "system", content: TOPIC_ARBITRATION_PROMPT },
         { role: "user", content: userContent },
