@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.RLock()
 _bridge_ok: bool | None = None
+_bridge_ok_at: float = 0.0
 _viewer_status: str | None = None
 _viewer_last_probe_at = 0.0
 _viewer_process: subprocess.Popen | None = None
@@ -42,6 +43,11 @@ HERMES_VIEWER_PORT = 18800
 VIEWER_PROBE_TTL_SEC = 30.0
 VIEWER_START_LOCK_TIMEOUT_SEC = 20.0
 VIEWER_START_LOCK_STALE_SEC = 60.0
+# Bound how long a cached `_bridge_ok` answer is trusted. Without this, a
+# single transient `_node_available()` failure during gateway startup
+# (subprocess race, `.env` loaded after the first probe) would pin the
+# provider to "unavailable" for the lifetime of the process — see #1797.
+BRIDGE_OK_TTL_SEC = 60.0
 
 
 @contextlib.contextmanager
@@ -84,10 +90,23 @@ def _viewer_start_lock(timeout: float = VIEWER_START_LOCK_TIMEOUT_SEC):
 
 
 def _bridge_script() -> Path:
+    """Pick the viewer-daemon entrypoint, preferring pure ESM.
+
+    See ``bridge_client._bridge_script`` for the rationale. The two
+    helpers intentionally share the same precedence so that the stdio
+    bridge spawned by ``MemosBridgeClient`` and the viewer daemon
+    spawned by ``ensure_viewer_daemon`` always end up on the same Node
+    entry binary.
+    """
     plugin_root = _plugin_root()
-    compiled = plugin_root / "dist" / "bridge.cjs"
-    if compiled.exists():
-        return compiled
+    candidates = (
+        plugin_root / "dist" / "bridge.mjs",
+        plugin_root / "dist" / "bridge.cjs",
+        plugin_root / "bridge.mts",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     return plugin_root / "bridge.cts"
 
 
@@ -140,7 +159,7 @@ def _bridge_command(*, daemon: bool) -> list[str]:
     bridge_args = [script, "--agent=hermes"]
     if daemon:
         bridge_args.append("--daemon")
-    if script_path.suffix == ".cjs":
+    if script_path.suffix in (".mjs", ".cjs"):
         return [node, *bridge_args]
     if tsx_cli.exists():
         return [node, str(tsx_cli), *bridge_args]
@@ -202,22 +221,39 @@ def ensure_bridge_running(*, probe_only: bool = False) -> bool:
     ``probe_only=True`` performs a lightweight availability check without
     launching a long-lived subprocess. This is what
     ``MemTensorProvider.is_available`` calls during Hermes startup.
+
+    The cached answer is honoured only inside ``BRIDGE_OK_TTL_SEC``; once
+    it expires we revalidate. A transient ``_node_available()`` failure
+    therefore self-heals on the next probe instead of permanently
+    disabling the provider (see issue #1797).
     """
-    global _bridge_ok
+    global _bridge_ok, _bridge_ok_at
     with _lock:
-        if _bridge_ok is not None and probe_only:
+        now = time.time()
+        if _bridge_ok is not None and probe_only and (now - _bridge_ok_at) < BRIDGE_OK_TTL_SEC:
             return _bridge_ok
         script = _bridge_script()
         if not script.exists():
             logger.warning("MemOS: bridge script missing at %s", script)
             _bridge_ok = False
+            _bridge_ok_at = now
             return False
-        if not _node_available():
-            logger.warning("MemOS: Node.js not found on PATH")
-            _bridge_ok = False
-            return False
-        _bridge_ok = True
-        return True
+        if _node_available():
+            _bridge_ok = True
+            _bridge_ok_at = now
+            return True
+        # Node binary check just failed. A MemOS bridge already running on
+        # :18800 is definitive proof Node works on this host (the daemon
+        # itself was launched via Node); trust it and recover rather than
+        # report unavailable forever.
+        if _probe_viewer() == "running_memos":
+            _bridge_ok = True
+            _bridge_ok_at = now
+            return True
+        logger.warning("MemOS: Node.js not found on PATH")
+        _bridge_ok = False
+        _bridge_ok_at = now
+        return False
 
 
 def _probe_viewer() -> str:
@@ -380,9 +416,10 @@ def ensure_viewer_daemon(*, probe_only: bool = False) -> bool:
 
 def shutdown_bridge() -> None:
     """Best-effort cleanup; each client owns its own subprocess."""
-    global _bridge_ok
+    global _bridge_ok, _bridge_ok_at
     with _lock:
         _bridge_ok = None
+        _bridge_ok_at = 0.0
 
 
 def wait_for_process_exit(pid: int, timeout: float = 5.0) -> bool:

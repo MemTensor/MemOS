@@ -104,6 +104,16 @@ export function makeDispatcher(
 
     switch (method) {
       // ── lifecycle ──
+      // CORE_INIT is retained for backward compatibility with any
+      // out-of-tree adapter that might still send it, but it is
+      // **deprecated** for in-tree use. The bridge always calls
+      // `core.init()` in-process during `bridge.cts::main()` — see
+      // the ordering invariant there (also enforced by
+      // `tests/unit/bridge/bridge-startup-ordering.test.ts`). No
+      // in-tree stdio adapter (OpenClaw, Hermes Python) sends this
+      // RPC. Issue #1747 flagged it as dead code; we keep the
+      // dispatch branch to avoid a wire-contract break and revisit
+      // removal once telemetry confirms zero callers.
       case RPC_METHODS.CORE_INIT:
         await core.init();
         return { ok: true };
