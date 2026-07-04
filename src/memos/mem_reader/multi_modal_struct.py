@@ -1035,7 +1035,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     process_preference_fine,
                     non_file_url_fast_items,
                     info,
-                    self.general_llm,
+                    getattr(self, "preference_extractor_llm", self.general_llm),
                     self.embedder,
                     **kwargs,
                 )
@@ -1127,7 +1127,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 process_preference_fine,
                 non_file_url_nodes,
                 info,
-                self.general_llm,
+                getattr(self, "preference_extractor_llm", self.general_llm),
                 self.embedder,
                 **kwargs,
             )

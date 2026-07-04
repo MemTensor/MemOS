@@ -21,9 +21,23 @@ export class Embedder {
     return this.cfg?.provider ?? "local";
   }
 
+  get model(): string {
+    if (this.provider === "local") return "";
+    return this.cfg?.model ?? "";
+  }
+
   get dimensions(): number {
     if (this.provider === "local") return 384;
     return this.cfg?.dimensions ?? 1536;
+  }
+
+  /**
+   * Canonical identity of the embedding space this embedder produces vectors in.
+   * Format: "provider:model:dimensions". Used to detect when stored vectors
+   * were produced by a different model than the live config.
+   */
+  get signature(): string {
+    return `${this.provider}:${this.model}:${this.dimensions}`;
   }
 
   async embed(texts: string[]): Promise<number[][]> {

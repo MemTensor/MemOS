@@ -83,6 +83,7 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
   const startedAt = Date.now();
   try {
     const searchFilters = buildTraceSearchFilters(deps, input);
+    const vectorFilters = buildVectorSearchFilters(deps, searchFilters);
     const vecPoolSize = Math.max(
       config.tier2TopK,
       Math.ceil(config.tier2TopK * config.candidatePoolFactor),
@@ -100,8 +101,8 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
       const summaryHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
         kind: "summary",
         anyOfTags: tagsForStorage,
-        where: searchFilters.where,
-        params: searchFilters.params,
+        where: vectorFilters.where,
+        params: vectorFilters.params,
         hardCap: vecPoolSize * 4,
       });
       mergeChannelHits(blended, summaryHits, "vec_summary", input.queryVec);
@@ -110,8 +111,8 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
         const actionHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
           kind: "action",
           anyOfTags: tagsForStorage,
-          where: searchFilters.where,
-          params: searchFilters.params,
+          where: vectorFilters.where,
+          params: vectorFilters.params,
           hardCap: vecPoolSize * 4,
         });
         mergeChannelHits(blended, actionHits, "vec_action", input.queryVec);
@@ -125,8 +126,8 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
         log.debug("tag_filter_relaxed", { tags: tagsForStorage });
         const retry = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
           kind: "summary",
-          where: searchFilters.where,
-          params: searchFilters.params,
+          where: vectorFilters.where,
+          params: vectorFilters.params,
           hardCap: vecPoolSize * 4,
         });
         mergeChannelHits(blended, retry, "vec_summary", input.queryVec);
@@ -285,6 +286,41 @@ function buildTraceSearchFilters(
   }
   if (parts.length === 0) return {};
   return { where: parts.join(" AND "), params };
+}
+
+/**
+ * Layered on top of {@link buildTraceSearchFilters}. Adds the
+ * `vectorScanMaxAgeMs` time-window bound (issue #1929) so the cosine
+ * brute-force scan over `traces.vec_summary` / `vec_action` only
+ * touches rows newer than the configured cutoff. The keyword
+ * channels (FTS / pattern / structural) keep the unbounded view so
+ * ancient traces remain reachable by exact-text recall.
+ *
+ * Returns the base filters unchanged when `vectorScanMaxAgeMs` is
+ * `0`, missing, or any other non-positive value — matching the
+ * legacy "scan everything" behaviour.
+ */
+function buildVectorSearchFilters(
+  deps: Tier2Deps,
+  base: { where?: string; params?: Record<string, unknown> },
+): { where?: string; params?: Record<string, unknown> } {
+  const maxAgeMs = deps.config.vectorScanMaxAgeMs;
+  if (
+    typeof maxAgeMs !== "number" ||
+    !Number.isFinite(maxAgeMs) ||
+    maxAgeMs <= 0
+  ) {
+    return base;
+  }
+  const minTs = deps.now() - maxAgeMs;
+  const params: Record<string, unknown> = {
+    ...(base.params ?? {}),
+    vector_scan_min_ts: minTs,
+  };
+  const where = base.where
+    ? `${base.where} AND ts >= @vector_scan_min_ts`
+    : "ts >= @vector_scan_min_ts";
+  return { where, params };
 }
 
 function resolveTagFilter(

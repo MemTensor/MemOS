@@ -1233,6 +1233,10 @@ algorithm:
       pkgVersion: "orphan-test-recover",
     });
     await core.init();
+    // Issue #1808: orphan recovery runs on a background promise; await
+    // it so the test reads SQLite after every meta / reward write
+    // settles, not just the synchronous ones.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const unscored = readDb
@@ -1394,6 +1398,11 @@ algorithm:
       pkgVersion: "dirty-rescore-recover",
     });
     await core.init();
+    // Issue #1808: orphan/dirty recovery now runs on a background
+    // promise so `init()` returns to the host instantly. Tests that
+    // assert side effects from the recovery chain must await the
+    // promise explicitly.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const episode = readDb
@@ -1488,6 +1497,9 @@ algorithm:
       pkgVersion: "missing-reward-recover",
     });
     await core.init();
+    // Issue #1808: orphan/dirty recovery now runs on a background
+    // promise; tests asserting recovery side effects must await it.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const episode = readDb
@@ -1507,21 +1519,10 @@ algorithm:
   });
 
   it("dirty-reward recovery does not insert orphan traces (regression: rescore loop guard)", async () => {
-    // Regression test for the rescore loop:
-    // When recoverDirtyClosedEpisodes re-emits episode.finalized, capture's
-    // runReflect used to insert new trace rows for "orphan steps" — steps
-    // whose timestamps didn't match any existing DB row.  For recovered
-    // episodes this happens whenever a trace has tool calls with endedAt
-    // timestamps different from the trace's own ts, because the snapshot
-    // rebuilds a separate tool-role turn for each call.
-    //
-    // Without the guard the orphan insert grows trace_ids_json, keeping
-    // reward.traceCount != traceIds.length forever and looping on every
-    // bridge restart.  The guard (meta.recoveryReason === "dirty_reward_rescore")
-    // skips the insert, so trace_ids_json stays stable and the episode
-    // stops appearing dirty after a single recovery pass.
-
-    home = await makeTmpHome({ agent: "openclaw" });
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
 
     const seeder = await bootstrapMemoryCore({
       agent: "openclaw",
@@ -1534,13 +1535,13 @@ algorithm:
 
     const Sqlite = (await import("better-sqlite3")).default;
     const writeDb = new Sqlite(home.home.dbFile);
-    const BASE = Date.now() - 5_000;
+    const base = Date.now() - 5_000;
 
     writeDb
       .prepare(
         `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
       )
-      .run("se_loop", "openclaw", BASE, BASE, "{}");
+      .run("se_loop", "openclaw", base, base, "{}");
 
     // Episode is dirty: traceCount=1 but trace_ids_json has 2 IDs.
     writeDb
@@ -1550,17 +1551,16 @@ algorithm:
       .run(
         "ep_loop",
         "se_loop",
-        BASE,
-        BASE + 1,
+        base,
+        base + 1,
         JSON.stringify(["tr_loop_a", "tr_loop_b"]),
         0.5,
         JSON.stringify({
           closeReason: "finalized",
-          reward: { rHuman: 0.5, scoredAt: BASE - 1000, traceCount: 1 },
+          reward: { rHuman: 0.5, scoredAt: base - 1_000, traceCount: 1 },
         }),
       );
 
-    // tr_loop_a: plain text trace — no orphan risk.
     writeDb
       .prepare(
         `INSERT INTO traces (
@@ -1574,7 +1574,7 @@ algorithm:
         "tr_loop_a",
         "ep_loop",
         "se_loop",
-        BASE,
+        base,
         "帮我分析一下这段Python代码的性能瓶颈，并给出优化建议。",
         "这段代码的主要性能问题在于嵌套循环，时间复杂度是O(n²)，可以用哈希表将其优化到O(n)。",
         "Python代码性能分析",
@@ -1587,21 +1587,18 @@ algorithm:
         0.5,
         "[]",
         "[]",
-        BASE,
+        base,
         1,
       );
 
-    // tr_loop_b: trace with a tool call whose endedAt differs from the trace ts.
-    // snapshotFromRecoveredEpisode creates a tool-role turn with ts=BASE+300,
-    // which does NOT appear in traceByTs (only BASE and BASE+100 are in the map).
-    // Without the guard this step is treated as an orphan and a new trace is
-    // inserted, growing trace_ids_json from 2 to 3 and keeping the episode dirty.
+    // The tool call ends at a timestamp that does not match any existing
+    // trace row, which used to create a synthetic orphan trace.
     const toolCallWithDifferentTs = JSON.stringify([
       {
         name: "bash",
-        input: { command: "python -c 'import cProfile; cProfile.run(\"main()\")'"},
+        input: { command: "python -c 'import cProfile; cProfile.run(\"main()\")'" },
         output: "ncalls tottime ... main 1 0.003",
-        endedAt: BASE + 300,
+        endedAt: base + 300,
       },
     ]);
     writeDb
@@ -1617,7 +1614,7 @@ algorithm:
         "tr_loop_b",
         "ep_loop",
         "se_loop",
-        BASE + 100,
+        base + 100,
         "请用cProfile验证一下",
         "运行结果确认了瓶颈在内层循环，优化后耗时减少了约80%。",
         "cProfile性能验证",
@@ -1630,12 +1627,11 @@ algorithm:
         0.5,
         "[]",
         "[]",
-        BASE + 100,
+        base + 100,
         1,
       );
     writeDb.close();
 
-    // First recovery: episode is dirty (traceCount=1 != ids_len=2).
     core = await bootstrapMemoryCore({
       agent: "openclaw",
       home: home.home,
@@ -1643,29 +1639,26 @@ algorithm:
       pkgVersion: "rescore-loop-recover-1",
     });
     await core.init();
+    await core.waitForStartupRecovery?.();
     await core.shutdown();
     core = null;
 
     const readDb1 = new Sqlite(home.home.dbFile, { readonly: true });
     const ep1 = readDb1
-      .prepare("SELECT trace_ids_json, meta_json, r_task FROM episodes WHERE id = ?")
-      .get("ep_loop") as { trace_ids_json: string; meta_json: string; r_task: number | null } | undefined;
+      .prepare("SELECT trace_ids_json, meta_json FROM episodes WHERE id = ?")
+      .get("ep_loop") as { trace_ids_json: string; meta_json: string } | undefined;
     readDb1.close();
 
     expect(ep1).toBeDefined();
     const ids1 = JSON.parse(ep1!.trace_ids_json) as string[];
-    // Guard: no orphan trace was inserted during dirty-reward recovery.
     expect(ids1.length).toBe(2);
     const meta1 = JSON.parse(ep1!.meta_json) as {
       recoveryReason?: string;
       reward?: { traceCount?: number };
     };
     expect(meta1.recoveryReason).toBe("dirty_reward_rescore");
-    // After recovery traceCount matches ids_len: episode is no longer dirty.
     expect(meta1.reward?.traceCount).toBe(2);
 
-    // Second recovery (simulates next bridge restart): episode should not
-    // be re-scored because traceCount(2) == trace_ids_json.length(2).
     core = await bootstrapMemoryCore({
       agent: "openclaw",
       home: home.home,
@@ -1673,6 +1666,7 @@ algorithm:
       pkgVersion: "rescore-loop-recover-2",
     });
     await core.init();
+    await core.waitForStartupRecovery?.();
 
     const readDb2 = new Sqlite(home.home.dbFile, { readonly: true });
     const ep2 = readDb2
@@ -1682,12 +1676,587 @@ algorithm:
 
     expect(ep2).toBeDefined();
     const ids2 = JSON.parse(ep2!.trace_ids_json) as string[];
-    // Still 2 — no new orphan inserts on the second restart.
     expect(ids2.length).toBe(2);
     const meta2 = JSON.parse(ep2!.meta_json) as {
       reward?: { traceCount?: number };
     };
-    // traceCount unchanged: the episode was not re-scored.
     expect(meta2.reward?.traceCount).toBe(2);
+  });
+
+  it("does not requeue episodes already stamped as dirty-reward recovery", async () => {
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-recovery-guard-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 1_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_recovery_guard", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_recovery_guard",
+        "se_recovery_guard",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_recovery_guard"]),
+        null,
+        JSON.stringify({
+          closeReason: "finalized",
+          recoveryReason: "dirty_reward_rescore",
+          rewardDirty: { failedAttempts: 1, lastFailureAt: ts },
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_recovery_guard",
+        "ep_recovery_guard",
+        "se_recovery_guard",
+        ts,
+        "watchdog interrupt test",
+        "recovery already stamped this episode",
+        "watchdog interrupt test",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-recovery-guard-recover",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_recovery_guard") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBeNull();
+    const meta = JSON.parse(episode!.meta_json) as {
+      recoveryReason?: string;
+      rewardDirty?: { failedAttempts?: number; lastFailureAt?: number };
+    };
+    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.rewardDirty?.failedAttempts).toBe(1);
+  });
+
+  it("init() returns immediately even when a stale orphan's recovery chain stalls (issue #1808)", async () => {
+    // Issue #1808: on databases with 30k+ traces, the dreaming chain
+    // synchronous-await inside `init()` blocked the OpenClaw Gateway's
+    // event loop for 3-5s+, timing out the 3s WebSocket read probe.
+    // We now run the recovery chain on a background promise so
+    // `init()` resolves in milliseconds regardless of the chain's
+    // worst-case latency.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-init-latency-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const orphanOldTs = Date.now() - 5 * 60 * 60 * 1000; // 5h ago > STALE_EPISODE_TIMEOUT_MS
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_issue1808", "openclaw", orphanOldTs, orphanOldTs, "{}");
+    for (let i = 0; i < 3; i++) {
+      writeDb
+        .prepare(
+          `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, NULL, '[]', NULL, 'open', '{}')`,
+        )
+        .run(`ep_issue1808_${i}`, "se_issue1808", orphanOldTs);
+    }
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-init-latency-recover",
+    });
+
+    // Measure how long `init()` itself takes. Even with three stale
+    // orphans queued for the background reflect/reward chain it must
+    // resolve well under the OpenClaw Gateway's 3s WebSocket read
+    // probe budget.
+    const startedAt = Date.now();
+    await core.init();
+    const initMs = Date.now() - startedAt;
+    expect(initMs).toBeLessThan(500);
+
+    // The background promise is still in flight (or just finished);
+    // either way `waitForStartupRecovery()` must resolve.
+    await core.waitForStartupRecovery?.();
+  });
+
+  it("dirty closed episodes hit a failure-count backoff so init() does not retry them every restart (issue #1808)", async () => {
+    // The OpenClaw report noted "orphan episodes with failed LLM calls
+    // are retried indefinitely with no backoff". After the third
+    // consecutive failure we suspend automatic retries until the
+    // exponential backoff window elapses; manual feedback is the only
+    // way to force another rescore inside the window.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-backoff-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 2_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_backoff", "openclaw", ts, ts, "{}");
+    // Seed a closed episode that is "dirty" by predicate (r_task=null
+    // + finalized + traceIds.length>0) but whose meta.rewardDirty
+    // already records 3 prior failures with `lastFailureAt = now` —
+    // i.e. inside the 1h backoff window.
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_backoff",
+        "se_backoff",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_backoff"]),
+        null,
+        JSON.stringify({
+          closeReason: "finalized",
+          recoveryReason: "missed_session_end",
+          rewardDirty: { failedAttempts: 3, lastFailureAt: Date.now() },
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_backoff",
+        "ep_backoff",
+        "se_backoff",
+        ts,
+        "需求澄清问题",
+        "好的，分阶段回答。",
+        "需求澄清问题",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-backoff-recover",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_backoff") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    // The episode is still inside the backoff window, so the rescan
+    // skipped it — r_task should stay null (the original failing
+    // value), and the recovery-reason stamp from `recoverDirtyClosedEpisodes`
+    // should NOT be present.
+    expect(episode!.r_task).toBeNull();
+    const meta = JSON.parse(episode!.meta_json) as {
+      recoveryReason?: string;
+      rewardDirty?: { failedAttempts?: number; lastFailureAt?: number };
+    };
+    expect(meta.recoveryReason).toBe("missed_session_end");
+    expect(meta.rewardDirty?.failedAttempts).toBe(3);
+  });
+
+  it("recoverDirtyClosedEpisodes bumps failedAttempts when the rescore did not lift the dirty flag (issue #1808)", async () => {
+    // After `recoverDirtyClosedEpisodes` finishes its flush, any
+    // episode still marked dirty has its `meta.rewardDirty` failure
+    // counter bumped + `lastFailureAt` stamped. Once `failedAttempts`
+    // crosses MAX_DIRTY_REWARD_ATTEMPTS the backoff filter kicks in
+    // on subsequent scans.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-counter-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 2_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_counter", "openclaw", ts, ts, "{}");
+    // A dirty episode with NO prior failure counter. Without a working
+    // LLM the reward listener cannot lift r_task above null → the
+    // episode stays dirty after recovery → failedAttempts should jump
+    // from 0 → 1.
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_counter",
+        "se_counter",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_counter"]),
+        null,
+        JSON.stringify({
+          closeReason: "finalized",
+          recoveryReason: "missed_session_end",
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_counter",
+        "ep_counter",
+        "se_counter",
+        ts,
+        "请帮我详细分析 1808 issue 的根因：为什么 memos-local-plugin 的梦境处理会饿死 OpenClaw 网关的事件循环？说明同步 LLM 调用与 await 之间的关系。",
+        "OpenClaw Gateway 进程是单线程 Node.js 事件循环。memos-local-plugin 在 init 同步等待 reflect/reward 链 → 阻塞事件循环 3-5s → WebSocket 升级超时。",
+        "OpenClaw Gateway 与 memos-local-plugin 事件循环阻塞根因分析",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    // The fakeEmbedder default is used, no LLM is configured (provider="")
+    // → reward listener resolves with r_task still null (LLM_UNAVAILABLE
+    // → heuristic fallback writes r_task=0 if it runs; if it cannot run
+    // we still expect the dirty flag to survive).
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-counter-recover",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_counter") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    const meta = JSON.parse(episode!.meta_json) as {
+      rewardDirty?: { failedAttempts?: number; lastFailureAt?: number };
+      reward?: { traceCount?: number; skipped?: boolean };
+    };
+    // Three possible end-states from the reward listener depending on
+    // the heuristic fallback's behaviour:
+    //   1. r_task=0, reward.traceCount matches  → no longer dirty → backoff cleared
+    //   2. r_task=null, reward.skipped=true     → no longer dirty (skipped path) → backoff cleared
+    //   3. r_task=null, no reward written       → still dirty → failedAttempts bumped to 1
+    // In all three cases the *invariant* is "no backoff metadata
+    // remains if the rescore stopped being dirty, AND failedAttempts
+    // increases by exactly 1 if it stayed dirty".
+    if (episode!.r_task !== null || meta.reward?.skipped === true) {
+      expect(meta.rewardDirty).toBeUndefined();
+    } else {
+      expect(meta.rewardDirty?.failedAttempts).toBe(1);
+      expect(typeof meta.rewardDirty?.lastFailureAt).toBe("number");
+    }
+  });
+
+  it("shutdown() awaits background recovery before tearing down storage (issue #1808)", async () => {
+    // If `shutdown()` did not await the background recovery promise we
+    // would close SQLite while the reflect / reward listeners were
+    // still mid-`handle.flush()`, producing `SQLITE_MISUSE` noise.
+    // Sequential init → shutdown back-to-back must complete cleanly
+    // without throwing.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-shutdown-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 2_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_shutdown", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_shutdown",
+        "se_shutdown",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_shutdown"]),
+        null,
+        JSON.stringify({
+          closeReason: "finalized",
+          recoveryReason: "missed_session_end",
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_shutdown",
+        "ep_shutdown",
+        "se_shutdown",
+        ts,
+        "shutdown 测试",
+        "好的。",
+        "shutdown 测试",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    const fastCore = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-shutdown-recover",
+    });
+    await fastCore.init();
+    // Deliberately skip `waitForStartupRecovery()`. `shutdown()` must
+    // still complete the recovery before closing the DB handle.
+    await expect(fastCore.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("does not rescore a closed episode whose only mismatch is a ghost trace ID (#1966)", async () => {
+    // Regression guard for https://github.com/MemTensor/MemOS/issues/1966.
+    // A dangling ID in trace_ids_json must not make reward coverage look dirty
+    // forever; only trace rows that still exist should count.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "ghost-trace-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 1_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_ghost", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_ghost",
+        "se_ghost",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_real", "tr_ghost"]),
+        0.6,
+        JSON.stringify({
+          closeReason: "finalized",
+          reward: {
+            rHuman: 0.6,
+            scoredAt: ts + 2,
+            traceCount: 1,
+            traceIds: ["tr_real"],
+            source: "heuristic",
+          },
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_real",
+        "ep_ghost",
+        "se_ghost",
+        ts,
+        "请讲一下回归任务的损失函数选择。",
+        "对连续目标变量常用 MSE 或 MAE；存在重尾噪声时用 Huber。",
+        "回归任务损失函数",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "ghost-trace-recover",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_ghost") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBeCloseTo(0.6);
+    const meta = JSON.parse(episode!.meta_json) as {
+      rewardDirty?: unknown;
+      recoveryReason?: string;
+      reward?: { rHuman?: number; traceCount?: number; traceIds?: string[] };
+    };
+    expect(meta.recoveryReason).toBeUndefined();
+    expect(meta.reward?.rHuman).toBeCloseTo(0.6);
+    expect(meta.reward?.traceCount).toBe(1);
+    expect(meta.reward?.traceIds).toEqual(["tr_real"]);
   });
 });
