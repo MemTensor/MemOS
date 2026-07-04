@@ -146,18 +146,50 @@ def handle_scheduler_allstatus(
         sched_failed = all_tasks_summary.failed
         sched_cancelled = all_tasks_summary.cancelled
 
-        # If queue monitor is available, prefer its live waiting/in_progress counts
+        # If queue monitor is available, prefer its live waiting/in_progress counts.
+        #
+        # Two queue backends produce different ``queue_status_data`` shapes:
+        #   - Redis queue: ``{"running": .., "remaining": .., "pending": ..,
+        #     "<stream_key_prefix>:<user>:<cube>:<label>": {"running": ..,
+        #     "remaining": .., "pending": ..}, ...}`` — the per-stream entries
+        #     are nested dicts and their keys start with the scheduler stream
+        #     prefix (default ``"scheduler:messages:stream:v2.0:"``). The loop
+        #     below aggregates those per-stream entries.
+        #   - Local in-memory queue: only the top-level totals
+        #     ``{"running", "remaining", "pending"}`` are present (see
+        #     ``TaskScheduleMonitor._get_local_tasks_status``). There are no
+        #     per-stream keys to enumerate, so the prefix loop would silently
+        #     collapse the summary to all zeros. Detect that case and fall back
+        #     to the flat totals so Docker / no-Redis deployments still surface
+        #     accurate in_progress / waiting / pending counts (issue #1395).
         if mem_scheduler.task_schedule_monitor:
             queue_status_data = mem_scheduler.task_schedule_monitor.get_tasks_status() or {}
             scheduler_waiting = 0
             scheduler_in_progress = 0
             scheduler_pending = 0
-            for key, value in queue_status_data.items():
-                if not key.startswith("scheduler:"):
-                    continue
-                scheduler_in_progress += int(value.get("running", 0) or 0)
-                scheduler_pending += int(value.get("pending", value.get("remaining", 0)) or 0)
-                scheduler_waiting += int(value.get("remaining", 0) or 0)
+            per_stream_keys = [
+                key
+                for key, value in queue_status_data.items()
+                if isinstance(key, str) and key.startswith("scheduler:") and isinstance(value, dict)
+            ]
+
+            if per_stream_keys:
+                for key in per_stream_keys:
+                    value = queue_status_data[key]
+                    scheduler_in_progress += int(value.get("running", 0) or 0)
+                    scheduler_pending += int(value.get("pending", value.get("remaining", 0)) or 0)
+                    scheduler_waiting += int(value.get("remaining", 0) or 0)
+            elif not getattr(mem_scheduler, "use_redis_queue", True):
+                # Local-queue mode: there are no per-stream keys; use the flat
+                # totals from ``_get_local_tasks_status``. ``remaining`` reflects
+                # queued depth (waiting / pending) and ``running`` reflects the
+                # dispatcher's in-flight count.
+                scheduler_in_progress = int(queue_status_data.get("running", 0) or 0)
+                scheduler_waiting = int(queue_status_data.get("remaining", 0) or 0)
+                scheduler_pending = int(
+                    queue_status_data.get("pending", queue_status_data.get("remaining", 0)) or 0
+                )
+
             sched_waiting = scheduler_waiting
             sched_in_progress = scheduler_in_progress
             sched_pending = scheduler_pending

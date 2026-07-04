@@ -48,14 +48,14 @@ export function nullable<T>(v: T | undefined): T | null {
 
 export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string): string {
   const newestFirst = opts?.newestFirst !== false;
-  const limit = clampLimit(opts?.limit ?? 50);
+  const limit = clampLimit(opts?.limit ?? 500);
   const offset = Math.max(opts?.offset ?? 0, 0);
   return `ORDER BY ${tsColumn} ${newestFirst ? "DESC" : "ASC"} LIMIT ${limit} OFFSET ${offset}`;
 }
 
 export function clampLimit(n: number): number {
-  if (!Number.isFinite(n) || n <= 0) return 50;
-  return Math.min(Math.trunc(n), 10_000);
+  if (!Number.isFinite(n) || n <= 0) return 500;
+  return Math.min(Math.trunc(n), 500);
 }
 
 export function timeRangeWhere(
