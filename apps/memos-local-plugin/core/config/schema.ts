@@ -477,6 +477,28 @@ const AlgorithmSchema = Type.Object({
      * slightly larger window pays for itself).
      */
     llmFilterCandidateBodyChars: NumberInRange(500, 120, 2000),
+    /**
+     * Tier-2 vector scan time-window bound (ms). When > 0, the
+     * vector scan path (`scanAndTopK` in `core/storage/vector.ts`)
+     * only considers traces written within the last
+     * `vectorScanMaxAgeMs` milliseconds. Set to `0` to disable the
+     * cap (legacy behaviour: full-table brute-force scan).
+     *
+     * Background: at 93K rows × 1536 dims the unbounded scan blocks
+     * the Node event loop for 5–30 s every `onTurnStart`
+     * (https://github.com/MemTensor/MemOS/issues/1929). A 24-hour
+     * window keeps onTurnStart latency under control without
+     * sacrificing recall for active-session memories. FTS keyword
+     * channels still cover older traces, so this bound only affects
+     * the cosine-only path.
+     *
+     * Hard cap is one year (31_536_000_000 ms) — anything larger is
+     * indistinguishable from "unbounded" at the corpus sizes where
+     * the bound starts to matter, and accepting absurdly large
+     * values lets misconfigured deployments silently revert to the
+     * old behaviour.
+     */
+    vectorScanMaxAgeMs: NumberInRange(0, 0, 31_536_000_000),
   }, { default: {} }),
 }, { default: {} });
 

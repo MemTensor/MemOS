@@ -167,6 +167,22 @@ export interface MemoryCore {
   health(): Promise<CoreHealth>;
   /** Late-bind ARMS telemetry (called after config is available). */
   bindTelemetry?(t: unknown): void;
+  /**
+   * Resolve when the background recovery kicked off by `init()` settles.
+   *
+   * `init()` returns as soon as the synchronous orphan / dirty-episode
+   * classification finishes; the actual reflect / reward / L2 recovery
+   * chain runs on a background promise so the host's event loop stays
+   * responsive (see issues #1776 + #1808). This method exposes that
+   * promise for callers that need the historic "await everything"
+   * semantics — primarily tests and one-shot batch tools.
+   *
+   * Implementations MUST never reject from this promise. Failures are
+   * logged on the `init.background_recovery_failed` channel instead.
+   * Adapters that have no startup recovery may omit the method; an
+   * absent implementation is equivalent to `() => Promise.resolve()`.
+   */
+  waitForStartupRecovery?(): Promise<void>;
 
   // ── session / episode ──
   openSession(input: {
