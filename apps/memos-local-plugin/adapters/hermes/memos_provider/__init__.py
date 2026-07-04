@@ -53,6 +53,7 @@ import re
 import sys
 import threading
 import time
+import weakref
 
 from pathlib import Path
 from typing import Any
@@ -1346,7 +1347,7 @@ class MemTensorProvider(MemoryProvider):
                 }
                 if bool(args.get("sessionScope", False)):
                     params["sessionId"] = self._session_id
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.search",
                     params,
                     timeout=_LONG_RPC_TIMEOUT,
@@ -1365,7 +1366,7 @@ class MemTensorProvider(MemoryProvider):
                 method = methods.get(kind)
                 if method is None:
                     return json.dumps({"error": f"unknown memory kind: {kind}"})
-                item = self._bridge.request(
+                item = self._bridge_request_with_retry(
                     method, {"id": item_id, "namespace": self._runtime_namespace()}
                 )
                 if not item:
@@ -1410,7 +1411,7 @@ class MemTensorProvider(MemoryProvider):
                     }
                 )
             if tool_name == "memos_timeline":
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.timeline",
                     {
                         "episodeId": args.get("episodeId", self._episode_id),
@@ -1425,12 +1426,12 @@ class MemTensorProvider(MemoryProvider):
                 params = {"limit": limit, "namespace": self._runtime_namespace()}
                 if args.get("status"):
                     params["status"] = args["status"]
-                return json.dumps(self._bridge.request("skill.list", params))
+                return json.dumps(self._bridge_request_with_retry("skill.list", params))
             if tool_name == "memos_environment":
                 query = (args.get("query") or "").strip()
                 limit = self._int_arg(args, "limit", 5, 1, 30)
                 if not query:
-                    resp = self._bridge.request(
+                    resp = self._bridge_request_with_retry(
                         "memory.list_world_models",
                         {"limit": limit, "offset": 0, "namespace": self._runtime_namespace()},
                     )
@@ -1446,7 +1447,7 @@ class MemTensorProvider(MemoryProvider):
                             "queried": False,
                         }
                     )
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.search",
                     {
                         "agent": "hermes",
@@ -1480,7 +1481,7 @@ class MemTensorProvider(MemoryProvider):
                 skill_id = (args.get("id") or "").strip()
                 if not skill_id:
                     return json.dumps({"error": "missing id"})
-                skill = self._bridge.request(
+                skill = self._bridge_request_with_retry(
                     "skill.get",
                     {
                         "id": skill_id,
@@ -1576,6 +1577,19 @@ class MemTensorProvider(MemoryProvider):
         # into the same task later.
         with contextlib.suppress(Exception):
             self._bridge.request("session.close", {"sessionId": self._session_id})
+
+    def __del__(self) -> None:
+        # Safety net — if shutdown() was never called (e.g. caller forgot,
+        # Hermes agent routed model change with self.agent = None), clean
+        # up the bridge subprocess and keepalive thread on GC.
+        if self._bridge is not None or (
+            self._bridge_keepalive_thread is not None and self._bridge_keepalive_thread.is_alive()
+        ):
+            logger.warning(
+                "MemOS: __del__ cleaning up leaked provider — shutdown() was never called"
+            )
+            with contextlib.suppress(Exception):
+                self.shutdown()
 
     def shutdown(self) -> None:  # type: ignore[override]
         self._bridge_keepalive_stop.set()
@@ -1786,11 +1800,80 @@ class MemTensorProvider(MemoryProvider):
         )
         self._session_id = resp.get("sessionId") or requested_session
 
+    def _bridge_request_with_retry(
+        self,
+        method: str,
+        params: Any,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Read-path helper: reconnect + retry once on ``transport_closed``.
+
+        Layer 4 (#2028): the read-path memory tools previously issued a
+        single ``self._bridge.request(...)`` and surfaced any error
+        verbatim to the model. When the Node bridge has died since the
+        last user turn, that first call now raises
+        ``transport_closed`` fast (thanks to Layer 1/2). This helper
+        mirrors the pattern ``sync_turn`` already uses: reconnect the
+        bridge once and re-issue the same request. A second failure is
+        left to propagate — the ``except`` block in
+        ``handle_tool_call`` will surface the error text verbatim.
+        """
+        assert self._bridge is not None
+        try:
+            if timeout is None:
+                return self._bridge.request(method, params)
+            return self._bridge.request(method, params, timeout=timeout)
+        except BridgeError as err:
+            if not self._is_transport_closed(err):
+                raise
+            logger.info(
+                "MemOS: bridge transport closed on %s; reconnecting and retrying once — %s",
+                method,
+                err,
+            )
+            self._reconnect_bridge(self._session_id, timeout=30.0)
+            assert self._bridge is not None
+            if timeout is None:
+                return self._bridge.request(method, params)
+            return self._bridge.request(method, params, timeout=timeout)
+
     def _is_transport_closed(self, err: Exception) -> bool:
         if isinstance(err, BridgeError) and err.code == "transport_closed":
             return True
         msg = str(err).lower()
         return "broken pipe" in msg or "bridge closed" in msg or "transport_closed" in msg
+
+    def _should_reconnect_after_keepalive_failure(self, err: Exception) -> bool:
+        """Decide whether a keepalive failure warrants a bridge reconnect.
+
+        Layer 3 (#2028): the keepalive previously reconnected only on
+        ``BridgeError("transport_closed", …)``. A hung Node bridge
+        surfaces instead as ``BridgeError("timeout", …)`` (the client
+        gave up waiting for a response); that error was dropped at
+        DEBUG and the stale client kept being reused, so every
+        subsequent memory tool timed out for another 30 s. Reconnect
+        also when the subprocess has already exited (belt-and-braces
+        for hangs that didn't raise a transport error).
+
+        A live subprocess raising a generic (non-transport) error must
+        NOT trigger a reconnect — otherwise transient parse noise
+        would create a reconnect storm.
+        """
+        if self._is_transport_closed(err):
+            return True
+        if isinstance(err, BridgeError) and err.code == "timeout":
+            return True
+        # Ask the underlying subprocess: is it still alive?
+        bridge = self._bridge
+        if bridge is not None:
+            try:
+                exit_code = bridge._proc.poll()  # type: ignore[attr-defined]
+            except Exception:
+                exit_code = None
+            if exit_code is not None:
+                return True
+        return False
 
     def _reconnect_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> None:
         # Don't reconnect if we're shutting down
@@ -1858,18 +1941,32 @@ class MemTensorProvider(MemoryProvider):
             return
         self._bridge_keepalive_stop.clear()
 
+        _self_ref = weakref.ref(self)
+
         def _run() -> None:
-            while not self._bridge_keepalive_stop.wait(5.0):
-                if not self._ensure_bridge(self._session_id, timeout=10.0):
+            while True:
+                # Stop signal set (e.g. shutdown called by another thread).
+                # When self is garbage-collected the weakref resolves to None
+                # and we exit gracefully instead of keeping the thread + bridge
+                # subprocess alive forever.
+                provider = _self_ref()
+                if provider is None:
+                    break
+                if provider._bridge_keepalive_stop.wait(5.0):
+                    break
+                if not provider._ensure_bridge(provider._session_id, timeout=10.0):
                     continue
                 try:
-                    assert self._bridge is not None
-                    self._bridge.request("core.health", {}, timeout=10.0)
+                    assert provider._bridge is not None
+                    provider._bridge.request("core.health", {}, timeout=10.0)
                 except Exception as err:
-                    if self._is_transport_closed(err):
-                        logger.info("MemOS: bridge keepalive reconnecting after transport close")
+                    if provider._should_reconnect_after_keepalive_failure(err):
+                        logger.info(
+                            "MemOS: bridge keepalive reconnecting after failure — %s",
+                            err,
+                        )
                         with contextlib.suppress(Exception):
-                            self._reconnect_bridge(self._session_id, timeout=10.0)
+                            provider._reconnect_bridge(provider._session_id, timeout=10.0)
                     else:
                         logger.debug("MemOS: bridge keepalive failed — %s", err)
 

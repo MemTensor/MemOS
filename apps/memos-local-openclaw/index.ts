@@ -33,7 +33,8 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
-import { ensureToolsAllowEntry } from "./src/openclaw-config";
+import { parseJsonOrJson5 } from "./src/shared/json5";
+import { patchOpenclawAllowFile } from "./src/shared/openclaw-config";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -168,6 +169,27 @@ const pluginConfigSchema = {
   },
 };
 
+/**
+ * Narrow view of the OpenClaw plugin API surface that this plugin uses for memory
+ * registration. Hoisted to module scope (rather than inlined at the call site) so that
+ * future maintainers can see exactly which host methods the feature detection covers,
+ * and so nobody accidentally reaches for other `OpenClawPluginApi` members through the
+ * narrowed reference. See issue #1559.
+ *
+ * - `registerMemoryPromptSection` was introduced in OpenClaw 2026.3.31.
+ * - `registerMemoryCapability` is the legacy umbrella call that the plugin used to rely
+ *   on; kept here purely so older gateways still work.
+ */
+interface MemoryRegistrationApi {
+  registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+  registerMemoryCapability?: (capability: { promptBuilder: typeof buildMemoryPromptSection }) => void;
+}
+
+interface ExtendedLogger {
+  warn(msg: string): void;
+  error?(msg: string): void;
+}
+
 const memosLocalPlugin = {
   id: "memos-local-openclaw-plugin",
   name: "MemOS Local Memory",
@@ -179,30 +201,27 @@ const memosLocalPlugin = {
 
   register(api: OpenClawPluginApi) {
     // OpenClaw 2026.3.31 split the legacy `registerMemoryCapability` facade
-    // into three focused registration methods. We prefer the new API when
-    // the host exposes it; otherwise we fall back to the legacy
-    // capability registration so older hosts still load. Either method
-    // being missing is non-fatal — the plugin must remain load-safe.
-    //
-    // See: https://github.com/MemTensor/MemOS/issues/1559
-    const hostApi = api as OpenClawPluginApi & {
-      registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
-      registerMemoryFlushPlan?: (resolver: unknown) => void;
-      registerMemoryRuntime?: (runtime: unknown) => void;
-    };
+    // into focused registration methods. Prefer the new prompt-section API,
+    // then fall back to the legacy capability registration so older hosts
+    // still load.
+    const memoryApi = api as OpenClawPluginApi & MemoryRegistrationApi;
 
-    if (typeof hostApi.registerMemoryPromptSection === "function") {
-      hostApi.registerMemoryPromptSection(buildMemoryPromptSection);
-    } else if (typeof hostApi.registerMemoryCapability === "function") {
-      hostApi.registerMemoryCapability({
-        promptBuilder: buildMemoryPromptSection,
-      });
+    if (typeof memoryApi.registerMemoryPromptSection === "function") {
+      memoryApi.registerMemoryPromptSection(buildMemoryPromptSection);
+    } else if (typeof memoryApi.registerMemoryCapability === "function") {
+      memoryApi.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
     } else {
-      hostApi.logger?.warn?.(
+      const message =
         "memos-local: host SDK exposes neither registerMemoryPromptSection " +
-          "nor registerMemoryCapability — memory prompt section will not be " +
-          "installed. Plugin continues without a system prompt prelude.",
-      );
+        "nor registerMemoryCapability; memory prompt section will not be " +
+        "installed. The plugin may be incompatible with this OpenClaw gateway version.";
+      const logger = api.logger as ExtendedLogger;
+      if (typeof logger.error === "function") {
+        logger.error(message);
+      } else {
+        logger.warn(message);
+      }
+      throw new Error(message);
     }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -322,8 +341,8 @@ const memosLocalPlugin = {
     const configPath = path.join(stateDir, "state", "memos-local", "config.json");
     if (Object.keys(pluginCfg).length === 0 && fs.existsSync(configPath)) {
       try {
-        const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        pluginCfg = fileConfig;
+        const fileConfig = parseJsonOrJson5(fs.readFileSync(configPath, "utf-8"));
+        pluginCfg = fileConfig as Record<string, unknown>;
         api.logger.info(`memos-local: loaded config from ${configPath}`);
       } catch (e) {
         api.logger.warn(`memos-local: failed to load config from ${configPath}: ${e}`);
@@ -381,15 +400,17 @@ const memosLocalPlugin = {
       ctx.log.warn(`memos-local: could not write to managed skills dir: ${e}`);
     }
 
-    // Ensure plugin tools are enabled in openclaw.json tools.allow
+    // Ensure plugin tools are enabled in openclaw.json tools.allow.
+    // openclaw.json is JSON5 (supports // comments / single-quoted strings /
+    // trailing commas) — the patcher tolerates all of these (see issue #1543).
     try {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
-        const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const patched = ensureToolsAllowEntry(raw, "group:plugins");
-        if (patched !== raw) {
-          fs.writeFileSync(openclawJsonPath, patched, "utf-8");
+        const result = patchOpenclawAllowFile(openclawJsonPath);
+        if (result.changed) {
           ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
+        } else if (result.reason) {
+          ctx.log.debug(`memos-local: tools.allow not patched (${result.reason})`);
         }
       }
     } catch (e) {
@@ -1885,6 +1906,9 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
+    // Track current session to detect cross-session memories
+    let currentSessionKey: string | null = null;
+
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
@@ -1902,7 +1926,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
       const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
-      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
+      const incomingSessionKey = hookCtx?.sessionKey ?? "default";
+      ctx.log.info(`auto-recall: agentId=${recallAgentId} sessionKey=${incomingSessionKey} (from hookCtx)`);
 
       const recallT0 = performance.now();
       let recallQuery = "";
@@ -1913,6 +1938,13 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
         const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
+
+        // Detect if this is a new session
+        const isNewSession = currentSessionKey !== incomingSessionKey || NEW_SESSION_PROMPT_RE.test(rawPrompt);
+        if (isNewSession && currentSessionKey !== null) {
+          ctx.log.info(`auto-recall: new session detected (prev=${currentSessionKey}, curr=${incomingSessionKey})`);
+        }
+        currentSessionKey = incomingSessionKey;
 
         const minQueryLength = ctx.config.recall?.autoRecallMinQueryLength ?? DEFAULTS.autoRecallMinQueryLength;
         if (query.length < minQueryLength) {
@@ -2058,10 +2090,18 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         filteredHits = deduplicateHits(filteredHits);
         ctx.log.debug(`auto-recall: merged ${allRawHits.length} → ${beforeDedup} relevant → ${filteredHits.length} after dedup, sufficient=${sufficient}`);
 
+        // Check if any memories are from a different session
+        const hasCrossSessionMemories = filteredHits.some(h =>
+          h.source.sessionKey && h.source.sessionKey !== incomingSessionKey
+        );
+        ctx.log.debug(`auto-recall: isNewSession=${isNewSession}, hasCrossSessionMemories=${hasCrossSessionMemories}`);
+
         const lines = filteredHits.map((h, i) => {
           const excerpt = h.original_excerpt;
+          const isCrossSession = h.source.sessionKey && h.source.sessionKey !== incomingSessionKey;
+          const sessionTag = isCrossSession ? " [from previous session]" : "";
           const oTag = h.origin === "local-shared" ? " [本机共享]" : h.origin === "hub-memory" ? " [团队缓存]" : "";
-          const parts: string[] = [`${i + 1}. [${h.source.role}]${oTag}`];
+          const parts: string[] = [`${i + 1}. [${h.source.role}]${sessionTag}${oTag}`];
           if (excerpt) parts.push(`   ${excerpt}`);
           parts.push(`   chunkId="${h.ref.chunkId}"`);
           if (h.taskId) {
@@ -2086,15 +2126,32 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         tips.push("- Need more surrounding dialogue → call `memory_timeline(chunkId=\"...\")` to expand context around a hit");
         const tipsText = "\n\nAvailable follow-up tools:\n" + tips.join("\n");
 
+        // Use different instructions based on whether memories are from current or previous sessions
         const contextParts = [
           "## User's conversation history (from memory system)",
           "",
-          "IMPORTANT: The following are facts from previous conversations with this user.",
-          "You MUST treat these as established knowledge and use them directly when answering.",
-          "Do NOT say you don't know or don't have information if the answer is in these memories.",
-          "",
-          lines.join("\n\n"),
         ];
+
+        if (hasCrossSessionMemories || isNewSession) {
+          contextParts.push(
+            "IMPORTANT: The following memories are from PREVIOUS SESSIONS.",
+            "Treat them as BACKGROUND KNOWLEDGE ONLY:",
+            "- Do NOT act on them unprompted or proactively respond based solely on these memories",
+            "- WAIT for the user's explicit instruction before taking any action",
+            "- These memories provide context, but the user must initiate the conversation",
+            "- If you reference these memories, explicitly note they are from a previous session (e.g., \"根据之前的会话...\" or \"Based on a previous conversation...\")",
+            "",
+          );
+        } else {
+          contextParts.push(
+            "IMPORTANT: The following are facts from previous conversations with this user.",
+            "You MUST treat these as established knowledge and use them directly when answering.",
+            "Do NOT say you don't know or don't have information if the answer is in these memories.",
+            "",
+          );
+        }
+
+        contextParts.push(lines.join("\n\n"));
         if (tipsText) contextParts.push(tipsText);
 
         // ─── Skill auto-recall ───
