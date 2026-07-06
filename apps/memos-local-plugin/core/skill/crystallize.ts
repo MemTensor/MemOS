@@ -9,7 +9,7 @@
  * traces we fail fast with `skipped_reason="no-evidence"`.
  */
 
-import type { LlmClient } from "../llm/types.js";
+import type { LlmClient, LlmMessage } from "../llm/types.js";
 import { detectModelRefusal } from "../llm/refusal.js";
 import {
   detectDominantLanguage,
@@ -174,6 +174,78 @@ export async function crystallizeDraft(
       });
       return { ok: false, skippedReason: "llm-refusal", modelRefusal };
     }
+
+    // ── retry with correction context if raw output is available ──
+    if (rawPreview) {
+      log.warn("skill.crystallize.retry", {
+        policyId: input.policy.id,
+        error: message,
+      });
+      const correctionMessages: LlmMessage[] = [
+        { role: "system", content: SKILL_CRYSTALLIZE_PROMPT.system },
+        { role: "system", content: languageSteeringLine(evidenceLang) },
+        { role: "user", content: userPayload },
+        { role: "assistant", content: rawPreview },
+        {
+          role: "user",
+          content: `The previous attempt produced the following output:
+
+${rawPreview}
+
+The error was: ${message}. Please correct this and generate a valid JSON skill definition. Ensure the output is valid JSON and follows the required schema.`,
+        },
+      ];
+      try {
+        const rsp = await llm.completeJson<Record<string, unknown>>(
+          correctionMessages,
+          {
+            op: "skill.crystallize",
+            phase: "skill",
+            episodeId: input.episodeId,
+            schemaHint: "skill-crystallize.v2",
+          },
+        );
+        const retryRawRefusal = detectModelRefusal(rsp.raw);
+        if (retryRawRefusal) {
+          const modelRefusal = {
+            provider: rsp.provider,
+            model: rsp.model,
+            servedBy: rsp.servedBy,
+            ...retryRawRefusal,
+          };
+          log.error("skill.crystallize.retry_model_refusal", {
+            policyId: input.policy.id,
+            ...modelRefusal,
+          });
+          return { ok: false, skippedReason: "llm-refusal", modelRefusal };
+        }
+        const draft = normaliseDraft(rsp.value, input);
+        const draftRefusal = detectModelRefusal(draft);
+        if (draftRefusal) {
+          const modelRefusal = {
+            provider: rsp.provider,
+            model: rsp.model,
+            servedBy: rsp.servedBy,
+            ...draftRefusal,
+          };
+          log.error("skill.crystallize.retry_model_refusal", {
+            policyId: input.policy.id,
+            ...modelRefusal,
+          });
+          return { ok: false, skippedReason: "llm-refusal", modelRefusal };
+        }
+        if (deps.validate) deps.validate(draft);
+        return { ok: true, draft };
+      } catch (retryErr) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        log.error("skill.crystallize.retry_failed", {
+          policyId: input.policy.id,
+          error: retryMsg,
+        });
+        return { ok: false, skippedReason: `llm-failed: ${retryMsg}` };
+      }
+    }
+
     log.error("skill.crystallize.failed", { policyId: input.policy.id, error: message });
     return { ok: false, skippedReason: `llm-failed: ${message}` };
   }
