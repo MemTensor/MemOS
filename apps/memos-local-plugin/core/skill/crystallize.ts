@@ -235,6 +235,10 @@ The error was: ${message}. Please correct this and generate a valid JSON skill d
           return { ok: false, skippedReason: "llm-refusal", modelRefusal };
         }
         if (deps.validate) deps.validate(draft);
+        log.warn("skill.crystallize.retry_succeeded", {
+          policyId: input.policy.id,
+          error: message,
+        });
         return { ok: true, draft };
       } catch (retryErr) {
         const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
