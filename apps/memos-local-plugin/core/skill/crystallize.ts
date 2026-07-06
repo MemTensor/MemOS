@@ -176,7 +176,7 @@ export async function crystallizeDraft(
     }
 
     // ── retry with correction context if raw output is available ──
-    if (rawPreview) {
+    if (rawPreview !== null) {
       log.warn("skill.crystallize.retry", {
         policyId: input.policy.id,
         error: message,
