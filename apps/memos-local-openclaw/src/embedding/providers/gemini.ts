@@ -5,7 +5,11 @@ export async function embedGemini(
   cfg: EmbeddingConfig,
   log: Logger,
 ): Promise<number[][]> {
-  const model = cfg.model ?? "text-embedding-004";
+  // Issue #1241: default aligned with what the Viewer Test-Connection uses.
+  // gemini-embedding-001 is the current officially-supported Gemini embedding
+  // model; text-embedding-004 is deprecated for new deployments and now
+  // returns 404 against the v1beta batchEmbedContents endpoint for many users.
+  const model = cfg.model ?? "gemini-embedding-001";
   const endpoint =
     cfg.endpoint ??
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents`;

@@ -3874,11 +3874,28 @@ export class ViewerServer {
       return vecs[0].length;
     }
     if (provider === "gemini") {
-      const url = `https://generativelanguage.googleapis.com/v1/models/${model || "text-embedding-004"}:embedContent?key=${apiKey}`;
+      // Issue #1241: keep this branch aligned with the runtime provider at
+      // src/embedding/providers/gemini.ts. Previously the Viewer Test-Connection
+      // path hardcoded `v1/…:embedContent`, ignored the user-configured
+      // endpoint, and defaulted to the deprecated text-embedding-004 model —
+      // which produced spurious 404s ("models/text-embedding-004 is not found
+      // for API version v1beta") even when the runtime embedder worked fine.
+      const geminiModel = model || "gemini-embedding-001";
+      const defaultEndpoint =
+        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:batchEmbedContents`;
+      const geminiEndpoint = endpoint || defaultEndpoint;
+      const url = `${geminiEndpoint}?key=${apiKey}`;
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: { parts: [{ text: "test embedding vector" }] } }),
+        body: JSON.stringify({
+          requests: [
+            {
+              model: `models/${geminiModel}`,
+              content: { parts: [{ text: "test embedding vector" }] },
+            },
+          ],
+        }),
         signal: AbortSignal.timeout(15_000),
       });
       if (!resp.ok) {
@@ -3886,7 +3903,10 @@ export class ViewerServer {
         throw new Error(`Gemini embed ${resp.status}: ${txt}`);
       }
       const json = await resp.json() as any;
-      const vec = json?.embedding?.values;
+      // batchEmbedContents returns { embeddings: [{ values: [...] }] };
+      // fall back to the legacy embedContent shape ({ embedding: { values } })
+      // in case the user's custom endpoint is still that older path.
+      const vec = json?.embeddings?.[0]?.values ?? json?.embedding?.values;
       if (!Array.isArray(vec) || vec.length === 0) {
         throw new Error("Gemini returned empty embedding vector");
       }
