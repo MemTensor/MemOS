@@ -976,19 +976,40 @@ export function createMemoryCore(
           ? orphans
           : orphans.filter((ep) => isLightweightEpisode(ep));
         for (const ep of treatAsLightweight) {
+          const isBackfill = lightweightMode && !isLightweightEpisode(ep);
           let recoveryReason: string;
-          if (lightweightMode && !isLightweightEpisode(ep)) {
+          if (isBackfill) {
             recoveryReason = "lightweight_startup_close_backfill";
           } else {
             recoveryReason = "lightweight_startup_close";
           }
-          handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
-          handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
-            lightweightMemory: true,
-            closeReason: "finalized",
-            recoveredAtStartup: nowMs,
-            recoveryReason,
-          });
+          try {
+            // Write the lightweight flag BEFORE close() so that even if
+            // close() throws, `isLightweightEpisode()` still returns true
+            // for this row and the periodic non-lightweight rescan paths
+            // (autoRescoreDirtyClosedEpisodes) skip it instead of feeding
+            // it into the reward / L2 / L3 pipeline. Mirrors the ordering
+            // used by the periodic stale-topic close above.
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              lightweightMemory: true,
+              // Legacy rows being backfilled were never actually
+              // finalized through the evolution pipeline; tag them with
+              // a distinct closeReason so analytics can distinguish a
+              // real finalize from a lightweight backfill.
+              closeReason: isBackfill ? "lightweight_backfill" : "finalized",
+              recoveredAtStartup: nowMs,
+              recoveryReason,
+            });
+            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+          } catch (err) {
+            // Isolate per-episode failures so a single DB lock /
+            // constraint violation cannot abort the whole startup
+            // orphan-close loop. Mirrors the periodic stale-topic path.
+            log.debug("init.lightweight_close_error", {
+              episodeId: ep.id,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         if (lightweightMode) {
           // No reward / L2 / L3 / skill work is scheduled when the
