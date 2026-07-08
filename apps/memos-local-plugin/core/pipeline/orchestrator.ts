@@ -1156,13 +1156,22 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       result.sessionId,
       result.contextHints,
     );
-    const episodeId = openEpisodeBySession.get(sessionId) ?? result.episodeId;
+    const explicitEpisode = result.episodeId
+      ? session.sessionManager.getEpisode(result.episodeId)
+      : null;
+    const episodeId = explicitEpisode
+      ? result.episodeId
+      : openEpisodeBySession.get(sessionId) ?? result.episodeId;
     if (!episodeId) {
       throw new Error(
         "pipeline.onTurnEnd: no open episode for session " + sessionId,
       );
     }
-    const episode = session.sessionManager.getEpisode(episodeId);
+    let episode = explicitEpisode ?? session.sessionManager.getEpisode(episodeId);
+    const wasClosedBeforeTurnEnd = episode?.status === "closed";
+    if (wasClosedBeforeTurnEnd) {
+      episode = session.sessionManager.reopenEpisode(episodeId, "follow_up");
+    }
     if (!episode || episode.status !== "open") {
       throw new Error(
         "pipeline.onTurnEnd: episode " + episodeId + " is not open",
@@ -1254,6 +1263,14 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           err: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+
+    if (wasClosedBeforeTurnEnd) {
+      session.sessionManager.finalizeEpisode(episodeId, {
+        patchMeta: {
+          delayedAgentEndRecovered: true,
+        },
+      });
     }
 
     // Update the "current open episode" snapshot so the relation
@@ -1350,6 +1367,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     await subs.l3.drain();
     await nextTick();
     await subs.skills.flush();
+    await subs.skills.lifecycleTick();
     await subs.feedback.flush();
     await embeddingRetryWorker.flush();
   }

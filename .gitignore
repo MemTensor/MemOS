@@ -239,3 +239,7 @@ outputs
 evaluation/data/
 test_add_pipeline.py
 test_file_pipeline.py
+
+# spec
+.ai-tasks/
+openspecs/

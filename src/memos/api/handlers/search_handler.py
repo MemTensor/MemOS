@@ -118,6 +118,23 @@ class SearchHandler(BaseHandler):
             top_k=search_req_local.top_k,
             file_mem_proportion=0.5,
         )
+        hooked_results = trigger_hook(
+            H.SEARCH_RESULTS_AFTER_RERANK,
+            handler=self,
+            search_req=search_req_local,
+            results=results,
+        )
+        if hooked_results is not None:
+            results = hooked_results
+
+        hooked_results = trigger_hook(
+            H.SEARCH_CONTEXT_RENDER,
+            handler=self,
+            search_req=search_req_local,
+            results=results,
+        )
+        if hooked_results is not None:
+            results = hooked_results
 
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
