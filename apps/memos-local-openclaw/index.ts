@@ -224,6 +224,7 @@ const memosLocalPlugin = {
     }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+    const pluginDir = moduleDir; // alias — replaces removed detectPluginDir(moduleDir)
     let pluginCfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
     const stateDir = process.env.OPENCLAW_STATE_DIR || api.resolvePath("~/.openclaw");
 
