@@ -422,6 +422,14 @@ class APISearchRequest(BaseRequest):
         ),
     )
 
+    rerank: bool = Field(
+        True,
+        description=(
+            "Whether to apply the textual memory reranker during search. "
+            "Set false to return retrieval-order candidates before post-search dedup/formatting."
+        ),
+    )
+
     pref_top_k: int = Field(
         6,
         ge=0,
@@ -462,6 +470,11 @@ class APISearchRequest(BaseRequest):
         3,
         ge=0,
         description="Number of skill memories to retrieve (top-K). Default: 3.",
+    )
+
+    context_format: str = Field(
+        "memory",
+        description="Optional search context format passed through to installed plugins.",
     )
 
     # ==== Filter conditions ====

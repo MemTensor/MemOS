@@ -313,11 +313,14 @@ class TestTimedWithStatusRegression:
         assert "ok_func" in logs[0]
 
     def test_failure_logging_no_fallback(self, caplog):
+        """When no fallback is configured, timed_with_status logs FAILED
+        and re-raises the original exception (does not swallow silently)."""
+
         @timed_with_status
         def fail_func():
             raise RuntimeError("bad")
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO), pytest.raises(RuntimeError, match="bad"):
             fail_func()
         logs = _collect_timer_with_status_logs(caplog)
         assert len(logs) == 1
