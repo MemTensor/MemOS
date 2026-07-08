@@ -24,7 +24,10 @@ from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem, TaskPriori
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube, is_cloud_env
+from memos.mem_scheduler.utils.misc_utils import (
+    group_messages_by_user_and_mem_cube,
+    is_playground_api,
+)
 from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event, to_iso
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
@@ -140,6 +143,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 # Propagate trace_id and user info to logging context for this handler execution
                 ctx = RequestContext(
                     trace_id=trace_id,
+                    api_path=getattr(first_msg, "api_path", None),
                     user_name=getattr(first_msg, "user_name", None),
                     user_type=None,
                 )
@@ -317,8 +321,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         mem_cube_id = first.mem_cube_id
 
         try:
-            cloud_env = is_cloud_env()
-            if not cloud_env:
+            if is_playground_api():
                 return
 
             for task_id in task_ids:
@@ -345,6 +348,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         log_content=f"Task {task_id} completed",
                         status="completed",
                         source_doc_id=source_doc_id,
+                        api_path=getattr(messages[0], "api_path", None) if messages else None,
                     )
                     self.submit_web_logs(event)
 
@@ -369,6 +373,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         log_content=f"Task {task_id} failed: {error_msg}",
                         status="failed",
                         source_doc_id=source_doc_id,
+                        api_path=getattr(messages[0], "api_path", None) if messages else None,
                     )
                     self.submit_web_logs(event)
         except Exception:

@@ -51,6 +51,16 @@ describe("reward/human-scorer", () => {
     expect(h.rHuman).toBeLessThan(0);
   });
 
+  it("heuristic: aggregates multiple explicit corrections by magnitude", () => {
+    const h = heuristicScore([
+      makeFeedback({ id: "fb_pos" as never, polarity: "positive", magnitude: 1 }),
+      makeFeedback({ id: "fb_neg" as never, polarity: "negative", magnitude: 0.5 }),
+    ]);
+    expect(h.source).toBe("explicit");
+    expect(h.rHuman).toBeCloseTo(1 / 3);
+    expect(h.axes.userSatisfaction).toBeCloseTo(1 / 3);
+  });
+
   it("LLM mode: happy path, uses the LLM and reports llm source", async () => {
     const llm = fakeLlm({
       completeJson: {

@@ -133,6 +133,7 @@ export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir(
     if (needsUnsafe) db.raw.unsafeMode(false);
   }
 
+  ensureHubSharingSearchColumns(db);
   markReady(db);
 
   log.info("migrations.summary", {
@@ -163,6 +164,12 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     ensureSkillUsageColumns(db);
     return;
   }
+  if (file.version === 5 && file.name === "skill-trials") {
+    if (tableExists(db, "skills") && tableExists(db, "episodes") && tableExists(db, "traces")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
   if (file.version === 6 && file.name === "world-model-version") {
     if (tableExists(db, "world_model")) {
       ensureColumn(db, "world_model", "version", "INTEGER NOT NULL DEFAULT 1");
@@ -175,6 +182,24 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
   }
   if (file.version === 8 && file.name === "feedback-experience-metadata") {
     ensureFeedbackExperienceMetadataColumns(db);
+    return;
+  }
+  if (file.version === 9 && file.name === "policies-fts") {
+    if (tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 10 && file.name === "trace-policy-links") {
+    if (tableExists(db, "traces") && tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  if (file.version === 12 && file.name === "trace-turn-pagination-index") {
+    if (tableExists(db, "traces")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
     return;
   }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
@@ -235,10 +260,26 @@ function ensureNamespaceVisibilityColumns(db: StorageDb): void {
     ensureColumn(db, table, "owner_profile_id", "TEXT NOT NULL DEFAULT 'default'");
     ensureColumn(db, table, "owner_workspace_id", "TEXT");
   }
+  // Per-row backfill of `share_scope` was originally done here with a blanket
+  // `UPDATE ${table} SET share_scope='private' WHERE share_scope IS NULL`.
+  // That rewrites every row of `traces` — which on busy installs is the
+  // largest, fattest table (each row carries embedding BLOBs, tool-call JSON,
+  // agent text, etc.). On databases past ~500 MB, the synchronous bootstrap
+  // transaction would hold the connection in CPU-bound JSON-revalidation for
+  // many minutes and never reach `migrations.summary`, manifesting as the
+  // "bridge hangs at 100 % CPU after `sqlite.open`" regression filed as
+  // https://github.com/MemTensor/MemOS/issues/1787.
+  //
+  // The application layer already treats NULL `share_scope` as the
+  // 'private' default — see `normalizeShareScope` and the
+  // `COALESCE(share_scope, 'private')` in `visibilityWhere`. Adding the
+  // column with `DEFAULT 'private'` covers every NEW row, so dropping the
+  // bulk UPDATE has no observable effect on behaviour. We keep the
+  // `ensureColumn` calls (they're O(1) since SQLite 3.35) so the schema
+  // shape is unchanged.
   for (const table of ["episodes", "traces", "policies", "world_model", "skills"]) {
     if (!tableExists(db, table)) continue;
     ensureColumn(db, table, "share_scope", "TEXT DEFAULT 'private'");
-    db.exec(`UPDATE ${table} SET share_scope='private' WHERE share_scope IS NULL`);
   }
 
   execIfTable(db, "skills", `DROP INDEX IF EXISTS uq_skills_name`);
@@ -306,6 +347,24 @@ function ensureFeedbackExperienceMetadataColumns(db: StorageDb): void {
   );
   db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_experience ON policies(experience_type, evidence_polarity, updated_at DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_skill_eligible ON policies(skill_eligible, status, updated_at DESC)`);
+}
+
+function ensureHubSharingSearchColumns(db: StorageDb): void {
+  if (!tableExists(db, "hub_shared_memories")) return;
+  ensureColumn(db, "hub_shared_memories", "embedding", "BLOB");
+  ensureColumn(db, "hub_shared_memories", "embedding_norm2", "REAL");
+  ensureColumn(
+    db,
+    "hub_shared_memories",
+    "visible",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (visible IN (0,1))",
+  );
+  ensureColumn(db, "hub_shared_memories", "deleted_at", "INTEGER");
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_hub_shared_memories_deleted
+       ON hub_shared_memories(visible, deleted_at)
+       WHERE visible = 0 AND deleted_at IS NOT NULL`,
+  );
 }
 
 function execIfTable(db: StorageDb, table: string, sql: string): void {

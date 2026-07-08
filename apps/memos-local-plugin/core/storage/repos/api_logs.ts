@@ -1,6 +1,6 @@
 /**
  * `api_logs` repository — structured log of the user-facing memory
- * operations (`memory_search`, `memory_add`). Mirrors the legacy
+ * operations (`memos_search`, `memory_add`). Mirrors the legacy
  * `memos-local-openclaw` plugin's table so the new viewer can render
  * the same rich JSON payloads (candidates, filtered, hub results,
  * ingestion stats, …).

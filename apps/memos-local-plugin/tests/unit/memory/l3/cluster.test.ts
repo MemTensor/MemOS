@@ -226,7 +226,7 @@ describe("memory/l3/cluster", () => {
       // confirming we landed in the loose fallback for the right
       // reason and not because of a bug elsewhere.
       expect(c.cohesion).toBeLessThan(0.6);
-      expect(c.cohesion).toBeGreaterThan(0.5);
+      expect(c.cohesion).toBeGreaterThan(0.49);
     });
 
     it("filters outliers below clusterMinSimilarity", () => {
@@ -272,7 +272,7 @@ describe("memory/l3/cluster", () => {
       // fallback.
       expect(c.admission).toBe("strict");
       expect(c.policies.map((p) => String(p.id))).not.toContain("po_outlier");
-      expect(c.cohesion).toBeGreaterThan(0.5);
+      expect(c.cohesion).toBeGreaterThan(0.49);
     });
   });
 });

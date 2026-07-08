@@ -38,7 +38,6 @@ configure team sharing in `config.yaml`'s `hub:` section.
 
 ## Need help?
 
-- User docs:   browse `site/content/docs/` in the source repo, or open the
-                viewer's *Help* link.
+- User docs:   open the viewer's *Help* link.
 - Bug reports: include `logs/error.log` and the relevant slice of
                 `logs/events.jsonl`.

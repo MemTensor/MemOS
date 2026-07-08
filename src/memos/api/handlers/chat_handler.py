@@ -60,6 +60,7 @@ class ChatHandler(BaseHandler):
         self,
         dependencies: HandlerDependencies,
         chat_llms: dict[str, Any],
+        playground_chat_llms: dict[str, Any] | None = None,
         search_handler=None,
         add_handler=None,
         online_bot=None,
@@ -70,6 +71,7 @@ class ChatHandler(BaseHandler):
         Args:
             dependencies: HandlerDependencies instance
             chat_llms: Dictionary mapping model names to LLM instances
+            playground_chat_llms: Optional model map for /chat/stream/playground
             search_handler: Optional SearchHandler instance (created if not provided)
             add_handler: Optional AddHandler instance (created if not provided)
             online_bot: Optional DingDing bot function for notifications
@@ -89,6 +91,7 @@ class ChatHandler(BaseHandler):
             add_handler = AddHandler(dependencies)
 
         self.chat_llms = chat_llms
+        self.playground_chat_llms = playground_chat_llms or chat_llms
         self.search_handler = search_handler
         self.add_handler = add_handler
         self.online_bot = online_bot
@@ -630,10 +633,11 @@ class ChatHandler(BaseHandler):
 
                     # Step 3: Generate streaming response from LLM
                     try:
-                        model = next(iter(self.chat_llms.keys()))
+                        chat_llms = self.playground_chat_llms
+                        model = next(iter(chat_llms.keys()))
                         self.logger.info(f"[PLAYGROUND CHAT] Chat Playground Stream Model: {model}")
                         start = time.time()
-                        response_stream = self.chat_llms[model].generate_stream(
+                        response_stream = chat_llms[model].generate_stream(
                             current_messages, model_name_or_path=model
                         )
 
@@ -1221,7 +1225,13 @@ class ChatHandler(BaseHandler):
                 [f"{msg['role']}: {msg['content']}" for msg in current_messages[-2:]]
             )
             further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
-            message_list = [{"role": "system", "content": further_suggestion_prompt}]
+            message_list = [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that generates suggestion queries based on dialogue context.",
+                },
+                {"role": "user", "content": further_suggestion_prompt},
+            ]
             response = self.llm.generate(message_list)
             clean_response = clean_json_response(response)
             response_json = json.loads(clean_response)

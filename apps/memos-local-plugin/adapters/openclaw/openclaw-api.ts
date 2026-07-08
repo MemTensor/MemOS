@@ -96,6 +96,7 @@ export type OpenClawHookName =
   | "agent_end"
   | "before_tool_call"
   | "after_tool_call"
+  | "tool_result_persist"
   | "session_start"
   | "session_end"
   | "subagent_spawned"
@@ -172,6 +173,15 @@ export interface AfterToolCallEvent {
   durationMs?: number;
 }
 
+export interface ToolResultPersistEvent {
+  toolName: string;
+  toolCallId?: string;
+  runId?: string;
+  message: unknown;
+  error?: string;
+  result?: unknown;
+}
+
 export interface SessionStartEvent {
   sessionId: string;
   sessionKey?: string;
@@ -231,6 +241,10 @@ export interface OpenClawHookHandlerMap {
     event: AfterToolCallEvent,
     ctx: PluginHookToolContext,
   ) => void | Promise<void>;
+  tool_result_persist: (
+    event: ToolResultPersistEvent,
+    ctx: PluginHookToolContext,
+  ) => { message?: unknown } | void | Promise<{ message?: unknown } | void>;
   session_start: (
     event: SessionStartEvent,
     ctx: PluginHookSessionContext,

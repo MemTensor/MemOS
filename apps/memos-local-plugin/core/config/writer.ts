@@ -56,6 +56,7 @@ export async function patchConfig(
   // Parse (or seed) the YAML document.
   const doc = existingText ? parseDoc(existingText, home.configFile) : parseDoc(stringifyYaml(DEFAULT_CONFIG), "<defaults>");
   applyPatch(doc, patch);
+  removeUnsupportedUserConfig(doc);
 
   // Validate against schema using the merged JS view.
   const merged = doc.toJS({ maxAliasCount: -1 }) as Record<string, unknown>;
@@ -110,6 +111,17 @@ function applyPatch(doc: ReturnType<typeof parseDoc>, patch: Record<string, unkn
     } else {
       doc.setIn(path, v);
     }
+  }
+}
+
+function removeUnsupportedUserConfig(doc: ReturnType<typeof parseDoc>): void {
+  // Embedding dimensionality is inferred from the provider/model at runtime.
+  // Keep stale manual values out of config.yaml so they cannot be mistaken
+  // for supported settings on the next edit.
+  try {
+    doc.deleteIn(["embedding", "dimensions"]);
+  } catch {
+    /* best-effort cleanup */
   }
 }
 

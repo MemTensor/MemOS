@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { applyGain, computeGain, nextStatus } from "../../../../core/memory/l2/gain.js";
+import { applyGain, computeGain, nextStatus, smoothGain } from "../../../../core/memory/l2/gain.js";
 import type { PolicyId, TraceRow } from "../../../../core/types.js";
 
 function mkTrace(value: number): TraceRow {
@@ -30,7 +30,7 @@ function mkTrace(value: number): TraceRow {
 }
 
 describe("memory/l2/gain", () => {
-  it("computeGain returns V_with − V_without using arithmetic mean for <3 traces", () => {
+  it("computeGain uses an adaptive shrinkage baseline for low-value trace pools", () => {
     const g = computeGain(
       {
         policyId: "po_1" as PolicyId,
@@ -41,8 +41,23 @@ describe("memory/l2/gain", () => {
     );
     expect(g.withMean).toBeCloseTo(0.7, 5);
     expect(g.withoutMean).toBeCloseTo(0.15, 5);
-    expect(g.gain).toBeCloseTo(0.55, 5);
+    expect(g.poolMean).toBeCloseTo(0.425, 5);
+    expect(g.baseline).toBeCloseTo(0.425, 5);
+    expect(g.gain).toBeCloseTo(0.35357143, 5);
     expect(g.withCount).toBe(2);
+  });
+
+  it("keeps the neutral baseline for high-value trace pools", () => {
+    const g = computeGain(
+      {
+        policyId: "po_1" as PolicyId,
+        withTraces: [mkTrace(0.8), mkTrace(0.7)],
+        withoutTraces: [mkTrace(0.6), mkTrace(0.55)],
+      },
+      { tauSoftmax: 0.5 },
+    );
+    expect(g.poolMean).toBeGreaterThan(0.5);
+    expect(g.baseline).toBeCloseTo(0.5, 5);
   });
 
   it("uses value-weighted mean for the with-set when count ≥ 3", () => {
@@ -112,6 +127,8 @@ describe("memory/l2/gain", () => {
         withCount: 4,
         withoutCount: 2,
         weightedWith: 0.55,
+        poolMean: 0.35,
+        baseline: 0.35,
       },
       deltaSupport: 2,
       currentStatus: "candidate",
@@ -130,5 +147,14 @@ describe("memory/l2/gain", () => {
       status: "active",
       updatedAt: 1_000,
     });
+  });
+
+  it("smoothGain preserves existing signal after the first update", () => {
+    expect(
+      smoothGain({ newGain: -0.15, currentGain: 0.1, alpha: 0.4, isFirst: false }),
+    ).toBeCloseTo(0, 5);
+    expect(
+      smoothGain({ newGain: -0.15, currentGain: 0.1, alpha: 0.4, isFirst: true }),
+    ).toBeCloseTo(-0.15, 5);
   });
 });

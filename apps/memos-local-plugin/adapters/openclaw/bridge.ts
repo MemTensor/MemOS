@@ -46,6 +46,7 @@ import type {
   SessionStartEvent,
   SubagentEndedEvent,
   SubagentSpawnedEvent,
+  ToolResultPersistEvent,
 } from "./openclaw-api.js";
 
 // ─── Message flattening ────────────────────────────────────────────────────
@@ -70,6 +71,7 @@ import type {
 
 const TOOL_RESULT_ROLES = new Set([
   "toolResult",      // pi-ai canonical
+  "toolresult",      // lower-case gateway/UI normalizer variants
   "tool",            // OpenAI legacy
   "tool_result",     // some Anthropic SDKs / older bridges
   "tool_response",   // older variants
@@ -156,13 +158,13 @@ export function flattenMessages(input: unknown[] | undefined): FlatMessage[] {
           textBuf += (textBuf ? "\n" : "") + b.text;
         } else if (type === "thinking" && typeof b.thinking === "string") {
           thinkingBuf += (thinkingBuf ? "\n\n" : "") + b.thinking;
-        } else if (type === "toolCall") {
+        } else if (isToolCallBlockType(type)) {
           inlineToolCalls.push({
             role: "tool_call",
             content: "",
             toolName: typeof b.name === "string" ? b.name : "unknown",
-            toolCallId: typeof b.id === "string" ? b.id : undefined,
-            toolInput: b.arguments,
+            toolCallId: pickToolCallId(b, m),
+            toolInput: pickToolInput(b),
             ts,
           });
         } else if (!type && typeof b.text === "string") {
@@ -244,6 +246,63 @@ export function flattenMessages(input: unknown[] | undefined): FlatMessage[] {
   }
 
   return out;
+}
+
+function isToolCallBlockType(type: string): boolean {
+  const normalized = type.trim().toLowerCase();
+  return (
+    normalized === "toolcall" ||
+    normalized === "tool_call" ||
+    normalized === "tooluse" ||
+    normalized === "tool_use" ||
+    normalized === "functioncall" ||
+    normalized === "function_call"
+  );
+}
+
+function pickToolCallId(
+  block: Record<string, unknown>,
+  message?: Record<string, unknown>,
+): string | undefined {
+  return firstString(
+    block.id,
+    block.toolCallId,
+    block.tool_call_id,
+    block.callId,
+    block.call_id,
+    block.toolUseId,
+    block.tool_use_id,
+    message?.toolCallId,
+    message?.tool_call_id,
+  );
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function pickToolInput(block: Record<string, unknown>): unknown {
+  if ("arguments" in block) return block.arguments;
+  if ("args" in block) return block.args;
+  if ("input" in block) return block.input;
+  if (typeof block.partialJson === "string") {
+    try {
+      return JSON.parse(block.partialJson);
+    } catch {
+      return block.partialJson;
+    }
+  }
+  if (typeof block.partialArgs === "string") {
+    try {
+      return JSON.parse(block.partialArgs);
+    } catch {
+      return block.partialArgs;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -425,7 +484,7 @@ function stripOpenClawUserEnvelope(raw: string): string {
     "",
   );
   text = text.replace(
-    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memory_search[^\n]*)*/gi,
+    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memos_search[^\n]*)*/gi,
     "",
   );
 
@@ -526,8 +585,25 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
   const userText = messages[lastUserIdx].content.trim();
   const tail = messages.slice(lastUserIdx + 1);
 
-  const pendingCalls = new Map<string, Partial<ToolCallDTO> & { _id?: string }>();
+  type PendingToolCall = Partial<ToolCallDTO> & { _id?: string };
+  const pendingCalls = new Map<string, PendingToolCall[]>();
   const toolCalls: ToolCallDTO[] = [];
+
+  const enqueuePendingCall = (key: string, stub: PendingToolCall): void => {
+    const queue = pendingCalls.get(key);
+    if (queue) {
+      queue.push(stub);
+    } else {
+      pendingCalls.set(key, [stub]);
+    }
+  };
+  const takePendingCall = (key: string): PendingToolCall | undefined => {
+    const queue = pendingCalls.get(key);
+    if (!queue || queue.length === 0) return undefined;
+    const stub = queue.shift();
+    if (queue.length === 0) pendingCalls.delete(key);
+    return stub;
+  };
 
   // Two separate buffers accumulate content not yet assigned to a tool.
   //
@@ -561,7 +637,7 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
       pendingAssistant = [];
 
       const key = m.toolCallId ?? m.toolName;
-      pendingCalls.set(key, {
+      enqueuePendingCall(key, {
         _id: m.toolCallId,
         name: m.toolName,
         input: m.toolInput,
@@ -572,7 +648,7 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
     }
     if (m.role === "tool_result") {
       const key = m.toolCallId ?? m.toolName ?? "";
-      const stub = pendingCalls.get(key);
+      const stub = key ? takePendingCall(key) : undefined;
       const errorCode = stub
         ? m.errorCode ?? (m.isError ? "tool_error" : undefined)
         : m.errorCode ?? (m.isError ? "tool_error" : undefined);
@@ -581,25 +657,28 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
         input: stub?.input,
         output: m.content || undefined,
         errorCode,
+        toolCallId: stub?._id ?? m.toolCallId,
         startedAt: stub?.startedAt ?? (m.ts ?? now),
         endedAt: m.ts ?? now,
         thinkingBefore: stub?.thinkingBefore,
       });
-      if (key) pendingCalls.delete(key);
       continue;
     }
   }
 
-  for (const stub of pendingCalls.values()) {
-    if (!stub.name) continue;
-    toolCalls.push({
-      name: stub.name,
-      input: stub.input,
-      output: undefined,
-      startedAt: stub.startedAt ?? now,
-      endedAt: now,
-      thinkingBefore: stub.thinkingBefore,
-    });
+  for (const queue of pendingCalls.values()) {
+    for (const stub of queue) {
+      if (!stub.name) continue;
+      toolCalls.push({
+        name: stub.name,
+        input: stub.input,
+        output: undefined,
+        toolCallId: stub._id,
+        startedAt: stub.startedAt ?? now,
+        endedAt: now,
+        thinkingBefore: stub.thinkingBefore,
+      });
+    }
   }
 
   const agentThinking = pendingThinking.join("\n\n").trim();
@@ -609,6 +688,56 @@ export function extractTurn(messages: FlatMessage[], now: number): CapturedTurn 
     agentThinking: agentThinking || undefined,
     toolCalls,
   };
+}
+
+function mergeToolCalls(
+  captured: readonly ToolCallDTO[],
+  observed: readonly ToolCallDTO[],
+): ToolCallDTO[] {
+  if (observed.length === 0) return [...captured];
+  const out = captured.map((tc) => ({ ...tc }));
+  for (const obs of observed) {
+    const idx = out.findIndex((existing) => toolCallsMatch(existing, obs));
+    if (idx >= 0) {
+      out[idx] = mergeToolCall(out[idx]!, obs);
+    } else {
+      out.push({ ...obs });
+    }
+  }
+  return out.sort((a, b) => {
+    const at = a.startedAt ?? a.endedAt ?? 0;
+    const bt = b.startedAt ?? b.endedAt ?? 0;
+    return at - bt;
+  });
+}
+
+function mergeToolCall(existing: ToolCallDTO, observed: ToolCallDTO): ToolCallDTO {
+  return {
+    ...observed,
+    ...existing,
+    input: existing.input ?? observed.input,
+    output: existing.output ?? observed.output,
+    errorCode: existing.errorCode ?? observed.errorCode,
+    toolCallId: existing.toolCallId ?? observed.toolCallId,
+    startedAt: existing.startedAt ?? observed.startedAt,
+    endedAt: existing.endedAt ?? observed.endedAt,
+    thinkingBefore: existing.thinkingBefore ?? observed.thinkingBefore,
+    assistantTextBefore: existing.assistantTextBefore ?? observed.assistantTextBefore,
+  };
+}
+
+function toolCallsMatch(a: ToolCallDTO, b: ToolCallDTO): boolean {
+  if (a.toolCallId && b.toolCallId) return a.toolCallId === b.toolCallId;
+  if (a.toolCallId || b.toolCallId) return false;
+  return a.name === b.name && stableStringify(a.input) === stableStringify(b.input);
+}
+
+function stableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 // ─── Session identity ──────────────────────────────────────────────────────
@@ -667,16 +796,18 @@ function isExplicitOneShotSessionKey(sessionKey: string | undefined): boolean {
 
 const CONTEXT_OPEN = "<memos_context>";
 const CONTEXT_CLOSE = "</memos_context>";
+const OPENCLAW_CONTEXT_CHAR_CAP = 6_000;
+const TOOL_FAILURE_REPAIR_HINT =
+  "This tool has failed multiple times in a row. You may want to call `memos_search` for relevant past experience before deciding what to do next.";
+const TOOL_FAILURE_HINT_THRESHOLD = 3;
 
 /**
  * Render the retrieval result as a prompt-prependable block.
  *
- * When the store is cold (no hits), we still emit a short "memory
- * tools are available" hint — the legacy `memos-local-openclaw`
- * adapter does the same via `noRecallHint`, and without it the LLM
- * has no reason to call `memory_search` at the start of a
- * conversation. The hint is kept *small* so repeated turns don't
- * bloat the system prompt.
+ * Callers may opt into a short cold-start hint when the store has no
+ * hits. The automatic OpenClaw before-prompt path disables that hint so
+ * no-hit turns continue with the user's prompt instead of injecting
+ * extra context.
  */
 export function renderContextBlock(
   packet: RetrievalResultDTO | null,
@@ -689,14 +820,29 @@ export function renderContextBlock(
   }
   if (opts.hintWhenEmpty === false) return "";
   // Cold-start hint — mirrors the legacy adapter's behaviour so the
-  // model is nudged to reach for `memory_search` even on the first
+  // model is nudged to reach for `memos_search` even on the first
   // turn of a fresh session.
   const hint = [
     "No prior memories matched this query — the store may simply be cold.",
-    "You can still call `memory_search` with a shorter or rephrased query",
+    "You can still call `memos_search` with a shorter or rephrased query",
     "if you expect there to be relevant past context.",
   ].join(" ");
   return `${CONTEXT_OPEN}\n${hint}\n${CONTEXT_CLOSE}`;
+}
+
+function capContextBlock(block: string): { block: string; truncated: boolean } {
+  if (block.length <= OPENCLAW_CONTEXT_CHAR_CAP) {
+    return { block, truncated: false };
+  }
+  const suffix = `\n\n[Memory context truncated to ${OPENCLAW_CONTEXT_CHAR_CAP} characters.]\n${CONTEXT_CLOSE}`;
+  const prefix = block.startsWith(`${CONTEXT_OPEN}\n`) ? `${CONTEXT_OPEN}\n` : "";
+  const bodyStart = prefix.length;
+  const bodyBudget = Math.max(0, OPENCLAW_CONTEXT_CHAR_CAP - prefix.length - suffix.length);
+  const body = block.slice(bodyStart, bodyStart + bodyBudget).trimEnd();
+  return {
+    block: `${prefix}${body}${suffix}`,
+    truncated: true,
+  };
 }
 
 // ─── Bridge factory ────────────────────────────────────────────────────────
@@ -731,6 +877,12 @@ export interface BridgeHandle {
     ctx: PluginHookToolContext,
   ) => Promise<void>;
 
+  /** Handler for `tool_result_persist` — append repeated-failure hint. */
+  handleToolResultPersist: (
+    event: ToolResultPersistEvent,
+    ctx: PluginHookToolContext,
+  ) => { message?: unknown } | void;
+
   /** Handler for `session_start`. */
   handleSessionStart: (
     event: SessionStartEvent,
@@ -760,6 +912,82 @@ export interface BridgeHandle {
   trackedToolCalls: () => number;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function toolFailureStreakKey(
+  toolName: string,
+  event: ToolResultPersistEvent,
+  ctx: PluginHookToolContext,
+): string {
+  const run = ctx.runId ?? event.runId ?? ctx.sessionId ?? ctx.sessionKey ?? "global";
+  return `${run}:${toolName}`;
+}
+
+function clearToolFailureStreaksForTurn(
+  streaks: Map<string, number>,
+  ctx: { runId?: string; sessionId?: string; sessionKey?: string },
+): void {
+  const prefix = `${ctx.runId ?? ctx.sessionId ?? ctx.sessionKey ?? "global"}:`;
+  for (const key of streaks.keys()) {
+    if (key.startsWith(prefix)) streaks.delete(key);
+  }
+}
+
+function toolResultPersistFailed(event: ToolResultPersistEvent): boolean {
+  if (event.error) return true;
+  const msg = asRecord(event.message);
+  if (msg) {
+    if (msg.isError === true || msg.error === true) return true;
+    if (typeof msg.error === "string" && msg.error.trim()) return true;
+    const details = asRecord(msg.details);
+    if (details?.isError === true || details?.error === true) return true;
+    if (typeof details?.error === "string" && details.error.trim()) return true;
+  }
+  const result = asRecord(event.result);
+  if (result?.isError === true || result?.error === true) return true;
+  if (typeof result?.error === "string" && result.error.trim()) return true;
+  return false;
+}
+
+function appendFailureHintToToolResultMessage(message: unknown): unknown {
+  const msg = asRecord(message);
+  if (!msg) return message;
+  const content = msg.content;
+  if (typeof content === "string") {
+    if (content.includes(TOOL_FAILURE_REPAIR_HINT)) return message;
+    return { ...msg, content: appendFailureHint(content) };
+  }
+  if (Array.isArray(content)) {
+    let idx = -1;
+    for (let i = content.length - 1; i >= 0; i--) {
+      const p = asRecord(content[i]);
+      if (p?.type === "text" && typeof p.text === "string") {
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 0) {
+      const part = asRecord(content[idx])!;
+      const text = String(part.text);
+      if (text.includes(TOOL_FAILURE_REPAIR_HINT)) return message;
+      const next = [...content];
+      next[idx] = { ...part, text: appendFailureHint(text) };
+      return { ...msg, content: next };
+    }
+    return { ...msg, content: [...content, { type: "text", text: TOOL_FAILURE_REPAIR_HINT }] };
+  }
+  return message;
+}
+
+function appendFailureHint(content: string): string {
+  const trimmed = content.trimEnd();
+  return `${trimmed}${trimmed ? "\n\n" : ""}${TOOL_FAILURE_REPAIR_HINT}`;
+}
+
 export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   const now = opts.now ?? (() => Date.now());
 
@@ -781,7 +1009,17 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   let episodeBindingSeq = 0;
   // Per-toolCallId start timestamps so `after_tool_call` can compute duration
   // when the host doesn't populate `durationMs`.
-  const toolCallStartedAt = new Map<string, { ts: number; sessionId: SessionId }>();
+  const toolCallStartedAt = new Map<string, {
+    ts: number;
+    sessionId: SessionId;
+    runId?: string;
+    toolName?: string;
+    params?: Record<string, unknown>;
+  }>();
+  const toolFailureStreaks = new Map<string, number>();
+  type ObservedToolCall = ToolCallDTO & { runId?: string; order: number };
+  const observedToolCallsBySession = new Map<SessionId, ObservedToolCall[]>();
+  let observedToolCallSeq = 0;
   const spawnedSubagents = new Map<string, {
     event: SubagentSpawnedEvent;
     ctx: PluginHookSubagentContext;
@@ -790,6 +1028,40 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     parentEpisodeId?: EpisodeId;
   }>();
   const pendingSubagentSessions = new Set<SessionId>();
+
+  function rememberObservedToolCall(
+    sessionId: SessionId,
+    runId: string | undefined,
+    tc: ToolCallDTO,
+  ): void {
+    const list = observedToolCallsBySession.get(sessionId) ?? [];
+    list.push({ ...tc, runId, order: ++observedToolCallSeq });
+    observedToolCallsBySession.set(sessionId, list.slice(-200));
+  }
+
+  function takeObservedToolCalls(
+    sessionId: SessionId,
+    runId: string | undefined,
+  ): ToolCallDTO[] {
+    const list = observedToolCallsBySession.get(sessionId) ?? [];
+    if (list.length === 0) return [];
+
+    const matched: ObservedToolCall[] = [];
+    const rest: ObservedToolCall[] = [];
+    for (const tc of list) {
+      const sameRun = runId ? tc.runId === runId || !tc.runId : true;
+      if (sameRun) matched.push(tc);
+      else rest.push(tc);
+    }
+
+    if (rest.length > 0) observedToolCallsBySession.set(sessionId, rest);
+    else observedToolCallsBySession.delete(sessionId);
+
+    return matched
+      .slice()
+      .sort((a, b) => (a.startedAt ?? a.order) - (b.startedAt ?? b.order))
+      .map(({ runId: _runId, order: _order, ...tc }) => tc);
+  }
 
   async function ensureSession(
     agentId: string | undefined,
@@ -879,6 +1151,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     event: BeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<BeforePromptBuildResult | void> {
+    const startedAt = now();
     try {
       // Ephemeral sub-agents (slug generator, internal probes) share
       // the plugin host and would otherwise open a throwaway episode
@@ -921,6 +1194,11 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
 
       const namespace = namespaceFromAgentCtx(ctx);
       const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
+      clearToolFailureStreaksForTurn(toolFailureStreaks, {
+        runId: ctx.runId,
+        sessionId: ctx.sessionId ?? sessionId,
+        sessionKey: ctx.sessionKey,
+      });
       lastUserTextBySession.set(sessionId, prompt);
 
       const turn: TurnInputDTO = {
@@ -954,6 +1232,16 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         }
       }
 
+      const renderedBlock = renderContextBlock(packet, {
+        // Avoid making OpenClaw do a second tool-driven search when
+        // auto-recall found nothing. A no-hit turn should simply
+        // continue with the user's prompt; tools remain available if
+        // the model independently decides to use them.
+        hintWhenEmpty: false,
+      });
+      const { block, truncated } = capContextBlock(renderedBlock);
+      const durationMs = now() - startedAt;
+
       opts.log.info("memos.onTurnStart", {
         sessionKey: ctx.sessionKey,
         agentId: ctx.agentId,
@@ -961,9 +1249,18 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         episodeId: routedEpisodeId,
         hits: packet.hits.length,
         tierLatencyMs: packet.tierLatencyMs,
+        durationMs,
+        contextChars: block.length,
+        injected: block.length > 0,
+        truncated,
       });
+      opts.log.info(
+        `memos.onTurnStart returned hits=${packet.hits.length} ` +
+          `durationMs=${durationMs} contextChars=${block.length} ` +
+          `injected=${block.length > 0 ? "yes" : "no"} ` +
+          `truncated=${truncated ? "yes" : "no"}`,
+      );
 
-      const block = renderContextBlock(packet, { hintWhenEmpty: true });
       if (!block) return;
       return { prependContext: block + "\n\n" };
     } catch (err) {
@@ -1052,8 +1349,12 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         });
         return;
       }
+      const toolCalls = mergeToolCalls(
+        turn.toolCalls,
+        takeObservedToolCalls(sessionId, ctx.runId),
+      );
       const isSubagentAnnouncement = isOpenClawSubagentAnnouncementPrompt(turn.userText);
-      const hasSubagentSpawn = turn.toolCalls.some((tc) => tc.name === "sessions_spawn");
+      const hasSubagentSpawn = toolCalls.some((tc) => tc.name === "sessions_spawn");
 
       // Resolve (or lazily open) the target episode. Three cases:
       //   1. `before_prompt_build` already ran this turn → we have the
@@ -1088,7 +1389,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         episodeId,
         agentText: turn.agentText,
         agentThinking: turn.agentThinking,
-        toolCalls: turn.toolCalls,
+        toolCalls,
         reflection: turn.reflection,
         contextHints: { namespace },
         ts: now(),
@@ -1101,7 +1402,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         sessionId,
         traceId: res.traceId,
         episodeId: res.episodeId,
-        tools: turn.toolCalls.length,
+        tools: toolCalls.length,
         success: event.success,
         durationMs: event.durationMs,
       });
@@ -1120,6 +1421,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         await opts.core.closeSession(sessionId);
         messageCursor.delete(sessionId);
         forgetSessionBindings(sessionId);
+        observedToolCallsBySession.delete(sessionId);
         lastUserTextBySession.delete(sessionId);
       }
     } catch (err) {
@@ -1131,13 +1433,20 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   }
 
   function handleBeforeToolCall(
-    _event: BeforeToolCallEvent,
+    event: BeforeToolCallEvent,
     ctx: PluginHookToolContext,
   ): void {
-    if (!ctx.toolCallId) return;
+    const toolCallId = ctx.toolCallId ?? event.toolCallId;
+    if (!toolCallId) return;
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
-    toolCallStartedAt.set(ctx.toolCallId, { ts: now(), sessionId });
+    toolCallStartedAt.set(toolCallId, {
+      ts: now(),
+      sessionId,
+      runId: ctx.runId ?? event.runId,
+      toolName: ctx.toolName ?? event.toolName,
+      params: event.params,
+    });
   }
 
   async function handleAfterToolCall(
@@ -1147,8 +1456,9 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
     try {
       const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
-      const started = ctx.toolCallId ? toolCallStartedAt.get(ctx.toolCallId) : undefined;
-      if (ctx.toolCallId) toolCallStartedAt.delete(ctx.toolCallId);
+      const toolCallId = ctx.toolCallId ?? event.toolCallId;
+      const started = toolCallId ? toolCallStartedAt.get(toolCallId) : undefined;
+      if (toolCallId) toolCallStartedAt.delete(toolCallId);
 
       const endedAt = now();
       const durationMs =
@@ -1157,11 +1467,22 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           : started
           ? Math.max(0, endedAt - started.ts)
           : 0;
+      const toolName = event.toolName || started?.toolName || ctx.toolName || "unknown";
+      const startedAt = started?.ts;
+      rememberObservedToolCall(sessionId, ctx.runId ?? event.runId ?? started?.runId, {
+        name: toolName,
+        input: event.params ?? started?.params,
+        output: event.result,
+        errorCode: event.error,
+        toolCallId,
+        startedAt,
+        endedAt,
+      });
 
       opts.core.recordToolOutcome({
         sessionId,
         episodeId: currentEpisodeId(sessionId),
-        tool: event.toolName,
+        tool: toolName,
         success: !event.error,
         errorCode: event.error,
         durationMs,
@@ -1172,6 +1493,27 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         err: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  function handleToolResultPersist(
+    event: ToolResultPersistEvent,
+    ctx: PluginHookToolContext,
+  ): { message?: unknown } | void {
+    if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    const toolName = event.toolName || ctx.toolName || "unknown";
+    const key = toolFailureStreakKey(toolName, event, ctx);
+    if (!toolResultPersistFailed(event)) {
+      toolFailureStreaks.delete(key);
+      return;
+    }
+
+    const nextCount = (toolFailureStreaks.get(key) ?? 0) + 1;
+    toolFailureStreaks.set(key, nextCount);
+    if (nextCount < TOOL_FAILURE_HINT_THRESHOLD) return;
+
+    const message = appendFailureHintToToolResultMessage(event.message);
+    if (message === event.message) return;
+    return { message };
   }
 
   async function handleSessionStart(
@@ -1211,6 +1553,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       await opts.core.closeSession(sessionId);
       messageCursor.delete(sessionId);
       forgetSessionBindings(sessionId);
+      observedToolCallsBySession.delete(sessionId);
       lastUserTextBySession.delete(sessionId);
       opts.log.debug("memos.session.ended", {
         sessionId: event.sessionId,
@@ -1282,6 +1625,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     handleAgentEnd,
     handleBeforeToolCall,
     handleAfterToolCall,
+    handleToolResultPersist,
     handleSessionStart,
     handleSessionEnd,
     handleSubagentSpawned,

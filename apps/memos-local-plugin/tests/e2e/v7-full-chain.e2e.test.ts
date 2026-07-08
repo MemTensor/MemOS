@@ -363,7 +363,7 @@ function buildPipeline(
     repos: db.repos,
     llm: opts.llm,
     reflectLlm: opts.llm,
-    embedder: fakeEmbedder({ dimensions: cfg.embedding.dimensions }),
+    embedder: fakeEmbedder({ dimensions: 384 }),
     log: rootLogger.child({ channel: "test.e2e.v7" }),
     now: () => NOW,
   };

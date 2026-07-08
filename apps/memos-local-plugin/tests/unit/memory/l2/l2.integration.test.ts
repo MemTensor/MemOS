@@ -42,6 +42,7 @@ function cfg(): L2Config {
     minTraceValue: 0.1,
     minEpisodesForInduction: 2,
     inductionTraceCharCap: 2_000,
+    gainEmaAlpha: 0.4,
   };
 }
 
@@ -725,5 +726,93 @@ describe("memory/l2/integration", () => {
       deps,
     );
     expect(r3.inductions.some((i) => i.policyId !== null)).toBe(true);
+  });
+
+  it("recomputes gain from historical trace-policy links and smooths the update", async () => {
+    ensureEpisode(handle, "ep_hist_a", "s_int");
+    ensureEpisode(handle, "ep_hist_b", "s_int");
+    const oldWith = mkTrace({
+      id: "tr_hist_with_old",
+      episodeId: "ep_hist_a",
+      value: 0.7,
+      ts: NOW as never,
+      vecSummary: vec([1, 0, 0]),
+    });
+    const oldWithout = mkTrace({
+      id: "tr_hist_without_old",
+      episodeId: "ep_hist_a",
+      value: 0.6,
+      ts: (NOW + 1) as never,
+      vecSummary: vec([0, 1, 0]),
+    });
+    const newWith = mkTrace({
+      id: "tr_hist_with_new",
+      episodeId: "ep_hist_b",
+      value: 0.3,
+      ts: (NOW + 2) as never,
+      vecSummary: vec([1, 0, 0]),
+    });
+    const newWithout = mkTrace({
+      id: "tr_hist_without_new",
+      episodeId: "ep_hist_b",
+      value: 0.35,
+      ts: (NOW + 3) as never,
+      vecSummary: vec([0, 1, 0]),
+    });
+    for (const t of [oldWith, oldWithout, newWith, newWithout]) {
+      handle.repos.traces.insert(t);
+    }
+    handle.repos.policies.insert({
+      id: "po_hist" as never,
+      title: "retry failed tools once with a corrected input",
+      trigger: "tool call fails but a corrected retry may recover",
+      procedure: "inspect the error, adjust the input, retry once, then explain fallback",
+      verification: "the retry resolves the error or the fallback is explicit",
+      boundary: "do not retry when the error is permanent",
+      support: 3,
+      gain: 0.1,
+      status: "active",
+      sourceEpisodeIds: ["ep_hist_a" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+    handle.repos.tracePolicyLinks.link({
+      traceId: oldWith.id,
+      policyId: "po_hist" as never,
+      episodeId: oldWith.episodeId,
+      now: NOW,
+    });
+
+    await runL2(
+      {
+        episodeId: "ep_hist_b" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [newWith, newWithout],
+        trigger: "manual",
+        now: NOW + 10,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: { ...cfg(), minSimilarity: 0.7, gainEmaAlpha: 0.4 },
+        thresholds: { minSupport: 3, minGain: 0.15, archiveGain: -0.05 },
+      },
+    );
+
+    const updated = handle.repos.policies.getById("po_hist" as never)!;
+    expect(handle.repos.tracePolicyLinks.getWithTraceIds("po_hist" as never).sort()).toEqual([
+      "tr_hist_with_new",
+      "tr_hist_with_old",
+    ]);
+    expect(updated.support).toBe(4);
+    expect(updated.gain).toBeGreaterThan(0);
+    expect(updated.gain).toBeLessThan(0.1);
+    expect(updated.status).toBe("active");
   });
 });

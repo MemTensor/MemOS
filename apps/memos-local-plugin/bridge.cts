@@ -3,7 +3,7 @@
  *
  * Started by non-TypeScript hosts (e.g. the Hermes Python client) via:
  *
- *   node_modules/.bin/tsx bridge.cts --agent=hermes
+ *   node_modules/.bin/tsx bridge.cts --agent=hermes --no-viewer
  *
  * The `.cts` extension is intentional: it lets the file be required
  * from CommonJS environments that spawn Node with `require("...")`
@@ -30,6 +30,8 @@ const path = require("node:path") as typeof import("node:path");
 const fs = require("node:fs") as typeof import("node:fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const childProcess = require("node:child_process") as typeof import("node:child_process");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const url = require("node:url") as typeof import("node:url");
 
 const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
 const BRIDGE_STATUS_STALE_MS = 20_000;
@@ -37,8 +39,10 @@ const BRIDGE_STATUS_FILE = "bridge-status.json";
 
 interface BridgeArgs {
   daemon: boolean;
+  noViewer: boolean;
   tcpPort?: number;
   agent: "openclaw" | "hermes";
+  home?: string;
 }
 
 type BridgeStatus = "connected" | "reconnecting" | "disconnected" | "unknown";
@@ -51,35 +55,139 @@ interface BridgeStatusSnapshot {
 }
 
 function parseArgs(argv: readonly string[]): BridgeArgs {
-  const args: BridgeArgs = { daemon: false, agent: "openclaw" };
+  const args: BridgeArgs = { daemon: false, noViewer: false, agent: "openclaw" };
   for (const raw of argv) {
     if (raw === "--daemon") args.daemon = true;
+    else if (raw === "--no-viewer") args.noViewer = true;
     else if (raw.startsWith("--tcp=")) args.tcpPort = Number(raw.slice(6));
     else if (raw === "--agent=hermes") args.agent = "hermes";
     else if (raw === "--agent=openclaw") args.agent = "openclaw";
+    else if (raw.startsWith("--home=")) args.home = raw.slice(7);
   }
   return args;
+}
+
+// ─── PID file singleton guard ───────────────────────────────────────────
+// Prevents bridge process accumulation: each new bridge that wants to
+// own the viewer port kills the previous holder via its PID file.
+// `--no-viewer` (headless) bridges use a SEPARATE PID file so they can
+// reap their own predecessors without colliding with the viewer daemon
+// that owns the port. Without the headless reap, every Hermes turn that
+// respawns the Python adapter leaks an old bridge.cjs (issue #1910).
+
+const PID_FILENAME = "bridge.pid";
+const STDIO_PID_FILENAME = "bridge-stdio.pid";
+
+function pidFilePath(agent: string, filename: string = PID_FILENAME): string {
+  const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
+  return path.join(
+    process.env.HOME ?? "/tmp",
+    agentHome,
+    "memos-plugin",
+    "daemon",
+    filename,
+  );
+}
+
+function readPidFile(pidPath: string): number | null {
+  try {
+    const raw = fs.readFileSync(pidPath, "utf8").trim();
+    const pid = parseInt(raw, 10);
+    if (isNaN(pid) || pid <= 0) return null;
+    process.kill(pid, 0); // throws if not alive
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+function writePidFile(pidPath: string): void {
+  fs.mkdirSync(path.dirname(pidPath), { recursive: true });
+  fs.writeFileSync(pidPath, String(process.pid), "utf8");
+}
+
+function removePidFile(pidPath: string): void {
+  try {
+    const content = fs.readFileSync(pidPath, "utf8").trim();
+    if (content === String(process.pid)) fs.unlinkSync(pidPath);
+  } catch {
+    /* best-effort; another bridge may have overwritten */
+  }
+}
+
+function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
+  const existingPid = readPidFile(pidPath);
+  if (existingPid === null || existingPid === process.pid) return;
+
+  process.stderr.write(
+    `bridge: killing stale bridge pid=${existingPid} before startup\n`,
+  );
+  try {
+    process.kill(existingPid, "SIGTERM");
+  } catch {
+    return; // already dead
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(existingPid, 0);
+    } catch {
+      return; // gone
+    }
+    childProcess.spawnSync("sleep", ["0.5"]);
+  }
+  try {
+    process.kill(existingPid, "SIGKILL");
+  } catch {
+    /* already dead */
+  }
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
+  // ─── Singleton: kill previous bridge that owns the viewer port ───
+  const pidPath = pidFilePath(args.agent);
+  const stdioPidPath = pidFilePath(args.agent, STDIO_PID_FILENAME);
+  const ownsViewerPort = args.daemon || !args.noViewer;
+  const removeOwnedPidFile = () => {
+    if (ownsViewerPort) removePidFile(pidPath);
+    // Headless bridges own a separate PID slot; remove it on exit too.
+    if (args.noViewer) removePidFile(stdioPidPath);
+  };
+  if (ownsViewerPort) {
+    killExistingBridge(pidPath);
+    writePidFile(pidPath);
+  }
+  if (args.noViewer) {
+    // Reap any previous --no-viewer bridge for this agent. This is the
+    // headless counterpart to the viewer-port singleton above and the
+    // Node-side defense against issue #1910 (bridge process leak).
+    killExistingBridge(stdioPidPath);
+    writePidFile(stdioPidPath);
+  }
+
   // Lazy-import ESM core. Using dynamic import so this file remains
   // CommonJS and stays `require`-able.
-  const { bootstrapMemoryCoreFull } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "core/pipeline/index.ts"))
+  const { bootstrapMemoryCoreFull } = (await importEsm(
+    runtimeModule("core/pipeline/index.ts", "dist/core/pipeline/index.js")
   )) as typeof import("./core/pipeline/index.js");
-  const { startStdioServer, waitForShutdown } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "bridge/stdio.ts"))
+  const { startStdioServer, waitForShutdown } = (await importEsm(
+    runtimeModule("bridge/stdio.ts", "dist/bridge/stdio.js")
   )) as typeof import("./bridge/stdio.js");
-  const { memoryBuffer, rootLogger } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "core/logger/index.ts"))
+  const { memoryBuffer, rootLogger } = (await importEsm(
+    runtimeModule("core/logger/index.ts", "dist/core/logger/index.js")
   )) as typeof import("./core/logger/index.js");
-  const { startHttpServer } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "server/http.ts"))
+  const { startHttpServer } = (await importEsm(
+    runtimeModule("server/http.ts", "dist/server/http.js")
   )) as typeof import("./server/http.js");
+  const { isHermesChatRunning } = (await importEsm(
+    runtimeModule("bridge/hermes-process.ts", "dist/bridge/hermes-process.js")
+  )) as typeof import("./bridge/hermes-process.js");
 
-  const pkgVersion = require("./package.json").version;
+  const rootDir = pluginRoot();
+  const pkgVersion = require(path.join(rootDir, "package.json")).version;
 
   // ─── Host LLM bridge (reverse RPC, lazy-bound to stdio) ────────
   // We need to register the bridge BEFORE bootstrap creates the
@@ -87,7 +195,8 @@ async function main(): Promise<void> {
   // non-null bridge), but `stdio` itself doesn't exist until later
   // in this function. The trick: hand a placeholder closure to
   // bootstrap that defers actual stdio access to the time of the
-  // first fallback call. By then `stdio` has been assigned.
+  // first fallback call. In stdio mode we start the server before
+  // `core.init()` so startup recovery can also use host fallback.
   //
   // Routing through `bootstrapMemoryCoreFull({ hostLlmBridge })`
   // (instead of having `bridge.cts` call `registerHostLlmBridge`
@@ -140,39 +249,163 @@ async function main(): Promise<void> {
       },
     };
 
-  const { Telemetry } = (await import(
-    pathToEsmUrl(path.resolve(__dirname, "core/telemetry/index.ts"))
+  const { Telemetry } = (await importEsm(
+    runtimeModule("core/telemetry/index.ts", "dist/core/telemetry/index.js")
   )) as typeof import("./core/telemetry/index.js");
 
+  // Resolve home early so we can use resolveHome with explicit defaultHome
+  const { resolveHome } = (await importEsm(
+    runtimeModule("core/config/paths.ts", "dist/core/config/paths.js")
+  )) as typeof import("./core/config/paths.js");
+
+  const resolvedHome = args.home
+    ? resolveHome(args.agent, args.home)
+    : undefined;
+
+  // Derive profileId dynamically from MEMOS_HOME.
+  // MEMOS_HOME points to <hermes-home>/memos-plugin, so parent dir is hermes-home.
+  // e.g. /root/.hermes/profiles/nova/memos-plugin → profile = "nova"
+  //      /root/.hermes/memos-plugin → profile = "default"
+  const deriveProfileId = (): string => {
+    const memosHome = process.env.MEMOS_HOME;
+    if (memosHome) {
+      const hermesHome = memosHome.replace(/memos-plugin\/?$/, "");
+      const match = /\/profiles\/([^/]+)\/?$/.exec(hermesHome);
+      if (match?.[1]) {
+        const cleaned = match[1].toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+        if (cleaned) return cleaned;
+      }
+      if (hermesHome.endsWith("/.hermes")) return "default";
+    }
+    return "default";
+  };
+  const resolvedProfileId = deriveProfileId();
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
-    namespace: { agentKind: args.agent, profileId: "default" },
+    namespace: { agentKind: args.agent, profileId: resolvedProfileId },
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
+    home: resolvedHome,
   });
-
-  const bridgeStatus =
-    args.agent === "hermes"
-      ? createBridgeStatusTracker(
-          path.join(home.root, BRIDGE_STATUS_FILE),
-          args.daemon,
-        )
-      : null;
-  await core.init();
 
   const telemetry = new Telemetry(
     config.telemetry ?? {},
     home.root,
     pkgVersion,
     rootLogger.child({ channel: "core.telemetry" }),
-    __dirname,
+    rootDir,
   );
   (core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }).bindTelemetry?.(telemetry);
   telemetry.trackPluginStarted(args.agent);
 
+  const bridgeStatus =
+    args.agent === "hermes"
+      ? createBridgeStatusTracker(
+          path.join(home.root, BRIDGE_STATUS_FILE),
+          args.daemon,
+          isHermesChatRunning,
+        )
+      : null;
+
+  // Process-level error reporting. Without these handlers a crash in
+  // a background task (capture / reward / L2 inducer) silently kills
+  // the bridge process and never surfaces in ARMS — making "0
+  // plugin_error events" actively misleading. Both handlers are
+  // best-effort and re-emit (or `process.exit(1)`) so we don't
+  // alter the existing crash semantics, only add observability.
+  // Only registered for `bridge.cts` (the dedicated process); the
+  // OpenClaw adapter runs inside the host process and must not steal
+  // its global error hooks.
+  process.on("uncaughtException", (err) => {
+    try {
+      telemetry.trackError("uncaught_exception", classifyErrorCode(err));
+    } catch {
+      /* swallow — telemetry must never widen the crash */
+    }
+    process.stderr.write(
+      `bridge: uncaughtException: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+    );
+    // Mirror Node's default behaviour so existing supervisors that
+    // expect non-zero exit on crash keep working.
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    try {
+      telemetry.trackError("unhandled_rejection", classifyErrorCode(reason));
+    } catch {
+      /* swallow — telemetry must never widen the crash */
+    }
+    process.stderr.write(
+      `bridge: unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`,
+    );
+    // Don't exit: per-promise rejections are usually recoverable
+    // (failed flush, dropped SSE client). The default Node 20+
+    // behaviour is to exit, but for a long-running bridge that
+    // would be too aggressive — surface to telemetry + stderr and
+    // continue.
+  });
+
   // Per-agent fixed viewer port.
   const AGENT_DEFAULT_PORTS = { openclaw: 18799, hermes: 18800 } as const;
   const viewerPort = AGENT_DEFAULT_PORTS[args.agent];
+
+  let bridgeHeartbeat:
+    | ReturnType<NonNullable<typeof bridgeStatus>["startHeartbeat"]>
+    | undefined;
+
+  // ─── Startup ordering invariant (issue #1747 + host LLM fallback) ───
+  //
+  // `startStdioServer({ core })` MUST run before `await core.init()`.
+  // Two independent failure modes if this ordering is reversed:
+  //
+  // 1. Host LLM fallback (original motivation for this ordering):
+  //    `core.init()` may recover dirty episodes and run
+  //    reflection/reward/L2/skill work; if that work hits a broken
+  //    primary skill-evolver model, the LLM facade can fall back to
+  //    host before init returns. Starting stdio first gives the
+  //    fallback a transport instead of tripping the lazy bridge guard.
+  //
+  // 2. Python adapter `session.open` timeout (issue #1747):
+  //    `core.init()` synchronously scans `episodes WHERE status='open'`
+  //    and recovers stale rows via `recoverOpenEpisodesAsSessionEnd`
+  //    + `recoverDirtyClosedEpisodes` — both of which call the LLM
+  //    and routinely take 10-60+ seconds when a previous chat left
+  //    orphan episodes behind. The Hermes Python adapter's
+  //    `_open_session()` default timeout is 30 s. If stdio starts
+  //    after init, the parent writes `session.open` into the bridge's
+  //    stdin and the Python side gets `asyncio.TimeoutError` before
+  //    the read loop is attached. By starting stdio first, the read
+  //    loop is alive immediately — `core.openSession()` is safe to
+  //    serve pre-init because it depends only on the SQLite handle
+  //    and event bus that `bootstrapMemoryCoreFull()` already
+  //    provisioned. (`ensureLive()` only blocks on `shutDown`, not
+  //    on `initialized`.)
+  //
+  // The invariant is pinned by
+  // `tests/unit/bridge/bridge-startup-ordering.test.ts`.
+  if (!args.daemon) {
+    stdio = startStdioServer({ core });
+    bridgeStatus?.markConnected();
+    bridgeHeartbeat = bridgeStatus?.startHeartbeat();
+    void stdio.done.then(() => {
+      bridgeHeartbeat?.stop();
+      bridgeStatus?.markDisconnected("Hermes chat disconnected");
+    });
+  }
+
+  try {
+    await core.init();
+  } catch (err) {
+    bridgeHeartbeat?.stop();
+    if (stdio) {
+      try {
+        await stdio.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+    throw err;
+  }
 
   // ─── Daemon mode ──────────────────────────────────────────────
   // When started with `--daemon`, skip stdio and run as a pure HTTP
@@ -201,7 +434,7 @@ async function main(): Promise<void> {
           {
             port: viewerPort,
             host: config.viewer.bindHost,
-            staticRoot: path.resolve(__dirname, "web/dist"),
+            staticRoot: path.resolve(rootDir, "viewer/dist"),
             agent: args.agent,
           },
         );
@@ -235,6 +468,7 @@ async function main(): Promise<void> {
 
     const shutdownDaemon = async (sig: string) => {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
+      removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
       await core.shutdown();
       process.exit(0);
@@ -246,55 +480,60 @@ async function main(): Promise<void> {
   }
 
   // ─── Normal (stdio) mode ──────────────────────────────────────
-  // Assign the stdio handle into the closure variable so the host
-  // LLM bridge (registered earlier inside bootstrap) can dispatch
-  // reverse-direction requests to the adapter.
-  stdio = startStdioServer({ core });
-  bridgeStatus?.markConnected();
-  const bridgeHeartbeat = bridgeStatus?.startHeartbeat();
-  void stdio.done.then(() => {
-    bridgeHeartbeat?.stop();
-    bridgeStatus?.markDisconnected("Hermes chat disconnected");
-  });
+  // The stdio handle was started before `core.init()` above so host
+  // fallback is available during startup recovery.
+  const activeStdio = stdio;
+  if (!activeStdio) {
+    throw new Error("internal bridge error: stdio server was not started");
+  }
 
-  // Try to bind the viewer port. EADDRINUSE → stay headless.
+  // Try to bind the viewer port unless the caller requested a pure stdio
+  // bridge. Hermes chat uses --no-viewer; the standalone --daemon process is
+  // the single owner of :18800.
   let viewer: import("./server/types.js").ServerHandle | null = null;
-  try {
-    viewer = await startHttpServer(
-      {
-        core,
-        home,
-        logTail: () => memoryBuffer().tail({ limit: 200 }),
-        bridgeStatus: bridgeStatus ? () => bridgeStatus.snapshot() : undefined,
-        telemetry,
-      },
-      {
-        port: viewerPort,
-        host: config.viewer.bindHost,
-        staticRoot: path.resolve(__dirname, "web/dist"),
-        agent: args.agent,
-      },
-    );
+  if (args.noViewer) {
     process.stderr.write(
-      `bridge: viewer live at ${viewer.url} (agent=${args.agent})\n`,
+      `bridge: stdio mode running without viewer (agent=${args.agent})\n`,
     );
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e?.code === "EADDRINUSE") {
-      process.stderr.write(
-        `bridge: viewer port :${viewerPort} is already in use — ` +
-          `${args.agent} will run headless (stdio only). ` +
-          `Free the port to expose the viewer.\n`,
+  } else {
+    try {
+      viewer = await startHttpServer(
+        {
+          core,
+          home,
+          logTail: () => memoryBuffer().tail({ limit: 200 }),
+          bridgeStatus: bridgeStatus ? () => bridgeStatus.snapshot() : undefined,
+          telemetry,
+        },
+        {
+          port: viewerPort,
+          host: config.viewer.bindHost,
+          staticRoot: path.resolve(rootDir, "viewer/dist"),
+          agent: args.agent,
+        },
       );
-    } else {
       process.stderr.write(
-        `bridge: viewer failed to start: ${e?.message ?? String(err)}\n`,
+        `bridge: viewer live at ${viewer.url} (agent=${args.agent})\n`,
       );
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code === "EADDRINUSE") {
+        process.stderr.write(
+          `bridge: viewer port :${viewerPort} is already in use — ` +
+            `${args.agent} will run headless (stdio only). ` +
+            `Free the port to expose the viewer.\n`,
+        );
+      } else {
+        process.stderr.write(
+          `bridge: viewer failed to start: ${e?.message ?? String(err)}\n`,
+        );
+      }
     }
   }
 
   const shutdown = async (sig: string) => {
     process.stderr.write(`bridge: received ${sig}, shutting down\n`);
+    removeOwnedPidFile();
     if (viewer) {
       try {
         await viewer.close();
@@ -302,7 +541,7 @@ async function main(): Promise<void> {
         /* best-effort */
       }
     }
-    await waitForShutdown(core, stdio!);
+    await waitForShutdown(core, activeStdio);
     process.exit(0);
   };
 
@@ -310,7 +549,7 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   // Keep the process alive until stdin ends (client disconnects).
-  await stdio.done;
+  await activeStdio.done;
 
   // If a viewer is running, keep the process alive as a daemon so the
   // memory panel stays accessible between `hermes chat` sessions.
@@ -322,6 +561,7 @@ async function main(): Promise<void> {
     const keepalive = setInterval(() => {
       if (viewer!.closed) {
         clearInterval(keepalive);
+        removeOwnedPidFile();
         void core.shutdown().then(() => process.exit(0));
       }
     }, 5_000);
@@ -330,16 +570,65 @@ async function main(): Promise<void> {
   }
 
   // No viewer (headless bridge) — clean exit.
+  removeOwnedPidFile();
   await core.shutdown();
   process.exit(0);
 }
 
-function pathToEsmUrl(abs: string): string {
-  const u = abs.startsWith("/") ? `file://${abs}` : `file:///${abs}`;
-  return u;
+function pluginRoot(): string {
+  // Source entry: <root>/bridge.cts. Built entry: <root>/dist/bridge.cjs.
+  if (fs.existsSync(path.join(__dirname, "package.json"))) return __dirname;
+  const parent = path.resolve(__dirname, "..");
+  if (fs.existsSync(path.join(parent, "package.json"))) return parent;
+  return __dirname;
 }
 
-function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
+function runtimeModule(sourceRel: string, distRel: string): string {
+  const root = pluginRoot();
+  const distAbs = path.resolve(root, distRel);
+  const sourceAbs = path.resolve(root, sourceRel);
+  return pathToEsmUrl(fs.existsSync(distAbs) ? distAbs : sourceAbs);
+}
+
+function pathToEsmUrl(abs: string): string {
+  return url.pathToFileURL(abs).href;
+}
+
+const importEsm = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (specifier: string) => Promise<unknown>;
+
+/**
+ * Best-effort error classification for ARMS `plugin_error.error_type`.
+ *
+ * Priority order:
+ *   1. `MemosError.code` and Node `errno` (`ENOENT`, `EADDRINUSE`, …)
+ *      — both surface as a `code` string property.
+ *   2. The constructor name when it's something more specific than
+ *      the generic `Error` (e.g. `TypeError`, `SyntaxError`).
+ *   3. `unknown` as a sentinel.
+ *
+ * Never returns the message — those can carry user paths or query
+ * fragments and would defeat the redaction the rest of the telemetry
+ * pipeline guarantees.
+ */
+function classifyErrorCode(err: unknown): string {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+  }
+  if (err instanceof Error && err.name && err.name !== "Error") {
+    return err.name;
+  }
+  return "unknown";
+}
+
+function createBridgeStatusTracker(
+  statusFile: string,
+  daemon: boolean,
+  isHermesChatRunning: () => boolean,
+): {
   snapshot(): BridgeStatusSnapshot;
   markConnected(): void;
   markDisconnected(message: string): void;
@@ -453,21 +742,10 @@ function createBridgeStatusTracker(statusFile: string, daemon: boolean): {
   };
 }
 
-function isHermesChatRunning(): boolean {
-  try {
-    const out = childProcess.execFileSync("pgrep", ["-f", "hermes chat"], {
-      encoding: "utf8",
-      timeout: 1000,
-    });
-    return out.trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-
 void main().catch((err) => {
+  const detail = err instanceof Error ? err.stack ?? err.message : String(err);
   process.stderr.write(
-    `bridge: fatal: ${err instanceof Error ? err.message : String(err)}\n`,
+    `bridge: fatal: ${detail}\n`,
   );
   process.exit(1);
 });

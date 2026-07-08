@@ -429,7 +429,9 @@ class SingleCubeView(MemCubeView):
             for edge in edges_info:
                 chunk_target_id = edge.get("to")
                 edge_type = edge.get("type")
-                item_neighbor = self.searcher.graph_store.get_node(chunk_target_id)
+                item_neighbor = self.searcher.graph_store.get_node(
+                    chunk_target_id, user_name=user_name
+                )
                 if item_neighbor:
                     item_neighbor_mem = TextualMemoryItem(**item_neighbor)
                     item_neighbor_mem.metadata.relativity = neighbor_relativity
@@ -529,7 +531,10 @@ class SingleCubeView(MemCubeView):
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
-                    info=add_req.info,
+                    info={
+                        **(add_req.info or {}),
+                        "is_upload_skill": getattr(add_req, "is_upload_skill", False),
+                    },
                     chat_history=add_req.chat_history,
                     user_context=user_context,
                 )
@@ -709,6 +714,7 @@ class SingleCubeView(MemCubeView):
                 user_name=user_context.mem_cube_id,
                 chat_history=add_req.chat_history,
                 user_context=user_context,
+                is_upload_skill=getattr(add_req, "is_upload_skill", False),
             )
         get_memory_ms = ts_gm.duration_ms
         flattened_local = [mm for m in memories_local for mm in m]

@@ -68,7 +68,7 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
       : traces.map(traceToPair).filter((p) => p !== null) as ExchangePair[];
 
   const pairsText = pairs.length > 0
-    ? pairs.map((p, i) => formatPair(p, i)).join("\n\n")
+    ? pairs.map((p, i) => formatPair(p, i, i === pairs.length - 1)).join("\n\n")
     : "(no recorded exchanges)";
 
   const agentActions = traces.map(traceOneLiner).filter(Boolean).join("\n");
@@ -88,7 +88,7 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
     oneLine(pairs.length > 0 ? pairs[pairs.length - 1]!.userText : userQuery, 500),
     ``,
     `MOST_RECENT_AGENT_REPLY:`,
-    oneLine(pairs.length > 0 ? pairs[pairs.length - 1]!.agentText : outcome, 800),
+    clampAgentText(pairs.length > 0 ? pairs[pairs.length - 1]!.agentText : outcome),
   ].join("\n");
 
   const { text, truncated } = clampText(body, cfg.summaryMaxChars);
@@ -167,10 +167,11 @@ function traceToPair(t: TraceRow): ExchangePair | null {
   return { userText: u, agentText: a, toolHint };
 }
 
-function formatPair(p: ExchangePair, idx: number): string {
+function formatPair(p: ExchangePair, idx: number, isLast = false): string {
   const lines: string[] = [`[${idx + 1}] USER: ${oneLine(p.userText, 300)}`];
   if (p.toolHint) lines.push(`    TOOLS: ${p.toolHint}`);
-  lines.push(`    AGENT: ${oneLine(p.agentText, 400)}`);
+  const agentSnippet = isLast ? clampAgentText(p.agentText) : oneLine(p.agentText, 400);
+  lines.push(`    AGENT: ${agentSnippet}`);
   return lines.join("\n");
 }
 
@@ -257,6 +258,16 @@ function oneLine(s: string, max: number): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+}
+
+const AGENT_TEXT_MAX = 5000;
+const AGENT_TEXT_HEAD = 2000;
+const AGENT_TEXT_TAIL = 3000;
+
+function clampAgentText(s: string): string {
+  const trimmed = s.trim();
+  if (trimmed.length <= AGENT_TEXT_MAX) return trimmed;
+  return trimmed.slice(0, AGENT_TEXT_HEAD) + "\n......\n" + trimmed.slice(trimmed.length - AGENT_TEXT_TAIL);
 }
 
 function clampText(text: string, max: number): { text: string; truncated: boolean } {
