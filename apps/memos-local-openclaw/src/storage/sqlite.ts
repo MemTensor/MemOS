@@ -3031,7 +3031,7 @@ function sanitizeFtsQuery(raw: string): string {
     .filter((t) => t.length > 1)
     .filter((t) => !FTS_RESERVED.has(t.toUpperCase()));
 
-  return tokens.join(" ");
+  return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(" ");
 }
 
 const FTS_RESERVED = new Set(["AND", "OR", "NOT", "NEAR"]);
