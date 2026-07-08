@@ -225,6 +225,39 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     /**
+     * Full episode-scoped trace fetch with NO pagination cap.
+     *
+     * The paginated `list({ episodeId })` path silently truncates to
+     * `PageOptions.limit`, which caps at 500 by default. That cap
+     * breaks capture-side dedup (#2076): when an episode grows past
+     * the cap, the next runLite / runReflect only sees the newest
+     * 500 rows, treats every older step as "novel", and re-inserts
+     * the whole tail every cycle. In the reporter's 4.2 GB / 6.8 GB
+     * failure, 518,375 trace rows had shrunk to 80,583 distinct
+     * `(episode_id, turn_id, user_text, agent_text, tool_calls_json)`
+     * signatures — 84 % duplicates driven by exactly this loop.
+     *
+     * Use this helper for any dedup / reconciliation read that must
+     * see the whole episode. All hot fields required by dedup are
+     * projected, so a caller that only needs `ts`, `turnId`, or the
+     * identity signature can still iterate at full speed without
+     * paying the paginated round trips.
+     *
+     * Rows are ordered by `ts ASC` so the causal chain matches the
+     * order runLite / runReflect built.
+     */
+    listAllForEpisode(episodeId: EpisodeId | string): TraceRow[] {
+      if (!episodeId) return [];
+      const sql = `SELECT ${COLUMNS.join(
+        ", ",
+      )} FROM traces WHERE episode_id = @episode_id ORDER BY ts ASC`;
+      const rows = db
+        .prepare<{ episode_id: string }, RawTraceRow>(sql)
+        .all({ episode_id: String(episodeId) });
+      return rows.map(mapRow);
+    },
+
+    /**
      * Total row count matching the same filter (no limit/offset).
      * Used by list endpoints so the viewer can show "Page N of M".
      */

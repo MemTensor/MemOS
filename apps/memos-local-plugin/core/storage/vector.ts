@@ -195,9 +195,29 @@ export interface ScanRow {
 }
 
 /**
+ * Default LIMIT applied when the caller doesn't pass an explicit
+ * `hardCap`. Historically 100_000, which — combined with the old
+ * `.all()` materialisation — meant one accidental "no cap" call
+ * could pull 100k multi-KB vector BLOBs into JS memory in a single
+ * synchronous step. On the reporter's DB in issue #2076 that
+ * translated to 4.2 GB RSS and a 100 % CPU main-thread stall.
+ *
+ * 5_000 is a much safer default: it still covers realistic per-agent
+ * corpora and it forces callers that legitimately need more to opt
+ * in explicitly.
+ */
+export const DEFAULT_SCAN_HARD_CAP = 5_000;
+
+/**
  * Stream rows from `table`, decode vectors, and run top-K cosine against
  * `query`. `selectExtra` lets callers bring along columns that will surface in
  * `VectorHit.meta`.
+ *
+ * Streaming: we use `.iterate()` (not `.all()`) so at most one row's
+ * BLOB is decoded at a time. The top-K min-heap keeps only `k`
+ * vectors of state, so peak RSS is O(k * dim) regardless of how many
+ * rows the LIMIT allows. Fixes the "load 100k BLOBs synchronously"
+ * pathology in #2076.
  */
 export function scanAndTopK<TMeta = undefined>(
   db: StorageDb,
@@ -207,30 +227,51 @@ export function scanAndTopK<TMeta = undefined>(
   k: number,
   opts: VectorScanOptions,
 ): Array<VectorHit<string, TMeta>> {
+  if (k <= 0 || query.length === 0) return [];
+
   const { vecColumn, norm2Column, where, params, hardCap } = opts;
+  const cap = hardCap ?? DEFAULT_SCAN_HARD_CAP;
   const cols = ["id", vecColumn, ...(norm2Column ? [norm2Column] : []), ...selectExtra];
   const sql = [
     `SELECT ${cols.join(", ")} FROM ${table}`,
     where ? `WHERE ${where}` : "",
-    `LIMIT ${hardCap ?? 100000}`,
+    `LIMIT ${cap}`,
   ]
     .filter(Boolean)
     .join(" ");
 
-  const rows = db.prepare<typeof params, ScanRow>(sql).all(params);
-  const decoded: Array<VectorRow<string, TMeta>> = [];
-  for (const r of rows) {
+  const qNorm = Math.sqrt(norm2(query));
+  if (qNorm === 0) return [];
+
+  // Streaming top-K: min-heap of size k. We *never* build the full
+  // candidate array — one BLOB lives on the JS heap at a time (plus
+  // the k already-selected vectors we're comparing against).
+  const heap: Array<VectorHit<string, TMeta>> = [];
+  const stmt = db.prepare<typeof params, ScanRow>(sql);
+  const iter = params === undefined ? stmt.iterate() : stmt.iterate(params);
+  for (const r of iter) {
     const vec = decodeVector(r[vecColumn] as Buffer | null);
     if (!vec) continue;
-    const meta = selectExtra.length > 0
-      ? (Object.fromEntries(selectExtra.map((c) => [c, r[c]])) as TMeta)
-      : (undefined as TMeta);
-    decoded.push({
-      id: String(r["id"]),
-      vec,
-      norm2: norm2Column ? ((r[norm2Column] as number | null) ?? undefined) : undefined,
-      meta,
-    });
+    if (vec.length === 0 || vec.length !== query.length) continue;
+    const rowNorm2 = norm2Column
+      ? (r[norm2Column] as number | null | undefined) ?? norm2(vec)
+      : norm2(vec);
+    const score = cosinePrenormed(query, qNorm, vec, rowNorm2);
+    if (heap.length < k) {
+      const meta = selectExtra.length > 0
+        ? (Object.fromEntries(selectExtra.map((c) => [c, r[c]])) as TMeta)
+        : (undefined as TMeta);
+      heap.push({ id: String(r["id"]), score, meta });
+      siftUp(heap, heap.length - 1);
+    } else if (score > heap[0]!.score) {
+      const meta = selectExtra.length > 0
+        ? (Object.fromEntries(selectExtra.map((c) => [c, r[c]])) as TMeta)
+        : (undefined as TMeta);
+      heap[0] = { id: String(r["id"]), score, meta };
+      siftDown(heap, 0);
+    }
   }
-  return topKCosine(query, decoded, k);
+  // `heap` is a min-heap on score; caller wants DESC.
+  heap.sort((a, b) => b.score - a.score);
+  return heap;
 }

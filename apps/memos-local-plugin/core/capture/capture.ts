@@ -133,7 +133,11 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // ─── Extract + dedup (skip steps we've already written this episode) ──
     const extractStart = now();
     const rawAll = extractSteps(input.episode);
-    const existingTraces = deps.tracesRepo.list({ episodeId: input.episode.id });
+    // #2076: MUST use listAllForEpisode (uncapped). The paginated `list`
+    // path silently truncates to 500 rows, which breaks dedup once an
+    // episode grows past that and causes the tail to be re-inserted every
+    // cycle (bloating `traces` unboundedly + starving the vector scan).
+    const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const seenTs = new Set<number>(existingTraces.map((t) => t.ts));
     const raw = rawAll.filter((s) => !seenTs.has(s.ts));
     const extractMs = now() - extractStart;
@@ -251,7 +255,8 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 
     const extractStart = now();
     const rawAll = extractSteps(input.episode);
-    const existingTraces = deps.tracesRepo.list({ episodeId: input.episode.id });
+    // #2076: uncapped dedup read — see runLite for the full rationale.
+    const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const seenTurnIds = new Set(
       existingTraces
         .map((t) => t.turnId)
@@ -391,7 +396,9 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // Pair each normalized step with its already-persisted trace row
     // (matched by ts). If runLite was skipped for any step, fall back
     // to a fresh insert path so we don't lose data.
-    const existing = deps.tracesRepo.list({ episodeId: input.episode.id });
+    // #2076: uncapped dedup read — reflect must see every trace we
+    // ever wrote for this episode, not just the newest 500.
+    const existing = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const traceByTs = new Map<number, (typeof existing)[number]>();
     for (const tr of existing) traceByTs.set(tr.ts, tr);
     const orphan = normalized.filter((s) => !traceByTs.has(s.ts));
@@ -769,7 +776,11 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     warnings: CaptureResult["warnings"],
     opts: { skipActionVectorRetry?: boolean } = {},
   ): Promise<boolean> {
-    const existingBeforeInsert = deps.tracesRepo.list({ episodeId: input.episode.id });
+    // #2076: uncapped dedup read — every row we ever wrote for this
+    // episode is a legitimate "already inserted" signature to skip.
+    // Using paginated `list` here missed all rows past the 500 cap
+    // and let the duplicate signatures re-insert every cycle.
+    const existingBeforeInsert = deps.tracesRepo.listAllForEpisode(input.episode.id);
     const seenSignatures = new Set(existingBeforeInsert.map(traceIdentitySignature));
     const uniqueRows = rows.filter((row) => {
       const signature = traceIdentitySignature(row);
