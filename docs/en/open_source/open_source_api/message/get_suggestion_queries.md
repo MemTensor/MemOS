@@ -3,8 +3,6 @@ title: Get Suggestion Queries
 desc: Automatically generate 3 follow-up conversation suggestions based on the current dialogue context or recent memories within a Cube.
 ---
 
-# Get Suggestion Queries
-
 **API Path**: `POST /product/suggestions`
 **Description**: This API implements the "Guess What You Want to Ask" feature. Based on the provided conversation context or recent memories in the target **MemCube**, the system uses a large language model to generate 3 relevant suggested questions, helping users continue the conversation.
 
@@ -39,27 +37,29 @@ desc: Automatically generate 3 follow-up conversation suggestions based on the c
 
 ## 4. Quick Start
 
-Use the SDK to get Chinese-language suggestions for the current conversation:
+Use an HTTP request to get Chinese-language suggestions for the current conversation:
 
 ```python
-from memos.api.client import MemOSClient
-
-client = MemOSClient(api_key="...", base_url="...")
+import requests
 
 # Scenario: Generate suggestions based on a recent conversation about "R language"
-res = client.get_suggestions(
-    user_id="dev_user_01",
-    mem_cube_id="private_cube_01",
-    language="zh",
-    message=[
-        {"role": "user", "content": "I want to learn R language visualization."},
-        {"role": "assistant", "content": "I recommend learning the ggplot2 package — it's the core tool for R language visualization."}
-    ]
+res = requests.post(
+    "http://localhost:8000/product/suggestions",
+    json={
+        "user_id": "dev_user_01",
+        "mem_cube_id": "private_cube_01",
+        "language": "zh",
+        "message": [
+            {"role": "user", "content": "I want to learn R language visualization."},
+            {"role": "assistant", "content": "I recommend learning the ggplot2 package — it's the core tool for R language visualization."}
+        ]
+    }
 )
 
-if res and res.code == 200:
+if res.status_code == 200:
+    data = res.json()
     # Example output: ["How do I install ggplot2?", "What are some classic ggplot2 tutorials?", "What other visualization packages does R have?"]
-    print(f"Suggested questions: {res.data}")
+    print(f"Suggested questions: {data['data']}")
 ```
 
 ## 5. Suggested Use Cases
