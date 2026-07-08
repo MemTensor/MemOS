@@ -261,21 +261,26 @@ export function makeTracesRepo(db: StorageDb) {
     /**
      * Full episode-scoped trace fetch with NO pagination cap.
      *
-     * The paginated `list({ episodeId })` path silently truncates to
-     * `PageOptions.limit`, which caps at 500 by default. That cap
-     * breaks capture-side dedup (#2076): when an episode grows past
-     * the cap, the next runLite / runReflect only sees the newest
-     * 500 rows, treats every older step as "novel", and re-inserts
-     * the whole tail every cycle. In the reporter's 4.2 GB / 6.8 GB
-     * failure, 518,375 trace rows had shrunk to 80,583 distinct
+     * Fetches ALL columns including the large `vec_summary` and
+     * `vec_action` BLOB columns, mapped into full `TraceRow` shape.
+     * Use this only when the caller genuinely needs those BLOBs
+     * (e.g. `runReflect`, which re-embeds and rewrites every field).
+     *
+     * **For dedup-only reads** — where only `ts`, `turnId`,
+     * `userText`, `agentText`, and `toolCalls` are needed — use
+     * {@link listDedupRowsForEpisode} instead to avoid loading
+     * multi-GB of embeddings into JS memory.
+     *
+     * Why an uncapped read exists at all: the paginated
+     * `list({ episodeId })` path silently truncates to
+     * `PageOptions.limit` (default 500). That cap breaks capture-side
+     * dedup (#2076): when an episode grows past the cap, the next
+     * runLite / runReflect only sees the newest 500 rows, treats
+     * every older step as "novel", and re-inserts the whole tail
+     * every cycle. In the reporter's 4.2 GB / 6.8 GB failure,
+     * 518,375 trace rows had shrunk to 80,583 distinct
      * `(episode_id, turn_id, user_text, agent_text, tool_calls_json)`
      * signatures — 84 % duplicates driven by exactly this loop.
-     *
-     * Use this helper for any dedup / reconciliation read that must
-     * see the whole episode. All hot fields required by dedup are
-     * projected, so a caller that only needs `ts`, `turnId`, or the
-     * identity signature can still iterate at full speed without
-     * paying the paginated round trips.
      *
      * Rows are ordered by `ts ASC` so the causal chain matches the
      * order runLite / runReflect built.
@@ -292,18 +297,29 @@ export function makeTracesRepo(db: StorageDb) {
     },
 
     /**
-     * Streaming, narrow-projection sibling of {@link listAllForEpisode}.
+     * Narrow-projection episode fetch for capture-side dedup.
      *
-     * Every capture-side dedup call-site (see `runLite`, `runLightweight`,
-     * `persistRows` in `core/capture/capture.ts`) needs only the five
-     * dedup identity fields — never the `vec_summary` / `vec_action`
-     * BLOBs which dominate row size. This helper projects exactly those
-     * columns and streams via `.iterate()` so peak memory scales with
-     * the scalar payload, not the total embedding footprint.
+     * Sibling to {@link listAllForEpisode}, but projects only the five
+     * scalar dedup-identity columns
+     * (`ts` / `turn_id` / `user_text` / `agent_text` / `tool_calls_json`)
+     * and NEVER touches `vec_summary` / `vec_action`. That is the real
+     * saving: on the reporter's DB in #2076 the two BLOB columns
+     * dominated row size, so skipping them cuts per-row bytes by
+     * ~1000× regardless of how many rows the episode contains.
+     *
+     * Uses `stmt.iterate()` internally to avoid better-sqlite3's
+     * intermediate `.all()` allocation, but the result is still
+     * materialised into a `TraceDedupRow[]` and returned to the
+     * caller — this is not a streaming API. Peak JS memory therefore
+     * scales linearly with row count × the small scalar payload,
+     * which is what capture-side dedup actually needs.
+     *
+     * Every capture-side dedup call-site (`runLite`, `runLightweight`,
+     * `persistRows` in `core/capture/capture.ts`) uses this helper
+     * so no BLOBs load during the dedup pass.
      *
      * Same episode-scoping / `ts ASC` ordering contract as
-     * `listAllForEpisode`; the two are drop-in siblings for callers that
-     * only need dedup identity.
+     * `listAllForEpisode`.
      */
     listDedupRowsForEpisode(episodeId: EpisodeId | string): TraceDedupRow[] {
       if (!episodeId) return [];

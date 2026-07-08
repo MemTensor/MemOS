@@ -243,6 +243,18 @@ export function scanAndTopK<TMeta = undefined>(
   const qNorm = Math.sqrt(norm2(query));
   if (qNorm === 0) return [];
 
+  // Build meta once per row — hoisted out of the loop so the meta
+  // projection is *not* re-allocated as a closure per iteration. The
+  // two heap-push branches below both need this when the row is kept,
+  // and rebuilding the closure in each iteration was pure GC pressure
+  // for hot searches. Only invoked for the heap-push branches, so
+  // filtered-out rows pay nothing.
+  const buildMeta =
+    selectExtra.length > 0
+      ? (row: ScanRow): TMeta =>
+          Object.fromEntries(selectExtra.map((c) => [c, row[c]])) as TMeta
+      : (_row: ScanRow): TMeta => undefined as TMeta;
+
   // Streaming top-K: min-heap of size k. We *never* build the full
   // candidate array — one BLOB lives on the JS heap at a time (plus
   // the k already-selected vectors we're comparing against).
@@ -272,18 +284,11 @@ export function scanAndTopK<TMeta = undefined>(
       ? (r[norm2Column] as number | null | undefined) ?? norm2(vec)
       : norm2(vec);
     const score = cosinePrenormed(query, qNorm, vec, rowNorm2);
-    // Build meta once — the two heap-push branches below both need it
-    // when the row is kept, and rebuilding it in each branch would
-    // duplicate the projection logic and drift over time.
-    const buildMeta = (): TMeta =>
-      selectExtra.length > 0
-        ? (Object.fromEntries(selectExtra.map((c) => [c, r[c]])) as TMeta)
-        : (undefined as TMeta);
     if (heap.length < k) {
-      heap.push({ id: String(r["id"]), score, meta: buildMeta() });
+      heap.push({ id: String(r["id"]), score, meta: buildMeta(r) });
       siftUp(heap, heap.length - 1);
     } else if (score > heap[0]!.score) {
-      heap[0] = { id: String(r["id"]), score, meta: buildMeta() };
+      heap[0] = { id: String(r["id"]), score, meta: buildMeta(r) };
       siftDown(heap, 0);
     }
   }
