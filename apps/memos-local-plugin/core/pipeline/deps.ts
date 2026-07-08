@@ -467,7 +467,7 @@ function lightweightRewardSubscription(): RewardSubscription {
       throwLightweight("rewardSubscription.submitFeedback");
     },
     async runManually() {
-      throwLightweight("rewardSubscription.runManually");
+      return throwLightweight("rewardSubscription.runManually");
     },
     stop() {
       /* no-op — nothing was attached */
@@ -501,7 +501,7 @@ function lightweightL2Handle(): L2SubscriberHandle {
       /* no-op */
     },
     async runOnce() {
-      throwLightweight("l2.runOnce");
+      return throwLightweight("l2.runOnce");
     },
     async drain() {
       /* no-op */

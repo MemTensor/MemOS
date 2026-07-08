@@ -624,13 +624,18 @@ export function createMemoryCore(
       if (lightweightMode) {
         for (const ep of stale) {
           try {
-            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+            // Write the lightweight flag BEFORE close() so that even if
+            // close() throws mid-way, `isLightweightEpisode()` still
+            // returns true and the periodic non-lightweight rescan paths
+            // (autoRescoreDirtyClosedEpisodes) skip this episode instead
+            // of feeding it into the reward / L2 / L3 pipeline.
             handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
               lightweightMemory: true,
-              closeReason: "finalized",
-              recoveredAtStartup: nowMs,
+              closeReason: "lightweight_stale",
+              closedAtMs: nowMs,
               recoveryReason: "lightweight_stale_topic_close",
             });
+            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
           } catch (err) {
             log.debug("stale_topic.lightweight_close_error", {
               episodeId: ep.id,
@@ -971,14 +976,18 @@ export function createMemoryCore(
           ? orphans
           : orphans.filter((ep) => isLightweightEpisode(ep));
         for (const ep of treatAsLightweight) {
+          let recoveryReason: string;
+          if (lightweightMode && !isLightweightEpisode(ep)) {
+            recoveryReason = "lightweight_startup_close_backfill";
+          } else {
+            recoveryReason = "lightweight_startup_close";
+          }
           handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
           handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
             lightweightMemory: true,
             closeReason: "finalized",
             recoveredAtStartup: nowMs,
-            recoveryReason: lightweightMode && !isLightweightEpisode(ep)
-              ? "lightweight_startup_close_backfill"
-              : "lightweight_startup_close",
+            recoveryReason,
           });
         }
         if (lightweightMode) {
