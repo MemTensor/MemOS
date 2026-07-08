@@ -18,17 +18,14 @@
  * therefore misses any invocation with a global flag (`--skills`,
  * `-m`, `--provider`, …) between them.
  *
- * The current pattern is `hermes\s.*chat\b`:
+ * The current pattern is `hermes(?:\s+\S+)*\s+chat\b`:
  *
- *   • `hermes\s`  — the binary basename followed by whitespace (the
- *     separator that always sits between the binary and either the
- *     first flag or the subcommand). Anchoring on whitespace stops it
- *     from matching `hermesctl`, `hermes-helper`, etc.
- *   • `.*`        — any flags between the binary and the subcommand
- *     (empty in the no-flags case).
- *   • `chat\b`    — `chat` ending at a word boundary, so it does *not*
- *     match `chatter`, `chat-server`, or a flag value like
- *     `--profile=chats`.
+ *   • `hermes`           — the binary basename.
+ *   • `(?:\s+\S+)*`      — any complete argv-style tokens between the
+ *     binary and the subcommand.
+ *   • `\s+chat\b`        — a standalone `chat` token, so it does *not*
+ *     match `chatter`, `chat-server`, `--chat-log`, or a flag value
+ *     like `--profile=chat`.
  *
  * `pgrep -f` on Linux uses glibc's ERE engine, which supports
  * `\s`/`\b` as GNU extensions. JavaScript's `RegExp` supports the same
@@ -48,7 +45,7 @@ import * as childProcess from "node:child_process";
  * string we hand to `pgrep` and confirm we have not silently regressed
  * back to a literal substring match.
  */
-export const HERMES_CHAT_PROCESS_PATTERN = "hermes\\s.*chat\\b";
+export const HERMES_CHAT_PROCESS_PATTERN = "hermes(?:\\s+\\S+)*\\s+chat\\b";
 
 /**
  * JS-side equivalent of `pgrep -f HERMES_CHAT_PROCESS_PATTERN`.

@@ -21,6 +21,7 @@ import { buildSkillBundleForHub, fetchHubSkillBundle, restoreSkillBundleFromHub 
 import type { Logger, Chunk, PluginContext, MemosLocalConfig } from "../types";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
+import { parseJsonOrJson5 } from "../shared/json5";
 
 export interface MigrationStepFailureCounts {
   summarization: number;
@@ -649,7 +650,7 @@ export class ViewerServer {
     try {
       const cfgPath = this.getOpenClawConfigPath();
       if (fs.existsSync(cfgPath)) {
-        const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
         const entries = raw?.plugins?.entries ?? {};
         const pluginCfg = entries["memos-local-openclaw-plugin"]?.config
           ?? entries["memos-local"]?.config ?? {};
@@ -1277,8 +1278,9 @@ export class ViewerServer {
 
   private embedTaskInBackground(taskId: string, text: string): void {
     if (!this.embedder || !text.trim()) return;
-    this.embedder.embed([text]).then((vecs: number[][]) => {
-      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0]);
+    const embedder = this.embedder;
+    embedder.embed([text]).then((vecs: number[][]) => {
+      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0], { provider: embedder.provider, model: embedder.model });
     }).catch(() => {});
   }
 
@@ -1418,8 +1420,9 @@ export class ViewerServer {
       const sv = this.store.getLatestSkillVersion(skillId);
       if (sv) {
         const text = `${skill.name}: ${skill.description}`;
-        this.embedder.embed([text]).then((vecs: number[][]) => {
-          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0]);
+        const embedder = this.embedder;
+        embedder.embed([text]).then((vecs: number[][]) => {
+          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0], { provider: embedder.provider, model: embedder.model });
         }).catch(() => {});
       }
     }
@@ -1959,7 +1962,7 @@ export class ViewerServer {
     try {
       const cfgPath = this.getOpenClawConfigPath();
       if (!fs.existsSync(cfgPath)) return null;
-      return JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      return parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, any>;
     } catch {
       return null;
     }
@@ -3073,7 +3076,7 @@ export class ViewerServer {
         this.jsonResponse(res, {});
         return;
       }
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
       const entries = raw?.plugins?.entries ?? {};
       const pluginEntry = entries["memos-local-openclaw-plugin"]?.config
         ?? entries["memos-local"]?.config
@@ -3105,7 +3108,7 @@ export class ViewerServer {
         const cfgPath = this.getOpenClawConfigPath();
         let raw: Record<string, unknown> = {};
         if (fs.existsSync(cfgPath)) {
-          raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, unknown>;
         }
 
         if (!raw.plugins) raw.plugins = {};
@@ -3823,7 +3826,7 @@ export class ViewerServer {
 
                   discardBackup();
                   this.log.info(`update-install: success! Updated to ${newVersion}`);
-                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install");
+                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install", 250);
                 });
               });
             });
@@ -4070,7 +4073,7 @@ export class ViewerServer {
       let hasSummarizer = false;
       if (fs.existsSync(cfgPath)) {
         try {
-          const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
           const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
                             raw?.plugins?.entries?.["memos-local"]?.config ??
                             raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
@@ -4378,7 +4381,7 @@ export class ViewerServer {
                             this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, row.text);
                             try {
                               const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]);
-                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb);
+                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb, { provider: this.embedder.provider, model: this.embedder.model });
                             } catch { /* best-effort */ }
                             dedupStatus = "merged";
                             dedupTarget = targetId;
@@ -4419,7 +4422,7 @@ export class ViewerServer {
 
                 this.store.insertChunk(chunk);
                 if (embedding && dedupStatus === "active") {
-                  this.store.upsertEmbedding(chunkId, embedding);
+                  this.store.upsertEmbedding(chunkId, embedding, { provider: this.embedder.provider, model: this.embedder.model });
                 }
 
                 totalStored++;
@@ -4611,7 +4614,7 @@ export class ViewerServer {
                           const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
                           if (targetId) {
                             this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, content);
-                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb); } catch { /* best-effort */ }
+                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb, { provider: this.embedder.provider, model: this.embedder.model }); } catch { /* best-effort */ }
                             dedupStatus = "merged"; dedupTarget = targetId; dedupReason = dedupResult.reason;
                           }
                         }
@@ -4634,7 +4637,7 @@ export class ViewerServer {
                 };
 
                 this.store.insertChunk(chunk);
-                if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding);
+                if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding, { provider: this.embedder.provider, model: this.embedder.model });
 
                 totalStored++;
                 send("item", { index: idx, total: totalMsgs, status: dedupStatus === "active" ? "stored" : dedupStatus, preview: content.slice(0, 120), summary: summary.slice(0, 80), source: file, agent: agentId, role: msgRole, stepFailures });
@@ -4969,12 +4972,11 @@ export class ViewerServer {
     statusCode = 200,
   ): void {
     res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(data), () => {
-      setTimeout(() => {
-        this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
-        try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-      }, delayMs);
-    });
+    res.end(JSON.stringify(data));
+    setTimeout(() => {
+      this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
+      try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+    }, delayMs);
   }
 
   private jsonResponse(res: http.ServerResponse, data: unknown, statusCode = 200): void {

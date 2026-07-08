@@ -7,8 +7,8 @@
  * subcommand (`hermes --skills memory-routing chat`) was silently
  * missed and the viewer was stuck on `"disconnected"`.
  *
- * The pattern under test is `hermes\s.*chat\b` — these cases lock in
- * the exact shape of the fix.
+ * The pattern under test is `hermes(?:\s+\S+)*\s+chat\b` — these cases
+ * lock in the exact shape of the fix.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -23,7 +23,7 @@ describe("HERMES_CHAT_PROCESS_PATTERN", () => {
     // If this string ever changes, audit `bridge.cts` callers and the
     // issue description before adjusting — the constant is the only
     // surface that fixes the substring-detection bug.
-    expect(HERMES_CHAT_PROCESS_PATTERN).toBe("hermes\\s.*chat\\b");
+    expect(HERMES_CHAT_PROCESS_PATTERN).toBe("hermes(?:\\s+\\S+)*\\s+chat\\b");
   });
 });
 
@@ -75,6 +75,14 @@ describe("matchesHermesChatCommandLine", () => {
   it("does not match `hermes chatter` (chat must end at a word boundary)", () => {
     expect(
       matchesHermesChatCommandLine("/usr/local/bin/hermes chatter"),
+    ).toBe(false);
+  });
+
+  it("does not match `hermes --chat-log=... status` (chat must be the subcommand token)", () => {
+    expect(
+      matchesHermesChatCommandLine(
+        "/usr/local/bin/hermes --chat-log=/tmp/history status",
+      ),
     ).toBe(false);
   });
 
