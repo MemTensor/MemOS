@@ -252,22 +252,38 @@ export function scanAndTopK<TMeta = undefined>(
   for (const r of iter) {
     const vec = decodeVector(r[vecColumn] as Buffer | null);
     if (!vec) continue;
-    if (vec.length === 0 || vec.length !== query.length) continue;
+    if (vec.length === 0 || vec.length !== query.length) {
+      // Non-empty vectors whose length disagrees with the query are the
+      // canonical "schema drift" signal — usually a re-embedding pass
+      // switched model dimensions and stale rows lingered. The old
+      // `topKCosine` path logged this exact case (see `topKCosine`
+      // above); the streaming rewrite must preserve the signal so
+      // operators can still detect silent under-recall in production.
+      if (vec.length !== 0) {
+        log.warn("search.dim_mismatch", {
+          expected: query.length,
+          got: vec.length,
+          rowId: String(r["id"]),
+        });
+      }
+      continue;
+    }
     const rowNorm2 = norm2Column
       ? (r[norm2Column] as number | null | undefined) ?? norm2(vec)
       : norm2(vec);
     const score = cosinePrenormed(query, qNorm, vec, rowNorm2);
-    if (heap.length < k) {
-      const meta = selectExtra.length > 0
+    // Build meta once — the two heap-push branches below both need it
+    // when the row is kept, and rebuilding it in each branch would
+    // duplicate the projection logic and drift over time.
+    const buildMeta = (): TMeta =>
+      selectExtra.length > 0
         ? (Object.fromEntries(selectExtra.map((c) => [c, r[c]])) as TMeta)
         : (undefined as TMeta);
-      heap.push({ id: String(r["id"]), score, meta });
+    if (heap.length < k) {
+      heap.push({ id: String(r["id"]), score, meta: buildMeta() });
       siftUp(heap, heap.length - 1);
     } else if (score > heap[0]!.score) {
-      const meta = selectExtra.length > 0
-        ? (Object.fromEntries(selectExtra.map((c) => [c, r[c]])) as TMeta)
-        : (undefined as TMeta);
-      heap[0] = { id: String(r["id"]), score, meta };
+      heap[0] = { id: String(r["id"]), score, meta: buildMeta() };
       siftDown(heap, 0);
     }
   }

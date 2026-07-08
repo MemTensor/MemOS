@@ -1,3 +1,4 @@
+import type { ToolCallDTO } from "../../../agent-contract/dto.js";
 import type { EmbeddingVector, EpisodeId, SessionId, ShareScope, TraceId, TraceRow } from "../../types.js";
 import type { StorageDb, TraceListFilter } from "../types.js";
 import { buildInClause, buildInsert, buildUpdate } from "../tx.js";
@@ -57,6 +58,39 @@ export type TraceSearchMeta = {
   tags_json?: string;
   error_signatures_json?: string;
 };
+
+/**
+ * Narrow row shape returned by {@link listDedupRowsForEpisode}. Includes
+ * exactly the fields the capture-side dedup path needs (see
+ * `traceIdentitySignature` / `runLite` / `runLightweight` in
+ * `core/capture/capture.ts`). Deliberately excludes the two big BLOB
+ * columns (`vec_summary`, `vec_action`) so an episode with 500k rows
+ * can be scanned without pulling ~4 GB of embeddings into JS memory —
+ * the root pathology in #2076.
+ */
+export interface TraceDedupRow {
+  ts: number;
+  turnId: number;
+  userText: string;
+  agentText: string;
+  toolCalls: ToolCallDTO[];
+}
+
+interface RawDedupRow {
+  ts: number;
+  turn_id: number;
+  user_text: string;
+  agent_text: string;
+  tool_calls_json: string;
+}
+
+const DEDUP_COLUMNS = [
+  "ts",
+  "turn_id",
+  "user_text",
+  "agent_text",
+  "tool_calls_json",
+] as const;
 
 export function makeTracesRepo(db: StorageDb) {
   const insert = db.prepare(buildInsert({ table: "traces", columns: COLUMNS }));
@@ -255,6 +289,39 @@ export function makeTracesRepo(db: StorageDb) {
         .prepare<{ episode_id: string }, RawTraceRow>(sql)
         .all({ episode_id: String(episodeId) });
       return rows.map(mapRow);
+    },
+
+    /**
+     * Streaming, narrow-projection sibling of {@link listAllForEpisode}.
+     *
+     * Every capture-side dedup call-site (see `runLite`, `runLightweight`,
+     * `persistRows` in `core/capture/capture.ts`) needs only the five
+     * dedup identity fields — never the `vec_summary` / `vec_action`
+     * BLOBs which dominate row size. This helper projects exactly those
+     * columns and streams via `.iterate()` so peak memory scales with
+     * the scalar payload, not the total embedding footprint.
+     *
+     * Same episode-scoping / `ts ASC` ordering contract as
+     * `listAllForEpisode`; the two are drop-in siblings for callers that
+     * only need dedup identity.
+     */
+    listDedupRowsForEpisode(episodeId: EpisodeId | string): TraceDedupRow[] {
+      if (!episodeId) return [];
+      const sql = `SELECT ${DEDUP_COLUMNS.join(
+        ", ",
+      )} FROM traces WHERE episode_id = @episode_id ORDER BY ts ASC`;
+      const stmt = db.prepare<{ episode_id: string }, RawDedupRow>(sql);
+      const rows: TraceDedupRow[] = [];
+      for (const r of stmt.iterate({ episode_id: String(episodeId) })) {
+        rows.push({
+          ts: r.ts,
+          turnId: r.turn_id,
+          userText: r.user_text,
+          agentText: r.agent_text,
+          toolCalls: fromJsonText<ToolCallDTO[]>(r.tool_calls_json, []),
+        });
+      }
+      return rows;
     },
 
     /**

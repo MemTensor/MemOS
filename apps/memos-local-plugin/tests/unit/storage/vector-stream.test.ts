@@ -18,9 +18,10 @@
  *      not the old 100_000 default.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import Database from "better-sqlite3";
 import { encodeVector, scanAndTopK } from "../../../core/storage/index.js";
+import { memoryBuffer, rootLogger } from "../../../core/logger/index.js";
 
 function vec(arr: number[]): Float32Array {
   return new Float32Array(arr);
@@ -132,6 +133,95 @@ describe("scanAndTopK — streaming rewrite (#2076)", () => {
         { vecColumn: "vec", where: "vec IS NOT NULL", hardCap: 20 },
       );
       expect(noCap[0]!.id).toBe("r-10");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("logs `search.dim_mismatch` on a non-empty vector whose dimension disagrees with the query (#2077 OCR)", () => {
+    // Regression guard for the OCR observation: the streaming rewrite
+    // originally dropped mismatched rows silently, whereas the old
+    // topKCosine path emitted `search.dim_mismatch`. Losing that signal
+    // means operators can't detect schema drift (re-embedding at a new
+    // model dimension) — the function just returns fewer results with
+    // no warning.
+    const db = openTinyVecDb();
+    try {
+      const insert = db.prepare("INSERT INTO bench (id, vec, extra) VALUES (?, ?, ?)");
+      // r-good matches the 3-dim query; r-drift is 4-dim (schema drift).
+      insert.run("r-good", encodeVector(vec([1, 0, 0])), null);
+      insert.run("r-drift", encodeVector(vec([0.1, 0.2, 0.3, 0.4])), null);
+
+      const warnSpy = vi.spyOn(rootLogger, "warn");
+      const query = vec([1, 0, 0]);
+      const hits = scanAndTopK(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        db as any,
+        "bench",
+        [],
+        query,
+        5,
+        { vecColumn: "vec", where: "vec IS NOT NULL" },
+      );
+
+      // Only the aligned row is returned; the drift row is dropped.
+      expect(hits.map((h) => h.id)).toEqual(["r-good"]);
+
+      // The observable operator signal — either a direct warn on the
+      // root logger or a warn record in the memory buffer — must fire
+      // for the drift row.
+      const bufWarn = memoryBuffer()
+        .tail({ limit: 100 })
+        .find(
+          (r) =>
+            r.msg === "search.dim_mismatch" &&
+            (r.data as Record<string, unknown> | undefined)?.rowId === "r-drift",
+        );
+      const spyWarn = warnSpy.mock.calls.some(
+        ([msg, data]) =>
+          msg === "search.dim_mismatch" &&
+          (data as Record<string, unknown> | undefined)?.rowId === "r-drift",
+      );
+      expect(Boolean(bufWarn) || spyWarn).toBe(true);
+      warnSpy.mockRestore();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("silently skips zero-length vector rows (empty embeddings are legitimate — not schema drift)", () => {
+    const db = openTinyVecDb();
+    try {
+      const insert = db.prepare("INSERT INTO bench (id, vec, extra) VALUES (?, ?, ?)");
+      insert.run("r-good", encodeVector(vec([1, 0, 0])), null);
+      insert.run("r-empty", encodeVector(vec([])), null);
+
+      const warnSpy = vi.spyOn(rootLogger, "warn");
+      const hits = scanAndTopK(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        db as any,
+        "bench",
+        [],
+        vec([1, 0, 0]),
+        5,
+        { vecColumn: "vec", where: "vec IS NOT NULL" },
+      );
+      expect(hits.map((h) => h.id)).toEqual(["r-good"]);
+      // Zero-length rows are drop-without-warn — see vector.ts comment.
+      const spyDrift = warnSpy.mock.calls.some(
+        ([msg, data]) =>
+          msg === "search.dim_mismatch" &&
+          (data as Record<string, unknown> | undefined)?.rowId === "r-empty",
+      );
+      const bufDrift = memoryBuffer()
+        .tail({ limit: 100 })
+        .some(
+          (r) =>
+            r.msg === "search.dim_mismatch" &&
+            (r.data as Record<string, unknown> | undefined)?.rowId === "r-empty",
+        );
+      expect(spyDrift || bufDrift).toBe(false);
+      warnSpy.mockRestore();
     } finally {
       db.close();
     }

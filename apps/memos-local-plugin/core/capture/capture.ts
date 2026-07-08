@@ -133,12 +133,17 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // ─── Extract + dedup (skip steps we've already written this episode) ──
     const extractStart = now();
     const rawAll = extractSteps(input.episode);
-    // #2076: MUST use listAllForEpisode (uncapped). The paginated `list`
-    // path silently truncates to 500 rows, which breaks dedup once an
-    // episode grows past that and causes the tail to be re-inserted every
-    // cycle (bloating `traces` unboundedly + starving the vector scan).
-    const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
-    const seenTs = new Set<number>(existingTraces.map((t) => t.ts));
+    // #2076: MUST use listDedupRowsForEpisode (uncapped, streaming, no
+    // BLOB projection). The paginated `list` path silently truncates to
+    // 500 rows, which breaks dedup once an episode grows past that and
+    // causes the tail to be re-inserted every cycle (bloating `traces`
+    // unboundedly + starving the vector scan). Using the narrow-column
+    // dedup projection here also keeps peak RSS proportional to scalar
+    // fields, not embedding footprint (open code review on #2077).
+    const existingDedupRows = deps.tracesRepo.listDedupRowsForEpisode(input.episode.id);
+    const seenTs = new Set<number>(existingDedupRows.map((t) => t.ts));
+    // Reused later by persistRows so we don't scan the episode twice.
+    const seenSignatures = new Set(existingDedupRows.map(traceIdentitySignature));
     const raw = rawAll.filter((s) => !seenTs.has(s.ts));
     const extractMs = now() - extractStart;
     log.debug("stage.extract.done", {
@@ -187,7 +192,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // Persist as new rows. Reflection / α deliberately empty.
     const persistStart = now();
     const rows = buildRows(scored, summaries, vecs, input.episode);
-    const persisted = await persistRows(rows, input, warnings);
+    const persisted = await persistRows(rows, input, warnings, {}, seenSignatures);
     if (!persisted) {
       // emit capture.failed handled inside persistRows on hard fail.
       return finalResult(
@@ -255,13 +260,16 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 
     const extractStart = now();
     const rawAll = extractSteps(input.episode);
-    // #2076: uncapped dedup read — see runLite for the full rationale.
-    const existingTraces = deps.tracesRepo.listAllForEpisode(input.episode.id);
+    // #2076 + #2077 OCR: uncapped, narrow-projection dedup read.
+    // See `runLite` for the full rationale — one scan, no BLOBs.
+    const existingDedupRows = deps.tracesRepo.listDedupRowsForEpisode(input.episode.id);
     const seenTurnIds = new Set(
-      existingTraces
+      existingDedupRows
         .map((t) => t.turnId)
         .filter((v): v is number => typeof v === "number" && Number.isFinite(v)),
     );
+    // Reused later by persistRows so we don't scan the episode twice.
+    const seenSignatures = new Set(existingDedupRows.map(traceIdentitySignature));
     const rawByTurn = new Map<number, StepCandidate[]>();
     for (const step of rawAll) {
       const turnId = pickTurnId(step.meta, step.ts);
@@ -313,7 +321,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     });
     const persisted = await persistRows(rows, input, warnings, {
       skipActionVectorRetry: true,
-    });
+    }, seenSignatures);
     if (!persisted) {
       return finalResult(
         input,
@@ -428,7 +436,12 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       }));
       const { vecs } = await runEmbed(orphanScored, summaries, warnings);
       const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
-      await persistRows(orphanRows, input, warnings);
+      // Reuse the `existing` scan we already ran above — the orphan
+      // persistRows only needs the signature Set, and re-running
+      // `listAllForEpisode` here (or its narrow sibling) would be a
+      // duplicate full-episode scan for no additional information.
+      const seenSignatures = new Set(existing.map(traceIdentitySignature));
+      await persistRows(orphanRows, input, warnings, {}, seenSignatures);
       for (const r of orphanRows) traceByTs.set(r.ts, r);
     }
 
@@ -775,13 +788,23 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     input: CaptureInput,
     warnings: CaptureResult["warnings"],
     opts: { skipActionVectorRetry?: boolean } = {},
+    existingSignatures?: Set<string>,
   ): Promise<boolean> {
-    // #2076: uncapped dedup read — every row we ever wrote for this
-    // episode is a legitimate "already inserted" signature to skip.
-    // Using paginated `list` here missed all rows past the 500 cap
-    // and let the duplicate signatures re-insert every cycle.
-    const existingBeforeInsert = deps.tracesRepo.listAllForEpisode(input.episode.id);
-    const seenSignatures = new Set(existingBeforeInsert.map(traceIdentitySignature));
+    // #2076 + #2077 OCR: uncapped, narrow-projection dedup read. The
+    // paginated `list` path missed all rows past the 500 cap and let
+    // duplicate signatures re-insert every cycle. When the caller has
+    // already computed the signature set upstream (runLite /
+    // runLightweight / runReflect all do), skip the second full scan
+    // and reuse it — otherwise fall back to a fresh streaming scan.
+    // We clone the caller-supplied set so the intra-batch dedup below
+    // doesn't leak new signatures back into the caller's Set instance.
+    const seenSignatures = existingSignatures
+      ? new Set(existingSignatures)
+      : new Set(
+          deps.tracesRepo
+            .listDedupRowsForEpisode(input.episode.id)
+            .map(traceIdentitySignature),
+        );
     const uniqueRows = rows.filter((row) => {
       const signature = traceIdentitySignature(row);
       if (seenSignatures.has(signature)) return false;
@@ -902,7 +925,9 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     return ["user", turnId, step.ts, step.userText.trim()].join("\x1f");
   }
 
-  function traceIdentitySignature(row: TraceRow): string {
+  function traceIdentitySignature(
+    row: Pick<TraceRow, "toolCalls" | "turnId" | "ts" | "agentText" | "userText">,
+  ): string {
     const tool = row.toolCalls[0];
     if (tool) {
       const hasRealTiming =
