@@ -90,4 +90,53 @@ describe("postinstall native binding validation", () => {
     expect(result.reason).toBe("removed");
     expect(calls).toEqual([["unlink", "/tmp/better_sqlite3.node"]]);
   });
+
+  it("reports the unlink failure (not the rename failure) when both fail", () => {
+    const fsImpl = {
+      existsSync: () => true,
+      renameSync: () => {
+        throw new Error("EPERM on rename");
+      },
+      unlinkSync: () => {
+        throw new Error("EBUSY on unlink");
+      },
+    };
+
+    const result = quarantineNativeBinding("/tmp/better_sqlite3.node", fsImpl, 123);
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("EBUSY on unlink");
+  });
+
+  it("produces unique quarantine paths for two calls within the same millisecond", () => {
+    const renames: Array<[string, string]> = [];
+    const fsImpl = {
+      existsSync: () => true,
+      renameSync: (from: string, to: string) => renames.push([from, to]),
+      unlinkSync: () => {},
+    };
+    // Deterministic random for the assertion.
+    const randomImpl = { random: () => 0.123456789 };
+
+    const a = quarantineNativeBinding(
+      "/tmp/better_sqlite3.node",
+      fsImpl,
+      1700000000000,
+      require("path"),
+      randomImpl,
+    );
+    const b = quarantineNativeBinding(
+      "/tmp/better_sqlite3.node",
+      fsImpl,
+      1700000000000,
+      require("path"),
+      randomImpl,
+    );
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    expect(a.quarantinedPath).not.toBe(b.quarantinedPath);
+    expect(renames).toHaveLength(2);
+    expect(renames[0][1]).not.toBe(renames[1][1]);
+  });
 });

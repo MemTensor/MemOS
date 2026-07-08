@@ -29,15 +29,24 @@ function validateNativeBinding(bindingPath, loadBinding = defaultLoadBinding) {
   }
 }
 
-function quarantineNativeBinding(bindingPath, fsImpl = fs, now = Date.now()) {
+function quarantineNativeBinding(
+  bindingPath,
+  fsImpl = fs,
+  now = Date.now(),
+  pathImpl = path,
+  randomImpl = Math,
+) {
   if (!bindingPath || !fsImpl.existsSync(bindingPath)) {
     return { ok: false, quarantinedPath: "", reason: "missing" };
   }
 
-  const parsed = path.parse(bindingPath);
-  const quarantinedPath = path.join(
+  const parsed = pathImpl.parse(bindingPath);
+  // Append a random suffix so two calls within the same millisecond don't
+  // collide on the quarantine target path.
+  const uniqueSuffix = `${now}-${randomImpl.random().toString(36).slice(2, 8)}`;
+  const quarantinedPath = pathImpl.join(
     parsed.dir,
-    `${parsed.name}.abi-mismatch-${now}${parsed.ext}`,
+    `${parsed.name}.abi-mismatch-${uniqueSuffix}${parsed.ext}`,
   );
 
   try {
@@ -47,8 +56,8 @@ function quarantineNativeBinding(bindingPath, fsImpl = fs, now = Date.now()) {
     try {
       fsImpl.unlinkSync(bindingPath);
       return { ok: true, quarantinedPath: "", reason: "removed" };
-    } catch {
-      return { ok: false, quarantinedPath: "", reason: errorMessage(error) };
+    } catch (unlinkError) {
+      return { ok: false, quarantinedPath: "", reason: errorMessage(unlinkError) };
     }
   }
 }
