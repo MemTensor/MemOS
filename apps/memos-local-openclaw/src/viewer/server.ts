@@ -3880,13 +3880,22 @@ export class ViewerServer {
         `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:batchEmbedContents`
       ).replace(/\/+$/, "");
       const separator = geminiEndpoint.includes("?") ? "&" : "?";
-      const url = `${geminiEndpoint}${separator}key=${apiKey}`;
+      // Only append the API key for the default Gemini endpoint; for custom
+      // endpoints the caller is responsible for authentication and we must
+      // never leak the Gemini API key to a user-controlled server.
+      const url = endpoint
+        ? geminiEndpoint
+        : `${geminiEndpoint}${separator}key=${apiKey}`;
+      // When the caller supplies a custom endpoint, don't hardcode the
+      // default model name in the request body either — the proxy may
+      // route based on this field.
+      const bodyModel = endpoint ? undefined : `models/${geminiModel}`;
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           requests: [{
-            model: `models/${geminiModel}`,
+            ...(bodyModel ? { model: bodyModel } : {}),
             content: { parts: [{ text: "test embedding vector" }] },
           }],
         }),
