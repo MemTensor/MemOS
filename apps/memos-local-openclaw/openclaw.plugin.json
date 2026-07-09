@@ -20,7 +20,7 @@
     }
   },
   "requirements": {
-    "node": ">=18.0.0",
+    "node": ">=22.0.0",
     "openclaw": ">=2026.2.0"
   },
   "setup": {
@@ -33,5 +33,25 @@
       "If better-sqlite3 fails to build, ensure you have C++ build tools: xcode-select --install (macOS) or build-essential (Linux)"
     ]
   },
-  "extensions": ["./index.ts"]
+  "extensions": [
+    "./index.ts"
+  ],
+  "contracts": {
+    "tools": [
+      "memory_search",
+      "memory_get",
+      "memory_timeline",
+      "memory_viewer",
+      "task_summary",
+      "skill_search",
+      "skill_install",
+      "skill_upgrade",
+      "memory_share",
+      "memory_unshare",
+      "skill_publish",
+      "skill_unpublish",
+      "network_skill_pull",
+      "network_team_info"
+    ]
+  }
 }

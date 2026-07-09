@@ -33,6 +33,7 @@ import { extractSteps } from "./step-extractor.js";
 import { createSummarizer, type Summarizer } from "./summarizer.js";
 import { tagsForStep } from "./tagger.js";
 import { extractErrorSignatures } from "./error-signature.js";
+import { RECOVERY_REASONS } from "../pipeline/recovery-constants.js";
 import type {
   CaptureConfig,
   CaptureEvent,
@@ -396,33 +397,47 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     for (const tr of existing) traceByTs.set(tr.ts, tr);
     const orphan = normalized.filter((s) => !traceByTs.has(s.ts));
     if (orphan.length > 0) {
-      log.warn("reflect.orphan_steps", {
-        episodeId: input.episode.id,
-        count: orphan.length,
-        action: "fallback_insert",
-      });
-      // These steps never went through runLite (likely a test path or a
-      // dropped event). Insert them now with reflection=null so the
-      // batch pass below can patch them like the rest.
-      const summStart = now();
-      const { summaries } = await runSummarize(
-        orphan.map((s) => ({
+      // During dirty-reward recovery (recoverDirtyClosedEpisodes), the episode
+      // snapshot is rebuilt from trace_ids_json. Any "orphan" steps here are
+      // artifact mismatches between snapshot timestamps and DB rows — NOT
+      // genuinely missing traces. Inserting them would grow trace_ids_json,
+      // keep reward.traceCount !== traceIds.length, and restart the recovery
+      // loop on every bridge start.
+      if (input.episode.meta?.recoveryReason === RECOVERY_REASONS.DIRTY_REWARD_RESCORE) {
+        log.warn("reflect.orphan_steps_skipped_recovery", {
+          episodeId: input.episode.id,
+          count: orphan.length,
+          reason: "dirty_reward_rescore — skipping insert to break recovery loop",
+        });
+      } else {
+        log.warn("reflect.orphan_steps", {
+          episodeId: input.episode.id,
+          count: orphan.length,
+          action: "fallback_insert",
+        });
+        // These steps never went through runLite (likely a test path or a
+        // dropped event). Insert them now with reflection=null so the
+        // batch pass below can patch them like the rest.
+        const summStart = now();
+        const { summaries } = await runSummarize(
+          orphan.map((s) => ({
+            ...s,
+            reflection: { text: null, alpha: 0, usable: false, source: "none" },
+          })),
+          summStart,
+          llmCalls,
+          warnings,
+          { episodeId: input.episode.id, phase: "reflect" },
+        );
+        const orphanScored: ScoredStep[] = orphan.map((s) => ({
           ...s,
           reflection: { text: null, alpha: 0, usable: false, source: "none" },
-        })),
-        summStart,
-        llmCalls,
-        warnings,
-        { episodeId: input.episode.id, phase: "reflect" },
-      );
-      const orphanScored: ScoredStep[] = orphan.map((s) => ({
-        ...s,
-        reflection: { text: null, alpha: 0, usable: false, source: "none" },
-      }));
-      const { vecs } = await runEmbed(orphanScored, summaries, warnings);
-      const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
-      await persistRows(orphanRows, input, warnings);
-      for (const r of orphanRows) traceByTs.set(r.ts, r);
+        }));
+        const { vecs } = await runEmbed(orphanScored, summaries, warnings);
+        const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
+        await persistRows(orphanRows, input, warnings);
+        for (const r of orphanRows) traceByTs.set(r.ts, r);
+      }
     }
 
     if (normalized.length === 0) {
