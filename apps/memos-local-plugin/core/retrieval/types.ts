@@ -234,6 +234,8 @@ export interface RetrievalConfig {
 
   /** Per-tier keyword (FTS + pattern) channel size. Default 20. */
   keywordTopK?: number;
+  /** Keyword tokenizer mode used when compiling FTS5 MATCH expressions. */
+  ftsTokenizer?: "trigram" | "cjk";
   /**
    * Drop candidates with `relevance < topRelevance · this`. 0 disables
    * the relative cutoff. Default 0.4.
