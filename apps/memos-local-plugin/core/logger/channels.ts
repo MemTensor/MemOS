@@ -101,6 +101,7 @@ export const CHANNELS = [
   "server.http",
   "server.sse",
   "server.routes",
+  "server.migrate",
   "bridge",
   "bridge.transport",
   "bridge.methods",

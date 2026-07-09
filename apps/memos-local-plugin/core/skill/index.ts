@@ -27,6 +27,7 @@ export {
   applyFeedback,
   recomputeEta,
   shouldArchiveIdle,
+  shouldPromoteCandidate,
   type LifecycleUpdate,
 } from "./lifecycle.js";
 export {
@@ -42,6 +43,7 @@ export {
 } from "./skill.js";
 export { attachSkillSubscriber, type SkillSubscriberDeps, type SkillSubscriberHandle } from "./subscriber.js";
 export { createSkillEventBus } from "./events.js";
+export { extractToolNames } from "./tool-names.js";
 export {
   verifyDraft,
   type VerifyDeps,

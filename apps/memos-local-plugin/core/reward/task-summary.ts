@@ -37,6 +37,12 @@ export interface SummaryInput {
   episode: EpisodeSnapshot;
   traces: readonly TraceRow[];
   cfg: Pick<RewardConfig, "summaryMaxChars">;
+  evaluator?: {
+    reflectionProvider?: string;
+    reflectionModel?: string;
+    scorerProvider?: string;
+    scorerModel?: string;
+  };
 }
 
 export function buildTaskSummary(input: SummaryInput): TaskSummary {
@@ -62,12 +68,16 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
       : traces.map(traceToPair).filter((p) => p !== null) as ExchangePair[];
 
   const pairsText = pairs.length > 0
-    ? pairs.map((p, i) => formatPair(p, i)).join("\n\n")
+    ? pairs.map((p, i) => formatPair(p, i, i === pairs.length - 1)).join("\n\n")
     : "(no recorded exchanges)";
 
   const agentActions = traces.map(traceOneLiner).filter(Boolean).join("\n");
+  const hostContext = formatHostAgentContext(episode, input.evaluator);
 
   const body = [
+    hostContext ? `HOST_AGENT_CONTEXT:` : "",
+    hostContext,
+    hostContext ? `` : "",
     `USER_ASKS_AND_AGENT_REPLIES (${pairs.length}, in order):`,
     pairsText,
     ``,
@@ -78,7 +88,7 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
     oneLine(pairs.length > 0 ? pairs[pairs.length - 1]!.userText : userQuery, 500),
     ``,
     `MOST_RECENT_AGENT_REPLY:`,
-    oneLine(pairs.length > 0 ? pairs[pairs.length - 1]!.agentText : outcome, 800),
+    clampAgentText(pairs.length > 0 ? pairs[pairs.length - 1]!.agentText : outcome),
   ].join("\n");
 
   const { text, truncated } = clampText(body, cfg.summaryMaxChars);
@@ -94,12 +104,44 @@ export function buildTaskSummary(input: SummaryInput): TaskSummary {
   return {
     episodeId: episode.id,
     sessionId: episode.sessionId,
+    hostContext,
     userQuery: oneLine(userQuery, 500),
     agentActions,
     outcome: oneLine(outcome, 800),
     text,
     truncated,
   };
+}
+
+function formatHostAgentContext(
+  episode: EpisodeSnapshot,
+  evaluator?: SummaryInput["evaluator"],
+): string {
+  const meta = episode.meta ?? {};
+  const hints = isRecord(meta.contextHints) ? meta.contextHints : {};
+  const fields: Array<[string, unknown]> = [
+    ["agent", meta.agent],
+    ["agentIdentity", hints.agentIdentity ?? meta.agentIdentity],
+    ["hostProvider", hints.hostProvider ?? meta.hostProvider],
+    ["hostModel", hints.hostModel ?? meta.hostModel],
+    ["hostApiMode", hints.hostApiMode ?? meta.hostApiMode],
+    ["reflectionProvider", evaluator?.reflectionProvider],
+    ["reflectionModel", evaluator?.reflectionModel],
+    ["scorerProvider", evaluator?.scorerProvider],
+    ["scorerModel", evaluator?.scorerModel],
+  ];
+  const lines = fields
+    .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+    .map(([key, value]) => `${key}: ${oneLine(String(value), 240)}`);
+  if (lines.length === 0) return "";
+  lines.push(
+    "gradingInstruction: Evaluate the host agent's answer in this host context; do not project the evaluator model's own identity, provider, or capabilities onto the host agent.",
+  );
+  return lines.join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -125,10 +167,11 @@ function traceToPair(t: TraceRow): ExchangePair | null {
   return { userText: u, agentText: a, toolHint };
 }
 
-function formatPair(p: ExchangePair, idx: number): string {
+function formatPair(p: ExchangePair, idx: number, isLast = false): string {
   const lines: string[] = [`[${idx + 1}] USER: ${oneLine(p.userText, 300)}`];
   if (p.toolHint) lines.push(`    TOOLS: ${p.toolHint}`);
-  lines.push(`    AGENT: ${oneLine(p.agentText, 400)}`);
+  const agentSnippet = isLast ? clampAgentText(p.agentText) : oneLine(p.agentText, 400);
+  lines.push(`    AGENT: ${agentSnippet}`);
   return lines.join("\n");
 }
 
@@ -215,6 +258,16 @@ function oneLine(s: string, max: number): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+}
+
+const AGENT_TEXT_MAX = 5000;
+const AGENT_TEXT_HEAD = 2000;
+const AGENT_TEXT_TAIL = 3000;
+
+function clampAgentText(s: string): string {
+  const trimmed = s.trim();
+  if (trimmed.length <= AGENT_TEXT_MAX) return trimmed;
+  return trimmed.slice(0, AGENT_TEXT_HEAD) + "\n......\n" + trimmed.slice(trimmed.length - AGENT_TEXT_TAIL);
 }
 
 function clampText(text: string, max: number): { text: string; truncated: boolean } {

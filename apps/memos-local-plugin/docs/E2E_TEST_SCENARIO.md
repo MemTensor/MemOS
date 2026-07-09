@@ -57,7 +57,7 @@ bash apps/memos-local-plugin/scripts/e2e-probe.sh
 
 - `traces Δ+5`：5 轮对话都被记忆（必现）
 - `episodes Δ+1`：5 轮对话被归纳为 1 个任务（必现；若 LLM 判定为新任务会有多个）
-- `apiLogs Δ+10`：5×(memory_search + memory_add) = 10 条 API 日志
+- `apiLogs Δ+10`：5×(memos_search + memory_add) = 10 条 API 日志
 - `policies Δ+1`：**经验生成** — 需要 Summarizer 和 Skill-Evolver 都配了真实 LLM Key 才会出
 - `worldModels Δ`：**环境认知** — 需要至少 2 条结构相似的经验才结晶；单次 probe 通常不够
 - `skills Δ+1`：**技能** — 经验被验证后才生成
@@ -83,7 +83,7 @@ bash apps/memos-local-plugin/scripts/e2e-probe.sh
 |--------------|--------------------------------------------------------------------------|
 | 记忆          | 多出 2 条，每条显示 summary、私有 pill、时间戳、V/α 数值                   |
 | 日志 (`memory_add`) | 卡片**默认展开**，行内直接显示新加入的记忆内容（不用点击）              |
-| 日志 (`memory_search`) | 展开后三段：初步召回 / Hub 远端 / LLM 筛选后，候选带分数和 role pill |
+| 日志 (`memos_search`) | 展开后三段：初步召回 / Hub 远端 / LLM 筛选后，候选带分数和 role pill |
 
 ### 第二轮 —— 检索 + 任务归纳
 
@@ -93,7 +93,7 @@ bash apps/memos-local-plugin/scripts/e2e-probe.sh
 
 | 面板 tab | 期待看到 |
 |---------|---------|
-| 日志 (`memory_search`) | 新条目，"LLM 筛选后"段落命中上一轮"喝豆浆"的记忆 |
+| 日志 (`memos_search`) | 新条目，"LLM 筛选后"段落命中上一轮"喝豆浆"的记忆 |
 | OpenClaw 回复 | 反映出"你早上喝豆浆，不喝咖啡" → 说明召回注入到 prompt 了 |
 | 任务 | 出现一条任务卡；多轮后状态会变成"已完成"；点卡片右侧抽屉是**聊天视图**（左 assistant 气泡 / 右 user 气泡） |
 
@@ -123,7 +123,7 @@ bash apps/memos-local-plugin/scripts/e2e-probe.sh
 
 | 面板 tab | 期待看到 |
 |---------|---------|
-| 日志 (`memory_search`) | 第三轮那条经验被检索出来放进 prompt |
+| 日志 (`memos_search`) | 第三轮那条经验被检索出来放进 prompt |
 | 经验 | 原经验的 `support` / `gain` 数值增加 |
 | 技能 | 原技能的 η 提升 |
 
@@ -179,7 +179,7 @@ hi
 | Skills | 技能 tab | `tests/unit/skill/*` + `skill.integration.test.ts` |
 | L3 environment | 环境认知 tab | `tests/unit/memory/l3/*` + `l3.integration.test.ts` |
 | Feedback → Policy | 用户反馈转经验 | `tests/unit/feedback/*` + `feedback.integration.test.ts` |
-| Retrieval | `memory_search` 日志三段 | `tests/unit/retrieval/*` |
+| Retrieval | `memos_search` 日志三段 | `tests/unit/retrieval/*` |
 | Reward | 任务 V/α 数值 | `tests/unit/reward/*` + `reward.integration.test.ts` |
 
 跑 `npm test` 全绿（700+ tests）= V7 算法管道在技术层面不破；本文档两部分的**前端可见验收** = 算法确实在你装好的实际环境里生效。

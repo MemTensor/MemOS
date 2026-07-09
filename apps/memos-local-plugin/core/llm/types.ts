@@ -32,6 +32,85 @@ export interface LlmConfig {
   maxTokens?: number;
   /** Extra HTTP headers for outgoing requests. */
   headers?: Record<string, string>;
+  /**
+   * Optional sink invoked once per terminal LLM failure. Lets the
+   * bootstrap layer record a `system_error` row in `api_logs` so the
+   * Logs viewer can surface infrastructure failures (auth, timeout,
+   * bad endpoint) right next to tool activity. Never throws; any
+   * exception inside the sink is swallowed by the facade.
+   */
+  onError?: (detail: LlmErrorDetail) => void;
+  /**
+   * Optional durable status sink invoked on primary success, host
+   * fallback success, and terminal failure. This is the machine-
+   * readable source used by Overview model cards so Hermes' viewer
+   * daemon can display status produced by a separate stdio bridge.
+   */
+  onStatus?: (detail: LlmStatusDetail) => void;
+  /**
+   * Optional circuit breaker config. The breaker trips on terminal
+   * provider errors (HTTP 401/402/403, or well-known phrases like
+   * "insufficient balance" / "invalid api key" / "unauthorized" /
+   * "account suspended" / "billing") and short-circuits subsequent
+   * calls for a cool-down window. Defaults to enabled. See
+   * `apps/memos-local-plugin/openspec/changes/.../design.md`
+   * (issue #1897) for the full state machine.
+   */
+  circuitBreaker?: LlmCircuitBreakerConfig;
+}
+
+export interface LlmCircuitBreakerConfig {
+  /** Default true. Set false to restore legacy (no-breaker) behavior. */
+  enabled?: boolean;
+  /**
+   * Cool-down window before the breaker enters half-open. Default
+   * 300_000 ms (5 minutes); minimum clamped to 30_000 ms.
+   */
+  cooldownMs?: number;
+  /**
+   * Override the default classifier. Returns true if the error should
+   * trip the breaker (terminal / non-recoverable).
+   */
+  isTerminal?: (err: unknown) => boolean;
+  /** Injected clock for tests. Default `Date.now`. */
+  now?: () => number;
+}
+
+export interface LlmErrorDetail {
+  provider: LlmProviderName | string;
+  model: string;
+  message: string;
+  /** Stable `MemosError` code when the underlying error carries one. */
+  code?: string;
+  /** Epoch ms at which the failure occurred (defaults to Date.now()). */
+  at?: number;
+  /**
+   * Logical role of the failing client. Bootstrap configures the
+   * facade with a closure that knows whether it's the summary `llm`
+   * or the dedicated `reflectLlm` for skill evolution; the facade
+   * just passes whatever the closure injected through.
+   */
+  role?: "llm" | "skillEvolver";
+}
+
+export interface LlmStatusDetail {
+  status: "ok" | "fallback" | "error" | "circuit_open";
+  provider: LlmProviderName | string;
+  model: string;
+  message?: string;
+  code?: string;
+  at?: number;
+  /** Actual model call duration when available. */
+  durationMs?: number;
+  fallbackProvider?: string;
+  fallbackModel?: string;
+  role?: "llm" | "skillEvolver";
+  /** Logical call-site, e.g. `capture.summarize` or `capture.reflection.batch`. */
+  op?: string;
+  /** Optional task context for viewer/audit logs. */
+  episodeId?: string;
+  /** Optional pipeline phase, e.g. `lite`, `reflect`, `reward`, `induce`. */
+  phase?: string;
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
@@ -48,6 +127,10 @@ export interface LlmMessage {
 export interface LlmCallOptions {
   /** Which logical call site is this? Used for log tagging (e.g. "reflection.score"). */
   op?: string;
+  /** Optional task context forwarded to model-status audit logs. */
+  episodeId?: string;
+  /** Optional pipeline phase forwarded to model-status audit logs. */
+  phase?: string;
   /** Override per-call temperature. */
   temperature?: number;
   /** Override per-call maxTokens. */
@@ -171,14 +254,30 @@ export interface ProviderCompletion {
 // ─── LlmClient facade ────────────────────────────────────────────────────────
 
 export interface LastCallStatus {
-  /** Most recent successful call (epoch ms), or `null` if none yet. */
+  /**
+   * Most recent direct success against the configured provider (epoch ms).
+   * Only set when the primary provider answered without going through
+   * `host_fallback`. Used by the viewer to render the green dot.
+   */
   lastOkAt: number | null;
   /**
-   * Most recent failed call. `null` if the client has either never been
-   * called or the last call (or a later one) succeeded. Viewer
-   * overview uses this to render a red dot + error tooltip.
+   * Most recent failure of the primary provider. Once set, this field is
+   * **not** cleared on subsequent success — the viewer compares
+   * timestamps across `lastOkAt` / `lastFallbackAt` / `lastError.at`
+   * to decide whether the latest event was good (green / yellow) or
+   * bad (red), so a real provider failure recorded in the
+   * `system_error` log can never be silently masked by a later
+   * successful call.
    */
   lastError: { at: number; message: string } | null;
+  /**
+   * Most recent time the primary provider failed but the host LLM
+   * fallback succeeded. Lets the viewer paint the slot yellow ("running
+   * on host fallback") instead of green or red. `null` when no
+   * fallback has happened in this process or the client has no
+   * `fallbackToHost` configured.
+   */
+  lastFallbackAt: number | null;
 }
 
 export interface LlmClientStats extends LastCallStatus {
@@ -188,6 +287,17 @@ export interface LlmClientStats extends LastCallStatus {
   retries: number;
   totalPromptTokens: number;
   totalCompletionTokens: number;
+  /**
+   * True while the per-client circuit breaker is open (and any
+   * cooldown timer has not yet elapsed). When true, further calls are
+   * short-circuited inside the facade and throw immediately without
+   * touching the provider. See issue #1897.
+   */
+  circuitOpen: boolean;
+  /** Epoch ms at which the open breaker becomes eligible for half-open probe. */
+  circuitOpenUntil: number | null;
+  /** Free-text reason from the error that opened the breaker. */
+  circuitOpenedReason: string | null;
 }
 
 export interface LlmClient {

@@ -29,6 +29,18 @@ import {
 
 const OP = `${L3_ABSTRACTION_PROMPT.id}.v${L3_ABSTRACTION_PROMPT.version}`;
 
+function emitInduced(l2Bus: ReturnType<typeof createL2EventBus>, episodeId: EpisodeId): void {
+  l2Bus.emit({
+    kind: "l2.policy.induced",
+    episodeId,
+    policyId: "po_new" as PolicyId,
+    signature: "docker|alpine|pip.install|_",
+    evidenceTraceIds: ["tr_1", "tr_2"],
+    evidenceEpisodeIds: ["ep_a" as EpisodeId, "ep_b" as EpisodeId],
+    title: "new pol",
+  });
+}
+
 function fakeL3Llm(): ReturnType<typeof fakeLlm> {
   return fakeLlm({
     completeJson: {
@@ -142,6 +154,67 @@ describe("memory/l3/subscriber", () => {
     expect(handle.repos.worldModel.list().length).toBe(1);
 
     handleSub.detach();
+  });
+
+  it("queues l2.policy.induced events that arrive while L3 is in flight", async () => {
+    seedFresh();
+
+    const firstRun = { release: null as (() => void) | null };
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: async () => {
+          calls += 1;
+          if (calls === 1) {
+            await new Promise<void>((resolve) => {
+              firstRun.release = resolve;
+            });
+          }
+          return {
+            title: "Alpine / pip model",
+            domain_tags: ["docker", "alpine"],
+            environment: [{ label: "musl", description: "no glibc" }],
+            inference: [],
+            constraints: [],
+            body: "# summary",
+            confidence: 0.7,
+            supersedes_world_ids: [],
+          };
+        },
+      },
+    });
+    const l2Bus = createL2EventBus();
+    const l3Bus = createL3EventBus();
+    const sub = attachL3Subscriber({
+      repos: {
+        policies: handle.repos.policies,
+        traces: handle.repos.traces,
+        worldModel: handle.repos.worldModel,
+        kv: handle.repos.kv,
+      },
+      l2Bus,
+      l3Bus,
+      llm,
+      log: rootLogger,
+      config: baseConfig(),
+    });
+
+    const seen: string[] = [];
+    l3Bus.onAny((e) => seen.push(e.kind));
+
+    emitInduced(l2Bus, "ep_a" as EpisodeId);
+    await new Promise((r) => setImmediate(r));
+    if (!firstRun.release) throw new Error("first L3 run did not reach the LLM");
+    const releaseFirst = firstRun.release;
+
+    emitInduced(l2Bus, "ep_b" as EpisodeId);
+    releaseFirst();
+    await sub.drain();
+
+    expect(seen.filter((kind) => kind === "l3.abstraction.started")).toHaveLength(2);
+    expect(calls).toBe(2);
+
+    sub.detach();
   });
 
   it("runOnce() kicks off a run without any event", async () => {

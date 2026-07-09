@@ -28,16 +28,20 @@ import type {
 import { ERROR_CODES } from "../../agent-contract/errors.js";
 import { ids } from "../id.js";
 import { rootLogger } from "../logger/index.js";
+import { collectDecisionGuidance } from "./decision-guidance.js";
 import { buildQuery, type CompiledQuery } from "./query-builder.js";
 import type { RetrievalEventBus } from "./events.js";
+import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
-import { rank } from "./ranker.js";
+import { rank, type RankedCandidate } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
+import { runTier2Experience } from "./tier2-experience.js";
 import { runTier2 } from "./tier2-trace.js";
 import { runTier3 } from "./tier3-world.js";
 import type {
   EpisodeCandidate,
+  ExperienceCandidate,
   RetrievalCtx,
   RetrievalDeps,
   RetrievalResult,
@@ -62,6 +66,22 @@ export interface RetrieveOptions {
   events?: RetrievalEventBus;
   /** Override `limit` default (tier totals honored when unspecified). */
   limit?: number;
+  /** Turn-start scheduler override. V1 uses this for intent tier gating. */
+  plan?: RetrievePlanOverride;
+  /**
+   * Return mechanically ranked candidates without the local LLM pass.
+   * Used when the caller will merge another retrieval route, then run
+   * one unified final LLM filter across all routes.
+   */
+  skipLlmFilter?: boolean;
+}
+
+export interface RetrievePlanOverride {
+  scenarioId?: string;
+  wantTier1?: boolean;
+  wantTier2?: boolean;
+  wantTier3?: boolean;
+  limit?: number;
 }
 
 // ─── Entry point: turn_start ────────────────────────────────────────────────
@@ -71,15 +91,25 @@ export async function turnStartRetrieve(
   ctx: TurnStartRetrieveCtx,
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
-  return runAll(deps, ctx, opts, {
+  if (deps.config.lightweightMemory) {
+    return runAll(deps, ctx, opts, applyPlanOverride({
+      wantTier1: false,
+      wantTier2: true,
+      wantTier3: false,
+      includeLowValue: false,
+      limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+      traceOnly: true,
+    }, opts.plan));
+  }
+  return runAll(deps, ctx, opts, applyPlanOverride({
     wantTier1: true,
     wantTier2: true,
     wantTier3: true,
-    includeLowValue: false,
+    includeLowValue: deps.config.includeLowValue,
     limit:
       opts.limit ??
       deps.config.tier1TopK + deps.config.tier2TopK + deps.config.tier3TopK,
-  });
+  }, opts.plan));
 }
 
 // ─── Entry point: tool_driven ───────────────────────────────────────────────
@@ -95,9 +125,10 @@ export async function toolDrivenRetrieve(
   return runAll(deps, ctx, opts, {
     wantTier1: false,
     wantTier2: true,
-    wantTier3: true,
-    includeLowValue: false,
+    wantTier3: deps.config.lightweightMemory ? false : true,
+    includeLowValue: deps.config.includeLowValue,
     limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+    traceOnly: deps.config.lightweightMemory,
   });
 }
 
@@ -108,6 +139,16 @@ export async function skillInvokeRetrieve(
   ctx: SkillInvokeRetrieveCtx,
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
+  if (deps.config.lightweightMemory) {
+    return runAll(deps, ctx, opts, {
+      wantTier1: false,
+      wantTier2: true,
+      wantTier3: false,
+      includeLowValue: false,
+      limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+      traceOnly: true,
+    });
+  }
   // Just-in-time: the agent is about to execute a named Skill. We want
   // (a) the actual Skill's invocation guide if still fresh, and (b) a
   // handful of trace hits to double-check it's the right call.
@@ -130,9 +171,10 @@ export async function subAgentRetrieve(
   return runAll(deps, ctx, opts, {
     wantTier1: false,
     wantTier2: true,
-    wantTier3: true,
+    wantTier3: deps.config.lightweightMemory ? false : true,
     includeLowValue: false,
     limit: opts.limit ?? deps.config.tier2TopK + deps.config.tier3TopK,
+    traceOnly: deps.config.lightweightMemory,
   });
 }
 
@@ -146,6 +188,7 @@ export async function repairRetrieve(
   // Only kicks in after we've hit `failureCount ≥ threshold`. The packet
   // may be `null` when we have no relevant history — callers should treat
   // that as "don't inject anything".
+  if (deps.config.lightweightMemory) return null;
   if (ctx.failureCount <= 0) return null;
   const result = await runAll(deps, ctx, opts, {
     wantTier1: true,
@@ -161,11 +204,25 @@ export async function repairRetrieve(
 // ─── Shared pipeline ────────────────────────────────────────────────────────
 
 interface RunPlan {
+  scenarioId?: string;
   wantTier1: boolean;
   wantTier2: boolean;
   wantTier3: boolean;
   includeLowValue: boolean;
   limit: number;
+  traceOnly?: boolean;
+}
+
+function applyPlanOverride(plan: RunPlan, override?: RetrievePlanOverride): RunPlan {
+  if (!override) return plan;
+  return {
+    ...plan,
+    scenarioId: override.scenarioId ?? plan.scenarioId,
+    wantTier1: override.wantTier1 ?? plan.wantTier1,
+    wantTier2: override.wantTier2 ?? plan.wantTier2,
+    wantTier3: override.wantTier3 ?? plan.wantTier3,
+    limit: override.limit ?? plan.limit,
+  };
 }
 
 async function runAll(
@@ -179,7 +236,7 @@ async function runAll(
   const episodeId = (ctx as { episodeId?: EpisodeId }).episodeId;
   const ts = deps.now();
 
-  const compiled = buildQuery(ctx);
+  const compiled = buildQuery(ctx, { ftsTokenizer: deps.config.ftsTokenizer });
   opts.events?.emit({
     kind: "retrieval.started",
     reason: ctx.reason,
@@ -191,11 +248,25 @@ async function runAll(
   });
 
   try {
+    const embeddingStats: RetrievalStats["embedding"] = {
+      attempted: compiled.text.length > 0,
+      ok: false,
+      degraded: false,
+    };
     const queryVec = compiled.text
-      ? await deps.embedder.embed(compiled.text, "query").catch((err) => {
+      ? await deps.embedder.embed(compiled.text, "query").then((vec) => {
+          embeddingStats.ok = true;
+          return vec;
+        }).catch((err) => {
+          const code = (err as { code?: string })?.code;
+          const message = err instanceof Error ? err.message : String(err);
+          embeddingStats.degraded = true;
+          embeddingStats.errorCode = code;
+          embeddingStats.errorMessage = message;
           log.warn("embed_failed", {
             reason: ctx.reason,
-            err: err instanceof Error ? err.message : String(err),
+            code,
+            err: message,
           });
           return null;
         })
@@ -209,9 +280,14 @@ async function runAll(
     const noUsableChannel = !queryVec && !haveKeywordChannel;
 
     // Kick off the tiers in parallel — each resolves to its own list.
+    const wantTier1 = plan.wantTier1 && deps.config.tier1TopK > 0;
+    const wantTier2 = plan.wantTier2 && deps.config.tier2TopK > 0;
+    const wantTier3 = plan.wantTier3 && deps.config.tier3TopK > 0;
+    const traceOnly = plan.traceOnly === true || deps.config.lightweightMemory === true;
+
     const tier1Start = Date.now();
     const tier1Promise: Promise<SkillCandidate[]> =
-      plan.wantTier1 && !noUsableChannel
+      wantTier1 && !noUsableChannel
         ? runTier1(
             { repos: deps.repos, config: deps.config },
             {
@@ -226,7 +302,7 @@ async function runAll(
 
     const tier2Start = Date.now();
     const tier2Promise: Promise<{ traces: TraceCandidate[]; episodes: EpisodeCandidate[] }> =
-      plan.wantTier2 && !noUsableChannel
+      wantTier2 && !noUsableChannel
         ? runTier2(
             { repos: deps.repos, config: deps.config, now: deps.now },
             {
@@ -236,13 +312,29 @@ async function runAll(
               ftsMatch: compiled.ftsMatch,
               patternTerms: compiled.patternTerms,
               includeLowValue: plan.includeLowValue,
+              excludeSessionId:
+                ctx.reason === "turn_start" && sessionId && !deps.config.lightweightMemory
+                  ? sessionId
+                  : undefined,
             },
           )
         : Promise.resolve({ traces: [], episodes: [] });
 
+    const tier2ExperiencePromise: Promise<ExperienceCandidate[]> =
+      wantTier2 && !traceOnly && !noUsableChannel
+        ? runTier2Experience(
+            { repos: deps.repos, config: deps.config },
+            {
+              queryVec,
+              ftsMatch: compiled.ftsMatch,
+              patternTerms: compiled.patternTerms,
+            },
+          )
+        : Promise.resolve([]);
+
     const tier3Start = Date.now();
     const tier3Promise: Promise<WorldModelCandidate[]> =
-      plan.wantTier3 && !noUsableChannel
+      wantTier3 && !noUsableChannel
         ? runTier3(
             { repos: deps.repos, config: deps.config },
             {
@@ -253,51 +345,72 @@ async function runAll(
           )
         : Promise.resolve([]);
 
-    const [tier1, tier2, tier3] = await Promise.all([
+    const [tier1, tier2, tier2Experiences, tier3] = await Promise.all([
       tier1Promise,
       tier2Promise,
+      tier2ExperiencePromise,
       tier3Promise,
     ]);
 
-    const tier1LatencyMs = plan.wantTier1 ? Date.now() - tier1Start : 0;
-    const tier2LatencyMs = plan.wantTier2 ? Date.now() - tier2Start : 0;
-    const tier3LatencyMs = plan.wantTier3 ? Date.now() - tier3Start : 0;
+    const tier1LatencyMs = wantTier1 ? Date.now() - tier1Start : 0;
+    const tier2LatencyMs = wantTier2 ? Date.now() - tier2Start : 0;
+    const tier3LatencyMs = wantTier3 ? Date.now() - tier3Start : 0;
 
     const fuseStart = Date.now();
     const rawCandidateCount =
-      tier1.length + tier2.traces.length + tier2.episodes.length + tier3.length;
+      tier1.length +
+      tier2.traces.length +
+      tier2.episodes.length +
+      tier2Experiences.length +
+      tier3.length;
     const ranked = rank({
       tier1,
       tier2Traces: tier2.traces,
-      tier2Episodes: tier2.episodes,
+      tier2Episodes: traceOnly ? [] : tier2.episodes,
+      tier2Experiences,
       tier3,
       limit: plan.limit,
       config: deps.config,
       now: deps.now(),
     });
+    const mechanicalRanked = ctx.reason !== "decision_repair" &&
+      requiresKeywordConfirmation(compiled.text)
+      ? ranked.ranked.filter((candidate) =>
+          bypassesKeywordConfirmation(candidate) || hasKeywordChannel(candidate)
+        )
+      : ranked.ranked;
     const fuseLatencyMs = Date.now() - fuseStart;
 
     // ─── LLM relevance filter ──────────────────────────────────────────
     // Mechanical retrieval produces high-recall but low-precision
     // candidates. A small LLM round-trip (see `llm-filter.ts`) prunes
     // items that share surface keywords with the query but aren't
-    // actually relevant. Fails open — on any error we keep the
-    // mechanical ranking.
-    const queryText =
-      (ctx as { userText?: string }).userText ?? compiled.text ?? "";
-    const filtered = await llmFilterCandidates(
-      { query: queryText, ranked: ranked.ranked },
-      {
-        llm: deps.llm ?? null,
-        log,
-        config: deps.config,
-      },
-    );
+    // actually relevant. If the LLM is unavailable, the filter helper
+    // keeps the mechanical ranking so local lightweight memories remain
+    // searchable in offline/default installs.
+    const queryText = (ctx as { userText?: string }).userText ?? compiled.text ?? "";
+    const filterResult = opts.skipLlmFilter
+      ? {
+          kept: mechanicalRanked,
+          dropped: [],
+          outcome: "deferred_to_final" as const,
+          sufficient: null,
+        }
+      : await llmFilterCandidates(
+          { query: queryText, ranked: mechanicalRanked, episodeId },
+          {
+            llm: deps.llm ?? null,
+            log,
+            config: deps.config,
+          },
+        );
+    const filtered = filterResult;
     log.debug("llm_filter.done", {
       outcome: filtered.outcome,
+      enforced: false,
       sufficient: filtered.sufficient,
       raw: rawCandidateCount,
-      afterThreshold: ranked.ranked.length,
+      afterThreshold: mechanicalRanked.length,
       droppedByThreshold: ranked.droppedByThreshold,
       thresholdFloor: round(ranked.thresholdFloor, 3),
       topRelevance: round(ranked.topRelevance, 3),
@@ -306,8 +419,33 @@ async function runAll(
       channels: ranked.channelHits,
     });
 
+    // V7 §2.4.6 — gather preference / anti-pattern from policies that
+    // share evidence with what we just retrieved. Cheap (one bounded
+    // scan of active policies) and produces nothing when there's
+    // nothing to say, so it's safe to call unconditionally here.
+    const { ranked: dedupedKept, dedupedByEpisodeCount } =
+      dedupeTraceEpisodeByEpisodeId(filtered.kept);
+
+    const decisionGuidance = traceOnly
+      ? undefined
+      : collectDecisionGuidance({
+          ranked: dedupedKept,
+          repos: deps.repos,
+        });
+    if (
+      decisionGuidance &&
+      (decisionGuidance.preference.length > 0 ||
+        decisionGuidance.antiPattern.length > 0)
+    ) {
+      log.debug("decision_guidance.collected", {
+        preference: decisionGuidance.preference.length,
+        antiPattern: decisionGuidance.antiPattern.length,
+        policyIdsTouched: decisionGuidance.policyIdsTouched.length,
+      });
+    }
+
     const { packet } = toPacket({
-      ranked: filtered.kept,
+      ranked: dedupedKept,
       reason: ctx.reason,
       tierLatencyMs: {
         tier1: tier1LatencyMs,
@@ -322,11 +460,12 @@ async function runAll(
       sessionId: sessionId ?? (`adhoc-session-${ids.span()}` as SessionId),
       episodeId: episodeId ?? (`adhoc-episode-${ids.span()}` as EpisodeId),
       // V7 §2.6 — Tier-1 default = "summary" so we surface skill
-      // descriptors + a `skill_get(...)` invocation hint instead of
+      // descriptors + a `memos_skill_get(...)` invocation hint instead of
       // inlining every full guide. Hosts without tool support can flip
       // this to "full" via `algorithm.retrieval.skillInjectionMode`.
       skillInjectionMode: deps.config.skillInjectionMode,
       skillSummaryChars: deps.config.skillSummaryChars,
+      decisionGuidance,
     });
     // Surface the dropped-by-LLM candidates so the Logs page can show
     // "initial N → kept M" without the viewer having to re-run the
@@ -337,11 +476,17 @@ async function runAll(
 
     const stats: RetrievalStats = {
       reason: ctx.reason,
+      scenarioId: plan.scenarioId,
       agent,
       sessionId,
       episodeId,
+      plannedTiers: {
+        tier1: plan.wantTier1,
+        tier2: plan.wantTier2,
+        tier3: plan.wantTier3,
+      },
       tier1Count: tier1.length,
-      tier2Count: tier2.traces.length + tier2.episodes.length,
+      tier2Count: tier2.traces.length + (traceOnly ? 0 : tier2.episodes.length) + tier2Experiences.length,
       tier3Count: tier3.length,
       tier1LatencyMs,
       tier2LatencyMs,
@@ -351,15 +496,18 @@ async function runAll(
       queryTokens: approxTokens(compiled.text),
       queryTags: compiled.tags,
       emptyPacket: packet.snippets.length === 0,
+      embedding: embeddingStats,
       rawCandidateCount,
       droppedByThresholdCount: ranked.droppedByThreshold,
       thresholdFloor: ranked.thresholdFloor,
       topRelevance: ranked.topRelevance,
-      rankedCount: ranked.ranked.length,
+      rankedCount: mechanicalRanked.length,
       llmFilterOutcome: filtered.outcome,
       llmFilterSufficient: filtered.sufficient ?? undefined,
       llmFilterKept: filtered.kept.length,
       llmFilterDropped: filtered.dropped.length,
+      dedupedByEpisodeCount:
+        dedupedByEpisodeCount > 0 ? dedupedByEpisodeCount : undefined,
       channelHits: ranked.channelHits,
     };
 
@@ -368,7 +516,8 @@ async function runAll(
       sessionId,
       tier1: tier1.length,
       tier2: tier2.traces.length,
-      tier2Ep: tier2.episodes.length,
+      tier2Ep: traceOnly ? 0 : tier2.episodes.length,
+      tier2Experience: tier2Experiences.length,
       tier3: tier3.length,
       kept: packet.snippets.length,
       totalMs: stats.totalLatencyMs,
@@ -442,8 +591,31 @@ function emptyResult(
       queryTokens: 0,
       queryTags: [],
       emptyPacket: true,
+      embedding: { attempted: false, ok: false, degraded: false },
     },
   };
+}
+
+function requiresKeywordConfirmation(text: string): boolean {
+  const tokens = text.match(/[A-Za-z0-9_:-]{12,}/g) ?? [];
+  return tokens.some((token) => {
+    const hasIdentifierShape = /[_:-]/.test(token) || /\d/.test(token);
+    const hasEnoughEntropy = /[A-Za-z]/.test(token) && token.length >= 16;
+    return hasIdentifierShape && hasEnoughEntropy;
+  });
+}
+
+function hasKeywordChannel(candidate: RankedCandidate): boolean {
+  return (candidate.candidate.channels ?? []).some((channel) =>
+    channel.channel === "fts" ||
+    channel.channel === "pattern" ||
+    channel.channel === "structural"
+  );
+}
+
+function bypassesKeywordConfirmation(candidate: RankedCandidate): boolean {
+  const refKind = candidate.candidate.refKind;
+  return refKind === "skill" || refKind === "world-model";
 }
 
 function approxTokens(s: string): number {

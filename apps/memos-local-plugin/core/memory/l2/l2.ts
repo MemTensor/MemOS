@@ -29,11 +29,12 @@ import type {
   TraceRow,
 } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
+import { ids } from "../../id.js";
 import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
 import { buildPolicyRow, induceDraft } from "./induce.js";
-import { applyGain, computeGain } from "./gain.js";
+import { applyGain, computeGain, nextStatus, smoothGain } from "./gain.js";
 import { signatureOf } from "./signature.js";
 import { tracePolicySimilarity } from "./similarity.js";
 import type {
@@ -47,7 +48,7 @@ import type {
 } from "./types.js";
 
 export interface RunL2Deps {
-  repos: Pick<Repos, "candidatePool" | "policies" | "traces">;
+  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "tracePolicyLinks" | "traces">;
   db: Parameters<typeof makeCandidatePool>[0]["db"];
   llm: LlmClient | null;
   log: Logger;
@@ -93,6 +94,19 @@ export async function runL2(
     if (!tr) continue;
     a.signature = signatureOf(tr);
     if (a.matchedPolicyId) {
+      try {
+        repos.tracePolicyLinks.link({
+          traceId: a.traceId,
+          policyId: a.matchedPolicyId,
+          episodeId: input.episodeId,
+          now: input.now ?? Date.now(),
+        });
+      } catch (err) {
+        warnings.push(stageWarn("trace-policy-link", err, {
+          traceId: a.traceId,
+          policyId: a.matchedPolicyId,
+        }));
+      }
       emit(bus, {
         kind: "l2.trace.associated",
         episodeId: input.episodeId,
@@ -183,6 +197,23 @@ export async function runL2(
         });
         pool.promote(bucket.candidateIds, dup.id);
         touched.set(dup.id, dup);
+        const evidence = inductionEvidenceByPolicy.get(dup.id) ?? new Set<string>();
+        for (const id of bucket.evidenceTraceIds) evidence.add(id);
+        inductionEvidenceByPolicy.set(dup.id, evidence);
+        for (const traceId of bucket.evidenceTraceIds) {
+          const trace = traces.find((t) => t.id === traceId);
+          if (!trace) continue;
+          try {
+            repos.tracePolicyLinks.link({
+              traceId,
+              policyId: dup.id,
+              episodeId: trace.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: dup.id }));
+          }
+        }
         continue;
       }
 
@@ -192,6 +223,7 @@ export async function runL2(
           episodeIds: epIds,
           signatureLabel: bucket.signature,
           charCap: config.inductionTraceCharCap,
+          triggerEpisodeId: input.episodeId,
         },
         {
           llm: config.useLlm ? deps.llm : null,
@@ -222,14 +254,88 @@ export async function runL2(
         inducedBy: `${L2_INDUCTION_PROMPT.id}.v${L2_INDUCTION_PROMPT.version}`,
         now: input.now ?? Date.now(),
       });
+      const owner = ownerFromTraces(traces);
+      policy.ownerAgentKind = owner.ownerAgentKind;
+      policy.ownerProfileId = owner.ownerProfileId;
+      policy.ownerWorkspaceId = owner.ownerWorkspaceId;
+      const duplicate = findExistingContentDuplicate(policy, repos);
+      if (duplicate) {
+        const merged = mergePolicyEvidence(duplicate, policy, input.now ?? Date.now());
+        repos.policies.upsert(merged);
+        pool.promote(bucket.candidateIds, duplicate.id);
+        touched.set(duplicate.id, merged);
+        inductionEvidenceByPolicy.set(
+          duplicate.id,
+          new Set(bucket.evidenceTraceIds as string[]),
+        );
+        for (const traceId of bucket.evidenceTraceIds) {
+          const trace = traces.find((t) => t.id === traceId);
+          if (!trace) continue;
+          try {
+            repos.tracePolicyLinks.link({
+              traceId,
+              policyId: duplicate.id,
+              episodeId: trace.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, {
+              traceId,
+              policyId: duplicate.id,
+            }));
+          }
+        }
+        inductions.push({
+          signature: bucket.signature,
+          policyId: duplicate.id,
+          poolSize: bucket.candidateIds.length,
+          episodeIds: epIds,
+          traceIds: bucket.evidenceTraceIds,
+          skippedReason: "duplicate_of",
+          duplicateOfPolicyId: duplicate.id,
+        });
+        continue;
+      }
       try {
         repos.policies.insert(policy);
+        if (!policy.vec) {
+          repos.embeddingRetryQueue.enqueue({
+            id: `er_${ids.span()}`,
+            targetKind: "policy",
+            targetId: policy.id,
+            vectorField: "vec",
+            sourceText: policyVectorText(policy),
+            now: input.now ?? Date.now(),
+          });
+          warnings.push({
+            stage: "embed",
+            message: "embedding retry queued for policy vector",
+            detail: { policyId: policy.id },
+          });
+        }
         pool.promote(bucket.candidateIds, policy.id);
         touched.set(policy.id, policy);
         inductionEvidenceByPolicy.set(
           policy.id,
           new Set(bucket.evidenceTraceIds as string[]),
         );
+        for (const traceId of bucket.evidenceTraceIds) {
+          const trace = traces.find((t) => t.id === traceId);
+          if (!trace) continue;
+          try {
+            repos.tracePolicyLinks.link({
+              traceId,
+              policyId: policy.id,
+              episodeId: trace.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, {
+              traceId,
+              policyId: policy.id,
+            }));
+          }
+        }
         inductions.push({
           signature: bucket.signature,
           policyId: policy.id,
@@ -278,6 +384,10 @@ export async function runL2(
       if (inductionIds) {
         for (const id of inductionIds) withIds.add(id);
       }
+      const newSupportIds = new Set(withIds);
+      for (const id of repos.tracePolicyLinks.getWithTraceIds(policy.id)) {
+        withIds.add(id);
+      }
 
       // Gain is computed over ALL traces currently in scope — the
       // current episode's traces PLUS the induction evidence traces
@@ -287,29 +397,40 @@ export async function runL2(
       // gain. Pull missing induction traces from the repo.
       const traceById = new Map<string, TraceRow>();
       for (const t of input.traces) traceById.set(t.id, t);
-      if (inductionIds) {
-        for (const id of inductionIds) {
-          if (traceById.has(id)) continue;
-          const t = repos.traces.getById(id as TraceRow["id"]);
-          if (t) traceById.set(t.id, t);
+      for (const id of withIds) {
+        if (traceById.has(id)) continue;
+        const t = repos.traces.getById(id as TraceRow["id"]);
+        if (t) traceById.set(t.id, t);
+      }
+      for (const episodeId of repos.tracePolicyLinks.getLinkedEpisodeIds(policy.id)) {
+        for (const t of repos.traces.list({ episodeId, limit: 50, newestFirst: true })) {
+          traceById.set(t.id, t);
         }
       }
-      const allTraces = Array.from(traceById.values());
+      const allTraces = Array.from(traceById.values())
+        .sort((a, b) => b.ts - a.ts || b.id.localeCompare(a.id));
 
-      const withTraces: TraceRow[] = allTraces.filter((t) => withIds.has(t.id));
-      const withoutTraces: TraceRow[] = allTraces.filter((t) => !withIds.has(t.id));
+      const withTraces: TraceRow[] = allTraces.filter((t) => withIds.has(t.id)).slice(0, 50);
+      const withoutTraces: TraceRow[] = allTraces.filter((t) => !withIds.has(t.id)).slice(0, 50);
 
-      const gain = computeGain(
+      const rawGain = computeGain(
         { policyId: policy.id, withTraces, withoutTraces },
         { tauSoftmax: config.tauSoftmax },
       );
+      const smoothedGainValue = smoothGain({
+        newGain: rawGain.gain,
+        currentGain: policy.gain,
+        alpha: config.gainEmaAlpha,
+        isFirst: policy.support === 0,
+      });
+      const gain = { ...rawGain, gain: smoothedGainValue };
 
       // `deltaSupport` must reflect only the *new* positive evidence
       // we just observed — both fresh associations AND the induction
       // evidence for a newly-minted policy. Previously only `withIds`
       // from associations contributed, so a new policy's support
       // stayed at 0 until someone re-associated in a later round.
-      const deltaSupport = withIds.size;
+      const deltaSupport = newSupportIds.size;
 
       const persisted = applyGain({
         gain,
@@ -332,6 +453,47 @@ export async function runL2(
       });
     }
     timings.gain = Date.now() - t0;
+  }
+
+  // ─── Step 5: Re-evaluate untouched candidates ────────────────────────
+  // A candidate policy that was induced in a previous episode but no longer
+  // matches any trace will never enter `touched` and therefore never have
+  // `nextStatus()` run against it. Without this sweep, it stays `candidate`
+  // forever even though its stored gain/support already satisfy the
+  // promotion thresholds.
+  {
+    const untouchedCandidates = repos.policies.list({ status: "candidate" });
+    for (const policy of untouchedCandidates) {
+      if (touched.has(policy.id)) continue; // already handled in Step 4
+      const next = nextStatus({
+        currentStatus: policy.status,
+        support: policy.support,
+        gain: policy.gain,
+        thresholds,
+      });
+      if (next !== policy.status) {
+        repos.policies.updateStats(policy.id, {
+          support: policy.support,
+          gain: policy.gain,
+          status: next,
+          updatedAt: input.now ?? Date.now(),
+        });
+        emit(bus, {
+          kind: "l2.policy.updated",
+          episodeId: input.episodeId,
+          policyId: policy.id,
+          status: next,
+          support: policy.support,
+          gain: policy.gain,
+        });
+        log.info("run.recheck_candidate_promoted", {
+          policyId: policy.id,
+          status: next,
+          support: policy.support,
+          gain: policy.gain,
+        });
+      }
+    }
   }
 
   timings.persist = 0; // reserved for future split
@@ -361,6 +523,19 @@ export async function runL2(
   };
 }
 
+function ownerFromTraces(traces: readonly TraceRow[]): {
+  ownerAgentKind: string;
+  ownerProfileId: string;
+  ownerWorkspaceId: string | null;
+} {
+  const first = traces[0];
+  return {
+    ownerAgentKind: first?.ownerAgentKind ?? "unknown",
+    ownerProfileId: first?.ownerProfileId ?? "default",
+    ownerWorkspaceId: first?.ownerWorkspaceId ?? null,
+  };
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function emit(bus: L2EventBus | undefined, evt: L2Event): void {
@@ -375,6 +550,16 @@ function stageWarn(
 ): { stage: string; message: string; detail?: Record<string, unknown> } {
   const message = err instanceof Error ? err.message : String(err);
   return { stage, message, detail };
+}
+
+function policyVectorText(policy: PolicyRow): string {
+  return [
+    policy.title,
+    policy.trigger,
+    policy.procedure,
+    policy.verification,
+    policy.boundary,
+  ].filter(Boolean).join("\n");
 }
 
 function pickOnePerEpisode(traces: readonly TraceRow[]): TraceRow[] {
@@ -405,4 +590,182 @@ function findExistingMatch(
     }
   }
   return null;
+}
+
+function findExistingContentDuplicate(
+  policy: PolicyRow,
+  repos: Pick<Repos, "policies">,
+): PolicyRow | null {
+  const target = policyContentKey(policy);
+  let best: { row: PolicyRow; score: PolicyNearDuplicateScore } | null = null;
+  for (const existing of repos.policies.list({ limit: 5_000 })) {
+    if (!sameOwnerScope(existing, policy)) continue;
+    if (policyContentKey(existing) === target && policyOptionalFieldsCompatible(existing, policy)) {
+      return existing;
+    }
+    const score = policyNearDuplicateScore(existing, policy);
+    if (score.match && (!best || score.weighted > best.score.weighted)) {
+      best = { row: existing, score };
+    }
+  }
+  return best?.row ?? null;
+}
+
+function policyOptionalFieldsCompatible(
+  a: Pick<PolicyRow, "boundary" | "verification">,
+  b: Pick<PolicyRow, "boundary" | "verification">,
+): boolean {
+  const boundary = optionalFieldSimilarity(a.boundary, b.boundary);
+  const verification = optionalFieldSimilarity(a.verification, b.verification);
+  return (
+    !boundaryPolarityConflicts(a.boundary, b.boundary) &&
+    (boundary == null || boundary >= POLICY_NEAR_DUP_BOUNDARY_MIN) &&
+    (verification == null || verification >= POLICY_NEAR_DUP_BOUNDARY_MIN)
+  );
+}
+
+function mergePolicyEvidence(existing: PolicyRow, incoming: PolicyRow, now: number): PolicyRow {
+  return {
+    ...existing,
+    sourceEpisodeIds: uniqueEpisodes([
+      ...existing.sourceEpisodeIds,
+      ...incoming.sourceEpisodeIds,
+    ]),
+    vec: existing.vec ?? incoming.vec,
+    updatedAt: now as PolicyRow["updatedAt"],
+  };
+}
+
+function policyContentKey(policy: Pick<PolicyRow, "title" | "trigger" | "procedure">): string {
+  return [
+    normalizePolicyText(policy.title),
+    normalizePolicyText(policy.trigger),
+    normalizePolicyText(policy.procedure),
+  ].join("\n");
+}
+
+const POLICY_NEAR_DUP_TITLE_MIN = 0.9;
+const POLICY_NEAR_DUP_TRIGGER_MIN = 0.8;
+const POLICY_NEAR_DUP_PROCEDURE_MIN = 0.7;
+const POLICY_NEAR_DUP_BOUNDARY_MIN = 0.45;
+
+interface PolicyNearDuplicateScore {
+  match: boolean;
+  title: number;
+  trigger: number;
+  procedure: number;
+  weighted: number;
+  boundary: number | null;
+  verification: number | null;
+}
+
+function policyNearDuplicateScore(
+  a: Pick<PolicyRow, "title" | "trigger" | "procedure" | "boundary" | "verification">,
+  b: Pick<PolicyRow, "title" | "trigger" | "procedure" | "boundary" | "verification">,
+): PolicyNearDuplicateScore {
+  const title = textSimilarity(a.title, b.title);
+  const trigger = textSimilarity(a.trigger, b.trigger);
+  const procedure = textSimilarity(a.procedure, b.procedure);
+  const weighted = title * 0.45 + trigger * 0.25 + procedure * 0.3;
+  const boundary = optionalFieldSimilarity(a.boundary, b.boundary);
+  const verification = optionalFieldSimilarity(a.verification, b.verification);
+  const optionalFieldsCompatible =
+    !boundaryPolarityConflicts(a.boundary, b.boundary) &&
+    (boundary == null || boundary >= POLICY_NEAR_DUP_BOUNDARY_MIN) &&
+    (verification == null || verification >= POLICY_NEAR_DUP_BOUNDARY_MIN);
+  const contentFieldMatches =
+    title >= POLICY_NEAR_DUP_TITLE_MIN ||
+    trigger >= POLICY_NEAR_DUP_TRIGGER_MIN ||
+    procedure >= POLICY_NEAR_DUP_PROCEDURE_MIN;
+  return {
+    match: contentFieldMatches && optionalFieldsCompatible,
+    title,
+    trigger,
+    procedure,
+    weighted,
+    boundary,
+    verification,
+  };
+}
+
+function normalizePolicyText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/[，,、;；:：。.!！?？"'“”‘’`()[\]{}（）【】]/g, "")
+    .replace(/(?:^|\s)\d+[.)、]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function optionalFieldSimilarity(a: string, b: string): number | null {
+  const aa = normalizePolicyText(a);
+  const bb = normalizePolicyText(b);
+  if (!aa || !bb) return null;
+  return textSimilarity(aa, bb);
+}
+
+function boundaryPolarityConflicts(a: string, b: string): boolean {
+  const aa = splitBoundaryPolarity(a);
+  const bb = splitBoundaryPolarity(b);
+  if (!aa || !bb) return false;
+  return (
+    (Boolean(aa.positive) && Boolean(bb.negative) && textSimilarity(aa.positive, bb.negative) >= 0.45) ||
+    (Boolean(bb.positive) && Boolean(aa.negative) && textSimilarity(bb.positive, aa.negative) >= 0.45)
+  );
+}
+
+function splitBoundaryPolarity(value: string): { positive: string; negative: string } | null {
+  const text = value.trim();
+  if (!text || !text.includes("不适用")) return null;
+  const [positiveRaw, ...negativeParts] = text.split(/不适用于|不适用/);
+  const negative = negativeParts.join(" ");
+  return {
+    positive: positiveRaw.replace(/仅适用于|只适用于|适用于/g, "").trim(),
+    negative: negative.replace(/仅适用于|只适用于|适用于/g, "").trim(),
+  };
+}
+
+function textSimilarity(a: string, b: string): number {
+  const aa = normalizePolicyText(a);
+  const bb = normalizePolicyText(b);
+  if (!aa || !bb) return aa === bb ? 1 : 0;
+  if (aa === bb) return 1;
+  const gramsA = charGrams(aa);
+  const gramsB = charGrams(bb);
+  let overlap = 0;
+  for (const [gram, countA] of gramsA) {
+    const countB = gramsB.get(gram);
+    if (countB) overlap += Math.min(countA, countB);
+  }
+  const totalA = Array.from(gramsA.values()).reduce((sum, n) => sum + n, 0);
+  const totalB = Array.from(gramsB.values()).reduce((sum, n) => sum + n, 0);
+  return totalA + totalB === 0 ? 0 : (2 * overlap) / (totalA + totalB);
+}
+
+function charGrams(value: string): Map<string, number> {
+  const chars = Array.from(value.replace(/\s+/g, ""));
+  const grams = new Map<string, number>();
+  if (chars.length <= 2) {
+    const key = chars.join("");
+    grams.set(key, 1);
+    return grams;
+  }
+  for (let i = 0; i < chars.length - 1; i++) {
+    const gram = `${chars[i]}${chars[i + 1]}`;
+    grams.set(gram, (grams.get(gram) ?? 0) + 1);
+  }
+  return grams;
+}
+
+function sameOwnerScope(a: PolicyRow, b: PolicyRow): boolean {
+  return (
+    (a.ownerAgentKind ?? "unknown") === (b.ownerAgentKind ?? "unknown") &&
+    (a.ownerProfileId ?? "default") === (b.ownerProfileId ?? "default") &&
+    (a.ownerWorkspaceId ?? null) === (b.ownerWorkspaceId ?? null)
+  );
+}
+
+function uniqueEpisodes(ids: readonly EpisodeId[]): EpisodeId[] {
+  return Array.from(new Set(ids));
 }

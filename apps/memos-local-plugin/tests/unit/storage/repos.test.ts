@@ -51,8 +51,42 @@ describe("storage/repos — happy paths", () => {
 
       expect(repos.episodes.getOpenForSession("s")!.id).toBe("e1");
 
+      // appendTrace persists only IDs that have a backing row in `traces`
+      // (#1966 — ghost IDs in trace_ids_json would otherwise loop the reward
+      // dirty-check forever). Insert the rows first, then append.
+      for (const id of ["t1", "t2"] as const) {
+        repos.traces.insert({
+          id,
+          episodeId: "e1",
+          sessionId: "s",
+          ts: 5,
+          userText: id,
+          agentText: "",
+          toolCalls: [],
+          reflection: null,
+          value: 0,
+          alpha: 0,
+          rHuman: null,
+          priority: 0,
+          tags: [],
+          vecSummary: null,
+          vecAction: null,
+          turnId: 0 as never,
+          schemaVersion: 1,
+        });
+      }
       repos.episodes.appendTrace("e1", ["t1", "t2"]);
       expect(repos.episodes.getById("e1")!.traceIds).toEqual(["t1", "t2"]);
+
+      // Ghost IDs (no backing trace row) are silently stripped: this is the
+      // regression guard for the infinite rescore loop reported in #1966.
+      repos.episodes.appendTrace("e1", ["t1", "t2", "tr_ghost"]);
+      expect(repos.episodes.getById("e1")!.traceIds).toEqual(["t1", "t2"]);
+      // ...and a list made entirely of ghosts collapses to []:
+      repos.episodes.appendTrace("e1", ["tr_ghost_only"]);
+      expect(repos.episodes.getById("e1")!.traceIds).toEqual([]);
+      // Restore for the close assertion below.
+      repos.episodes.appendTrace("e1", ["t1", "t2"]);
 
       repos.episodes.close("e1", 99, 0.8);
       const closed = repos.episodes.getById("e1")!;
@@ -102,6 +136,7 @@ describe("storage/repos — happy paths", () => {
           tags: [],
           vecSummary: vec([i, 0]),
           vecAction: null,
+          turnId: 0 as never,
           schemaVersion: 1,
         });
       }
@@ -119,6 +154,39 @@ describe("storage/repos — happy paths", () => {
       repos.traces.updateScore("t0", { value: -0.5, alpha: 0.6, priority: 1.5 });
       expect(repos.traces.getById("t0")!.value).toBe(-0.5);
       expect(repos.traces.getById("t0")!.priority).toBe(1.5);
+
+      // hasAnyNewerThan: cheap exists-check used by the startup
+      // dirty-closed-episode scan in memory-core.init().
+      // Regression guard for https://github.com/MemTensor/MemOS/issues/1787:
+      // the old code path called `getManyByIds(...).some(tr => tr.ts > ts)`,
+      // which hydrated every BLOB column for every trace into Node memory.
+      expect(repos.traces.hasAnyNewerThan(["t0", "t1", "t2"], 5)).toBe(true);
+      // Boundary: ts must be STRICTLY greater than the watermark.
+      expect(repos.traces.hasAnyNewerThan(["t0"], 10)).toBe(false);
+      expect(repos.traces.hasAnyNewerThan(["t2"], 29)).toBe(true);
+      expect(repos.traces.hasAnyNewerThan([], 0)).toBe(false);
+      expect(repos.traces.hasAnyNewerThan(["missing-id"], 0)).toBe(false);
+
+      // countExisting / filterExistingIds — the cheap existence helpers
+      // introduced for the #1966 ghost-trace dirty-check fix. Mixed batches
+      // should return the count / list of just the IDs that exist; duplicate
+      // inputs are de-duplicated to match `getManyByIds(...).length`
+      // semantics.
+      expect(repos.traces.countExisting(["t0", "t1", "t2"])).toBe(3);
+      expect(repos.traces.countExisting(["t0", "ghost", "t2"])).toBe(2);
+      expect(repos.traces.countExisting(["ghost-a", "ghost-b"])).toBe(0);
+      expect(repos.traces.countExisting(["t0", "t0", "t1"])).toBe(2);
+      expect(repos.traces.countExisting([])).toBe(0);
+
+      expect(repos.traces.filterExistingIds(["t0", "ghost", "t2"])).toEqual([
+        "t0",
+        "t2",
+      ]);
+      expect(repos.traces.filterExistingIds(["t0", "t0", "t1"])).toEqual([
+        "t0",
+        "t1",
+      ]);
+      expect(repos.traces.filterExistingIds([])).toEqual([]);
     } finally {
       cleanup();
     }
@@ -139,6 +207,7 @@ describe("storage/repos — happy paths", () => {
         status: "candidate",
         sourceEpisodeIds: [],
         inducedBy: "proto",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
@@ -155,6 +224,7 @@ describe("storage/repos — happy paths", () => {
         status: "active",
         sourceEpisodeIds: [],
         inducedBy: "proto",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
@@ -175,6 +245,16 @@ describe("storage/repos — happy paths", () => {
         statusIn: ["active"],
       });
       expect(hits.map((h) => h.id)).toEqual(["p_active"]);
+
+      const textHits = repos.policies.searchByText('"active"', 5, {
+        statusIn: ["active"],
+      });
+      expect(textHits.map((h) => h.id)).toEqual(["p_active"]);
+
+      const patternHits = repos.policies.searchByPattern(["act"], 5, {
+        statusIn: ["active"],
+      });
+      expect(patternHits.map((h) => h.id)).toEqual(["p_active"]);
     } finally {
       cleanup();
     }
@@ -196,9 +276,11 @@ describe("storage/repos — happy paths", () => {
         trialsPassed: 0,
         sourcePolicyIds: [],
         sourceWorldModelIds: [],
+        evidenceAnchors: [],
         vec: vec([1, 0]),
         createdAt: 1,
         updatedAt: 1,
+        version: 1,
       });
 
       expect(() =>
@@ -215,16 +297,18 @@ describe("storage/repos — happy paths", () => {
           trialsPassed: 0,
           sourcePolicyIds: [],
           sourceWorldModelIds: [],
+          evidenceAnchors: [],
           vec: null,
           createdAt: 1,
           updatedAt: 1,
+          version: 1,
         }),
       ).toThrow(/UNIQUE/i);
 
       const after = repos.skills.bumpTrial("sk1", true, 2);
-      expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 1 });
+      expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 0.5 });
       const after2 = repos.skills.bumpTrial("sk1", false, 3);
-      expect(after2.eta).toBeCloseTo(0.5);
+      expect(after2.eta).toBeCloseTo(1 / 3, 5);
     } finally {
       cleanup();
     }
@@ -299,6 +383,7 @@ describe("storage/repos — happy paths", () => {
         status: "candidate",
         sourceEpisodeIds: [],
         inducedBy: "",
+        decisionGuidance: { preference: [], antiPattern: [] },
         vec: null,
         createdAt: 0,
         updatedAt: 0,

@@ -41,6 +41,42 @@ export interface EmbeddingConfig {
   headers?: Record<string, string>;
   /** If true, all output vectors are L2-normalized. Default: true. */
   normalize?: boolean;
+  /**
+   * Optional sink invoked once per terminal provider failure. Lets the
+   * bootstrap layer write a `system_error` row to `api_logs` so the
+   * Logs viewer can surface infrastructure failures alongside tool
+   * activity. Never throws; any exception inside the sink is swallowed.
+   */
+  onError?: (detail: EmbeddingErrorDetail) => void;
+  /**
+   * Optional durable status sink invoked on successful and failed
+   * provider calls. Unlike `onError` (human-facing log only), this
+   * is the machine-readable source used by the Overview model cards.
+   */
+  onStatus?: (detail: EmbeddingStatusDetail) => void;
+}
+
+export interface EmbeddingErrorDetail {
+  kind: "embedding";
+  provider: EmbeddingProviderName | string;
+  model: string;
+  message: string;
+  /** Stable `MemosError` code when the underlying error carries one. */
+  code?: string;
+  /** Epoch ms at which the failure occurred (defaults to Date.now()). */
+  at?: number;
+}
+
+export interface EmbeddingStatusDetail {
+  kind: "embedding";
+  status: "ok" | "error";
+  provider: EmbeddingProviderName | string;
+  model: string;
+  message?: string;
+  code?: string;
+  at?: number;
+  /** Actual provider batch-call duration when available. */
+  durationMs?: number;
 }
 
 // ─── Roles ───────────────────────────────────────────────────────────────────
@@ -108,9 +144,12 @@ export interface EmbedStats {
   /** Most recent successful round-trip to the provider (epoch ms). */
   lastOkAt: number | null;
   /**
-   * Most recent failure. `null` if no call has failed yet, or a later
-   * call succeeded. Viewer overview uses this to render a red dot +
-   * error tooltip on the embedding card.
+   * Most recent failure. `null` until the embedder has thrown at least
+   * once. Once set, it is **not** cleared by a subsequent success —
+   * the viewer compares `lastError.at` against `lastOkAt` to decide
+   * whether the most recent event was good (green) or bad (red), so
+   * users never see a green dot while a real provider error is still
+   * sitting in the system_error log.
    */
   lastError: { at: number; message: string } | null;
 }

@@ -370,17 +370,14 @@ Use selectedIndex 0 when none is highly relevant.`;
     if (skill.status !== "active") return;
 
     const explicitAutoInstall = this.ctx.config.skillEvolution?.autoInstall ?? DEFAULTS.skillAutoInstall;
-    if (explicitAutoInstall) {
-      this.installer.install(skill.id);
-      this.ctx.log.info(`SkillEvolver: auto-installed "${skill.name}" (explicit autoInstall=true)`);
+    if (!explicitAutoInstall) {
+      this.ctx.log.debug(`SkillEvolver: skipping auto-install for "${skill.name}" (autoInstall=false)`);
       return;
     }
 
+    this.installer.install(skill.id);
     const manifest = SkillInstaller.buildManifest(skill.dirPath, !!skill.installed, skill.name);
-    if (manifest.installMode === "install_recommended") {
-      this.installer.install(skill.id);
-      this.ctx.log.info(`SkillEvolver: auto-installed "${skill.name}" (install_recommended: ${manifest.scriptsCount} scripts, ${Math.round(manifest.totalSize / 1024)}KB)`);
-    }
+    this.ctx.log.info(`SkillEvolver: auto-installed "${skill.name}" (autoInstall=true, mode=${manifest.installMode}, ${manifest.scriptsCount} scripts, ${Math.round(manifest.totalSize / 1024)}KB)`);
   }
 
   private readSkillContent(skill: Skill): string | null {

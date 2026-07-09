@@ -19,6 +19,7 @@
 import type { LlmClient } from "../llm/types.js";
 import type { Logger } from "../logger/types.js";
 import { DECISION_REPAIR_PROMPT } from "../llm/prompts/decision-repair.js";
+import { sanitizeDerivedMarkdown, sanitizeDerivedText } from "../safety/content.js";
 import type { PolicyId, PolicyRow, TraceId, TraceRow } from "../types.js";
 import { capTrace } from "./evidence.js";
 import type {
@@ -75,6 +76,7 @@ export async function synthesizeDraft(
     const prompt = packPrompt(input, prefer, avoid, deps.config.traceCharCap);
     const res = await deps.llm.completeJson<LlmRepairResponse>(prompt, {
       op: "decision.repair",
+      phase: "feedback",
       schemaHint: "decision-repair.v1",
     });
     const value = res.value as LlmRepairResponse;
@@ -193,8 +195,8 @@ function normalizeDraft(
 ): DecisionRepairDraft {
   return {
     contextHash: input.contextHash,
-    preference: v.preference.trim(),
-    antiPattern: v.anti_pattern.trim(),
+    preference: sanitizeDerivedMarkdown(v.preference),
+    antiPattern: sanitizeDerivedMarkdown(v.anti_pattern),
     severity: v.severity,
     confidence: clamp01(v.confidence),
     highValueTraceIds: input.highValue.map((t) => t.id) as TraceId[],
@@ -212,8 +214,8 @@ function templateDraft(
   const best = input.highValue.slice().sort((a, b) => b.value - a.value)[0];
   const worst = input.lowValue.slice().sort((a, b) => a.value - b.value)[0];
   const hint = input.classifiedFeedback;
-  const preferText = hint?.prefer?.trim() || firstNonEmpty(best?.reflection, best?.agentText);
-  const avoidText = hint?.avoid?.trim() || firstNonEmpty(worst?.reflection, worst?.agentText);
+  const preferText = sanitizeDerivedMarkdown(hint?.prefer) || sanitizeDerivedMarkdown(firstNonEmpty(best?.reflection, best?.agentText));
+  const avoidText = sanitizeDerivedMarkdown(hint?.avoid) || sanitizeDerivedMarkdown(firstNonEmpty(worst?.reflection, worst?.agentText));
   if (!preferText && !avoidText) return null;
   return {
     contextHash: input.contextHash,

@@ -21,6 +21,13 @@ export function registerFeedbackRoutes(routes: Routes, deps: ServerDeps): void {
       writeError(ctx, 400, "invalid_argument", "polarity is required");
       return;
     }
+    if (fb.traceId) {
+      const trace = await deps.core.getTrace(fb.traceId);
+      if (!trace) {
+        writeError(ctx, 404, "trace_not_found", `trace not found: ${fb.traceId}`);
+        return;
+      }
+    }
     const out = await deps.core.submitFeedback({
       channel: fb.channel,
       polarity: fb.polarity,

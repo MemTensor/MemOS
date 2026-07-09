@@ -72,10 +72,28 @@ export function createEmbedderWithProvider(
   let failures = 0;
   let lastOkAt: number | null = null;
   let lastError: { at: number; message: string } | null = null;
+  let actualDimensions = config.dimensions;
 
   function toInput(i: string | EmbedInput): Required<EmbedInput> {
     if (typeof i === "string") return { text: i, role: "document" };
     return { text: i.text, role: i.role ?? "document" };
+  }
+
+  function notifyStatus(detail: {
+    status: "ok" | "error";
+    provider: string;
+    model: string;
+    message?: string;
+    code?: string;
+    at?: number;
+    durationMs?: number;
+  }): void {
+    if (!config.onStatus) return;
+    try {
+      config.onStatus({ kind: "embedding", ...detail });
+    } catch {
+      /* status sink errors are non-fatal */
+    }
   }
 
   async function embedOne(input: string | EmbedInput): Promise<EmbeddingVector> {
@@ -156,31 +174,68 @@ export function createEmbedderWithProvider(
         const texts = slice.map((s) => s.text);
         roundTrips++;
         let raw: number[][];
+        const startedAt = Date.now();
         try {
           const ctx: ProviderCallCtx = {
             config,
             log: providerCtxLog,
           };
           raw = await provider.embed(texts, role, ctx);
+          // Record success but DO NOT clear `lastError` — the viewer
+          // compares `lastError.at` against `lastOkAt` to decide the
+          // overview card colour. Clearing here would let one cache-
+          // friendly success silently mask a still-real provider
+          // outage that just produced a `system_error` log row.
           lastOkAt = Date.now();
-          lastError = null;
+          notifyStatus({
+            status: "ok",
+            provider: provider.name,
+            model: config.model,
+            at: lastOkAt,
+            durationMs: lastOkAt - startedAt,
+          });
         } catch (err) {
           failures++;
-          lastError = {
-            at: Date.now(),
-            message:
-              err instanceof MemosError
-                ? `${err.code}: ${err.message}`
-                : err instanceof Error
-                ? err.message
-                : String(err),
-          };
+          const errAt = Date.now();
+          const errMessage =
+            err instanceof MemosError
+              ? `${err.code}: ${err.message}`
+              : err instanceof Error
+              ? err.message
+              : String(err);
+          lastError = { at: errAt, message: errMessage };
           logger.warn("provider.failed", {
             provider: provider.name,
             model: config.model,
             role,
             count: texts.length,
             err: toErrDetail(err),
+          });
+          // Notify the bootstrap-supplied error sink (if any). Wrapped in
+          // its own try/catch so a buggy sink never masks the original
+          // failure for the caller.
+          if (config.onError) {
+            try {
+              config.onError({
+                kind: "embedding",
+                provider: provider.name,
+                model: config.model,
+                message: errMessage,
+                code: err instanceof MemosError ? err.code : undefined,
+                at: errAt,
+              });
+            } catch {
+              /* sink errors are non-fatal */
+            }
+          }
+          notifyStatus({
+            status: "error",
+            provider: provider.name,
+            model: config.model,
+            message: errMessage,
+            code: err instanceof MemosError ? err.code : undefined,
+            at: errAt,
+            durationMs: errAt - startedAt,
           });
           throw err instanceof MemosError
             ? err
@@ -199,11 +254,19 @@ export function createEmbedderWithProvider(
         }
         const normalize = config.normalize ?? true;
         const processed = postProcess(raw, {
-          dimensions: config.dimensions,
+          dimensions: actualDimensions,
           provider: provider.name,
           model: config.model,
           normalize,
         });
+        if (actualDimensions <= 0 && processed[0]) {
+          actualDimensions = processed[0].length;
+          logger.info("dimensions.inferred", {
+            provider: provider.name,
+            model: config.model,
+            dimensions: actualDimensions,
+          });
+        }
         for (let j = 0; j < slice.length; j++) {
           const vec = processed[j]!;
           const entry = slice[j]!;
@@ -229,7 +292,9 @@ export function createEmbedderWithProvider(
   const api: Embedder = {
     provider: provider.name,
     model: config.model,
-    dimensions: config.dimensions,
+    get dimensions() {
+      return actualDimensions;
+    },
     embedOne,
     embedMany,
     stats(): EmbedStats {
@@ -257,7 +322,7 @@ export function createEmbedderWithProvider(
   logger.info("init", {
     provider: provider.name,
     model: config.model,
-    dimensions: config.dimensions,
+    dimensions: actualDimensions > 0 ? actualDimensions : "auto",
     cacheEnabled: config.cache.enabled,
     batchSize: config.batchSize ?? 32,
   });

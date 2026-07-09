@@ -63,9 +63,13 @@ function applyTrial(
 ): LifecycleUpdate {
   const trialsAttempted = skill.trialsAttempted + 1;
   const trialsPassed = skill.trialsPassed + (passed ? 1 : 0);
-  // Beta posterior: mean = (α + passed) / (α + β + attempted)
-  //   α = β = 1 (uniform prior)
-  const eta = clamp01((trialsPassed + 1) / (trialsAttempted + 2));
+  const eta = trialEtaWithPrior(
+    skill.eta,
+    skill.trialsAttempted,
+    skill.trialsPassed,
+    trialsAttempted,
+    trialsPassed,
+  );
   let status: SkillRow["status"] = skill.status;
   let transition: SkillLifecycleTransition | undefined;
 
@@ -85,6 +89,23 @@ function applyTrial(
   }
 
   return { status, eta, trialsAttempted, trialsPassed, transition };
+}
+
+function trialEtaWithPrior(
+  currentEta: number,
+  previousAttempts: number,
+  previousPasses: number,
+  nextAttempts: number,
+  nextPasses: number,
+): number {
+  // Treat the pre-trial η as one pseudo-observation, then fold in the
+  // accumulated trial record. This preserves the skill's policy-derived
+  // prior while still letting repeated real outcomes dominate.
+  const priorStrength = 1;
+  const priorEta = clamp01(
+    currentEta * (priorStrength + previousAttempts) - previousPasses,
+  );
+  return clamp01((priorEta * priorStrength + nextPasses) / (priorStrength + nextAttempts));
 }
 
 function applyThumbs(
@@ -178,6 +199,37 @@ export function shouldArchiveIdle(
   const age = now - skill.updatedAt;
   if (age < idleMs) return false;
   return skill.eta < cfg.minEtaForRetrieval;
+}
+
+/**
+ * Decide whether a non-repair candidate skill should skip trial
+ * and become active immediately.  `eta` already encodes the
+ * gain / support of the source policies (initialised at
+ * crystallisation and kept current by reward drift), so we
+ * don't need a separate gain / support gate.
+ */
+export function shouldPromoteCandidate(
+  skill: SkillRow,
+  cfg: SkillConfig,
+): boolean {
+  if (skill.status !== "candidate") return false;
+  if (hasDecisionGuidance(skill)) return false;
+  return skill.eta >= cfg.minEtaForRetrieval;
+}
+
+function hasDecisionGuidance(skill: SkillRow): boolean {
+  const procedure = skill.procedureJson;
+  if (!procedure || typeof procedure !== "object") return false;
+  const guidance = (procedure as {
+    decisionGuidance?: {
+      preference?: unknown[];
+      antiPattern?: unknown[];
+    };
+  }).decisionGuidance;
+  return Boolean(
+    (Array.isArray(guidance?.preference) && guidance.preference.length > 0) ||
+      (Array.isArray(guidance?.antiPattern) && guidance.antiPattern.length > 0),
+  );
 }
 
 function clamp01(n: number): number {

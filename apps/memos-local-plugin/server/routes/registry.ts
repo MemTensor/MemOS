@@ -44,7 +44,8 @@ import { registerAdminRoutes } from "./admin.js";
 import { registerModelsRoutes } from "./models.js";
 import { registerApiLogsRoutes } from "./api-logs.js";
 import { registerDiagRoutes } from "./diag.js";
-import { registerHubRoutes } from "./hub.js";
+import { registerEmbeddingRoutes } from "./embeddings.js";
+import { registerTelemetryRoutes } from "./telemetry.js";
 
 export interface RouteContext {
   req: IncomingMessage;
@@ -163,7 +164,7 @@ export function buildRoutes(
   registerHealthRoutes(routes, deps);
   registerOverviewRoutes(routes, deps);
   registerSessionRoutes(routes, deps);
-  registerMemoryRoutes(routes, deps);
+  registerMemoryRoutes(routes, deps, options);
   registerTraceRoutes(routes, deps);
   registerPoliciesRoutes(routes, deps);
   registerSkillRoutes(routes, deps);
@@ -172,15 +173,16 @@ export function buildRoutes(
   registerLogsRoutes(routes, deps, options);
   registerConfigRoutes(routes, deps);
   registerMetricsRoutes(routes, deps);
-  registerImportExportRoutes(routes, deps);
-  registerMigrateRoutes(routes, deps);
+  registerImportExportRoutes(routes, deps, options);
+  registerMigrateRoutes(routes, deps, options);
   registerHubAdminRoutes(routes, deps);
-  registerAuthRoutes(routes, deps);
-  registerAdminRoutes(routes, deps);
+  registerAuthRoutes(routes, deps, options);
+  registerAdminRoutes(routes, deps, options);
   registerModelsRoutes(routes, deps);
+  registerEmbeddingRoutes(routes, deps);
   registerApiLogsRoutes(routes, deps);
-  registerHubRoutes(routes, deps);
   registerDiagRoutes(routes, deps);
+  registerTelemetryRoutes(routes, deps);
   return routes;
 }
 

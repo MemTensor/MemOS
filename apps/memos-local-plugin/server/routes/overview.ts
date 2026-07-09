@@ -18,6 +18,15 @@ import type { Routes } from "./registry.js";
 
 export function registerOverviewRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/overview", async () => {
+    // `viewer_opened` is now emitted by the SPA itself via
+    // `POST /api/v1/telemetry/viewer-opened` (see
+    // `viewer/src/components/App.tsx`). The previous in-memory
+    // `viewerTracked` flag here was per-process and triggered on any
+    // GET — including background polling and CLI tooling — so the
+    // metric drifted on every bridge restart and over-counted
+    // headless callers. Routing the ping through the viewer's mount
+    // hook keeps the semantics honest (a browser actually opened
+    // the page) and is naturally deduped by browser tab lifetime.
     const [health, episodeIds, skills, policies, worldModels, metrics] =
       await Promise.all([
         deps.core.health(),

@@ -37,11 +37,27 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
     const statusRaw = params.get("status");
     const status = isValidPolicyStatus(statusRaw) ? statusRaw : undefined;
     const q = params.get("q") || undefined;
-    const policies = await deps.core.listPolicies({ status, limit, offset, q });
+    const ownerAgentKind = params.get("ownerAgentKind") || undefined;
+    const ownerProfileId = params.get("ownerProfileId") || undefined;
+    const policies = await deps.core.listPolicies({
+      status,
+      limit,
+      offset,
+      q,
+      ownerAgentKind,
+      ownerProfileId,
+    });
+    const total = await deps.core.countPolicies({
+      status,
+      q,
+      ownerAgentKind,
+      ownerProfileId,
+    });
     return {
       policies,
       limit,
       offset,
+      total,
       nextOffset: policies.length === limit ? offset + limit : undefined,
     };
   });
@@ -258,11 +274,25 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
     const offset =
       Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const q = params.get("q") || undefined;
-    const worldModels = await deps.core.listWorldModels({ limit, offset, q });
+    const ownerAgentKind = params.get("ownerAgentKind") || undefined;
+    const ownerProfileId = params.get("ownerProfileId") || undefined;
+    const worldModels = await deps.core.listWorldModels({
+      limit,
+      offset,
+      q,
+      ownerAgentKind,
+      ownerProfileId,
+    });
+    const total = await deps.core.countWorldModels({
+      q,
+      ownerAgentKind,
+      ownerProfileId,
+    });
     return {
       worldModels,
       limit,
       offset,
+      total,
       nextOffset: worldModels.length === limit ? offset + limit : undefined,
     };
   });

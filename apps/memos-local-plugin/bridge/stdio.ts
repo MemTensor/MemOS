@@ -52,6 +52,20 @@ export interface StdioServerHandle {
   close: () => Promise<void>;
   /** Resolve once stdin ends. */
   done: Promise<void>;
+  /**
+   * Send a JSON-RPC request **from the bridge to the client** and wait
+   * for the matching response. Used by the host LLM bridge to ask the
+   * adapter (e.g. the Hermes Python provider) to run a fallback LLM
+   * call using the agent's own model.
+   *
+   * IDs use the `"srv-N"` prefix so they cannot collide with the
+   * client's numeric request IDs.
+   */
+  serverRequest<R = unknown>(
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number },
+  ): Promise<R>;
 }
 
 // ─── Server ─────────────────────────────────────────────────────────────────
@@ -66,12 +80,46 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
   const eventsHandlers = new Set<symbol>();
   const logsHandlers = new Set<symbol>();
 
+  // ─── Server-initiated RPC bookkeeping ──
+  // Reverse-direction requests (bridge → client) live in their own
+  // ID namespace ("srv-1", "srv-2", …) so they never collide with the
+  // numeric IDs the Python client uses for forward requests.
+  let serverRequestSeq = 0;
+  const serverPending = new Map<
+    string,
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: unknown) => void;
+      timer: ReturnType<typeof setTimeout> | null;
+    }
+  >();
+
   const eventsUnsubscribe = options.core.subscribeEvents((e) => {
     writeNotification(RPC_METHODS.EVENTS_NOTIFY, e);
   });
   const logsUnsubscribe = options.core.subscribeLogs((r) => {
     writeNotification(RPC_METHODS.LOGS_FORWARD, r);
   });
+
+  function finishTransport(err?: Error): void {
+    if (closed) return;
+    closed = true;
+    try {
+      eventsUnsubscribe();
+    } catch {
+      /* ignore */
+    }
+    try {
+      logsUnsubscribe();
+    } catch {
+      /* ignore */
+    }
+    for (const [id, entry] of serverPending) {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.reject(err ?? new Error("stdio bridge closed"));
+      serverPending.delete(id);
+    }
+  }
 
   function writeLine(obj: unknown): void {
     try {
@@ -103,6 +151,7 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
   }
 
   async function handleLine(line: string): Promise<void> {
+    if (closed) return;
     const trimmed = line.trim();
     if (trimmed.length === 0) return;
 
@@ -115,6 +164,31 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
           text: err instanceof Error ? err.message : String(err),
         }),
       );
+      return;
+    }
+
+    // Reverse-direction response: the client is replying to a request
+    // we previously sent via `serverRequest`. Match by `srv-` ID and
+    // resolve / reject the matching pending promise.
+    const raw = msg as unknown as Record<string, unknown>;
+    if (
+      raw &&
+      typeof raw === "object" &&
+      typeof raw.id === "string" &&
+      (raw.id as string).startsWith("srv-") &&
+      (raw.result !== undefined || raw.error !== undefined)
+    ) {
+      const id = raw.id as string;
+      const pending = serverPending.get(id);
+      if (pending) {
+        serverPending.delete(id);
+        if (pending.timer) clearTimeout(pending.timer);
+        if (raw.error != null) {
+          pending.reject(raw.error);
+        } else {
+          pending.resolve(raw.result);
+        }
+      }
       return;
     }
 
@@ -156,6 +230,7 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
 
   const donePromise = new Promise<void>((resolve) => {
     stdin.on("data", (chunk) => {
+      if (closed) return;
       buffer += String(chunk);
       let nl = buffer.indexOf("\n");
       while (nl >= 0) {
@@ -170,15 +245,43 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
         void handleLine(buffer);
         buffer = "";
       }
+      finishTransport();
       resolve();
     });
     stdin.on("error", (err) => {
       if (logToStderr) {
         process.stderr.write(`bridge.stdio.read.err: ${err.message}\n`);
       }
+      finishTransport(err);
       resolve();
     });
   });
+
+  function serverRequest<R = unknown>(
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number },
+  ): Promise<R> {
+    const id = `srv-${++serverRequestSeq}`;
+    const timeoutMs = options?.timeoutMs ?? 60_000;
+    return new Promise<R>((resolve, reject) => {
+      if (closed) {
+        reject(new Error("stdio bridge closed"));
+        return;
+      }
+      const timer = setTimeout(() => {
+        if (serverPending.delete(id)) {
+          reject(new Error(`serverRequest ${method} timed out after ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+      serverPending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timer,
+      });
+      writeLine({ jsonrpc: "2.0", id, method, params });
+    });
+  }
 
   return {
     get connected() {
@@ -186,21 +289,11 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
     },
     async close() {
       if (closed) return;
-      closed = true;
-      try {
-        eventsUnsubscribe();
-      } catch {
-        /* ignore */
-      }
-      try {
-        logsUnsubscribe();
-      } catch {
-        /* ignore */
-      }
-      // Drain remaining lines then flush.
-      await donePromise;
+      finishTransport();
+      stdin.pause?.();
     },
     done: donePromise,
+    serverRequest,
   };
 }
 
@@ -302,13 +395,13 @@ export async function waitForShutdown(
   core: MemoryCore,
   handle: StdioServerHandle,
 ): Promise<void> {
-  // Stdin closing is the "client disconnected" signal.
-  await handle.done;
+  await handle.close();
   try {
     await core.shutdown();
   } catch {
     /* swallow */
   }
-  await handle.close();
-  await once(process.stdout, "drain").catch(() => {});
+  if (process.stdout.writableNeedDrain) {
+    await once(process.stdout, "drain").catch(() => {});
+  }
 }
