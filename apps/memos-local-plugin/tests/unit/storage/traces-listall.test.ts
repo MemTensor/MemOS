@@ -5,8 +5,9 @@
  * Root cause: capture.ts dedup callers used `tracesRepo.list({ episodeId })`,
  * which is paginated and silently truncates to 500 rows. Any episode with
  * more than 500 rows would see the older rows re-inserted as "novel" every
- * runLite/runReflect cycle. The fix is `listAllForEpisode(episodeId)`, an
- * uncapped read used only for dedup/reconciliation.
+ * runLite/runReflect cycle. The fix is uncapped episode reconciliation reads
+ * (`listAllForEpisode(episodeId)` and the legacy `list({ episodeId })` path
+ * when no explicit page was requested).
  *
  * These tests pin the new contract: give me EVERY row for the episode, no
  * matter how large it grew, so callers can compute the full "already seen"
@@ -97,6 +98,19 @@ describe("traces.listAllForEpisode — uncapped episode fetch (#2076)", () => {
     const tsSet = new Set(all.map((t) => t.ts));
     expect(tsSet.has(1_000)).toBe(true);
     expect(tsSet.has(1_000 + N - 1)).toBe(true);
+  });
+
+  it("keeps legacy episode-only list() calls uncapped unless the caller asks for a page", () => {
+    const N = 750;
+    for (let i = 0; i < N; i++) {
+      repo.insert(makeTrace({ id: `t-${i}`, ts: 1_000 + i, turnId: i }));
+    }
+
+    const unpaged = repo.list({ episodeId: "ep-huge" });
+    expect(unpaged.length).toBe(N);
+
+    const paged = repo.list({ episodeId: "ep-huge", limit: 25 });
+    expect(paged.length).toBe(25);
   });
 
   it("scopes strictly by episodeId — other episodes' rows are excluded", () => {

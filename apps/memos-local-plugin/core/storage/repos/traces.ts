@@ -253,7 +253,13 @@ export function makeTracesRepo(db: StorageDb) {
       }
       if (tr.sql) fragments.push(tr.sql);
       const where = joinWhere(fragments);
-      const page = buildPageClauses(filter, "ts");
+      const shouldUseUncappedEpisodeScan =
+        Boolean(filter.episodeId) &&
+        filter.limit === undefined &&
+        filter.offset === undefined;
+      const page = shouldUseUncappedEpisodeScan
+        ? `ORDER BY ts ${filter.newestFirst === false ? "ASC" : "DESC"}`
+        : buildPageClauses(filter, "ts");
       const sql = `SELECT ${COLUMNS.join(", ")} FROM traces ${where} ${page}`;
       return db.prepare<typeof params, RawTraceRow>(sql).all(params).map(mapRow);
     },

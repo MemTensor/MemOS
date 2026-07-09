@@ -404,9 +404,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // Pair each normalized step with its already-persisted trace row
     // (matched by ts). If runLite was skipped for any step, fall back
     // to a fresh insert path so we don't lose data.
-    // #2076: uncapped dedup read — reflect must see every trace we
-    // ever wrote for this episode, not just the newest 500.
-    const existing = deps.tracesRepo.listAllForEpisode(input.episode.id);
+    const existing = deps.tracesRepo.list({ episodeId: input.episode.id });
     const traceByTs = new Map<number, (typeof existing)[number]>();
     for (const tr of existing) traceByTs.set(tr.ts, tr);
     const orphan = normalized.filter((s) => !traceByTs.has(s.ts));
@@ -436,12 +434,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       }));
       const { vecs } = await runEmbed(orphanScored, summaries, warnings);
       const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
-      // Reuse the `existing` scan we already ran above — the orphan
-      // persistRows only needs the signature Set, and re-running
-      // `listAllForEpisode` here (or its narrow sibling) would be a
-      // duplicate full-episode scan for no additional information.
-      const seenSignatures = new Set(existing.map(traceIdentitySignature));
-      await persistRows(orphanRows, input, warnings, {}, seenSignatures);
+      await persistRows(orphanRows, input, warnings);
       for (const r of orphanRows) traceByTs.set(r.ts, r);
     }
 
