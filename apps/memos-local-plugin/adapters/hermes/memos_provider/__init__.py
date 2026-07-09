@@ -66,7 +66,13 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from bridge_client import BridgeError, MemosBridgeClient, MemosHttpClient  # noqa: E402
-from daemon_manager import ensure_bridge_running, ensure_viewer_daemon, probe_viewer_status, kill_zombie_bridges, startup_lock_active  # noqa: E402
+from daemon_manager import (  # noqa: E402
+    ensure_bridge_running,
+    ensure_viewer_daemon,
+    kill_zombie_bridges,
+    probe_viewer_status,
+    startup_lock_active,
+)
 
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
@@ -428,13 +434,12 @@ class MemTensorProvider(MemoryProvider):
             if startup_lock_active():
                 time.sleep(1.0)
                 viewer_status = probe_viewer_status()
-            if viewer_status == "running_memos":
-                if self._connect_http_bridge(session_id):
-                    logger.info(
-                        "MemOS: bridge ready (HTTP, late probe) session=%s platform=%s (episode deferred)",
-                        self._session_id,
-                        self._platform,
-                    )
+            if viewer_status == "running_memos" and self._connect_http_bridge(session_id):
+                logger.info(
+                    "MemOS: bridge ready (HTTP, late probe) session=%s platform=%s (episode deferred)",
+                    self._session_id,
+                    self._platform,
+                )
 
         if self._bridge is None:
             try:
@@ -1955,10 +1960,11 @@ class MemTensorProvider(MemoryProvider):
             ensure_bridge_running()
             # Try HTTP first if daemon is running
             viewer_status = probe_viewer_status()
-            if viewer_status == "running_memos":
-                if self._connect_http_bridge(session_id, timeout=timeout):
-                    logger.info("MemOS: reconnected via HTTP")
-                    return
+            if viewer_status == "running_memos" and self._connect_http_bridge(
+                session_id, timeout=timeout
+            ):
+                logger.info("MemOS: reconnected via HTTP")
+                return
 
             try:
                 ensure_viewer_daemon()
