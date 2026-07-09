@@ -1837,6 +1837,13 @@ input,textarea,select{font-family:inherit;font-size:inherit}
               <button class="btn btn-ghost" onclick="loadConfig()" data-i18n="settings.reset">Reset</button>
               <button class="btn btn-primary" onclick="saveGeneralConfig()" data-i18n="settings.save">Save Settings</button>
             </div>
+            <div class="settings-card-divider"></div>
+            <div class="settings-card-subtitle" data-i18n="settings.export">\u{1F4E4} Export Data</div>
+            <div class="field-hint" style="margin-bottom:10px" data-i18n="settings.export.hint">Download all your memories, tasks, and skills as a backup file. Choose JSON for full data or CSV for memories only.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-ghost" onclick="exportData('json')" data-i18n="settings.export.json">\u2B07 Export JSON (full backup)</button>
+              <button class="btn btn-ghost" onclick="exportData('csv')" data-i18n="settings.export.csv">\u2B07 Export CSV (memories only)</button>
+            </div>
           </div>
         </div>
 
@@ -2327,6 +2334,10 @@ const I18N={
     'settings.telemetry':'Telemetry',
     'settings.telemetry.enabled':'Enable Anonymous Telemetry',
     'settings.telemetry.hint':'Only collects tool names, latencies and version info. No memory content or personal data.',
+    'settings.export':'Export Data',
+    'settings.export.hint':'Download all your memories, tasks, and skills as a backup file.',
+    'settings.export.json':'Export JSON (full backup)',
+    'settings.export.csv':'Export CSV (memories only)',
     'settings.viewerport':'Viewer Port',
     'settings.viewerport.hint':'Requires restart to take effect',
     'settings.taskAutoFinalize':'Task Auto-Finalize (hours)',
@@ -3100,6 +3111,10 @@ const I18N={
     'settings.telemetry':'数据统计',
     'settings.telemetry.enabled':'启用匿名数据统计',
     'settings.telemetry.hint':'仅收集工具名称、响应时间和版本号，不涉及任何记忆内容或个人数据。',
+    'settings.export':'导出数据',
+    'settings.export.hint':'将所有记忆、任务和技能下载为备份文件。',
+    'settings.export.json':'导出 JSON（完整备份）',
+    'settings.export.csv':'导出 CSV（仅记忆）',
     'settings.viewerport':'Viewer 端口',
     'settings.viewerport.hint':'修改后需重启网关生效',
     'settings.taskAutoFinalize':'任务自动完结（小时）',
@@ -7491,6 +7506,16 @@ async function saveHubConfig(){
     loadSharingStatus(true);
     if(_activeView==='admin') loadAdminData();
   }
+}
+
+function exportData(format){
+  var url='/api/export?format='+encodeURIComponent(format);
+  var a=document.createElement('a');
+  a.href=url;
+  a.style.display='none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 async function saveGeneralConfig(){
