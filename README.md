@@ -1,16 +1,18 @@
-# MemOS
 
-Intelligence begins with memory.
 
-Give your AI persistent memory and the ability to grow.
+#   MemOS 2.0 Stardust（星尘）
 
-Scalable memory services for AI applications — keeping models consistent and personalized across tasks and scenarios.
+**Intelligence begins with memory.**  
+**Give your Agent persistent memory and the ability to grow.**  
+**Scalable memory services for AI applications — keeping models consistent and personalized across tasks and scenarios.**
 
-[Docs](https://memos-docs.openmem.net/home/overview/) · [Paper](https://arxiv.org/abs/2507.03724) · [Discord](https://discord.gg/Txbx3gebZR) · [X](https://x.com/MemOS_dev) · [Issues](https://github.com/MemTensor/MemOS/issues)
+
 
 **English** | [中文](README_ZH.md)
 
-## Performance
+---
+
+## 📊 Performance
 
 MemOS leads across multiple benchmarks — evaluated against mainstream commercial memory products across 5 user memory and 5 agent memory tasks.
 
@@ -31,7 +33,7 @@ MemOS leads across multiple benchmarks — evaluated against mainstream commerci
 
 Evaluated via OmniMemEval — [https://github.com/MemTensor/OmniMemEval](https://github.com/MemTensor/OmniMemEval).
 
-## What MemOS Is For
+## 🎯 What MemOS Is For
 
 MemOS gives AI agents long-term memory. Common uses:
 
@@ -40,9 +42,7 @@ MemOS gives AI agents long-term memory. Common uses:
 - Personalized agents that adapt to individual preferences
 - Multi-agent collaboration with shared or isolated memory
 
-
-
-## Quick Start
+## 🚀 Quick Start
 
 MemOS is built around three entry points. Pick the one that matches your scenario.
 
@@ -54,10 +54,7 @@ MemOS is built around three entry points. Pick the one that matches your scenari
 | Infra needed | Neo4j + Qdrant     | None (uses MemOS Cloud)  | None (local SQLite)             |
 | Data lives   | Your servers       | MemOS Cloud              | Your machine                    |
 
-
-
-
-### 1. Self-Host the MemOS Service
+### 🖥️ Self-Host the MemOS Service
 
 You want to run MemOS as a REST service on your own machine or cluster.
 
@@ -118,9 +115,16 @@ res = requests.post(f"{base}/search", headers=headers, data=json.dumps({
 print(res.json())
 ```
 
+### 🧠 MemOS Plugin: Persistent Memory for Your AI Agents ✨
 
+Your OpenClaw and Hermes Agents now have **the best** memory system — choose ***Cloud Service*** or ***Self-hosted*** to get started 🏃🏻
 
-### 2. OpenClaw Cloud Plugin
+| 🔌 Plugin                                                                                                     | 💡 Core Features | 🧩 Resources                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 🧠 **[memos-local-plugin 2.0](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin)**         |                  | 🌐 [Website](https://memos-claw.openmem.net/) · 📖 [Docs](https://memos-docs.openmem.net/cn/openclaw/local_plugin) · 🐙 [GitHub](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-plugin) |
+| ☁️ **[OpenClaw Cloud Plugin](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin)** |                  | 🖥️ [MemOS Dashboard](https://memos-dashboard.openmem.net/login/) · 📖 [Full Tutorial](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin)                                                                                                                         |
+
+#### 1. OpenClaw Cloud Plugin
 
 You use OpenClaw and want persistent memory via MemOS Cloud — no infrastructure to run.
 
@@ -138,7 +142,7 @@ openclaw gateway restart
 
 The plugin recalls memories from MemOS Cloud before each agent run and saves new messages back after the run ends.
 
-### 3. Local Plugin (memos-local-plugin 2.0)
+#### 2. Local Plugin (memos-local-plugin 2.0)
 
 You use Hermes Agent or OpenClaw and want 100% on-device memory — nothing leaves your machine.
 
@@ -149,11 +153,7 @@ You use Hermes Agent or OpenClaw and want 100% on-device memory — nothing leav
 
 Features: hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution (L1 traces / L2 policies / L3 world model), multi-agent collaboration, local-first SQLite storage.
 
-> **Docker note:** When running the local plugin inside Docker, set the `MEMOS_HOME` environment variable or pass `--home` to specify the config location. See [Docker deployment](./apps/memos-local-plugin/README.md#docker-deployment).
-
-
-
-## Community
+## 🤝 Community
 
 - **GitHub Issues:** [https://github.com/MemTensor/MemOS/issues](https://github.com/MemTensor/MemOS/issues)
 - **GitHub Discussions:** [https://github.com/MemTensor/MemOS/discussions](https://github.com/MemTensor/MemOS/discussions)
@@ -162,7 +162,7 @@ Features: hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution 
 
 
 
-## Citation
+## 📚 Citation
 
 If you use MemOS in your research, please cite:
 
@@ -186,6 +186,6 @@ If you use MemOS in your research, please cite:
 
 
 
-## License
+## ⚖️ License
 
 MemOS is licensed under the [Apache 2.0 License](./LICENSE).
