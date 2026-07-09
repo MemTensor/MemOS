@@ -34,7 +34,7 @@
     ]
   },
   "extensions": [
-    "./index.ts"
+    "./dist/index.js"
   ],
   "contracts": {
     "tools": [
