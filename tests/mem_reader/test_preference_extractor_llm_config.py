@@ -12,7 +12,6 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
-from memos.types.general_types import MemoryView
 
 
 def test_product_default_config_wires_preference_extractor_model(monkeypatch):
@@ -150,8 +149,6 @@ def test_multimodal_transfer_uses_preference_extractor_llm():
             "memos.mem_reader.multi_modal_struct.process_preference_fine", return_value=[]
         ) as mock_process_pref,
     ):
-        reader._process_transfer_multi_modal_data(
-            [raw_node], allow_memory_view=[MemoryView.PREFERENCE]
-        )
+        reader._process_transfer_multi_modal_data([raw_node])
 
     assert mock_process_pref.call_args.args[2] is reader.preference_extractor_llm
