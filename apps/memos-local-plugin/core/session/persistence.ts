@@ -64,6 +64,7 @@ export interface EpisodesRepo {
   }): void;
   updateTraceIds(id: EpisodeId, traceIds: string[]): void;
   updateMeta(id: EpisodeId, metaPatch: Record<string, unknown>): void;
+  deleteById(id: EpisodeId): void;
   close(id: EpisodeId, endedAt: EpochMs, rTask?: number, meta?: Record<string, unknown>): void;
   /**
    * Flip a closed episode back to `open` — V7 §0.1 "revision" path.
@@ -152,6 +153,9 @@ export function adaptEpisodesRepo(sqlite: SqliteEpisodes): EpisodesRepo {
     },
     updateMeta(id, metaPatch) {
       sqlite.updateMeta(id, metaPatch);
+    },
+    deleteById(id) {
+      sqlite.deleteById(id);
     },
     close(id, endedAt, rTask, meta) {
       // CRITICAL: never use `episodes.upsert` here. The repo's upsert

@@ -57,6 +57,10 @@ export function createMemorySearchTool(engine: RecallEngine, store?: SqliteStore
           type: "string",
           description: "Optional hub bearer token override for group/all search or integration tests.",
         },
+        excludeSessionKey: {
+          type: "string",
+          description: "Optional sessionKey to exclude from recall. Pass the current conversation's sessionKey to avoid recalling chunks from the ongoing session — useful to save tokens and surface only historical memories.",
+        },
       },
     },
     handler: async (input) => {
@@ -66,12 +70,16 @@ export function createMemorySearchTool(engine: RecallEngine, store?: SqliteStore
       const minScore = input.minScore as number | undefined;
       const ownerFilter = resolveOwnerFilter(input.owner);
       const scope = resolveScope(input.scope);
+      const excludeSessionKey = typeof input.excludeSessionKey === "string" && input.excludeSessionKey.length > 0
+        ? input.excludeSessionKey
+        : undefined;
 
       const localSearch = engine.search({
         query,
         maxResults,
         minScore,
         ownerFilter,
+        excludeSessionKey,
       });
 
       if (scope === "local" || !store || !ctx) {

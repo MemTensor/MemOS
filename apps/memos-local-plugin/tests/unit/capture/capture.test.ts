@@ -217,6 +217,50 @@ describe("capture/pipeline (end-to-end)", () => {
     });
   }
 
+  it("lightweight capture merges one turn into one memory with summary-only embedding", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "capture.summarize": { summary: "looked up sales and reported final answer" },
+      },
+    });
+    const embedder = fakeEmbedder({ dimensions: 8 });
+    const runner = buildRunner({ alphaScoring: true, synthReflections: true }, llm, embedder);
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", JSON.stringify({ total: 42 }), 1_100, {
+          tool: "db_query",
+          input: { sql: "select total from sales" },
+          output: { total: 42 },
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "current sales are 42", 1_200),
+      ],
+    });
+
+    const result = await runner.runLightweight({ episode: ep });
+    const rows = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+
+    expect(result.traceIds).toHaveLength(1);
+    expect(result.llmCalls.summarize).toBe(1);
+    expect(result.llmCalls.reflectionSynth).toBe(0);
+    expect(result.llmCalls.alphaScoring).toBe(0);
+    expect(embedder.stats().requests).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.userText).toBe("look up current sales");
+    expect(rows[0]!.agentText).toBe("current sales are 42");
+    expect(rows[0]!.toolCalls).toHaveLength(1);
+    expect(rows[0]!.summary).toBe("looked up sales and reported final answer");
+    expect(rows[0]!.tags).toContain("lightweight_memory");
+    expect(rows[0]!.vecSummary).toBeInstanceOf(Float32Array);
+    expect(rows[0]!.vecAction).toBeNull();
+    expect(tmp.repos.embeddingRetryQueue.countByStatus("pending")).toBe(0);
+    expect(seen.map((e) => e.kind)).toEqual(["capture.started", "capture.lite.done"]);
+  });
+
   it("writes one trace per step with α=0 when alpha disabled and no reflection present", async () => {
     const runner = buildRunner({ alphaScoring: false });
     const ep = episodeSnapshot({
@@ -379,6 +423,7 @@ describe("capture/pipeline (end-to-end)", () => {
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toContain("shell tool");
     expect(t.alpha).toBeCloseTo(0.8, 5);
+    expect(result.traces[0]?.reflection.reason).toBe("concrete");
   });
 
   it("clamps α to 0 when LLM marks reflection unusable", async () => {

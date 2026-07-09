@@ -48,7 +48,11 @@ export async function loadConfig(home: ResolvedHome): Promise<LoadConfigResult> 
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") {
-      warnings.push(`config file not found at ${home.configFile}; using defaults`);
+      warnings.push(
+        `config file not found at ${home.configFile}; using defaults. ` +
+        `To fix: set MEMOS_HOME or MEMOS_CONFIG_FILE env var, or use --home CLI flag. ` +
+        `See: https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin#configuration`
+      );
     } else if (MemosError.is(err)) {
       throw err;
     } else {
@@ -69,6 +73,7 @@ export async function loadConfig(home: ResolvedHome): Promise<LoadConfigResult> 
 export function resolveConfig(raw: unknown, warnings?: string[]): ResolvedConfig {
   const cleaned = pruneUnknown(raw, DEFAULT_CONFIG, "", warnings);
   const merged = deepMerge(DEFAULT_CONFIG as Record<string, unknown>, cleaned);
+  stripUnsupportedEmbeddingDimensions(merged);
 
   // Apply Typebox defaults + coerce types as much as possible.
   const completed = Value.Default(ConfigSchema, merged) as ResolvedConfig;
@@ -157,6 +162,15 @@ function pruneUnknown(
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function stripUnsupportedEmbeddingDimensions(merged: Record<string, unknown>): void {
+  const embedding = merged.embedding;
+  if (!isPlainObject(embedding)) return;
+  // Vector dimensionality is derived from the model/provider at runtime,
+  // not a user-facing config field. Ignore legacy/manual YAML values so
+  // a stale `dimensions: 384` cannot truncate bge-m3's 1024-dim vectors.
+  delete embedding.dimensions;
 }
 
 /**

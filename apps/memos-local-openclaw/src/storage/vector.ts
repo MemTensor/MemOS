@@ -22,6 +22,8 @@ export interface VectorHit {
 /**
  * Brute-force vector search over stored embeddings.
  * When maxChunks > 0, only searches the most recent maxChunks chunks (uses index; avoids full scan as data grows).
+ * When excludeSessionKey is set, chunks whose session_key equals it are filtered out before scoring,
+ * so the caller can suppress recall of the current conversation session.
  */
 export function vectorSearch(
   store: SqliteStore,
@@ -29,10 +31,11 @@ export function vectorSearch(
   topK: number,
   maxChunks?: number,
   ownerFilter?: string[],
+  excludeSessionKey?: string,
 ): VectorHit[] {
   const all = maxChunks != null && maxChunks > 0
-    ? store.getRecentEmbeddings(maxChunks, ownerFilter)
-    : store.getAllEmbeddings(ownerFilter);
+    ? store.getRecentEmbeddings(maxChunks, ownerFilter, excludeSessionKey)
+    : store.getAllEmbeddings(ownerFilter, excludeSessionKey);
   const scored: VectorHit[] = all.map((row) => ({
     chunkId: row.chunkId,
     score: cosineSimilarity(queryVec, row.vector),

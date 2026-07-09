@@ -1,4 +1,6 @@
 import copy
+import importlib
+import re
 import traceback
 
 from concurrent.futures import as_completed
@@ -12,6 +14,7 @@ from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, T
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     FastTokenizer,
+    StopwordManager,
     cosine_similarity_matrix,
     detect_lang,
     find_best_unrelated_subgroup,
@@ -32,6 +35,8 @@ from .task_goal_parser import TaskGoalParser
 
 
 logger = get_logger(__name__)
+KEYWORD_EXTRACT_TOP_K = 3
+KEYWORD_ALLOW_POS = ("n", "nr", "nrt", "ns", "nt", "nz", "vn", "v", "t", "eng", "m")
 COT_DICT = {
     "fine": {"en": COT_PROMPT, "zh": COT_PROMPT_ZH},
     "fast": {"en": SIMPLE_COT_PROMPT, "zh": SIMPLE_COT_PROMPT_ZH},
@@ -72,6 +77,30 @@ class Searcher:
         self.tokenizer = tokenizer
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
+    def _maybe_rerank(
+        self,
+        enabled: bool,
+        *,
+        query: str,
+        graph_results: list[TextualMemoryItem],
+        top_k: int,
+        **kwargs,
+    ) -> list[tuple[TextualMemoryItem, float]]:
+        if not enabled or self.reranker is None:
+            return [(item, 0.0) for item in graph_results[:top_k]]
+        return self.reranker.rerank(
+            query=query,
+            graph_results=graph_results,
+            top_k=top_k,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _query_embedding_for_rerank(enabled: bool, query_embedding):
+        if not enabled:
+            return None
+        return query_embedding[0]
+
     @timed
     def retrieve(
         self,
@@ -94,6 +123,7 @@ class Searcher:
         logger.info(
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}, user_name={user_name}"
         )
+        rerank = bool(kwargs.get("rerank", True))
         parsed_goal, query_embedding, _context, query = self._parse_task(
             query,
             info,
@@ -120,6 +150,7 @@ class Searcher:
             skill_mem_top_k,
             include_preference_memory,
             pref_mem_top_k,
+            rerank,
         )
         return results
 
@@ -278,7 +309,7 @@ class Searcher:
 
             # retrieve related nodes by embedding
             related_nodes = [
-                self.graph_store.get_node(n["id"])
+                self.graph_store.get_node(n["id"], user_name=user_name)
                 for n in self.graph_store.search_by_embedding(
                     query_embedding,
                     top_k=top_k,
@@ -345,6 +376,7 @@ class Searcher:
         skill_mem_top_k: int = 3,
         include_preference_memory: bool = False,
         pref_mem_top_k: int = 6,
+        rerank: bool = True,
     ):
         """Run A/B/C/D/E/F retrieval paths in parallel"""
         tasks = []
@@ -367,6 +399,7 @@ class Searcher:
                     search_priority,
                     user_name,
                     id_filter,
+                    rerank=rerank,
                 )
             )
             tasks.append(
@@ -382,6 +415,7 @@ class Searcher:
                     user_name,
                     id_filter,
                     mode=mode,
+                    rerank=rerank,
                 )
             )
             tasks.append(
@@ -395,6 +429,7 @@ class Searcher:
                     mode,
                     memory_type,
                     user_name,
+                    rerank=rerank,
                 )
             )
             if self.use_fulltext:
@@ -410,6 +445,7 @@ class Searcher:
                         search_priority,
                         user_name,
                         id_filter,
+                        rerank=rerank,
                     )
                 )
             if search_tool_memory:
@@ -426,6 +462,7 @@ class Searcher:
                         user_name,
                         id_filter,
                         mode=mode,
+                        rerank=rerank,
                     )
                 )
             if include_skill_memory:
@@ -442,6 +479,7 @@ class Searcher:
                         user_name,
                         id_filter,
                         mode=mode,
+                        rerank=rerank,
                     )
                 )
             if include_preference_memory:
@@ -458,6 +496,7 @@ class Searcher:
                         user_name,
                         id_filter,
                         mode=mode,
+                        rerank=rerank,
                     )
                 )
             results = []
@@ -480,6 +519,7 @@ class Searcher:
         search_priority: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
+        rerank: bool = True,
     ):
         """Retrieve and rerank from WorkingMemory"""
         if memory_type not in ["All", "WorkingMemory"]:
@@ -496,14 +536,106 @@ class Searcher:
             id_filter=id_filter,
             use_fast_graph=self.use_fast_graph,
         )
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
             search_filter=search_filter,
         )
+
+    @staticmethod
+    def _require_keyword_user_name(user_name: str | None) -> str:
+        normalized_user_name = user_name.strip() if isinstance(user_name, str) else ""
+        if not normalized_user_name:
+            raise ValueError(
+                "[PATH-KEYWORD] user_name is required for PolarDB fulltext keyword search"
+            )
+        return normalized_user_name
+
+    @staticmethod
+    def _is_keyword_stopword(term: str) -> bool:
+        normalized = term.strip()
+        return not normalized or StopwordManager.is_search_stopword(normalized)
+
+    @staticmethod
+    def _normalize_keyword_term(term: str) -> str:
+        normalized = str(term).strip()
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*(?:[._+\-/][A-Za-z0-9]+)*", normalized):
+            return normalized.lower()
+        return normalized
+
+    @staticmethod
+    def _keyword_extract_top_k(query: str, language: str) -> int:
+        cleaned_query = query.strip()
+        if not cleaned_query:
+            return 0
+        if len(cleaned_query) <= 12:
+            return 1
+        if language != "zh":
+            token_count = len(re.findall(r"\b[a-zA-Z0-9]+\b", cleaned_query))
+            return 2 if token_count <= 8 else KEYWORD_EXTRACT_TOP_K
+        if len(cleaned_query) <= 120:
+            return 2
+        return KEYWORD_EXTRACT_TOP_K
+
+    @classmethod
+    def _rank_english_keyword_terms(cls, terms: list[str]) -> list[str]:
+        term_stats: dict[str, dict[str, int | str]] = {}
+        for index, term in enumerate(terms):
+            normalized_term = cls._normalize_keyword_term(term)
+            if cls._is_keyword_stopword(normalized_term):
+                continue
+            key = normalized_term.lower()
+            if key not in term_stats:
+                term_stats[key] = {"term": normalized_term, "index": index, "count": 0}
+            term_stats[key]["count"] = int(term_stats[key]["count"]) + 1
+
+        def score(item: tuple[str, dict[str, int | str]]) -> tuple[float, int]:
+            _, data = item
+            term = str(data["term"])
+            count = int(data["count"])
+            term_score = count * 3.0 + min(len(term), 16) * 0.1
+            if any(ch.isdigit() for ch in term):
+                term_score += 1.0
+            if len(term) <= 2:
+                term_score -= 0.5
+            return (-term_score, int(data["index"]))
+
+        return [str(data["term"]) for _, data in sorted(term_stats.items(), key=score)]
+
+    def _extract_weighted_keyword_terms(self, query: str) -> list[str]:
+        language = detect_lang(query)
+        keyword_top_k = self._keyword_extract_top_k(query, language)
+        if keyword_top_k <= 0:
+            return []
+
+        if language == "zh":
+            jieba_analyse = importlib.import_module("jieba.analyse")
+
+            weighted_terms = jieba_analyse.extract_tags(
+                query,
+                topK=keyword_top_k,
+                allowPOS=KEYWORD_ALLOW_POS,
+            )
+        else:
+            tokenizer = self.tokenizer or FastTokenizer()
+            weighted_terms = self._rank_english_keyword_terms(tokenizer.tokenize_english(query))
+
+        query_words: list[str] = []
+        seen_words: set[str] = set()
+        for term in weighted_terms:
+            normalized_term = self._normalize_keyword_term(term)
+            dedupe_key = normalized_term.lower()
+            if self._is_keyword_stopword(normalized_term) or dedupe_key in seen_words:
+                continue
+            seen_words.add(dedupe_key)
+            query_words.append(normalized_term)
+            if len(query_words) >= keyword_top_k:
+                break
+        return query_words
 
     @timed
     def _retrieve_from_keyword(
@@ -517,6 +649,7 @@ class Searcher:
         search_priority: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
+        rerank: bool = True,
     ) -> list[tuple[TextualMemoryItem, float]]:
         """Keyword/fulltext path that directly calls graph DB fulltext search."""
 
@@ -524,22 +657,21 @@ class Searcher:
             return []
         if not query_embedding:
             return []
+        user_name = self._require_keyword_user_name(user_name)
 
-        query_words: list[str] = []
-        if self.tokenizer:
-            query_words = self.tokenizer.tokenize_mixed(query)
-        else:
-            query_words = query.strip().split()
-        # Use unique tokens; avoid passing the raw query into `to_tsquery(...)` because it may contain
-        # spaces/operators that cause tsquery parsing errors.
-        query_words = list(dict.fromkeys(query_words))
-        if len(query_words) > 64:
-            query_words = query_words[:64]
+        query_words = self._extract_weighted_keyword_terms(query)
         if not query_words:
             return []
+        # Quote weighted terms before `to_tsquery(...)` to avoid parsing operators from user input.
         tsquery_terms = ["'" + w.replace("'", "''") + "'" for w in query_words if w and w.strip()]
         if not tsquery_terms:
             return []
+        logger.info(
+            "[PATH-KEYWORD] weighted query_words=%s top_k=%s user_name=%s",
+            query_words,
+            top_k,
+            user_name,
+        )
 
         scopes = [memory_type] if memory_type != "All" else ["LongTermMemory", "UserMemory"]
 
@@ -548,7 +680,7 @@ class Searcher:
             try:
                 hits = self.graph_store.search_by_fulltext(
                     query_words=tsquery_terms,
-                    top_k=top_k * 2,
+                    top_k=top_k,
                     status="activated",
                     scope=scope,
                     search_filter=None,
@@ -592,9 +724,10 @@ class Searcher:
                 ordered_nodes.append(node)
 
         results = [TextualMemoryItem.from_dict(n) for n in ordered_nodes]
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -615,6 +748,7 @@ class Searcher:
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = []
@@ -686,9 +820,10 @@ class Searcher:
             results = self._deduplicate_rawfile_results(results, user_name=user_name)
             results = self._filter_intermediate_content(results)
 
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -697,7 +832,13 @@ class Searcher:
 
     @timed
     def _retrieve_from_memcubes(
-        self, query, parsed_goal, query_embedding, top_k, cube_name="memos_cube01"
+        self,
+        query,
+        parsed_goal,
+        query_embedding,
+        top_k,
+        cube_name="memos_cube01",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = self.graph_retriever.retrieve_from_cube(
@@ -707,9 +848,10 @@ class Searcher:
             cube_name=cube_name,
             user_name=cube_name,
         )
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -727,6 +869,7 @@ class Searcher:
         mode,
         memory_type,
         user_id: str | None = None,
+        rerank: bool = True,
     ):
         """Retrieve and rerank from Internet source"""
         if not self.internet_retriever:
@@ -743,9 +886,10 @@ class Searcher:
             query=query, top_k=2 * top_k, parsed_goal=parsed_goal, info=info, mode=mode
         )
         logger.info(f"[PATH-C] '{query}' Retrieved from internet {len(items)} items: {items}")
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -765,6 +909,7 @@ class Searcher:
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from ToolMemory"""
         results = {
@@ -825,17 +970,19 @@ class Searcher:
                 elif rsp and rsp[0].metadata.memory_type == "ToolTrajectoryMemory":
                     results["ToolTrajectoryMemory"].extend(rsp)
 
-        schema_reranked = self.reranker.rerank(
+        schema_reranked = self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results["ToolSchemaMemory"],
             top_k=top_k,
             parsed_goal=parsed_goal,
             search_filter=search_filter,
         )
-        trajectory_reranked = self.reranker.rerank(
+        trajectory_reranked = self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results["ToolTrajectoryMemory"],
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -857,6 +1004,7 @@ class Searcher:
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from SkillMemory"""
 
@@ -887,9 +1035,10 @@ class Searcher:
             use_fast_graph=self.use_fast_graph,
         )
 
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -909,6 +1058,7 @@ class Searcher:
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from PreferenceMemory"""
         if memory_type not in ["All", "PreferenceMemory"]:
@@ -938,9 +1088,10 @@ class Searcher:
             use_fast_graph=self.use_fast_graph,
         )
 
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -991,9 +1142,11 @@ class Searcher:
         logger.info(
             f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}"
         )
-        return self.reranker.rerank(
+        rerank = bool(kwargs.get("rerank", True))
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embeddings[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embeddings),
             graph_results=selected_items,
             top_k=top_k,
         )

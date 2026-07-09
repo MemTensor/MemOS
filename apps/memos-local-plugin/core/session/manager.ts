@@ -47,6 +47,8 @@ export interface SessionManagerDeps {
   bus?: SessionEventBus;
   /** Injected episode manager (for tests). */
   episodeManager?: EpisodeManager;
+  /** Lightweight memory mode closes technical episodes without reflect/reward semantics. */
+  lightweightMemory?: boolean;
 }
 
 export interface StartEpisodeInput {
@@ -73,6 +75,7 @@ export interface SessionManager {
   addTurn(episodeId: EpisodeId, turn: EpisodeTurnInput): EpisodeTurn;
   finalizeEpisode(episodeId: EpisodeId, input?: EpisodeFinalizeInput): EpisodeSnapshot;
   abandonEpisode(episodeId: EpisodeId, reason: string): EpisodeSnapshot;
+  discardEmptyEpisode(episodeId: EpisodeId, reason: string): EpisodeSnapshot | null;
   /** V7 §0.1 "revision" path — reopen a previously-closed episode. */
   reopenEpisode(
     episodeId: EpisodeId,
@@ -169,6 +172,23 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
       // confusion. True crash-orphans get a separate recovery path
       // at plugin bootstrap (see `recoverOrphanedEpisodes` in
       // `core/pipeline/memory-core.ts`).
+      if (deps.lightweightMemory && ep.meta.lightweightMemory === true) {
+        epm.finalize(ep.id, {
+          patchMeta: {
+            lightweightMemory: true,
+            sessionCloseReason: reason,
+          },
+        });
+        continue;
+      }
+      if (reason.startsWith("shutdown:")) {
+        epm.patchMeta(ep.id, {
+          topicState: "paused",
+          pauseReason: `session_closed:${reason}`,
+          sessionCloseReason: reason,
+        });
+        continue;
+      }
       if (isCompletedExchange(ep)) {
         epm.finalize(ep.id, {
           patchMeta: { sessionCloseReason: reason },
@@ -293,6 +313,13 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     return snap;
   }
 
+  function discardEmptyEpisode(id: EpisodeId, reason: string): EpisodeSnapshot | null {
+    const before = epm.get(id);
+    const snap = epm.discardEmpty(id, reason);
+    if (before) decrementOpenCount(before.sessionId);
+    return snap;
+  }
+
   function reopenEpisode(
     id: EpisodeId,
     reason: import("./types.js").TurnRelation,
@@ -334,9 +361,22 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     for (const ep of epm.listOpen()) {
       if (!live.has(ep.sessionId)) {
         if (isCompletedExchange(ep)) {
+          if (deps.lightweightMemory && ep.meta.lightweightMemory === true) {
+            finalizeEpisode(ep.id, {
+              patchMeta: {
+                lightweightMemory: true,
+                sessionCloseReason: `shutdown:${reason}`,
+              },
+            });
+            continue;
+          }
           finalizeEpisode(ep.id, {
             patchMeta: { sessionCloseReason: `shutdown:${reason}` },
           });
+          continue;
+        }
+        if (isDiscardableEmptyEpisode(ep)) {
+          epm.discardEmpty(ep.id, `shutdown:${reason}`);
           continue;
         }
         epm.patchMeta(ep.id, {
@@ -371,6 +411,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     addTurn: epm.addTurn,
     finalizeEpisode,
     abandonEpisode,
+    discardEmptyEpisode,
     reopenEpisode,
     hydrateEpisode,
     attachTraceIds: epm.attachTraceIds,
@@ -387,6 +428,11 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
 function stringMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = meta?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isDiscardableEmptyEpisode(ep: EpisodeSnapshot): boolean {
+  if (ep.traceIds.length > 0) return false;
+  return !ep.turns.some((t) => t.role === "assistant" && t.content.trim().length > 0);
 }
 
 // Re-export helpers tests will want to use.

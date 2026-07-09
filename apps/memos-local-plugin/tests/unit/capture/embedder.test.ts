@@ -71,6 +71,26 @@ describe("capture/embedder", () => {
     expect(e.stats().roundTrips).toBe(1);
   });
 
+  it("summary-only mode embeds one vector per step and leaves action null", async () => {
+    const e = fakeEmbedder();
+    const out = await embedSteps(
+      e,
+      [
+        step({ userText: "a", agentText: "b" }),
+        step({ userText: "c", agentText: "d" }),
+      ],
+      ["summary a", "summary c"],
+      { summaryOnly: true },
+    );
+    expect(e.stats().requests).toBe(2);
+    expect(e.stats().roundTrips).toBe(1);
+    expect(out).toHaveLength(2);
+    expect(out[0]!.summary).toBeInstanceOf(Float32Array);
+    expect(out[0]!.action).toBeNull();
+    expect(out[1]!.summary).toBeInstanceOf(Float32Array);
+    expect(out[1]!.action).toBeNull();
+  });
+
   it("tool-call-only step still embeds", async () => {
     const e = fakeEmbedder();
     const out = await embedSteps(e, [

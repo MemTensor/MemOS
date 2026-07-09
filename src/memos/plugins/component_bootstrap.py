@@ -7,6 +7,7 @@ def build_plugin_context(
     *,
     graph_db: Any,
     embedder: Any,
+    llm: Any | None = None,
     default_cube_config: Any,
     nli_client_config: dict[str, Any],
     mem_reader_config: Any,
@@ -18,6 +19,10 @@ def build_plugin_context(
         "shared": {
             "graph_db": graph_db,
             "embedder": embedder,
+            "llm": llm,
+            "mem_scheduler": None,
+            "submit_scheduler_messages": None,
+            "api_module": None,
         },
         "configs": {
             "default_cube_config": default_cube_config,

@@ -493,7 +493,7 @@ after feedback:
 - `core/types.ts`
 - `core/storage/repos/policies.ts`
 - `agent-contract/dto.ts`
-- `web/src/api/types.ts`
+- `viewer/src/api/types.ts`
 
 新增经验字段：
 

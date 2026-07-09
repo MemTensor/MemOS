@@ -79,12 +79,11 @@ export class Telemetry {
   private enabled: boolean;
   private pluginVersion: string;
   private log: Logger;
-  private dailyPingSent = false;
-  private dailyPingDate = "";
   private buffer: ArmsEvent[] = [];
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private sessionId: string;
   private firstSeenDate: string;
+  private dailyPingFile: string;
   private armsEndpoint: string;
   private armsPid: string;
   private armsEnv: string;
@@ -102,6 +101,7 @@ export class Telemetry {
     this.distinctId = this.loadOrCreateAnonymousId(stateDir);
     this.firstSeenDate = this.loadOrCreateFirstSeen(stateDir);
     this.sessionId = this.loadOrCreateSessionId(stateDir);
+    this.dailyPingFile = path.join(stateDir, "memos-local", ".last-daily-ping");
 
     const creds = loadTelemetryCredentials(pluginDir);
     this.armsEndpoint = creds.endpoint;
@@ -272,7 +272,7 @@ export class Telemetry {
   }
 
   trackTurnStart(agentName: string, latencyMs: number, hitCount: number): void {
-    this.capture("memory_search", {
+    this.capture("memos_search", {
       agent_name: agentName,
       type: "turn_start",
       latency_ms: Math.round(latencyMs),
@@ -288,7 +288,7 @@ export class Telemetry {
   }
 
   trackMemorySearch(agentName: string, latencyMs: number, hitCount: number): void {
-    this.capture("memory_search", {
+    this.capture("memos_search", {
       agent_name: agentName,
       type: "adhoc",
       latency_ms: Math.round(latencyMs),
@@ -314,11 +314,36 @@ export class Telemetry {
     });
   }
 
+  /**
+   * Emit `daily_active` at most once per UTC day per home directory.
+   *
+   * The de-dup state lives on disk (`<stateDir>/memos-local/.last-daily-ping`)
+   * so it survives process restarts. Without this, every `bridge.cts` /
+   * OpenClaw adapter spawn would emit a fresh ping (Hermes spawns one
+   * subprocess per `hermes chat`), turning `daily_active` into a
+   * "process started" counter and breaking DAU dashboards.
+   *
+   * Read failures are treated as "first time today" — that means at
+   * worst we over-report by one event after a corrupt file, never
+   * under-report. Write failures are swallowed; the next launch will
+   * just send another ping (still better than the silent in-memory
+   * failure mode the previous implementation had).
+   */
   private maybeSendDailyPing(): void {
     const today = new Date().toISOString().slice(0, 10);
-    if (this.dailyPingSent && this.dailyPingDate === today) return;
-    this.dailyPingSent = true;
-    this.dailyPingDate = today;
+    let lastPing = "";
+    try {
+      lastPing = fs.readFileSync(this.dailyPingFile, "utf-8").trim();
+    } catch {
+      // First time today (or first install) — fall through and emit.
+    }
+    if (lastPing === today) return;
+    try {
+      fs.mkdirSync(path.dirname(this.dailyPingFile), { recursive: true });
+      fs.writeFileSync(this.dailyPingFile, today, "utf-8");
+    } catch {
+      // Non-fatal; we'll just send another one next launch.
+    }
     this.capture("daily_active", { first_seen_date: this.firstSeenDate });
   }
 
