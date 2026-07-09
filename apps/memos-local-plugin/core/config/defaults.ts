@@ -53,6 +53,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     temperature: 0,
     timeoutMs: 60_000,
   },
+  storage: {
+    ftsTokenizer: "trigram",
+  },
   algorithm: {
     lightweightMemory: {
       enabled: true,

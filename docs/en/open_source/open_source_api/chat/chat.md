@@ -70,11 +70,11 @@ client = MemOSClient(api_key="...", base_url="...")
 # Initiate a chat request
 res = client.chat(
     user_id="dev_user_01",
+    conversation_id="conv_r_study_001",
     query="Based on my previous preferences, recommend an R language data cleaning workflow",
-    readable_cube_ids=["private_cube_01", "public_kb_r_lang"], # Read: personal preferences + public knowledge base
-    writable_cube_ids=["private_cube_01"],                      # Write: persist to personal space
-    add_message_on_answer=True,                                 # Enable automatic memory write-back
-    mode="fine"                                                 # Use fine-grained retrieval mode
+    knowledgebase_ids=["kb_r_lang"],  # Retrieve from the public R language knowledge base
+    add_message_on_answer=True,       # Enable automatic memory write-back
+    temperature=0.7
 )
 
 if res:

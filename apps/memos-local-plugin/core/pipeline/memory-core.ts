@@ -95,6 +95,7 @@ import {
 } from "../llm/host-bridge.js";
 
 import { createPipeline } from "./orchestrator.js";
+import { RECOVERY_REASONS } from "./recovery-constants.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
 import type { PipelineDeps, PipelineHandle } from "./types.js";
 import {
@@ -597,6 +598,11 @@ export function createMemoryCore(
     const nowMs = Date.now();
     if (nowMs - lastStaleScan < 30_000) return;
     lastStaleScan = nowMs;
+    // Issue #2063: lightweight mode disables reward / L2 / L3 / skill;
+    // the periodic auto-finalize used to emit `episode.finalized` for
+    // every stale open topic, which still cascaded into the evolution
+    // chain in earlier releases. Close them silently instead.
+    const lightweightMode = handle.algorithm.lightweightMemory.enabled;
     try {
       const openEpisodes = handle.repos.episodes
         .list({ status: "open", limit: 200 })
@@ -615,7 +621,32 @@ export function createMemoryCore(
           stale.push(ep);
         }
       }
-      if (stale.length > 0) await recoverOpenEpisodesAsSessionEnd(stale);
+      if (stale.length === 0) return;
+      if (lightweightMode) {
+        for (const ep of stale) {
+          try {
+            // Write the lightweight flag BEFORE close() so that even if
+            // close() throws mid-way, `isLightweightEpisode()` still
+            // returns true and the periodic non-lightweight rescan paths
+            // (autoRescoreDirtyClosedEpisodes) skip this episode instead
+            // of feeding it into the reward / L2 / L3 pipeline.
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              lightweightMemory: true,
+              closeReason: "lightweight_stale",
+              closedAtMs: nowMs,
+              recoveryReason: "lightweight_stale_topic_close",
+            });
+            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+          } catch (err) {
+            log.debug("stale_topic.lightweight_close_error", {
+              episodeId: ep.id,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        return;
+      }
+      await recoverOpenEpisodesAsSessionEnd(stale);
     } catch (err) {
       log.debug("stale_topic.scan_error", {
         err: err instanceof Error ? err.message : String(err),
@@ -627,6 +658,11 @@ export function createMemoryCore(
     const nowMs = Date.now();
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
+    // Issue #2063: lightweight mode explicitly disables reward — the
+    // periodic dirty-closed rescan (which would emit
+    // `episode.finalized` and call `handle.rewardRunner.run(...)`)
+    // must be a no-op.
+    if (handle.algorithm.lightweightMemory.enabled) return;
     try {
       const allDirty = handle.repos.episodes
         .list({ status: "closed", limit: 500 })
@@ -926,53 +962,107 @@ export function createMemoryCore(
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
         const nowMs = Date.now();
-        const lightweight = orphans.filter((ep) => isLightweightEpisode(ep));
-        for (const ep of lightweight) {
-          handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
-          handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
-            lightweightMemory: true,
-            closeReason: "finalized",
-            recoveredAtStartup: nowMs,
-            recoveryReason: "lightweight_startup_close",
-          });
+        // Issue #2063: when `algorithm.lightweightMemory.enabled` is
+        // true, treat EVERY orphan episode as lightweight — legacy rows
+        // written before the flag was flipped lack
+        // `meta.lightweightMemory=true`, and prior versions still
+        // re-emitted `episode.finalized` on them at startup which
+        // cascaded into reward / L2 / L3 / skill LLM calls (the
+        // "backlog of evolution calls after every bridge restart"
+        // reported by the issue). Closing them silently here matches
+        // the schema-comment guarantee that the flag disables the
+        // whole evolution pipeline.
+        const lightweightMode = handle.algorithm.lightweightMemory.enabled;
+        const treatAsLightweight = lightweightMode
+          ? orphans
+          : orphans.filter((ep) => isLightweightEpisode(ep));
+        for (const ep of treatAsLightweight) {
+          const isBackfill = lightweightMode && !isLightweightEpisode(ep);
+          let recoveryReason: string;
+          if (isBackfill) {
+            recoveryReason = "lightweight_startup_close_backfill";
+          } else {
+            recoveryReason = "lightweight_startup_close";
+          }
+          try {
+            // Write the lightweight flag BEFORE close() so that even if
+            // close() throws, `isLightweightEpisode()` still returns true
+            // for this row and the periodic non-lightweight rescan paths
+            // (autoRescoreDirtyClosedEpisodes) skip it instead of feeding
+            // it into the reward / L2 / L3 pipeline. Mirrors the ordering
+            // used by the periodic stale-topic close above.
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              lightweightMemory: true,
+              // Legacy rows being backfilled were never actually
+              // finalized through the evolution pipeline; tag them with
+              // a distinct closeReason so analytics can distinguish a
+              // real finalize from a lightweight backfill.
+              closeReason: isBackfill ? "lightweight_backfill" : "finalized",
+              recoveredAtStartup: nowMs,
+              recoveryReason,
+            });
+            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+          } catch (err) {
+            // Isolate per-episode failures so a single DB lock /
+            // constraint violation cannot abort the whole startup
+            // orphan-close loop. Mirrors the periodic stale-topic path.
+            log.debug("init.lightweight_close_error", {
+              episodeId: ep.id,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
-        const normalOrphans = orphans.filter((ep) => !isLightweightEpisode(ep));
-        const stale = normalOrphans.filter(
-          (ep) =>
-            ep.rTask != null ||
-            (ep.traceIds?.length ?? 0) > 0 ||
-            nowMs - (ep.endedAt ?? ep.startedAt) > STALE_EPISODE_TIMEOUT_MS,
-        );
-        const recent = normalOrphans.filter((ep) => !stale.includes(ep));
-        for (const ep of recent) {
-          handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
-            topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
-            pauseReason: (ep.meta?.pauseReason as string | undefined) ?? "startup_recovered_open_topic",
-            recoveredAtStartup: nowMs,
-          });
-        }
-        staleForBackground = stale;
-      }
-      const nowForDirty = Date.now();
-      const allDirty = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
-      const dirtyClosed: typeof allDirty = [];
-      for (const ep of allDirty) {
-        if (dirtyEpisodeBackoffElapsed(ep, nowForDirty)) {
-          dirtyClosed.push(ep);
+        if (lightweightMode) {
+          // No reward / L2 / L3 / skill work is scheduled when the
+          // pipeline is lightweight — leave both background queues
+          // empty so the recovery promise short-circuits below.
+          staleForBackground = [];
+          dirtyClosedForBackground = [];
         } else {
-          const dirtyMeta = (ep.meta?.rewardDirty as
-            | { failedAttempts?: number; lastFailureAt?: number }
-            | undefined) ?? {};
-          log.debug("init.dirty_closed_episodes.skip_backoff", {
-            episodeId: ep.id,
-            failedAttempts: dirtyMeta.failedAttempts ?? 0,
-            lastFailureAt: dirtyMeta.lastFailureAt ?? 0,
-          });
+          const normalOrphans = orphans.filter((ep) => !isLightweightEpisode(ep));
+          const stale = normalOrphans.filter(
+            (ep) =>
+              ep.rTask != null ||
+              (ep.traceIds?.length ?? 0) > 0 ||
+              nowMs - (ep.endedAt ?? ep.startedAt) > STALE_EPISODE_TIMEOUT_MS,
+          );
+          const recent = normalOrphans.filter((ep) => !stale.includes(ep));
+          for (const ep of recent) {
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
+              pauseReason: (ep.meta?.pauseReason as string | undefined) ?? "startup_recovered_open_topic",
+              recoveredAtStartup: nowMs,
+            });
+          }
+          staleForBackground = stale;
         }
       }
-      dirtyClosedForBackground = dirtyClosed;
+      if (handle.algorithm.lightweightMemory.enabled) {
+        // Same story for dirty-closed episodes — never rescore them
+        // when the pipeline is intentionally light.
+        dirtyClosedForBackground = [];
+      } else {
+        const nowForDirty = Date.now();
+        const allDirty = handle.repos.episodes
+          .list({ status: "closed", limit: 500 })
+          .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+        const dirtyClosed: typeof allDirty = [];
+        for (const ep of allDirty) {
+          if (dirtyEpisodeBackoffElapsed(ep, nowForDirty)) {
+            dirtyClosed.push(ep);
+          } else {
+            const dirtyMeta = (ep.meta?.rewardDirty as
+              | { failedAttempts?: number; lastFailureAt?: number }
+              | undefined) ?? {};
+            log.debug("init.dirty_closed_episodes.skip_backoff", {
+              episodeId: ep.id,
+              failedAttempts: dirtyMeta.failedAttempts ?? 0,
+              lastFailureAt: dirtyMeta.lastFailureAt ?? 0,
+            });
+          }
+        }
+        dirtyClosedForBackground = dirtyClosed;
+      }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
         err: err instanceof Error ? err.message : String(err),
@@ -1359,10 +1449,10 @@ export function createMemoryCore(
       handle.repos.episodes.updateMeta(episodeId, {
         closeReason: "finalized",
         recoveredAtStartup: endedAt,
-        recoveryReason: "dirty_reward_rescore",
+        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
       });
       const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
-        recoveryReason: "dirty_reward_rescore",
+        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
       });
       handle.buses.session.emit({
         kind: "episode.finalized",
