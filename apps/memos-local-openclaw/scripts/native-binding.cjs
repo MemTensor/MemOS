@@ -3,6 +3,9 @@
 const fs = require("fs");
 const path = require("path");
 
+let lastQuarantineTimestamp = null;
+let quarantineTimestampSequence = 0;
+
 function errorMessage(error) {
   if (error && typeof error.message === "string") return error.message;
   return String(error || "Unknown native binding error");
@@ -34,16 +37,21 @@ function quarantineNativeBinding(
   fsImpl = fs,
   now = Date.now(),
   pathImpl = path,
-  randomImpl = Math,
 ) {
   if (!bindingPath || !fsImpl.existsSync(bindingPath)) {
     return { ok: false, quarantinedPath: "", reason: "missing" };
   }
 
   const parsed = pathImpl.parse(bindingPath);
-  // Append a random suffix so two calls within the same millisecond don't
-  // collide on the quarantine target path.
-  const uniqueSuffix = `${now}-${randomImpl.random().toString(36).slice(2, 8)}`;
+  if (now === lastQuarantineTimestamp) {
+    quarantineTimestampSequence += 1;
+  } else {
+    lastQuarantineTimestamp = now;
+    quarantineTimestampSequence = 0;
+  }
+  const uniqueSuffix = quarantineTimestampSequence === 0
+    ? `${now}`
+    : `${now}-${quarantineTimestampSequence}`;
   const quarantinedPath = pathImpl.join(
     parsed.dir,
     `${parsed.name}.abi-mismatch-${uniqueSuffix}${parsed.ext}`,

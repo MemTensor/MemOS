@@ -115,22 +115,17 @@ describe("postinstall native binding validation", () => {
       renameSync: (from: string, to: string) => renames.push([from, to]),
       unlinkSync: () => {},
     };
-    // Deterministic random for the assertion.
-    const randomImpl = { random: () => 0.123456789 };
-
     const a = quarantineNativeBinding(
       "/tmp/better_sqlite3.node",
       fsImpl,
       1700000000000,
       require("path"),
-      randomImpl,
     );
     const b = quarantineNativeBinding(
       "/tmp/better_sqlite3.node",
       fsImpl,
       1700000000000,
       require("path"),
-      randomImpl,
     );
 
     expect(a.ok).toBe(true);
