@@ -42,17 +42,6 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     timeoutMs: 45_000,
     maxRetries: 3,
   },
-  skillEvolver: {
-    // Empty by default — falls back to the shared `llm` settings.
-    // Operators set this when they want a stronger model (e.g.
-    // claude-sonnet / gpt-5-thinking) for skill crystallisation.
-    provider: "",
-    endpoint: "",
-    model: "",
-    apiKey: "",
-    temperature: 0,
-    timeoutMs: 60_000,
-  },
   l3Llm: {
     // Empty by default — falls back to the shared `llm` settings.
     // Operators set this when they want a stronger model for L3
@@ -65,6 +54,20 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     temperature: 0,
     timeoutMs: 60_000,
+  },
+  skillEvolver: {
+    // Empty by default — falls back to the shared `llm` settings.
+    // Operators set this when they want a stronger model (e.g.
+    // claude-sonnet / gpt-5-thinking) for skill crystallisation.
+    provider: "",
+    endpoint: "",
+    model: "",
+    apiKey: "",
+    temperature: 0,
+    timeoutMs: 60_000,
+  },
+  storage: {
+    ftsTokenizer: "trigram",
   },
   algorithm: {
     lightweightMemory: {

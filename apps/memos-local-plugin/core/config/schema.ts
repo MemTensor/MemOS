@@ -91,6 +91,18 @@ const SkillEvolverSchema = Type.Object({
   timeoutMs: NumberInRange(60_000, 1_000),
 }, { default: {} });
 
+const StorageSchema = Type.Object({
+  /**
+   * Keyword tokenizer mode used when compiling FTS5 MATCH expressions.
+   * `trigram` preserves the historical SQLite trigram behavior; `cjk`
+   * keeps short Chinese words and mixed ASCII+CJK tokens searchable.
+   */
+  ftsTokenizer: Type.Union([
+    Type.Literal("trigram"),
+    Type.Literal("cjk"),
+  ], { default: "trigram" }),
+}, { default: {} });
+
 const AlgorithmSchema = Type.Object({
   lightweightMemory: Type.Object({
     /**
@@ -579,9 +591,10 @@ export const ConfigSchema = Type.Object({
   bridge: BridgeSchema,
   embedding: EmbeddingSchema,
   llm: LlmSchema,
-  skillEvolver: SkillEvolverSchema,
   /** Dedicated model slot for L3 abstraction. Same shape as skillEvolver. */
   l3Llm: SkillEvolverSchema,
+  skillEvolver: SkillEvolverSchema,
+  storage: StorageSchema,
   algorithm: AlgorithmSchema,
   hub: HubSchema,
   telemetry: TelemetrySchema,
