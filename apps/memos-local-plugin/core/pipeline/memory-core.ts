@@ -628,12 +628,9 @@ export function createMemoryCore(
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
     try {
-      const allDirty = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
       // Apply the same backoff filter as init() so the 10-min periodic
       // scan does not hammer episodes whose LLM call keeps failing.
-      const dirtyClosed = allDirty.filter((ep) => dirtyEpisodeBackoffElapsed(ep, nowMs));
+      const dirtyClosed = collectDirtyClosedEpisodes(nowMs);
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -954,24 +951,7 @@ export function createMemoryCore(
         staleForBackground = stale;
       }
       const nowForDirty = Date.now();
-      const allDirty = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
-      const dirtyClosed: typeof allDirty = [];
-      for (const ep of allDirty) {
-        if (dirtyEpisodeBackoffElapsed(ep, nowForDirty)) {
-          dirtyClosed.push(ep);
-        } else {
-          const dirtyMeta = (ep.meta?.rewardDirty as
-            | { failedAttempts?: number; lastFailureAt?: number }
-            | undefined) ?? {};
-          log.debug("init.dirty_closed_episodes.skip_backoff", {
-            episodeId: ep.id,
-            failedAttempts: dirtyMeta.failedAttempts ?? 0,
-            lastFailureAt: dirtyMeta.lastFailureAt ?? 0,
-          });
-        }
-      }
+      const dirtyClosed = collectDirtyClosedEpisodes(nowForDirty);
       dirtyClosedForBackground = dirtyClosed;
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
@@ -1275,7 +1255,15 @@ export function createMemoryCore(
           continue;
         }
 
-        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt);
+        // Pre-stamp before emitting finalized: if the watchdog fires mid-scoring,
+        // the next startup's condition-4 check will see DIRTY_REWARD_RESCORE and
+        // skip this episode rather than looping indefinitely.
+        handle.repos.episodes.updateMeta(episodeId, {
+          recoveryReason: "dirty_reward_rescore",
+        });
+        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
+          recoveryReason: "dirty_reward_rescore",
+        });
         debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
           episodeId,
           sessionId: ep.sessionId,
@@ -1341,6 +1329,7 @@ export function createMemoryCore(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
+    const rescored: EpisodeId[] = [];
     // Snapshot the prior failure counters so we can increment them later
     // (after the bus chain settles) without an extra DB read.
     const priorFailedAttempts = new Map<EpisodeId, number>();
@@ -1360,6 +1349,7 @@ export function createMemoryCore(
         closeReason: "finalized",
         recoveredAtStartup: endedAt,
         recoveryReason: "dirty_reward_rescore",
+        rewardDirty: undefined,
       });
       const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
         recoveryReason: "dirty_reward_rescore",
@@ -1369,6 +1359,17 @@ export function createMemoryCore(
         episode: snapshot,
         closedBy: "finalized",
       });
+      rescored.push(episodeId);
+    }
+    // Drain the capture pass (patches reflections + α onto existing traces).
+    await handle.flush();
+    // In lightweight mode flush() returns before draining the reward
+    // subscriber. Explicitly run reward for any episode whose trace count
+    // still mismatches — mirrors the pattern in recoverOpenEpisodesAsSessionEnd.
+    for (const episodeId of rescored) {
+      if (episodeRewardIsDirty(handle.repos.episodes.getById(episodeId) ?? {} as never)) {
+        await handle.rewardRunner.run({ episodeId, feedback: [], trigger: "manual" });
+      }
     }
     await handle.flush();
     // After the reward / reflect chain has finished, account for the
@@ -1398,9 +1399,44 @@ export function createMemoryCore(
     }
   }
 
+  function collectDirtyClosedEpisodes(
+    nowMs?: number,
+  ): (EpisodeRow & { meta?: Record<string, unknown> })[] {
+    const dirty: (EpisodeRow & { meta?: Record<string, unknown> })[] = [];
+    let offset = 0;
+    const pageSize = 500;
+    while (true) {
+      const page = handle.repos.episodes.list({ status: "closed", limit: pageSize, offset });
+      for (const ep of page) {
+        if (isLightweightEpisode(ep)) continue;
+        if (!episodeRewardIsDirty(ep)) continue;
+        if (nowMs === undefined || dirtyEpisodeBackoffElapsed(ep, nowMs)) {
+          dirty.push(ep);
+        } else {
+          const dirtyMeta = (ep.meta?.rewardDirty as
+            | { failedAttempts?: number; lastFailureAt?: number }
+            | undefined) ?? {};
+          log.debug("init.dirty_closed_episodes.skip_backoff", {
+            episodeId: ep.id,
+            failedAttempts: dirtyMeta.failedAttempts ?? 0,
+            lastFailureAt: dirtyMeta.lastFailureAt ?? 0,
+          });
+        }
+      }
+      if (page.length < pageSize) break;
+      offset += pageSize;
+    }
+    return dirty;
+  }
+
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
     if (meta.lightweightMemory === true) return false;
+    // Episodes already attempted by a recovery path carry recoveryReason "dirty_reward_rescore".
+    // Excluding them prevents a crash-respawn loop when the watchdog fires
+    // mid-scoring and leaves rTask null: without this guard the next startup
+    // would re-pick the episode via closeReason="finalized" indefinitely.
+    if (meta.recoveryReason === "dirty_reward_rescore") return false;
     if (meta.rewardDirty && typeof meta.rewardDirty === "object") return true;
 
     const reward = meta.reward;
