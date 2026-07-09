@@ -1,0 +1,280 @@
+/*
+ * Design tokens — MemOS Local Viewer.
+ *
+ * Palette ported from `memos-local-openclaw`'s v2 viewer (see
+ * `apps/memos-local-openclaw/src/viewer/html-v2.ts` #14-60) so the
+ * new viewer matches the look-and-feel users were already familiar
+ * with: dark indigo-tinted slate background, vibrant status
+ * accents, compact sidebar (220px) and topbar (48px). We keep the
+ * NEW layout (Preact components, semantic routes) but reshape the
+ * surface colours + spacing to the old plugin's aesthetic.
+ *
+ * Layering convention:
+ *
+ *   raw palette  →  --color-*         (never referenced by components)
+ *   v2 parity    →  --bg, --bg-card, --pri, --green, …
+ *   semantic     →  --fg, --accent, --success, …  (what the rest of
+ *                                                  the app already uses)
+ *
+ * Both alias groups resolve to the same values — keeping both keeps
+ * the tokens.css diff small AND lets existing component CSS keep
+ * working untouched.
+ */
+
+:root {
+  /* ── Typography ──────────────────────────────────────────────── */
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Noto Sans SC", Roboto, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas,
+    monospace;
+  /* v2 parity aliases (components coming from the old plugin use these). */
+  --font: var(--font-sans);
+  --mono: var(--font-mono);
+
+  --fs-2xs: 10.5px;
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-md: 13.5px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 24px;
+  --fs-3xl: 32px;
+
+  --lh-tight: 1.15;
+  --lh-normal: 1.55;
+  --lh-loose: 1.7;
+
+  --fw-reg: 400;
+  --fw-med: 500;
+  --fw-semi: 600;
+  --fw-bold: 700;
+
+  /* ── Spacing (4-px base) ─────────────────────────────────────── */
+  --sp-0: 0;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 28px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* ── Radii (v2 values: 12/8/6) ───────────────────────────────── */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  /* v2 aliases */
+  --radius: 12px;
+  --radius-s: 8px;
+  --radius-xs-legacy: 6px;
+
+  /* ── Layout (v2 values: sidebar=220, topbar=48) ──────────────── */
+  --sidebar-w: 220px;
+  --sidebar-collapsed: 56px;
+  --topbar-h: 48px;
+  --content-max: 1320px;
+
+  /* ── Motion ──────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --dur-xs: 120ms;
+  --dur-sm: 180ms;
+  --dur-md: 260ms;
+  --dur-lg: 420ms;
+}
+
+/* ── Dark theme (default for MemOS — matches legacy default) ─── */
+
+:root,
+:root[data-theme="dark"] {
+  /* v2 parity layer */
+  --bg: #0f1117;
+  --bg-card: #181b23;
+  --bg-card-hover: #1e2230;
+  --bg-sidebar: #14161e;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-hover: rgba(255, 255, 255, 0.14);
+  --text: #e4e6eb;
+  --text-sec: #8b8fa4;
+  --text-muted: #555a6e;
+  --pri: #7c8cf5;
+  --pri-dim: rgba(124, 140, 245, 0.12);
+  --pri-dark: #5b6be0;
+  --green: #34d399;
+  --green-bg: rgba(52, 211, 153, 0.1);
+  --amber: #fbbf24;
+  --amber-bg: rgba(251, 191, 36, 0.1);
+  --red: #f87171;
+  --red-bg: rgba(248, 113, 113, 0.1);
+  --cyan: #22d3ee;
+  --cyan-bg: rgba(34, 211, 238, 0.1);
+  --violet: #a78bfa;
+  --violet-bg: rgba(167, 139, 250, 0.1);
+  --rose: #fb7185;
+  --rose-bg: rgba(251, 113, 133, 0.1);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25);
+
+  /* Semantic aliases (what my new components already reference) */
+  --bg-canvas: var(--bg);
+  --bg-elev-1: var(--bg-card);
+  --bg-elev-2: var(--bg-card);
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  --fg: var(--text);
+  --fg-muted: var(--text-sec);
+  --fg-dim: var(--text-muted);
+  --fg-placeholder: var(--text-muted);
+  --border-strong: var(--border-hover);
+  --border-focus: var(--pri);
+  --accent: var(--pri);
+  --accent-hover: var(--pri-dark);
+  --accent-soft: var(--pri-dim);
+  --accent-fg: #ffffff;
+  --success: var(--green);
+  --warning: var(--amber);
+  --danger: var(--red);
+  --info: var(--cyan);
+  --success-soft: var(--green-bg);
+  --warning-soft: var(--amber-bg);
+  --danger-soft: var(--red-bg);
+  --info-soft: var(--cyan-bg);
+  --shadow-md: var(--shadow);
+  --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.6),
+    0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-focus: 0 0 0 3px rgba(124, 140, 245, 0.28);
+  --glass-bg: rgba(24, 27, 35, 0.9);
+  --glass-border: var(--border);
+}
+
+/* ── Light theme (v2 parity) ─────────────────────────────────── */
+
+:root[data-theme="light"] {
+  --bg: #f5f6fa;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f0f1f5;
+  --bg-sidebar: #ffffff;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.15);
+  --text: #1a1d2e;
+  --text-sec: #5a5f76;
+  --text-muted: #9ca3af;
+  --pri: #5b6be0;
+  --pri-dim: rgba(91, 107, 224, 0.08);
+  --pri-dark: #4a58c9;
+  --green: #059669;
+  --green-bg: rgba(5, 150, 105, 0.06);
+  --amber: #d97706;
+  --amber-bg: rgba(217, 119, 6, 0.06);
+  --red: #dc2626;
+  --red-bg: rgba(220, 38, 38, 0.06);
+  --cyan: #0891b2;
+  --cyan-bg: rgba(8, 145, 178, 0.06);
+  --violet: #7c3aed;
+  --violet-bg: rgba(124, 58, 237, 0.06);
+  --rose: #e11d48;
+  --rose-bg: rgba(225, 29, 72, 0.06);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04);
+
+  /* Semantic aliases */
+  --bg-canvas: var(--bg);
+  --bg-elev-1: var(--bg-card);
+  --bg-elev-2: var(--bg-card);
+  --bg-hover: rgba(0, 0, 0, 0.035);
+  --bg-active: rgba(0, 0, 0, 0.06);
+  --fg: var(--text);
+  --fg-muted: var(--text-sec);
+  --fg-dim: var(--text-muted);
+  --fg-placeholder: var(--text-muted);
+  --border-strong: var(--border-hover);
+  --border-focus: var(--pri);
+  --accent: var(--pri);
+  --accent-hover: var(--pri-dark);
+  --accent-soft: var(--pri-dim);
+  --accent-fg: #ffffff;
+  --success: var(--green);
+  --warning: var(--amber);
+  --danger: var(--red);
+  --info: var(--cyan);
+  --success-soft: var(--green-bg);
+  --warning-soft: var(--amber-bg);
+  --danger-soft: var(--red-bg);
+  --info-soft: var(--cyan-bg);
+  --shadow-md: var(--shadow);
+  --shadow-lg: 0 20px 40px -12px rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-focus: 0 0 0 3px rgba(91, 107, 224, 0.22);
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --glass-border: var(--border);
+}
+
+/* ── Auto (prefers-color-scheme) mirrors dark by default ──────── */
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    --bg: #f5f6fa;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f0f1f5;
+    --bg-sidebar: #ffffff;
+    --border: rgba(0, 0, 0, 0.08);
+    --border-hover: rgba(0, 0, 0, 0.15);
+    --text: #1a1d2e;
+    --text-sec: #5a5f76;
+    --text-muted: #9ca3af;
+    --pri: #5b6be0;
+    --pri-dim: rgba(91, 107, 224, 0.08);
+    --pri-dark: #4a58c9;
+    --green: #059669;
+    --green-bg: rgba(5, 150, 105, 0.06);
+    --amber: #d97706;
+    --amber-bg: rgba(217, 119, 6, 0.06);
+    --red: #dc2626;
+    --red-bg: rgba(220, 38, 38, 0.06);
+    --cyan: #0891b2;
+    --cyan-bg: rgba(8, 145, 178, 0.06);
+    --violet: #7c3aed;
+    --violet-bg: rgba(124, 58, 237, 0.06);
+    --rose: #e11d48;
+    --rose-bg: rgba(225, 29, 72, 0.06);
+    --shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+
+    --bg-canvas: var(--bg);
+    --bg-elev-1: var(--bg-card);
+    --bg-elev-2: var(--bg-card);
+    --bg-hover: rgba(0, 0, 0, 0.035);
+    --bg-active: rgba(0, 0, 0, 0.06);
+    --fg: var(--text);
+    --fg-muted: var(--text-sec);
+    --fg-dim: var(--text-muted);
+    --fg-placeholder: var(--text-muted);
+    --border-strong: var(--border-hover);
+    --border-focus: var(--pri);
+    --accent: var(--pri);
+    --accent-hover: var(--pri-dark);
+    --accent-soft: var(--pri-dim);
+    --accent-fg: #ffffff;
+    --success: var(--green);
+    --warning: var(--amber);
+    --danger: var(--red);
+    --info: var(--cyan);
+    --success-soft: var(--green-bg);
+    --warning-soft: var(--amber-bg);
+    --danger-soft: var(--red-bg);
+    --info-soft: var(--cyan-bg);
+    --shadow-md: var(--shadow);
+    --shadow-lg: 0 20px 40px -12px rgba(0, 0, 0, 0.1),
+      0 4px 12px rgba(0, 0, 0, 0.06);
+    --shadow-focus: 0 0 0 3px rgba(91, 107, 224, 0.22);
+    --glass-bg: rgba(255, 255, 255, 0.85);
+    --glass-border: var(--border);
+  }
+}

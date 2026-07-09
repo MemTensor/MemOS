@@ -9,13 +9,21 @@ from starlette.staticfiles import StaticFiles
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.middleware.request_context import RequestContextMiddleware
 from memos.api.routers.server_router import router as server_router
+from memos.plugins.manager import plugin_manager
 
 
 load_dotenv()
 
+plugin_manager.discover()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+logger.info(
+    "[SERVER_API] load_dotenv completed. env_MEMSCHEDULER_STREAM_KEY_PREFIX=%s, env_MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX=%s",
+    os.getenv("MEMSCHEDULER_STREAM_KEY_PREFIX"),
+    os.getenv("MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX"),
+)
 
 app = FastAPI(
     title="MemOS Server REST APIs",
@@ -48,6 +56,8 @@ app.exception_handler(ValueError)(APIExceptionHandler.value_error_handler)
 app.exception_handler(HTTPException)(APIExceptionHandler.http_error_handler)
 # Fallback for unknown errors
 app.exception_handler(Exception)(APIExceptionHandler.global_exception_handler)
+
+plugin_manager.init_app(app)
 
 
 if __name__ == "__main__":

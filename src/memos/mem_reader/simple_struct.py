@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from memos import log
 from memos.chunkers import ChunkerFactory
+from memos.configs.llm import LLMConfigFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
@@ -183,6 +184,21 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             if config.general_llm is not None
             else self.llm
         )
+        preference_extractor_llm_config = getattr(config, "preference_extractor_llm", None)
+        self.preference_extractor_llm = (
+            LLMFactory.from_config(preference_extractor_llm_config)
+            if preference_extractor_llm_config is not None
+            else self.general_llm
+        )
+        self.qwen_llm = None
+        qwen_llm_config = getattr(config, "qwen_llm", None)
+        if qwen_llm_config:
+            try:
+                if isinstance(qwen_llm_config, dict):
+                    qwen_llm_config = LLMConfigFactory.model_validate(qwen_llm_config)
+                self.qwen_llm = LLMFactory.from_config(qwen_llm_config)
+            except Exception as e:
+                logger.warning(f"[LLM] Qwen initialization failed: {e}")
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
         self.save_rawfile = self.chunker.config.save_rawfile
@@ -276,8 +292,14 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         response_json = self._safe_parse(response_text)
 
         if not response_json:
+            # NOTE: the key MUST be ``"memory list"`` (with a space) — the
+            # downstream consumers in ``_process_chat_data`` /
+            # ``_process_transfer_chat_data`` read via
+            # ``resp.get("memory list", [])``. A typo here drops the
+            # salvaged item silently and causes ``/product/add`` to return
+            # 200 with zero memories written to Neo4j (bug #1355).
             return {
-                "memory_list": [
+                "memory list": [
                     {
                         "key": mem_str[:10],
                         "memory_type": "UserMemory",

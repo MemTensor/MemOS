@@ -9,15 +9,16 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import * as fs from "fs";
 import * as path from "path";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
 import type { HostModelsConfig } from "./src/openclaw-api";
+import { isPathInside } from "./src/path-utils";
 import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
 import { IngestWorker } from "./src/ingest/worker";
 import { RecallEngine } from "./src/recall/engine";
+import { shouldSkipAutoRecallForSession } from "./src/recall/session-policy";
 import { captureMessages, stripInboundMetadata } from "./src/capture";
 import { DEFAULTS } from "./src/types";
 import type { SearchHit } from "./src/types";
@@ -31,6 +32,8 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { parseJsonOrJson5 } from "./src/shared/json5";
+import { patchOpenclawAllowFile } from "./src/shared/openclaw-config";
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -94,7 +97,11 @@ const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
   return lines;
 };
 
-function normalizeAutoRecallQuery(rawPrompt: string): string {
+const INSTRUCTIONAL_PROMPT_MAX_LEN = 300;
+const SYSTEM_ROLE_PROMPT_RE = /^You are\b/i;
+const HERMES_SKILL_REVIEW_RE = /Review the conversation above/i;
+
+export function normalizeAutoRecallQuery(rawPrompt: string): string {
   let query = rawPrompt.trim();
 
   const senderTag = "Sender (untrusted metadata):";
@@ -125,6 +132,17 @@ function normalizeAutoRecallQuery(rawPrompt: string): string {
   query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
   query = query.replace(CONTINUE_PROMPT_RE, "").trim();
 
+  // Drop instructional prompts (system role prompts, Hermes skill-review prompts,
+  // over-long instruction blobs). These shapes are not user search intents — passing
+  // them to FTS5 fails the sanitize step and wastes a downstream LLM filter call.
+  if (
+    query.length > INSTRUCTIONAL_PROMPT_MAX_LEN
+    || SYSTEM_ROLE_PROMPT_RE.test(query)
+    || HERMES_SKILL_REVIEW_RE.test(query)
+  ) {
+    return "";
+  }
+
   return query;
 }
 
@@ -150,6 +168,27 @@ const pluginConfigSchema = {
   },
 };
 
+/**
+ * Narrow view of the OpenClaw plugin API surface that this plugin uses for memory
+ * registration. Hoisted to module scope (rather than inlined at the call site) so that
+ * future maintainers can see exactly which host methods the feature detection covers,
+ * and so nobody accidentally reaches for other `OpenClawPluginApi` members through the
+ * narrowed reference. See issue #1559.
+ *
+ * - `registerMemoryPromptSection` was introduced in OpenClaw 2026.3.31.
+ * - `registerMemoryCapability` is the legacy umbrella call that the plugin used to rely
+ *   on; kept here purely so older gateways still work.
+ */
+interface MemoryRegistrationApi {
+  registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+  registerMemoryCapability?: (capability: { promptBuilder: typeof buildMemoryPromptSection }) => void;
+}
+
+interface ExtendedLogger {
+  warn(msg: string): void;
+  error?(msg: string): void;
+}
+
 const memosLocalPlugin = {
   id: "memos-local-openclaw-plugin",
   name: "MemOS Local Memory",
@@ -160,131 +199,32 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    api.registerMemoryCapability({
-      promptBuilder: buildMemoryPromptSection,
-    });
+    // OpenClaw 2026.3.31 split the legacy `registerMemoryCapability` facade
+    // into focused registration methods. Prefer the new prompt-section API,
+    // then fall back to the legacy capability registration so older hosts
+    // still load.
+    const memoryApi = api as OpenClawPluginApi & MemoryRegistrationApi;
+
+    if (typeof memoryApi.registerMemoryPromptSection === "function") {
+      memoryApi.registerMemoryPromptSection(buildMemoryPromptSection);
+    } else if (typeof memoryApi.registerMemoryCapability === "function") {
+      memoryApi.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
+    } else {
+      const message =
+        "memos-local: host SDK exposes neither registerMemoryPromptSection " +
+        "nor registerMemoryCapability; memory prompt section will not be " +
+        "installed. The plugin may be incompatible with this OpenClaw gateway version.";
+      const logger = api.logger as ExtendedLogger;
+      if (typeof logger.error === "function") {
+        logger.error(message);
+      } else {
+        logger.warn(message);
+      }
+      throw new Error(message);
+    }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-    const localRequire = createRequire(import.meta.url);
-    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-
-    function detectPluginDir(startDir: string): string {
-      let cur = startDir;
-      for (let i = 0; i < 6; i++) {
-        const pkg = path.join(cur, "package.json");
-        if (fs.existsSync(pkg)) return cur;
-        const parent = path.dirname(cur);
-        if (parent === cur) break;
-        cur = parent;
-      }
-      return startDir;
-    }
-
-    const pluginDir = detectPluginDir(moduleDir);
-
-    function normalizeFsPath(p: string): string {
-      return path.resolve(p).replace(/^\\\\\?\\/, "").toLowerCase();
-    }
-
-    function isPathInside(baseDir: string, targetPath: string): boolean {
-      const baseNorm = normalizeFsPath(baseDir);
-      const targetNorm = normalizeFsPath(targetPath);
-      const rel = path.relative(baseNorm, targetNorm);
-      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-    }
-
-    function runNpm(args: string[]) {
-      const { spawnSync } = localRequire("child_process") as typeof import("node:child_process");
-      return spawnSync(npmCmd, args, {
-        cwd: pluginDir,
-        stdio: "pipe",
-        shell: false,
-        timeout: 120_000,
-      });
-    }
-
-    let sqliteReady = false;
-
-    function trySqliteLoad(): boolean {
-      try {
-        const resolved = localRequire.resolve("better-sqlite3", { paths: [pluginDir] });
-        const resolvedReal = fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved;
-        if (!isPathInside(pluginDir, resolvedReal)) {
-          api.logger.warn(`memos-local: better-sqlite3 resolved outside plugin dir: ${resolved}`);
-          return false;
-        }
-        localRequire(resolvedReal);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-
-    sqliteReady = trySqliteLoad();
-
-    if (!sqliteReady) {
-      api.logger.warn(`memos-local: better-sqlite3 not found in ${pluginDir}, attempting auto-rebuild ...`);
-
-      try {
-        const rebuildResult = runNpm(["rebuild", "better-sqlite3"]);
-
-        const stdout = rebuildResult.stdout?.toString() || "";
-        const stderr = rebuildResult.stderr?.toString() || "";
-        if (stdout) api.logger.info(`memos-local: rebuild stdout: ${stdout.slice(0, 500)}`);
-        if (stderr) api.logger.warn(`memos-local: rebuild stderr: ${stderr.slice(0, 500)}`);
-
-        if (rebuildResult.status === 0) {
-          Object.keys(localRequire.cache)
-            .filter(k => k.includes("better-sqlite3") || k.includes("better_sqlite3"))
-            .forEach(k => delete localRequire.cache[k]);
-          sqliteReady = trySqliteLoad();
-          if (sqliteReady) {
-            api.logger.info("memos-local: better-sqlite3 auto-rebuild succeeded!");
-          } else {
-            api.logger.warn("memos-local: rebuild exited 0 but module still not loadable from plugin dir");
-          }
-        } else {
-          api.logger.warn(`memos-local: rebuild exited with code ${rebuildResult.status}`);
-        }
-      } catch (rebuildErr) {
-        api.logger.warn(`memos-local: auto-rebuild error: ${rebuildErr}`);
-      }
-
-      if (!sqliteReady) {
-        const nodeVer = process.version;
-        const nodeMajor = parseInt(process.versions?.node?.split(".")[0] ?? "0", 10);
-        const isNode25Plus = nodeMajor >= 25;
-        const lines = [
-          "",
-          "╔══════════════════════════════════════════════════════════════╗",
-          "║  MemOS Local Memory — better-sqlite3 native module missing  ║",
-          "╠══════════════════════════════════════════════════════════════╣",
-          "║                                                            ║",
-          "║  Auto-rebuild failed (Node " + nodeVer + "). Run manually:              ║",
-          "║                                                            ║",
-          `║  cd ${pluginDir}`,
-          "║  npm rebuild better-sqlite3                                ║",
-          "║  openclaw gateway stop && openclaw gateway start           ║",
-          "║                                                            ║",
-          "║  If rebuild fails, install build tools first:              ║",
-          "║  macOS:  xcode-select --install                            ║",
-          "║  Linux:  sudo apt install build-essential python3          ║",
-        ];
-        if (isNode25Plus) {
-          lines.push("║                                                            ║");
-          lines.push("║  Node 25+ has no prebuild: build tools required, or use    ║");
-          lines.push("║  Node LTS (20/22): nvm install 22 && nvm use 22            ║");
-        }
-        lines.push("║                                                            ║");
-        lines.push("╚══════════════════════════════════════════════════════════════╝");
-        lines.push("");
-        api.logger.warn(lines.join("\n"));
-        throw new Error(
-          `better-sqlite3 native module not found (Node ${nodeVer}). Auto-rebuild failed. Fix: install build tools, then cd ${pluginDir} && npm rebuild better-sqlite3. Or use Node LTS (20/22).`
-        );
-      }
-    }
-
+    const pluginDir = moduleDir; // alias — replaces removed detectPluginDir(moduleDir)
     let pluginCfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
     const stateDir = process.env.OPENCLAW_STATE_DIR || api.resolvePath("~/.openclaw");
 
@@ -292,8 +232,8 @@ const memosLocalPlugin = {
     const configPath = path.join(stateDir, "state", "memos-local", "config.json");
     if (Object.keys(pluginCfg).length === 0 && fs.existsSync(configPath)) {
       try {
-        const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        pluginCfg = fileConfig;
+        const fileConfig = parseJsonOrJson5(fs.readFileSync(configPath, "utf-8"));
+        pluginCfg = fileConfig as Record<string, unknown>;
         api.logger.info(`memos-local: loaded config from ${configPath}`);
       } catch (e) {
         api.logger.warn(`memos-local: failed to load config from ${configPath}: ${e}`);
@@ -351,23 +291,17 @@ const memosLocalPlugin = {
       ctx.log.warn(`memos-local: could not write to managed skills dir: ${e}`);
     }
 
-    // Ensure plugin tools are enabled in openclaw.json tools.allow
+    // Ensure plugin tools are enabled in openclaw.json tools.allow.
+    // openclaw.json is JSON5 (supports // comments / single-quoted strings /
+    // trailing commas) — the patcher tolerates all of these (see issue #1543).
     try {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
-        const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const cfg = JSON.parse(raw);
-        const allow: string[] | undefined = cfg?.tools?.allow;
-        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins") && !allow.includes("*")) {
-          const lastEntry = JSON.stringify(allow[allow.length - 1]);
-          const patched = raw.replace(
-            new RegExp(`(${lastEntry})(\\s*\\])`),
-            `$1,\n      "group:plugins"$2`,
-          );
-          if (patched !== raw && patched.includes("group:plugins")) {
-            fs.writeFileSync(openclawJsonPath, patched, "utf-8");
-            ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
-          }
+        const result = patchOpenclawAllowFile(openclawJsonPath);
+        if (result.changed) {
+          ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
+        } else if (result.reason) {
+          ctx.log.debug(`memos-local: tools.allow not patched (${result.reason})`);
         }
       }
     } catch (e) {
@@ -1863,14 +1797,28 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
+    // Track current session to detect cross-session memories
+    let currentSessionKey: string | null = null;
+
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
+      // ─── Cron / excluded-session gate (GitHub #1311) ───────────────
+      // Skip auto-recall (and skill auto-recall) entirely for OpenClaw
+      // cron sessions by default. The cron prompt is the spec — recalling
+      // prior meta-discussion about the cron contaminates the next run.
+      const recallSessionKey = hookCtx?.sessionKey ?? (event as any)?.sessionKey;
+      if (shouldSkipAutoRecallForSession(recallSessionKey, ctx.config.autoRecall)) {
+        ctx.log.info(`auto-recall: skipping (cron/excluded session: "${recallSessionKey}")`);
+        return;
+      }
+
       const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
       const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
-      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
+      const incomingSessionKey = hookCtx?.sessionKey ?? "default";
+      ctx.log.info(`auto-recall: agentId=${recallAgentId} sessionKey=${incomingSessionKey} (from hookCtx)`);
 
       const recallT0 = performance.now();
       let recallQuery = "";
@@ -1882,16 +1830,35 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
 
-        if (query.length < 2) {
-          ctx.log.debug("auto-recall: extracted query too short, skipping");
+        // Detect if this is a new session
+        const isNewSession = currentSessionKey !== incomingSessionKey || NEW_SESSION_PROMPT_RE.test(rawPrompt);
+        if (isNewSession && currentSessionKey !== null) {
+          ctx.log.info(`auto-recall: new session detected (prev=${currentSessionKey}, curr=${incomingSessionKey})`);
+        }
+        currentSessionKey = incomingSessionKey;
+
+        const minQueryLength = ctx.config.recall?.autoRecallMinQueryLength ?? DEFAULTS.autoRecallMinQueryLength;
+        if (query.length < minQueryLength) {
+          ctx.log.debug(`auto-recall: query too short (len=${query.length} < minQueryLength=${minQueryLength}), skipping`);
           return;
         }
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
 
         // ── Phase 1: Local search ∥ Hub search (parallel) ──
-        const arLocalP = engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
+        // Issue #1514: previously hardcoded maxResults: 10 here, which made
+        // `recall.maxResultsDefault` and the new `recall.autoRecallMaxResults`
+        // ineffective for the auto-recall path. Resolution order:
+        //   1. `recall.autoRecallMaxResults` (explicit auto-recall cap)
+        //   2. `recall.maxResultsDefault`    (shared default with memory_search)
+        //   3. literal 10                    (defensive — `resolveConfig`
+        //      always fills `maxResultsDefault`, so this fires only if a
+        //      caller built a context without going through `resolveConfig`).
+        const recallCfg = ctx.config.recall ?? {};
+        const autoRecallMax = recallCfg.autoRecallMaxResults ?? recallCfg.maxResultsDefault ?? 10;
+
+        const arLocalP = engine.search({ query, maxResults: autoRecallMax, minScore: 0.45, ownerFilter: recallOwnerFilter });
         const arHubP = ctx.config?.sharing?.enabled
-          ? hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" })
+          ? hubSearchMemories(store, ctx, { query, maxResults: autoRecallMax, scope: "all" })
               .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
           : Promise.resolve({ hits: [] as any[], meta: {} });
 
@@ -2014,10 +1981,18 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         filteredHits = deduplicateHits(filteredHits);
         ctx.log.debug(`auto-recall: merged ${allRawHits.length} → ${beforeDedup} relevant → ${filteredHits.length} after dedup, sufficient=${sufficient}`);
 
+        // Check if any memories are from a different session
+        const hasCrossSessionMemories = filteredHits.some(h =>
+          h.source.sessionKey && h.source.sessionKey !== incomingSessionKey
+        );
+        ctx.log.debug(`auto-recall: isNewSession=${isNewSession}, hasCrossSessionMemories=${hasCrossSessionMemories}`);
+
         const lines = filteredHits.map((h, i) => {
           const excerpt = h.original_excerpt;
+          const isCrossSession = h.source.sessionKey && h.source.sessionKey !== incomingSessionKey;
+          const sessionTag = isCrossSession ? " [from previous session]" : "";
           const oTag = h.origin === "local-shared" ? " [本机共享]" : h.origin === "hub-memory" ? " [团队缓存]" : "";
-          const parts: string[] = [`${i + 1}. [${h.source.role}]${oTag}`];
+          const parts: string[] = [`${i + 1}. [${h.source.role}]${sessionTag}${oTag}`];
           if (excerpt) parts.push(`   ${excerpt}`);
           parts.push(`   chunkId="${h.ref.chunkId}"`);
           if (h.taskId) {
@@ -2042,15 +2017,32 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         tips.push("- Need more surrounding dialogue → call `memory_timeline(chunkId=\"...\")` to expand context around a hit");
         const tipsText = "\n\nAvailable follow-up tools:\n" + tips.join("\n");
 
+        // Use different instructions based on whether memories are from current or previous sessions
         const contextParts = [
           "## User's conversation history (from memory system)",
           "",
-          "IMPORTANT: The following are facts from previous conversations with this user.",
-          "You MUST treat these as established knowledge and use them directly when answering.",
-          "Do NOT say you don't know or don't have information if the answer is in these memories.",
-          "",
-          lines.join("\n\n"),
         ];
+
+        if (hasCrossSessionMemories || isNewSession) {
+          contextParts.push(
+            "IMPORTANT: The following memories are from PREVIOUS SESSIONS.",
+            "Treat them as BACKGROUND KNOWLEDGE ONLY:",
+            "- Do NOT act on them unprompted or proactively respond based solely on these memories",
+            "- WAIT for the user's explicit instruction before taking any action",
+            "- These memories provide context, but the user must initiate the conversation",
+            "- If you reference these memories, explicitly note they are from a previous session (e.g., \"根据之前的会话...\" or \"Based on a previous conversation...\")",
+            "",
+          );
+        } else {
+          contextParts.push(
+            "IMPORTANT: The following are facts from previous conversations with this user.",
+            "You MUST treat these as established knowledge and use them directly when answering.",
+            "Do NOT say you don't know or don't have information if the answer is in these memories.",
+            "",
+          );
+        }
+
+        contextParts.push(lines.join("\n\n"));
         if (tipsText) contextParts.push(tipsText);
 
         // ─── Skill auto-recall ───
@@ -2382,6 +2374,29 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     let serviceStarted = false;
 
+    // Hub client connection is split out from startServiceCore so it can be
+    // attempted eagerly at plugin-load time, regardless of how the host
+    // chooses to launch the plugin. Some hosts (notably the QClaw desktop
+    // app) load the plugin without calling service.start(), which used to
+    // mean Hub connection never happened (see GitHub issue #1612).
+    //
+    // The guard makes this safe to call from multiple entry points: the
+    // service.start() callback (gateway CLI path) and the eager fire at the
+    // end of register() (QClaw desktop path) both funnel through here and
+    // only one attempt actually runs.
+    let hubClientConnectAttempted = false;
+    const connectClientToHubIfNeeded = async () => {
+      if (hubClientConnectAttempted) return;
+      if (!ctx.config.sharing?.enabled || ctx.config.sharing.role !== "client") return;
+      hubClientConnectAttempted = true;
+      try {
+        const session = await connectToHub(store, ctx.config, ctx.log);
+        api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
+      } catch (err) {
+        api.logger.warn(`memos-local: Hub connection failed: ${err}`);
+      }
+    };
+
     const startServiceCore = async () => {
       if (serviceStarted) return;
       serviceStarted = true;
@@ -2391,14 +2406,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         api.logger.info(`memos-local: hub started at ${hubUrl}`);
       }
 
-      if (ctx.config.sharing?.enabled && ctx.config.sharing.role === "client") {
-        try {
-          const session = await connectToHub(store, ctx.config, ctx.log);
-          api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
-        } catch (err) {
-          api.logger.warn(`memos-local: Hub connection failed: ${err}`);
-        }
-      }
+      await connectClientToHubIfNeeded();
 
       try {
         const viewerUrl = await viewer.start();
@@ -2436,6 +2444,16 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         store.close();
         api.logger.info("memos-local: stopped");
       },
+    });
+
+    // Eager Hub client connection: kick off the Hub login as soon as the
+    // plugin is registered, independent of the host's service lifecycle.
+    // This guarantees team sharing works in hosts that load the plugin
+    // without calling service.start() (e.g. the QClaw desktop app — see
+    // GitHub issue #1612). The setTimeout(0) fallback below still handles
+    // viewer startup; this fire-and-forget call does not block register().
+    connectClientToHubIfNeeded().catch((err) => {
+      api.logger.warn(`memos-local: eager Hub connection failed: ${err}`);
     });
 
     // Fallback: OpenClaw may load this plugin via deferred reload after

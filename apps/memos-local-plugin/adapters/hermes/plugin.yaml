@@ -1,4 +1,31 @@
 name: memtensor
-version: 0.1.0
-description: "MemTensor semantic memory — persistent recall across sessions with hybrid search (vector + FTS + recency)."
+version: 2.0.0-beta.1
+description: >-
+  MemOS Local — Reflect2Evolve V7 memory for hermes-agent.
+  Layered L1/L2/L3 traces, reflection-weighted reward backprop,
+  cross-task policy induction, skill crystallization, three-tier
+  retrieval, and decision-repair. All memory + config live under
+  $HERMES_HOME/memos-plugin/.
+
 author: MemTensor
+homepage: https://github.com/MemTensor/MemOS
+
+# The hermes-agent host has no pip-install step; all runtime
+# dependencies of the Python adapter ship with the plugin itself
+# (standard library only). The Node.js bridge is spawned lazily by
+# daemon_manager.py and is not a pip dep.
+pip_dependencies: []
+
+# `requires_env` declares env vars the host should check before
+# activating. MemOS keeps all secrets in config.yaml (chmod 600),
+# so this list stays empty.
+requires_env: []
+
+# Lifecycle hooks this provider overrides (declared so the host can
+# wire them eagerly without reflection). Matches the method names in
+# `agent.memory_provider.MemoryProvider`.
+hooks:
+  - on_turn_start
+  - on_session_end
+  - on_pre_compress
+  - on_delegation
