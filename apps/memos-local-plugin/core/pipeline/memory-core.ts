@@ -95,6 +95,7 @@ import {
 } from "../llm/host-bridge.js";
 
 import { createPipeline } from "./orchestrator.js";
+import { RECOVERY_REASONS } from "./recovery-constants.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
 import type { PipelineDeps, PipelineHandle } from "./types.js";
 import {
@@ -1359,10 +1360,10 @@ export function createMemoryCore(
       handle.repos.episodes.updateMeta(episodeId, {
         closeReason: "finalized",
         recoveredAtStartup: endedAt,
-        recoveryReason: "dirty_reward_rescore",
+        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
       });
       const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
-        recoveryReason: "dirty_reward_rescore",
+        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
       });
       handle.buses.session.emit({
         kind: "episode.finalized",
