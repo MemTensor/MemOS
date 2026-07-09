@@ -93,18 +93,53 @@ MemOS 为 AI agent 提供长期记忆能力，典型场景：
 
 ## 🚀 快速开始
 
-MemOS 提供三种使用方式，按你的场景选择。
+MemOS 提供四种使用方式，按你的场景选择。
 
 
-|      | 本地部署              | OpenClaw 云插件             | 本地插件                    |
-| ---- | ----------------- | ------------------------ | ----------------------- |
-| 适合谁  | 自建基础设施的团队         | OpenClaw 用户，零运维          | Hermes/OpenClaw，100% 端侧 |
-| 启动方式 | docker compose up | openclaw plugins install | npm install + 配置        |
-| 依赖设施 | Neo4j + Qdrant    | 无（使用 MemOS Cloud）        | 无（本地 SQLite）            |
-| 数据存放 | 你的服务器             | MemOS Cloud              | 你的机器                    |
+|      | Cloud API    | 本地部署              | OpenClaw 云插件             | 本地插件                    |
+| ---- | ------------ | ----------------- | ------------------------ | ----------------------- |
+| 适合谁  | 自建应用，全托管      | 自建基础设施的团队         | OpenClaw 用户，零运维          | Hermes/OpenClaw，100% 端侧 |
+| 启动方式 | 申请 API Key   | docker compose up | openclaw plugins install | npm install + 配置        |
+| 依赖设施 | 无（托管）        | Neo4j + Qdrant    | 无（使用 MemOS Cloud）        | 无（本地 SQLite）            |
+| 数据存放 | MemOS Cloud  | 你的服务器             | MemOS Cloud              | 你的机器                    |
 
+### ☁️ 使用 Cloud API（托管）
 
+想通过全托管服务给应用加记忆——无需自建任何基础设施。
 
+**1. 申请 API Key：**
+
+- 在 [MemOS 控制台](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing) 注册。
+- 进入 **API Keys** 复制你的 Key（以 `mpg-` 开头），请妥善保存在服务端。
+
+**2. 写入与检索记忆：**
+
+```python
+import requests
+
+API_KEY = "mpg-..."                  # 请保存在服务端
+base = "https://memos.memtensor.cn/api/openmem/v1"
+headers = {"Authorization": f"Token {API_KEY}", "Content-Type": "application/json"}
+
+# 1. 写入一条记忆
+requests.post(f"{base}/add/message", headers=headers, json={
+    "user_id": "alice",
+    "conversation_id": "conv_001",
+    "messages": [{"role": "user", "content": "I like strawberry"}],
+})
+
+# 2. 检索记忆
+res = requests.post(f"{base}/search/memory", headers=headers, json={
+    "query": "What do I like?",
+    "user_id": "alice",
+})
+print(res.json())
+```
+
+**下一步：**
+
+- [MemOS Cloud 快速开始](https://memos-docs.openmem.net/memos_cloud/quick_start/)——几分钟内接入 MemOS Cloud 并启用记忆。
+- [MemOS Cloud 平台](https://memos.openmem.net/?from=/quickstart/)——探索云端控制台、功能与工作流。
 
 ### 🖥️ 本地部署 MemOS 服务
 

@@ -90,15 +90,53 @@ MemOS gives AI agents long-term memory. Common uses:
 
 ## 🚀 Quick Start
 
-MemOS is built around three entry points. Pick the one that matches your scenario.
+MemOS is built around four entry points. Pick the one that matches your scenario.
 
 
-|              | Self-Host          | OpenClaw Cloud Plugin    | Local Plugin                    |
-| ------------ | ------------------ | ------------------------ | ------------------------------- |
-| Best for     | Teams on own infra | OpenClaw users, zero ops | Hermes/OpenClaw, 100% on-device |
-| Setup        | docker compose up  | openclaw plugins install | npm install + config            |
-| Infra needed | Neo4j + Qdrant     | None (uses MemOS Cloud)  | None (local SQLite)             |
-| Data lives   | Your servers       | MemOS Cloud              | Your machine                    |
+|              | Cloud API               | Self-Host          | OpenClaw Cloud Plugin    | Local Plugin                    |
+| ------------ | ----------------------- | ------------------ | ------------------------ | ------------------------------- |
+| Best for     | Your app, fully managed | Teams on own infra | OpenClaw users, zero ops | Hermes/OpenClaw, 100% on-device |
+| Setup        | Get an API key          | docker compose up  | openclaw plugins install | npm install + config            |
+| Infra needed | None (hosted)           | Neo4j + Qdrant     | None (uses MemOS Cloud)  | None (local SQLite)             |
+| Data lives   | MemOS Cloud             | Your servers       | MemOS Cloud              | Your machine                    |
+
+### ☁️ Use the Cloud API (Hosted)
+
+You want to add memory to your app through a fully managed service — no infrastructure to run.
+
+**1. Get an API key:**
+
+- Sign up on the [MemOS dashboard](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing).
+- Go to **API Keys** and copy your key (starts with `mpg-`). Keep it server-side.
+
+**2. Add and search memories:**
+
+```python
+import requests
+
+API_KEY = "mpg-..."                  # keep this server-side
+base = "https://memos.memtensor.cn/api/openmem/v1"
+headers = {"Authorization": f"Token {API_KEY}", "Content-Type": "application/json"}
+
+# 1. Add a memory
+requests.post(f"{base}/add/message", headers=headers, json={
+    "user_id": "alice",
+    "conversation_id": "conv_001",
+    "messages": [{"role": "user", "content": "I like strawberry"}],
+})
+
+# 2. Search memories
+res = requests.post(f"{base}/search/memory", headers=headers, json={
+    "query": "What do I like?",
+    "user_id": "alice",
+})
+print(res.json())
+```
+
+**Next steps:**
+
+- [MemOS Cloud Getting Started](https://memos-docs.openmem.net/memos_cloud/quick_start/) — connect to MemOS Cloud and enable memory in minutes.
+- [MemOS Cloud Platform](https://memos.openmem.net/?from=/quickstart/) — explore the Cloud dashboard, features, and workflows.
 
 ### 🖥️ Self-Host the MemOS Service
 
