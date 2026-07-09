@@ -16,9 +16,7 @@
   </p>
 
   <p align="center">
-    <strong>Intelligence begins with memory.</strong><br/>
     <strong>Give your Agent persistent memory and the ability to grow.</strong><br/>
-    <strong>Scalable memory services for AI applications — keeping models consistent and personalized across tasks and scenarios.</strong>
   </p>
 
   <p align="center">
@@ -26,7 +24,39 @@
   </p>
 </div>
 
+
+<div align="center">
+  <img width="1660" height="664" alt="MemOS Plugin Banner" src="https://github.com/user-attachments/assets/9d15dde2-196e-4f71-a364-dd5a33062117" />
+</div>
+
 ---
+
+## 👾 MemOS: Memory Operating System for LLM & AI Agents
+
+**MemOS** is a Memory Operating System for LLMs and AI agents that unifies **store / retrieve / manage** for long-term memory, enabling **context-aware and personalized** interactions with **KB**, **multi-modal**, **tool memory**, and **enterprise-grade** optimizations built in.
+
+### Key Features
+
+- **Unified Memory API**: A single API to add, retrieve, edit, and delete memory—structured as a graph, inspectable and editable by design, not a black-box embedding store.
+- **Multi-Modal Memory**: Natively supports text, images, tool traces, and personas, retrieved and reasoned together in one memory system.
+- **Multi-Cube Knowledge Base Management**: Manage multiple knowledge bases as composable memory cubes, enabling isolation, controlled sharing, and dynamic composition across users, projects, and agents.
+- **Asynchronous Ingestion via MemScheduler**: Run memory operations asynchronously with millisecond-level latency for production stability under high concurrency.
+- **Memory Feedback & Correction**: Refine memory with natural-language feedback—correcting, supplementing, or replacing existing memories over time.
+
+
+### News
+
+- **2026-07-02** · 🏆 **MemOS Advances Agent and User Memory Benchmarks**
+  With MemOS, **OpenClaw** improves average task completion from **36.63% to 50.87%** across five agent tasks. MemOS also achieves **92.34 on LoCoMo** and **93.40 on LongMemEval**, and leads in **OmniMemEval**, a unified evaluation of 14 commercial memory products across ten datasets.
+
+- **2026-05-09** · 🧠 **memos-local-plugin 2.0**
+  Official local memory plugin for **Hermes Agent** and **OpenClaw**. One core powers self-evolving memory across L1 traces, L2 policies, L3 world models, and crystallized Skills, with local-first storage and feedback-driven retrieval.
+
+- **2026-04-10** · 👧🏻 **MemOS Hermes Agent Local Plugin**
+  Official Hermes Agent memory plugins launched: Hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution, multi-agent collaboration. 100% local, zero cloud dependency.
+  
+- **2026-03-08** · 🦞 **MemOS OpenClaw Plugin — Cloud & Local**
+  Official OpenClaw memory plugins launched. **Cloud Plugin**: hosted memory service with 72% lower token usage and multi-agent memory sharing ([MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)). **Local Plugin** (`v1.0.0`): 100% on-device memory with persistent SQLite, hybrid search (FTS5 + vector), task summarization & skill evolution, multi-agent collaboration, and a full Memory Viewer dashboard.
 
 ## 📊 Performance
 
@@ -133,10 +163,6 @@ print(res.json())
 
 ### 🧠 MemOS Plugin: Persistent Memory for Your AI Agents ✨
 
-<div align="center">
-  <img width="1660" height="664" alt="MemOS Plugin Banner" src="https://github.com/user-attachments/assets/9d15dde2-196e-4f71-a364-dd5a33062117" />
-</div>
-
 Your OpenClaw and Hermes Agents now have **the best** memory system — choose ***Cloud Service*** or ***Self-hosted*** to get started 🏃🏻
 
 | 🔌 Plugin                                                                                                     | 💡 Core Features | 🧩 Resources                                                                                                                                                                                                                                                                   |
@@ -170,6 +196,20 @@ You use Hermes Agent or OpenClaw and want 100% on-device memory — nothing leav
 - **NPM:** `[@memtensor/memos-local-plugin](https://www.npmjs.com/package/@memtensor/memos-local-plugin)`
 - **Docs:** [https://memos-docs.openmem.net/cn/openclaw/local_plugin](https://memos-docs.openmem.net/cn/openclaw/local_plugin)
 - **Viewer dashboard:** see `apps/memos-local-plugin/viewer/`
+
+Install (macOS / Linux):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash
+```
+
+Install (Windows PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 -OutFile "$env:TEMP\memos-install.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\memos-install.ps1"
+```
+
+Requires Node.js and an already-installed OpenClaw or Hermes. The installer auto-detects OpenClaw and Hermes, deploys the plugin to the right agent home (`~/.hermes/plugins/` or `~/.openclaw/plugins/`), writes the initial `config.yaml`, and restarts the agent runtime.
 
 Features: hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution (L1 traces / L2 policies / L3 world model), multi-agent collaboration, local-first SQLite storage.
 
