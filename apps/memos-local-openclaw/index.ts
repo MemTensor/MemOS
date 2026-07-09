@@ -1863,6 +1863,9 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
+    // Track current session to detect cross-session memories
+    let currentSessionKey: string | null = null;
+
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
@@ -1870,7 +1873,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
       const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
-      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
+      const incomingSessionKey = hookCtx?.sessionKey ?? "default";
+      ctx.log.info(`auto-recall: agentId=${recallAgentId} sessionKey=${incomingSessionKey} (from hookCtx)`);
 
       const recallT0 = performance.now();
       let recallQuery = "";
@@ -1882,16 +1886,35 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
 
-        if (query.length < 2) {
-          ctx.log.debug("auto-recall: extracted query too short, skipping");
+        // Detect if this is a new session
+        const isNewSession = currentSessionKey !== incomingSessionKey || NEW_SESSION_PROMPT_RE.test(rawPrompt);
+        if (isNewSession && currentSessionKey !== null) {
+          ctx.log.info(`auto-recall: new session detected (prev=${currentSessionKey}, curr=${incomingSessionKey})`);
+        }
+        currentSessionKey = incomingSessionKey;
+
+        const minQueryLength = ctx.config.recall?.autoRecallMinQueryLength ?? DEFAULTS.autoRecallMinQueryLength;
+        if (query.length < minQueryLength) {
+          ctx.log.debug(`auto-recall: query too short (len=${query.length} < minQueryLength=${minQueryLength}), skipping`);
           return;
         }
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
 
         // ── Phase 1: Local search ∥ Hub search (parallel) ──
-        const arLocalP = engine.search({ query, maxResults: ctx.config.recall.autoRecallMaxResults, minScore: ctx.config.recall.autoRecallMinScore, ownerFilter: recallOwnerFilter });
+        // Issue #1514: previously hardcoded maxResults: 10 here, which made
+        // `recall.maxResultsDefault` and the new `recall.autoRecallMaxResults`
+        // ineffective for the auto-recall path. Resolution order:
+        //   1. `recall.autoRecallMaxResults` (explicit auto-recall cap)
+        //   2. `recall.maxResultsDefault`    (shared default with memory_search)
+        //   3. literal 10                    (defensive — `resolveConfig`
+        //      always fills `maxResultsDefault`, so this fires only if a
+        //      caller built a context without going through `resolveConfig`).
+        const recallCfg = ctx.config.recall ?? {};
+        const autoRecallMax = recallCfg.autoRecallMaxResults ?? recallCfg.maxResultsDefault ?? 10;
+
+        const arLocalP = engine.search({ query, maxResults: autoRecallMax, minScore: 0.45, ownerFilter: recallOwnerFilter });
         const arHubP = ctx.config?.sharing?.enabled
-          ? hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" })
+          ? hubSearchMemories(store, ctx, { query, maxResults: autoRecallMax, scope: "all" })
               .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
           : Promise.resolve({ hits: [] as any[], meta: {} });
 
