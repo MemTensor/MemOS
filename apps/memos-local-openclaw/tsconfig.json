@@ -5,7 +5,7 @@
     "lib": ["ES2022"],
     "outDir": "dist",
     "rootDir": ".",
-    "strict": false,
+    "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
@@ -20,6 +20,6 @@
       "openclaw/plugin-sdk": ["./types/openclaw__plugin-sdk/index.d.ts"]
     }
   },
-  "include": ["src", "index.ts"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "scripts", "tests", "skill", "plugin-impl.ts"]
+  "include": ["index.ts", "plugin-impl.ts", "src"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }
