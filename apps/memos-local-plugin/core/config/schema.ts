@@ -591,6 +591,8 @@ export const ConfigSchema = Type.Object({
   bridge: BridgeSchema,
   embedding: EmbeddingSchema,
   llm: LlmSchema,
+  /** Dedicated model slot for L3 abstraction. Same shape as skillEvolver. */
+  l3Llm: SkillEvolverSchema,
   skillEvolver: SkillEvolverSchema,
   storage: StorageSchema,
   algorithm: AlgorithmSchema,

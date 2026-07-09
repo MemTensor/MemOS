@@ -431,6 +431,45 @@ export async function bootstrapMemoryCoreFull(
     });
   }
 
+
+  // Dedicated LLM for L3 abstraction (mirrors skillEvolver above).
+  // L3 clustering → world-model abstraction is an infrequent async pass
+  // that is quality- and shape-sensitive (cheap models over-extract and
+  // truncate the JSON, producing "'constraints' must be an array"). It runs
+  // off the turn-response path, so a slower-but-correct model here has no
+  // impact on companion latency. Blank → falls back to the main `llm`.
+  let l3Llm: ReturnType<typeof createLlmClient> | null = null;
+  try {
+    const l3c = (config as { l3Llm?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).l3Llm;
+    const l3Model = (l3c?.model ?? "").trim();
+    const l3Provider = (l3c?.provider ?? "").trim();
+    if (l3Model && l3Provider) {
+      l3Llm = createLlmClient({
+        provider: l3Provider,
+        model: l3Model,
+        endpoint: l3c?.endpoint ?? "",
+        apiKey: l3c?.apiKey ?? "",
+        temperature: l3c?.temperature ?? 0,
+        timeoutMs: l3c?.timeoutMs ?? 60_000,
+        maxRetries: 3,
+        fallbackToHost: true,
+        onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
+          log.warn("l3Llm.llm_error", d),
+      } as never);
+      log.info("l3Llm.ready", {
+        provider: l3Provider,
+        model: l3Model,
+        source: "l3Llm",
+      });
+    }
+  } catch (err) {
+    log.warn("l3Llm.unavailable", {
+      err: err instanceof Error ? err.message : String(err),
+      fallback: "main llm",
+    });
+  }
+
+
   // 3. Pipeline.
   const deps: PipelineDeps = {
     agent: options.agent,
@@ -440,6 +479,7 @@ export async function bootstrapMemoryCoreFull(
     repos,
     llm,
     reflectLlm: reflectLlm ?? llm,
+    l3Llm: l3Llm ?? llm,
     embedder,
     log,
     namespace,
