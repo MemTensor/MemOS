@@ -7234,7 +7234,7 @@ var _providerDefaults={
   cohere:{endpoint:'https://api.cohere.com/v2',embModel:'embed-english-v3.0'},
   mistral:{endpoint:'https://api.mistral.ai/v1',embModel:'mistral-embed'},
   voyage:{endpoint:'https://api.voyageai.com/v1',embModel:'voyage-3'},
-  gemini:{endpoint:'',embModel:'text-embedding-004',chatModel:'gemini-2.0-flash'},
+  gemini:{endpoint:'',embModel:'gemini-embedding-001',chatModel:'gemini-2.0-flash'},
   zhipu:{endpoint:'https://open.bigmodel.cn/api/paas/v4',embModel:'embedding-3',chatModel:'glm-4-flash'},
   deepseek:{endpoint:'https://api.deepseek.com/v1',chatModel:'deepseek-chat'},
   bailian:{endpoint:'https://coding.dashscope.aliyuncs.com/v1',embModel:'text-embedding-v3',chatModel:'qwen-max'},
