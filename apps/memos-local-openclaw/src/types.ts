@@ -189,6 +189,9 @@ export interface EmbeddingConfig extends ProviderConfig {
   batchSize?: number;
   dimensions?: number;
   retry?: number;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
 }
 
 // ─── Skill ───
@@ -419,8 +422,17 @@ export interface PluginContext {
 }
 
 export interface OpenClawAPI {
-  embed(request: { texts: string[]; model?: string }): Promise<{ embeddings: number[][]; dimensions: number }>;
-  complete(request: { prompt: string; maxTokens?: number; temperature?: number; model?: string }): Promise<{ text: string }>;
+  embed(request: {
+    texts: string[];
+    model?: string;
+    inputType?: string;
+  }): Promise<{ embeddings: number[][]; dimensions: number }>;
+  complete(request: {
+    prompt: string;
+    maxTokens?: number;
+    temperature?: number;
+    model?: string;
+  }): Promise<{ text: string }>;
 }
 
 export interface Logger {
