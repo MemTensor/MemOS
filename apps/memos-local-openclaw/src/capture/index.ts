@@ -7,7 +7,9 @@ const SYSTEM_BOILERPLATE_RE = /^A new session was started via \/new or \/reset\b
 // Boot-check / memory-system injection patterns that should never be stored.
 const BOOT_CHECK_RE = /^(?:You are running a boot check|Read HEARTBEAT\.md if it exists|## Memory system — ACTION REQUIRED)/;
 
-// Agent-internal review prompts — Hermes → Agent instructions, not user content.
+// Agent-framework self-instruction prompts (e.g. Hermes Agent's "Review the
+// conversation above, consider saving..."). These arrive with role="user"
+// but are not user content and must never be stored as memory.
 const REVIEW_CONVERSATION_RE = /^Review the conversation above/i;
 
 /**
@@ -85,7 +87,7 @@ export function captureMessages(
       continue;
     }
     if (role === "user" && REVIEW_CONVERSATION_RE.test(msg.content.trim())) {
-      log.debug(`Skipping agent-internal review prompt: ${msg.content.slice(0, 60)}...`);
+      log.debug(`Skipping review-conversation injection: ${msg.content.slice(0, 60)}...`);
       continue;
     }
 
