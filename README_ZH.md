@@ -1,13 +1,33 @@
-#   MemOS 2.0 Stardust（星尘）
+<div align="center">
+  <h1 align="center">
+    <a href="https://memos.openmem.net/">
+      <img src="https://statics.memtensor.com.cn/logo/memos_color_m.png" alt="MemOS Logo" width="48"/>
+    </a>&nbsp;
+    MemOS 2.0&ensp;Stardust（星尘）
+  </h1>
 
-  
+  <p align="center">
+    <a href="https://memos-docs.openmem.net/home/overview/"><img src="https://img.shields.io/badge/Docs-Get--Start-002FA7?labelColor=gray&style=for-the-badge&logo=googledocs&logoColor=white" alt="Docs"></a>
+    <a href="https://arxiv.org/abs/2507.03724"><img src="https://img.shields.io/badge/ArXiv-2507.03724-B31B1B?labelColor=gray&style=for-the-badge&logo=arxiv&logoColor=white" alt="ArXiv"></a>
+    <a href="https://x.com/MemOS_dev"><img src="https://img.shields.io/badge/Follow-MemOS-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
+    <a href="https://discord.gg/Txbx3gebZR"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FTxbx3gebZR%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+    <br>
+    <a href="https://github.com/IAAR-Shanghai/Awesome-AI-Memory"><img src="https://img.shields.io/badge/Resources-Awesome--AI--Memory-8A2BE2?labelColor=gray&style=for-the-badge&logo=awesomelists&logoColor=white" alt="Resources"></a>
+  </p>
+
+  <p align="center">
+    <strong>让 Agent 拥有持续记忆与成长能力</strong><br/>
+  </p>
+
+  <p align="center">
+    <a href="README.md">English</a> | <strong>中文</strong>
+  </p>
+</div>
 
 
-**让 Agent 拥有持续记忆与成长能力**  
-
-
-[English](README.md) | **中文**
-
+<div align="center">
+  <img width="1660" height="664" alt="MemOS Plugin Banner" src="https://github.com/user-attachments/assets/9d15dde2-196e-4f71-a364-dd5a33062117" />
+</div>
 
 ---
 
@@ -211,6 +231,10 @@ irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plug
 - **GitHub Discussions：** [https://github.com/MemTensor/MemOS/discussions](https://github.com/MemTensor/MemOS/discussions)
 - **Discord：** [https://discord.gg/Txbx3gebZR](https://discord.gg/Txbx3gebZR)
 - **微信：** 扫码加入微信群。
+
+<div align="center">
+  <img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="300" />
+</div>
 
 
 
