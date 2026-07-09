@@ -89,6 +89,9 @@ Persistent local conversation memory for [OpenClaw](https://github.com/nicepkg/o
 
 ## Quick Start
 
+> **Optional quick try:** Want to preview the bundled memory guide before installing the local plugin?
+> Try the MemOS memory guide in [Telegram or WhatsApp](https://app.clawmama.run/skills/dbete9/hermes?utm_source=github&utm_medium=issue&utm_campaign=skill_outreach_memtensor_memos_memos_memory_guide), then return here to set up local persistent memory.
+
 ### 1. Install
 
 One command installs the plugin, all dependencies, and build tools automatically. Supports auto-upgrade to the latest version.
