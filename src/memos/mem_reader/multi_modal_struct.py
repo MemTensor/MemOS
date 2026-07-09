@@ -17,7 +17,7 @@ from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.plugins.hook_defs import H
-from memos.plugins.hooks import trigger_single_hook
+from memos.plugins.hooks import trigger_hook, trigger_single_hook
 from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_MERGE_PROMPT_ZH
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
@@ -785,6 +785,14 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 )
                 rawfile_node.metadata.summary_ids = [mem_node.id for mem_node in fine_items]
                 fine_items.append(rawfile_node)
+            enriched_items = trigger_hook(
+                H.MEMORY_ITEMS_AFTER_FINE_EXTRACT,
+                items=fine_items,
+                user_context=kwargs.get("user_context"),
+                mem_reader=self,
+                extract_mode="fine",
+            )
+            fine_items = enriched_items if enriched_items is not None else fine_items
             return fine_items
 
         fine_memory_items: list[TextualMemoryItem] = []
@@ -993,6 +1001,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             return fast_memory_items
 
         # Stage: llm_extract — fine mode 4-way parallel LLM + per-source serial
+        is_upload_skill = kwargs.pop("is_upload_skill", False)
         non_file_url_fast_items = [
             item for item in fast_memory_items if not self._is_file_url_only_item(item)
         ]
@@ -1009,7 +1018,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 )
                 future_skill = executor.submit(
                     process_skill_memory_fine,
-                    fast_memory_items=non_file_url_fast_items,
+                    fast_memory_items=fast_memory_items
+                    if is_upload_skill
+                    else non_file_url_fast_items,
                     info=info,
                     searcher=self.searcher,
                     graph_db=self.graph_db,
@@ -1017,13 +1028,14 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     embedder=self.embedder,
                     oss_config=self.oss_config,
                     skills_dir_config=self.skills_dir_config,
+                    is_upload_skill=is_upload_skill,
                     **kwargs,
                 )
                 future_pref = executor.submit(
                     process_preference_fine,
                     non_file_url_fast_items,
                     info,
-                    self.general_llm,
+                    getattr(self, "preference_extractor_llm", self.general_llm),
                     self.embedder,
                     **kwargs,
                 )
@@ -1039,6 +1051,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             fine_memory_items.extend(fine_memory_items_pref_parser)
 
             # Part B: per-source serial processing
+            if is_upload_skill:
+                # (skip for upload skill to avoid zip being parsed)
+                return fine_memory_items
+
             with timed_stage("add", "per_source") as ts_ps:
                 for fast_item in fast_memory_items:
                     sources = fast_item.metadata.sources
@@ -1072,6 +1088,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             logger.warning("[MultiModalStruct] No raw nodes found.")
             return []
 
+        is_upload_skill = kwargs.pop("is_upload_skill", False)
+
         # Extract info from raw_nodes (same as simple_struct.py)
         info = {
             "user_id": raw_nodes[0].metadata.user_id,
@@ -1093,7 +1111,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
             future_skill = executor.submit(
                 process_skill_memory_fine,
-                non_file_url_nodes,
+                raw_nodes if is_upload_skill else non_file_url_nodes,
                 info,
                 searcher=self.searcher,
                 llm=self.general_llm,
@@ -1101,6 +1119,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 graph_db=self.graph_db,
                 oss_config=self.oss_config,
                 skills_dir_config=self.skills_dir_config,
+                is_upload_skill=is_upload_skill,
                 **kwargs,
             )
             # Add preference memory extraction
@@ -1108,7 +1127,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 process_preference_fine,
                 non_file_url_nodes,
                 info,
-                self.general_llm,
+                getattr(self, "preference_extractor_llm", self.general_llm),
                 self.embedder,
                 **kwargs,
             )
@@ -1125,6 +1144,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         fine_memory_items.extend(fine_memory_items_pref_parser)
 
         # Part B: get fine multimodal items
+        if is_upload_skill:
+            # (skip for upload skill to avoid zip being parsed)
+            return fine_memory_items
         for raw_node in raw_nodes:
             sources = raw_node.metadata.sources
             for source in sources:

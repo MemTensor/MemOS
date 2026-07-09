@@ -127,10 +127,10 @@
 | 写入 `decision_repairs` 表 | `core/storage/repos/decision_repairs.ts` | ✅ |
 | **挂到 PolicyRow** | `feedback.ts::attachRepairToPolicies` 把 `{preference, antiPattern}` 塞进 `policy.boundary` 的 `@repair {…}` JSON 块 | ⚠️ 工作但是 hack — 应该是独立列 |
 | PolicyDTO 透出 preference / antiPattern | `memory-core.ts::parsePolicyGuidanceBlock` | ✅ |
-| PoliciesView 显示 | `web/src/views/PoliciesView.tsx:243-256, 497-518` | ✅ |
+| PoliciesView 显示 | `viewer/src/views/PoliciesView.tsx:243-256, 497-518` | ✅ |
 | **写入 SkillRow.procedureJson.decisionGuidance** | `core/skill/packager.ts::buildProcedure` | ✅ **已实现** — 用 draft.decisionGuidance 替换原硬编码空 |
 | **Skill crystallize prompt 输入 policy 的 @repair** | `core/llm/prompts/skill-crystallize.ts v2` + `crystallize.ts::packPrompt::parseRepairBlock` | ✅ **已实现** — 把 `@repair {…}` 提到 `repair_hints`，加上 `counter_examples` 一起喂给 LLM |
-| **SkillsView 显示 decisionGuidance** | `web/src/views/SkillsView.tsx::SkillDrawer` | ✅ **已实现** — drawer 新增 "Decision guidance (prefer / avoid)" 段，列出双数组 |
+| **SkillsView 显示 decisionGuidance** | `viewer/src/views/SkillsView.tsx::SkillDrawer` | ✅ **已实现** — drawer 新增 "Decision guidance (prefer / avoid)" 段，列出双数组 |
 | **retrieval/injector 把 decision_guidance 注入到 agent prompt** | `core/retrieval/decision-guidance.ts::collectDecisionGuidance` + `injector.ts::renderDecisionGuidance` | ✅ **已实现** — retrieval 拉 active policies, 按 `sourceEpisodeIds` 与召回的 trace 关联, 解析 `@repair` 块, 在注入包尾部渲染 "## Decision guidance" 段 |
 
 → **决策修复链路完整闭环**：repair 的 preference / anti-pattern 三处都消费了：① 写入到 Skill 的 `decisionGuidance` 字段并随技能注入；② retrieval 时按 episode-policy 关联从 active policies 临时召回，独立成段注入到 agent prompt；③ PoliciesView + SkillsView 都展示。Agent 现在真正能感知到"吃一堑长一智"的教训。

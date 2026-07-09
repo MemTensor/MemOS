@@ -88,6 +88,8 @@ export interface TimeRange {
 export interface TraceListFilter extends PageOptions, TimeRange {
   sessionId?: string;
   episodeId?: EpisodeId;
+  ownerAgentKind?: string;
+  ownerProfileId?: string;
   /** Only traces with |value| >= this (absolute). */
   minAbsValue?: number;
   traceIds?: TraceId[];

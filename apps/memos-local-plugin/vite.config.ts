@@ -2,11 +2,11 @@ import { defineConfig } from "vite";
 import preact from "@preact/preset-vite";
 import path from "node:path";
 
-// Vite config for the runtime viewer (web/).
-// Output goes to web/dist and is served at runtime by server/static.ts.
+// Vite config for the runtime viewer (viewer/).
+// Output goes to viewer/dist and is served at runtime by server/static.ts.
 
 export default defineConfig({
-  root: "web",
+  root: "viewer",
   publicDir: "public",
   plugins: [preact()],
   // Relative asset URLs. Each agent owns its own port and serves the
@@ -33,7 +33,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@contract": path.resolve(__dirname, "agent-contract"),
-      "@web": path.resolve(__dirname, "web/src"),
+      "@viewer": path.resolve(__dirname, "viewer/src"),
     },
   },
 });

@@ -22,18 +22,37 @@ describe("retrieval/query-builder", () => {
     expect(cq.truncated).toBe(false);
   });
 
-  it("tool_driven serialises args JSON + tool name", () => {
+  it("tool_driven uses explicit search query text when present", () => {
     const cq = buildQuery({
       reason: "tool_driven",
       agent: "openclaw",
       sessionId: "s1" as unknown as never,
-      tool: "memory_search",
+      tool: "memos_search",
       args: { query: "past docker bugs", limit: 5 },
       ts: NOW,
     });
-    expect(cq.text).toContain("tool:memory_search");
-    expect(cq.text).toContain('"query":"past docker bugs"');
+    expect(cq.text).toContain("past docker bugs");
+    expect(cq.text).toContain('"limit":5');
+    expect(cq.text).not.toContain("tool:memos_search");
     expect(cq.tags).toContain("docker");
+  });
+
+  it("passes CJK tokenizer mode to keyword query compilation", () => {
+    const cq = buildQuery(
+      {
+        reason: "tool_driven",
+        agent: "openclaw",
+        sessionId: "s1" as unknown as never,
+        tool: "memos_search",
+        args: { query: "早报 API配置 C盘" },
+        ts: NOW,
+      },
+      { ftsTokenizer: "cjk" },
+    );
+    expect(cq.ftsMatch).toContain('"早报"');
+    expect(cq.ftsMatch).toContain('"API"');
+    expect(cq.ftsMatch).toContain('"配置"');
+    expect(cq.ftsMatch).toContain('"C盘"');
   });
 
   it("skill_invoke prepends skill id when provided", () => {

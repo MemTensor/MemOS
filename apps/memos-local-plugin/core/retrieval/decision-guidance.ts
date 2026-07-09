@@ -4,11 +4,12 @@
  * Inputs:
  *   - Ranked Tier-2 trace candidates (we use their `episodeId` to find
  *     the policies that share evidence with the trace).
- *   - Ranked Tier-1 skill candidates (later, when skills carry their own
- *     `procedureJson.decisionGuidance` — for now we still go through
- *     the source policies via `sourcePolicyIds`).
+ *   - Ranked Tier-1 skill candidates. When a skill carries its own
+ *     `procedureJson.decisionGuidance`, that skill-local guidance is
+ *     authoritative; we only fall back to source policies for legacy
+ *     skills without embedded guidance.
  *
- * Output: a deduped list of `{ preference, antiPattern, sourcePolicyIds }`
+ * Output: a deduped list of `{ preference, antiPattern, sourcePolicyIds/sourceSkillIds }`
  * entries, ordered by frequency-of-attachment then alphabetically.
  *
  * Why dedupe at this stage and not later: a policy may surface against
@@ -25,6 +26,7 @@ import type { EpisodeId } from "../../agent-contract/dto.js";
 import type { RankedCandidate } from "./ranker.js";
 import type {
   RetrievalRepos,
+  EpisodeCandidate,
   ExperienceCandidate,
   SkillCandidate,
   TraceCandidate,
@@ -41,6 +43,7 @@ export interface GuidanceLine {
   kind: "preference" | "antiPattern";
   text: string;
   sourcePolicyIds: string[];
+  sourceSkillIds: string[];
 }
 
 /** What the injector needs — small, easy to render. */
@@ -49,12 +52,15 @@ export interface CollectedGuidance {
   antiPattern: GuidanceLine[];
   /** Policy ids consulted (for debug / logs). */
   policyIdsTouched: string[];
+  /** Skill ids that contributed embedded decision guidance. */
+  skillIdsTouched: string[];
 }
 
 const EMPTY: CollectedGuidance = Object.freeze({
   preference: [],
   antiPattern: [],
   policyIdsTouched: [],
+  skillIdsTouched: [],
 });
 
 export interface CollectInput {
@@ -67,53 +73,98 @@ export interface CollectInput {
 export function collectDecisionGuidance(input: CollectInput): CollectedGuidance {
   const { ranked, repos, perListCap = 3 } = input;
   if (ranked.length === 0) return EMPTY;
-  if (!repos.policies) return EMPTY;
 
   // Gather the (episodeId, refKind) pairs we care about.
   const traceEpisodeIds = new Set<EpisodeId>();
   const policyIds = new Set<string>();
+  const skillGuidance = new Map<
+    string,
+    { preference: string[]; antiPattern: string[] }
+  >();
   for (const r of ranked) {
     const c = r.candidate;
     if (c.tier === "tier2" && c.refKind === "trace") {
       traceEpisodeIds.add((c as TraceCandidate).episodeId);
+    } else if (c.tier === "tier2" && c.refKind === "episode") {
+      traceEpisodeIds.add((c as EpisodeCandidate).refId);
     } else if (c.tier === "tier2" && c.refKind === "experience") {
       policyIds.add((c as ExperienceCandidate).refId);
     } else if (c.tier === "tier1") {
-      for (const id of (c as SkillCandidate).sourcePolicyIds ?? []) {
-        policyIds.add(id);
+      const skill = c as SkillCandidate;
+      if (hasGuidance(skill.decisionGuidance)) {
+        skillGuidance.set(skill.refId, skill.decisionGuidance);
+      } else {
+        for (const id of skill.sourcePolicyIds ?? []) {
+          policyIds.add(id);
+        }
       }
     }
   }
-  if (traceEpisodeIds.size === 0 && policyIds.size === 0) return EMPTY;
-
-  const activePolicies = repos.policies.list({ status: "active" });
-  if (activePolicies.length === 0) return EMPTY;
+  if (traceEpisodeIds.size === 0 && policyIds.size === 0 && skillGuidance.size === 0) {
+    return EMPTY;
+  }
 
   // Map each policy to {preference[], antiPattern[]} once.
   const policyGuidance = new Map<
     string,
     { preference: string[]; antiPattern: string[]; matchedEpisodes: number }
   >();
-  for (const p of activePolicies) {
-    let matched = 0;
-    for (const ep of p.sourceEpisodeIds) {
-      if (traceEpisodeIds.has(ep)) matched += 1;
-    }
-    if (policyIds.has(p.id)) matched += 1;
-    if (matched === 0) continue; // policy isn't connected to anything we retrieved
+  if (repos.policies && (traceEpisodeIds.size > 0 || policyIds.size > 0)) {
+    const activePolicies = repos.policies.list({ status: "active" });
+    for (const p of activePolicies) {
+      let matched = 0;
+      for (const ep of p.sourceEpisodeIds) {
+        if (traceEpisodeIds.has(ep)) matched += 1;
+      }
+      if (policyIds.has(p.id)) matched += 1;
+      if (matched === 0) continue; // policy isn't connected to anything we retrieved
 
-    const dg = p.decisionGuidance;
-    if (dg.preference.length === 0 && dg.antiPattern.length === 0) {
-      continue; // policy has no learned guidance yet
+      const dg = p.decisionGuidance;
+      if (dg.preference.length === 0 && dg.antiPattern.length === 0) {
+        continue; // policy has no learned guidance yet
+      }
+      policyGuidance.set(p.id, { ...dg, matchedEpisodes: matched });
     }
-    policyGuidance.set(p.id, { ...dg, matchedEpisodes: matched });
   }
 
-  if (policyGuidance.size === 0) return EMPTY;
+  if (policyGuidance.size === 0 && skillGuidance.size === 0) return EMPTY;
 
   // Build dedupe maps keyed by normalized text.
   const prefDedupe = new Map<string, GuidanceLine>();
   const avoidDedupe = new Map<string, GuidanceLine>();
+
+  for (const [sid, g] of skillGuidance) {
+    for (const text of g.preference) {
+      const key = normaliseKey(text);
+      if (!key) continue;
+      const existing = prefDedupe.get(key);
+      if (existing) {
+        existing.sourceSkillIds.push(sid);
+      } else {
+        prefDedupe.set(key, {
+          kind: "preference",
+          text: text.trim(),
+          sourcePolicyIds: [],
+          sourceSkillIds: [sid],
+        });
+      }
+    }
+    for (const text of g.antiPattern) {
+      const key = normaliseKey(text);
+      if (!key) continue;
+      const existing = avoidDedupe.get(key);
+      if (existing) {
+        existing.sourceSkillIds.push(sid);
+      } else {
+        avoidDedupe.set(key, {
+          kind: "antiPattern",
+          text: text.trim(),
+          sourcePolicyIds: [],
+          sourceSkillIds: [sid],
+        });
+      }
+    }
+  }
 
   for (const [pid, g] of policyGuidance) {
     for (const text of g.preference) {
@@ -127,6 +178,7 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
           kind: "preference",
           text: text.trim(),
           sourcePolicyIds: [pid],
+          sourceSkillIds: [],
         });
       }
     }
@@ -141,6 +193,7 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
           kind: "antiPattern",
           text: text.trim(),
           sourcePolicyIds: [pid],
+          sourceSkillIds: [],
         });
       }
     }
@@ -148,8 +201,10 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
 
   // Sort: more cross-policy support first, then alphabetic for stability.
   const sortByFreq = (a: GuidanceLine, b: GuidanceLine) => {
-    if (a.sourcePolicyIds.length !== b.sourcePolicyIds.length) {
-      return b.sourcePolicyIds.length - a.sourcePolicyIds.length;
+    const aSupport = a.sourcePolicyIds.length + a.sourceSkillIds.length;
+    const bSupport = b.sourcePolicyIds.length + b.sourceSkillIds.length;
+    if (aSupport !== bSupport) {
+      return bSupport - aSupport;
     }
     return a.text.localeCompare(b.text);
   };
@@ -158,6 +213,7 @@ export function collectDecisionGuidance(input: CollectInput): CollectedGuidance 
     preference: Array.from(prefDedupe.values()).sort(sortByFreq).slice(0, perListCap),
     antiPattern: Array.from(avoidDedupe.values()).sort(sortByFreq).slice(0, perListCap),
     policyIdsTouched: Array.from(policyGuidance.keys()),
+    skillIdsTouched: Array.from(skillGuidance.keys()),
   };
 }
 
@@ -177,4 +233,10 @@ function normaliseKey(s: string): string {
     .replace(/[\s.。!！?？,，;；:：]+$/g, "")
     .trim();
   return k;
+}
+
+function hasGuidance(
+  dg: { preference: string[]; antiPattern: string[] } | undefined,
+): dg is { preference: string[]; antiPattern: string[] } {
+  return !!dg && (dg.preference.length > 0 || dg.antiPattern.length > 0);
 }

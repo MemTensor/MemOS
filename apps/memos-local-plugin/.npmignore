@@ -8,9 +8,6 @@ tests/
 .notes/
 TODO.local.md
 
-# Site is local-only; never publish dist
-site/dist/
-
 # Editor / OS
 .DS_Store
 .vscode/

@@ -26,7 +26,6 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     provider: "local",
     endpoint: "",
     model: "Xenova/all-MiniLM-L6-v2",
-    dimensions: 384,
     apiKey: "",
     cache: {
       enabled: true,
@@ -54,7 +53,13 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     temperature: 0,
     timeoutMs: 60_000,
   },
+  storage: {
+    ftsTokenizer: "trigram",
+  },
   algorithm: {
+    lightweightMemory: {
+      enabled: true,
+    },
     capture: {
       maxTextChars: 4_000,
       maxToolOutputChars: 2_000,
@@ -79,6 +84,29 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // remain task-end events handled by `core/reward`, unchanged.
       batchMode: "auto",
       batchThreshold: 12,
+      // `reflectionContextMode` controls which extra prompt context blocks
+      // topic-end reflection receives:
+      //   - "none": no TASK CONTEXT and no DOWNSTREAM STEP PREVIEW
+      //   - "task": inject TASK CONTEXT only
+      //   - "downstream": inject DOWNSTREAM STEP PREVIEW only
+      //   - "task_downstream": inject both blocks
+      // `longEpisodeReflectMode` controls the fallback used when an episode is
+      // too long for batch scoring:
+      //   - "per_step_parallel": keep the current parallel per-step path. Each
+      //     step is reflected independently, using only the context blocks
+      //     enabled by `reflectionContextMode` that are available without
+      //     downstream preview.
+      //   - "per_step_downstream": still run per-step work in parallel, but
+      //     prebuild a bounded DOWNSTREAM STEP PREVIEW for each step (step+1
+      //     through step+N, capped by `downstreamStepCount`) and inject it when
+      //     `reflectionContextMode` includes "downstream".
+      reflectionContextMode: "task_downstream",
+      longEpisodeReflectMode: "per_step_downstream",
+      downstreamStepCount: 3,
+      taskContextMaxChars: 800,
+      downstreamContextMaxChars: 1_200,
+      downstreamPerStepMaxChars: 400,
+      synthOutcomeMaxChars: 600,
     },
     reward: {
       gamma: 0.9,
@@ -124,6 +152,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       minTraceValue: 0.005,
       useLlm: true,
       traceCharCap: 3_000,
+      gainEmaAlpha: 0.4,
       archiveGain: -0.05,
     },
     l3Abstraction: {
@@ -185,6 +214,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       failureThreshold: 3,
       failureWindow: 5,
       valueDelta: 0.5,
+      minLowValueThreshold: 0.01,
       useLlm: true,
       attachToPolicy: true,
       cooldownMs: 60_000,
@@ -234,6 +264,12 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // hits before injection.
       llmFilterMinCandidates: 2,
       llmFilterCandidateBodyChars: 500,
+      // Default 0 — no time-window bound, keeping the legacy
+      // brute-force scan behaviour for fresh installs that haven't
+      // grown past the threshold where the bound starts paying off.
+      // Operators with >50K traces are expected to flip this on (we
+      // suggest 86_400_000 = 24h, or 2_592_000_000 = 30 days).
+      vectorScanMaxAgeMs: 0,
     },
   },
   hub: {

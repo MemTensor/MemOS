@@ -35,6 +35,22 @@ import { writeJson } from "../middleware/io.js";
 
 const NATIVE_IMPORT_DEFAULT_BATCH = 25;
 const NATIVE_IMPORT_MAX_BATCH = 200;
+const NATIVE_IMPORT_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface HermesNativeSource {
+  memories: string[];
+  bytes: number;
+  mtimeMs: number;
+}
+
+interface OpenClawNativeSource {
+  messages: OpenClawNativeMessage[];
+  files: number;
+  sessions: number;
+}
+
+const hermesNativeCache = new Map<string, { source: HermesNativeSource }>();
+const openClawNativeCache = new Map<string, { source: OpenClawNativeSource; cachedAt: number }>();
 
 export function registerImportExportRoutes(
   routes: Routes,
@@ -143,7 +159,7 @@ export function registerImportExportRoutes(
     const limit = coerceBatchLimit(body.limit);
 
     try {
-      const source = await readHermesNativeMemories(path);
+      const source = await readHermesNativeMemories(path, { force: offset === 0 });
       const total = source.memories.length;
       const batch = source.memories.slice(offset, offset + limit);
       if (batch.length === 0) {
@@ -221,7 +237,7 @@ export function registerImportExportRoutes(
     const limit = coerceBatchLimit(body.limit);
 
     try {
-      const source = await readOpenClawNativeMessages(path);
+      const source = await readOpenClawNativeMessages(path, { force: offset === 0 });
       const total = source.messages.length;
       const batch = source.messages.slice(offset, offset + limit);
       if (batch.length === 0) {
@@ -340,7 +356,7 @@ interface HermesNativeScanResult {
 
 async function scanHermesNativeMemories(path: string): Promise<HermesNativeScanResult> {
   try {
-    const source = await readHermesNativeMemories(path);
+    const source = await readHermesNativeMemories(path, { force: true });
     return {
       found: true,
       agent: "hermes",
@@ -359,18 +375,28 @@ async function scanHermesNativeMemories(path: string): Promise<HermesNativeScanR
   }
 }
 
-async function readHermesNativeMemories(path: string): Promise<{
-  memories: string[];
-  bytes: number;
-  mtimeMs: number;
-}> {
+async function readHermesNativeMemories(
+  path: string,
+  opts: { force?: boolean } = {},
+): Promise<HermesNativeSource> {
   const info = await stat(path);
+  const cached = hermesNativeCache.get(path);
+  if (
+    !opts.force &&
+    cached &&
+    cached.source.bytes === info.size &&
+    cached.source.mtimeMs === info.mtimeMs
+  ) {
+    return cached.source;
+  }
   const raw = await readFile(path, "utf8");
-  return {
+  const source = {
     memories: splitHermesNativeMemories(raw),
     bytes: info.size,
     mtimeMs: info.mtimeMs,
   };
+  hermesNativeCache.set(path, { source });
+  return source;
 }
 
 function splitHermesNativeMemories(raw: string): string[] {
@@ -446,7 +472,7 @@ interface OpenClawNativeScanResult {
 
 async function scanOpenClawNativeSessions(path: string): Promise<OpenClawNativeScanResult> {
   try {
-    const source = await readOpenClawNativeMessages(path);
+    const source = await readOpenClawNativeMessages(path, { force: true });
     return {
       found: true,
       agent: "openclaw",
@@ -468,11 +494,14 @@ async function scanOpenClawNativeSessions(path: string): Promise<OpenClawNativeS
   }
 }
 
-async function readOpenClawNativeMessages(path: string): Promise<{
-  messages: OpenClawNativeMessage[];
-  files: number;
-  sessions: number;
-}> {
+async function readOpenClawNativeMessages(
+  path: string,
+  opts: { force?: boolean } = {},
+): Promise<OpenClawNativeSource> {
+  const cached = openClawNativeCache.get(path);
+  if (!opts.force && cached && Date.now() - cached.cachedAt < NATIVE_IMPORT_CACHE_TTL_MS) {
+    return cached.source;
+  }
   const agentEntries = await readdir(path, { withFileTypes: true });
   const messages: OpenClawNativeMessage[] = [];
   let files = 0;
@@ -549,7 +578,9 @@ async function readOpenClawNativeMessages(path: string): Promise<{
     if (af !== bf) return af.localeCompare(bf);
     return a.lineNo - b.lineNo;
   });
-  return { messages, files, sessions };
+  const source = { messages, files, sessions };
+  openClawNativeCache.set(path, { source, cachedAt: Date.now() });
+  return source;
 }
 
 function buildOpenClawNativeTraces(messages: readonly OpenClawNativeMessage[]): TraceDTO[] {
@@ -669,7 +700,7 @@ function stripOpenClawMemoryInjection(text: string): string {
     "",
   );
   cleaned = cleaned.replace(
-    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memory_search[^\n]*)*/gi,
+    /## Memory system\n+No memories were automatically recalled[^\n]*(?:\n[^\n]*memos_search[^\n]*)*/gi,
     "",
   );
   return cleaned.trim();
