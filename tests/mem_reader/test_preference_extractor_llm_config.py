@@ -12,6 +12,7 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
+from memos.types.general_types import MemoryView
 
 
 def test_product_default_config_wires_preference_extractor_model(monkeypatch):
@@ -26,6 +27,26 @@ def test_product_default_config_wires_preference_extractor_model(monkeypatch):
     assert pref_config["config"]["model_name_or_path"] == "pref-model"
     assert pref_config["config"]["api_base"] == "https://pref.example/v1"
     assert pref_config["config"]["api_key"] == "pref-key"
+
+
+def test_preference_extractor_qwen35_disables_thinking(monkeypatch):
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_MODEL", "qwen3.5-flash")
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_KEY", "pref-key")
+
+    pref_config = APIConfig.get_preference_extractor_llm_config()
+
+    assert pref_config["config"]["extra_body"] == {"enable_thinking": False}
+
+
+def test_preference_extractor_qwen36_disables_thinking(monkeypatch):
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_MODEL", "qwen3.6-flash")
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_KEY", "pref-key")
+
+    pref_config = APIConfig.get_preference_extractor_llm_config()
+
+    assert pref_config["config"]["extra_body"] == {"enable_thinking": False}
 
 
 def test_product_default_config_leaves_preference_extractor_unset_without_model(monkeypatch):
@@ -129,6 +150,8 @@ def test_multimodal_transfer_uses_preference_extractor_llm():
             "memos.mem_reader.multi_modal_struct.process_preference_fine", return_value=[]
         ) as mock_process_pref,
     ):
-        reader._process_transfer_multi_modal_data([raw_node])
+        reader._process_transfer_multi_modal_data(
+            [raw_node], allow_memory_view=[MemoryView.PREFERENCE]
+        )
 
     assert mock_process_pref.call_args.args[2] is reader.preference_extractor_llm
