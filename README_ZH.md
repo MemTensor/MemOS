@@ -46,7 +46,7 @@
 ### News
 
 - **2026-07-02** · 🏆 **MemOS 在 Agent 与用户记忆榜单上全面领先**
-  在 MemOS 的加持下，**OpenClaw** 在五个 Agent 任务上的平均任务完成率从 **36.63% 提升到 50.87%**。MemOS 在 **LoCoMo** 取得 **92.34**、**LongMemEval** 取得 **93.40**，并在 **OmniMemEval**（覆盖 14 款商业记忆产品、十个数据集的统一评测）中领先。
+  在 MemOS 的加持下，**OpenClaw** 在五个 Agent 任务上的平均任务完成率从 **36.63% 提升到 50.87%**。MemOS 在 **LoCoMo** 取得 **88.83**、**LongMemEval** 取得 **89.20**，并在 **OmniMemEval**（覆盖 14 款商业记忆产品、十个数据集的统一评测）中领先。
 
 - **2026-05-09** · 🧠 **memos-local-plugin 2.0**
   **Hermes Agent** 与 **OpenClaw** 官方本地记忆插件。单一核心驱动自演化记忆：L1 轨迹、L2 策略、L3 世界模型与结晶化 Skill，本地优先存储 + 反馈驱动检索。
