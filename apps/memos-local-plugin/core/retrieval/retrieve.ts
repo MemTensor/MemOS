@@ -236,7 +236,7 @@ async function runAll(
   const episodeId = (ctx as { episodeId?: EpisodeId }).episodeId;
   const ts = deps.now();
 
-  const compiled = buildQuery(ctx);
+  const compiled = buildQuery(ctx, { ftsTokenizer: deps.config.ftsTokenizer });
   opts.events?.emit({
     kind: "retrieval.started",
     reason: ctx.reason,

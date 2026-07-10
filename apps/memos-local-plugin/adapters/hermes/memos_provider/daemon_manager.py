@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.RLock()
 _bridge_ok: bool | None = None
+_bridge_ok_at: float = 0.0
 _viewer_status: str | None = None
 _viewer_last_probe_at = 0.0
 _viewer_process: subprocess.Popen | None = None
@@ -43,6 +44,11 @@ HERMES_VIEWER_PORT = 18800
 VIEWER_PROBE_TTL_SEC = 30.0
 VIEWER_START_LOCK_TIMEOUT_SEC = 20.0
 VIEWER_START_LOCK_STALE_SEC = 60.0
+# Bound how long a cached `_bridge_ok` answer is trusted. Without this, a
+# single transient `_node_available()` failure during gateway startup
+# (subprocess race, `.env` loaded after the first probe) would pin the
+# provider to "unavailable" for the lifetime of the process — see #1797.
+BRIDGE_OK_TTL_SEC = 60.0
 
 
 @contextlib.contextmanager
@@ -167,22 +173,39 @@ def ensure_bridge_running(*, probe_only: bool = False) -> bool:
     ``probe_only=True`` performs a lightweight availability check without
     launching a long-lived subprocess. This is what
     ``MemTensorProvider.is_available`` calls during Hermes startup.
+
+    The cached answer is honoured only inside ``BRIDGE_OK_TTL_SEC``; once
+    it expires we revalidate. A transient ``_node_available()`` failure
+    therefore self-heals on the next probe instead of permanently
+    disabling the provider (see issue #1797).
     """
-    global _bridge_ok
+    global _bridge_ok, _bridge_ok_at
     with _lock:
-        if _bridge_ok is not None and probe_only:
+        now = time.time()
+        if _bridge_ok is not None and probe_only and (now - _bridge_ok_at) < BRIDGE_OK_TTL_SEC:
             return _bridge_ok
         script = _bridge_script()
         if not script.exists():
             logger.warning("MemOS: bridge script missing at %s", script)
             _bridge_ok = False
+            _bridge_ok_at = now
             return False
-        if not _node_available():
-            logger.warning("MemOS: Node.js not found on PATH")
-            _bridge_ok = False
-            return False
-        _bridge_ok = True
-        return True
+        if _node_available():
+            _bridge_ok = True
+            _bridge_ok_at = now
+            return True
+        # Node binary check just failed. A MemOS bridge already running on
+        # :18800 is definitive proof Node works on this host (the daemon
+        # itself was launched via Node); trust it and recover rather than
+        # report unavailable forever.
+        if _probe_viewer() == "running_memos":
+            _bridge_ok = True
+            _bridge_ok_at = now
+            return True
+        logger.warning("MemOS: Node.js not found on PATH")
+        _bridge_ok = False
+        _bridge_ok_at = now
+        return False
 
 
 def _probe_viewer() -> str:
@@ -318,7 +341,10 @@ def ensure_viewer_daemon(*, probe_only: bool = False) -> bool:
                 logger.warning("MemOS: failed to start viewer daemon — %s", err)
                 return False
 
-            deadline = time.time() + 15.0
+            # 45s is generous for cold Node.js starts (tsx compile + SQLite
+            # open + FTS warmup). Fast probes for the first 15s, then back
+            # off to 2s to avoid hammering a slow-starting daemon.
+            deadline = time.time() + 45.0
             while time.time() < deadline:
                 if _viewer_process.poll() is not None:
                     logger.warning(
@@ -338,16 +364,119 @@ def ensure_viewer_daemon(*, probe_only: bool = False) -> bool:
                         HERMES_VIEWER_PORT,
                     )
                     return False
-                time.sleep(0.5)
-            logger.warning("MemOS: viewer daemon did not become healthy within 15s")
+                time.sleep(0.5 if (deadline - time.time()) > 30 else 2.0)
+            logger.warning("MemOS: viewer daemon did not become healthy within 45s")
             return False
 
 
 def shutdown_bridge() -> None:
     """Best-effort cleanup; each client owns its own subprocess."""
-    global _bridge_ok
+    global _bridge_ok, _bridge_ok_at
     with _lock:
         _bridge_ok = None
+        _bridge_ok_at = 0.0
+
+
+def probe_viewer_status() -> str:
+    """Return the current viewer daemon status without side effects.
+
+    Returns one of: ``"running_memos"``, ``"free"``, ``"blocked"``.
+    This is a cheap, lock-free probe suitable for deciding whether to
+    spawn a new stdio bridge or connect to the existing daemon over HTTP.
+    """
+    return _probe_viewer()
+
+
+def startup_lock_active() -> bool:
+    """Return True when the viewer-start.lock directory exists.
+
+    Used by the provider to skip the cold-start sleep when there is no
+    concurrent daemon launch in progress.
+    """
+    return (_plugin_root() / "daemon" / "viewer-start.lock").exists()
+
+
+def kill_zombie_bridges() -> int:
+    """Kill all bridge.cjs processes that are NOT the daemon on port 18800.
+
+    Returns the number of zombies killed. The daemon (the process that
+    owns port 18800) is left alone. This should be called early in the
+    provider's lifecycle to clean up leftovers from crashed sessions.
+    """
+    # Find the PID that owns port 18800 (the real daemon).
+    # ss(8) is Linux-only; fall back to lsof on macOS.
+    daemon_pid: int | None = None
+    try:
+        ss_out = subprocess.check_output(
+            ["ss", "-tlnp"],
+            timeout=2.0,
+            text=True,
+        )
+        for line in ss_out.splitlines():
+            if ":18800" in line:
+                # ss output: users:(("node",pid=21246,fd=24))
+                m = re.search(r"pid=(\d+)", line)
+                if m:
+                    daemon_pid = int(m.group(1))
+                    break
+    except Exception:
+        pass
+
+    if daemon_pid is None:
+        # macOS fallback — lsof is available on both Linux and macOS.
+        try:
+            lsof_out = subprocess.check_output(
+                ["lsof", "-iTCP:18800", "-sTCP:LISTEN", "-n", "-P"],
+                timeout=2.0,
+                text=True,
+            )
+            for line in lsof_out.splitlines()[1:]:  # skip header
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        daemon_pid = int(parts[1])
+                        break
+                    except ValueError:
+                        continue
+        except Exception:
+            pass
+
+    # If we still can't identify the daemon PID, skip killing entirely to
+    # avoid terminating the daemon itself.
+    if daemon_pid is None:
+        logger.debug("MemOS: zombie scan skipped — could not identify daemon PID on port 18800")
+        return 0
+
+    # Find all bridge.cjs processes
+    killed = 0
+    try:
+        ps_out = subprocess.check_output(
+            ["ps", "aux"],
+            timeout=2.0,
+            text=True,
+        )
+        for line in ps_out.splitlines():
+            if "bridge.cjs" not in line or "grep" in line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[1])
+            except ValueError:
+                continue
+            if pid == daemon_pid:
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+                killed += 1
+                logger.info("MemOS: killed zombie bridge pid=%d", pid)
+            except (OSError, ProcessLookupError):
+                pass
+    except Exception as err:
+        logger.debug("MemOS: zombie scan failed — %s", err)
+
+    return killed
 
 
 def probe_viewer_status() -> str:

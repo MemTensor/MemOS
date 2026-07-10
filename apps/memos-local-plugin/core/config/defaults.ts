@@ -42,6 +42,19 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     timeoutMs: 45_000,
     maxRetries: 3,
   },
+  l3Llm: {
+    // Empty by default — falls back to the shared `llm` settings.
+    // Operators set this when they want a stronger model for L3
+    // abstraction. L3 runs off the turn-response path, so a slower
+    // but more reliable model improves world-model quality without
+    // affecting companion latency.
+    provider: "",
+    endpoint: "",
+    model: "",
+    apiKey: "",
+    temperature: 0,
+    timeoutMs: 60_000,
+  },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
     // Operators set this when they want a stronger model (e.g.
@@ -52,6 +65,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     temperature: 0,
     timeoutMs: 60_000,
+  },
+  storage: {
+    ftsTokenizer: "trigram",
   },
   algorithm: {
     lightweightMemory: {
@@ -261,6 +277,12 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // hits before injection.
       llmFilterMinCandidates: 2,
       llmFilterCandidateBodyChars: 500,
+      // Default 0 — no time-window bound, keeping the legacy
+      // brute-force scan behaviour for fresh installs that haven't
+      // grown past the threshold where the bound starts paying off.
+      // Operators with >50K traces are expected to flip this on (we
+      // suggest 86_400_000 = 24h, or 2_592_000_000 = 30 days).
+      vectorScanMaxAgeMs: 0,
     },
   },
   hub: {
@@ -307,6 +329,7 @@ export const SECRET_FIELD_PATHS: readonly string[] = Object.freeze([
   "embedding.apiKey",
   "llm.apiKey",
   "skillEvolver.apiKey",
+  "l3Llm.apiKey",
   "hub.teamToken",
   "hub.userToken",
 ]);

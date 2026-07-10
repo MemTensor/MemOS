@@ -21,6 +21,7 @@ import { buildSkillBundleForHub, fetchHubSkillBundle, restoreSkillBundleFromHub 
 import type { Logger, Chunk, PluginContext, MemosLocalConfig } from "../types";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
+import { parseJsonOrJson5 } from "../shared/json5";
 
 export interface MigrationStepFailureCounts {
   summarization: number;
@@ -395,6 +396,7 @@ export class ViewerServer {
       else if (p === "/api/migrate/postprocess/stream" && req.method === "GET") this.handlePostprocessStream(res);
       else if (p === "/api/migrate/postprocess/stop" && req.method === "POST") this.handlePostprocessStop(res);
       else if (p === "/api/migrate/postprocess/status" && req.method === "GET") this.handlePostprocessStatus(res);
+      else if (p === "/api/export" && req.method === "GET") this.handleExport(res, url);
       else {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "not found" }));
@@ -649,7 +651,7 @@ export class ViewerServer {
     try {
       const cfgPath = this.getOpenClawConfigPath();
       if (fs.existsSync(cfgPath)) {
-        const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
         const entries = raw?.plugins?.entries ?? {};
         const pluginCfg = entries["memos-local-openclaw-plugin"]?.config
           ?? entries["memos-local"]?.config ?? {};
@@ -1277,8 +1279,9 @@ export class ViewerServer {
 
   private embedTaskInBackground(taskId: string, text: string): void {
     if (!this.embedder || !text.trim()) return;
-    this.embedder.embed([text]).then((vecs: number[][]) => {
-      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0]);
+    const embedder = this.embedder;
+    embedder.embed([text]).then((vecs: number[][]) => {
+      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0], { provider: embedder.provider, model: embedder.model });
     }).catch(() => {});
   }
 
@@ -1418,8 +1421,9 @@ export class ViewerServer {
       const sv = this.store.getLatestSkillVersion(skillId);
       if (sv) {
         const text = `${skill.name}: ${skill.description}`;
-        this.embedder.embed([text]).then((vecs: number[][]) => {
-          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0]);
+        const embedder = this.embedder;
+        embedder.embed([text]).then((vecs: number[][]) => {
+          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0], { provider: embedder.provider, model: embedder.model });
         }).catch(() => {});
       }
     }
@@ -1959,7 +1963,7 @@ export class ViewerServer {
     try {
       const cfgPath = this.getOpenClawConfigPath();
       if (!fs.existsSync(cfgPath)) return null;
-      return JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      return parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, any>;
     } catch {
       return null;
     }
@@ -3066,6 +3070,42 @@ export class ViewerServer {
     res.end(JSON.stringify({ ips }));
   }
 
+  // ─── Export ───
+
+  private handleExport(res: http.ServerResponse, url: URL): void {
+    const format = url.searchParams.get("format") ?? "json";
+    const now = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+
+    try {
+      if (format === "csv") {
+        const csv = this.store.exportMemoriesAsCsv();
+        const filename = `memos-memories-${now}.csv`;
+        res.writeHead(200, {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        });
+        res.end(csv);
+      } else {
+        const data = this.store.exportAll();
+        const payload = JSON.stringify(
+          { exportedAt: new Date().toISOString(), version: 1, ...data },
+          null,
+          2,
+        );
+        const filename = `memos-export-${now}.json`;
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        });
+        res.end(payload);
+      }
+    } catch (err) {
+      this.log.error(`Export failed: ${err}`);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  }
+
   private serveConfig(res: http.ServerResponse): void {
     try {
       const cfgPath = this.getOpenClawConfigPath();
@@ -3073,7 +3113,7 @@ export class ViewerServer {
         this.jsonResponse(res, {});
         return;
       }
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
       const entries = raw?.plugins?.entries ?? {};
       const pluginEntry = entries["memos-local-openclaw-plugin"]?.config
         ?? entries["memos-local"]?.config
@@ -3105,7 +3145,7 @@ export class ViewerServer {
         const cfgPath = this.getOpenClawConfigPath();
         let raw: Record<string, unknown> = {};
         if (fs.existsSync(cfgPath)) {
-          raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, unknown>;
         }
 
         if (!raw.plugins) raw.plugins = {};
@@ -3823,7 +3863,7 @@ export class ViewerServer {
 
                   discardBackup();
                   this.log.info(`update-install: success! Updated to ${newVersion}`);
-                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install");
+                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install", 250);
                 });
               });
             });
@@ -3871,11 +3911,31 @@ export class ViewerServer {
       return vecs[0].length;
     }
     if (provider === "gemini") {
-      const url = `https://generativelanguage.googleapis.com/v1/models/${model || "text-embedding-004"}:embedContent?key=${apiKey}`;
+      const geminiModel = model || "gemini-embedding-001";
+      const geminiEndpoint = (
+        endpoint ||
+        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:batchEmbedContents`
+      ).replace(/\/+$/, "");
+      const separator = geminiEndpoint.includes("?") ? "&" : "?";
+      // Only append the API key for the default Gemini endpoint; for custom
+      // endpoints the caller is responsible for authentication and we must
+      // never leak the Gemini API key to a user-controlled server.
+      const url = endpoint
+        ? geminiEndpoint
+        : `${geminiEndpoint}${separator}key=${apiKey}`;
+      // When the caller supplies a custom endpoint, don't hardcode the
+      // default model name in the request body either — the proxy may
+      // route based on this field.
+      const bodyModel = endpoint ? undefined : `models/${geminiModel}`;
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: { parts: [{ text: "test embedding vector" }] } }),
+        body: JSON.stringify({
+          requests: [{
+            ...(bodyModel ? { model: bodyModel } : {}),
+            content: { parts: [{ text: "test embedding vector" }] },
+          }],
+        }),
         signal: AbortSignal.timeout(15_000),
       });
       if (!resp.ok) {
@@ -3883,20 +3943,40 @@ export class ViewerServer {
         throw new Error(`Gemini embed ${resp.status}: ${txt}`);
       }
       const json = await resp.json() as any;
-      const vec = json?.embedding?.values;
+      const vec = json?.embeddings?.[0]?.values;
       if (!Array.isArray(vec) || vec.length === 0) {
         throw new Error("Gemini returned empty embedding vector");
       }
       return vec.length;
     }
-    const resp = await fetch(embUrl, {
+    const requestBody = { input: ["test embedding vector"], model: model || "text-embedding-3-small" };
+    let resp = await fetch(embUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify({ input: ["test embedding vector"], model: model || "text-embedding-3-small" }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(15_000),
     });
     if (!resp.ok) {
       const txt = await resp.text();
+      if (/input[_ -]?type/i.test(txt) && /required/i.test(txt)) {
+        resp = await fetch(embUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...requestBody, input_type: "query" }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (resp.ok) {
+          const json = await resp.json() as any;
+          const data = json?.data;
+          const vec = Array.isArray(data) && data.length > 0 ? data[0]?.embedding : undefined;
+          if (!Array.isArray(vec) || vec.length === 0) {
+            throw new Error(
+              `API returned empty embedding vector (got ${JSON.stringify(vec)?.slice(0, 100)})`,
+            );
+          }
+          return vec.length;
+        }
+      }
       throw new Error(`${resp.status}: ${txt}`);
     }
     const json = await resp.json() as any;
@@ -4070,7 +4150,7 @@ export class ViewerServer {
       let hasSummarizer = false;
       if (fs.existsSync(cfgPath)) {
         try {
-          const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
           const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
                             raw?.plugins?.entries?.["memos-local"]?.config ??
                             raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
@@ -4378,7 +4458,7 @@ export class ViewerServer {
                             this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, row.text);
                             try {
                               const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]);
-                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb);
+                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb, { provider: this.embedder.provider, model: this.embedder.model });
                             } catch { /* best-effort */ }
                             dedupStatus = "merged";
                             dedupTarget = targetId;
@@ -4419,7 +4499,7 @@ export class ViewerServer {
 
                 this.store.insertChunk(chunk);
                 if (embedding && dedupStatus === "active") {
-                  this.store.upsertEmbedding(chunkId, embedding);
+                  this.store.upsertEmbedding(chunkId, embedding, { provider: this.embedder.provider, model: this.embedder.model });
                 }
 
                 totalStored++;
@@ -4611,7 +4691,7 @@ export class ViewerServer {
                           const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
                           if (targetId) {
                             this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, content);
-                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb); } catch { /* best-effort */ }
+                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb, { provider: this.embedder.provider, model: this.embedder.model }); } catch { /* best-effort */ }
                             dedupStatus = "merged"; dedupTarget = targetId; dedupReason = dedupResult.reason;
                           }
                         }
@@ -4634,7 +4714,7 @@ export class ViewerServer {
                 };
 
                 this.store.insertChunk(chunk);
-                if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding);
+                if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding, { provider: this.embedder.provider, model: this.embedder.model });
 
                 totalStored++;
                 send("item", { index: idx, total: totalMsgs, status: dedupStatus === "active" ? "stored" : dedupStatus, preview: content.slice(0, 120), summary: summary.slice(0, 80), source: file, agent: agentId, role: msgRole, stepFailures });
@@ -4969,12 +5049,11 @@ export class ViewerServer {
     statusCode = 200,
   ): void {
     res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(data), () => {
-      setTimeout(() => {
-        this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
-        try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-      }, delayMs);
-    });
+    res.end(JSON.stringify(data));
+    setTimeout(() => {
+      this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
+      try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+    }, delayMs);
   }
 
   private jsonResponse(res: http.ServerResponse, data: unknown, statusCode = 200): void {
