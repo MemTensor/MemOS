@@ -68,6 +68,25 @@ class FailingSessionOpenBridge(FakeBridge):
 
 
 class HermesProviderPipelineTests(unittest.TestCase):
+    def test_module_imports_cleanly(self) -> None:
+        """Regression for #2096: ``memos_provider`` must import without
+        pulling in symbols that don't exist in ``bridge_client``.
+
+        The module is already loaded at the top of this file, so if any
+        dangling reference is reintroduced, ``import memos_provider``
+        raises ``ImportError`` and the whole file fails to collect.
+        This test additionally asserts the surface Hermes actually reads:
+        the ``MemTensorProvider`` class and the ``BridgeError`` /
+        ``MemosBridgeClient`` names from ``bridge_client``.
+        """
+        self.assertTrue(hasattr(memos_provider, "MemTensorProvider"))
+        self.assertTrue(hasattr(memos_provider, "MemosBridgeClient"))
+        self.assertTrue(hasattr(memos_provider, "BridgeError"))
+        # ``MemosHttpClient`` was referenced by name in a half-merged HTTP
+        # bridge feature (see #2096). It must not reappear until the class
+        # itself is committed in ``bridge_client``.
+        self.assertFalse(hasattr(memos_provider, "MemosHttpClient"))
+
     def test_lifecycle_persists_turn_and_closes_real_episode(self) -> None:
         bridge = FakeBridge()
         with (
