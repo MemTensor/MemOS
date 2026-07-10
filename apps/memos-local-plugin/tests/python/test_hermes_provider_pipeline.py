@@ -69,19 +69,37 @@ class FailingSessionOpenBridge(FakeBridge):
 
 class HermesProviderPipelineTests(unittest.TestCase):
     def test_module_imports_cleanly(self) -> None:
-        """Regression for #2096: ``memos_provider`` must import without
-        pulling in symbols that don't exist in ``bridge_client``.
+        """Regression guard for #2096: asserts that ``MemosHttpClient`` is
+        NOT present in ``memos_provider``, since the class was referenced
+        before it was ever committed (see issue #2096).
 
-        The module is already loaded at the top of this file, so if any
-        dangling reference is reintroduced, ``import memos_provider``
-        raises ``ImportError`` and the whole file fails to collect.
-        This test additionally asserts the surface Hermes actually reads:
-        the ``MemTensorProvider`` class and the ``BridgeError`` /
-        ``MemosBridgeClient`` names from ``bridge_client``.
+        Note: the import itself is already validated at collection time —
+        the ``import memos_provider`` at the top of this file will raise
+        ``ImportError`` if a dangling reference is reintroduced, causing
+        the entire test file to fail to load. This test body only adds:
+
+        * the explicit negative guard on ``MemosHttpClient`` below (unique
+          to this test), and
+        * positive checks on ``MemTensorProvider`` (the class the Hermes
+          host actually instantiates) and on ``bridge_client``'s real
+          contract (``MemosBridgeClient`` / ``BridgeError``), rather than
+          on their incidental re-exports through ``memos_provider`` — the
+          latter only appear on the package namespace because
+          ``__init__.py`` uses a bare ``from bridge_client import ...``,
+          which is an implementation detail we don't want the test to
+          lock in.
         """
+        import importlib
+
+        # MemTensorProvider is the class hermes-agent host instantiates.
         self.assertTrue(hasattr(memos_provider, "MemTensorProvider"))
-        self.assertTrue(hasattr(memos_provider, "MemosBridgeClient"))
-        self.assertTrue(hasattr(memos_provider, "BridgeError"))
+
+        # Assert the actual contract on bridge_client directly rather
+        # than on its re-exports through memos_provider.
+        bc = importlib.import_module("bridge_client")
+        self.assertTrue(hasattr(bc, "MemosBridgeClient"))
+        self.assertTrue(hasattr(bc, "BridgeError"))
+
         # ``MemosHttpClient`` was referenced by name in a half-merged HTTP
         # bridge feature (see #2096). It must not reappear until the class
         # itself is committed in ``bridge_client``.
