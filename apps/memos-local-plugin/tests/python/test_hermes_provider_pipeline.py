@@ -79,7 +79,10 @@ class HermesProviderPipelineTests(unittest.TestCase):
         the entire test file to fail to load. This test body only adds:
 
         * the explicit negative guard on ``MemosHttpClient`` below (unique
-          to this test), and
+          to this test), which covers both the ``memos_provider``
+          re-export surface *and* ``bridge_client`` itself so a partial
+          re-add of the class only in ``bridge_client`` (with no
+          matching re-export) still fails the guard, and
         * positive checks on ``MemTensorProvider`` (the class the Hermes
           host actually instantiates) and on ``bridge_client``'s real
           contract (``MemosBridgeClient`` / ``BridgeError``), rather than
@@ -102,8 +105,13 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         # ``MemosHttpClient`` was referenced by name in a half-merged HTTP
         # bridge feature (see #2096). It must not reappear until the class
-        # itself is committed in ``bridge_client``.
+        # itself is committed in ``bridge_client``. Guard both the
+        # ``memos_provider`` re-export (which is what the original
+        # ImportError travelled through) and ``bridge_client`` itself —
+        # otherwise a partial re-add of the class in ``bridge_client``
+        # without a matching re-export would slip past this test.
         self.assertFalse(hasattr(memos_provider, "MemosHttpClient"))
+        self.assertFalse(hasattr(bc, "MemosHttpClient"))
 
     def test_lifecycle_persists_turn_and_closes_real_episode(self) -> None:
         bridge = FakeBridge()
