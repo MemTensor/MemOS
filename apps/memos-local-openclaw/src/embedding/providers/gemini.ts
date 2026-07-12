@@ -5,7 +5,7 @@ export async function embedGemini(
   cfg: EmbeddingConfig,
   log: Logger,
 ): Promise<number[][]> {
-  const model = cfg.model ?? "text-embedding-004";
+  const model = cfg.model ?? "gemini-embedding-001";
   const endpoint =
     cfg.endpoint ??
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents`;
