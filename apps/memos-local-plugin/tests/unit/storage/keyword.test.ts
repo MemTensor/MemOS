@@ -32,6 +32,14 @@ describe("storage/keyword.prepareFtsMatch", () => {
     expect(prepareFtsMatch("唐波")).toBeNull(); // 2-char CJK only
   });
 
+  it("keeps short CJK and mixed ASCII+CJK terms in cjk mode", () => {
+    const out = prepareFtsMatch("早报 API配置 C盘", { tokenizer: "cjk" });
+    expect(out).toContain('"早报"');
+    expect(out).toContain('"API"');
+    expect(out).toContain('"配置"');
+    expect(out).toContain('"C盘"');
+  });
+
   it("escapes quotes inside tokens for FTS5 phrase syntax", () => {
     const out = prepareFtsMatch('check "quoted" word');
     // FTS5 phrase syntax doubles the inner quote.

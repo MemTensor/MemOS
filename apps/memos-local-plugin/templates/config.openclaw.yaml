@@ -26,6 +26,9 @@ llm:
   apiKey: ""              # required except for provider=host | local_only
   model: ""               # blank = let the provider pick its default
 
+storage:
+  ftsTokenizer: trigram    # trigram | cjk; cjk improves short Chinese keyword recall
+
 algorithm:
   lightweightMemory:
     enabled: true          # true = low-cost summaries only; false = memory self-evolution with tasks/experiences/world models/skills

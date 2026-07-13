@@ -18,7 +18,7 @@ import { buildSkillConfigChain, callLLMWithFallback } from "../shared/llm-call";
 //   - Imperative form, keep it concise
 //   - Generalize from the specific task, don't over-fit
 
-const STEP1_SKILL_MD_PROMPT = `You are a Skill creation expert. Your job is to distill a completed task's execution record into a reusable SKILL.md file.
+export const STEP1_SKILL_MD_PROMPT = `You are a Skill creation expert. Your job is to distill a completed task's execution record into a reusable SKILL.md file.
 
 This Skill is special: it comes from real execution experience — every step was actually run, every pitfall was actually encountered and resolved.
 
@@ -41,6 +41,9 @@ The description field decides whether the agent activates this skill. Write it "
 - Explain WHY for each step, not just HOW — today's LLMs respond better to reasoning than rigid rules
 - Seeing yourself write ALWAYS or NEVER in caps is a yellow flag — rephrase with reasoning instead
 - Generalize from the specific task so the skill works for similar future scenarios, don't over-fit to this exact project
+- Pattern over procedure: make the core steps reusable patterns, and demote project-specific file names, feature names, versions, and implementation details to examples unless they are required prerequisites
+- Abstract the mistake, not just the fix: capture the diagnostic method that found the problem, not only the specific error message or patch from this task
+- Do not make a specific project name, product version, branch, or one-off rollback decision a required part of the skill unless the future task truly depends on it
 - Keep real commands/code/config from the task record — these are verified to work
 
 ### Language matching (CRITICAL)

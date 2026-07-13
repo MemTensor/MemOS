@@ -61,12 +61,22 @@ class FakePopen:
 
         self.stdin.write = _write  # type: ignore[assignment]
 
-    # The client just needs wait/kill to exist; they are no-ops here.
+    # The client just needs wait/kill/poll to exist; they are no-ops
+    # here. `poll_return` lets a test simulate an already-exited
+    # subprocess for the fast-fail path.
+    poll_return: int | None = None
+
     def wait(self, timeout: float | None = None) -> int:
         return 0
 
     def kill(self) -> None:
         pass
+
+    def terminate(self) -> None:
+        pass
+
+    def poll(self) -> int | None:
+        return self.poll_return
 
 
 class _ServerStream(io.StringIO):
@@ -164,10 +174,20 @@ class RecordingBridge:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+        # Kwargs captured per call — used by tests that assert on the
+        # per-request `timeout` kwarg the provider now passes for
+        # long-running operations (memory.search / turn.start / turn.end).
+        self.call_kwargs: list[dict] = []
 
-    def request(self, method: str, params: dict | None = None) -> dict | None:
+    def request(
+        self,
+        method: str,
+        params: dict | None = None,
+        **kwargs,
+    ) -> dict | None:
         payload = params or {}
         self.calls.append((method, payload))
+        self.call_kwargs.append(dict(kwargs))
         if method == "memory.search":
             return {
                 "hits": [
@@ -256,12 +276,16 @@ class BridgeClientTests(unittest.TestCase):
         )
         self._popen_patch.start()
         self._which_patch.start()
+        # Hermetic singleton: clear any tracking left over from prior tests
+        # so each test starts with a fresh module-level registry.
+        bridge_client_mod._ACTIVE_CLIENTS.clear()
 
     def tearDown(self) -> None:
         if self._fake is not None:
             self._fake.stdout._done = True
         self._popen_patch.stop()
         self._which_patch.stop()
+        bridge_client_mod._ACTIVE_CLIENTS.clear()
 
     def test_request_returns_result_on_success(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
@@ -295,6 +319,45 @@ class BridgeClientTests(unittest.TestCase):
         client.close()
         client.close()  # second call must not raise
 
+    def test_module_singleton_closes_previous_client_same_agent(self) -> None:
+        """Constructing a second client with the same agent must reap the first.
+
+        Regression for issue #1910: each turn the Hermes adapter could
+        spawn a fresh bridge subprocess without closing its predecessor,
+        accumulating 4+ processes per session. The singleton tracker in
+        ``MemosBridgeClient`` prevents that by closing any active client
+        for the same ``(agent, no_viewer)`` slot at construction time.
+        """
+        first = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        self.assertFalse(first._closed)
+        second = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        # The new constructor must have reaped the previous one.
+        self.assertTrue(first._closed)
+        self.assertFalse(second._closed)
+        second.close()
+        self.assertTrue(second._closed)
+
+    def test_module_singleton_independent_for_distinct_agents(self) -> None:
+        """A bridge for a different agent must not reap an unrelated bridge."""
+        hermes = MemosBridgeClient(bridge_path="/tmp/bridge.cts", agent="hermes")
+        openclaw = MemosBridgeClient(bridge_path="/tmp/bridge.cts", agent="openclaw")
+        self.assertFalse(hermes._closed)
+        self.assertFalse(openclaw._closed)
+        hermes.close()
+        openclaw.close()
+
+    def test_close_unregisters_active_client_only_when_still_current(self) -> None:
+        """A stale close() must not evict the newer registered client."""
+        first = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        second = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        # First was already closed by second's __init__. Closing it again is
+        # a no-op and must not touch the registry's current entry (second).
+        first.close()
+        key = (second._singleton_agent, second._singleton_no_viewer)
+        self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key), second)
+        second.close()
+        self.assertIsNone(bridge_client_mod._ACTIVE_CLIENTS.get(key))
+
     def test_stdio_bridge_starts_without_viewer_by_default(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
         assert self._fake is not None
@@ -327,6 +390,63 @@ class BridgeClientTests(unittest.TestCase):
         response = self._wait_for_client_write(lambda msg: msg.get("id") == "srv-1")
         self.assertEqual(response["result"]["text"], "host:ping")
         self.assertNotIn("error", response)
+        client.close()
+
+    def test_reader_exit_marks_pending_as_transport_closed(self) -> None:
+        """R1 (#2028): reader thread EOF must wake pending waiters
+        with transport_closed instead of leaving them parked on their
+        per-request timeout.
+        """
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+
+        results: dict[str, Exception | dict] = {}
+
+        def _issue() -> None:
+            try:
+                # Method name intentionally not scripted by _ServerStream,
+                # so the request stays pending until the reader thread
+                # signals transport_closed.
+                results["ok"] = client.request("unscripted.method", {}, timeout=10.0)
+            except Exception as err:
+                results["err"] = err
+
+        worker = threading.Thread(target=_issue, daemon=True)
+        worker.start()
+        # Let the request register in _pending before we kill stdout.
+        time.sleep(0.05)
+        # Simulate the Node bridge subprocess dying — the ServerStream
+        # iterator returns, so the reader thread exits its for-loop.
+        self._fake.stdout._done = True
+        # The reader thread's finally block should wake our waiter well
+        # inside 2 s (well below the 10 s per-request timeout that would
+        # otherwise fire).
+        worker.join(timeout=2.0)
+        self.assertFalse(worker.is_alive(), "waiter was not woken in <2s")
+        err = results.get("err")
+        self.assertIsInstance(err, BridgeError)
+        assert isinstance(err, BridgeError)
+        self.assertEqual(err.code, "transport_closed")
+        client.close()
+
+    def test_request_fast_fails_when_subprocess_already_dead(self) -> None:
+        """R2 (#2028): request() must short-circuit with transport_closed
+        without writing to stdin when the subprocess has already exited.
+        """
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+
+        # Simulate an already-exited subprocess (e.g. OOM kill, exit 137).
+        self._fake.poll_return = 137
+        # Snapshot writes so we can assert none are added by the failed call.
+        writes_before = list(self._fake._stdin_lines)
+
+        with self.assertRaises(BridgeError) as ctx:
+            client.request("core.health", {}, timeout=1.0)
+        self.assertEqual(ctx.exception.code, "transport_closed")
+
+        # Nothing new should have been written to the dead pipe.
+        self.assertEqual(self._fake._stdin_lines, writes_before)
         client.close()
 
     def _wait_for_client_write(self, predicate, timeout: float = 2.0) -> dict:
@@ -395,6 +515,49 @@ class MemTensorProviderTests(unittest.TestCase):
         res = p.handle_tool_call("memos_search", {"query": "x"})
         parsed = json.loads(res)
         self.assertIn("error", parsed)
+
+    def test_initialize_closes_pre_existing_bridge(self) -> None:
+        """Calling initialize twice must reap the previous bridge.
+
+        Regression for #1910: every Hermes turn could call `initialize()`
+        a second time (re-entry from the host plugin loader), overwriting
+        `self._bridge` and leaking the previous Node subprocess.
+        """
+
+        class TrackedBridge:
+            def __init__(self) -> None:
+                self.closed = False
+                self.pid = 4242
+
+            def register_host_handler(self, *_a, **_kw) -> None:  # pragma: no cover
+                pass
+
+            def request(self, method, params=None, **_kwargs):
+                if method == "session.open":
+                    return {"sessionId": (params or {}).get("sessionId", "sess")}
+                return {}
+
+            def close(self) -> None:
+                self.closed = True
+
+        p = self._provider_mod.MemTensorProvider()
+
+        first = TrackedBridge()
+        second = TrackedBridge()
+        constructed: list[TrackedBridge] = [first, second]
+
+        def _factory(*_a, **_kw) -> TrackedBridge:
+            return constructed.pop(0)
+
+        with patch("memos_provider.MemosBridgeClient", side_effect=_factory):
+            p.initialize("sess-A", hermes_home="/tmp/h", platform="cli")
+            self.assertIs(p._bridge, first)
+            p.initialize("sess-A", hermes_home="/tmp/h", platform="cli")
+            # The second initialize must close the first bridge before
+            # adopting the new one; otherwise the previous subprocess
+            # leaks (issue #1910).
+            self.assertTrue(first.closed)
+            self.assertIs(p._bridge, second)
 
     def test_handle_tool_call_routes_all_exposed_tools(self) -> None:
         p = self._provider_mod.MemTensorProvider()
@@ -534,7 +697,7 @@ class MemTensorProviderTests(unittest.TestCase):
                 return {}
 
         class RetryFailBridge:
-            def request(self, method, params=None):
+            def request(self, method, params=None, **_kwargs):
                 if method == "session.open":
                     return {"sessionId": (params or {}).get("sessionId", "sess")}
                 if method == "turn.start":
@@ -571,7 +734,7 @@ class MemTensorProviderTests(unittest.TestCase):
             def close(self):
                 self.closed = True
 
-            def request(self, method, params=None):
+            def request(self, method, params=None, **_kwargs):
                 if method == "turn.end":
                     raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
                 return {}
@@ -627,6 +790,171 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertIn("局势", retry_payload["agentText"])
         self.assertEqual(retry_payload["toolCalls"][0]["name"], "search_files")
 
+    def test_keepalive_reconnects_on_health_timeout(self) -> None:
+        """R3 (#2028): a hung bridge surfaces as BridgeError('timeout', …)
+        — the helper predicate must treat it as a reconnect trigger so
+        the stale bridge does not keep timing out every user call.
+        """
+
+        class LiveBridge:
+            def __init__(self) -> None:
+                # Live subprocess — `poll()` returns None.
+                self._proc = type("_P", (), {"poll": lambda self: None})()
+
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = LiveBridge()  # type: ignore[assignment]
+
+        self.assertTrue(
+            p._should_reconnect_after_keepalive_failure(
+                BridgeError("timeout", "core.health did not respond within 10.0s")
+            )
+        )
+
+    def test_keepalive_reconnects_when_subprocess_is_dead(self) -> None:
+        """R3 (#2028): even for a generic exception, if the bridge
+        subprocess has already exited the helper must trigger a
+        reconnect (belt-and-braces for hangs that don't raise transport
+        errors).
+        """
+
+        class DeadBridge:
+            def __init__(self) -> None:
+                # Simulate exit(1).
+                self._proc = type("_P", (), {"poll": lambda self: 1})()
+
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = DeadBridge()  # type: ignore[assignment]
+
+        self.assertTrue(p._should_reconnect_after_keepalive_failure(RuntimeError("boom")))
+
+    def test_keepalive_does_not_reconnect_on_transient_generic_error(self) -> None:
+        """R3 (#2028): a live subprocess raising a non-transport generic
+        error must NOT reconnect — otherwise transient parse noise would
+        create a reconnect storm.
+        """
+
+        class LiveBridge:
+            def __init__(self) -> None:
+                self._proc = type("_P", (), {"poll": lambda self: None})()
+
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = LiveBridge()  # type: ignore[assignment]
+
+        self.assertFalse(p._should_reconnect_after_keepalive_failure(RuntimeError("parse hiccup")))
+
+    def test_handle_tool_call_retries_memos_search_after_transport_closed(self) -> None:
+        """R4 (#2028): the first stale-bridge call fails with
+        transport_closed; the read-path retry reconnects and the second
+        call succeeds — the tool must return the hits, not the error.
+        """
+
+        class StaleBridge:
+            def __init__(self) -> None:
+                self.closed = False
+                self.calls: list[tuple[str, dict]] = []
+
+            def close(self) -> None:
+                self.closed = True
+
+            def request(self, method, params=None, **_kwargs):
+                self.calls.append((method, params or {}))
+                if method == "memory.search":
+                    raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
+                return {}
+
+        class HealthyBridge:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, dict]] = []
+
+            def register_host_handler(self, _method, _handler) -> None:
+                return None
+
+            def request(self, method, params=None, **_kwargs):
+                self.calls.append((method, params or {}))
+                if method == "session.open":
+                    return {"sessionId": (params or {}).get("sessionId", "sess")}
+                if method == "turn.start":
+                    return {"query": {"episodeId": "ep_after_reconnect"}}
+                if method == "memory.search":
+                    return {
+                        "hits": [
+                            {
+                                "tier": 2,
+                                "refKind": "trace",
+                                "refId": "tr-post-reconnect",
+                                "score": 0.9,
+                                "snippet": "hit for HERMES_2028",
+                            }
+                        ]
+                    }
+                return {}
+
+        stale = StaleBridge()
+        healthy = HealthyBridge()
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = stale  # type: ignore[assignment]
+        p._session_id = "sess_2028"
+        p._episode_id = "ep_2028"
+        p._hermes_home = "/tmp/hermes-home"
+        p._platform = "tui"
+        p._agent_identity = "hermes-test"
+
+        with patch("memos_provider.MemosBridgeClient", return_value=healthy):
+            result = json.loads(p.handle_tool_call("memos_search", {"query": "HERMES_2028"}))
+
+        self.assertIn("hits", result)
+        self.assertEqual(result["hits"][0]["refId"], "tr-post-reconnect")
+        # Retry must have gone through the replacement bridge.
+        methods = [m for m, _ in healthy.calls]
+        self.assertIn("memory.search", methods)
+        # Original stale bridge must have been closed by _reconnect_bridge.
+        self.assertTrue(stale.closed)
+
+    def test_handle_tool_call_surfaces_second_transport_failure(self) -> None:
+        """R4 (#2028): if the retry also fails, the tool response must
+        contain the error text verbatim so the model sees the error
+        instead of an empty hits payload.
+        """
+
+        class StaleBridge:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+            def request(self, method, params=None, **_kwargs):
+                if method == "memory.search":
+                    raise BridgeError("transport_closed", "[Errno 32] Broken pipe")
+                return {}
+
+        class StillBrokenBridge:
+            def register_host_handler(self, _method, _handler) -> None:
+                return None
+
+            def request(self, method, params=None, **_kwargs):
+                if method == "session.open":
+                    return {"sessionId": (params or {}).get("sessionId", "sess")}
+                if method == "turn.start":
+                    return {"query": {"episodeId": "ep_after_reconnect"}}
+                if method == "memory.search":
+                    raise BridgeError("transport_closed", "[Errno 32] Broken pipe again")
+                return {}
+
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = StaleBridge()  # type: ignore[assignment]
+        p._session_id = "sess_2028"
+        p._episode_id = "ep_2028"
+        p._hermes_home = "/tmp/hermes-home"
+        p._platform = "tui"
+        p._agent_identity = "hermes-test"
+
+        with patch("memos_provider.MemosBridgeClient", return_value=StillBrokenBridge()):
+            result = json.loads(p.handle_tool_call("memos_search", {"query": "HERMES_2028"}))
+
+        self.assertIn("error", result)
+        self.assertIn("Broken pipe", result["error"])
+
     def test_get_config_schema_describes_known_fields(self) -> None:
         p = self._provider_mod.MemTensorProvider()
         schema = p.get_config_schema()
@@ -656,6 +984,90 @@ class MemTensorProviderTests(unittest.TestCase):
             loaded = yaml.safe_load(cfg_path.read_text())
             self.assertEqual(loaded["viewer"]["port"], 18920)
             self.assertEqual(loaded["llm"]["provider"], "openai_compatible")
+
+    # ─── Long-operation RPC timeouts (issue #2028) ──────────────────────
+    #
+    # After 1-2 hours of Hermes use the memory / capture / reflection
+    # pipeline legitimately needs more than the 30s JSON-RPC default,
+    # which surfaced as:
+    #     [timeout] memory.search did not respond within 30.0s
+    #     [timeout] turn.end did not respond within 30.0s
+    # `feedback.submit` already opts into 75s, and `sync_turn` already
+    # opts into a 75s `_ensure_bridge`, but the actual `memory.search`
+    # and `turn.start` / `turn.end` requests still fell back to 30s.
+    # These tests pin the fix.
+
+    _EXPECTED_LONG_TIMEOUT = 75.0
+
+    def test_memos_search_uses_long_rpc_timeout(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+
+        p.handle_tool_call("memos_search", {"query": "yesterday"})
+        method, _params = bridge.calls[-1]
+        self.assertEqual(method, "memory.search")
+        kwargs = bridge.call_kwargs[-1]
+        self.assertIn("timeout", kwargs)
+        self.assertGreaterEqual(
+            kwargs["timeout"],
+            self._EXPECTED_LONG_TIMEOUT,
+            "memory.search must not fall back to the 30s JSON-RPC default; "
+            "large memories legitimately need more time (issue #2028).",
+        )
+
+    def test_memos_environment_search_uses_long_rpc_timeout(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+
+        # memos_environment routes to memory.search when a query is passed.
+        p.handle_tool_call("memos_environment", {"query": "install path"})
+        method, _params = bridge.calls[-1]
+        self.assertEqual(method, "memory.search")
+        kwargs = bridge.call_kwargs[-1]
+        self.assertGreaterEqual(kwargs.get("timeout", 0.0), self._EXPECTED_LONG_TIMEOUT)
+
+    def test_sync_turn_uses_long_rpc_timeout_for_turn_end(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+        p._episode_id = "ep-1"  # skip the turn.start prelude
+
+        p.sync_turn("what did we do?", "we tested memory")
+        methods = [m for m, _ in bridge.calls]
+        self.assertIn("turn.end", methods)
+        end_index = methods.index("turn.end")
+        end_kwargs = bridge.call_kwargs[end_index]
+        self.assertIn("timeout", end_kwargs)
+        self.assertGreaterEqual(
+            end_kwargs["timeout"],
+            self._EXPECTED_LONG_TIMEOUT,
+            "turn.end must not fall back to the 30s JSON-RPC default; "
+            "the V7 capture/reflection pipeline grows past 30s in long "
+            "sessions (issue #2028).",
+        )
+
+    def test_prefetch_uses_long_rpc_timeout_for_turn_start(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+
+        p.prefetch("what did I do yesterday?", session_id="hermes:session:1")
+        methods = [m for m, _ in bridge.calls]
+        self.assertIn("turn.start", methods)
+        start_index = methods.index("turn.start")
+        start_kwargs = bridge.call_kwargs[start_index]
+        self.assertGreaterEqual(
+            start_kwargs.get("timeout", 0.0),
+            self._EXPECTED_LONG_TIMEOUT,
+            "turn.start suffers the same long-tail latency as turn.end and "
+            "must share the long RPC timeout (issue #2028).",
+        )
 
 
 class ViewerDaemonTests(unittest.TestCase):
@@ -741,6 +1153,144 @@ class ViewerDaemonTests(unittest.TestCase):
         ):
             self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
             popen.assert_not_called()
+
+
+class BridgeOkCacheTests(unittest.TestCase):
+    """Regression tests for issue #1797.
+
+    `ensure_bridge_running(probe_only=True)` used to cache a `False`
+    result permanently. These tests pin down the new contract: cache
+    entries have a TTL, and a running MemOS bridge on :18800 is a
+    fallback signal that Node works on this host even if a transient
+    `_node_available()` call failed.
+    """
+
+    def setUp(self) -> None:
+        # Make sure each test starts from a clean module-level cache.
+        daemon_manager_mod._bridge_ok = None
+        daemon_manager_mod._bridge_ok_at = 0.0
+        # Pretend the compiled bridge script exists so the "script
+        # missing" early-return does not steal the test.
+        self._script_patch = patch.object(
+            daemon_manager_mod,
+            "_bridge_script",
+            return_value=Path("/fake/bridge.cjs"),
+        )
+        self._script_patch.start()
+        self._exists_patch = patch.object(Path, "exists", return_value=True)
+        self._exists_patch.start()
+
+    def tearDown(self) -> None:
+        self._exists_patch.stop()
+        self._script_patch.stop()
+        daemon_manager_mod._bridge_ok = None
+        daemon_manager_mod._bridge_ok_at = 0.0
+
+    def test_probe_only_when_cache_empty_revalidates(self) -> None:
+        with (
+            patch.object(daemon_manager_mod, "_node_available", return_value=True) as node,
+            patch.object(daemon_manager_mod, "_probe_viewer") as probe,
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+            node.assert_called_once()
+            probe.assert_not_called()
+
+    def test_cached_false_returns_immediately_within_ttl(self) -> None:
+        # Seed the cache with a fresh False as if a transient failure occurred.
+        now = 1_000_000.0
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=False),
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="free"),
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+
+        # Within TTL, _node_available must NOT be called again — the cached
+        # False is returned directly.
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now + 1.0),
+            patch.object(daemon_manager_mod, "_node_available") as node,
+            patch.object(daemon_manager_mod, "_probe_viewer") as probe,
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+            node.assert_not_called()
+            probe.assert_not_called()
+
+    def test_cached_false_expires_after_ttl_and_recovers(self) -> None:
+        now = 2_000_000.0
+        # Seed cache with a False at t=now.
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=False),
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="free"),
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+
+        # After TTL + 1s, Node is now reachable. probe_only=True must
+        # revalidate and switch the cache to True.
+        with (
+            patch.object(
+                daemon_manager_mod.time,
+                "time",
+                return_value=now + daemon_manager_mod.BRIDGE_OK_TTL_SEC + 1.0,
+            ),
+            patch.object(daemon_manager_mod, "_node_available", return_value=True),
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+        # And the value is cached.
+        self.assertTrue(daemon_manager_mod._bridge_ok)
+
+    def test_running_bridge_overrides_failed_node_probe(self) -> None:
+        # A live MemOS bridge is definitive proof Node worked; trust it
+        # even if `_node_available` returns False (e.g. env-var race).
+        now = 3_000_000.0
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=False),
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="running_memos"),
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+        self.assertTrue(daemon_manager_mod._bridge_ok)
+        self.assertEqual(daemon_manager_mod._bridge_ok_at, now)
+
+    def test_shutdown_bridge_resets_cache_and_timestamp(self) -> None:
+        now = 4_000_000.0
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=True),
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+
+        self.assertIsNotNone(daemon_manager_mod._bridge_ok)
+        self.assertGreater(daemon_manager_mod._bridge_ok_at, 0.0)
+
+        daemon_manager_mod.shutdown_bridge()
+        self.assertIsNone(daemon_manager_mod._bridge_ok)
+        self.assertEqual(daemon_manager_mod._bridge_ok_at, 0.0)
+
+        # After reset, the next probe must call `_node_available` again.
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now + 1.0),
+            patch.object(daemon_manager_mod, "_node_available", return_value=True) as node,
+        ):
+            self.assertTrue(daemon_manager_mod.ensure_bridge_running(probe_only=True))
+            node.assert_called_once()
+
+    def test_full_call_always_revalidates(self) -> None:
+        # `probe_only=False` (called from `MemTensorProvider.initialize`)
+        # must bypass the cache and refresh.
+        now = 5_000_000.0
+        # Pre-seed a stale True.
+        daemon_manager_mod._bridge_ok = True
+        daemon_manager_mod._bridge_ok_at = now - 1.0
+        with (
+            patch.object(daemon_manager_mod.time, "time", return_value=now),
+            patch.object(daemon_manager_mod, "_node_available", return_value=False) as node,
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="free"),
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_bridge_running())
+            node.assert_called_once()
+        self.assertFalse(daemon_manager_mod._bridge_ok)
 
 
 if __name__ == "__main__":
