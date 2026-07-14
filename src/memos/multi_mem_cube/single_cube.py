@@ -71,28 +71,27 @@ def _summarize_search_result_for_log(
             if not isinstance(group, dict):
                 continue
             mems = group.get("memories") or []
-            bucket_count += len(mems)
+            bucket_count += len(mems)  # always count, regardless of sample limit
 
-            for mem in mems:
-                if len(samples) >= _LOG_SAMPLE_PER_BUCKET:
-                    break
-                if not isinstance(mem, dict):
-                    continue
-                metadata = mem.get("metadata") or {}
-                embedding = metadata.get("embedding")
-                embedding_len = len(embedding) if isinstance(embedding, (list, tuple)) else 0
-                samples.append(
-                    {
-                        "id": mem.get("id"),
-                        "ref_id": mem.get("ref_id"),
-                        "memory_type": metadata.get("memory_type"),
-                        "relativity": metadata.get("relativity"),
-                        "has_embedding": embedding_len > 0,
-                        "embedding_len": embedding_len,
-                    }
-                )
-            if len(samples) >= _LOG_SAMPLE_PER_BUCKET:
-                break
+            if len(samples) < _LOG_SAMPLE_PER_BUCKET:
+                for mem in mems:
+                    if len(samples) >= _LOG_SAMPLE_PER_BUCKET:
+                        break
+                    if not isinstance(mem, dict):
+                        continue
+                    metadata = mem.get("metadata") or {}
+                    embedding = metadata.get("embedding")
+                    embedding_len = len(embedding) if isinstance(embedding, (list, tuple)) else 0
+                    samples.append(
+                        {
+                            "id": mem.get("id"),
+                            "ref_id": mem.get("ref_id"),
+                            "memory_type": metadata.get("memory_type"),
+                            "relativity": metadata.get("relativity"),
+                            "has_embedding": embedding_len > 0,
+                            "embedding_len": embedding_len,
+                        }
+                    )
 
         summary[bucket] = {"count": bucket_count, "samples": samples}
         total += bucket_count

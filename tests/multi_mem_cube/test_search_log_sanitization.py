@@ -110,7 +110,9 @@ class TestSummarizeSearchResultForLog:
         # And no giant float-list should appear anywhere in the summary tree.
         for bucket in ("text_mem", "pref_mem", "tool_mem", "skill_mem"):
             for sample in summary[bucket]["samples"]:
-                assert "embedding" not in sample or sample["embedding_len"] is not None
+                assert "embedding" not in sample, (
+                    f"Raw embedding key must never appear in log sample: {list(sample.keys())}"
+                )
                 assert isinstance(sample.get("has_embedding"), bool)
                 # The full embedding value must NEVER be in the sample dict.
                 assert 0.12345 not in list(sample.values())
@@ -178,6 +180,51 @@ class TestSummarizeSearchResultForLog:
         assert len(summary["text_mem"]["samples"]) == _LOG_SAMPLE_PER_BUCKET
         # Even the full string form stays small (bounded, no embeddings).
         assert len(str(summary)) < 2000
+
+    def test_count_is_accurate_across_groups_after_sample_cap(self):
+        """Regression: bucket_count must aggregate every group's memories, even
+        the groups visited after ``samples`` reaches ``_LOG_SAMPLE_PER_BUCKET``.
+
+        Multi-cube deployments produce one ``group`` per cube inside the same
+        bucket (e.g. ``text_mem``); the old code broke out of the outer
+        ``for group in groups`` loop the moment sampling capped, so
+        ``bucket_count`` and ``total_memories`` silently undercounted the
+        real number of matched memories. This test pins the correct
+        behaviour: sampling is bounded, counting is not.
+        """
+        from memos.multi_mem_cube.single_cube import (
+            _LOG_SAMPLE_PER_BUCKET,
+            _summarize_search_result_for_log,
+        )
+
+        embedding = [0.1] * 32
+        # Two cubes, 10 memories each. First group already exceeds the sample cap.
+        group_a = [_make_memory_dict(f"a-{i}", embedding) for i in range(10)]
+        group_b = [_make_memory_dict(f"b-{i}", embedding) for i in range(10)]
+        result = {
+            "text_mem": [
+                {"cube_id": "cube_a", "memories": group_a, "total_nodes": 10},
+                {"cube_id": "cube_b", "memories": group_b, "total_nodes": 10},
+            ],
+            "act_mem": [],
+            "para_mem": [],
+            "pref_mem": [],
+            "pref_note": "",
+            "tool_mem": [],
+            "skill_mem": [],
+        }
+
+        summary = _summarize_search_result_for_log(result)
+
+        # bucket_count must include memories from both cubes' groups.
+        assert summary["text_mem"]["count"] == 20, (
+            f"bucket_count undercounted: expected 20, got {summary['text_mem']['count']}"
+        )
+        assert summary["total_memories"] == 20, (
+            f"total_memories undercounted: expected 20, got {summary['total_memories']}"
+        )
+        # Sampling is still bounded.
+        assert len(summary["text_mem"]["samples"]) == _LOG_SAMPLE_PER_BUCKET
 
     def test_handles_missing_or_malformed_input(self):
         from memos.multi_mem_cube.single_cube import _summarize_search_result_for_log
