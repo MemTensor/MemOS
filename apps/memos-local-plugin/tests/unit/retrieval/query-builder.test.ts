@@ -37,6 +37,24 @@ describe("retrieval/query-builder", () => {
     expect(cq.tags).toContain("docker");
   });
 
+  it("passes CJK tokenizer mode to keyword query compilation", () => {
+    const cq = buildQuery(
+      {
+        reason: "tool_driven",
+        agent: "openclaw",
+        sessionId: "s1" as unknown as never,
+        tool: "memos_search",
+        args: { query: "早报 API配置 C盘" },
+        ts: NOW,
+      },
+      { ftsTokenizer: "cjk" },
+    );
+    expect(cq.ftsMatch).toContain('"早报"');
+    expect(cq.ftsMatch).toContain('"API"');
+    expect(cq.ftsMatch).toContain('"配置"');
+    expect(cq.ftsMatch).toContain('"C盘"');
+  });
+
   it("skill_invoke prepends skill id when provided", () => {
     const cq = buildQuery({
       reason: "skill_invoke",
