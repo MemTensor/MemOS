@@ -261,6 +261,28 @@ class APIConfig:
     """Centralized configuration management for MemOS APIs."""
 
     @staticmethod
+    def _preference_extractor_extra_body(model_name: str) -> dict[str, Any] | None:
+        normalized_model = model_name.strip().lower()
+        if normalized_model.startswith(("qwen3.5", "qwen3.6")):
+            return {"enable_thinking": False}
+        return None
+
+    @staticmethod
+    def get_profile_memory_reserved_top_k() -> int:
+        """Get profile-memory MMR reserve count.
+
+        This is intentionally read from environment/config at runtime so Nacos
+        property updates can take effect without changing request payloads.
+        """
+        raw = os.getenv("PROFILE_MEMORY_RESERVED_TOP_K", "0")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning("Invalid PROFILE_MEMORY_RESERVED_TOP_K=%r, using 0.", raw)
+            return 0
+        return max(0, value)
+
+    @staticmethod
     def get_openai_config() -> dict[str, Any]:
         """Get OpenAI configuration."""
         return {
@@ -469,23 +491,27 @@ class APIConfig:
         """
         pref_model = os.getenv("PREFERENCE_EXTRACTOR_MODEL")
         if pref_model:
+            extra_body = APIConfig._preference_extractor_extra_body(pref_model)
+            config = {
+                "model_name_or_path": pref_model,
+                "temperature": 0.6,
+                "max_tokens": int(os.getenv("PREFERENCE_EXTRACTOR_MAX_TOKENS", "8000")),
+                "top_p": 0.95,
+                "top_k": 20,
+                "api_key": os.getenv(
+                    "PREFERENCE_EXTRACTOR_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
+                ),
+                "api_base": os.getenv(
+                    "PREFERENCE_EXTRACTOR_API_BASE",
+                    os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                ),
+                "remove_think_prefix": True,
+            }
+            if extra_body is not None:
+                config["extra_body"] = extra_body
             return {
                 "backend": os.getenv("PREFERENCE_EXTRACTOR_BACKEND", "openai"),
-                "config": {
-                    "model_name_or_path": pref_model,
-                    "temperature": 0.6,
-                    "max_tokens": int(os.getenv("PREFERENCE_EXTRACTOR_MAX_TOKENS", "8000")),
-                    "top_p": 0.95,
-                    "top_k": 20,
-                    "api_key": os.getenv(
-                        "PREFERENCE_EXTRACTOR_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
-                    ),
-                    "api_base": os.getenv(
-                        "PREFERENCE_EXTRACTOR_API_BASE",
-                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
-                    ),
-                    "remove_think_prefix": True,
-                },
+                "config": config,
             }
         # Fallback to general_llm config (which itself falls back to OpenAI)
         return APIConfig.get_memreader_general_llm_config()
@@ -979,6 +1005,10 @@ class APIConfig:
                     "general_llm": APIConfig.get_memreader_general_llm_config(),
                     # Image parser LLM (requires vision model)
                     "image_parser_llm": APIConfig.get_image_parser_llm_config(),
+                    # Preference extractor LLM. Reader falls back to general_llm when unset.
+                    "preference_extractor_llm": APIConfig.get_preference_extractor_llm_config()
+                    if os.getenv("PREFERENCE_EXTRACTOR_MODEL")
+                    else None,
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
@@ -1108,6 +1138,10 @@ class APIConfig:
                     "general_llm": APIConfig.get_memreader_general_llm_config(),
                     # Image parser LLM (requires vision model)
                     "image_parser_llm": APIConfig.get_image_parser_llm_config(),
+                    # Preference extractor LLM. Reader falls back to general_llm when unset.
+                    "preference_extractor_llm": APIConfig.get_preference_extractor_llm_config()
+                    if os.getenv("PREFERENCE_EXTRACTOR_MODEL")
+                    else None,
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
