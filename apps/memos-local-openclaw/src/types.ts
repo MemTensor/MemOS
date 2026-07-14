@@ -189,6 +189,9 @@ export interface EmbeddingConfig extends ProviderConfig {
   batchSize?: number;
   dimensions?: number;
   retry?: number;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
 }
 
 // ─── Skill ───
@@ -296,15 +299,39 @@ export interface SharingConfig {
   capabilities?: SharingCapabilities;
 }
 
+export interface AutoRecallConfig {
+  /**
+   * When true (default), skip auto-recall for OpenClaw cron session keys
+   * (any session whose path contains a `cron` segment, e.g.
+   * `agent:main:cron:<jobId>`). Set to false to restore the pre-1311
+   * behaviour where cron sessions also got recall-injected context.
+   */
+  excludeCron?: boolean;
+  /**
+   * Optional regex strings tested against the raw session key in addition
+   * to the cron rule above. Any match wins. Invalid patterns are ignored.
+   */
+  excludeSessionKeyPatterns?: string[];
+}
+
 export interface MemosLocalConfig {
   summarizer?: SummarizerConfig;
   embedding?: EmbeddingConfig;
   storage?: {
     dbPath?: string;
   };
+  autoRecall?: AutoRecallConfig;
   recall?: {
     maxResultsDefault?: number;
     maxResultsMax?: number;
+    /**
+     * Override the maximum number of candidates the `before_prompt_build`
+     * auto-recall hook fetches per source (local + Hub). When undefined the
+     * hook falls back to `maxResultsDefault`. Use this to make auto-recall
+     * leaner (e.g. 3 or 5) without shrinking the result set of explicit
+     * `memory_search` tool calls. See issue #1514.
+     */
+    autoRecallMaxResults?: number;
     minScoreDefault?: number;
     minScoreFloor?: number;
     rrfK?: number;
@@ -312,6 +339,20 @@ export interface MemosLocalConfig {
     recencyHalfLifeDays?: number;
     /** Cap vector search to this many most recent chunks. 0 = no cap (search all; may get slower with 200k+ chunks). If you set a cap for performance, use a large value (e.g. 200000–300000) so older memories are still in the window; FTS always searches all. */
     vectorSearchMaxChunks?: number;
+    /**
+     * Minimum length (in UTF-16 code units, i.e. `string.length`) of the
+     * normalised auto-recall query. When the user prompt is shorter than
+     * this threshold (e.g. one-word confirmations like "好的", "可以",
+     * "运行", "继续", "?"), the `before_prompt_build` hook skips
+     * auto-recall to avoid injecting noise into the agent context.
+     *
+     * Only affects the *automatic* recall path. Explicit `memory_search`
+     * tool calls are unaffected — the agent / user opted in.
+     *
+     * Default: 4. Set to 0 to disable the guard (run auto-recall on
+     * every prompt regardless of length).
+     */
+    autoRecallMinQueryLength?: number;
   };
   dedup?: {
     similarityThreshold?: number;
@@ -337,6 +378,14 @@ export const DEFAULTS = {
   mmrLambda: 0.7,
   recencyHalfLifeDays: 14,
   vectorSearchMaxChunks: 0,
+  /**
+   * Default minimum length of the normalised auto-recall query before
+   * the `before_prompt_build` hook will run a memory search. Filters
+   * out one-word language tokens (e.g. "好的", "可以", "运行", "继续",
+   * "?", "👍") that would otherwise inject unrelated history into the
+   * agent context. See `MemosLocalConfig.recall.autoRecallMinQueryLength`.
+   */
+  autoRecallMinQueryLength: 4,
   dedupSimilarityThreshold: 0.80,
   evidenceWrapperTag: "STORED_MEMORY",
   excerptMinChars: 200,
@@ -373,8 +422,17 @@ export interface PluginContext {
 }
 
 export interface OpenClawAPI {
-  embed(request: { texts: string[]; model?: string }): Promise<{ embeddings: number[][]; dimensions: number }>;
-  complete(request: { prompt: string; maxTokens?: number; temperature?: number; model?: string }): Promise<{ text: string }>;
+  embed(request: {
+    texts: string[];
+    model?: string;
+    inputType?: string;
+  }): Promise<{ embeddings: number[][]; dimensions: number }>;
+  complete(request: {
+    prompt: string;
+    maxTokens?: number;
+    temperature?: number;
+    model?: string;
+  }): Promise<{ text: string }>;
 }
 
 export interface Logger {

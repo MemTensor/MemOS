@@ -1,7 +1,10 @@
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
 
-export type ShareScope = "private" | "local" | "public" | "hub";
+export type ShareScope = "private" | "public" | "hub";
+export type LegacyShareScope = ShareScope | "local";
+
+export const SHARE_SCOPE_OPTIONS = ["private", "public", "hub"] as const satisfies readonly ShareScope[];
 
 interface SharingConfig {
   hub?: {
@@ -19,11 +22,17 @@ let pendingConfigLoad: Promise<void> | null = null;
  * global team-sharing switch.
  */
 export function effectiveShareScope(
-  scope: ShareScope | null | undefined,
+  scope: LegacyShareScope | null | undefined,
   sharingEnabled = hubSharingEnabled.value,
 ): ShareScope {
-  const intendedScope = scope ?? "private";
+  const intendedScope = normalizeShareScope(scope);
   return sharingEnabled ? intendedScope : "private";
+}
+
+export function normalizeShareScope(scope: LegacyShareScope | null | undefined): ShareScope {
+  if (scope === "local") return "public";
+  if (scope === "public" || scope === "hub") return scope;
+  return "private";
 }
 
 export async function loadHubSharingEnabled({

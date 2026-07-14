@@ -18,6 +18,8 @@ from memos.mem_scheduler.schemas.general_schemas import DIRECT_EXCHANGE_TYPE, FA
 
 logger = get_logger(__name__)
 
+PLAYGROUND_CHAT_STREAM_PATH = "/product/chat/stream/playground"
+
 
 class RabbitMQSchedulerModule(BaseSchedulerModule):
     @require_python_package(
@@ -37,6 +39,8 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         self.rabbit_queue_name = "memos-scheduler"
         self.rabbitmq_exchange_name = "memos-fanout"  # Default, will be overridden by config
         self.rabbitmq_exchange_type = FANOUT_EXCHANGE_TYPE  # Default, will be overridden by config
+        self.rabbitmq_playground_chat_exchange_name: str | None = None
+        self.rabbitmq_playground_chat_exchange_type = FANOUT_EXCHANGE_TYPE
         self.rabbitmq_connection = None
         self.rabbitmq_channel = None
 
@@ -154,6 +158,27 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 self.rabbitmq_exchange_type = env_exchange_type
                 logger.info(f"Using env exchange type override: {self.rabbitmq_exchange_type}")
 
+            playground_exchange_name = os.getenv(
+                "MEMSCHEDULER_RABBITMQ_PLAYGROUND_CHAT_EXCHANGE_NAME", ""
+            ).strip()
+            playground_exchange_type = os.getenv(
+                "MEMSCHEDULER_RABBITMQ_PLAYGROUND_CHAT_EXCHANGE_TYPE",
+                FANOUT_EXCHANGE_TYPE,
+            ).strip()
+            if playground_exchange_name:
+                self.rabbitmq_playground_chat_exchange_name = playground_exchange_name
+                self.rabbitmq_playground_chat_exchange_type = (
+                    playground_exchange_type or FANOUT_EXCHANGE_TYPE
+                )
+                logger.info(
+                    "Using playground chat exchange override: name=%s, type=%s",
+                    self.rabbitmq_playground_chat_exchange_name,
+                    self.rabbitmq_playground_chat_exchange_type,
+                )
+            else:
+                self.rabbitmq_playground_chat_exchange_name = None
+                self.rabbitmq_playground_chat_exchange_type = FANOUT_EXCHANGE_TYPE
+
             # Start connection process
             parameters = self.get_rabbitmq_connection_param()
             self.rabbitmq_connection = SelectConnection(
@@ -260,16 +285,33 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         self.rabbitmq_channel = channel
         logger.info("[DIAGNOSTIC] RabbitMQ channel opened")
 
-        # Setup exchange and queue
+        # Setup primary/direct exchange and optional playground/fanout exchange.
         channel.exchange_declare(
             exchange=self.rabbitmq_exchange_name,
             exchange_type=self.rabbitmq_exchange_type,
             durable=True,
-            callback=self.on_rabbitmq_exchange_declared,
+            callback=self.on_rabbitmq_primary_exchange_declared,
         )
 
-    def on_rabbitmq_exchange_declared(self, frame):
-        """Called when exchange is ready."""
+    def on_rabbitmq_primary_exchange_declared(self, frame):
+        """Called when primary exchange is ready."""
+        if self.rabbitmq_playground_chat_exchange_name:
+            self.rabbitmq_channel.exchange_declare(
+                exchange=self.rabbitmq_playground_chat_exchange_name,
+                exchange_type=self.rabbitmq_playground_chat_exchange_type,
+                durable=True,
+                callback=self.on_rabbitmq_playground_exchange_declared,
+            )
+            return
+
+        self._rabbitmq_continue_queue_setup()
+
+    def on_rabbitmq_playground_exchange_declared(self, frame):
+        """Called when optional playground exchange is ready."""
+        self._rabbitmq_continue_queue_setup()
+
+    def _rabbitmq_continue_queue_setup(self):
+        """Declare scheduler queue and bind it to the primary exchange."""
         self.rabbitmq_channel.queue_declare(
             queue=self.rabbit_queue_name, durable=True, callback=self.on_rabbitmq_queue_declared
         )
@@ -288,6 +330,13 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         logger.info("RabbitMQ setup completed")
         # Flush any cached publish messages now that connection is ready
         self._flush_cached_publish_messages()
+
+    def resolve_publish_route(self, message: dict) -> tuple[str, str]:
+        api_path = message.get("api_path")
+        if api_path == PLAYGROUND_CHAT_STREAM_PATH and self.rabbitmq_playground_chat_exchange_name:
+            return self.rabbitmq_playground_chat_exchange_name, ""
+
+        return self.rabbitmq_exchange_name, ""
 
     def on_rabbitmq_message(self, channel, method, properties, body):
         """Handle incoming messages. Only for test."""
@@ -327,34 +376,17 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         """
         import pika
 
-        exchange_name = self.rabbitmq_exchange_name
-        routing_key = self.rabbit_queue_name
+        exchange_name, routing_key = self.resolve_publish_route(message)
         label = message.get("label")
 
-        # Special handling for knowledgeBaseUpdate in local environment: always empty routing key
-        if label == "knowledgeBaseUpdate":
-            routing_key = ""
-
-        # Env override: apply to all message types when MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME is set
-        env_exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-        env_routing_key = os.getenv("MEMSCHEDULER_RABBITMQ_ROUTING_KEY")
-        if env_exchange_name:
-            exchange_name = env_exchange_name
-            routing_key = (
-                env_routing_key if env_routing_key is not None and env_routing_key != "" else ""
-            )
-            logger.info(
-                f"[DIAGNOSTIC] Publishing {label} message with env exchange override. "
-                f"Exchange: {exchange_name}, Routing Key: '{routing_key}'."
-            )
-            logger.info(f"  - Message Content: {json.dumps(message, indent=2, ensure_ascii=False)}")
-        elif label == "knowledgeBaseUpdate":
-            # Original diagnostic logging for knowledgeBaseUpdate if NOT in cloud env
-            logger.info(
-                f"[DIAGNOSTIC] Publishing knowledgeBaseUpdate message (Local Env). "
-                f"Current configured Exchange: {exchange_name}, Routing Key: '{routing_key}'."
-            )
-            logger.info(f"  - Message Content: {json.dumps(message, indent=2, ensure_ascii=False)}")
+        logger.info(
+            "[DIAGNOSTIC] Publishing %s message. api_path=%s Exchange: %s, Routing Key: '%s'.",
+            label,
+            message.get("api_path"),
+            exchange_name,
+            routing_key,
+        )
+        logger.info(f"  - Message Content: {json.dumps(message, indent=2, ensure_ascii=False)}")
 
         with self._rabbitmq_lock:
             logger.info(

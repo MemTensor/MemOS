@@ -1,6 +1,6 @@
 /**
  * End-to-end integration of the OpenClaw adapter, exercising the full
- * memory_add → memory_search → injection round trip.
+ * memory_add → memos_search → injection round trip.
  *
  * The intent is to fail loudly whenever any of the following silently
  * regress (which they did, twice, in earlier iterations):
@@ -279,11 +279,11 @@ describe("OpenClaw adapter — end-to-end memory chain", () => {
     expect(block).toContain("<memos_context>");
     expect(block).toContain("</memos_context>");
     // It must contain *some* real content — either an actual hit
-    // ("游泳") or the cold-start hint mentioning `memory_search`. The
+    // ("游泳") or the cold-start hint mentioning `memos_search`. The
     // failing regression we test against was emitting only metadata
     // labels (e.g. `[trace] trace · V=0.09`) with no body.
     const hasUserSwimText = block.includes("游泳");
-    const hasReadableHint = block.includes("memory_search") || block.includes("conversation history");
+    const hasReadableHint = block.includes("memos_search") || block.includes("conversation history");
     expect(hasUserSwimText || hasReadableHint).toBe(true);
     // Negative assertion — the regression-style metadata-only line
     // would look like `[trace] trace · V=` but never carry text.
@@ -299,7 +299,7 @@ describe("OpenClaw adapter — end-to-end memory chain", () => {
     }
   });
 
-  it("memory_search via MemoryCore returns hits readable by the viewer", async () => {
+  it("memos_search via MemoryCore returns hits readable by the viewer", async () => {
     // The viewer hits `/api/v1/memory/search` which proxies to
     // `MemoryCore.searchMemory`. Verify the path returns hits that
     // include the actual snippet text (not just refIds).
