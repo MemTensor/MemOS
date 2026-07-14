@@ -47,6 +47,16 @@ llm:
   maxRetries: 3
 ```
 
+### `storage`
+```yaml
+storage:
+  ftsTokenizer: trigram      # trigram | cjk
+```
+
+`trigram` preserves the historical FTS5 behavior. `cjk` keeps short Chinese
+words and mixed ASCII+CJK terms searchable in the keyword channel, which helps
+queries such as `早报`, `配置`, and `API配置`.
+
 ### `algorithm`
 Direct mapping to the V7 spec (γ, support, gain, top-K, etc.). Change only
 if you know what you're doing — defaults are calibrated for the paper.
