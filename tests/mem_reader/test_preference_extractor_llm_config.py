@@ -28,6 +28,26 @@ def test_product_default_config_wires_preference_extractor_model(monkeypatch):
     assert pref_config["config"]["api_key"] == "pref-key"
 
 
+def test_preference_extractor_qwen35_disables_thinking(monkeypatch):
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_MODEL", "qwen3.5-flash")
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_KEY", "pref-key")
+
+    pref_config = APIConfig.get_preference_extractor_llm_config()
+
+    assert pref_config["config"]["extra_body"] == {"enable_thinking": False}
+
+
+def test_preference_extractor_qwen36_disables_thinking(monkeypatch):
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_MODEL", "qwen3.6-flash")
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_KEY", "pref-key")
+
+    pref_config = APIConfig.get_preference_extractor_llm_config()
+
+    assert pref_config["config"]["extra_body"] == {"enable_thinking": False}
+
+
 def test_product_default_config_leaves_preference_extractor_unset_without_model(monkeypatch):
     monkeypatch.delenv("PREFERENCE_EXTRACTOR_MODEL", raising=False)
     monkeypatch.delenv("PREFERENCE_EXTRACTOR_API_BASE", raising=False)
