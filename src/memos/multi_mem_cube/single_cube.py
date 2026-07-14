@@ -100,7 +100,11 @@ def _summarize_search_result_for_log(
 
     pref_note = memories_result.get("pref_note")
     if pref_note:
-        summary["pref_note_len"] = len(pref_note) if isinstance(pref_note, str) else 0
+        summary["pref_note_len"] = (
+            len(pref_note)
+            if isinstance(pref_note, str)
+            else f"non-str({type(pref_note).__name__})"
+        )
 
     return summary
 

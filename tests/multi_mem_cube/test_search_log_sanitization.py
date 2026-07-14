@@ -246,6 +246,31 @@ class TestSummarizeSearchResultForLog:
         )
         assert summary["total_memories"] >= 0
 
+    def test_pref_note_non_string_surfaces_type(self):
+        """Regression: when ``pref_note`` is a non-string truthy value (list,
+        dict, etc.), the log must surface the anomalous type instead of
+        silently reporting ``pref_note_len: 0``. Operators need to see the
+        wrong type to diagnose upstream bugs."""
+        from memos.multi_mem_cube.single_cube import _summarize_search_result_for_log
+
+        # str case — still reports numeric length.
+        summary = _summarize_search_result_for_log({"pref_note": "hello world"})
+        assert summary["pref_note_len"] == 11
+
+        # list case — surfaces the type marker.
+        summary = _summarize_search_result_for_log({"pref_note": ["a", "b", "c"]})
+        assert summary["pref_note_len"] == "non-str(list)"
+
+        # dict case — same.
+        summary = _summarize_search_result_for_log({"pref_note": {"k": "v"}})
+        assert summary["pref_note_len"] == "non-str(dict)"
+
+        # Falsy (empty str / None) — key omitted entirely, unchanged behavior.
+        summary = _summarize_search_result_for_log({"pref_note": ""})
+        assert "pref_note_len" not in summary
+        summary = _summarize_search_result_for_log({"pref_note": None})
+        assert "pref_note_len" not in summary
+
 
 # ---------------------------------------------------------------------------
 # SingleCubeView.search_memories log-line assertions
@@ -335,7 +360,7 @@ class TestSearchMemoriesLogSanitization:
         # Even without embeddings, the summary line still fires with counts.
         assert "Search memories result summary" in joined
         assert "'text_mem'" in joined or "text_mem" in joined
-        assert "'count': 2" in joined or "count=2" in joined or "'count': 2" in joined
+        assert "'count': 2" in joined or "count=2" in joined or '"count": 2' in joined
 
     def test_no_bad_len_call_on_result_dict(self, monkeypatch, caplog):
         """Old code did ``len(memories_result)`` which returned the count of
