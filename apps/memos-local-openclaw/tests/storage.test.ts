@@ -106,6 +106,22 @@ describe("SqliteStore", () => {
     expect(results.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("should handle FTS queries containing message ids and CJK text", () => {
+    store.insertChunk(
+      makeChunk({
+        id: "c1",
+        content: "message_id om_x100b544a390604b8c3e1b7d8641f08e 我要测试",
+        summary: "message id trace",
+      }),
+    );
+
+    const results = store.ftsSearch(
+      "message_id om_x100b544a390604b8c3e1b7d8641f08e 我要测试",
+      10,
+    );
+    expect(Array.isArray(results)).toBe(true);
+  });
+
   it("should get neighbor chunks", () => {
     const now = Date.now();
     store.insertChunk(makeChunk({ id: "c1", turnId: "t1", seq: 0, createdAt: now }));
