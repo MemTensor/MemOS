@@ -129,7 +129,7 @@ class TestNoEmbeddingLeak:
         rendered = json.dumps(summary, default=str)
 
         # None of the vector components may appear in the rendered log payload.
-        for value in (0.0123, -0.0456, 0.7890, 0.5678):
+        for value in (0.0123, -0.0456, 0.7890, -0.1234, 0.5678):
             assert str(value) not in rendered, (
                 f"Embedding float {value} leaked into log summary: {rendered!r}"
             )
@@ -153,6 +153,20 @@ class TestNoEmbeddingLeak:
 
         assert summary["has_embedding"] is False
 
+    def test_has_embedding_true_when_only_in_pref_mem(self):
+        """has_embedding=True even if embedding exists only in pref_mem."""
+        summarize = _import_helper()
+        result = _make_result(
+            pref_mems=[
+                _make_memory("pref-1", "PreferenceMemory", embedding=[0.111, 0.222])
+            ],
+            text_mems=[],
+            tool_mems=[],
+            skill_mems=[],
+        )
+
+        summary = summarize(result)
+        assert summary["has_embedding"] is True
 
 # ---------------------------------------------------------------------------
 # Debug value preservation
