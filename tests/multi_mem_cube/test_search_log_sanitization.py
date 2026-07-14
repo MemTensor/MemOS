@@ -238,13 +238,13 @@ class TestSummaryContent:
 
 class TestDedupBranches:
     @pytest.mark.parametrize(
-        "embedding_value",
+        ("embedding_value", "expected_has_embedding"),
         [
-            [0.001, 0.002, 0.003, 0.004, 0.005],  # dedup="mmr" / "sim"
-            [],  # dedup="no" (or anything else that drops embeddings)
+            ([0.001, 0.002, 0.003, 0.004, 0.005], True),  # dedup="mmr" / "sim"
+            ([], False),  # dedup="no" (or anything else that drops embeddings)
         ],
     )
-    def test_both_branches_produce_safe_output(self, embedding_value):
+    def test_both_branches_produce_safe_output(self, embedding_value, expected_has_embedding):
         """Whether embeddings are populated (mmr/sim) or empty (no), the log
         summary must remain safe and structurally identical."""
         summarize = _import_helper()
@@ -259,13 +259,18 @@ class TestDedupBranches:
         for value in embedding_value:
             assert str(value) not in rendered
 
-        # For the empty-embedding branch the loop above is a no-op — parametrize
-        # gives us zero iterations, so without this the ``dedup="no"`` case
-        # would carry no leak-detection signal. Assert the structural key too.
-        assert '"embedding"' not in rendered
+        # ``has_embedding`` is the one boolean signal we deliberately expose;
+        # pin it per branch so the empty-embedding case (where the loop above
+        # is a no-op) still carries a real, non-trivial assertion.
+        assert summary["has_embedding"] is expected_has_embedding
 
-        # Both branches must expose the same top-level keys.
-        assert set(summary.keys()) >= {"counts", "total", "samples", "has_embedding"}
+        # Pin the top-level structure *exactly* — using ``==`` rather than
+        # ``>=``. A future accidental leak under a different key name
+        # (e.g. ``"embed"`` / ``"vector"`` / ``"raw_embedding"``) would
+        # add an extra key here and fail this assertion, whereas the earlier
+        # ``'"embedding"' not in rendered`` check was trivially true since the
+        # helper never emits that literal key at all.
+        assert set(summary.keys()) == {"counts", "total", "samples", "has_embedding"}
 
 
 # ---------------------------------------------------------------------------
