@@ -2,7 +2,9 @@ import json
 import mimetypes
 import os
 
+from collections.abc import Iterator
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -95,13 +97,13 @@ class MemOSClient:
         self,
         user_id: str,
         conversation_id: str | None = None,
-        conversation_limit_number: int = 6,
-        message_limit_number: int = 6,
+        conversation_limit_number: int | None = None,
+        message_limit_number: int | None = None,
         source: str | None = None,
     ) -> MemOSGetMessagesResponse | None:
         """Get message"""
         # Validate required parameters
-        self._validate_required_params(user_id=user_id)
+        self._validate_required_params(user_id=user_id, conversation_id=conversation_id)
 
         url = f"{self.base_url}/get/message"
         payload = {
@@ -128,12 +130,12 @@ class MemOSClient:
     def add_message(
         self,
         messages: list[dict[str, Any]],
-        user_id: str | list[str],
-        conversation_id: str,
+        user_id: str | list[str] | None = None,
+        conversation_id: str | None = None,
         info: dict[str, Any] | None = None,
         source: str | None = None,
         app_id: str | None = None,
-        agent_id: str | None = None,
+        agent_id: str | list[str] | None = None,
         async_mode: bool = True,
         tags: list[str] | None = None,
         allow_public: bool = False,
@@ -142,9 +144,9 @@ class MemOSClient:
     ) -> MemOSAddResponse | None:
         """Add message"""
         # Validate required parameters
-        self._validate_required_params(
-            messages=messages, user_id=user_id, conversation_id=conversation_id
-        )
+        self._validate_required_params(messages=messages)
+        if not user_id and not agent_id:
+            raise ValueError("user_id or agent_id is required")
 
         url = f"{self.base_url}/add/message"
         payload = {
@@ -178,7 +180,7 @@ class MemOSClient:
     def search_memory(
         self,
         query: str,
-        user_id: str,
+        user_id: str | None = None,
         conversation_id: str | None = None,
         agent_id: str | None = None,
         memory_limit_number: int = 6,
@@ -197,7 +199,8 @@ class MemOSClient:
     ) -> MemOSSearchResponse | None:
         """Search memories"""
         # Validate required parameters
-        self._validate_required_params(query=query, user_id=user_id)
+        self._validate_required_params(query=query)
+        self._validate_profile_subject(user_id, agent_id)
 
         url = f"{self.base_url}/search/memory"
         payload = {
@@ -248,6 +251,8 @@ class MemOSClient:
         """get memories"""
         # Validate required parameters
         self._validate_profile_subject(user_id, agent_id)
+        if size > 50:
+            raise ValueError("size must be less than or equal to 50")
 
         url = f"{self.base_url}/get/memory"
         payload = {
@@ -275,17 +280,47 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
+    @staticmethod
+    def _iter_sse_data(response: requests.Response) -> Iterator[str]:
+        """Yield decoded data payloads from a Server-Sent Events response."""
+        try:
+            for line in response.iter_lines(decode_unicode=True):
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8")
+                if not line or not line.startswith("data:"):
+                    continue
+                yield line.removeprefix("data:").lstrip()
+        finally:
+            response.close()
+
+    def get_memory_by_id(self, memid: str) -> dict[str, Any] | None:
+        """Get one memory detail by its memory ID."""
+        self._validate_required_params(memid=memid)
+
+        url = f"{self.base_url}/get/memory/{quote(memid, safe='')}"
+        for retry in range(MAX_RETRY_COUNT):
+            try:
+                response = requests.get(url, headers=self.headers, timeout=30)
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                logger.error(
+                    "Failed to get memory by ID (retry %s/%s): %s",
+                    retry + 1,
+                    MAX_RETRY_COUNT,
+                    e,
+                )
+                if retry == MAX_RETRY_COUNT - 1:
+                    raise
+
     def create_knowledgebase(
-        self, knowledgebase_name: str, knowledgebase_description: str
+        self, knowledgebase_name: str, knowledgebase_description: str | None = None
     ) -> MemOSCreateKnowledgebaseResponse | None:
         """
         Create knowledgebase
         """
         # Validate required parameters
-        self._validate_required_params(
-            knowledgebase_name=knowledgebase_name,
-            knowledgebase_description=knowledgebase_description,
-        )
+        self._validate_required_params(knowledgebase_name=knowledgebase_name)
 
         url = f"{self.base_url}/create/knowledgebase"
         payload = {
@@ -524,8 +559,8 @@ class MemOSClient:
     def add_feedback(
         self,
         user_id: str,
-        conversation_id: str,
-        feedback_content: str,
+        conversation_id: str | None = None,
+        feedback_content: str | None = None,
         agent_id: str | None = None,
         app_id: str | None = None,
         feedback_time: str | None = None,
@@ -534,9 +569,7 @@ class MemOSClient:
     ) -> MemOSAddFeedBackResponse | None:
         """Add feedback"""
         # Validate required parameters
-        self._validate_required_params(
-            feedback_content=feedback_content, user_id=user_id, conversation_id=conversation_id
-        )
+        self._validate_required_params(feedback_content=feedback_content, user_id=user_id)
 
         url = f"{self.base_url}/add/feedback"
         payload = {
@@ -743,8 +776,8 @@ class MemOSClient:
         allow_public: bool = False,
         allow_knowledgebase_ids: list[str] | None = None,
         max_tokens: int = 8192,
-        temperature: float | None = None,
-        top_p: float | None = None,
+        temperature: float | None = 0.7,
+        top_p: float | None = 0.95,
         include_preference: bool = True,
         preference_limit_number: int = 6,
         memory_limit_number: int = 6,
@@ -752,7 +785,7 @@ class MemOSClient:
         include_tool_memory: bool = False,
         tool_memory_limit_number: int = 6,
         relativity: float | None = None,
-    ) -> MemOSChatResponse | None:
+    ) -> MemOSChatResponse | Iterator[str] | None:
         """chat"""
         # Validate required parameters
         self._validate_required_params(
@@ -795,9 +828,15 @@ class MemOSClient:
         for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
+                    url,
+                    data=json.dumps(payload),
+                    headers=self.headers,
+                    timeout=30,
+                    stream=stream,
                 )
                 response.raise_for_status()
+                if stream:
+                    return self._iter_sse_data(response)
                 response_data = response.json()
 
                 return MemOSChatResponse(**response_data)

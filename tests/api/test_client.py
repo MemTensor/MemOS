@@ -43,7 +43,30 @@ class DummyResponse:
         return self.payload
 
 
+class DummyStreamResponse:
+    def __init__(self, lines: list[str]):
+        self.lines = lines
+        self.closed = False
+        self.json_called = False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        self.json_called = True
+        raise AssertionError("streaming responses must not be parsed as JSON")
+
+    def iter_lines(self, decode_unicode: bool = False):
+        assert decode_unicode is True
+        yield from self.lines
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _response_for(url: str) -> dict:
+    if url.endswith("/get/message"):
+        return {"code": 200, "message": "ok", "data": {"message_detail_list": []}}
     if url.endswith("/add/message"):
         return {
             "code": 200,
@@ -54,10 +77,18 @@ def _response_for(url: str) -> dict:
         return {"code": 200, "message": "ok", "data": {"memory_detail_list": []}}
     if url.endswith("/get/memory"):
         return {"code": 200, "message": "ok", "data": {"memory_detail_list": []}}
+    if url.endswith("/create/knowledgebase"):
+        return {"code": 200, "message": "ok", "data": {"id": "kb-1"}}
     if url.endswith("/get/knowledgebase-file"):
         return {"code": 200, "message": "ok", "data": {"file_detail_list": []}}
     if url.endswith("/delete/memory"):
         return {"code": 200, "message": "ok", "data": {"success": True}}
+    if url.endswith("/add/feedback"):
+        return {
+            "code": 200,
+            "message": "ok",
+            "data": {"success": True, "task_id": "task-1", "status": "running"},
+        }
     if url.endswith("/chat"):
         return {"code": 200, "message": "ok", "data": {"response": "answer"}}
     if url.endswith("/add/knowledgebase-file"):
@@ -103,6 +134,24 @@ def posted_requests(monkeypatch, client_module):
 
 
 @pytest.fixture
+def fetched_requests(monkeypatch, client_module):
+    calls: list[dict] = []
+
+    def fake_get(url: str, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return DummyResponse(
+            {
+                "code": 200,
+                "message": "ok",
+                "data": {"id": "memory-1", "memory_type": "LongTermMemory"},
+            }
+        )
+
+    monkeypatch.setattr(client_module.requests, "get", fake_get)
+    return calls
+
+
+@pytest.fixture
 def client(client_module) -> Any:
     return client_module.MemOSClient(api_key="test-key", base_url="https://example.test/openmem/v1")
 
@@ -134,7 +183,7 @@ def test_search_memory_sends_updated_existing_request_fields(
 ) -> None:
     client.search_memory(
         query="hello",
-        user_id="user-1",
+        user_id=None,
         agent_id="agent-1",
         relativity=0.2,
         include_skill=True,
@@ -404,3 +453,234 @@ def test_profile_subject_requires_exactly_one_user_or_agent(client: Any) -> None
             user_id="user-1",
             agent_id="agent-1",
         )
+
+
+def test_task_status_response_parses_current_object_shape(client_module: Any) -> None:
+    response = client_module.MemOSGetTaskStatusResponse(
+        code=200,
+        message="ok",
+        data={
+            "task_id": "task-1",
+            "status": "running",
+            "memory_views": {"added": 1},
+        },
+    )
+
+    assert response.data.task_id == "task-1"
+    assert response.data.status == "running"
+    assert response.data.memory_views == {"added": 1}
+
+
+def test_search_response_keeps_all_current_memory_view_lists(client_module: Any) -> None:
+    response = client_module.MemOSSearchResponse(
+        code=200,
+        message="ok",
+        data={
+            "memory_detail_list": [],
+            "skill_detail_list": [{"id": "skill-1"}],
+            "profile_detail_list": [{"id": "profile-1"}],
+            "event_detail_list": [{"id": "event-1"}],
+        },
+    )
+
+    assert response.data.skill_detail_list[0].id == "skill-1"
+    assert response.data.profile_detail_list[0].id == "profile-1"
+    assert response.data.event_detail_list[0].id == "event-1"
+
+
+def test_get_memory_response_keeps_views_and_pagination(client_module: Any) -> None:
+    response = client_module.MemOSGetMemoryResponse(
+        code=200,
+        message="ok",
+        data={
+            "memory_detail_list": [],
+            "tool_memory_detail_list": [{"id": "tool-1"}],
+            "profile_detail_list": [{"id": "profile-1"}],
+            "event_detail_list": [{"id": "event-1"}],
+            "skill_detail_list": [{"id": "skill-1"}],
+            "total": 21,
+            "size": 10,
+            "current": 2,
+            "pages": 3,
+        },
+    )
+
+    assert response.data.tool_memory_detail_list[0].id == "tool-1"
+    assert response.data.profile_detail_list[0].id == "profile-1"
+    assert response.data.event_detail_list[0].id == "event-1"
+    assert response.data.skill_detail_list[0].id == "skill-1"
+    assert response.data.total == 21
+    assert response.data.size == 10
+    assert response.data.current == 2
+    assert response.data.pages == 3
+
+
+def test_get_knowledgebase_file_response_keeps_pagination(client_module: Any) -> None:
+    response = client_module.MemOSGetKnowledgebaseFileResponse(
+        code=200,
+        message="ok",
+        data={
+            "file_detail_list": [],
+            "total": 8,
+            "page": 2,
+            "page_size": 5,
+        },
+    )
+
+    assert response.data.total == 8
+    assert response.data.page == 2
+    assert response.data.page_size == 5
+
+
+def test_get_message_requires_conversation_id(client: Any, posted_requests: list[dict]) -> None:
+    with pytest.raises(ValueError, match="conversation_id is required"):
+        client.get_message(user_id="user-1")
+
+    assert posted_requests == []
+
+
+def test_get_message_uses_playground_default_limits(
+    client: Any, posted_requests: list[dict]
+) -> None:
+    client.get_message(user_id="user-1", conversation_id="conversation-1")
+
+    payload = _json_payload(posted_requests[0])
+
+    assert payload["conversation_limit_number"] is None
+    assert payload["message_limit_number"] is None
+
+
+def test_add_message_allows_agent_only_and_generated_conversation(
+    client: Any, posted_requests: list[dict]
+) -> None:
+    client.add_message(
+        messages=[{"role": "user", "content": "hello"}],
+        user_id=None,
+        agent_id="agent-1",
+        conversation_id=None,
+    )
+
+    payload = _json_payload(posted_requests[0])
+
+    assert payload["user_id"] is None
+    assert payload["agent_id"] == "agent-1"
+    assert payload["conversation_id"] is None
+
+
+def test_search_memory_allows_agent_only(client: Any, posted_requests: list[dict]) -> None:
+    client.search_memory(query="hello", user_id=None, agent_id="agent-1")
+
+    payload = _json_payload(posted_requests[0])
+
+    assert payload["user_id"] is None
+    assert payload["agent_id"] == "agent-1"
+
+
+def test_search_memory_rejects_multiple_subjects(client: Any, posted_requests: list[dict]) -> None:
+    with pytest.raises(ValueError, match="exactly one of user_id or agent_id"):
+        client.search_memory(query="hello", user_id="user-1", agent_id="agent-1")
+
+    assert posted_requests == []
+
+
+def test_create_knowledgebase_allows_empty_description(
+    client: Any, posted_requests: list[dict]
+) -> None:
+    client.create_knowledgebase(knowledgebase_name="Knowledge Base")
+
+    payload = _json_payload(posted_requests[0])
+
+    assert payload == {
+        "knowledgebase_name": "Knowledge Base",
+        "knowledgebase_description": None,
+    }
+
+
+def test_add_feedback_allows_generated_conversation(
+    client: Any, posted_requests: list[dict]
+) -> None:
+    client.add_feedback(user_id="user-1", feedback_content="helpful")
+
+    payload = _json_payload(posted_requests[0])
+
+    assert payload["conversation_id"] is None
+    assert payload["feedback_content"] == "helpful"
+
+
+def test_chat_uses_playground_sampling_defaults(client: Any, posted_requests: list[dict]) -> None:
+    client.chat(user_id="user-1", conversation_id="conversation-1", query="hello")
+
+    payload = _json_payload(posted_requests[0])
+
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.95
+
+
+def test_get_memory_rejects_size_above_playground_limit(
+    client: Any, posted_requests: list[dict]
+) -> None:
+    with pytest.raises(ValueError, match="size must be less than or equal to 50"):
+        client.get_memory(user_id="user-1", size=51)
+
+    assert posted_requests == []
+
+
+def test_get_memory_by_id_uses_detail_get_endpoint(
+    client: Any, fetched_requests: list[dict]
+) -> None:
+    response = client.get_memory_by_id("memory-1")
+
+    assert fetched_requests == [
+        {
+            "url": "https://example.test/openmem/v1/get/memory/memory-1",
+            "headers": client.headers,
+            "timeout": 30,
+        }
+    ]
+    assert response == {
+        "code": 200,
+        "message": "ok",
+        "data": {"id": "memory-1", "memory_type": "LongTermMemory"},
+    }
+
+
+def test_get_memory_by_id_requires_memid(client: Any, fetched_requests: list[dict]) -> None:
+    with pytest.raises(ValueError, match="memid is required"):
+        client.get_memory_by_id("")
+
+    assert fetched_requests == []
+
+
+def test_chat_stream_yields_sse_data_and_closes_response(monkeypatch, client_module: Any) -> None:
+    calls: list[dict] = []
+    stream_response = DummyStreamResponse(
+        [
+            "event: message",
+            'data: {"response":"first"}',
+            "",
+            "data: [DONE]",
+        ]
+    )
+
+    def fake_post(url: str, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return stream_response
+
+    monkeypatch.setattr(client_module.requests, "post", fake_post)
+    client = client_module.MemOSClient(
+        api_key="test-key", base_url="https://example.test/openmem/v1"
+    )
+
+    chunks = list(
+        client.chat(
+            user_id="user-1",
+            conversation_id="conversation-1",
+            query="hello",
+            stream=True,
+        )
+    )
+
+    assert calls[0]["stream"] is True
+    assert chunks == ['{"response":"first"}', "[DONE]"]
+    assert stream_response.json_called is False
+    assert stream_response.closed is True
