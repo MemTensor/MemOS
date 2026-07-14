@@ -90,11 +90,15 @@ def _summarize_search_result_for_log(
             if not isinstance(memories, list):
                 continue
 
-            counts[bucket] += len(memories)
-
             for mem in memories:
                 if not isinstance(mem, dict):
                     continue
+
+                # Count only validated dict entries so ``counts`` matches the
+                # docstring's "total memories per bucket" contract. Non-dict
+                # items (strings, ``None``, etc.) are silently ignored rather
+                # than inflating the reported total.
+                counts[bucket] += 1
 
                 metadata = mem.get("metadata") or {}
                 if isinstance(metadata, dict):

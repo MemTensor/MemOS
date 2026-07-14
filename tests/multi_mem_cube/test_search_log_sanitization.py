@@ -259,6 +259,11 @@ class TestDedupBranches:
         for value in embedding_value:
             assert str(value) not in rendered
 
+        # For the empty-embedding branch the loop above is a no-op — parametrize
+        # gives us zero iterations, so without this the ``dedup="no"`` case
+        # would carry no leak-detection signal. Assert the structural key too.
+        assert '"embedding"' not in rendered
+
         # Both branches must expose the same top-level keys.
         assert set(summary.keys()) >= {"counts", "total", "samples", "has_embedding"}
 
@@ -297,5 +302,7 @@ class TestRobustness:
         # Must not raise
         summary = summarize(result)
 
-        # The valid item is still counted
-        assert summary["counts"]["text_mem"] == 3
+        # Only validated dict entries contribute to the reported bucket count;
+        # the ``"not-a-dict"`` string and ``None`` are silently skipped so the
+        # summary matches the docstring's "total memories per bucket" contract.
+        assert summary["counts"]["text_mem"] == 1
