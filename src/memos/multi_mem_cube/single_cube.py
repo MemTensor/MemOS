@@ -37,6 +37,89 @@ from memos.utils import timed, timed_stage
 logger = get_logger(__name__)
 
 
+# Cap on how many memories per bucket appear in the search log summary. The
+# full count is still reported via ``summary["counts"]``; this just bounds the
+# INFO-line size when top_k is large.
+_LOG_SAMPLE_MAX_PER_BUCKET = 5
+
+# Buckets we surface counts/samples for in the log summary. ``act_mem`` and
+# ``para_mem`` are intentionally excluded — they are not populated by the text
+# search path and would just add noise.
+_LOG_SUMMARY_BUCKETS = ("text_mem", "pref_mem", "tool_mem", "skill_mem")
+
+
+def _summarize_search_result_for_log(
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a compact, embedding-free summary of a ``MOSSearchResult`` for
+    logging.
+
+    The previous ``search_memories`` INFO log dumped the full result dict,
+    which under the default ``dedup="mmr"`` (or ``dedup="sim"``) branch keeps
+    the raw ``metadata.embedding`` vector on every memory. That leaked
+    high-dimensional floats into the log stream, caused log explosion, and
+    raised privacy concerns (issue #2103).
+
+    This helper produces a bounded dict containing:
+      * ``counts``: total memories per bucket (``text_mem`` / ``pref_mem`` /
+        ``tool_mem`` / ``skill_mem``).
+      * ``total``: sum of counts across all buckets.
+      * ``samples``: up to ``_LOG_SAMPLE_MAX_PER_BUCKET`` items per bucket,
+        exposing only ``id`` / ``memory_type`` / ``relativity`` — never the
+        embedding.
+      * ``has_embedding``: True iff at least one memory carries a non-empty
+        embedding list. The boolean is safe to log; the vector itself is not.
+
+    The helper degrades gracefully on malformed input (missing buckets,
+    non-dict memory items).
+    """
+
+    counts: dict[str, int] = dict.fromkeys(_LOG_SUMMARY_BUCKETS, 0)
+    samples: dict[str, list[dict[str, Any]]] = {bucket: [] for bucket in _LOG_SUMMARY_BUCKETS}
+    has_embedding = False
+
+    for bucket in _LOG_SUMMARY_BUCKETS:
+        groups = result.get(bucket) or []
+        if not isinstance(groups, list):
+            continue
+
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            memories = group.get("memories") or []
+            if not isinstance(memories, list):
+                continue
+
+            counts[bucket] += len(memories)
+
+            for mem in memories:
+                if not isinstance(mem, dict):
+                    continue
+
+                metadata = mem.get("metadata") or {}
+                if isinstance(metadata, dict):
+                    embedding = metadata.get("embedding")
+                    if isinstance(embedding, list) and len(embedding) > 0:
+                        has_embedding = True
+
+                if len(samples[bucket]) < _LOG_SAMPLE_MAX_PER_BUCKET:
+                    metadata_dict = metadata if isinstance(metadata, dict) else {}
+                    samples[bucket].append(
+                        {
+                            "id": mem.get("id"),
+                            "memory_type": metadata_dict.get("memory_type"),
+                            "relativity": metadata_dict.get("relativity"),
+                        }
+                    )
+
+    return {
+        "counts": counts,
+        "total": sum(counts.values()),
+        "samples": samples,
+        "has_embedding": has_embedding,
+    }
+
+
 if TYPE_CHECKING:
     from memos.api.product_models import APIADDRequest, APIFeedbackRequest, APISearchRequest
     from memos.mem_cube.navie import NaiveMemCube
@@ -129,8 +212,9 @@ class SingleCubeView(MemCubeView):
             self.cube_id,
         )
 
-        self.logger.info(f"Search memories result: {memories_result}")
-        self.logger.info(f"Search {len(memories_result)} memories.")
+        self.logger.info(
+            "Search memories summary: %s", _summarize_search_result_for_log(memories_result)
+        )
         return memories_result
 
     @timed
