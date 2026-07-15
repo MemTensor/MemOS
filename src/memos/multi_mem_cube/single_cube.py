@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import traceback
 
@@ -75,6 +76,10 @@ def _redact_embeddings_for_log(memories_result: dict[str, Any]) -> dict[str, Any
                 continue
             new_group = dict(group)
             new_memories = []
+            # `or []` intentionally handles the `{"memories": None}` case —
+            # `dict.get("memories")` returns `None` (not `[]`) when the value
+            # is explicitly None, and downstream `format_memory_item` /
+            # post-processing may leave that key null on empty partitions.
             for mem in group.get("memories") or []:
                 if not isinstance(mem, dict):
                     new_memories.append(mem)
@@ -188,7 +193,10 @@ class SingleCubeView(MemCubeView):
             self.cube_id,
         )
 
-        self.logger.info("Search memories result: %s", _redact_embeddings_for_log(memories_result))
+        if self.logger.isEnabledFor(logging.INFO):
+            self.logger.info(
+                "Search memories result: %s", _redact_embeddings_for_log(memories_result)
+            )
         self.logger.info(f"Search {len(memories_result)} memories.")
         return memories_result
 
