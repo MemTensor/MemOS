@@ -1,0 +1,59 @@
+user_id: "user11alice"
+cube_id: "user11alice/mem_cube_tree"
+text_mem:
+  backend: "tree_text"
+  config:
+    extractor_llm:
+      backend: "ollama"
+      config:
+        model_name_or_path: "qwen3:0.6b"
+        temperature: 0.0
+        remove_think_prefix: true
+        max_tokens: 8192
+    dispatcher_llm:
+      backend: "ollama"
+      config:
+        model_name_or_path: "qwen3:0.6b"
+        temperature: 0.0
+        remove_think_prefix: true
+        max_tokens: 8192
+    graph_db:
+      backend: "neo4j"
+      config:
+        uri: "bolt://localhost:7687"
+        user: "neo4j"
+        password: "12345678"
+        db_name: "user11alice"
+        auto_create: true
+    embedder:
+      backend: "ollama"
+      config:
+        model_name_or_path: "nomic-embed-text:latest"
+act_mem:
+  backend: "kv_cache"
+  config:
+    memory_filename: "activation_memory.pickle"
+    extractor_llm:
+      backend: "huggingface_singleton"
+      config:
+        model_name_or_path: "Qwen/Qwen3-1.7B"
+        temperature: 0.8
+        max_tokens: 1024
+        top_p: 0.9
+        top_k: 50
+        add_generation_prompt: true
+        remove_think_prefix: false
+para_mem:
+  backend: "lora"
+  config:
+    memory_filename: "parametric_memory.adapter"
+    extractor_llm:
+      backend: "huggingface_singleton"
+      config:
+        model_name_or_path: "Qwen/Qwen3-1.7B"
+        temperature: 0.8
+        max_tokens: 1024
+        top_p: 0.9
+        top_k: 50
+        add_generation_prompt: true
+        remove_think_prefix: false

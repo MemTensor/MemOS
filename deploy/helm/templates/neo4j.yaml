@@ -1,0 +1,125 @@
+{{- if .Values.neo4j.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "memos.neo4j.fullname" . }}
+  labels:
+    {{- include "memos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: neo4j
+spec:
+  replicas: {{ .Values.neo4j.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "memos.labels" . | nindent 6 }}
+      app.kubernetes.io/component: neo4j
+  template:
+    metadata:
+      labels:
+        {{- include "memos.labels" . | nindent 8 }}
+        app.kubernetes.io/component: neo4j
+    spec:
+      containers:
+        - name: neo4j
+          image: "{{ .Values.neo4j.image.repository }}:{{ .Values.neo4j.image.tag }}"
+          imagePullPolicy: {{ .Values.neo4j.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 7474
+            - name: bolt
+              containerPort: 7687
+          env:
+            - name: NEO4J_ACCEPT_LICENSE_AGREEMENT
+              value: {{ .Values.neo4j.auth.acceptLicense | quote }}
+            - name: NEO4J_AUTH
+              value: "{{ .Values.neo4j.auth.user }}/{{ .Values.neo4j.auth.password }}"
+          {{- if .Values.neo4j.persistence.enabled }}
+          volumeMounts:
+            - name: neo4j-data
+              mountPath: /data
+            - name: neo4j-logs
+              mountPath: /logs
+          {{- end }}
+          resources:
+            {{- toYaml .Values.neo4j.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 7474
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 7474
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      {{- if .Values.neo4j.persistence.enabled }}
+      volumes:
+        - name: neo4j-data
+          persistentVolumeClaim:
+            claimName: {{ include "memos.neo4j.fullname" . }}-data
+        - name: neo4j-logs
+          persistentVolumeClaim:
+            claimName: {{ include "memos.neo4j.fullname" . }}-logs
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "memos.neo4j.fullname" . }}
+  labels:
+    {{- include "memos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: neo4j
+spec:
+  type: {{ .Values.neo4j.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.neo4j.service.httpPort }}
+      targetPort: http
+    - name: bolt
+      port: {{ .Values.neo4j.service.boltPort }}
+      targetPort: bolt
+  selector:
+    {{- include "memos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: neo4j
+{{- if .Values.neo4j.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "memos.neo4j.fullname" . }}-data
+  labels:
+    {{- include "memos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: neo4j
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass }}
+  {{- else if .Values.neo4j.persistence.storageClass }}
+  storageClassName: {{ .Values.neo4j.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.neo4j.persistence.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "memos.neo4j.fullname" . }}-logs
+  labels:
+    {{- include "memos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: neo4j
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass }}
+  {{- else if .Values.neo4j.persistence.storageClass }}
+  storageClassName: {{ .Values.neo4j.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: 1Gi
+{{- end }}
+{{- end }}

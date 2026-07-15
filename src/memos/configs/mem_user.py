@@ -31,6 +31,17 @@ class MySQLUserManagerConfig(BaseUserManagerConfig):
     charset: str = Field(default="utf8mb4", description="MySQL charset")
 
 
+class RedisUserManagerConfig(BaseUserManagerConfig):
+    """Redis user manager configuration."""
+
+    host: str = Field(default="localhost", description="Redis server host")
+    port: int = Field(default=6379, description="Redis server port")
+    username: str = Field(default="root", description="Redis username")
+    password: str = Field(default="", description="Redis password")
+    database: str = Field(default="memos_users", description="Redis database name")
+    charset: str = Field(default="utf8mb4", description="Redis charset")
+
+
 class UserManagerConfigFactory(BaseModel):
     """Factory for user manager configurations."""
 
@@ -42,6 +53,7 @@ class UserManagerConfigFactory(BaseModel):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "sqlite": SQLiteUserManagerConfig,
         "mysql": MySQLUserManagerConfig,
+        "redis": RedisUserManagerConfig,
     }
 
     @field_validator("backend")

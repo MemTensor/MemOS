@@ -9,7 +9,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "--lib",
     type=str,
-    choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
+    choices=[
+        "mem0",
+        "mem0_graph",
+        "memos-api",
+        "memos-api-online",
+        "memobase",
+        "memu",
+        "supermemory",
+    ],
+    default="memos-api",
 )
 parser.add_argument(
     "--version",

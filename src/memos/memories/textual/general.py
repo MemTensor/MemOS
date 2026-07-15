@@ -26,6 +26,8 @@ class GeneralTextMemory(BaseTextMemory):
 
     def __init__(self, config: GeneralTextMemoryConfig):
         """Initialize memory with the given configuration."""
+        # Set mode from class default or override if needed
+        self.mode = getattr(self.__class__, "mode", "sync")
         self.config: GeneralTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm
@@ -54,7 +56,9 @@ class GeneralTextMemory(BaseTextMemory):
             [message["role"] + ":" + message["content"] for message in messages]
         )
 
-        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace("${conversation}", str_messages)
+        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace("${conversation}", str_messages).replace(
+            "${custom_tags_prompt}", ""
+        )
         messages = [{"role": "user", "content": prompt}]
         response_text = self.extractor_llm.generate(messages)
         response_json = self.parse_json_result(response_text)
@@ -132,7 +136,7 @@ class GeneralTextMemory(BaseTextMemory):
         ]
         return result_memories
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID."""
         result = self.vector_db.get_by_id(memory_id)
         if result is None:

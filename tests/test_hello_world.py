@@ -118,6 +118,8 @@ def test_memos_yuqingchen_hello_world_logger_called():
 
 
 def test_memos_chen_tang_hello_world():
+    import warnings
+
     from memos.memories.textual.general import GeneralTextMemory
 
     # Define return values for os.getenv
@@ -130,7 +132,10 @@ def test_memos_chen_tang_hello_world():
         }
         return mock_values.get(key, default)
 
-    # Use patch to mock os.getenv
-    with patch("os.getenv", side_effect=mock_getenv):
-        memory = memos_chentang_hello_world()
-        assert isinstance(memory, GeneralTextMemory)
+    # Filter Pydantic serialization warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+        # Use patch to mock os.getenv
+        with patch("os.getenv", side_effect=mock_getenv):
+            memory = memos_chentang_hello_world()
+            assert isinstance(memory, GeneralTextMemory)

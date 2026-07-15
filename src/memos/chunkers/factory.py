@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from memos.configs.chunker import ChunkerConfigFactory
 
 from .base import BaseChunker
+from .markdown_chunker import MarkdownChunker
 from .sentence_chunker import SentenceChunker
 
 
@@ -11,6 +12,7 @@ class ChunkerFactory:
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "sentence": SentenceChunker,
+        "markdown": MarkdownChunker,
     }
 
     @classmethod

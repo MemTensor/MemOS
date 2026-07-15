@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MemOS Plugin Config</title>
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <div class="hero-grid">
+          <div>
+            <div class="hero-top">
+              <span class="eyebrow" id="eyebrowText">
+                <img class="eyebrow-icon" src="/icon.svg" alt="" aria-hidden="true" />
+                <span>MemOS Plugin Config UI</span>
+              </span>
+              <div class="lang-switch">
+                <span class="lang-label" id="langLabel">Language</span>
+                <div class="lang-dropdown" id="languageDropdown">
+                  <button
+                    class="lang-select"
+                    id="languageSelectButton"
+                    type="button"
+                    aria-haspopup="listbox"
+                    aria-expanded="false"
+                    aria-labelledby="langLabel languageSelectButton"
+                  >
+                    <span class="lang-select-text" id="languageSelectText">Auto</span>
+                  </button>
+                  <div class="lang-menu" id="languageMenu" role="listbox" aria-labelledby="langLabel">
+                    <button class="lang-option" id="languageOptionAuto" type="button" role="option" data-language="auto">Auto</button>
+                    <button class="lang-option" id="languageOptionEn" type="button" role="option" data-language="en">EN</button>
+                    <button class="lang-option" id="languageOptionZh" type="button" role="option" data-language="zh">中文</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="hero-title-row">
+              <img class="hero-logo" src="/icon.svg" alt="MemOS Cloud OpenClaw Plugin icon" />
+              <h1 id="heroTitle">MemOS Cloud OpenClaw Plugin Config</h1>
+            </div>
+            <p class="subtitle" id="heroSubtitle">
+              This page reads and writes <code>plugins.entries.__PLUGIN_ID__.config</code> from the active gateway
+              config file, and keeps the form in sync with on-disk changes.
+            </p>
+            <div class="status-row" id="statusRow"></div>
+            <div class="meta-row" id="metaRow"></div>
+            <div class="banner" id="banner"></div>
+          </div>
+          <div class="hero-actions">
+            <div class="panel">
+              <h2 id="activeConfigTitle">Active Config File</h2>
+              <p class="muted" id="activeConfigText">The page automatically follows the current runtime profile and local config path.</p>
+              <div class="path-box-row">
+                <div class="path-box" id="pathBox"></div>
+                <button class="icon-button" id="copyPathButton" type="button" aria-label="Copy Config Path" title="Copy Config Path">
+                  <span aria-hidden="true">⧉</span>
+                </button>
+              </div>
+              <div class="button-row">
+                <button class="btn btn-primary" id="saveButton">Save Config</button>
+                <button class="btn btn-secondary" id="reloadButton">Reload From Disk</button>
+              </div>
+            </div>
+            <div class="panel">
+              <h2 id="editingModelTitle">Editing Model</h2>
+              <p class="muted" id="editingModelText">
+                Known plugin fields are rendered as typed controls. Unknown keys stay in the extra JSON section so
+                future custom fields are not lost.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <main class="layout" id="layout"></main>
+      <aside class="floating-tools" id="floatingTools">
+        <div class="floating-nav-card">
+          <div class="floating-nav-head">
+            <span id="floatingNavLabel">Sections</span>
+            <button class="floating-toggle" id="floatingToggleButton" type="button" aria-expanded="true" aria-controls="floatingNav" title="Collapse Navigation">
+              <span class="floating-toggle-icon" aria-hidden="true">⇤</span>
+            </button>
+          </div>
+          <div class="floating-nav" id="floatingNav"></div>
+        </div>
+      </aside>
+    </div>
+
+    <button class="back-top-button" id="backTopButton" type="button" aria-label="Back To Top" title="Back To Top">
+      <span aria-hidden="true">↑</span>
+    </button>
+
+    <div class="overlay" id="overlay">
+      <div class="overlay-card">
+        <h4 id="overlayTitle">Restarting gateway</h4>
+        <p id="overlayText">
+          Restart requested. Refresh this page in a few seconds if it does not recover automatically.
+        </p>
+        <div class="overlay-actions">
+          <button class="icon-button overlay-refresh-button" id="overlayRefreshButton" type="button" aria-label="Refresh Page" title="Refresh Page">
+            <span aria-hidden="true">↻</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="__APP_JS_URL__"></script>
+  </body>
+</html>

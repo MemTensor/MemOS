@@ -16,13 +16,13 @@ from memos.cli import download_examples, export_openapi, main
 class TestExportOpenAPI:
     """Test the export_openapi function."""
 
-    @patch("memos.api.start_api.app")
+    @patch("memos.cli.get_openapi_app")
     @patch("builtins.open", new_callable=mock_open)
     @patch("os.makedirs")
     def test_export_openapi_success(self, mock_makedirs, mock_file, mock_app):
         """Test successful OpenAPI export."""
         mock_openapi_data = {"openapi": "3.0.0", "info": {"title": "Test API"}}
-        mock_app.openapi.return_value = mock_openapi_data
+        mock_app.return_value.openapi.return_value = mock_openapi_data
 
         result = export_openapi("/test/path/openapi.json")
 
@@ -30,11 +30,11 @@ class TestExportOpenAPI:
         mock_makedirs.assert_called_once_with("/test/path", exist_ok=True)
         mock_file.assert_called_once_with("/test/path/openapi.json", "w")
 
-    @patch("memos.api.start_api.app")
+    @patch("memos.cli.get_openapi_app")
     @patch("builtins.open", side_effect=OSError("Permission denied"))
     def test_export_openapi_error(self, mock_file, mock_app):
         """Test OpenAPI export when file writing fails."""
-        mock_app.openapi.return_value = {"test": "data"}
+        mock_app.return_value.openapi.return_value = {"test": "data"}
 
         with pytest.raises(IOError):
             export_openapi("/invalid/path/openapi.json")

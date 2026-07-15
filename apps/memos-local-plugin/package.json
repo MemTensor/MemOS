@@ -1,0 +1,97 @@
+{
+  "name": "@memtensor/memos-local-plugin",
+  "version": "2.0.10",
+  "description": "Reflect2Evolve memory plugin: layered L1/L2/L3 memory, reflection-weighted value backprop, cross-task policy induction, skill crystallization, three-tier retrieval. Adapters for OpenClaw and Hermes Agent via a shared algorithm core.",
+  "type": "module",
+  "main": "dist/core/index.js",
+  "types": "dist/core/index.d.ts",
+  "openclaw": {
+    "id": "memos-local-plugin",
+    "kind": "memory",
+    "extensions": [
+      "./dist/adapters/openclaw/index.js"
+    ],
+    "installDependencies": true
+  },
+  "files": [
+    "dist",
+    "telemetry.credentials.json",
+    "openclaw.plugin.json",
+    "bridge.cts",
+    "bridge.mts",
+    "bridge/**/*.ts",
+    "core/**/*.ts",
+    "core/storage/migrations/*.sql",
+    "agent-contract/**/*.ts",
+    "server/**/*.ts",
+    "adapters/openclaw/**/*.ts",
+    "adapters/openclaw/*.sh",
+    "adapters/hermes/*.sh",
+    "adapters/hermes/plugin.yaml",
+    "adapters/hermes/memos_provider/*.py",
+    "templates/*.yaml",
+    "templates/README.user.md",
+    "viewer/dist",
+    "scripts/postinstall.cjs",
+    "install.sh",
+    "install.ps1",
+    "tsconfig.json",
+    "!**/ALGORITHMS.md",
+    "!**/README.md",
+    "!**/__pycache__",
+    "!**/*.pyc",
+    "!**/.gitkeep",
+    "!**/*.map",
+    "!dist/tests",
+    "!dist/tests/**"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-runtime-assets.cjs",
+    "build:viewer": "vite build --config vite.config.ts",
+    "build:package": "npm run build && npm run build:viewer",
+    "prepack": "npm run build:package",
+    "dev": "tsc -p tsconfig.json --watch",
+    "viewer:dev": "vite --config vite.config.ts",
+    "bridge": "tsx bridge.cts",
+    "bridge:daemon": "tsx bridge.cts --daemon",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "postinstall": "node scripts/postinstall.cjs"
+  },
+  "keywords": [
+    "memory",
+    "agent",
+    "reflect2evolve",
+    "self-evolution",
+    "skill-crystallization",
+    "openclaw",
+    "hermes"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.0",
+    "@preact/signals": "^2.9.0",
+    "@sinclair/typebox": "^0.34.48",
+    "better-sqlite3": "^12.10.0",
+    "preact": "^10.29.1",
+    "tsx": "^4.21.0",
+    "uuid": "^10.0.0",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.5",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.9"
+  }
+}

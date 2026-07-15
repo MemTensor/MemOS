@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from memos.configs.mem_user import UserManagerConfigFactory
 from memos.mem_user.mysql_persistent_user_manager import MySQLPersistentUserManager
 from memos.mem_user.persistent_user_manager import PersistentUserManager
+from memos.mem_user.redis_persistent_user_manager import RedisPersistentUserManager
 
 
 class PersistentUserManagerFactory:
@@ -11,6 +12,7 @@ class PersistentUserManagerFactory:
     backend_to_class: ClassVar[dict[str, Any]] = {
         "sqlite": PersistentUserManager,
         "mysql": MySQLPersistentUserManager,
+        "redis": RedisPersistentUserManager,
     }
 
     @classmethod

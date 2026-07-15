@@ -1,14 +1,13 @@
-import json
 import unittest
 
 from unittest.mock import MagicMock, patch
 
 from memos.chunkers import ChunkerFactory
-from memos.chunkers.base import Chunk
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.simple_struct import SimpleStructMemReader
+from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem
 
 
@@ -17,6 +16,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
         # Mock config
         self.config = MagicMock(spec=SimpleStructMemReaderConfig)
         self.config.llm = MagicMock()
+        self.config.general_llm = None  # Optional, falls back to main llm
         self.config.embedder = MagicMock()
         self.config.chunker = MagicMock()
         self.config.remove_prompt_example = MagicMock()
@@ -31,6 +31,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
 
         # Set up mock LLM and embedder
         self.reader.llm = MagicMock()
+        self.reader.general_llm = self.reader.llm  # Falls back to main llm
         self.reader.embedder = MagicMock()
         self.reader.chunker = MagicMock()
 
@@ -58,7 +59,6 @@ class TestSimpleStructMemReader(unittest.TestCase):
             '"summary": "Tom is currently focused on managing a new project with a tight schedule."}'
         )
         self.reader.llm.generate.return_value = mock_response
-        self.reader.parse_json_result = lambda x: json.loads(x)
 
         result = self.reader._process_chat_data(scene_data_info, info)
 
@@ -68,27 +68,6 @@ class TestSimpleStructMemReader(unittest.TestCase):
             result[0].memory, "Tom planned to suggest in a meeting on June 27, 2025 at 9:30 AM"
         )
         self.assertEqual(result[0].metadata.user_id, "user1")
-
-    def test_process_doc_data(self):
-        """Test processing document chunks into memory items."""
-        scene_data_info = {"file": "tests/mem_reader/test.txt", "text": "Parsed document text"}
-        info = {"user_id": "user1", "session_id": "session1"}
-
-        # Mock LLM response
-        mock_response = (
-            '{"value": "A sample document about testing.", "tags": ["document"], "key": "title"}'
-        )
-        self.reader.llm.generate.return_value = mock_response
-        self.reader.chunker.chunk.return_value = [
-            Chunk(text="Parsed document text", token_count=3, sentences=["Parsed document text"])
-        ]
-        self.reader.parse_json_result = lambda x: json.loads(x)
-
-        result = self.reader._process_doc_data(scene_data_info, info)
-
-        self.assertIsInstance(result, list)
-        self.assertIsInstance(result[0], TextualMemoryItem)
-        self.assertIn("sample document", result[0].memory)
 
     def test_get_scene_data_info_with_chat(self):
         """Test extracting chat info from scene data."""
@@ -124,25 +103,10 @@ class TestSimpleStructMemReader(unittest.TestCase):
             },
         )
 
-    @patch("memos.mem_reader.simple_struct.ParserFactory")
-    def test_get_scene_data_info_with_doc(self, mock_parser_factory):
-        """Test parsing document files."""
-        parser_instance = MagicMock()
-        parser_instance.parse.return_value = "Parsed document text.\n"
-        mock_parser_factory.from_config.return_value = parser_instance
-
-        scene_data = ["/fake/path/to/doc.txt"]
-        with patch("os.path.exists", return_value=True):
-            result = self.reader.get_scene_data_info(scene_data, type="doc")
-
-        self.assertIsInstance(result, list)
-        self.assertEqual(result[0]["text"], "Parsed document text.\n")
-        parser_instance.parse.assert_called_once_with("/fake/path/to/doc.txt")
-
     def test_parse_json_result_success(self):
         """Test successful JSON parsing."""
         raw_response = '{"summary": "Test summary", "tags": ["test"]}'
-        result = self.reader.parse_json_result(raw_response)
+        result = parse_json_result(raw_response)
 
         self.assertIsInstance(result, dict)
         self.assertIn("summary", result)
@@ -150,9 +114,69 @@ class TestSimpleStructMemReader(unittest.TestCase):
     def test_parse_json_result_failure(self):
         """Test failure in JSON parsing."""
         raw_response = "Invalid JSON string"
-        result = self.reader.parse_json_result(raw_response)
+        result = parse_json_result(raw_response)
 
         self.assertEqual(result, {})
+
+    def test_get_llm_response_fallback_key_matches_consumer(self):
+        """Regression test for issue #1355.
+
+        When the LLM response cannot be parsed as JSON, `_get_llm_response`
+        is expected to return a fallback dict whose ``"memory list"`` (with
+        a single space) entry contains one salvaged ``UserMemory`` item built
+        from the raw user input. Downstream consumers in
+        ``_process_chat_data`` read ``resp.get("memory list", [])`` — if the
+        fallback uses the wrong key (e.g. ``"memory_list"`` with an
+        underscore) the salvaged memory is silently dropped and the request
+        produces zero memories despite returning HTTP 200.
+        """
+        # Force `_safe_parse` to return None so the fallback branch is taken.
+        self.reader.llm.generate.return_value = "not-valid-json"
+        self.reader.config.remove_prompt_example = False
+
+        resp = self.reader._get_llm_response("test memory content", custom_tags=None)
+
+        # The fallback must use the "memory list" (with space) key the
+        # rest of the pipeline reads; verify the salvaged item shape too.
+        salvaged = resp.get("memory list", [])
+        self.assertEqual(
+            len(salvaged),
+            1,
+            f"Fallback memory list must contain exactly one salvaged item, got: {resp!r}",
+        )
+        self.assertEqual(salvaged[0]["value"], "test memory content")
+        self.assertEqual(salvaged[0]["memory_type"], "UserMemory")
+
+    def test_process_chat_data_fine_yields_node_when_llm_unparseable(self):
+        """Regression test for issue #1355 (end-to-end of the reader stage).
+
+        With Kimi-style outputs that fail strict JSON parsing,
+        ``_process_chat_data`` (fine mode) should still emit a fallback
+        ``TextualMemoryItem`` so that the upstream `/product/add` request
+        ultimately writes at least one node to Neo4j instead of returning
+        200 with zero stored memories.
+        """
+        # Embedder produces a stable embedding for the salvaged item.
+        self.reader.embedder.embed = MagicMock(return_value=[[0.1, 0.2, 0.3]])
+        # LLM returns garbage so `_safe_parse` returns None and the fallback
+        # in `_get_llm_response` is exercised.
+        self.reader.llm.generate.return_value = "I cannot produce JSON sorry"
+        self.reader.config.remove_prompt_example = False
+
+        scene_data_info = [{"role": "user", "content": "test memory content"}]
+        info = {"user_id": "user1", "session_id": "session1"}
+
+        result = self.reader._process_chat_data(scene_data_info, info, mode="fine")
+
+        self.assertIsInstance(result, list)
+        self.assertEqual(
+            len(result),
+            1,
+            "fine-mode _process_chat_data must produce one salvaged memory "
+            "item when LLM output is unparseable (bug #1355)",
+        )
+        self.assertIsInstance(result[0], TextualMemoryItem)
+        self.assertIn("test memory content", result[0].memory)
 
 
 if __name__ == "__main__":

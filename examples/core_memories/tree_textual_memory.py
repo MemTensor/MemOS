@@ -3,6 +3,7 @@ import time
 from memos import log
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.configs.memory import TreeTextMemoryConfig
+from memos.mem_reader.multi_modal_struct import MultiModalStructMemReader
 from memos.mem_reader.simple_struct import SimpleStructMemReader
 from memos.memories.textual.tree import TreeTextMemory
 
@@ -239,6 +240,33 @@ results = my_tree_textual_memory.search(
     "Tell me about what memos consist of?",
     top_k=30,
     info={"query": "Tell me about what memos consist of?", "user_id": "111", "session": "2234"},
+)
+
+for i, r in enumerate(results):
+    r = r.to_dict()
+    print(f"{i}'th similar result is: " + str(r["memory"]))
+print(f"Successfully search {len(results)} memories")
+
+logger.info("start multi-modal memory search example...")
+
+multi_modal_reader = MultiModalStructMemReader(reader_config)
+doc_paths = ["examples/data/one_page_example.pdf"]
+multi_modal_memory = multi_modal_reader.get_memory(
+    doc_paths, "doc", info={"user_id": "1111", "session_id": "2222"}
+)
+
+for m_list in multi_modal_memory:
+    added_ids = my_tree_textual_memory.add(m_list)
+    my_tree_textual_memory.memory_manager.wait_reorganizer()
+
+results = my_tree_textual_memory.search(
+    "Give me one poem from Tagore's 'Stray birds'",
+    top_k=30,
+    info={
+        "query": "Give me one poem from Tagore's 'Stray birds'",
+        "user_id": "111",
+        "session": "2234",
+    },
 )
 for i, r in enumerate(results):
     r = r.to_dict()

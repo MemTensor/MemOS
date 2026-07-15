@@ -16,8 +16,9 @@ class BaseReranker(ABC):
     def rerank(
         self,
         query: str,
-        graph_results: list,
+        graph_results: list[TextualMemoryItem],
         top_k: int,
+        search_filter: dict | None = None,
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
         """Return top_k (item, score) sorted by score desc."""

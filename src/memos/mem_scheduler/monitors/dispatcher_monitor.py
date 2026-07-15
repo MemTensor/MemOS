@@ -1,14 +1,20 @@
 import threading
 import time
 
-from datetime import datetime
 from time import perf_counter
 
 from memos.configs.mem_scheduler import BaseSchedulerConfig
-from memos.context.context import ContextThreadPoolExecutor
+from memos.context.context import ContextThread, ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
-from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
+from memos.mem_scheduler.schemas.general_schemas import (
+    DEFAULT_DISPATCHER_MONITOR_CHECK_INTERVAL,
+    DEFAULT_DISPATCHER_MONITOR_MAX_FAILURES,
+    DEFAULT_STOP_WAIT,
+    DEFAULT_STUCK_THREAD_TOLERANCE,
+)
+from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
+from memos.mem_scheduler.utils.db_utils import get_utc_now
 
 
 logger = get_logger(__name__)
@@ -21,8 +27,12 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         super().__init__()
         self.config: BaseSchedulerConfig = config
 
-        self.check_interval = self.config.get("dispatcher_monitor_check_interval", 300)
-        self.max_failures = self.config.get("dispatcher_monitor_max_failures", 2)
+        self.check_interval = self.config.get(
+            "dispatcher_monitor_check_interval", DEFAULT_DISPATCHER_MONITOR_CHECK_INTERVAL
+        )
+        self.max_failures = self.config.get(
+            "dispatcher_monitor_max_failures", DEFAULT_DISPATCHER_MONITOR_MAX_FAILURES
+        )
 
         # Registry of monitored thread pools
         self._pools: dict[str, dict] = {}
@@ -36,6 +46,11 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         # modules with thread pool
         self.dispatcher: SchedulerDispatcher | None = None
         self.dispatcher_pool_name = "dispatcher"
+
+        # Configure shutdown wait behavior from config or default
+        self.stop_wait = (
+            self.config.get("stop_wait", DEFAULT_STOP_WAIT) if self.config else DEFAULT_STOP_WAIT
+        )
 
     def initialize(self, dispatcher: SchedulerDispatcher):
         self.dispatcher = dispatcher
@@ -75,7 +90,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
                 "max_workers": max_workers,
                 "restart": restart_on_failure,
                 "failure_count": 0,
-                "last_active": datetime.utcnow(),
+                "last_active": get_utc_now(),
                 "healthy": True,
             }
             logger.info(f"Registered thread pool '{name}' for monitoring")
@@ -113,54 +128,6 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
 
         logger.debug("Monitor loop exiting")
 
-    def start(self) -> bool:
-        """
-        Start the monitoring thread.
-
-        Returns:
-            bool: True if monitor started successfully, False if already running
-        """
-        if self._running:
-            logger.warning("Dispatcher Monitor is already running")
-            return False
-
-        self._running = True
-        self._monitor_thread = threading.Thread(
-            target=self._monitor_loop, name="threadpool_monitor", daemon=True
-        )
-        self._monitor_thread.start()
-        logger.info("Dispatcher Monitor  monitor started")
-        return True
-
-    def stop(self) -> None:
-        """
-        Stop the monitoring thread and clean up all managed thread pools.
-        Ensures proper shutdown of all monitored executors.
-        """
-        if not self._running:
-            return
-
-        # Stop the monitoring loop
-        self._running = False
-        if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=5)
-
-        # Shutdown all registered pools
-        with self._pool_lock:
-            for name, pool_info in self._pools.items():
-                executor = pool_info["executor"]
-                if not executor._shutdown:  # pylint: disable=protected-access
-                    try:
-                        logger.info(f"Shutting down thread pool '{name}'")
-                        executor.shutdown(wait=True, cancel_futures=True)
-                        logger.info(f"Successfully shut down thread pool '{name}'")
-                    except Exception as e:
-                        logger.error(f"Error shutting down pool '{name}': {e!s}", exc_info=True)
-
-        # Clear the pool registry
-        self._pools.clear()
-        logger.info("Thread pool monitor and all pools stopped")
-
     def _check_pools_health(self) -> None:
         """Check health of all registered thread pools."""
         for name, pool_info in list(self._pools.items()):
@@ -168,12 +135,13 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
                 pool_info=pool_info,
                 stuck_max_interval=4,
             )
-            logger.info(f"Pool '{name}'. is_healthy: {is_healthy}. pool_info: {pool_info}")
+            if not is_healthy:
+                logger.info(f"Pool '{name}'. is_healthy: {is_healthy}. pool_info: {pool_info}")
+
             with self._pool_lock:
                 if is_healthy:
                     pool_info["failure_count"] = 0
                     pool_info["healthy"] = True
-                    return
                 else:
                     pool_info["failure_count"] += 1
                     pool_info["healthy"] = False
@@ -189,40 +157,86 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
             ):
                 self._restart_pool(name, pool_info)
 
-    def _check_pool_health(self, pool_info: dict, stuck_max_interval=4) -> tuple[bool, str]:
+    def _check_pool_health(
+        self, pool_info: dict, stuck_max_interval=4, stuck_thread_tolerance=None
+    ) -> tuple[bool, str]:
         """
-        Check health of a single thread pool.
+        Check health of a single thread pool with enhanced task tracking.
 
         Args:
             pool_info: Dictionary containing pool configuration
+            stuck_max_interval: Maximum intervals before considering pool stuck
+            stuck_thread_tolerance: Maximum number of stuck threads to tolerate before restarting pool
 
         Returns:
             Tuple: (is_healthy, reason) where reason explains failure if not healthy
         """
+        if stuck_thread_tolerance is None:
+            stuck_thread_tolerance = DEFAULT_STUCK_THREAD_TOLERANCE
+
         executor = pool_info["executor"]
 
         # Check if executor is shutdown
         if executor._shutdown:  # pylint: disable=protected-access
             return False, "Executor is shutdown"
 
-        # Check thread activity
-        active_threads = sum(
-            1
-            for t in threading.enumerate()
-            if t.name.startswith(executor._thread_name_prefix)  # pylint: disable=protected-access
-        )
+        # Enhanced health check using dispatcher task tracking
+        stuck_tasks = []
+        if self.dispatcher:
+            running_tasks = self.dispatcher.get_running_tasks()
+            running_count = self.dispatcher.get_running_task_count()
 
-        # Check if no threads are active but should be
-        if active_threads == 0 and pool_info["max_workers"] > 0:
-            return False, "No active worker threads"
+            # Log detailed task information
+            if running_tasks:
+                logger.debug(f"Currently running {running_count} tasks:")
+                for _task_id, task in running_tasks.items():
+                    logger.debug(f"  - {task.get_execution_info()}")
+            else:
+                logger.debug("No tasks currently running")
 
-        # Check if threads are stuck (no activity for 2 intervals)
-        time_delta = (datetime.utcnow() - pool_info["last_active"]).total_seconds()
+            # Check for stuck tasks (running longer than expected)
+            for task in running_tasks.values():
+                if task.duration_seconds and task.duration_seconds > (
+                    self.check_interval * stuck_max_interval
+                ):
+                    stuck_tasks.append(task)
+
+            # Always log stuck tasks if any exist
+            if stuck_tasks:
+                logger.warning(f"Found {len(stuck_tasks)} potentially stuck tasks:")
+                for task in stuck_tasks:
+                    task_info = task.get_execution_info()
+                    messages_info = ""
+                    if task.messages:
+                        messages_info = f", Messages: {len(task.messages)} items - {[str(msg) for msg in task.messages[:3]]}"
+                        if len(task.messages) > 3:
+                            messages_info += f" ... and {len(task.messages) - 3} more"
+                    logger.warning(f"  - Stuck task: {task_info}{messages_info}")
+
+                # Check if stuck task count exceeds tolerance
+                # If thread pool size is smaller, use the smaller value as threshold
+                max_workers = pool_info.get("max_workers", 0)
+                effective_tolerance = (
+                    min(stuck_thread_tolerance, max_workers)
+                    if max_workers > 0
+                    else stuck_thread_tolerance
+                )
+
+                if len(stuck_tasks) >= effective_tolerance:
+                    return (
+                        False,
+                        f"Found {len(stuck_tasks)} stuck tasks (tolerance: {effective_tolerance})",
+                    )
+
+        # Only check for stuck threads, not inactive threads
+        # Check if threads are stuck (no activity for specified intervals)
+        time_delta = (get_utc_now() - pool_info["last_active"]).total_seconds()
         if time_delta >= self.check_interval * stuck_max_interval:
-            return False, "No recent activity"
+            return False, f"No recent activity for {time_delta:.1f} seconds"
 
         # If we got here, pool appears healthy
-        pool_info["last_active"] = datetime.utcnow()
+        pool_info["last_active"] = get_utc_now()
+
         return True, ""
 
     def _restart_pool(self, name: str, pool_info: dict) -> None:
@@ -263,7 +277,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
                 pool_info["executor"] = new_executor
                 pool_info["failure_count"] = 0
                 pool_info["healthy"] = True
-                pool_info["last_active"] = datetime.utcnow()
+                pool_info["last_active"] = get_utc_now()
 
                 elapsed_time = perf_counter() - start_time
                 if elapsed_time > 1:
@@ -304,3 +318,49 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit point."""
         self.stop()
+
+    def start(self) -> bool:
+        """
+        Start the monitoring thread.
+
+        Returns:
+            bool: True if monitor started successfully, False if already running
+        """
+        if self._running:
+            logger.warning("Dispatcher Monitor is already running")
+            return False
+
+        self._running = True
+        self._monitor_thread = ContextThread(
+            target=self._monitor_loop, name="threadpool_monitor", daemon=True
+        )
+        self._monitor_thread.start()
+        logger.info("Dispatcher Monitor  monitor started")
+        return True
+
+    def stop(self) -> None:
+        """
+        Stop the monitoring thread and clean up all managed thread pools.
+        Ensures proper shutdown of all monitored executors.
+        """
+        if not self._running:
+            return
+
+        # Stop the monitoring loop
+        self._running = False
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=5)
+
+        # Shutdown all registered pools
+        with self._pool_lock:
+            for name, pool_info in self._pools.items():
+                executor = pool_info["executor"]
+                if not executor._shutdown:  # pylint: disable=protected-access
+                    try:
+                        logger.info(f"Shutting down thread pool '{name}'")
+                        executor.shutdown(wait=self.stop_wait, cancel_futures=True)
+                        logger.info(f"Successfully shut down thread pool '{name}'")
+                    except Exception as e:
+                        logger.error(f"Error shutting down pool '{name}': {e!s}", exc_info=True)
+
+        logger.info("Thread pool monitor and all pools stopped")

@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MemOS 插件演示指南 — Demo Playbook</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#06080f;--bg2:rgba(14,18,32,.7);
+  --border:rgba(99,140,255,.12);--border2:rgba(99,140,255,.3);
+  --text:#eef1ff;--text2:rgba(200,210,255,.6);--text3:rgba(160,175,220,.35);
+  --cyan:#00e5ff;--blue:#638cff;--purple:#b16cff;--magenta:#ff3cac;
+  --green:#00e676;--amber:#ffca28;--red:#ff5252;
+  --g1:linear-gradient(135deg,#00e5ff,#638cff,#b16cff);
+  --g2:linear-gradient(135deg,#ff3cac,#b16cff,#638cff);
+  --mono:'SF Mono','Fira Code','JetBrains Mono',monospace
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+body{font-family:'Inter',system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;line-height:1.55;font-size:24px}
+.deck{position:absolute;width:1440px;height:810px;top:50%;left:50%;transform-origin:center center}
+.slide{position:absolute;inset:0;opacity:0;pointer-events:none;transition:opacity .45s,transform .45s;transform:scale(.97);overflow:hidden}
+.slide.active{opacity:1;pointer-events:auto;transform:scale(1)}
+.prog{position:absolute;top:0;left:0;height:4px;background:var(--g1);z-index:9999;transition:width .4s}
+.nav{position:absolute;bottom:28px;right:40px;z-index:999;display:flex;gap:10px;align-items:center}
+.nav button{width:44px;height:44px;border:1px solid var(--border);border-radius:50%;background:rgba(6,8,15,.7);backdrop-filter:blur(10px);color:var(--text);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.2s}
+.nav button:hover{background:var(--blue);border-color:var(--blue)}
+.nav .ct{font-size:15px;color:var(--text3);min-width:56px;text-align:center}
+.pn{position:absolute;bottom:32px;left:40px;font-size:14px;color:var(--text3);z-index:999;letter-spacing:1px}
+.pad{padding:36px 56px}
+.slide-content{position:relative;z-index:1;height:100%;max-height:100%;display:flex;flex-direction:column;justify-content:flex-start;overflow:hidden}
+h1{font-size:78px;font-weight:900;line-height:1.1;letter-spacing:-.04em}
+h2{font-size:52px;font-weight:900;line-height:1.15;letter-spacing:-.03em;margin:0 0 14px}
+h3{font-size:30px;font-weight:800;line-height:1.3}
+h4{font-size:24px;font-weight:700;line-height:1.35}
+.desc{font-size:24px;color:var(--text2);line-height:1.65}
+.hl{background:var(--g1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hl2{background:var(--g2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.tag{display:inline-flex;align-items:center;gap:8px;padding:8px 22px;border-radius:20px;font-size:16px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;border:1px solid rgba(0,229,255,.2);background:rgba(0,229,255,.06);color:var(--cyan)}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:24px;backdrop-filter:blur(12px);transition:.3s;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--g1);opacity:0;transition:.3s}
+.card:hover{border-color:var(--border2);box-shadow:0 0 24px rgba(0,229,255,.06)}
+.card:hover::before{opacity:1}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:6px 16px;border-radius:8px;font-size:16px;font-weight:600;background:rgba(99,140,255,.08);color:var(--blue);border:1px solid rgba(99,140,255,.1)}
+.b-c{background:rgba(0,229,255,.06);color:var(--cyan);border-color:rgba(0,229,255,.15)}
+.b-g{background:rgba(0,230,118,.06);color:var(--green);border-color:rgba(0,230,118,.15)}
+.b-p{background:rgba(177,108,255,.06);color:var(--purple);border-color:rgba(177,108,255,.15)}
+.b-a{background:rgba(255,202,40,.06);color:var(--amber);border-color:rgba(255,202,40,.15)}
+.b-r{background:rgba(255,82,82,.06);color:var(--red);border-color:rgba(255,82,82,.15)}
+.q{color:var(--text);font-size:22px;line-height:1.6;padding:14px 22px;border-left:4px solid var(--cyan);background:rgba(0,229,255,.03);border-radius:0 10px 10px 0;margin:8px 0}
+.stat-box{text-align:center;padding:18px;background:rgba(99,140,255,.03);border:1px solid var(--border);border-radius:14px}
+.stat-num{font-size:42px;font-weight:900;line-height:1.1;margin-bottom:6px}
+.stat-label{font-size:18px;color:var(--text2)}
+.glow-line{height:3px;background:linear-gradient(90deg,transparent,var(--blue),var(--cyan),var(--blue),transparent);opacity:.3;position:relative;overflow:hidden}
+.glow-line::after{content:'';position:absolute;top:0;left:-100%;width:50%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);animation:shimmer 2.5s ease-in-out infinite}
+.orb{position:absolute;border-radius:50%;pointer-events:none}
+.grid-bg{position:absolute;inset:0;background-image:radial-gradient(rgba(99,140,255,.04) 1px,transparent 1px);background-size:40px 40px;pointer-events:none}
+.anim{opacity:0;transform:translateY(16px);transition:all .4s cubic-bezier(.4,0,.2,1)}
+.slide.active .anim{opacity:1;transform:translateY(0)}
+.slide.active .anim:nth-child(1){transition-delay:.04s}
+.slide.active .anim:nth-child(2){transition-delay:.1s}
+.slide.active .anim:nth-child(3){transition-delay:.16s}
+.slide.active .anim:nth-child(4){transition-delay:.22s}
+.slide.active .anim:nth-child(5){transition-delay:.28s}
+.slide.active .anim:nth-child(6){transition-delay:.34s}
+.slide.active .anim:nth-child(7){transition-delay:.4s}
+.slide.active .anim:nth-child(8){transition-delay:.46s}
+.slide.active .anim:nth-child(9){transition-delay:.52s}
+.slide.active .anim:nth-child(10){transition-delay:.58s}
+.slide.active .anim:nth-child(11){transition-delay:.64s}
+.slide.active .anim:nth-child(12){transition-delay:.7s}
+@keyframes orbF{0%,100%{transform:translate(0,0)}25%{transform:translate(30px,-40px)}50%{transform:translate(-20px,30px)}75%{transform:translate(40px,20px)}}
+@keyframes shimmer{0%{left:-100%}100%{left:200%}}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,229,255,.3)}50%{box-shadow:0 0 0 10px rgba(0,229,255,0)}}
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:var(--g1);color:#06080f;font-size:16px;font-weight:900;flex-shrink:0}
+.step-row{display:flex;gap:14px;align-items:flex-start}
+.step-row .step-body{flex:1;min-width:0}
+.cmd-box{background:rgba(0,0,0,.4);border:1px solid rgba(99,140,255,.1);border-radius:10px;padding:12px 18px;font-family:var(--mono);font-size:15px;color:var(--cyan);margin:6px 0;overflow-x:auto;white-space:pre-wrap;line-height:1.6}
+.talk-tip{background:rgba(255,202,40,.06);border:1px solid rgba(255,202,40,.15);border-radius:10px;padding:12px 18px;font-size:17px;color:var(--amber);line-height:1.6;margin:6px 0}
+.talk-tip::before{content:'🎤 ';font-size:16px}
+.section-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 18px;border-radius:20px;font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:12px}
+.real-tag{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:700;background:rgba(0,230,118,.1);color:var(--green);border:1px solid rgba(0,230,118,.2);letter-spacing:.5px}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+<div class="prog" id="prog"></div>
+<div class="pn" id="pn">01 / 19</div>
+<div class="nav">
+  <button onclick="go(cur-1)">←</button>
+  <span class="ct" id="ct">1 / 19</span>
+  <button onclick="go(cur+1)">→</button>
+  <button onclick="toggleFS()" id="fsBtn" title="全屏">⛶</button>
+</div>
+
+<!-- ═══ S01: COVER ═══ -->
+<section class="slide active pad" style="display:flex;align-items:center;justify-content:center">
+  <div class="orb" style="width:700px;height:700px;background:radial-gradient(circle,rgba(0,229,255,.07),transparent 70%);top:-250px;left:-150px;animation:orbF 20s ease-in-out infinite"></div>
+  <div class="orb" style="width:550px;height:550px;background:radial-gradient(circle,rgba(177,108,255,.06),transparent 70%);bottom:-180px;right:-120px;animation:orbF 25s ease-in-out infinite reverse"></div>
+  <div class="grid-bg"></div>
+  <div style="position:relative;z-index:1;text-align:center;max-width:1300px">
+    <div class="anim" style="font-size:80px;margin-bottom:6px">🧠</div>
+    <h1 class="anim" style="margin:16px 0 14px;font-size:76px">MemOS <span class="hl">演示指南</span></h1>
+    <p class="anim" style="font-size:30px;color:var(--text2);margin-bottom:20px;line-height:1.5">让 AI 拥有记忆 · 从经验到技能 · 从个人到团队</p>
+    <div class="glow-line anim" style="max-width:500px;margin:0 auto 22px"></div>
+    <div class="anim" style="display:flex;gap:12px;justify-content:center;align-items:center">
+      <span class="real-tag">✦ 全部真实数据</span>
+      <span class="real-tag">✦ 现场实操</span>
+      <span class="real-tag">✦ 零造假</span>
+    </div>
+    <p class="anim" style="font-size:18px;color:var(--text3);margin-top:14px">Demo Playbook · 2026.03 · 演示时长约 15 分钟</p>
+  </div>
+</section>
+
+<!-- ═══ S02: REAL DATA ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <h2 class="anim">你的 AI 已经积累了 <span class="hl">这些</span></h2>
+    <p class="anim desc" style="margin-bottom:18px">以下数据全部来自真实使用，不是演示用的假数据</p>
+    <div class="anim" style="display:flex;gap:16px;justify-content:center;margin-bottom:22px">
+      <div class="stat-box" style="flex:1;padding:18px">
+        <div class="stat-num" style="color:var(--cyan);font-size:48px">1,185</div>
+        <div class="stat-label">记忆片段</div>
+      </div>
+      <div class="stat-box" style="flex:1;padding:18px">
+        <div class="stat-num" style="color:var(--purple);font-size:48px">71</div>
+        <div class="stat-label">识别任务</div>
+      </div>
+      <div class="stat-box" style="flex:1;padding:18px">
+        <div class="stat-num" style="color:var(--green);font-size:48px">14</div>
+        <div class="stat-label">已完成任务</div>
+      </div>
+      <div class="stat-box" style="flex:1;padding:18px">
+        <div class="stat-num" style="color:var(--amber);font-size:48px">1</div>
+        <div class="stat-label">自动生成技能</div>
+      </div>
+    </div>
+    <div style="flex:1;display:flex;gap:14px;align-items:stretch;min-height:0">
+      <div class="card anim" style="flex:1;padding:20px;border-color:rgba(0,229,255,.12)">
+        <h4 style="color:var(--cyan);margin-bottom:8px">📈 自动生成的技能</h4>
+        <div class="cmd-box" style="font-size:14px;line-height:1.6;color:var(--text)">📈 stock-market-analysis-framework
+<span style="color:var(--text2)">A股市场复盘分析框架
+四层分析法：指数表现 → 结构分化 → 资金情绪 → 次日策略</span></div>
+        <p style="font-size:15px;color:var(--text3);margin-top:6px">来源：3月12日的一次 A 股复盘对话，MemOS 自动提炼</p>
+      </div>
+      <div class="card anim" style="flex:1;padding:20px;border-color:rgba(177,108,255,.12)">
+        <h4 style="color:var(--purple);margin-bottom:8px">🔧 已完成的典型任务</h4>
+        <div style="display:flex;flex-direction:column;gap:5px;font-size:15px;color:var(--text2)">
+          <div>• Nginx 反向代理配置 <span class="real-tag" style="font-size:10px;padding:2px 6px">真实</span></div>
+          <div>• 创建 Node.js Dockerfile <span class="real-tag" style="font-size:10px;padding:2px 6px">真实</span></div>
+          <div>• TypeScript 搭建 Express API <span class="real-tag" style="font-size:10px;padding:2px 6px">真实</span></div>
+          <div>• PostgreSQL 14 数据库配置 <span class="real-tag" style="font-size:10px;padding:2px 6px">真实</span></div>
+          <div>• MySQL 行锁 + K8s 集群配置 <span class="real-tag" style="font-size:10px;padding:2px 6px">真实</span></div>
+          <div>• DevOps: Jenkins / SonarQube / Terraform <span class="real-tag" style="font-size:10px;padding:2px 6px">真实</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S03: OVERVIEW ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <h2 class="anim">今日演示 <span class="hl">两大场景</span></h2>
+    <p class="anim desc" style="margin-bottom:20px">全部基于真实使用数据，现场实操</p>
+    <div style="flex:1;display:flex;gap:20px;align-items:stretch;min-height:0">
+      <div class="card anim" style="flex:1;padding:28px;border-color:rgba(0,229,255,.15);display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div style="font-size:44px">📈</div>
+          <div><span class="real-tag">真实技能</span></div>
+        </div>
+        <h3 style="color:var(--cyan);margin-bottom:6px">Demo 1: Mem2Skill</h3>
+        <h4 style="color:var(--text);margin-bottom:10px;font-weight:600">"我就聊了一次股票，AI 就学会了"</h4>
+        <p style="font-size:18px;color:var(--text2);line-height:1.6;flex:1">真实场景：我上周和 AI 聊了一次 A 股复盘。<br>MemOS 默默记录了 <b style="color:var(--cyan)">164 条记忆</b>，<br>自动提炼出一套<b style="color:var(--cyan)">「A 股复盘分析框架」</b>技能，<br>现在 AI 每次分析股票都自动套用这个框架。</p>
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <span class="badge b-c">真实记忆</span>
+          <span class="badge b-g">真实技能</span>
+          <span class="badge b-a">现场验证</span>
+        </div>
+      </div>
+      <div class="card anim" style="flex:1;padding:28px;border-color:rgba(177,108,255,.15);display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div style="font-size:44px">🌐</div>
+          <div><span class="real-tag">现场搭建</span></div>
+        </div>
+        <h3 style="color:var(--purple);margin-bottom:6px">Demo 2: 团队共享</h3>
+        <h4 style="color:var(--text);margin-bottom:10px;font-weight:600">"3 分钟让团队共享知识"</h4>
+        <p style="font-size:18px;color:var(--text2);line-height:1.6;flex:1">现场演示：从零开始搭建团队知识共享。<br>把我的 <b style="color:var(--purple)">Nginx 配置经验</b> 分享到团队，<br>打开管理面板，展示共享内容，<br>证明：<b style="color:var(--purple)">一个人的经验 = 全团队的能力</b>。</p>
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <span class="badge b-p">现场搭建</span>
+          <span class="badge b-a">真实任务</span>
+          <span class="badge b-c">全流程展示</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S04: DEMO 1 DIVIDER ═══ -->
+<section class="slide pad" style="display:flex;align-items:center;justify-content:center">
+  <div class="orb" style="width:500px;height:500px;background:radial-gradient(circle,rgba(0,229,255,.08),transparent 70%);top:-100px;right:-50px;animation:orbF 18s ease-in-out infinite"></div>
+  <div class="grid-bg"></div>
+  <div style="position:relative;z-index:1;text-align:center;max-width:1100px">
+    <div class="anim section-badge" style="background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);color:var(--cyan)">DEMO 1 · 真实数据</div>
+    <h1 class="anim" style="font-size:68px;margin-bottom:14px">Mem<span class="hl">2</span>Skill</h1>
+    <p class="anim" style="font-size:30px;color:var(--text2);margin-bottom:10px;line-height:1.5">我只是和 AI 聊了一次 A 股行情</p>
+    <p class="anim" style="font-size:30px;color:var(--text2);margin-bottom:22px;line-height:1.5">MemOS 就自动学会了我的分析方法</p>
+    <div class="glow-line anim" style="max-width:400px;margin:0 auto 20px"></div>
+    <div class="anim" style="display:flex;gap:12px;justify-content:center">
+      <span class="real-tag">164 条真实记忆</span>
+      <span class="real-tag">1 个自动生成技能</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S05: DEMO 1 — STEP 1: MEMORIES ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <div class="anim section-badge" style="background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.15);color:var(--cyan)">🎬 现场操作 · STEP 1</div>
+    <h2 class="anim">打开记忆 — <span class="hl">搜索 "A股"</span></h2>
+    <div style="flex:1;display:flex;gap:18px;align-items:stretch;min-height:0">
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;flex:1;display:flex;flex-direction:column;gap:10px">
+          <h4 style="color:var(--cyan)">📋 操作步骤</h4>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">1. 浏览器打开 <code style="background:rgba(0,229,255,.08);padding:2px 8px;border-radius:4px;color:var(--cyan)">http://127.0.0.1:18799</code></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">2. 登录后，默认进入 <b style="color:var(--text)">记忆</b> 页面</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">3. 搜索框输入 <b style="color:var(--cyan)">"A股 复盘"</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">4. 展示搜索结果 — 指出这些都是之前聊天时<b style="color:var(--text)">自动记录</b>的</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">5. 点击任意一条，展开看<b style="color:var(--text)">原始对话上下文</b></p>
+        </div>
+        <div class="talk-tip">大家看到了吗？我上周和 AI 聊了一次 A 股行情，MemOS 默默记住了 164 条对话内容，还给每条记忆做了摘要和向量索引。我搜「A 股复盘」，所有相关记忆全部出来了。这些不是我手动存的，是自动的。</div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px">
+          <h4 style="color:var(--green);margin-bottom:10px">📌 关键展示点</h4>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--green);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">自动采集</b> — 每次对话自动记录，无需手动操作</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--green);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">语义搜索</b> — 不需要精确关键词，用自然语言搜索</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--green);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">智能摘要</b> — 每条记忆自动生成一句话摘要</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--green);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">上下文回溯</b> — 点击可查看完整对话上下文</span></div>
+          </div>
+        </div>
+        <div class="card" style="padding:14px;border-color:rgba(255,202,40,.12)">
+          <p style="font-size:15px;color:var(--amber);line-height:1.5">💡 <b>Tip：</b>也可以搜「DevOps」「Nginx」「Docker」等展示其他主题的记忆，证明覆盖面广。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S06: DEMO 1 — STEP 2: TASK ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <div class="anim section-badge" style="background:rgba(177,108,255,.06);border:1px solid rgba(177,108,255,.15);color:var(--purple)">🎬 现场操作 · STEP 2</div>
+    <h2 class="anim">任务面板 — <span class="hl">AI 理解了你在干嘛</span></h2>
+    <div style="flex:1;display:flex;gap:18px;align-items:stretch;min-height:0">
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;flex:1;display:flex;flex-direction:column;gap:10px">
+          <h4 style="color:var(--purple)">📋 操作步骤</h4>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">1. 点击顶部 <b style="color:var(--text)">"任务"</b> 标签</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">2. 展示任务列表 — 滚动让观众看到各种任务标题</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">3. 找到 <b style="color:var(--purple)">"2026年3月12日A股市场复盘分析"</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">4. 展开查看任务摘要 — 目标、步骤、结果</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">5. 指出该任务标有 <span class="badge b-g" style="font-size:12px;padding:2px 10px">skill generated</span></p>
+        </div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;border-color:rgba(177,108,255,.15)">
+          <h4 style="color:var(--purple);margin-bottom:8px">📄 真实任务摘要预览</h4>
+          <div class="cmd-box" style="font-size:13px;color:var(--text2);line-height:1.7"><span style="color:var(--cyan)">🎯 目标</span>
+了解2026年3月12日A股市场行情表现
+
+<span style="color:var(--cyan)">📋 关键步骤</span>
+• 指数表现：沪深300、上证50、中证1000
+• 结构分化：政策/产业主线 + 资金偏好
+• 资金与情绪：成交额、涨跌家数、北向资金
+• 次日应对策略：根据判断调仓位
+
+<span style="color:var(--green)">✅ 结果</span>
+使用检索接口获取了市场具体数据</div>
+        </div>
+        <div class="talk-tip">MemOS 不只是记住你说了什么，还能理解你在做什么。它把一次聊天归纳成了一个完整任务：目标、步骤、结果。更厉害的是 — 它从这个任务里提炼出了一个可复用的技能。下面我给大家看。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S07: DEMO 1 — STEP 3: SKILL ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <div class="anim section-badge" style="background:rgba(0,230,118,.06);border:1px solid rgba(0,230,118,.15);color:var(--green)">⭐ 高光时刻 · STEP 3</div>
+    <h2 class="anim">技能面板 — <span class="hl">AI 自动写了操作手册</span></h2>
+    <div style="flex:1;display:flex;gap:18px;align-items:stretch;min-height:0">
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;flex:1;display:flex;flex-direction:column;gap:10px">
+          <h4 style="color:var(--green)">📋 操作步骤</h4>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">1. 点击顶部 <b style="color:var(--text)">"技能"</b> 标签</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">2. 找到 <b style="color:var(--green)">📈 stock-market-analysis-framework</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">3. 点击展开 — <b style="color:var(--green)">让观众看完整的 SKILL.md</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">4. 缓慢滚动，让大家看清每一部分：<br>　适用场景 → 4 个步骤 → 常见陷阱 → 环境要求</p>
+        </div>
+        <div class="talk-tip">大家看仔细了 — 这个文件我一个字都没手写。MemOS 从我上周的一次聊天中，自动提炼出了一套完整的「A 股复盘分析框架」。四层分析法：指数、结构、资金、策略。甚至还总结了常见陷阱：只看指数涨跌容易忽略结构性机会。这是 AI 从我的经验中学会的。</div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:10px">
+        <div class="card" style="padding:16px;border-color:rgba(0,230,118,.15)">
+          <h4 style="color:var(--green);font-size:18px;margin-bottom:6px">📈 SKILL.md 关键内容</h4>
+          <div class="cmd-box" style="font-size:13px;color:var(--text2);line-height:1.7"><span style="color:var(--green);font-weight:700"># A股市场复盘分析框架</span>
+
+<span style="color:var(--cyan)">## 适用场景</span>
+• 分析A股整体表现，判断市场风格
+• 识别政策主线和资金偏好
+• 通过情绪指标决定投资策略
+• 根据分析调整投资组合和仓位
+
+<span style="color:var(--cyan)">## 步骤</span>
+1. 分析指数表现（沪深300/上证50/中证1000）
+2. 识别结构分化（政策+资金主线）
+3. 评估资金与情绪（成交额/涨跌家数）
+4. 制定次日应对策略
+
+<span style="color:var(--amber)">## 常见陷阱</span>
+❌ 只关注指数涨跌 → 忽略结构性机会
+✅ 使用四层框架进行全面分析</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S08: DEMO 1 — STEP 4: LIVE TEST ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <div class="anim section-badge" style="background:rgba(0,230,118,.06);border:1px solid rgba(0,230,118,.15);color:var(--green)">⭐ 现场验证 · STEP 4</div>
+    <h2 class="anim">现场提问 — <span class="hl">AI 自动套用框架</span></h2>
+    <div style="flex:1;display:flex;gap:18px;align-items:stretch;min-height:0">
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;border-color:rgba(0,230,118,.15);flex:1;display:flex;flex-direction:column;gap:10px">
+          <h4 style="color:var(--green)">📋 操作步骤</h4>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">1. 打开 OpenClaw 对话窗口</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">2. 输入：</p>
+          <div class="cmd-box" style="font-size:18px;color:var(--green)">帮我分析一下今天 A 股大盘走势</div>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">3. 观察 AI 回答 —— 应该自动按四层框架输出：<br>　<b style="color:var(--green)">指数 → 结构 → 资金情绪 → 策略</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">4. 打开 Logs 展示 <code style="color:var(--cyan)">skill_search</code> 调用</p>
+        </div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;border-color:rgba(0,230,118,.15)">
+          <h4 style="color:var(--green);margin-bottom:8px">✨ 预期效果</h4>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:17px;color:var(--text)">✅ AI 自动按<b style="color:var(--green)">四层框架</b>组织回答</div>
+            <div style="font-size:17px;color:var(--text)">✅ 包含<b style="color:var(--green)">指数对比</b>（大盘 vs 成长）</div>
+            <div style="font-size:17px;color:var(--text)">✅ 包含<b style="color:var(--green)">资金情绪</b>判断</div>
+            <div style="font-size:17px;color:var(--text)">✅ 给出<b style="color:var(--green)">次日策略</b>建议</div>
+          </div>
+        </div>
+        <div class="talk-tip">我什么都没提示，只说「分析 A 股」，AI 就自动按我之前用过的四层分析法输出了。这不是提示词工程，是 AI 真正学会了我的分析方法。以后每次分析，它都会用这套框架。</div>
+        <div class="card" style="padding:14px;border-color:rgba(255,82,82,.15)">
+          <h4 style="color:var(--red);font-size:16px;margin-bottom:6px">⚠ 备选方案</h4>
+          <p style="font-size:15px;color:var(--text2);line-height:1.5">若 AI 响应不理想，直接打开 Logs → 过滤 skill_search → 展示 AI 确实查询了技能，强调这个机制已在工作。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S09: DEMO 1 VALUE ═══ -->
+<section class="slide pad" style="display:flex;align-items:center;justify-content:center">
+  <div class="grid-bg"></div>
+  <div style="position:relative;z-index:1;text-align:center;max-width:1200px">
+    <div class="anim" style="font-size:100px;margin-bottom:10px;opacity:.15">❝</div>
+    <p class="anim" style="font-size:38px;font-weight:700;color:var(--text);line-height:1.5;margin-bottom:20px">我只是和 AI 聊了聊股票<br>它就<span class="hl">自己写了一本操作手册</span></p>
+    <div class="glow-line anim" style="max-width:400px;margin:0 auto 22px"></div>
+    <div class="anim" style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap">
+      <div class="stat-box" style="padding:14px 24px">
+        <div class="stat-num" style="color:var(--cyan);font-size:36px">0</div>
+        <div class="stat-label" style="font-size:15px">手动操作</div>
+      </div>
+      <div class="stat-box" style="padding:14px 24px">
+        <div class="stat-num" style="color:var(--green);font-size:36px">164</div>
+        <div class="stat-label" style="font-size:15px">自动记忆</div>
+      </div>
+      <div class="stat-box" style="padding:14px 24px">
+        <div class="stat-num" style="color:var(--purple);font-size:36px">1</div>
+        <div class="stat-label" style="font-size:15px">自动生成技能</div>
+      </div>
+    </div>
+    <p class="anim" style="font-size:22px;color:var(--text3);margin-top:18px">对话即培训 · 经验即技能 · 你用得越多，AI 越懂你</p>
+  </div>
+</section>
+
+<!-- ═══ S10: DEMO 2 DIVIDER ═══ -->
+<section class="slide pad" style="display:flex;align-items:center;justify-content:center">
+  <div class="orb" style="width:500px;height:500px;background:radial-gradient(circle,rgba(177,108,255,.08),transparent 70%);bottom:-100px;left:-50px;animation:orbF 18s ease-in-out infinite reverse"></div>
+  <div class="grid-bg"></div>
+  <div style="position:relative;z-index:1;text-align:center;max-width:1100px">
+    <div class="anim section-badge" style="background:rgba(177,108,255,.08);border:1px solid rgba(177,108,255,.2);color:var(--purple)">DEMO 2 · 现场搭建</div>
+    <h1 class="anim" style="font-size:64px;margin-bottom:14px">团队 <span class="hl2">共享</span></h1>
+    <p class="anim" style="font-size:30px;color:var(--text2);margin-bottom:10px;line-height:1.5">从零开始，3 分钟搭建团队知识共享</p>
+    <p class="anim" style="font-size:30px;color:var(--text2);margin-bottom:22px;line-height:1.5">把真实的运维经验分享给全团队</p>
+    <div class="glow-line anim" style="max-width:400px;margin:0 auto 20px"></div>
+    <div class="anim" style="display:flex;gap:12px;justify-content:center">
+      <span class="real-tag">现场操作</span>
+      <span class="real-tag">真实任务数据</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S11: DEMO 2 — STEP 1: SETTINGS ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <div class="anim section-badge" style="background:rgba(177,108,255,.06);border:1px solid rgba(177,108,255,.15);color:var(--purple)">🎬 现场操作 · STEP 1</div>
+    <h2 class="anim">设置页面 — <span class="hl2">开启团队共享</span></h2>
+    <div style="flex:1;display:flex;gap:18px;align-items:stretch;min-height:0">
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;flex:1;display:flex;flex-direction:column;gap:10px">
+          <h4 style="color:var(--purple)">📋 操作步骤</h4>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">1. Memory Viewer → 点击 <b style="color:var(--text)">"设置"</b> 标签</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">2. 滚动到 <b style="color:var(--purple)">团队共享</b> 卡片</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">3. 打开 <b style="color:var(--text)">"启用团队共享"</b> 开关</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">4. 选择 <b style="color:var(--purple)">"服务端（托管团队）"</b> 角色</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">5. 展示：Team Name 和 Team Token <b style="color:var(--green)">自动生成</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">6. 点击 <b style="color:var(--text)">"Save Settings"</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">7. 重启 gateway（已提前设好则跳过）</p>
+        </div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;border-color:rgba(177,108,255,.15)">
+          <h4 style="color:var(--purple);margin-bottom:8px">📌 展示亮点</h4>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--purple);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">卡片化设置页</b> — 分类清晰，一目了然</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--purple);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">一键开启</b> — 不需要编辑配置文件</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--purple);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">Token 自动生成</b> — 安全认证开箱即用</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--purple);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">分享信息卡</b> — 一键复制服务器地址和 Token</span></div>
+          </div>
+        </div>
+        <div class="talk-tip">搭建团队知识共享有多简单？打开开关，选个角色，保存。就这三步。Token 自动生成，地址自动获取。把这个地址和 Token 发给同事，他们就能连上你的知识库了。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S12: DEMO 2 — STEP 2: SHARE TASK ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <div class="anim section-badge" style="background:rgba(177,108,255,.06);border:1px solid rgba(177,108,255,.15);color:var(--purple)">🎬 现场操作 · STEP 2</div>
+    <h2 class="anim">分享任务 — <span class="hl2">把经验推到团队</span></h2>
+    <div style="flex:1;display:flex;gap:18px;align-items:stretch;min-height:0">
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;flex:1;display:flex;flex-direction:column;gap:10px">
+          <h4 style="color:var(--purple)">📋 操作步骤</h4>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">1. 切换到 <b style="color:var(--text)">"任务"</b> 标签</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">2. 找到 <b style="color:var(--purple)">"Nginx 反向代理配置"</b> 任务</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">3. 展开 → 点击 <b style="color:var(--green)">"共享到团队"</b> 按钮</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">4. 同样分享 <b style="color:var(--purple)">"创建 Node.js Dockerfile"</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">5. 再分享 <b style="color:var(--purple)">"PostgreSQL 14 数据库配置"</b></p>
+        </div>
+        <div class="talk-tip">我现在把我之前做过的三个运维任务分享到团队：Nginx 配置、Docker 部署、数据库配置。这些都是我真实的工作经验。分享出去之后，团队里任何人的 AI 都能检索到这些知识。</div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;border-color:rgba(0,229,255,.12)">
+          <h4 style="color:var(--cyan);margin-bottom:8px">📄 分享内容预览</h4>
+          <div class="cmd-box" style="font-size:13px;color:var(--text2);line-height:1.7"><span style="color:var(--green);font-weight:700">Nginx 反向代理配置</span>
+🎯 部署 Nginx 反向代理，监听 443 端口
+📋 SSL + upstream + gzip + 缓存头
+✅ 包含完整配置代码
+
+<span style="color:var(--green);font-weight:700">创建 Node.js Dockerfile</span>
+🎯 编写生产级 Dockerfile
+📋 多阶段构建 + .dockerignore
+
+<span style="color:var(--green);font-weight:700">PostgreSQL 14 数据库配置</span>
+🎯 配置生产环境数据库
+📋 连接池 + 安全设置</div>
+        </div>
+        <div class="card" style="padding:14px;border-color:rgba(255,202,40,.12)">
+          <p style="font-size:15px;color:var(--amber);line-height:1.5">💡 <b>如果有第二台设备：</b>让同事在自己电脑上连接团队，搜索 "Nginx 配置"，展示跨设备知识检索。效果更震撼。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S13: DEMO 2 — STEP 3: ADMIN ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <div class="anim section-badge" style="background:rgba(0,230,118,.06);border:1px solid rgba(0,230,118,.15);color:var(--green)">⭐ 高光时刻 · STEP 3</div>
+    <h2 class="anim">管理面板 — <span class="hl2">团队知识可视化</span></h2>
+    <div style="flex:1;display:flex;gap:18px;align-items:stretch;min-height:0">
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;flex:1;display:flex;flex-direction:column;gap:10px">
+          <h4 style="color:var(--green)">📋 操作步骤</h4>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">1. 点击顶部 <b style="color:var(--text)">"管理"</b> 标签</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">2. 展示<b style="color:var(--green)">统计面板</b> — 共享任务数刚刚增加了</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">3. 点击 <b style="color:var(--text)">"Shared Tasks"</b> 子标签</p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">4. 展示刚才分享的三个任务 — <b style="color:var(--green)">实时可见！</b></p>
+          <p style="font-size:18px;color:var(--text2);line-height:1.7">5. 切换到 <b style="color:var(--text)">"Users"</b> 展示用户管理</p>
+        </div>
+        <div class="talk-tip">大家看管理面板 — 我刚才分享的三个任务已经出现在这里了。如果有同事连接进来，他们会出现在 Users 列表里。管理员可以批准或拒绝加入申请，所有操作都在 UI 上完成，不需要碰任何配置文件。</div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:18px;border-color:rgba(0,230,118,.15)">
+          <h4 style="color:var(--green);margin-bottom:10px">📌 关键展示点</h4>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--green);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">实时同步</b> — 分享后立即在管理面板可见</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--green);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">用户管理</b> — Admin 可批准/拒绝成员加入</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--green);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">权限控制</b> — group / public 可见性</span></div>
+            <div style="display:flex;align-items:flex-start;gap:10px"><span style="color:var(--green);font-weight:700;font-size:18px">✓</span><span style="font-size:17px;color:var(--text2)"><b style="color:var(--text)">全 UI 操作</b> — 零配置文件编辑</span></div>
+          </div>
+        </div>
+        <div class="card" style="padding:14px;border-color:rgba(0,229,255,.12)">
+          <h4 style="color:var(--cyan);font-size:16px;margin-bottom:6px">💡 加分操作</h4>
+          <p style="font-size:15px;color:var(--text2);line-height:1.5">也可以把 <b>stock-market-analysis-framework</b> 技能发布到团队（Skill Publish），展示技能共享：你学会的方法，全团队的 AI 都能用。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S14: DEMO 2 VALUE ═══ -->
+<section class="slide pad" style="display:flex;align-items:center;justify-content:center">
+  <div class="grid-bg"></div>
+  <div style="position:relative;z-index:1;text-align:center;max-width:1200px">
+    <div class="anim" style="font-size:100px;margin-bottom:10px;opacity:.15">❝</div>
+    <p class="anim" style="font-size:38px;font-weight:700;color:var(--text);line-height:1.5;margin-bottom:20px">一个人的经验<br>不应该锁在一个人的 <span class="hl2">电脑里</span></p>
+    <div class="glow-line anim" style="max-width:400px;margin:0 auto 22px"></div>
+    <div class="anim" style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap">
+      <div class="stat-box" style="padding:14px 24px">
+        <div class="stat-num" style="color:var(--purple);font-size:36px">3 步</div>
+        <div class="stat-label" style="font-size:15px">搭建共享</div>
+      </div>
+      <div class="stat-box" style="padding:14px 24px">
+        <div class="stat-num" style="color:var(--cyan);font-size:36px">1 键</div>
+        <div class="stat-label" style="font-size:15px">分享经验</div>
+      </div>
+      <div class="stat-box" style="padding:14px 24px">
+        <div class="stat-num" style="color:var(--green);font-size:36px">全 UI</div>
+        <div class="stat-label" style="font-size:15px">零配置</div>
+      </div>
+    </div>
+    <p class="anim" style="font-size:22px;color:var(--text3);margin-top:18px">个体经验 → 组织记忆 · 新人即老手 · 知识永不流失</p>
+  </div>
+</section>
+
+<!-- ═══ S15: FLOW SUMMARY ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <h2 class="anim">完整演示 <span class="hl">流程图</span></h2>
+    <p class="anim desc" style="margin-bottom:16px">从头到尾的操作路径，演讲者照做即可</p>
+    <div style="flex:1;display:flex;gap:14px;align-items:stretch;min-height:0">
+      <div class="card anim" style="flex:1;padding:18px;border-color:rgba(0,229,255,.12);display:flex;flex-direction:column;gap:8px">
+        <h3 style="color:var(--cyan);font-size:22px;margin-bottom:6px">Demo 1: Mem2Skill (7 min)</h3>
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:16px;flex:1">
+          <div style="display:flex;align-items:center;gap:8px"><span class="step-num" style="width:24px;height:24px;font-size:12px">1</span><span style="color:var(--text)">打开 Viewer → <b>记忆</b>页</span></div>
+          <div style="color:var(--text3);font-size:14px;padding-left:32px">搜索"A股复盘"展示记忆</div>
+          <div style="display:flex;align-items:center;gap:8px"><span class="step-num" style="width:24px;height:24px;font-size:12px">2</span><span style="color:var(--text)">切换 → <b>任务</b>页</span></div>
+          <div style="color:var(--text3);font-size:14px;padding-left:32px">展示 A 股任务摘要和 skill generated 标记</div>
+          <div style="display:flex;align-items:center;gap:8px"><span class="step-num" style="width:24px;height:24px;font-size:12px">3</span><span style="color:var(--text)">切换 → <b>技能</b>页 ⭐</span></div>
+          <div style="color:var(--text3);font-size:14px;padding-left:32px">展开 SKILL.md 内容 — 高光时刻</div>
+          <div style="display:flex;align-items:center;gap:8px"><span class="step-num" style="width:24px;height:24px;font-size:12px">4</span><span style="color:var(--text)">打开对话 → <b>现场提问</b></span></div>
+          <div style="color:var(--text3);font-size:14px;padding-left:32px">"帮我分析A股" 验证框架效果</div>
+        </div>
+      </div>
+      <div class="card anim" style="flex:1;padding:18px;border-color:rgba(177,108,255,.12);display:flex;flex-direction:column;gap:8px">
+        <h3 style="color:var(--purple);font-size:22px;margin-bottom:6px">Demo 2: 团队共享 (8 min)</h3>
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:16px;flex:1">
+          <div style="display:flex;align-items:center;gap:8px"><span class="step-num" style="width:24px;height:24px;font-size:12px;background:var(--g2)">1</span><span style="color:var(--text)">切换 → <b>设置</b>页</span></div>
+          <div style="color:var(--text3);font-size:14px;padding-left:32px">团队共享卡片 → 开启 → 选角色 → 保存</div>
+          <div style="display:flex;align-items:center;gap:8px"><span class="step-num" style="width:24px;height:24px;font-size:12px;background:var(--g2)">2</span><span style="color:var(--text)">切换 → <b>任务</b>页</span></div>
+          <div style="color:var(--text3);font-size:14px;padding-left:32px">分享 Nginx / Docker / PostgreSQL 任务</div>
+          <div style="display:flex;align-items:center;gap:8px"><span class="step-num" style="width:24px;height:24px;font-size:12px;background:var(--g2)">3</span><span style="color:var(--text)">切换 → <b>管理</b>页 ⭐</span></div>
+          <div style="color:var(--text3);font-size:14px;padding-left:32px">展示共享内容 + 用户管理 — 高光时刻</div>
+          <div style="display:flex;align-items:center;gap:8px"><span class="step-num" style="width:24px;height:24px;font-size:12px;background:var(--g2)">4</span><span style="color:var(--text)">(加分) 第二台设备 <b>搜索验证</b></span></div>
+          <div style="color:var(--text3);font-size:14px;padding-left:32px">跨设备搜索 "Nginx" 展示知识流动</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S16: FAQ ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <h2 class="anim">常见问题 <span class="hl">应对</span></h2>
+    <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0;overflow:hidden">
+      <div class="card anim" style="padding:16px;border-color:rgba(255,82,82,.12)">
+        <h4 style="color:var(--red);font-size:17px;margin-bottom:6px">❓ "AI 回答没用到技能框架"</h4>
+        <p style="font-size:15px;color:var(--text2);line-height:1.5">打开 Logs → 过滤 skill_search，展示 AI 确实搜索了技能。若未匹配，可能是问法太笼统，换成 "用四层框架分析 A 股" 效果更好。</p>
+      </div>
+      <div class="card anim" style="padding:16px;border-color:rgba(255,82,82,.12)">
+        <h4 style="color:var(--red);font-size:17px;margin-bottom:6px">❓ "服务端重启后连不上"</h4>
+        <p style="font-size:15px;color:var(--text2);line-height:1.5">提前确认 gateway 已启动且服务端口 18800 可用。Settings 页面「连接状态」区域会实时显示。如果需要，提前重启好。</p>
+      </div>
+      <div class="card anim" style="padding:16px;border-color:rgba(255,82,82,.12)">
+        <h4 style="color:var(--red);font-size:17px;margin-bottom:6px">❓ "为什么只有 1 个技能？"</h4>
+        <p style="font-size:15px;color:var(--text2);line-height:1.5">技能生成条件严格：6+ memory chunks + 任务完成 + LLM 评估。大多数短对话不会触发。这恰恰说明 MemOS 是有质量把控的，不会生成垃圾技能。</p>
+      </div>
+      <div class="card anim" style="padding:16px;border-color:rgba(0,229,255,.12)">
+        <h4 style="color:var(--cyan);font-size:17px;margin-bottom:6px">💡 "数据安全怎么保证？"</h4>
+        <p style="font-size:15px;color:var(--text2);line-height:1.5">所有数据存本地 SQLite。团队共享通过 Token 认证。不开启团队共享 = 纯本地，不影响使用。展示 Settings 中的 "不开启也不影响" 提示。</p>
+      </div>
+      <div class="card anim" style="padding:16px;border-color:rgba(0,229,255,.12)">
+        <h4 style="color:var(--cyan);font-size:17px;margin-bottom:6px">💡 "和 RAG 有什么区别？"</h4>
+        <p style="font-size:15px;color:var(--text2);line-height:1.5">RAG = 查文档。MemOS = 记忆 + 理解（任务归纳） + 学习（技能生成） + 分享（团队）。RAG 只是 MemOS 的第一层。</p>
+      </div>
+      <div class="card anim" style="padding:16px;border-color:rgba(0,229,255,.12)">
+        <h4 style="color:var(--cyan);font-size:17px;margin-bottom:6px">💡 "需要额外部署什么吗？"</h4>
+        <p style="font-size:15px;color:var(--text2);line-height:1.5">不需要。MemOS 是 OpenClaw 插件，安装即用。数据库用内嵌 SQLite，向量索引自带。唯一需要的是配置一个 Embedding Model（可用 Host 代理）。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S17: CHECKLIST ═══ -->
+<section class="slide pad">
+  <div class="grid-bg"></div>
+  <div class="slide-content">
+    <h2 class="anim">演示日 <span class="hl">Checklist</span></h2>
+    <p class="anim desc" style="margin-bottom:16px">上台前 10 分钟逐项确认</p>
+    <div style="flex:1;display:flex;gap:18px;align-items:stretch;min-height:0">
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:10px">
+        <h3 style="color:var(--cyan);margin-bottom:4px">🔌 环境</h3>
+        <div class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;flex:1">
+          <div style="font-size:17px;color:var(--text)">☐ openclaw gateway 已启动</div>
+          <div style="font-size:17px;color:var(--text)">☐ Memory Viewer 可打开 (18799)</div>
+          <div style="font-size:17px;color:var(--text)">☐ 浏览器已登录</div>
+          <div style="font-size:17px;color:var(--text)">☐ 网络稳定（AI API 可用）</div>
+          <div style="font-size:17px;color:var(--text)">☐ 关闭无关通知和弹窗</div>
+        </div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:10px">
+        <h3 style="color:var(--purple);margin-bottom:4px">📊 数据</h3>
+        <div class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;flex:1">
+          <div style="font-size:17px;color:var(--text)">☐ 记忆页能搜到 "A股" 相关</div>
+          <div style="font-size:17px;color:var(--text)">☐ 任务页有 A 股复盘 (completed)</div>
+          <div style="font-size:17px;color:var(--text)">☐ 技能页有 stock-market 技能</div>
+          <div style="font-size:17px;color:var(--text)">☐ 任务页有 Nginx/Docker 等</div>
+          <div style="font-size:17px;color:var(--text)">☐ 团队共享已开启或可现场开启</div>
+        </div>
+      </div>
+      <div class="anim" style="flex:1;display:flex;flex-direction:column;gap:10px">
+        <h3 style="color:var(--green);margin-bottom:4px">🎤 演讲</h3>
+        <div class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;flex:1">
+          <div style="font-size:17px;color:var(--text)">☐ 本指南已打开备用</div>
+          <div style="font-size:17px;color:var(--text)">☐ 四个 Step 操作路径记牢</div>
+          <div style="font-size:17px;color:var(--text)">☐ 🎤 话术心中有数</div>
+          <div style="font-size:17px;color:var(--text)">☐ 备选方案记好</div>
+          <div style="font-size:17px;color:var(--text)">☐ 自信演示 ✨</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ S18: KEY MESSAGE ═══ -->
+<section class="slide pad" style="display:flex;align-items:center;justify-content:center">
+  <div class="orb" style="width:600px;height:600px;background:radial-gradient(circle,rgba(0,229,255,.06),transparent 70%);top:-200px;left:-100px;animation:orbF 22s ease-in-out infinite"></div>
+  <div class="grid-bg"></div>
+  <div style="position:relative;z-index:1;text-align:center;max-width:1200px">
+    <h2 class="anim" style="font-size:44px;margin-bottom:18px">一句话总结给观众</h2>
+    <div class="anim" style="font-size:48px;font-weight:900;line-height:1.4;margin-bottom:22px">
+      <span class="hl">MemOS</span> 让你的 AI<br>
+      从<span style="color:var(--red)">金鱼记忆</span>进化到<span style="color:var(--green)">过目不忘</span><br>
+      从<span style="color:var(--red)">只会执行</span>进化到<span style="color:var(--green)">学会方法</span><br>
+      从<span style="color:var(--red)">各自为战</span>进化到<span style="color:var(--green)">团队共享</span>
+    </div>
+    <div class="glow-line anim" style="max-width:600px;margin:0 auto"></div>
+  </div>
+</section>
+
+<!-- ═══ S19: THANK YOU ═══ -->
+<section class="slide pad" style="display:flex;align-items:center;justify-content:center">
+  <div class="orb" style="width:600px;height:600px;background:radial-gradient(circle,rgba(0,229,255,.07),transparent 70%);top:-200px;right:-100px;animation:orbF 20s ease-in-out infinite"></div>
+  <div class="orb" style="width:500px;height:500px;background:radial-gradient(circle,rgba(177,108,255,.06),transparent 70%);bottom:-150px;left:-100px;animation:orbF 25s ease-in-out infinite reverse"></div>
+  <div class="grid-bg"></div>
+  <div style="position:relative;z-index:1;text-align:center;max-width:1200px">
+    <div class="anim" style="font-size:72px;margin-bottom:8px">🧠</div>
+    <h1 class="anim" style="font-size:68px;margin-bottom:12px">Good <span class="hl">Luck</span> !</h1>
+    <p class="anim" style="font-size:26px;color:var(--text2);margin-bottom:20px">祝演示顺利</p>
+    <div class="glow-line anim" style="max-width:500px;margin:0 auto 24px"></div>
+    <div class="anim" style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:20px">
+      <div class="card" style="padding:14px 24px;text-align:center">
+        <div style="font-size:14px;color:var(--text3);margin-bottom:4px">Memory Viewer</div>
+        <div style="font-size:18px;color:var(--cyan);font-family:var(--mono)">http://127.0.0.1:18799</div>
+      </div>
+      <div class="card" style="padding:14px 24px;text-align:center">
+        <div style="font-size:14px;color:var(--text3);margin-bottom:4px">Team Server</div>
+        <div style="font-size:18px;color:var(--purple);font-family:var(--mono)">http://127.0.0.1:18800</div>
+      </div>
+    </div>
+    <p class="anim" style="font-size:20px;color:var(--text3)">MemOS — 让 AI 拥有记忆，让团队共享智慧</p>
+    <div class="anim" style="display:inline-block;margin-top:18px;padding:10px 32px;border-radius:99px;background:var(--g1);font-size:22px;font-weight:700;color:#06080f">按 F 键全屏 · ← → 翻页</div>
+  </div>
+</section>
+
+</div>
+<script>
+const S=document.querySelectorAll('.slide'),T=S.length;let cur=0,busy=false;
+function ui(){document.getElementById('ct').textContent=`${cur+1} / ${T}`;document.getElementById('pn').textContent=`${String(cur+1).padStart(2,'0')} / ${String(T).padStart(2,'0')}`;document.getElementById('prog').style.width=`${(cur+1)/T*100}%`}
+function go(i){if(i<0||i>=T||i===cur||busy)return;busy=true;S[cur].classList.remove('active');S[i].classList.add('active');cur=i;ui();setTimeout(()=>busy=false,450)}
+function toggleFS(){if(!document.fullscreenElement&&!document.webkitFullscreenElement){(document.documentElement.requestFullscreen||document.documentElement.webkitRequestFullscreen).call(document.documentElement)}else{(document.exitFullscreen||document.webkitExitFullscreen).call(document)}}
+document.addEventListener('keydown',e=>{if(e.key==='f'||e.key==='F'){e.preventDefault();toggleFS()}if(e.key==='ArrowRight'||e.key==='ArrowDown'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(cur+1)}if(e.key==='ArrowLeft'||e.key==='ArrowUp'||e.key==='PageUp'){e.preventDefault();go(cur-1)}if(e.key==='Home'){e.preventDefault();go(0)}if(e.key==='End'){e.preventDefault();go(T-1)}});
+document.addEventListener('click',e=>{if(e.target.closest('.nav')||e.target.closest('a')||e.target.closest('button'))return;const x=e.clientX/window.innerWidth;if(x>.6)go(cur+1);else if(x<.4)go(cur-1)});
+let tx=0;document.addEventListener('touchstart',e=>{tx=e.touches[0].clientX});document.addEventListener('touchend',e=>{const d=tx-e.changedTouches[0].clientX;if(Math.abs(d)>50){d>0?go(cur+1):go(cur-1)}});
+function scale(){const d=document.getElementById('deck'),s=Math.min(window.innerWidth/1440,window.innerHeight/810);d.style.transform=`translate(-50%,-50%) scale(${s})`}
+window.addEventListener('resize',scale);scale();ui();
+</script>
+</body>
+</html>

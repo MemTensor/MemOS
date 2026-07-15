@@ -27,16 +27,31 @@ class QdrantVecDBConfig(BaseVecDBConfig):
     host: str | None = Field(default=None, description="Host for Qdrant")
     port: int | None = Field(default=None, description="Port for Qdrant")
     path: str | None = Field(default=None, description="Path for Qdrant")
+    url: str | None = Field(default=None, description="Qdrant Cloud/remote endpoint URL")
+    api_key: str | None = Field(default=None, description="Qdrant Cloud API key")
 
     @model_validator(mode="after")
     def set_default_path(self):
-        if all(x is None for x in (self.host, self.port, self.path)):
+        # Only fall back to embedded/local path when no remote host/port/path/url is provided.
+        if all(x is None for x in (self.host, self.port, self.path, self.url)):
             logger.warning(
                 "No host, port, or path provided for Qdrant. Defaulting to local path: %s",
                 settings.MEMOS_DIR / "qdrant",
             )
             self.path = str(settings.MEMOS_DIR / "qdrant")
         return self
+
+
+class MilvusVecDBConfig(BaseVecDBConfig):
+    """Configuration for Milvus vector database."""
+
+    uri: str = Field(..., description="URI for Milvus connection")
+    collection_name: list[str] = Field(..., description="Name(s) of the collection(s)")
+    max_length: int = Field(
+        default=65535, description="Maximum length for string fields (varChar type)"
+    )
+    user_name: str = Field(default="", description="User name for Milvus connection")
+    password: str = Field(default="", description="Password for Milvus connection")
 
 
 class VectorDBConfigFactory(BaseConfig):
@@ -47,6 +62,7 @@ class VectorDBConfigFactory(BaseConfig):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "qdrant": QdrantVecDBConfig,
+        "milvus": MilvusVecDBConfig,
     }
 
     @field_validator("backend")

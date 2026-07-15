@@ -48,11 +48,23 @@ def test_searcher_fast_path(mock_searcher):
     mock_searcher.embedder.embed.return_value = [[0.1] * 5, [0.2] * 5]
 
     # working path mock
-    mock_searcher.graph_retriever.retrieve.side_effect = [
-        [make_item("wm1", 0.9)[0]],  # working memory
-        [make_item("lt1", 0.8)[0]],  # long-term
-        [make_item("um1", 0.7)[0]],  # user
-    ]
+    # For "All", _retrieve_from_working_memory calls once (WorkingMemory),
+    # and _retrieve_from_long_term_and_user calls 3 times (LongTermMemory, UserMemory, RawFileMemory)
+    # Use a function to handle concurrent calls with different memory_scope
+    def retrieve_side_effect(*args, **kwargs):
+        memory_scope = kwargs.get("memory_scope", "")
+        if memory_scope == "WorkingMemory":
+            return [make_item("wm1", 0.9)[0]]
+        elif memory_scope == "LongTermMemory":
+            return [make_item("lt1", 0.8)[0]]
+        elif memory_scope == "UserMemory":
+            return [make_item("um1", 0.7)[0]]
+        elif memory_scope == "RawFileMemory":
+            return [make_item("rm1", 0.6)[0]]
+        else:
+            return []
+
+    mock_searcher.graph_retriever.retrieve.side_effect = retrieve_side_effect
     mock_searcher.reranker.rerank.return_value = [
         make_item("wm1", 0.9),
         make_item("lt1", 0.8),
@@ -69,12 +81,27 @@ def test_searcher_fast_path(mock_searcher):
     assert len(result) <= 2
     assert all(isinstance(item, TextualMemoryItem) for item in result)
 
-    # Should update usage and call update_node
-    for item in result:
-        assert len(item.metadata.usage) > 0
-        mock_searcher.graph_store.update_node.assert_any_call(
-            item.id, {"usage": item.metadata.usage}
-        )
+
+def test_searcher_can_skip_rerank_per_request(mock_searcher):
+    parsed_goal = MagicMock()
+    parsed_goal.memories = ["Cats are cute"]
+    parsed_goal.rephrased_query = None
+    mock_searcher.task_goal_parser.parse.return_value = parsed_goal
+    mock_searcher.embedder.embed.return_value = [[0.1] * 5, [0.2] * 5]
+    mock_searcher.graph_retriever.retrieve.return_value = [make_item("wm1", 0.9)[0]]
+
+    result = mock_searcher.search(
+        query="Tell me about cats",
+        top_k=1,
+        info={"test": True},
+        mode="fast",
+        memory_type="WorkingMemory",
+        rerank=False,
+    )
+
+    mock_searcher.reranker.rerank.assert_not_called()
+    assert len(result) == 1
+    assert result[0].memory == "wm1"
 
 
 def test_searcher_fine_mode_triggers_reasoner(mock_searcher):

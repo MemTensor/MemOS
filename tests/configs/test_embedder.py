@@ -17,7 +17,7 @@ def test_base_embedder_config():
         required_fields=[
             "model_name_or_path",
         ],
-        optional_fields=["embedding_dims"],
+        optional_fields=["embedding_dims", "max_tokens", "headers_extra"],
     )
 
     check_config_instantiation_valid(
@@ -36,7 +36,7 @@ def test_ollama_embedder_config():
         required_fields=[
             "model_name_or_path",
         ],
-        optional_fields=["embedding_dims", "api_base"],
+        optional_fields=["embedding_dims", "max_tokens", "headers_extra", "api_base"],
     )
 
     check_config_instantiation_valid(

@@ -10,6 +10,9 @@ from memos.types import MessageList
 class BaseTextMemory(BaseMemory):
     """Base class for all textual memory implementations."""
 
+    # Default mode configuration - can be overridden by subclasses
+    mode: str = "sync"  # Default mode: 'async' or 'sync'
+
     @abstractmethod
     def __init__(self, config: BaseTextMemoryConfig):
         """Initialize memory with the given configuration."""
@@ -24,7 +27,7 @@ class BaseTextMemory(BaseMemory):
         """
 
     @abstractmethod
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> list[str]:
+    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], **kwargs) -> list[str]:
         """Add memories.
 
         Args:
@@ -47,7 +50,7 @@ class BaseTextMemory(BaseMemory):
         """
 
     @abstractmethod
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID.
         Args:
             memory_id (str): The ID of the memory to retrieve.
@@ -56,7 +59,9 @@ class BaseTextMemory(BaseMemory):
         """
 
     @abstractmethod
-    def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
+    def get_by_ids(
+        self, memory_ids: list[str], user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
         """Get memories by their IDs.
         Args:
             memory_ids (list[str]): List of memory IDs to retrieve.

@@ -19,6 +19,7 @@ class BaseMemCube(ABC):
         self.text_mem: BaseTextMemory
         self.act_mem: BaseActMemory
         self.para_mem: BaseParaMemory
+        self.pref_mem: BaseTextMemory
 
     @abstractmethod
     def load(self, dir: str) -> None:

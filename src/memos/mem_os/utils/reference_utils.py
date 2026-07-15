@@ -142,12 +142,21 @@ def prepare_reference_data(memories_list: list[TextualMemoryItem]) -> list[dict]
     # Prepare reference data
     reference = []
     for memories in memories_list:
-        memories_json = memories.model_dump()
-        memories_json["metadata"]["ref_id"] = f"{memories.id.split('-')[0]}"
-        memories_json["metadata"]["embedding"] = []
-        memories_json["metadata"]["sources"] = []
-        memories_json["metadata"]["memory"] = memories.memory
-        memories_json["metadata"]["id"] = memories.id
-        reference.append({"metadata": memories_json["metadata"]})
+        if isinstance(memories, TextualMemoryItem):
+            memories_json = memories.model_dump()
+            memories_json["metadata"]["ref_id"] = f"{memories.id.split('-')[0]}"
+            memories_json["metadata"]["embedding"] = []
+            memories_json["metadata"]["sources"] = []
+            memories_json["metadata"]["memory"] = memories.memory
+            memories_json["metadata"]["id"] = memories.id
+            reference.append({"metadata": memories_json["metadata"]})
+        else:
+            memories_json = memories
+            memories_json["metadata"]["ref_id"] = f"{memories_json['id'].split('-')[0]}"
+            memories_json["metadata"]["embedding"] = []
+            memories_json["metadata"]["sources"] = []
+            memories_json["metadata"]["memory"] = memories_json["memory"]
+            memories_json["metadata"]["id"] = memories_json["id"]
+            reference.append({"metadata": memories_json["metadata"]})
 
     return reference

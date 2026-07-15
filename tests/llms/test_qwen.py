@@ -12,12 +12,14 @@ class TestQwenLLM(unittest.TestCase):
         """Test QwenLLM non-streaming response generation with and without <think> prefix removal."""
 
         # Simulated full response content with <think> tag
-        full_content = "<think>Analyzing your request...</think>Hello, world!"
+        full_content = "Hello from DeepSeek!"
+        reasoning_content = "Thinking in progress..."
 
         # Prepare the mock response object with expected structure
         mock_response = MagicMock()
         mock_response.model_dump_json.return_value = '{"mocked": "true"}'
         mock_response.choices[0].message.content = full_content
+        mock_response.choices[0].message.reasoning_content = reasoning_content
 
         # Create config with remove_think_prefix = False
         config_with_think = QwenLLMConfig.model_validate(
@@ -37,7 +39,7 @@ class TestQwenLLM(unittest.TestCase):
         llm_with_think.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         response_with_think = llm_with_think.generate([{"role": "user", "content": "Hi"}])
-        self.assertEqual(response_with_think, full_content)
+        self.assertEqual(response_with_think, f"<think>{reasoning_content}</think>{full_content}")
 
         # Create config with remove_think_prefix = True
         config_without_think = config_with_think.model_copy(update={"remove_think_prefix": True})
@@ -47,7 +49,7 @@ class TestQwenLLM(unittest.TestCase):
         llm_without_think.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         response_without_think = llm_without_think.generate([{"role": "user", "content": "Hi"}])
-        self.assertEqual(response_without_think, "Hello, world!")
+        self.assertEqual(response_without_think, full_content)
         self.assertNotIn("<think>", response_without_think)
 
     def test_qwen_llm_generate_stream(self):

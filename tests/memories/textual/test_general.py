@@ -100,7 +100,7 @@ class TestGeneralTextMemory(unittest.TestCase):
         self.assertEqual(embedding, expected_embedding)
 
     def test_extract(self):
-        # 准备输入
+        # Prepare input
         messages = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi there"},
@@ -108,10 +108,10 @@ class TestGeneralTextMemory(unittest.TestCase):
         mock_response = '{"memory list": [{"key": "greeting", "value": "Hello", "tags": ["test"]}]}'
         self.memory.extractor_llm.generate.return_value = mock_response
 
-        # 执行
+        # Execute
         result = self.memory.extract(messages)
 
-        # 验证
+        # Verify
         self.assertEqual(len(result), 1)
         self.assertIsInstance(result[0], TextualMemoryItem)
         self.assertEqual(result[0].memory, "Hello")

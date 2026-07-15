@@ -61,6 +61,8 @@ class NaiveTextMemory(BaseTextMemory):
 
     def __init__(self, config: NaiveTextMemoryConfig):
         """Initialize memory with the given configuration."""
+        # Set mode from class default or override if needed
+        self.mode = getattr(self.__class__, "mode", "sync")
         self.config = config
         self.extractor_llm = LLMFactory.from_config(config.extractor_llm)
         self.memories = []
@@ -125,7 +127,7 @@ class NaiveTextMemory(BaseTextMemory):
         # Convert search results to TextualMemoryItem objects
         return [TextualMemoryItem(**memory) for memory, _ in sims[:top_k]]
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID."""
         for memory in self.memories:
             if memory["id"] == memory_id:

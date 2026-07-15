@@ -1,0 +1,142 @@
+/* DM Sans Font Faces */
+@font-face {
+  font-family: 'DM Sans';
+  src: url('/fonts/DMSans-Light.ttf') format('truetype');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  src: url('/fonts/DMSans-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  src: url('/fonts/DMSans-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  src: url('/fonts/DMSans-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'DM Sans';
+  src: url('/fonts/DMSans-Black.ttf') format('truetype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Shadcn-inspired theme variables */
+:root {
+  --background: 0 0% 97.6%; /* #f9f9f9 */
+  --foreground: 0 0% 12.5%; /* #202020 */
+  --card: 0 0% 98.8%; /* #fcfcfc */
+  --card-foreground: 0 0% 12.5%; /* #202020 */
+  --popover: 0 0% 98.8%; /* #fcfcfc */
+  --popover-foreground: 0 0% 12.5%; /* #202020 */
+  --primary: 123 30% 20%; /* #213c20 */
+  --primary-foreground: 0 0% 100%; /* #ffffff */
+  --secondary: 120 14% 85%; /* #d8dfd7 */
+  --secondary-foreground: 100 20% 18%; /* #2b391e */
+  --muted: 0 0% 93.7%; /* #efefef */
+  --muted-foreground: 0 0% 39.2%; /* #646464 */
+  --accent: 0 0% 91%; /* #e8e8e8 */
+  --accent-foreground: 0 0% 12.5%; /* #202020 */
+  --destructive: 8 78% 54%; /* #e54d2e */
+  --destructive-foreground: 0 0% 100%; /* #ffffff */
+  --border: 12 8% 90%; /* #eae2e1 */
+  --input: 0 0% 84.7%; /* #d8d8d8 */
+  --ring: 20 25% 33%; /* #644a40 */
+  --radius: 0.5rem;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+
+/* Drag region for frameless window - these work when loaded in Electron BrowserView */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Focus visible for accessibility */
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* Base styles */
+@layer base {
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* Prevent text selection in UI elements */
+  button,
+  [role='button'] {
+    @apply select-none;
+  }
+}
+
+/* Placeholder font family for textareas */
+textarea::-webkit-input-placeholder {
+  font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+}
+
+textarea:-ms-input-placeholder {
+  font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+}
+
+textarea:-moz-placeholder {
+  font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+}
+
+textarea::-moz-placeholder {
+  font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+}
+
+textarea::placeholder {
+  font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+}
+
+/* Component utilities - removed as we're using shadcn components now */

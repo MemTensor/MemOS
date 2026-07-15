@@ -1,0 +1,20 @@
+services:
+  e2e-tests:
+    build:
+      context: ../../../..
+      dockerfile: apps/desktop/e2e/docker/Dockerfile
+    environment:
+      - E2E_SKIP_AUTH=1
+      - E2E_MOCK_TASK_EVENTS=1
+      - NODE_ENV=test
+      - DISPLAY=:99
+      - DOCKER_ENV=1
+    volumes:
+      # Mount test results for viewing on host
+      - ../test-results:/app/apps/desktop/e2e/test-results
+      - ../html-report:/app/apps/desktop/e2e/html-report
+    # Increase shared memory for Chromium
+    shm_size: '2gb'
+    # Allow running privileged for Electron sandbox
+    security_opt:
+      - seccomp:unconfined

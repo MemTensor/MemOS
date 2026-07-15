@@ -47,6 +47,17 @@ class TestSentenceChunker(unittest.TestCase):
             self.assertEqual(len(chunks), 2)
             # Validate the properties of the first chunk
             mock_chunker.chunk.assert_called_once_with(text)
-            self.assertEqual(chunks[0].text, "This is the first sentence.")
-            self.assertEqual(chunks[0].token_count, 6)
-            self.assertEqual(chunks[0].sentences, ["This is the first sentence."])
+
+            # Handle both return types: list[str] | list[Chunk]
+            if isinstance(chunks[0], str):
+                # If returns list[str], check the string value
+                self.assertEqual(chunks[0], "This is the first sentence.")
+                self.assertEqual(chunks[1], "This is the second sentence.")
+            else:
+                # If returns list[Chunk], check the Chunk properties
+                from memos.chunkers.base import Chunk
+
+                self.assertIsInstance(chunks[0], Chunk)
+                self.assertEqual(chunks[0].text, "This is the first sentence.")
+                self.assertEqual(chunks[0].token_count, 6)
+                self.assertEqual(chunks[0].sentences, ["This is the first sentence."])

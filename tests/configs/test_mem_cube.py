@@ -28,7 +28,7 @@ def test_base_mem_cube_config():
 def test_general_mem_cube_config():
     check_config_base_class(
         GeneralMemCubeConfig,
-        factory_fields=["text_mem", "act_mem", "para_mem"],
+        factory_fields=["text_mem", "act_mem", "para_mem", "pref_mem"],
         required_fields=[],
         optional_fields=["config_filename", "user_id", "cube_id"],
         reserved_fields=["model_schema"],

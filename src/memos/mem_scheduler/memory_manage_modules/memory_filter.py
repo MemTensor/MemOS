@@ -2,7 +2,7 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
-from memos.mem_scheduler.utils.misc_utils import extract_json_dict
+from memos.mem_scheduler.utils.misc_utils import extract_json_obj
 from memos.memories.textual.tree import TextualMemoryItem
 
 
@@ -66,7 +66,7 @@ class MemoryFilter(BaseSchedulerModule):
 
         try:
             # Parse JSON response
-            response = extract_json_dict(response)
+            response = extract_json_obj(response)
             logger.debug(f"Parsed JSON response: {response}")
             relevant_indices = response["relevant_memories"]
             filtered_count = response["filtered_count"]
@@ -164,7 +164,7 @@ class MemoryFilter(BaseSchedulerModule):
 
         try:
             # Parse JSON response
-            response = extract_json_dict(response)
+            response = extract_json_obj(response)
             logger.debug(f"Parsed JSON response: {response}")
             kept_indices = response["kept_memories"]
             redundant_groups = response.get("redundant_groups", [])
@@ -226,8 +226,6 @@ class MemoryFilter(BaseSchedulerModule):
         Note:
             If LLM filtering fails, returns all memories (conservative approach)
         """
-        success_flag = False
-
         if not memories:
             logger.info("No memories to filter for unrelated and redundant - returning empty list")
             return [], True
@@ -265,7 +263,7 @@ class MemoryFilter(BaseSchedulerModule):
 
         try:
             # Parse JSON response
-            response = extract_json_dict(response)
+            response = extract_json_obj(response)
             logger.debug(f"Parsed JSON response: {response}")
             kept_indices = response["kept_memories"]
             unrelated_removed_count = response.get("unrelated_removed_count", 0)

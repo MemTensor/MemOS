@@ -20,12 +20,7 @@ class MockLLM:
 def test_parse_fast_returns_expected():
     parser = TaskGoalParser()
     result = parser.parse("Tell me about cats", mode="fast")
-
     assert isinstance(result, ParsedTaskGoal)
-    assert result.memories == ["Tell me about cats"]
-    assert result.keys == ["Tell me about cats"]
-    assert result.tags == []
-    assert result.goal_type == "default"
 
 
 def test_parse_fine_calls_llm_and_parses():

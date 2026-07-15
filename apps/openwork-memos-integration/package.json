@@ -1,0 +1,30 @@
+{
+  "name": "accomplish",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The open source AI coworker that lives on your desktop",
+  "author": "Accomplish Inc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/accomplish-ai/openwork.git"
+  },
+  "scripts": {
+    "dev": "pnpm -F @accomplish/desktop dev",
+    "build": "pnpm -r build",
+    "build:desktop": "pnpm -F @accomplish/desktop build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r clean && rm -rf node_modules"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "devDependencies": {
+    "next": "^15.1.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

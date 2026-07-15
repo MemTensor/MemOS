@@ -20,7 +20,7 @@ def main():
             "extractor_llm": {
                 "backend": "vllm",
                 "config": {
-                    "model_name_or_path": "/mnt/afs/models/hf_models/Qwen2.5-7B",
+                    "model_name_or_path": "Qwen/Qwen3-0.6B",
                     "api_base": "http://localhost:8088/v1",
                     "temperature": 0.7,
                     "max_tokens": 1024,

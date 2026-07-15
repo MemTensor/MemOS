@@ -13,3 +13,4 @@ class ParsedTaskGoal:
     rephrased_query: str | None = None
     internet_search: bool = False
     goal_type: str | None = None  # e.g., 'default', 'explanation', etc.
+    context: str = ""

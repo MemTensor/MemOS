@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from memos.utils import timed
+
 from .base import BaseReranker
 
 
@@ -10,6 +12,7 @@ if TYPE_CHECKING:
 
 
 class NoopReranker(BaseReranker):
+    @timed
     def rerank(
         self, query: str, graph_results: list, top_k: int, **kwargs
     ) -> list[tuple[TextualMemoryItem, float]]:

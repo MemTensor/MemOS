@@ -27,18 +27,24 @@ class NodeHandler:
         self.llm = llm
         self.embedder = embedder
 
-    def detect(self, memory, top_k: int = 5, scope=None):
+    def detect(self, memory, top_k: int = 5, scope=None, user_name: str | None = None):
         # 1. Search for similar memories based on embedding
         embedding = memory.metadata.embedding
         embedding_candidates_info = self.graph_store.search_by_embedding(
-            embedding, top_k=top_k, scope=scope, threshold=self.EMBEDDING_THRESHOLD
+            embedding,
+            top_k=top_k,
+            scope=scope,
+            threshold=self.EMBEDDING_THRESHOLD,
+            user_name=user_name,
         )
         # 2. Filter based on similarity threshold
         embedding_candidates_ids = [
             info["id"] for info in embedding_candidates_info if info["id"] != memory.id
         ]
         # 3. Judge conflicts using LLM
-        embedding_candidates = self.graph_store.get_nodes(embedding_candidates_ids)
+        embedding_candidates = self.graph_store.get_nodes(
+            embedding_candidates_ids, user_name=user_name
+        )
         detected_relationships = []
         for embedding_candidate in embedding_candidates:
             embedding_candidate = TextualMemoryItem.from_dict(embedding_candidate)
@@ -67,13 +73,20 @@ class NodeHandler:
                 pass
         return detected_relationships
 
-    def resolve(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem, relation) -> None:
+    def resolve(
+        self,
+        memory_a: TextualMemoryItem,
+        memory_b: TextualMemoryItem,
+        relation,
+        user_name: str | None = None,
+    ) -> None:
         """
         Resolve detected conflicts between two memory items using LLM fusion.
         Args:
             memory_a: The first conflicting memory item.
             memory_b: The second conflicting memory item.
             relation: relation
+            user_name: Optional user name for multi-tenant isolation.
         Returns:
             A fused TextualMemoryItem representing the resolved memory.
         """
@@ -105,17 +118,22 @@ class NodeHandler:
                 logger.warning(
                     f"{relation} between {memory_a.id} and {memory_b.id} could not be resolved. "
                 )
-                self._hard_update(memory_a, memory_b)
+                self._hard_update(memory_a, memory_b, user_name=user_name)
             # —————— 2.2 Conflict resolved, update metadata and memory ————
             else:
                 fixed_metadata = self._merge_metadata(answer, memory_a.metadata, memory_b.metadata)
                 merged_memory = TextualMemoryItem(memory=answer, metadata=fixed_metadata)
                 logger.info(f"Resolved result: {merged_memory}")
-                self._resolve_in_graph(memory_a, memory_b, merged_memory)
+                self._resolve_in_graph(memory_a, memory_b, merged_memory, user_name=user_name)
         except json.decoder.JSONDecodeError:
             logger.error(f"Failed to parse LLM response: {response}")
 
-    def _hard_update(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem):
+    def _hard_update(
+        self,
+        memory_a: TextualMemoryItem,
+        memory_b: TextualMemoryItem,
+        user_name: str | None = None,
+    ):
         """
         Hard update: compare updated_at, keep the newer one, overwrite the older one's metadata.
         """
@@ -125,7 +143,7 @@ class NodeHandler:
         newer_mem = memory_a if time_a >= time_b else memory_b
         older_mem = memory_b if time_a >= time_b else memory_a
 
-        self.graph_store.delete_node(older_mem.id)
+        self.graph_store.delete_node(older_mem.id, user_name=user_name)
         logger.warning(
             f"Delete older memory {older_mem.id}: <{older_mem.memory}> due to conflict with {newer_mem.id}: <{newer_mem.memory}>"
         )
@@ -135,13 +153,21 @@ class NodeHandler:
         conflict_a: TextualMemoryItem,
         conflict_b: TextualMemoryItem,
         merged: TextualMemoryItem,
+        user_name: str | None = None,
     ):
-        edges_a = self.graph_store.get_edges(conflict_a.id, type="ANY", direction="ANY")
-        edges_b = self.graph_store.get_edges(conflict_b.id, type="ANY", direction="ANY")
+        edges_a = self.graph_store.get_edges(
+            conflict_a.id, type="ANY", direction="ANY", user_name=user_name
+        )
+        edges_b = self.graph_store.get_edges(
+            conflict_b.id, type="ANY", direction="ANY", user_name=user_name
+        )
         all_edges = edges_a + edges_b
 
         self.graph_store.add_node(
-            merged.id, merged.memory, merged.metadata.model_dump(exclude_none=True)
+            merged.id,
+            merged.memory,
+            merged.metadata.model_dump(exclude_none=True),
+            user_name=user_name,
         )
 
         for edge in all_edges:
@@ -150,13 +176,15 @@ class NodeHandler:
             if new_from == new_to:
                 continue
             # Check if the edge already exists before adding
-            if not self.graph_store.edge_exists(new_from, new_to, edge["type"], direction="ANY"):
-                self.graph_store.add_edge(new_from, new_to, edge["type"])
+            if not self.graph_store.edge_exists(
+                new_from, new_to, edge["type"], direction="ANY", user_name=user_name
+            ):
+                self.graph_store.add_edge(new_from, new_to, edge["type"], user_name=user_name)
 
-        self.graph_store.update_node(conflict_a.id, {"status": "archived"})
-        self.graph_store.update_node(conflict_b.id, {"status": "archived"})
-        self.graph_store.add_edge(conflict_a.id, merged.id, type="MERGED_TO")
-        self.graph_store.add_edge(conflict_b.id, merged.id, type="MERGED_TO")
+        self.graph_store.update_node(conflict_a.id, {"status": "archived"}, user_name=user_name)
+        self.graph_store.update_node(conflict_b.id, {"status": "archived"}, user_name=user_name)
+        self.graph_store.add_edge(conflict_a.id, merged.id, type="MERGED_TO", user_name=user_name)
+        self.graph_store.add_edge(conflict_b.id, merged.id, type="MERGED_TO", user_name=user_name)
         logger.debug(
             f"Archive {conflict_a.id} and {conflict_b.id}, and inherit their edges to {merged.id}."
         )

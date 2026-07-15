@@ -4,11 +4,13 @@ from memos.configs.mem_os import MOSConfig
 from memos.log import get_logger
 from memos.mem_os.main import MOS
 from memos.mem_scheduler.schemas.general_schemas import (
-    ANSWER_LABEL,
     MONITOR_WORKING_MEMORY_TYPE,
-    QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ANSWER_TASK_LABEL,
+    QUERY_TASK_LABEL,
+)
 
 
 logger = get_logger(__name__)
@@ -427,8 +429,7 @@ class MOSForTestScheduler(MOS):
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
-                    label=QUERY_LABEL,
+                    label=QUERY_TASK_LABEL,
                     content=query,
                     timestamp=datetime.now(),
                 )
@@ -485,18 +486,20 @@ class MOSForTestScheduler(MOS):
         past_key_values = None
 
         if self.config.enable_activation_memory:
-            assert self.config.chat_model.backend == "huggingface", (
-                "Activation memory only used for huggingface backend."
-            )
-            # TODO this only one cubes
-            for mem_cube_id, mem_cube in self.mem_cubes.items():
-                if mem_cube_id not in user_cube_ids:
-                    continue
-                if mem_cube.act_mem:
-                    kv_cache = next(iter(mem_cube.act_mem.get_all()), None)
-                    past_key_values = (
-                        kv_cache.memory if (kv_cache and hasattr(kv_cache, "memory")) else None
-                    )
+            if self.config.chat_model.backend != "huggingface":
+                logger.error(
+                    "Activation memory only used for huggingface backend. Skipping activation memory."
+                )
+            else:
+                # TODO this only one cubes
+                for mem_cube_id, mem_cube in self.mem_cubes.items():
+                    if mem_cube_id not in user_cube_ids:
+                        continue
+                    if mem_cube.act_mem:
+                        kv_cache = next(iter(mem_cube.act_mem.get_all()), None)
+                        past_key_values = (
+                            kv_cache.memory if (kv_cache and hasattr(kv_cache, "memory")) else None
+                        )
                     break
             # Generate response
             response = self.chat_llm.generate(current_messages, past_key_values=past_key_values)
@@ -516,8 +519,7 @@ class MOSForTestScheduler(MOS):
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
-                    label=ANSWER_LABEL,
+                    label=ANSWER_TASK_LABEL,
                     content=response,
                     timestamp=datetime.now(),
                 )

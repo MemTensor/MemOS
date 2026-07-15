@@ -1,7 +1,10 @@
 <div align="center">
-  <a href="https://memos.openmem.net/">
-    <img src="https://statics.memtensor.com.cn/memos/memos-banner.gif" alt="MemOS Banner">
-  </a>
+  <h1 align="center">
+    <a href="https://memos.openmem.net/">
+      <img src="https://statics.memtensor.com.cn/logo/memos_color_m.png" alt="MemOS Logo" width="48"/>
+    </a>&nbsp;
+    MemOS 2.0&ensp;Stardust（星尘）
+  </h1>
 
 <h1 align="center">
   <img src="https://statics.memtensor.com.cn/logo/memos_color_m.png" alt="MemOS Logo" width="50"/> MemOS 1.0: 星河 (Stellar)  <img src="https://img.shields.io/badge/status-Preview-blue" alt="Preview Badge"/>
@@ -36,176 +39,261 @@
       <img src="https://img.shields.io/badge/License-Apache_2.0-green.svg?logo=apache" alt="License">
     </a>
   </p>
+
+  <p align="center">
+    <strong>Give your Agent persistent memory and the ability to grow.</strong><br/>
+  </p>
+
+  <p align="center">
+    <strong>English</strong> | <a href="README_ZH.md">中文</a>
+  </p>
+</div>
+
+
+<div align="center">
+  <img width="1660" height="664" alt="MemOS Plugin Banner" src="https://github.com/user-attachments/assets/9d15dde2-196e-4f71-a364-dd5a33062117" />
 </div>
 
 ---
 
-<img src="https://statics.memtensor.com.cn/memos/sota_score.jpg" alt="SOTA SCORE">
+## 👾 MemOS: Memory Operating System for LLM & AI Agents
 
-**MemOS** is an operating system for Large Language Models (LLMs) that enhances them with long-term memory capabilities. It allows LLMs to store, retrieve, and manage information, enabling more context-aware, consistent, and personalized interactions.
+**MemOS** is a Memory Operating System for LLMs and AI agents that unifies **store / retrieve / manage** for long-term memory, enabling **context-aware and personalized** interactions with **KB**, **multi-modal**, **tool memory**, and **enterprise-grade** optimizations built in.
 
-- **Website**: https://memos.openmem.net/
-- **Documentation**: https://memos-docs.openmem.net/home/overview/
-- **API Reference**: https://memos-docs.openmem.net/docs/api/info/
-- **Source Code**: https://github.com/MemTensor/MemOS
+### Key Features
 
-## 📈 Performance Benchmark
+- **Unified Memory API**: A single API to add, retrieve, edit, and delete memory—structured as a graph, inspectable and editable by design, not a black-box embedding store.
+- **Multi-Modal Memory**: Natively supports text, images, tool traces, and personas, retrieved and reasoned together in one memory system.
+- **Multi-Cube Knowledge Base Management**: Manage multiple knowledge bases as composable memory cubes, enabling isolation, controlled sharing, and dynamic composition across users, projects, and agents.
+- **Asynchronous Ingestion via MemScheduler**: Run memory operations asynchronously with millisecond-level latency for production stability under high concurrency.
+- **Memory Feedback & Correction**: Refine memory with natural-language feedback—correcting, supplementing, or replacing existing memories over time.
 
-MemOS demonstrates significant improvements over baseline memory solutions in multiple reasoning tasks.
 
-| Model       | Avg. Score | Multi-Hop | Open Domain | Single-Hop | Temporal Reasoning |
-|-------------|------------|-----------|-------------|------------|---------------------|
-| **OpenAI**  | 0.5275     | 0.6028    | 0.3299      | 0.6183     | 0.2825              |
-| **MemOS**   | **0.7331** | **0.6430** | **0.5521**   | **0.7844** | **0.7321**          |
-| **Improvement** | **+38.98%** | **+6.67%** | **+67.35%** | **+26.86%** | **+159.15%**       |
+### News
 
-> 💡 **Temporal reasoning accuracy improved by 159% compared to the OpenAI baseline.**
+- **2026-07-02** · 🏆 **MemOS Advances Agent and User Memory Benchmarks**
+  With MemOS, **OpenClaw** improves average task completion from **36.63% to 50.87%** across five agent tasks. MemOS also achieves **88.83 on LoCoMo** and **89.20 on LongMemEval**, and leads in **OmniMemEval**, a unified evaluation of 14 commercial memory products across ten datasets.
 
-### Details of End-to-End Evaluation on LOCOMO
+- **2026-05-09** · 🧠 **memos-local-plugin 2.0**
+  Official local memory plugin for **Hermes Agent** and **OpenClaw**. One core powers self-evolving memory across L1 traces, L2 policies, L3 world models, and crystallized Skills, with local-first storage and feedback-driven retrieval.
 
-> [!NOTE]
-> Comparison of LLM Judge Scores across five major tasks in the LOCOMO benchmark. Each bar shows the mean evaluation score judged by LLMs for a given method-task pair, with standard deviation as error bars. MemOS-0630 consistently outperforms baseline methods (LangMem, Zep, OpenAI, Mem0) across all task types, especially in multi-hop and temporal reasoning scenarios.
+- **2026-04-10** · 👧🏻 **MemOS Hermes Agent Local Plugin**
+  Official Hermes Agent memory plugins launched: Hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution, multi-agent collaboration. 100% local, zero cloud dependency.
+  
+- **2026-03-08** · 🦞 **MemOS OpenClaw Plugin — Cloud & Local**
+  Official OpenClaw memory plugins launched. **Cloud Plugin**: hosted memory service with 72% lower token usage and multi-agent memory sharing ([MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)). **Local Plugin** (`v1.0.0`): 100% on-device memory with persistent SQLite, hybrid search (FTS5 + vector), task summarization & skill evolution, multi-agent collaboration, and a full Memory Viewer dashboard.
 
-<img src="https://statics.memtensor.com.cn/memos/score_all_end2end.jpg" alt="END2END SCORE">
+## 📊 Performance
 
-## ✨ Key Features
+MemOS leads across multiple benchmarks — evaluated against mainstream commercial memory products across 5 user memory and 5 agent memory tasks.
 
-- **🧠 Memory-Augmented Generation (MAG)**: Provides a unified API for memory operations, integrating with LLMs to enhance chat and reasoning with contextual memory retrieval.
-- **📦 Modular Memory Architecture (MemCube)**: A flexible and modular architecture that allows for easy integration and management of different memory types.
-- **💾 Multiple Memory Types**:
-    - **Textual Memory**: For storing and retrieving unstructured or structured text knowledge.
-    - **Activation Memory**: Caches key-value pairs (`KVCacheMemory`) to accelerate LLM inference and context reuse.
-    - **Parametric Memory**: Stores model adaptation parameters (e.g., LoRA weights).
-- **🔌 Extensible**: Easily extend and customize memory modules, data sources, and LLM integrations.
 
-## 🚀 Getting Started
+| Benchmark       | Score |
+| --------------- | ----- |
+| LoCoMo          | 88.83 |
+| LongMemEval     | 89.20 |
+| PersonaMem v2   | 40.58 |
+| HaluMem         | 80.91 |
+| BEAM-10M        | 56.75 |
+| GDPVal          | 62.07 |
+| LiveCodeBench   | 64.96 |
+| OmniMath        | 61.00 |
+| SWE-Bench       | 38.46 |
+| BrowseComp-Plus | 23.85 |
 
-Here's a quick example of how to create a **`MemCube`**, load it from a directory, access its memories, and save it.
+
+Evaluated via OmniMemEval — [https://github.com/MemTensor/OmniMemEval](https://github.com/MemTensor/OmniMemEval).
+
+## 🎯 What MemOS Is For
+
+MemOS gives AI agents long-term memory. Common uses:
+
+- AI assistants with consistent, context-rich conversations
+- Customer support that recalls past tickets and user history
+- Personalized agents that adapt to individual preferences
+- Multi-agent collaboration with shared or isolated memory
+
+## 🚀 Quick Start
+
+MemOS is built around four entry points. Pick the one that matches your scenario.
+
+
+|              | Cloud API               | Self-Host          | OpenClaw Cloud Plugin    | Local Plugin                    |
+| ------------ | ----------------------- | ------------------ | ------------------------ | ------------------------------- |
+| Best for     | Your app, fully managed | Teams on own infra | OpenClaw users, zero ops | Hermes/OpenClaw, 100% on-device |
+| Setup        | Get an API key          | docker compose up  | openclaw plugins install | npm install + config            |
+| Infra needed | None (hosted)           | Neo4j + Qdrant     | None (uses MemOS Cloud)  | None (local SQLite)             |
+| Data lives   | MemOS Cloud             | Your servers       | MemOS Cloud              | Your machine                    |
+
+### ☁️ Use the Cloud API (Hosted)
+
+You want to add memory to your app through a fully managed service — no infrastructure to run.
+
+**1. Get an API key:**
+
+- Sign up on the [MemOS dashboard](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing).
+- Go to **API Keys** and copy your key (starts with `mpg-`). Keep it server-side.
+
+**2. Add and search memories:**
 
 ```python
-from memos.mem_cube.general import GeneralMemCube
+import requests
 
-# Initialize a MemCube from a local directory
-mem_cube = GeneralMemCube.init_from_dir("examples/data/mem_cube_2")
+API_KEY = "mpg-..."                  # keep this server-side
+base = "https://memos.memtensor.cn/api/openmem/v1"
+headers = {"Authorization": f"Token {API_KEY}", "Content-Type": "application/json"}
 
-# Access and print all memories
-print("--- Textual Memories ---")
-for item in mem_cube.text_mem.get_all():
-    print(item)
+# 1. Add a memory
+requests.post(f"{base}/add/message", headers=headers, json={
+    "user_id": "alice",
+    "conversation_id": "conv_001",
+    "messages": [{"role": "user", "content": "I like strawberry"}],
+})
 
-print("\n--- Activation Memories ---")
-for item in mem_cube.act_mem.get_all():
-    print(item)
-
-# Save the MemCube to a new directory
-mem_cube.dump("tmp/mem_cube")
+# 2. Search memories
+res = requests.post(f"{base}/search/memory", headers=headers, json={
+    "query": "What do I like?",
+    "user_id": "alice",
+})
+print(res.json())
 ```
 
-What about **`MOS`** (Memory Operating System)? It's a higher-level orchestration layer that manages multiple MemCubes and provides a unified API for memory operations. Here's a quick example of how to use MOS:
+**Next steps:**
+
+- [MemOS Cloud Getting Started](https://memos-docs.openmem.net/memos_cloud/quick_start/) — connect to MemOS Cloud and enable memory in minutes.
+- [MemOS Cloud Platform](https://memos.openmem.net/?from=/quickstart/) — explore the Cloud dashboard, features, and workflows.
+
+### 🖥️ Self-Host the MemOS Service
+
+You want to run MemOS as a REST service on your own machine or cluster.
+
+**Option A — Docker (recommended):**
+
+```bash
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+cp docker/.env.example .env          # fill in your API keys in .env
+cd docker
+docker compose up                    # starts MemOS API + Neo4j + Qdrant
+```
+
+The API is served at `http://localhost:8000`.
+
+**Option B — Run with uvicorn (without Docker):**
+
+```bash
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+cp docker/.env.example .env          # fill in your API keys in .env
+# Ensure Neo4j and Qdrant are running, then:
+cd src
+uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+See `[docker/.env.example](./docker/.env.example)` for all configuration options (LLM provider, embedder, vector DB, graph DB, scheduler). The full deployment guide is at [https://memos-docs.openmem.net/open_source/getting_started/rest_api_server/](https://memos-docs.openmem.net/open_source/getting_started/rest_api_server/).
+
+**Try the API:**
 
 ```python
-from memos.configs.mem_os import MOSConfig
-from memos.mem_os.main import MOS
+import requests, json
 
+headers = {"Content-Type": "application/json"}
+base = "http://localhost:8000/product"
 
-# init MOS
-mos_config = MOSConfig.from_json_file("examples/data/config/simple_memos_config.json")
-memory = MOS(mos_config)
+# 1. Create a memory cube
+requests.post(f"{base}/create_cube", headers=headers, data=json.dumps({
+    "cube_name": "Alice's memory",
+    "owner_id": "alice",
+    "cube_id": "alice_cube",
+}))
 
-# create user
-user_id = "b41a34d5-5cae-4b46-8c49-d03794d206f5"
-memory.create_user(user_id=user_id)
+# 2. Add a memory
+requests.post(f"{base}/add", headers=headers, data=json.dumps({
+    "user_id": "alice",
+    "writable_cube_ids": ["alice_cube"],
+    "messages": [{"role": "user", "content": "I like strawberry"}],
+    "async_mode": "sync",
+}))
 
-# register cube for user
-memory.register_mem_cube("examples/data/mem_cube_2", user_id=user_id)
-
-# add memory for user
-memory.add(
-    messages=[
-        {"role": "user", "content": "I like playing football."},
-        {"role": "assistant", "content": "I like playing football too."},
-    ],
-    user_id=user_id,
-)
-
-# Later, when you want to retrieve memory for user
-retrieved_memories = memory.search(query="What do you like?", user_id=user_id)
-# output text_memories: I like playing football, act_memories, para_memories
-print(f"text_memories: {retrieved_memories['text_mem']}")
+# 3. Search memories
+res = requests.post(f"{base}/search", headers=headers, data=json.dumps({
+    "query": "What do I like?",
+    "user_id": "alice",
+    "readable_cube_ids": ["alice_cube"],
+}))
+print(res.json())
 ```
 
-For more detailed examples, please check out the [`examples`](./examples) directory.
+### 🧠 MemOS Plugin: Persistent Memory for Your AI Agents ✨
 
-## 📦 Installation
+Your OpenClaw and Hermes Agents now have **the best** memory system — choose ***Cloud Service*** or ***Self-hosted*** to get started 🏃🏻
 
-### Install via pip
+| 🔌 Plugin                                                                                                     | 💡 Core Features | 🧩 Resources                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 🧠 **[memos-local-plugin 2.0](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin)**         |                  | 🌐 [Website](https://memos-claw.openmem.net/) · 📖 [Docs](https://memos-docs.openmem.net/cn/openclaw/local_plugin) · 🐙 [GitHub](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-plugin) |
+| ☁️ **[OpenClaw Cloud Plugin](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin)** |                  | 🖥️ [MemOS Dashboard](https://memos-dashboard.openmem.net/login/) · 📖 [Full Tutorial](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin)                                                                                                                         |
+
+#### 1. OpenClaw Cloud Plugin
+
+You use OpenClaw and want persistent memory via MemOS Cloud — no infrastructure to run.
+
+- **Repo:** [MemTensor/MemOS ·](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin) `apps/MemOS-Cloud-OpenClaw-Plugin`
+- **NPM:** `[@memtensor/memos-cloud-openclaw-plugin](https://www.npmjs.com/package/@memtensor/memos-cloud-openclaw-plugin)`
+- **Dashboard:** [https://memos-dashboard.openmem.net/](https://memos-dashboard.openmem.net/)
+- **Tutorial:** [https://memos-docs.openmem.net/openclaw/guide](https://memos-docs.openmem.net/openclaw/guide)
+
+Install:
 
 ```bash
-pip install MemoryOS
+openclaw plugins install @memtensor/memos-cloud-openclaw-plugin@latest
+openclaw gateway restart
 ```
 
-### Optional Dependencies
+The plugin recalls memories from MemOS Cloud before each agent run and saves new messages back after the run ends.
 
-MemOS provides several optional dependency groups for different features. You can install them based on your needs.
+#### 2. Local Plugin (memos-local-plugin 2.0)
 
-| Feature               | Package Name              |
-| --------------------- | ------------------------- |
-| Tree Memory           | `MemoryOS[tree-mem]`      |
-| Memory Reader         | `MemoryOS[mem-reader]`    |
-| Memory Scheduler      | `MemoryOS[mem-scheduler]` |
+You use Hermes Agent or OpenClaw and want 100% on-device memory — nothing leaves your machine.
 
-Example installation commands:
+- **Repo:** [MemTensor/MemOS ·](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) `apps/memos-local-plugin`
+- **NPM:** `[@memtensor/memos-local-plugin](https://www.npmjs.com/package/@memtensor/memos-local-plugin)`
+- **Docs:** [https://memos-docs.openmem.net/cn/openclaw/local_plugin](https://memos-docs.openmem.net/cn/openclaw/local_plugin)
+- **Viewer dashboard:** see `apps/memos-local-plugin/viewer/`
+
+Install (macOS / Linux):
 
 ```bash
-pip install MemoryOS[tree-mem]
-pip install MemoryOS[tree-mem,mem-reader]
-pip install MemoryOS[mem-scheduler]
-pip install MemoryOS[tree-mem,mem-reader,mem-scheduler]
+curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash
 ```
 
-### External Dependencies
+Install (Windows PowerShell):
 
-#### Ollama Support
-
-To use MemOS with [Ollama](https://ollama.com/), first install the Ollama CLI:
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
+```powershell
+irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 -OutFile "$env:TEMP\memos-install.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\memos-install.ps1"
 ```
 
-#### Transformers Support
+Requires Node.js and an already-installed OpenClaw or Hermes. The installer auto-detects OpenClaw and Hermes, deploys the plugin to the right agent home (`~/.hermes/plugins/` or `~/.openclaw/plugins/`), writes the initial `config.yaml`, and restarts the agent runtime.
 
-To use functionalities based on the `transformers` library, ensure you have [PyTorch](https://pytorch.org/get-started/locally/) installed (CUDA version recommended for GPU acceleration).
+Features: hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution (L1 traces / L2 policies / L3 world model), multi-agent collaboration, local-first SQLite storage.
 
-#### Download Examples
+## 🤝 Community
 
-To download example code, data and configurations, run the following command:
+- **GitHub Issues:** [https://github.com/MemTensor/MemOS/issues](https://github.com/MemTensor/MemOS/issues)
+- **GitHub Discussions:** [https://github.com/MemTensor/MemOS/discussions](https://github.com/MemTensor/MemOS/discussions)
+- **Discord:** [https://discord.gg/Txbx3gebZR](https://discord.gg/Txbx3gebZR)
+- **WeChat:** scan the QR code to join the group.
 
-```bash
-memos download_examples
-```
+<div align="center">
+  <img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="300" />
+</div>
 
-## 💬 Community & Support
 
-Join our community to ask questions, share your projects, and connect with other developers.
 
-- **GitHub Issues**: Report bugs or request features in our <a href="https://github.com/MemTensor/MemOS/issues" target="_blank">GitHub Issues</a>.
-- **GitHub Pull Requests**: Contribute code improvements via <a href="https://github.com/MemTensor/MemOS/pulls" target="_blank">Pull Requests</a>.
-- **GitHub Discussions**: Participate in our <a href="https://github.com/MemTensor/MemOS/discussions" target="_blank">GitHub Discussions</a> to ask questions or share ideas.
-- **Discord**: Join our <a href="https://discord.gg/Txbx3gebZR" target="_blank">Discord Server</a>.
-- **WeChat**: Scan the QR code to join our WeChat group.
+## 📚 Citation
 
-<img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="600">
-
-## 📜 Citation
-
-> [!NOTE]
-> We publicly released the Short Version on **May 28, 2025**, making it the earliest work to propose the concept of a Memory Operating System for LLMs.
-
-If you use MemOS in your research, we would appreciate citations to our papers.
+If you use MemOS in your research, please cite:
 
 ```bibtex
-
 @article{li2025memos_long,
   title={MemOS: A Memory OS for AI System},
   author={Li, Zhiyu and Song, Shichao and Xi, Chenyang and Wang, Hanyu and Tang, Chen and Niu, Simin and Chen, Ding and Yang, Jiawei and Li, Chunyu and Yu, Qingchen and Zhao, Jihao and Wang, Yezhaohui and Liu, Peng and Lin, Zehao and Wang, Pengyuan and Huo, Jiahao and Chen, Tianyi and Chen, Kai and Li, Kehang and Tao, Zhen and Ren, Junpeng and Lai, Huayi and Wu, Hao and Tang, Bo and Wang, Zhenren and Fan, Zhaoxin and Zhang, Ningyu and Zhang, Linfeng and Yan, Junchi and Yang, Mingchuan and Xu, Tong and Xu, Wei and Chen, Huajun and Wang, Haofeng and Yang, Hongkang and Zhang, Wentao and Xu, Zhi-Qin John and Chen, Siheng and Xiong, Feiyu},
@@ -221,41 +309,10 @@ If you use MemOS in your research, we would appreciate citations to our papers.
   year={2025},
   url={https://arxiv.org/abs/2505.22101}
 }
-
-@article{yang2024memory3,
-author = {Yang, Hongkang and Zehao, Lin and Wenjin, Wang and Wu, Hao and Zhiyu, Li and Tang, Bo and Wenqiang, Wei and Wang, Jinbo and Zeyun, Tang and Song, Shichao and Xi, Chenyang and Yu, Yu and Kai, Chen and Xiong, Feiyu and Tang, Linpeng and Weinan, E},
-title = {Memory$^3$: Language Modeling with Explicit Memory},
-journal = {Journal of Machine Learning},
-year = {2024},
-volume = {3},
-number = {3},
-pages = {300--346},
-issn = {2790-2048},
-doi = {https://doi.org/10.4208/jml.240708},
-url = {https://global-sci.com/article/91443/memory3-language-modeling-with-explicit-memory}
-}
 ```
 
-## 🙌 Contributing
 
-We welcome contributions from the community! Please read our [contribution guidelines](https://memos-docs.openmem.net/contribution/overview) to get started.
 
-## 📄 License
+## ⚖️ License
 
 MemOS is licensed under the [Apache 2.0 License](./LICENSE).
-
-## 📰 News
-
-Stay up to date with the latest MemOS announcements, releases, and community highlights.
-
-
-- **2025-09-10** - 🎉 *MemOS v1.0.1 (Group Q&A Bot)*: Group Q&A bot based on MemOS Cube, updated KV-Cache performance comparison data across different GPU deployment schemes, optimized test benchmarks and statistics, added plaintext memory Reranker sorting, optimized plaintext memory hallucination issues, and Playground version updates. [Try PlayGround](https://memos-playground.openmem.net/login/)
-- **2025-08-07** - 🎉 *MemOS v1.0.0 (MemCube Release)*: First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
-- **2025-07-29** – 🎉 *MemOS v0.2.2 (Nebula Update)*: Internet search+Nebula DB integration, refactored memory scheduler, KV Cache stress tests, MemCube Cookbook release (CN/EN), and 4b/1.7b/0.6b memory ops models.
-- **2025-07-21** – 🎉 *MemOS v0.2.1 (Neo Release)*: Lightweight Neo version with plaintext+KV Cache functionality, Docker/multi-tenant support, MCP expansion, and new Cookbook/Mud game examples.
-- **2025-07-11** – 🎉 *MemOS v0.2.0 (Cross-Platform)*: Added doc search/bilingual UI, MemReader-4B (local deploy), full Win/Mac/Linux support, and playground end-to-end connection.
-- **2025-07-07** – 🎉 *MemOS 1.0 (Stellar) Preview Release*: A SOTA Memory OS for LLMs is now open-sourced.
-- **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
-- **2025-05-28** – 🎉 *Short Paper Uploaded*: [MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models](https://arxiv.org/abs/2505.22101) was published on arXiv.
-- **2024-07-04** – 🎉 *Memory3 Model Released at WAIC 2024*: The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
-- **2024-07-01** – 🎉 *Memory3 Paper Released*: [Memory3: Language Modeling with Explicit Memory](https://arxiv.org/abs/2407.01178) introduces the new approach to structured memory in LLMs.

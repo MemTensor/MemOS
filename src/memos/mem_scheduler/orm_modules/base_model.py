@@ -10,11 +10,14 @@ from typing import Any, TypeVar
 
 from sqlalchemy import Boolean, Column, DateTime, String, Text, and_, create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from memos.log import get_logger
 from memos.mem_user.user_manager import UserManager
+
+
+class DatabaseError(Exception):
+    """Exception raised for database-related errors"""
 
 
 T = TypeVar("T")  # The model type (MemoryMonitorManager, QueryMonitorManager, etc.)
@@ -561,7 +564,7 @@ class BaseDBManager(UserManager):
             logger.error(f"Error during close operation: {e}")
 
     @staticmethod
-    def create_default_engine() -> Engine:
+    def create_default_sqlite_engine() -> Engine:
         """Create SQLAlchemy engine with default database path
 
         Returns:
@@ -633,3 +636,94 @@ class BaseDBManager(UserManager):
         else:
             db_path = f"mysql+pymysql://{username}@{host}:{port}/{database}?charset={charset}"
         return db_path
+
+    @staticmethod
+    def load_mysql_engine_from_env(env_file_path: str | None = None) -> Engine | None:
+        """Load MySQL engine from environment variables
+
+        Args:
+            env_file_path: Path to .env file (optional, defaults to loading from current environment)
+
+        Returns:
+            SQLAlchemy Engine instance configured for MySQL
+
+        Raises:
+            DatabaseError: If required environment variables are missing or connection fails
+        """
+        # Load environment variables from file if provided
+        if env_file_path:
+            if os.path.exists(env_file_path):
+                from dotenv import load_dotenv
+
+                load_dotenv(env_file_path)
+                logger.info(f"Loaded environment variables from {env_file_path}")
+            else:
+                logger.warning(
+                    f"Environment file not found: {env_file_path}, using current environment variables"
+                )
+        else:
+            logger.info("Using current environment variables (no env_file_path provided)")
+
+        # Get MySQL configuration from environment variables
+        mysql_host = os.getenv("MYSQL_HOST")
+        mysql_port_str = os.getenv("MYSQL_PORT")
+        mysql_username = os.getenv("MYSQL_USERNAME")
+        mysql_password = os.getenv("MYSQL_PASSWORD")
+        mysql_database = os.getenv("MYSQL_DATABASE")
+        mysql_charset = os.getenv("MYSQL_CHARSET")
+
+        # Check required environment variables
+        required_vars = {
+            "MYSQL_HOST": mysql_host,
+            "MYSQL_USERNAME": mysql_username,
+            "MYSQL_PASSWORD": mysql_password,
+            "MYSQL_DATABASE": mysql_database,
+        }
+
+        missing_vars = [var for var, value in required_vars.items() if not value]
+        if missing_vars:
+            error_msg = f"Missing required MySQL environment variables: {', '.join(missing_vars)}"
+            logger.error(error_msg)
+            return None
+
+        # Parse port with validation
+        try:
+            mysql_port = int(mysql_port_str) if mysql_port_str else 3306
+        except ValueError:
+            error_msg = f"Invalid MYSQL_PORT value: {mysql_port_str}. Must be a valid integer."
+            logger.error(error_msg)
+            return None
+
+        # Set default charset if not provided
+        if not mysql_charset:
+            mysql_charset = "utf8mb4"
+
+        # Create MySQL connection URL
+        db_url = BaseDBManager.create_mysql_db_path(
+            host=mysql_host,
+            port=mysql_port,
+            username=mysql_username,
+            password=mysql_password,
+            database=mysql_database,
+            charset=mysql_charset,
+        )
+
+        try:
+            # Create and test the engine
+            engine = create_engine(db_url, echo=False)
+
+            # Test connection
+            with engine.connect() as conn:
+                from sqlalchemy import text
+
+                conn.execute(text("SELECT 1"))
+
+            logger.info(
+                f"Successfully created MySQL engine: {mysql_host}:{mysql_port}/{mysql_database}"
+            )
+            return engine
+
+        except Exception as e:
+            error_msg = f"Failed to create MySQL engine from environment variables: {e}"
+            logger.error(error_msg)
+            raise DatabaseError(error_msg) from e

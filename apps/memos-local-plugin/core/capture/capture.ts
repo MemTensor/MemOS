@@ -1,0 +1,1470 @@
+/**
+ * `capture.ts` — the Phase 6 pipeline entry point.
+ *
+ * Orchestrates:
+ *     extract → normalize → reflect(+synth?) → alpha-score → embed → persist
+ *
+ * Called by `subscriber.ts` whenever `episode.finalized` fires, or
+ * directly by integration tests to run capture synchronously.
+ *
+ * Return contract: a fully populated `CaptureResult`. Failures inside
+ * one stage are captured as `warnings` and we still try to persist the
+ * partial rows — V7 treats missing α as α=0, which is already the SQL
+ * default, so a non-fatal capture run still yields reward-propagatable
+ * traces.
+ */
+
+import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
+import type { Embedder } from "../embedding/index.js";
+import type { LlmClient } from "../llm/index.js";
+import { rootLogger } from "../logger/index.js";
+import { ids } from "../id.js";
+import type { EpisodeRow, TraceRow, TraceId, EpochMs } from "../types.js";
+import type { makeEmbeddingRetryQueueRepo } from "../storage/repos/embedding_retry_queue.js";
+import type { makeTracesRepo } from "../storage/repos/traces.js";
+import type { EpisodesRepo } from "../session/persistence.js";
+import { disabledScore, scoreReflection } from "./alpha-scorer.js";
+import { batchScoreReflections, type BatchScoreInput } from "./batch-scorer.js";
+import { embedSteps, type VecPair } from "./embedder.js";
+import { normalizeSteps } from "./normalizer.js";
+import { extractReflection } from "./reflection-extractor.js";
+import { synthesizeReflection } from "./reflection-synth.js";
+import { extractSteps } from "./step-extractor.js";
+import { createSummarizer, type Summarizer } from "./summarizer.js";
+import { tagsForStep } from "./tagger.js";
+import { extractErrorSignatures } from "./error-signature.js";
+import { RECOVERY_REASONS } from "../pipeline/recovery-constants.js";
+import type {
+  CaptureConfig,
+  CaptureEvent,
+  CaptureEventBus,
+  CaptureInput,
+  CaptureResult,
+  DownstreamStepPreview,
+  NormalizedStep,
+  ReflectionContext,
+  ReflectionScore,
+  ScoredStep,
+  StepCandidate,
+  TraceCandidate,
+} from "./types.js";
+
+type TracesRepo = ReturnType<typeof makeTracesRepo>;
+type EmbeddingRetryQueueRepo = ReturnType<typeof makeEmbeddingRetryQueueRepo>;
+
+export interface CaptureDeps {
+  tracesRepo: TracesRepo;
+  embeddingRetryQueue?: EmbeddingRetryQueueRepo;
+  episodesRepo: EpisodesRepo;
+  embedder: Embedder | null;
+  /** Main LLM — used for per-turn lite capture (summarisation). */
+  llm: LlmClient | null;
+  /**
+   * Dedicated LLM for the topic-end reflection + α scoring pass.
+   * When the user configures a stronger model under `skillEvolver.*`,
+   * this points to that model; otherwise it falls back to `llm`.
+   */
+  reflectLlm: LlmClient | null;
+  bus: CaptureEventBus;
+  cfg: CaptureConfig;
+  now?: () => number;
+}
+
+export interface CaptureRunner {
+  /**
+   * Per-turn "lite" capture. Writes the trace row for any newly added
+   * step in the episode with `reflection=null` + `alpha=0`. No LLM
+   * reflection / α scoring here — the user can already see the memory
+   * in the viewer immediately, but no "反思" pill is shown until the
+   * topic-level reflect pass fires.
+   *
+   * Idempotent: existing traces (matched by `step.ts`) are skipped.
+   * Safe to call after every `addTurn` cycle.
+   */
+  runLite(input: CaptureInput): Promise<CaptureResult>;
+  /**
+   * Lightweight memory capture. Writes one trace per user/assistant turn
+   * instead of per tool/action step, and never emits `capture.done`.
+   */
+  runLightweight(input: CaptureInput): Promise<CaptureResult>;
+  /**
+   * Topic-end "reflect" capture. Runs the batch reflection scorer over
+   * EVERY step of the (now-finalized) episode in one LLM call so the
+   * model sees the full causal chain, then writes
+   * `reflection + alpha` back onto each existing trace via
+   * `tracesRepo.updateReflection`. Emits `capture.done` so the reward
+   * subscriber can run `R_human` + V backprop afterwards.
+   *
+   * Falls back to per-step scoring when the episode exceeds
+   * `cfg.batchThreshold` so the prompt can't overflow the model's
+   * context window.
+   */
+  runReflect(input: CaptureInput): Promise<CaptureResult>;
+}
+
+export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
+  const log = rootLogger.child({ channel: "core.capture" });
+  const now = deps.now ?? Date.now;
+  const summarizer: Summarizer = createSummarizer({
+    llm: deps.llm ?? null,
+    log: log.child({ channel: "core.capture.summarizer" }),
+  });
+
+  function emit(evt: CaptureEvent): void {
+    deps.bus.emit(evt);
+  }
+
+  /**
+   * Per-turn lite capture — see `CaptureRunner.runLite` for contract.
+   * Extracts new steps from the episode, summarises + embeds them,
+   * and inserts trace rows with `reflection=null` + `alpha=0`. The
+   * topic-end `runReflect` pass fills those in later.
+   */
+  async function runLite(input: CaptureInput): Promise<CaptureResult> {
+    const startedAt = now();
+    const warnings: CaptureResult["warnings"] = [];
+    const llmCalls = newLlmCounters();
+
+    emit({
+      kind: "capture.started",
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+    });
+
+    // ─── Extract + dedup (skip steps we've already written this episode) ──
+    const extractStart = now();
+    const rawAll = extractSteps(input.episode);
+    // #2076: MUST use listDedupRowsForEpisode (uncapped, streaming, no
+    // BLOB projection). The paginated `list` path silently truncates to
+    // 500 rows, which breaks dedup once an episode grows past that and
+    // causes the tail to be re-inserted every cycle (bloating `traces`
+    // unboundedly + starving the vector scan). Using the narrow-column
+    // dedup projection here also keeps peak RSS proportional to scalar
+    // fields, not embedding footprint (open code review on #2077).
+    const existingDedupRows = deps.tracesRepo.listDedupRowsForEpisode(input.episode.id);
+    const seenTs = new Set<number>(existingDedupRows.map((t) => t.ts));
+    // Reused later by persistRows so we don't scan the episode twice.
+    const seenSignatures = new Set(existingDedupRows.map(traceIdentitySignature));
+    const raw = rawAll.filter((s) => !seenTs.has(s.ts));
+    const extractMs = now() - extractStart;
+    log.debug("stage.extract.done", {
+      phase: "lite",
+      episodeId: input.episode.id,
+      steps: raw.length,
+      novel: raw.length,
+      skipped: rawAll.length - raw.length,
+      durationMs: extractMs,
+    });
+
+    const normStart = now();
+    const normalized = normalizeSteps(raw, deps.cfg);
+    const normalizeMs = now() - normStart;
+
+    if (normalized.length === 0) {
+      const result = emptyResult(input, startedAt, {
+        extract: extractMs,
+        normalize: normalizeMs,
+      }, llmCalls, warnings);
+      // No `capture.done` here — lite never triggers reward.
+      return result;
+    }
+
+    // Skip stage 3 entirely. Wrap each NormalizedStep into a
+    // ScoredStep with a placeholder reflection so the rest of the
+    // pipeline keeps the same shape.
+    const scored: ScoredStep[] = normalized.map((s) => ({
+      ...s,
+      reflection: { text: null, alpha: 0, usable: false, source: "none" },
+    }));
+
+    // Summarise — needed for the viewer card line + retrieval embedding.
+    const summarizeStart = now();
+    const { summaries, summarizeMs } = await runSummarize(
+      scored,
+      summarizeStart,
+      llmCalls,
+      warnings,
+      { episodeId: input.episode.id, phase: "lite" },
+    );
+
+    // Embed.
+    const { vecs, embedMs } = await runEmbed(scored, summaries, warnings);
+
+    // Persist as new rows. Reflection / α deliberately empty.
+    const persistStart = now();
+    const rows = buildRows(scored, summaries, vecs, input.episode);
+    const persisted = await persistRows(rows, input, warnings, {}, seenSignatures);
+    if (!persisted) {
+      // emit capture.failed handled inside persistRows on hard fail.
+      return finalResult(
+        input,
+        startedAt,
+        [],
+        scored.map(toCandidate(rows)),
+        {
+          extract: extractMs,
+          normalize: normalizeMs,
+          reflect: 0,
+          alpha: 0,
+          summarize: summarizeMs,
+          embed: embedMs,
+          persist: now() - persistStart,
+        },
+        llmCalls,
+        warnings,
+      );
+    }
+    const persistMs = now() - persistStart;
+
+    const result = finalResult(
+      input,
+      startedAt,
+      rows.map((r) => r.id),
+      buildTraceCandidates(scored, rows),
+      {
+        extract: extractMs,
+        normalize: normalizeMs,
+        reflect: 0,
+        alpha: 0,
+        summarize: summarizeMs,
+        embed: embedMs,
+        persist: persistMs,
+      },
+      llmCalls,
+      warnings,
+    );
+    log.info("capture.lite.done", {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traces: result.traceIds.length,
+      llmCalls,
+      totalMs: result.completedAt - startedAt,
+      warnings: warnings.length,
+    });
+    // Emit `capture.lite.done` so the api_logs table gets a per-turn
+    // `memory_add` row. This is distinct from `capture.done` which
+    // triggers the reward / L2 / L3 chain and only fires at topic end.
+    emit({ kind: "capture.lite.done", result });
+    return result;
+  }
+
+  async function runLightweight(input: CaptureInput): Promise<CaptureResult> {
+    const startedAt = now();
+    const warnings: CaptureResult["warnings"] = [];
+    const llmCalls = newLlmCounters();
+
+    emit({
+      kind: "capture.started",
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+    });
+
+    const extractStart = now();
+    const rawAll = extractSteps(input.episode);
+    // #2076 + #2077 OCR: uncapped, narrow-projection dedup read.
+    // See `runLite` for the full rationale — one scan, no BLOBs.
+    const existingDedupRows = deps.tracesRepo.listDedupRowsForEpisode(input.episode.id);
+    const seenTurnIds = new Set(
+      existingDedupRows
+        .map((t) => t.turnId)
+        .filter((v): v is number => typeof v === "number" && Number.isFinite(v)),
+    );
+    // Reused later by persistRows so we don't scan the episode twice.
+    const seenSignatures = new Set(existingDedupRows.map(traceIdentitySignature));
+    const rawByTurn = new Map<number, StepCandidate[]>();
+    for (const step of rawAll) {
+      const turnId = pickTurnId(step.meta, step.ts);
+      if (seenTurnIds.has(turnId)) continue;
+      const bucket = rawByTurn.get(turnId) ?? [];
+      bucket.push(step);
+      rawByTurn.set(turnId, bucket);
+    }
+    const raw = Array.from(rawByTurn.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([turnId, steps]) => mergeTurnSteps(input.episode.id, turnId, steps));
+    const extractMs = now() - extractStart;
+
+    const normStart = now();
+    const normalized = normalizeSteps(raw, deps.cfg);
+    const normalizeMs = now() - normStart;
+
+    if (normalized.length === 0) {
+      return emptyResult(input, startedAt, {
+        extract: extractMs,
+        normalize: normalizeMs,
+      }, llmCalls, warnings);
+    }
+
+    const scored: ScoredStep[] = normalized.map((s) => ({
+      ...s,
+      reflection: { text: null, alpha: 0, usable: false, source: "none" },
+    }));
+
+    const summarizeStart = now();
+    const { summaries, summarizeMs } = await runSummarize(
+      scored,
+      summarizeStart,
+      llmCalls,
+      warnings,
+      { episodeId: input.episode.id, phase: "lightweight" },
+    );
+
+    const { vecs: summaryOnlyVecs, embedMs } = await runEmbed(
+      scored,
+      summaries,
+      warnings,
+      { summaryOnly: true },
+    );
+
+    const persistStart = now();
+    const rows = buildRows(scored, summaries, summaryOnlyVecs, input.episode, {
+      lightweightMemory: true,
+    });
+    const persisted = await persistRows(rows, input, warnings, {
+      skipActionVectorRetry: true,
+    }, seenSignatures);
+    if (!persisted) {
+      return finalResult(
+        input,
+        startedAt,
+        [],
+        scored.map(toCandidate(rows)),
+        {
+          extract: extractMs,
+          normalize: normalizeMs,
+          reflect: 0,
+          alpha: 0,
+          summarize: summarizeMs,
+          embed: embedMs,
+          persist: now() - persistStart,
+        },
+        llmCalls,
+        warnings,
+      );
+    }
+    const persistMs = now() - persistStart;
+
+    const result = finalResult(
+      input,
+      startedAt,
+      rows.map((r) => r.id),
+      buildTraceCandidates(scored, rows),
+      {
+        extract: extractMs,
+        normalize: normalizeMs,
+        reflect: 0,
+        alpha: 0,
+        summarize: summarizeMs,
+        embed: embedMs,
+        persist: persistMs,
+      },
+      llmCalls,
+      warnings,
+    );
+    log.info("capture.lightweight.done", {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traces: result.traceIds.length,
+      llmCalls,
+      totalMs: result.completedAt - startedAt,
+      warnings: warnings.length,
+    });
+    emit({ kind: "capture.lite.done", result });
+    return result;
+  }
+
+  /**
+   * Topic-end reflect pass — see `CaptureRunner.runReflect` for contract.
+   * Reads every trace already written for this episode, batch-scores
+   * reflection + α across the full causal chain, and patches each
+   * trace row with the result. Then fires `capture.done` so the
+   * reward subscriber computes R_human + back-propagates V.
+   */
+  async function runReflect(input: CaptureInput): Promise<CaptureResult> {
+    const startedAt = now();
+    const warnings: CaptureResult["warnings"] = [];
+    const llmCalls = newLlmCounters();
+
+    emit({
+      kind: "capture.started",
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+    });
+
+    // Re-derive normalized steps from the (now closed) episode so the
+    // batch scorer sees state/action/outcome in the exact same shape
+    // it would have seen during a per-step pass.
+    const extractStart = now();
+    const rawAll = extractSteps(input.episode);
+    const extractMs = now() - extractStart;
+
+    const normStart = now();
+    const normalized = normalizeSteps(rawAll, deps.cfg);
+    const normalizeMs = now() - normStart;
+
+    // Pair each normalized step with its already-persisted trace row
+    // (matched by ts). If runLite was skipped for any step, fall back
+    // to a fresh insert path so we don't lose data.
+    const existing = deps.tracesRepo.list({ episodeId: input.episode.id });
+    const traceByTs = new Map<number, (typeof existing)[number]>();
+    for (const tr of existing) traceByTs.set(tr.ts, tr);
+    const orphan = normalized.filter((s) => !traceByTs.has(s.ts));
+    if (orphan.length > 0) {
+      // During dirty-reward recovery (recoverDirtyClosedEpisodes), the episode
+      // snapshot is rebuilt from trace_ids_json. Any "orphan" steps here are
+      // artifact mismatches between snapshot timestamps and DB rows — NOT
+      // genuinely missing traces. Inserting them would grow trace_ids_json,
+      // keep reward.traceCount !== traceIds.length, and restart the recovery
+      // loop on every bridge start.
+      if (input.episode.meta?.recoveryReason === RECOVERY_REASONS.DIRTY_REWARD_RESCORE) {
+        log.warn("reflect.orphan_steps_skipped_recovery", {
+          episodeId: input.episode.id,
+          count: orphan.length,
+          reason: "dirty_reward_rescore — skipping insert to break recovery loop",
+        });
+      } else {
+        log.warn("reflect.orphan_steps", {
+          episodeId: input.episode.id,
+          count: orphan.length,
+          action: "fallback_insert",
+        });
+        // These steps never went through runLite (likely a test path or a
+        // dropped event). Insert them now with reflection=null so the
+        // batch pass below can patch them like the rest.
+        const summStart = now();
+        const { summaries } = await runSummarize(
+          orphan.map((s) => ({
+            ...s,
+            reflection: { text: null, alpha: 0, usable: false, source: "none" },
+          })),
+          summStart,
+          llmCalls,
+          warnings,
+          { episodeId: input.episode.id, phase: "reflect" },
+        );
+        const orphanScored: ScoredStep[] = orphan.map((s) => ({
+          ...s,
+          reflection: { text: null, alpha: 0, usable: false, source: "none" },
+        }));
+        const { vecs } = await runEmbed(orphanScored, summaries, warnings);
+        const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
+        await persistRows(orphanRows, input, warnings);
+        for (const r of orphanRows) traceByTs.set(r.ts, r);
+      }
+    }
+
+    if (normalized.length === 0) {
+      const result = emptyResult(input, startedAt, {
+        extract: extractMs,
+        normalize: normalizeMs,
+      }, llmCalls, warnings);
+      emit({ kind: "capture.done", result });
+      return result;
+    }
+
+    // Batch reflection + α across every step of the now-closed
+    // episode. Falls back to per-step scoring when over the threshold
+    // or when batching fails / no LLM is wired. The reflect pass uses
+    // `reflectLlm` (skill-evolver model when configured) for higher
+    // quality reflections; per-turn lite capture still uses `llm`.
+    const reflectStart = now();
+    const rLlm = deps.reflectLlm ?? deps.llm;
+    const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
+    const contextEnabled = contextModeFor(deps.cfg, useBatch, normalized.length);
+    const taskSummary = contextEnabled.includeTask
+      ? buildTaskReflectionSummary(input.episode, normalized, deps.cfg.taskContextMaxChars)
+      : null;
+    const downstreamByStep = contextEnabled.includeDownstream
+      ? buildDownstreamStepPreviews(normalized, deps.cfg)
+      : normalized.map(() => []);
+    log.info("capture.reflect.scoring.start", {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      steps: normalized.length,
+      mode: useBatch ? "batch" : contextEnabled.includeDownstream ? "per_step_downstream" : "per_step",
+      reflectionContextMode: deps.cfg.reflectionContextMode,
+      downstreamPreview: contextEnabled.includeDownstream,
+      provider: rLlm?.provider ?? "none",
+      model: rLlm?.model ?? "none",
+      taskSummary: taskSummary ? taskSummary.slice(0, 240) : null,
+    });
+    let scored: ScoredStep[] = [];
+    if (useBatch) {
+      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
+    }
+    if (!useBatch || scored.length === 0) {
+      scored = await runPerStepScoring(
+        normalized,
+        rLlm,
+        deps,
+        warnings,
+        llmCalls,
+        input.episode.id,
+        buildReflectionContexts(normalized, taskSummary, downstreamByStep),
+      );
+    }
+    const reflectMs = now() - reflectStart;
+
+    // Patch each existing trace with the freshly-computed reflection +
+    // α. Steps that lack a matching trace (shouldn't happen after the
+    // orphan-fallback above) are skipped with a warning.
+    const persistStart = now();
+    const patchedTraceIds: string[] = [];
+    for (const s of scored) {
+      const row = traceByTs.get(s.ts);
+      if (!row) {
+        warnings.push({
+          stage: "persist",
+          message: "reflect: no trace row for step ts; skipping",
+          detail: { ts: s.ts, key: s.key },
+        });
+        continue;
+      }
+      try {
+        log.info("capture.reflect.trace.scored", {
+          episodeId: input.episode.id,
+          sessionId: input.episode.sessionId,
+          traceId: row.id,
+          stepKey: s.key,
+          ts: s.ts,
+          turnId: pickTurnId(s.meta, s.ts),
+          alpha: s.reflection.alpha ?? 0,
+          usable: s.reflection.usable,
+          reason: s.reflection.reason ?? null,
+          source: s.reflection.source,
+          model: s.reflection.model ?? null,
+          reflection: s.reflection.text,
+        });
+        deps.tracesRepo.updateReflection(row.id, {
+          reflection: s.reflection.text,
+          alpha: s.reflection.alpha ?? 0,
+        });
+        patchedTraceIds.push(row.id);
+      } catch (err) {
+        warnings.push({
+          stage: "persist",
+          message: "reflect: updateReflection failed",
+          detail: errDetail(err),
+        });
+      }
+    }
+    const persistMs = now() - persistStart;
+
+    // Build traces[] mirroring the schema downstream subscribers
+    // expect (reward / L2 induction reads `traces` to seed credit
+    // assignment). For reflect-phase rows we re-emit ScoredStep-shaped
+    // candidates carrying the freshly computed reflection + α; the
+    // already-existing trace ids come from the matched DB rows.
+    const traces: TraceCandidate[] = scored.map((s) => {
+      const row = traceByTs.get(s.ts);
+      return {
+        ...s,
+        traceId: (row?.id ?? "") as TraceId,
+        tags: row?.tags ?? tagsForStep(s),
+        vecSummary: row?.vecSummary ?? null,
+        vecAction: row?.vecAction ?? null,
+      };
+    });
+
+    const result: CaptureResult = {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traceIds: patchedTraceIds,
+      traces,
+      startedAt,
+      completedAt: now(),
+      stageTimings: {
+        extract: extractMs,
+        normalize: normalizeMs,
+        reflect: reflectMs,
+        alpha: 0,
+        summarize: 0,
+        embed: 0,
+        persist: persistMs,
+      },
+      llmCalls,
+      warnings,
+    };
+
+    log.info("capture.reflect.done", {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traces: patchedTraceIds.length,
+      llmCalls,
+      totalMs: result.completedAt - startedAt,
+      warnings: warnings.length,
+    });
+    // ONLY here (topic end) do we fire `capture.done`. That kicks off
+    // the reward subscriber → R_human + V backprop, then L2 / L3 /
+    // skill induction. By gating it on the reflect phase we make sure
+    // those expensive downstream stages run once per topic, not once
+    // per turn.
+    emit({ kind: "capture.done", result });
+    return result;
+  }
+
+  // ─── Internal helpers shared by runLite + runReflect ────────────────────
+
+  function newLlmCounters() {
+    return {
+      reflectionSynth: 0,
+      alphaScoring: 0,
+      batchedReflection: 0,
+      summarize: 0,
+    };
+  }
+
+  function emptyResult(
+    input: CaptureInput,
+    startedAt: number,
+    timings: { extract: number; normalize: number },
+    llmCalls: ReturnType<typeof newLlmCounters>,
+    warnings: CaptureResult["warnings"],
+  ): CaptureResult {
+    return {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traceIds: [],
+      traces: [],
+      startedAt,
+      completedAt: now(),
+      stageTimings: {
+        extract: timings.extract,
+        normalize: timings.normalize,
+        reflect: 0,
+        alpha: 0,
+        summarize: 0,
+        embed: 0,
+        persist: 0,
+      },
+      llmCalls,
+      warnings: [
+        ...warnings,
+        { stage: "extract", message: "no usable steps in episode" },
+      ],
+    };
+  }
+
+  async function runSummarize(
+    scored: ScoredStep[],
+    summarizeStart: number,
+    llmCalls: ReturnType<typeof newLlmCounters>,
+    warnings: CaptureResult["warnings"],
+    context: { episodeId?: string; phase?: string },
+  ): Promise<{ summaries: string[]; summarizeMs: number }> {
+    const concurrency = Math.max(1, deps.cfg.llmConcurrency);
+    const summaries = await runConcurrently(
+      scored,
+      concurrency,
+      async (step) => {
+        try {
+          const s = await summarizer.summarize(step, context);
+          llmCalls.summarize += 1;
+          return s;
+        } catch (err) {
+          warnings.push({
+            stage: "summarize",
+            message: "summarizer threw; falling back to userText",
+            detail: errDetail(err),
+          });
+          return (step.userText ?? step.agentText ?? "").slice(0, 140);
+        }
+      },
+    );
+    return { summaries, summarizeMs: now() - summarizeStart };
+  }
+
+  async function runEmbed(
+    scored: ScoredStep[],
+    summaries: string[],
+    warnings: CaptureResult["warnings"],
+    opts: { summaryOnly?: boolean } = {},
+  ): Promise<{ vecs: VecPair[]; embedMs: number }> {
+    const start = now();
+    if (!deps.cfg.embedTraces || !deps.embedder) {
+      return { vecs: scored.map(() => ({ summary: null, action: null })), embedMs: now() - start };
+    }
+    try {
+      const vecs = await embedSteps(deps.embedder, scored, summaries, opts);
+      return { vecs, embedMs: now() - start };
+    } catch (err) {
+      warnings.push({
+        stage: "embed",
+        message: "embedder threw; inserting null vectors",
+        detail: errDetail(err),
+      });
+      return { vecs: scored.map(() => ({ summary: null, action: null })), embedMs: now() - start };
+    }
+  }
+
+  function buildRows(
+    scored: ScoredStep[],
+    summaries: string[],
+    vecs: VecPair[],
+    episode: CaptureInput["episode"],
+    opts: { lightweightMemory?: boolean } = {},
+  ): TraceRow[] {
+    const owner = ownerFromEpisode(episode);
+    const traces: TraceCandidate[] = scored.map((s, i) => ({
+      ...s,
+      traceId: ids.trace() as TraceId,
+      tags: tagsForStep(s),
+      vecSummary: vecs[i]?.summary ?? null,
+      vecAction: vecs[i]?.action ?? null,
+    }));
+    return traces.map((t, i) => ({
+      id: t.traceId,
+      episodeId: episode.id,
+      sessionId: episode.sessionId,
+      ...owner,
+      ts: t.ts,
+      userText: t.userText,
+      agentText: t.agentText,
+      summary: summaries[i] ?? null,
+      toolCalls: t.toolCalls,
+      // Reflection + α deliberately empty in lite-phase rows; the
+      // topic-end reflect pass fills them via `updateReflection`.
+      reflection: t.reflection.text,
+      agentThinking: t.agentThinking ?? null,
+      value: 0,
+      alpha: t.reflection.alpha ?? 0,
+      rHuman: null,
+      // V7 §0.6: priority(f1) ∝ max(V,0) · decay(Δt). Seeded at 0.5
+      // so retrieval can find the row immediately; reward backprop
+      // overwrites it once the topic is reflected on.
+      priority: 0.5,
+      tags: opts.lightweightMemory ? mergeTags(t.tags, ["lightweight_memory"]) : t.tags,
+      errorSignatures: extractErrorSignatures({
+        toolCalls: t.toolCalls,
+        agentText: t.agentText,
+        reflection: t.reflection.text ?? undefined,
+      }),
+      vecSummary: t.vecSummary,
+      vecAction: t.vecAction,
+      // step-extractor stamps every sub-step that came from the same
+      // user message with a stable `turnId` (= the user turn's ts).
+      // The viewer collapses rows with identical (episodeId, turnId)
+      // into a single "one round = one memory" card; algorithm-side
+      // machinery ignores the field.
+      turnId: pickTurnId(t.meta, t.ts),
+      schemaVersion: 1,
+    }));
+  }
+
+  function ownerFromEpisode(episode: CaptureInput["episode"]) {
+    const meta = episode.meta ?? {};
+    const contextHints =
+      meta.contextHints && typeof meta.contextHints === "object"
+        ? (meta.contextHints as Record<string, unknown>)
+        : {};
+    return {
+      ownerAgentKind: stringMeta(meta, "ownerAgentKind") ?? stringMeta(contextHints, "ownerAgentKind") ?? "unknown",
+      ownerProfileId: stringMeta(meta, "ownerProfileId") ?? stringMeta(contextHints, "ownerProfileId") ?? "default",
+      ownerWorkspaceId: stringMeta(meta, "ownerWorkspaceId") ?? stringMeta(contextHints, "ownerWorkspaceId") ?? null,
+    };
+  }
+
+  function buildTraceCandidates(
+    scored: ScoredStep[],
+    rows: TraceRow[],
+  ): TraceCandidate[] {
+    const used = new Set<number>();
+    return rows.map((row) => {
+      const idx = scored.findIndex((s, i) => !used.has(i) && rowMatchesStep(row, s));
+      const s = scored[idx >= 0 ? idx : 0]!;
+      if (idx >= 0) used.add(idx);
+      return {
+        ...s,
+        traceId: row.id as TraceId,
+        tags: row.tags,
+        vecSummary: row.vecSummary,
+        vecAction: row.vecAction,
+      };
+    });
+  }
+
+  function rowMatchesStep(row: TraceRow, step: ScoredStep): boolean {
+    if (row.ts !== step.ts) return false;
+    const rowTool = row.toolCalls[0];
+    const stepTool = step.toolCalls[0];
+    if (rowTool || stepTool) return rowTool?.name === stepTool?.name;
+    return row.userText === step.userText && row.agentText === step.agentText;
+  }
+
+  async function persistRows(
+    rows: TraceRow[],
+    input: CaptureInput,
+    warnings: CaptureResult["warnings"],
+    opts: { skipActionVectorRetry?: boolean } = {},
+    existingSignatures?: Set<string>,
+  ): Promise<boolean> {
+    // #2076 + #2077 OCR: uncapped, narrow-projection dedup read. The
+    // paginated `list` path missed all rows past the 500 cap and let
+    // duplicate signatures re-insert every cycle. When the caller has
+    // already computed the signature set upstream (runLite /
+    // runLightweight / runReflect all do), skip the second full scan
+    // and reuse it — otherwise fall back to a fresh streaming scan.
+    // We clone the caller-supplied set so the intra-batch dedup below
+    // doesn't leak new signatures back into the caller's Set instance.
+    const seenSignatures = existingSignatures
+      ? new Set(existingSignatures)
+      : new Set(
+          deps.tracesRepo
+            .listDedupRowsForEpisode(input.episode.id)
+            .map(traceIdentitySignature),
+        );
+    const uniqueRows = rows.filter((row) => {
+      const signature = traceIdentitySignature(row);
+      if (seenSignatures.has(signature)) return false;
+      seenSignatures.add(signature);
+      return true;
+    });
+    if (uniqueRows.length !== rows.length) {
+      warnings.push({
+        stage: "persist",
+        message: "skipped duplicate trace rows during capture persist",
+        detail: {
+          skipped: rows.length - uniqueRows.length,
+          episodeId: input.episode.id,
+        },
+      });
+      rows.splice(0, rows.length, ...uniqueRows);
+    }
+
+    try {
+      for (const row of rows) deps.tracesRepo.insert(row);
+      enqueueMissingTraceVectors(rows, warnings, opts);
+    } catch (err) {
+      const failure = errDetail(err);
+      log.error("persist.failed", {
+        episodeId: input.episode.id,
+        err: failure,
+      });
+      emit({
+        kind: "capture.failed",
+        episodeId: input.episode.id,
+        sessionId: input.episode.sessionId,
+        stage: "persist",
+        error: {
+          code: (failure.code as string | undefined) ?? ERROR_CODES.INTERNAL,
+          message: (failure.message as string | undefined) ?? String(err),
+        },
+      });
+      throw err instanceof Error
+        ? err
+        : new MemosError(ERROR_CODES.INTERNAL, "capture.persist failed", failure);
+    }
+    try {
+      const current = deps.episodesRepo.getById(input.episode.id) as EpisodeRow | null;
+      const currentTraceIds = current?.traceIds ?? input.episode.traceIds;
+      deps.episodesRepo.updateTraceIds(
+        input.episode.id,
+        reconcileTraceIds([...currentTraceIds, ...rows.map((r) => r.id)], input.episode),
+      );
+    } catch (err) {
+      warnings.push({
+        stage: "persist",
+        message: "failed to update episode trace_ids_json",
+        detail: errDetail(err),
+      });
+    }
+    return true;
+  }
+
+  function reconcileTraceIds(traceIds: TraceId[], episode: CaptureInput["episode"]): TraceId[] {
+    const uniqueIds = dedupeTraceIds(traceIds);
+    const rowById = new Map(deps.tracesRepo.getManyByIds(uniqueIds).map((row) => [row.id, row]));
+    const originalIndex = new Map(uniqueIds.map((id, idx) => [id, idx]));
+    const stepOrder = new Map<string, number>();
+    extractSteps(episode).forEach((step, idx) => {
+      const signature = stepIdentitySignature(step);
+      if (!stepOrder.has(signature)) stepOrder.set(signature, idx);
+    });
+    const seenSignatures = new Set<string>();
+    return uniqueIds
+      .filter((id) => rowById.has(id))
+      .sort((a, b) => {
+        const ai = stepOrder.get(traceIdentitySignature(rowById.get(a)!));
+        const bi = stepOrder.get(traceIdentitySignature(rowById.get(b)!));
+        if (ai != null && bi != null && ai !== bi) return ai - bi;
+        if (ai != null && bi == null) return -1;
+        if (ai == null && bi != null) return 1;
+        return (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0);
+      })
+      .filter((id) => {
+        const signature = traceIdentitySignature(rowById.get(id)!);
+        if (seenSignatures.has(signature)) return false;
+        seenSignatures.add(signature);
+        return true;
+      });
+  }
+
+  function dedupeTraceIds(traceIds: TraceId[]): TraceId[] {
+    const seen = new Set<TraceId>();
+    const out: TraceId[] = [];
+    for (const id of traceIds) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  }
+
+  function stepIdentitySignature(step: StepCandidate): string {
+    const tool = step.toolCalls[0];
+    const turnId = pickTurnId(step.meta, step.ts);
+    if (tool) {
+      const hasRealTiming =
+        typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
+      return [
+        "tool",
+        turnId,
+        tool.name,
+        hasRealTiming ? tool.startedAt ?? "" : step.ts,
+        hasRealTiming ? tool.endedAt ?? "" : "",
+        stableJson(tool.input),
+        stableJson(tool.output),
+        tool.errorCode ?? "",
+      ].join("\x1f");
+    }
+    if (step.agentText.trim()) {
+      return ["assistant", turnId, step.ts, step.agentText.trim()].join("\x1f");
+    }
+    return ["user", turnId, step.ts, step.userText.trim()].join("\x1f");
+  }
+
+  function traceIdentitySignature(
+    row: Pick<TraceRow, "toolCalls" | "turnId" | "ts" | "agentText" | "userText">,
+  ): string {
+    const tool = row.toolCalls[0];
+    if (tool) {
+      const hasRealTiming =
+        typeof tool.startedAt === "number" || typeof tool.endedAt === "number";
+      return [
+        "tool",
+        row.turnId,
+        tool.name,
+        hasRealTiming ? tool.startedAt ?? "" : row.ts,
+        hasRealTiming ? tool.endedAt ?? "" : "",
+        stableJson(tool.input),
+        stableJson(tool.output),
+        tool.errorCode ?? "",
+      ].join("\x1f");
+    }
+    if (row.agentText.trim()) {
+      return ["assistant", row.turnId, row.ts, row.agentText.trim()].join("\x1f");
+    }
+    return ["user", row.turnId, row.ts, row.userText.trim()].join("\x1f");
+  }
+
+  function stableJson(value: unknown): string {
+    if (value === undefined) return "";
+    return JSON.stringify(sortJson(value));
+  }
+
+  function sortJson(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(sortJson);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, val]) => [key, sortJson(val)]),
+    );
+  }
+
+  function enqueueMissingTraceVectors(
+    rows: TraceRow[],
+    warnings: CaptureResult["warnings"],
+    opts: { skipActionVectorRetry?: boolean } = {},
+  ): void {
+    if (!deps.cfg.embedTraces || !deps.embeddingRetryQueue || !deps.embedder) return;
+    const queuedAt = now();
+    let queued = 0;
+    for (const row of rows) {
+      if (!row.vecSummary) {
+        deps.embeddingRetryQueue.enqueue({
+          id: `er_${ids.span()}`,
+          targetKind: "trace",
+          targetId: row.id,
+          vectorField: "vec_summary",
+          sourceText: row.summary?.trim() || row.userText.trim() || "(empty)",
+          now: queuedAt,
+        });
+        queued++;
+      }
+      if (!opts.skipActionVectorRetry && !row.vecAction) {
+        deps.embeddingRetryQueue.enqueue({
+          id: `er_${ids.span()}`,
+          targetKind: "trace",
+          targetId: row.id,
+          vectorField: "vec_action",
+          sourceText: traceActionText(row),
+          now: queuedAt,
+        });
+        queued++;
+      }
+    }
+    if (queued > 0) {
+      warnings.push({
+        stage: "embed",
+        message: "embedding retry queued for missing trace vectors",
+        detail: { queued },
+      });
+    }
+  }
+
+  function mergeTags(existing: readonly string[], extra: readonly string[]): string[] {
+    return Array.from(new Set([...existing, ...extra])).sort();
+  }
+
+  function finalResult(
+    input: CaptureInput,
+    startedAt: number,
+    traceIds: string[],
+    traces: TraceCandidate[],
+    timings: CaptureResult["stageTimings"],
+    llmCalls: ReturnType<typeof newLlmCounters>,
+    warnings: CaptureResult["warnings"],
+  ): CaptureResult {
+    return {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traceIds,
+      traces,
+      startedAt,
+      completedAt: now(),
+      stageTimings: timings,
+      llmCalls,
+      warnings,
+    };
+  }
+
+  /**
+   * Used by `runLite`'s short-circuit error branch — captures the
+   * partially-computed scored steps as TraceCandidates so the result
+   * still carries debug info even when persistence failed.
+   */
+  function toCandidate(
+    rows: TraceRow[],
+  ): (s: ScoredStep, i: number) => TraceCandidate {
+    return (s, i) => ({
+      ...s,
+      traceId: (rows[i]?.id ?? "") as TraceId,
+      tags: rows[i]?.tags ?? tagsForStep(s),
+      vecSummary: rows[i]?.vecSummary ?? null,
+      vecAction: rows[i]?.vecAction ?? null,
+    });
+  }
+
+  return { runLite, runLightweight, runReflect };
+}
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Decide whether to use the batched reflection+α path.
+ *
+ * `per_step`     → never (legacy path).
+ * `per_episode`  → always, when an LLM is available.
+ * `auto`         → batch when step count fits inside `batchThreshold`.
+ */
+function shouldBatch(cfg: CaptureConfig, stepCount: number, hasLlm: boolean): boolean {
+  if (!hasLlm) return false;
+  if (stepCount === 0) return false;
+  if (cfg.batchMode === "per_step") return false;
+  if (cfg.batchMode === "per_episode") return true;
+  // "auto"
+  return stepCount <= cfg.batchThreshold;
+}
+
+function contextModeFor(
+  cfg: CaptureConfig,
+  useBatch: boolean,
+  stepCount: number,
+): { includeTask: boolean; includeDownstream: boolean } {
+  const mode = cfg.reflectionContextMode;
+  const includeTask = mode === "task" || mode === "task_downstream";
+  const wantsDownstream = mode === "downstream" || mode === "task_downstream";
+  const longPerStep = !useBatch && stepCount > cfg.batchThreshold;
+  const includeDownstream =
+    wantsDownstream &&
+    cfg.longEpisodeReflectMode === "per_step_downstream" &&
+    cfg.downstreamStepCount > 0 &&
+    cfg.downstreamContextMaxChars > 0 &&
+    longPerStep;
+  return { includeTask, includeDownstream };
+}
+
+function buildReflectionContexts(
+  steps: readonly NormalizedStep[],
+  taskSummary: string | null,
+  downstreamByStep: readonly DownstreamStepPreview[][],
+): ReflectionContext[] {
+  return steps.map((_, idx) => ({
+    taskSummary,
+    downstream: downstreamByStep[idx] ?? [],
+  }));
+}
+
+async function runBatchScoring(
+  normalized: NormalizedStep[],
+  llm: LlmClient,
+  deps: CaptureDeps,
+  warnings: CaptureResult["warnings"],
+  llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
+  episodeId: string,
+  taskSummary: string | null,
+): Promise<ScoredStep[]> {
+  const inputs: BatchScoreInput[] = normalized.map((step) => ({
+    step,
+    existingReflection: extractReflection(step),
+  }));
+
+  try {
+    const out = await batchScoreReflections(llm, inputs, {
+      synthReflections: deps.cfg.synthReflections,
+      episodeId,
+      phase: "reflect",
+      taskSummary,
+    });
+    llmCalls.batchedReflection += 1;
+    return normalized.map((step, i) => ({
+      ...step,
+      reflection: out.scores[i] ?? disabledScore(null, "none"),
+    }));
+  } catch (err) {
+    // Single failure mode: the batched call (or its validator) threw.
+    // Fall back to per-step in the caller. We surface a warning so the
+    // viewer can show "batch path degraded" without crashing capture.
+    warnings.push({
+      stage: "batch",
+      message: "batched reflection scoring failed; falling back to per-step",
+      detail: errDetail(err),
+    });
+    return [];
+  }
+}
+
+async function runPerStepScoring(
+  normalized: NormalizedStep[],
+  llm: LlmClient | null,
+  deps: CaptureDeps,
+  warnings: CaptureResult["warnings"],
+  llmCalls: { reflectionSynth: number; alphaScoring: number },
+  episodeId: string,
+  contexts: ReflectionContext[],
+): Promise<ScoredStep[]> {
+  const concurrency = Math.max(1, deps.cfg.llmConcurrency);
+  return runConcurrently(normalized, concurrency, async (step, idx): Promise<ScoredStep> => {
+    const context = contexts[idx] ?? {};
+    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId, context);
+    llmCalls.reflectionSynth += synthCount;
+    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId, context);
+    if (finalScore !== score) llmCalls.alphaScoring += 1;
+    return { ...step, reflection: finalScore };
+  });
+}
+
+async function resolveReflection(
+  step: NormalizedStep,
+  llm: LlmClient | null,
+  deps: CaptureDeps,
+  warnings: CaptureResult["warnings"],
+  episodeId: string,
+  context: ReflectionContext,
+): Promise<{ score: ReflectionScore; synthCount: number }> {
+  const adapterProvided = step.rawReflection !== null && step.rawReflection.trim().length > 0;
+  const extracted = extractReflection(step);
+  if (extracted) {
+    return {
+      score: disabledScore(extracted, adapterProvided ? "adapter" : "extracted"),
+      synthCount: 0,
+    };
+  }
+  if (!deps.cfg.synthReflections || !llm) {
+    return { score: disabledScore(null, "none"), synthCount: 0 };
+  }
+  try {
+    const synth = await synthesizeReflection(llm, step, {
+      episodeId,
+      phase: "reflect",
+      taskSummary: context.taskSummary,
+      downstream: context.downstream,
+      outcomeMaxChars: deps.cfg.synthOutcomeMaxChars,
+    });
+    if (synth.text) {
+      return {
+        score: { text: synth.text, alpha: null, usable: true, source: "synth", model: synth.model },
+        synthCount: 1,
+      };
+    }
+    return { score: disabledScore(null, "none"), synthCount: 1 };
+  } catch (err) {
+    warnings.push({
+      stage: "reflection.synth",
+      message: "synth failed",
+      detail: errDetail(err),
+    });
+    return { score: disabledScore(null, "none"), synthCount: 0 };
+  }
+}
+
+async function resolveAlpha(
+  step: NormalizedStep,
+  current: ReflectionScore,
+  llm: LlmClient | null,
+  deps: CaptureDeps,
+  warnings: CaptureResult["warnings"],
+  episodeId: string,
+  context: ReflectionContext,
+): Promise<ReflectionScore> {
+  if (!current.text) return current; // nothing to grade
+  if (!deps.cfg.alphaScoring || !llm) return current;
+
+  try {
+    const scored = await scoreReflection(llm, {
+      step,
+      reflectionText: current.text,
+      episodeId,
+      phase: "reflect",
+      taskSummary: context.taskSummary,
+      downstream: context.downstream,
+      outcomeMaxChars: deps.cfg.synthOutcomeMaxChars,
+    });
+    return {
+      ...current,
+      alpha: scored.alpha,
+      usable: scored.usable,
+      reason: scored.reason,
+      model: scored.model,
+    };
+  } catch (err) {
+    warnings.push({
+      stage: "alpha",
+      message: "alpha scoring failed; keeping neutral α",
+      detail: errDetail(err),
+    });
+    return current;
+  }
+}
+
+async function runConcurrently<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, idx: number) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers: Promise<void>[] = [];
+  const worker = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]!, i);
+    }
+  };
+  for (let w = 0; w < Math.min(concurrency, items.length); w++) {
+    workers.push(worker());
+  }
+  await Promise.all(workers);
+  return out;
+}
+
+function errDetail(err: unknown): Record<string, unknown> {
+  if (err instanceof MemosError) return { code: err.code, message: err.message, ...(err.details ?? {}) };
+  if (err instanceof Error) return { name: err.name, message: err.message };
+  return { value: String(err) };
+}
+
+function traceActionText(row: Pick<TraceRow, "agentText" | "toolCalls">): string {
+  const toolSig = row.toolCalls
+    .map((t) => `${t.name}(${safeStringify(t.input).slice(0, 300)})`)
+    .join("; ");
+  return [row.agentText.trim(), toolSig].filter((s) => s.length > 0).join("\n---\n") || "(empty)";
+}
+
+function buildTaskReflectionSummary(
+  episode: CaptureInput["episode"],
+  steps: readonly NormalizedStep[],
+  maxChars = 1_200,
+): string | null {
+  const firstUser = episode.turns.find((t) => t.role === "user" && t.content.trim());
+  const finalAssistant = [...episode.turns]
+    .reverse()
+    .find((t) => t.role === "assistant" && t.content.trim());
+  const toolNames = Array.from(
+    new Set(steps.flatMap((s) => s.toolCalls.map((t) => t.name).filter(Boolean))),
+  ).slice(0, 12);
+
+  const parts = [
+    firstUser ? `Task: ${clipForPrompt(firstUser.content, Math.min(500, maxChars))}` : "",
+    `Intent: ${episode.intent.kind} (${episode.intent.reason})`,
+    finalAssistant ? `Final assistant response: ${clipForPrompt(finalAssistant.content, Math.min(500, maxChars))}` : "",
+    toolNames.length > 0 ? `Tools used: ${toolNames.join(", ")}` : "",
+  ].filter(Boolean);
+
+  const summary = parts.length > 0 ? parts.join("\n") : null;
+  return summary ? clipForPrompt(summary, maxChars) : null;
+}
+
+function buildDownstreamStepPreviews(
+  steps: readonly NormalizedStep[],
+  cfg: CaptureConfig,
+): DownstreamStepPreview[][] {
+  return steps.map((_, idx) => {
+    const out: DownstreamStepPreview[] = [];
+    let usedChars = 0;
+    const count = Math.max(0, Math.min(3, cfg.downstreamStepCount));
+    for (let offset = 1; offset <= count; offset++) {
+      const step = steps[idx + offset];
+      if (!step) break;
+      const remaining = cfg.downstreamContextMaxChars - usedChars;
+      if (remaining <= 0) break;
+      const item = downstreamPreviewForStep(
+        step,
+        offset as 1 | 2 | 3,
+        Math.min(cfg.downstreamPerStepMaxChars, remaining),
+      );
+      usedChars += previewSize(item);
+      out.push(item);
+    }
+    return out;
+  });
+}
+
+function downstreamPreviewForStep(
+  step: NormalizedStep,
+  offset: 1 | 2 | 3,
+  maxChars: number,
+): DownstreamStepPreview {
+  const existingReflection = extractReflection(step);
+  if (step.toolCalls.length > 0) {
+    return {
+      offset,
+      kind: "tooluse",
+      toolNames: step.toolCalls.map((t) => t.name).filter(Boolean),
+      toolOutput: clipForPrompt(summarizeToolOutputs(step), maxChars),
+      reflection: existingReflection ? clipForPrompt(existingReflection, Math.floor(maxChars / 2)) : null,
+    };
+  }
+  return {
+    offset,
+    kind: "text",
+    text: clipForPrompt(textPreviewForStep(step), maxChars),
+  };
+}
+
+function summarizeToolOutputs(step: NormalizedStep): string {
+  return step.toolCalls
+    .map((t) => {
+      const label = t.errorCode ? `${t.name} ERROR[${t.errorCode}]` : t.name;
+      const output = outputOfToolCall(t);
+      return `${label}: ${output || "(no output)"}`;
+    })
+    .join("\n");
+}
+
+function outputOfToolCall(t: { output?: unknown }): string {
+  if (t.output === undefined || t.output === null) return "";
+  if (typeof t.output === "string") return t.output;
+  try {
+    return JSON.stringify(t.output);
+  } catch {
+    return String(t.output);
+  }
+}
+
+function textPreviewForStep(step: NormalizedStep): string {
+  const parts = [
+    step.userText.trim() ? `state: ${step.userText.trim()}` : "",
+    step.agentText.trim() ? `action: ${step.agentText.trim()}` : "",
+  ].filter(Boolean);
+  return parts.join("\n") || "(empty)";
+}
+
+function previewSize(item: DownstreamStepPreview): number {
+  return [
+    item.kind,
+    item.text,
+    item.toolNames?.join(", "),
+    item.toolOutput,
+    item.reflection,
+  ]
+    .filter(Boolean)
+    .join("\n").length;
+}
+
+function stringMeta(meta: Record<string, unknown>, key: string): string | undefined {
+  const value = meta[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function safeStringify(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function clipForPrompt(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}...` : s;
+}
+
+function mergeTurnSteps(
+  episodeId: string,
+  turnId: number,
+  steps: readonly StepCandidate[],
+): StepCandidate {
+  const ordered = [...steps].sort((a, b) => a.ts - b.ts);
+  const first = ordered[0]!;
+  const userText = firstNonEmpty(ordered.map((s) => s.userText));
+  const agentText = ordered
+    .map((s) => s.agentText.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const agentThinking = ordered
+    .map((s) => s.agentThinking?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n") || null;
+  const rawReflection = firstNonEmpty(ordered.map((s) => s.rawReflection ?? ""));
+  const toolCalls = ordered.flatMap((s) => s.toolCalls);
+  const lastTs = ordered.reduce((m, s) => Math.max(m, s.ts), first.ts);
+
+  return {
+    key: `${episodeId}:${turnId}:lightweight`,
+    ts: lastTs as EpochMs,
+    userText,
+    agentText,
+    agentThinking,
+    toolCalls,
+    rawReflection: rawReflection || null,
+    depth: Math.min(...ordered.map((s) => s.depth)),
+    isSubagent: ordered.some((s) => s.isSubagent),
+    meta: {
+      ...ordered.reduce<Record<string, unknown>>(
+        (acc, s) => ({ ...acc, ...s.meta }),
+        {},
+      ),
+      turnId,
+      lightweightMemory: true,
+    },
+  };
+}
+
+function firstNonEmpty(values: readonly string[]): string {
+  return values.map((v) => v.trim()).find(Boolean) ?? "";
+}
+
+/**
+ * Pull the `turnId` stamped by `step-extractor` out of the
+ * `StepCandidate.meta` blob. Falls back to the trace's own `ts` so
+ * old fixtures that pre-date the field still group as a singleton
+ * (one row → one card). Always returns a finite number.
+ */
+function pickTurnId(meta: Record<string, unknown> | undefined, fallbackTs: number): number {
+  const raw = (meta as Record<string, unknown> | undefined)?.turnId;
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : fallbackTs;
+}

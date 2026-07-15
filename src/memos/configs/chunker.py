@@ -14,10 +14,24 @@ class BaseChunkerConfig(BaseConfig):
     chunk_size: int = Field(default=512, description="Maximum tokens per chunk")
     chunk_overlap: int = Field(default=128, description="Overlap between chunks")
     min_sentences_per_chunk: int = Field(default=1, description="Minimum sentences in each chunk")
+    save_rawfile: bool = Field(default=True, description="Whether to save rawfile")  # TODO
 
 
 class SentenceChunkerConfig(BaseChunkerConfig):
     """Configuration for sentence-based text chunker."""
+
+
+class MarkdownChunkerConfig(BaseChunkerConfig):
+    """Configuration for markdown-based text chunker."""
+
+    headers_to_split_on: list[tuple[str, str]] = Field(
+        default=[("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")],
+        description="Headers to split on",
+    )
+    strip_headers: bool = Field(default=True, description="Strip headers from the text")
+    recursive: bool = Field(
+        default=False, description="Whether to use recursive character text splitter"
+    )
 
 
 class ChunkerConfigFactory(BaseConfig):
@@ -28,6 +42,7 @@ class ChunkerConfigFactory(BaseConfig):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "sentence": SentenceChunkerConfig,
+        "markdown": MarkdownChunkerConfig,
     }
 
     @field_validator("backend")

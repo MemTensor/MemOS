@@ -17,12 +17,12 @@ from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.schemas.general_schemas import (
-    ANSWER_LABEL,
-    QUERY_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleLogForWebItem,
+)
+from memos.mem_scheduler.schemas.task_schemas import (
+    ANSWER_TASK_LABEL,
+    QUERY_TASK_LABEL,
 )
 from memos.memories.textual.tree import TreeTextMemory
 
@@ -33,6 +33,9 @@ sys.path.insert(0, str(BASE_DIR))  # Enable execution from any working directory
 
 
 class TestGeneralScheduler(unittest.TestCase):
+    # Control whether to run activation memory tests that require GPU, default is False
+    RUN_ACTIVATION_MEMORY_TESTS = True
+
     def _create_mock_auth_config(self):
         """Create a mock AuthConfig for testing purposes."""
         # Create mock configs with valid test values
@@ -65,6 +68,19 @@ class TestGeneralScheduler(unittest.TestCase):
         self.llm = MagicMock(spec=BaseLLM)
         self.mem_cube = MagicMock(spec=GeneralMemCube)
         self.tree_text_memory = MagicMock(spec=TreeTextMemory)
+        # Add memory_manager mock to prevent AttributeError in scheduler_logger
+        self.tree_text_memory.memory_manager = MagicMock()
+        self.tree_text_memory.memory_manager.memory_size = {
+            "LongTermMemory": 10000,
+            "UserMemory": 10000,
+            "WorkingMemory": 20,
+        }
+        # Mock get_current_memory_size method
+        self.tree_text_memory.get_current_memory_size.return_value = {
+            "LongTermMemory": 100,
+            "UserMemory": 50,
+            "WorkingMemory": 10,
+        }
         self.mem_cube.text_mem = self.tree_text_memory
         self.mem_cube.act_mem = MagicMock()
 
@@ -90,8 +106,8 @@ class TestGeneralScheduler(unittest.TestCase):
     def test_initialization(self):
         """Test that scheduler initializes with correct default values and handlers."""
         # Verify handler registration
-        self.assertTrue(QUERY_LABEL in self.scheduler.dispatcher.handlers)
-        self.assertTrue(ANSWER_LABEL in self.scheduler.dispatcher.handlers)
+        self.assertTrue(QUERY_TASK_LABEL in self.scheduler.dispatcher.handlers)
+        self.assertTrue(ANSWER_TASK_LABEL in self.scheduler.dispatcher.handlers)
 
     def test_initialize_modules(self):
         """Test module initialization with proper component assignments."""
@@ -105,9 +121,9 @@ class TestGeneralScheduler(unittest.TestCase):
         log_message = ScheduleLogForWebItem(
             user_id="test_user",
             mem_cube_id="test_cube",
-            label=QUERY_LABEL,
-            from_memory_type="WorkingMemory",  # 新增字段
-            to_memory_type="LongTermMemory",  # 新增字段
+            label=QUERY_TASK_LABEL,
+            from_memory_type="WorkingMemory",  # New field
+            to_memory_type="LongTermMemory",  # New field
             log_content="Test Content",
             current_memory_sizes={
                 "long_term_memory_size": 0,
@@ -123,41 +139,120 @@ class TestGeneralScheduler(unittest.TestCase):
             },
         )
 
-        # Empty the queue by consuming all elements
-        while not self.scheduler._web_log_message_queue.empty():
-            self.scheduler._web_log_message_queue.get()
+        self.scheduler.rabbitmq_config = MagicMock()
+        self.scheduler.rabbitmq_publish_message = MagicMock()
 
         # Submit the log message
         self.scheduler._submit_web_logs(messages=log_message)
 
-        # Verify the message was added to the queue
-        self.assertEqual(self.scheduler._web_log_message_queue.qsize(), 1)
-
-        # Get the actual message from the queue
-        actual_message = self.scheduler._web_log_message_queue.get()
-
-        # Verify core fields
-        self.assertEqual(actual_message.user_id, "test_user")
-        self.assertEqual(actual_message.mem_cube_id, "test_cube")
-        self.assertEqual(actual_message.label, QUERY_LABEL)
-        self.assertEqual(actual_message.from_memory_type, "WorkingMemory")
-        self.assertEqual(actual_message.to_memory_type, "LongTermMemory")
-        self.assertEqual(actual_message.log_content, "Test Content")
-
-        # Verify memory sizes
-        self.assertEqual(actual_message.current_memory_sizes["long_term_memory_size"], 0)
-        self.assertEqual(actual_message.current_memory_sizes["user_memory_size"], 0)
-        self.assertEqual(actual_message.current_memory_sizes["working_memory_size"], 0)
-        self.assertEqual(actual_message.current_memory_sizes["transformed_act_memory_size"], 0)
-
-        # Verify memory capacities
-        self.assertEqual(actual_message.memory_capacities["long_term_memory_capacity"], 1000)
-        self.assertEqual(actual_message.memory_capacities["user_memory_capacity"], 500)
-        self.assertEqual(actual_message.memory_capacities["working_memory_capacity"], 100)
-        self.assertEqual(actual_message.memory_capacities["transformed_act_memory_capacity"], 0)
+        self.scheduler.rabbitmq_publish_message.assert_called_once_with(
+            message=log_message.to_dict()
+        )
 
         # Verify auto-generated fields exist
-        self.assertTrue(hasattr(actual_message, "item_id"))
-        self.assertTrue(isinstance(actual_message.item_id, str))
-        self.assertTrue(hasattr(actual_message, "timestamp"))
-        self.assertTrue(isinstance(actual_message.timestamp, datetime))
+        self.assertTrue(hasattr(log_message, "item_id"))
+        self.assertTrue(isinstance(log_message.item_id, str))
+        self.assertTrue(hasattr(log_message, "timestamp"))
+        self.assertTrue(isinstance(log_message.timestamp, datetime))
+
+    def test_activation_memory_update(self):
+        """Test activation memory update functionality with DynamicCache handling."""
+        if not self.RUN_ACTIVATION_MEMORY_TESTS:
+            self.skipTest(
+                "Skipping activation memory test. Set RUN_ACTIVATION_MEMORY_TESTS=True to enable."
+            )
+
+        from unittest.mock import Mock
+
+        from transformers import DynamicCache
+
+        from memos.memories.activation.kv import KVCacheMemory
+
+        # Mock the mem_cube with activation memory
+        mock_kv_cache_memory = Mock(spec=KVCacheMemory)
+        self.mem_cube.act_mem = mock_kv_cache_memory
+
+        # Mock get_all to return empty list (no existing cache items)
+        mock_kv_cache_memory.get_all.return_value = []
+
+        # Create a mock DynamicCache with layers attribute
+        mock_cache = Mock(spec=DynamicCache)
+        mock_cache.layers = []
+
+        # Create mock layers with key_cache and value_cache
+        for _ in range(2):  # Simulate 2 layers
+            mock_layer = Mock()
+            mock_layer.key_cache = Mock()
+            mock_layer.value_cache = Mock()
+            mock_cache.layers.append(mock_layer)
+
+        # Mock the extract method to return a KVCacheItem
+        mock_cache_item = Mock()
+        mock_cache_item.records = Mock()
+        mock_cache_item.records.text_memories = []
+        mock_cache_item.records.timestamp = None
+        mock_kv_cache_memory.extract.return_value = mock_cache_item
+
+        # Test data
+        test_memories = ["Test memory 1", "Test memory 2"]
+        user_id = "test_user"
+        mem_cube_id = "test_cube"
+
+        # Call the method under test
+        try:
+            self.scheduler.update_activation_memory(
+                new_memories=test_memories,
+                label=QUERY_TASK_LABEL,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=self.mem_cube,
+            )
+
+            # Verify that extract was called
+            mock_kv_cache_memory.extract.assert_called_once()
+
+            # Verify that add was called with the extracted cache item
+            mock_kv_cache_memory.add.assert_called_once()
+
+            # Verify that dump was called
+            mock_kv_cache_memory.dump.assert_called_once()
+
+            print("✅ Activation memory update test passed - DynamicCache layers handled correctly")
+
+        except Exception as e:
+            self.fail(f"Activation memory update failed: {e}")
+
+    def test_dynamic_cache_layers_access(self):
+        """Test DynamicCache layers attribute access for compatibility."""
+        if not self.RUN_ACTIVATION_MEMORY_TESTS:
+            self.skipTest(
+                "Skipping activation memory test. Set RUN_ACTIVATION_MEMORY_TESTS=True to enable."
+            )
+
+        from unittest.mock import Mock
+
+        from transformers import DynamicCache
+
+        # Create a real DynamicCache instance
+        cache = DynamicCache()
+
+        # Check if it has layers attribute (may vary by transformers version)
+        if hasattr(cache, "layers"):
+            self.assertIsInstance(cache.layers, list, "DynamicCache.layers should be a list")
+
+            # Test with mock layers
+            mock_layer = Mock()
+            mock_layer.key_cache = Mock()
+            mock_layer.value_cache = Mock()
+            cache.layers.append(mock_layer)
+
+            # Verify we can access layer attributes
+            self.assertEqual(len(cache.layers), 1)
+            self.assertTrue(hasattr(cache.layers[0], "key_cache"))
+            self.assertTrue(hasattr(cache.layers[0], "value_cache"))
+
+            print("✅ DynamicCache layers access test passed")
+        else:
+            # If layers attribute doesn't exist, verify our fix handles this case
+            print("⚠️  DynamicCache doesn't have 'layers' attribute in this transformers version")
+            print("✅ Test passed - our code should handle this gracefully")

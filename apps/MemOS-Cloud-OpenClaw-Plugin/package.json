@@ -1,0 +1,55 @@
+{
+  "name": "@memtensor/memos-cloud-openclaw-plugin",
+  "version": "0.1.12",
+  "description": "OpenClaw lifecycle plugin for MemOS Cloud (add + recall memory)",
+  "scripts": {
+    "sync-version": "node scripts/sync-version.js",
+    "version": "npm run sync-version && git add openclaw.plugin.json moltbot.plugin.json clawdbot.plugin.json",
+    "publish-beta": "npm publish --tag beta",
+    "publish-beta-patch": "npm version prepatch --preid=beta && npm publish --tag beta",
+    "publish-latest": "npm version $(node -p \"require('./package.json').version.split('-')[0]\") && npm publish",
+    "publish-latest-patch": "npm version patch && npm publish"
+  },
+  "keywords": [
+    "memos",
+    "memos-cloud",
+    "openclaw",
+    "plugin",
+    "memory"
+  ],
+  "homepage": "https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin#readme",
+  "bugs": {
+    "url": "https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin.git"
+  },
+  "type": "module",
+  "author": "MemTensor",
+  "license": "MIT",
+  "openclaw": {
+    "hooks": [
+      "./index.js"
+    ],
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "clawdbot": {
+    "hooks": [
+      "./index.js"
+    ],
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "moltbot": {
+    "hooks": [
+      "./index.js"
+    ],
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

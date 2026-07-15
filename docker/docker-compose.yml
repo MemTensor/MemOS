@@ -26,7 +26,7 @@ services:
       - memos_network
 
   neo4j:
-    image: neo4j:5.26.4
+    image: neo4j:5.26.6
     container_name: neo4j-docker
     ports:
       - "7474:7474"   # HTTP
@@ -53,7 +53,7 @@ services:
       - "6333:6333"  # REST API
       - "6334:6334"  # gRPC API
     volumes:
-      - ./qdrant_data:/qdrant/storage
+      - qdrant_data:/qdrant/storage
     environment:
       QDRANT__SERVICE__GRPC_PORT: 6334
       QDRANT__SERVICE__HTTP_PORT: 6333
@@ -64,6 +64,7 @@ services:
 volumes:
   neo4j_data:
   neo4j_logs:
+  qdrant_data:
 
 networks:
   memos_network:

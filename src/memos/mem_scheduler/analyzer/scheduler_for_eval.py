@@ -7,15 +7,15 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from memos.log import get_logger
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.schemas.general_schemas import (
-    DEFAULT_MAX_QUERY_KEY_WORDS,
-    UserID,
-)
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    DEFAULT_MAX_QUERY_KEY_WORDS,
+)
 
 
 if TYPE_CHECKING:
     from memos.memories.textual.tree import TextualMemoryItem
+    from memos.types import UserID
 
 
 logger = get_logger(__name__)
@@ -226,9 +226,9 @@ class SchedulerForEval(GeneralScheduler):
 
         try:
             # Extract JSON response
-            from memos.mem_scheduler.utils.misc_utils import extract_json_dict
+            from memos.mem_scheduler.utils.misc_utils import extract_json_obj
 
-            result = extract_json_dict(response)
+            result = extract_json_obj(response)
 
             # Validate response structure
             if "result" in result:

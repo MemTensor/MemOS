@@ -1,5 +1,13 @@
-import asyncio
+# Prerequisites:
+# 1. Ensure a Redis server is running locally on the default port (6379).
+#    You can start it with: `redis-server`
+#    On macOS with Homebrew: `/opt/homebrew/bin/redis-server` or `brew services start redis`
+#    On Linux: `sudo service redis-server start`
+# 2. If Redis is running on a different host/port, update the configuration or environment variables accordingly.
+
+
 import sys
+import time
 
 from datetime import datetime
 from pathlib import Path
@@ -9,8 +17,8 @@ from uuid import uuid4
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.schemas.general_schemas import QUERY_LABEL
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import QUERY_TASK_LABEL
 
 
 if TYPE_CHECKING:
@@ -22,7 +30,7 @@ BASE_DIR = FILE_PATH.parent.parent.parent
 sys.path.insert(0, str(BASE_DIR))  # Enable execution from any working directory
 
 
-async def service_run():
+def service_run():
     # Init
     example_scheduler_config_path = (
         f"{BASE_DIR}/examples/data/config/mem_scheduler/general_scheduler_config.yaml"
@@ -55,16 +63,16 @@ async def service_run():
         message_item = ScheduleMessageItem(
             user_id=user_id,
             mem_cube_id="mem_cube_2",
-            label=QUERY_LABEL,
+            label=QUERY_TASK_LABEL,
             mem_cube=mem_cube,
             content=query,
             timestamp=datetime.now(),
         )
-        res = await mem_scheduler.redis_add_message_stream(message=message_item.to_dict())
+        res = mem_scheduler.redis_add_message_stream(message=message_item.to_dict())
         print(
             f"Added: {res}",
         )
-        await asyncio.sleep(0.5)
+        time.sleep(0.5)
 
     mem_scheduler.redis_stop_listening()
 
@@ -72,4 +80,4 @@ async def service_run():
 
 
 if __name__ == "__main__":
-    asyncio.run(service_run())
+    service_run()

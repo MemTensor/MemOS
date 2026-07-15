@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from memos.log import get_logger
+from memos.utils import timed
+
 from .base import BaseReranker
 
 
@@ -15,6 +18,8 @@ try:
     _HAS_NUMPY = True
 except Exception:
     _HAS_NUMPY = False
+
+logger = get_logger(__name__)
 
 
 def _cosine_one_to_many(q: list[float], m: list[list[float]]) -> list[float]:
@@ -54,6 +59,7 @@ class CosineLocalReranker(BaseReranker):
         self.level_weights = level_weights or {"topic": 1.0, "concept": 1.0, "fact": 1.0}
         self.level_field = level_field
 
+    @timed
     def rerank(
         self,
         query: str,
@@ -92,5 +98,5 @@ class CosineLocalReranker(BaseReranker):
             chosen = {it.id for it, _ in top_items}
             remain = [(it, -1.0) for it in graph_results if it.id not in chosen]
             top_items.extend(remain[: top_k - len(top_items)])
-
+        logger.info(f"CosineLocalReranker rerank result: {top_items[:1]}")
         return top_items

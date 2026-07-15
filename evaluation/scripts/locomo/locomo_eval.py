@@ -3,10 +3,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 
 import nltk
 import numpy as np
+import tiktoken
 import transformers
 
 from bert_score import score as bert_score
@@ -23,7 +25,7 @@ from tqdm import tqdm
 
 logging.basicConfig(level=logging.CRITICAL)
 transformers.logging.set_verbosity_error()
-
+encoding = tiktoken.get_encoding("cl100k_base")
 # Download necessary NLTK resources
 try:
     nltk.download("wordnet", quiet=True)
@@ -44,6 +46,29 @@ except Exception as e:
 class LLMGrade(BaseModel):
     llm_judgment: str = Field(description="CORRECT or WRONG")
     llm_reasoning: str = Field(description="Explain why the answer is correct or incorrect.")
+
+
+def extract_label_json(text: str) -> str | None:
+    """
+    Extracts a JSON object of the form {"label": "VALUE"} from a given text string.
+    This function is designed to handle cases where the LLM response contains
+    natural language alongside a final JSON snippet, ensuring robust parsing.
+
+    Supports both single and double quotes around the label value.
+    Ignores surrounding whitespace and formatting.
+
+    Returns:
+        The full matching JSON string (e.g., '{"label": "CORRECT"}') if found.
+        None if no valid label JSON is found.
+    """
+    # Regex pattern to match: { "label": "value" } with optional whitespace
+    # Matches both single and double quotes, allows spaces around keys and values
+    pattern = r'\{\s*"label"\s*:\s*["\']([^"\']*)["\']\s*\}'
+    match = re.search(pattern, text)
+    if match:
+        # Return the complete matched JSON string for safe json.loads()
+        return match.group(0)
+    return None
 
 
 async def locomo_grader(llm_client, question: str, gold_answer: str, response: str) -> bool:
@@ -76,20 +101,23 @@ async def locomo_grader(llm_client, question: str, gold_answer: str, response: s
 
     Just return the label CORRECT or WRONG in a json format with the key as "label".
     """
-
-    response = await llm_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": accuracy_prompt},
-        ],
-        temperature=0,
-    )
-    message_content = response.choices[0].message.content
-    label = json.loads(message_content)["label"]
-    parsed = LLMGrade(llm_judgment=label, llm_reasoning="")
-
-    return parsed.llm_judgment.strip().lower() == "correct"
+    try:
+        response = await llm_client.chat.completions.create(
+            model=os.getenv("EVAL_MODEL", "gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": accuracy_prompt},
+            ],
+            temperature=0,
+        )
+        message_content = response.choices[0].message.content
+        message_content = extract_label_json(text=message_content)
+        label = json.loads(message_content)["label"]
+        parsed = LLMGrade(llm_judgment=label, llm_reasoning="")
+        return parsed.llm_judgment.strip().lower() == "correct"
+    except Exception as e:
+        print(f"======== {e}, {response} ===========")
+        exit()
 
 
 def calculate_rouge_scores(gold_answer, response):
@@ -173,7 +201,7 @@ def calculate_nlp_metrics(gold_answer, response, context, options=None):
     gold_answer = str(gold_answer) if gold_answer is not None else ""
     response = str(response) if response is not None else ""
 
-    metrics = {"context_tokens": len(nltk.word_tokenize(context)) if context else 0}
+    metrics = {"context_tokens": len(encoding.encode(context)) if context else 0}
 
     if "lexical" in options:
         gold_tokens = nltk.word_tokenize(gold_answer.lower())
@@ -362,7 +390,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
+        default="memos-api",
     )
     parser.add_argument(
         "--version",
@@ -376,9 +413,9 @@ if __name__ == "__main__":
         default=3,
         help="Number of times to run the LLM grader for each question",
     )
-    parser.add_argument("--options", nargs="+", default=["lexical", "semantic"])
+    parser.add_argument("--options", nargs="+", default=["lexical"])
     parser.add_argument(
-        "--workers", type=int, default=4, help="Number of concurrent workers for processing groups"
+        "--workers", type=int, default=10, help="Number of concurrent workers for processing groups"
     )
     args = parser.parse_args()
 

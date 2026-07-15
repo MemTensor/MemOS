@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "memos.memos.fullname" . }}
+  labels:
+    {{- include "memos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.memos.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "memos.labels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "memos.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-neo4j
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z {{ include "memos.neo4j.fullname" . }} 7687; do echo waiting for neo4j; sleep 2; done;']
+        - name: wait-for-qdrant
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z {{ include "memos.qdrant.fullname" . }} 6333; do echo waiting for qdrant; sleep 2; done;']
+      containers:
+        - name: memos
+          image: "{{ .Values.memos.image.repository }}:{{ .Values.memos.image.tag }}"
+          imagePullPolicy: {{ .Values.memos.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: {{ include "memos.memos.fullname" . }}
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "memos.memos.fullname" . }}-secret
+                  key: openai-api-key
+            - name: MEMRADER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "memos.memos.fullname" . }}-secret
+                  key: memrader-api-key
+          resources:
+            {{- toYaml .Values.memos.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "memos.memos.fullname" . }}
+  labels:
+    {{- include "memos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: {{ .Values.memos.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.memos.service.port }}
+      targetPort: http
+  selector:
+    {{- include "memos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "memos.memos.fullname" . }}-secret
+  labels:
+    {{- include "memos.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  openai-api-key: {{ .Values.memos.env.OPENAI_API_KEY | quote }}
+  memrader-api-key: {{ .Values.memos.env.MEMRADER_API_KEY | quote }}

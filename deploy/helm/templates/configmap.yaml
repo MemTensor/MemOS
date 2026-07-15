@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "memos.memos.fullname" . }}
+  labels:
+    {{- include "memos.labels" . | nindent 4 }}
+data:
+  TZ: {{ .Values.memos.env.TZ | quote }}
+  MOS_CUBE_PATH: {{ .Values.memos.env.MOS_CUBE_PATH | quote }}
+  MEMOS_BASE_PATH: {{ .Values.memos.env.MEMOS_BASE_PATH | quote }}
+  MOS_ENABLE_DEFAULT_CUBE_CONFIG: {{ .Values.memos.env.MOS_ENABLE_DEFAULT_CUBE_CONFIG | quote }}
+  MOS_ENABLE_REORGANIZE: {{ .Values.memos.env.MOS_ENABLE_REORGANIZE | quote }}
+  MOS_TEXT_MEM_TYPE: {{ .Values.memos.env.MOS_TEXT_MEM_TYPE | quote }}
+  ASYNC_MODE: {{ .Values.memos.env.ASYNC_MODE | quote }}
+  MOS_TOP_K: {{ .Values.memos.env.MOS_TOP_K | quote }}
+  MOS_CHAT_MODEL: {{ .Values.memos.env.MOS_CHAT_MODEL | quote }}
+  MOS_CHAT_TEMPERATURE: {{ .Values.memos.env.MOS_CHAT_TEMPERATURE | quote }}
+  MOS_MAX_TOKENS: {{ .Values.memos.env.MOS_MAX_TOKENS | quote }}
+  MOS_TOP_P: {{ .Values.memos.env.MOS_TOP_P | quote }}
+  MOS_CHAT_MODEL_PROVIDER: {{ .Values.memos.env.MOS_CHAT_MODEL_PROVIDER | quote }}
+  OPENAI_API_BASE: {{ .Values.memos.env.OPENAI_API_BASE | quote }}
+  MEMRADER_MODEL: {{ .Values.memos.env.MEMRADER_MODEL | quote }}
+  MEMRADER_API_BASE: {{ .Values.memos.env.MEMRADER_API_BASE | quote }}
+  MEMRADER_MAX_TOKENS: {{ .Values.memos.env.MEMRADER_MAX_TOKENS | quote }}
+  EMBEDDING_DIMENSION: {{ .Values.memos.env.EMBEDDING_DIMENSION | quote }}
+  MOS_EMBEDDER_BACKEND: {{ .Values.memos.env.MOS_EMBEDDER_BACKEND | quote }}
+  MOS_EMBEDDER_PROVIDER: {{ .Values.memos.env.MOS_EMBEDDER_PROVIDER | quote }}
+  MOS_EMBEDDER_MODEL: {{ .Values.memos.env.MOS_EMBEDDER_MODEL | quote }}
+  MOS_EMBEDDER_API_BASE: {{ .Values.memos.env.MOS_EMBEDDER_API_BASE | quote }}
+  MOS_EMBEDDER_API_KEY: {{ .Values.memos.env.MOS_EMBEDDER_API_KEY | quote }}
+  MOS_RERANKER_BACKEND: {{ .Values.memos.env.MOS_RERANKER_BACKEND | quote }}
+  MOS_RERANKER_URL: {{ .Values.memos.env.MOS_RERANKER_URL | quote }}
+  MOS_RERANKER_MODEL: {{ .Values.memos.env.MOS_RERANKER_MODEL | quote }}
+  MOS_RERANKER_STRATEGY: {{ .Values.memos.env.MOS_RERANKER_STRATEGY | quote }}
+  ENABLE_INTERNET: {{ .Values.memos.env.ENABLE_INTERNET | quote }}
+  ENABLE_PREFERENCE_MEMORY: {{ .Values.memos.env.ENABLE_PREFERENCE_MEMORY | quote }}
+  PREFERENCE_ADDER_MODE: {{ .Values.memos.env.PREFERENCE_ADDER_MODE | quote }}
+  MOS_ENABLE_SCHEDULER: {{ .Values.memos.env.MOS_ENABLE_SCHEDULER | quote }}
+  MOS_SCHEDULER_TOP_K: {{ .Values.memos.env.MOS_SCHEDULER_TOP_K | quote }}
+  NEO4J_BACKEND: {{ .Values.memos.env.NEO4J_BACKEND | quote }}
+  NEO4J_URI: "bolt://{{ include "memos.neo4j.fullname" . }}:7687"
+  NEO4J_USER: {{ .Values.neo4j.auth.user | quote }}
+  NEO4J_PASSWORD: {{ .Values.neo4j.auth.password | quote }}
+  NEO4J_DB_NAME: {{ .Values.memos.env.NEO4J_DB_NAME | quote }}
+  MOS_NEO4J_SHARED_DB: {{ .Values.memos.env.MOS_NEO4J_SHARED_DB | quote }}
+  QDRANT_HOST: {{ include "memos.qdrant.fullname" . }}
+  QDRANT_PORT: "6333"
+  PYTHONPATH: "/app/src"

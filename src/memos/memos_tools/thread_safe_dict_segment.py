@@ -71,7 +71,7 @@ class FastReadWriteLock:
                 self._waiting_writers -= 1
                 self._last_write_time = time.time()
                 return True
-            except:
+            except Exception:
                 self._waiting_writers -= 1
                 raise
 
