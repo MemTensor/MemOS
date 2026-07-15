@@ -16,7 +16,7 @@ from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.dream.contextualization import CONTEXT_MEMORY_TYPE
-from memos.log import get_logger
+from memos.log import get_logger, summarize_search_request, summarize_search_results
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     cosine_similarity_matrix,
 )
@@ -77,7 +77,10 @@ class SearchHandler(BaseHandler):
         Returns:
             SearchResponse with formatted results
         """
-        self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
+        self.logger.info(
+            "[SearchHandler] Search request summary: %s",
+            summarize_search_request(search_req),
+        )
 
         # Use deepcopy to avoid modifying the original request object
         search_req_local = copy.deepcopy(search_req)
@@ -137,7 +140,8 @@ class SearchHandler(BaseHandler):
             results = hooked_results
 
         self.logger.info(
-            f"[SearchHandler] Final search results: count={len(results)} results={results}"
+            "[SearchHandler] Final search result summary: %s",
+            summarize_search_results(results),
         )
 
         return SearchResponse(
