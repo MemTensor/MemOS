@@ -17,9 +17,6 @@
     <a href="https://pypi.org/project/MemoryOS">
       <img src="https://img.shields.io/pypi/pyversions/MemoryOS.svg" alt="Supported Python versions">
     </a>
-    <a href="https://pypi.org/project/MemoryOS">
-      <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey" alt="Supported Platforms">
-    </a>
     <a href="https://memos-docs.openmem.net/home/overview/">
       <img src="https://img.shields.io/badge/Documentation-view-blue.svg" alt="Documentation">
     </a>

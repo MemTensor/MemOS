@@ -42,7 +42,7 @@ class TraceIDFilter(logging.Filter):
             trace_id = get_current_trace_id()
             record.trace_id = trace_id if trace_id else "trace-id"
         except Exception:
-            record.trace_id = "trace-id"
+            record.trace_id = "trace-id-test"
         return True
 
 
