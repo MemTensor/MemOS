@@ -312,7 +312,9 @@ class TestSearchMemoriesLoggingRedaction:
         with caplog.at_level(logging.INFO, logger="test.search_log_redaction"):
             view.search_memories(req)
 
-        summary = next(r.message for r in caplog.records if "Search memories result" in r.message)
+        matched = [r.message for r in caplog.records if "Search memories result" in r.message]
+        assert len(matched) == 1, f"expected exactly one summary log line, got: {matched}"
+        summary = matched[0]
         # Useful fields still logged — this is a log hygiene fix, not a log removal.
         assert "mem-1" in summary
         assert "user likes dark mode" in summary

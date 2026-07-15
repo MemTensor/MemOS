@@ -75,7 +75,7 @@ def _redact_embeddings_for_log(memories_result: dict[str, Any]) -> dict[str, Any
                 continue
             new_group = dict(group)
             new_memories = []
-            for mem in group.get("memories", []) or []:
+            for mem in group.get("memories") or []:
                 if not isinstance(mem, dict):
                     new_memories.append(mem)
                     continue
@@ -188,7 +188,7 @@ class SingleCubeView(MemCubeView):
             self.cube_id,
         )
 
-        self.logger.info(f"Search memories result: {_redact_embeddings_for_log(memories_result)}")
+        self.logger.info("Search memories result: %s", _redact_embeddings_for_log(memories_result))
         self.logger.info(f"Search {len(memories_result)} memories.")
         return memories_result
 
