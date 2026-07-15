@@ -14,6 +14,9 @@ on:
         description: "Git ref to build from (branch, tag, or SHA). Leave blank to use the branch selected above."
         required: false
         default: ""
+      release_notes:
+        description: "Markdown release notes for GitHub Release and docs changelog. Include a ## Changelog section."
+        required: true
 
 concurrency:
   group: memos-local-plugin-publish
@@ -133,15 +136,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          if [ -z "$(printf '%s' "${RELEASE_NOTES}" | tr -d '[:space:]')" ]; then
+            echo "::error::release_notes is required so Doc Agent can update docs."
+            exit 1
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          release_tag="memos-local-plugin-v${RELEASE_VERSION}"
+          release_tag="openclaw-local-plugin-v${RELEASE_VERSION}"
           release_branch="release/${release_tag}"
           release_title="release: @memtensor/memos-local-plugin v${RELEASE_VERSION}"
+          release_notes_file="$(mktemp)"
+          printf '%s\n' "${RELEASE_NOTES}" > "${release_notes_file}"
 
           git add apps/memos-local-plugin/package.json apps/memos-local-plugin/package-lock.json
           created_release_commit=false
@@ -164,6 +175,16 @@ jobs:
           else
             git tag "${release_tag}"
             git push origin "refs/tags/${release_tag}"
+          fi
+
+          if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "GitHub Release ${release_tag} already exists; leaving it unchanged."
+          else
+            gh release create "${release_tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "$(git rev-parse HEAD)" \
+              --title "OpenClaw Local Plugin v${RELEASE_VERSION}" \
+              --notes-file "${release_notes_file}"
           fi
 
           if [ "${created_release_commit}" = "true" ]; then
