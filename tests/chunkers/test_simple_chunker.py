@@ -9,6 +9,7 @@ raised `AttributeError: 'SimpleTextSplitter' object has no attribute
 
 import pytest
 
+from memos.chunkers.base import URLProtectionMixin
 from memos.chunkers.simple_chunker import SimpleTextSplitter
 
 
@@ -45,7 +46,9 @@ def test_simple_text_splitter_long_text_preserves_url():
     )
     # No chunk should contain the placeholder marker leftover.
     for c in chunks:
-        assert "__URL_" not in c, f"unresolved URL placeholder leaked into chunk: {c!r}"
+        assert URLProtectionMixin._URL_PLACEHOLDER_PREFIX not in c, (
+            f"unresolved URL placeholder leaked into chunk: {c!r}"
+        )
     # No chunk should contain a *partial* URL — i.e., if the chunk mentions
     # "https://" it must contain the URL in full.
     for c in chunks:
