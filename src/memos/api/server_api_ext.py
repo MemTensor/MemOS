@@ -26,11 +26,12 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 # Import Krolik extensions
+from memos.api.lifecycle import shutdown_components
 from memos.api.middleware.rate_limit import RateLimitMiddleware
-from memos.api.routers.admin_router import router as admin_router
 
 # Import base routers from MemOS
-from memos.api.routers.server_router import router as server_router
+from memos.api.routers import server_router as server_router_module
+from memos.api.routers.admin_router import router as admin_router
 
 
 # Try to import exception handlers (may vary between MemOS versions)
@@ -94,7 +95,7 @@ if RATE_LIMIT_ENABLED:
     logger.info("Rate limiting enabled")
 
 # Include routers
-app.include_router(server_router)
+app.include_router(server_router_module.router)
 app.include_router(admin_router)
 
 # Exception handlers
@@ -116,6 +117,11 @@ async def health_check():
         "auth_enabled": os.getenv("AUTH_ENABLED", "false").lower() == "true",
         "rate_limit_enabled": RATE_LIMIT_ENABLED,
     }
+
+
+@app.on_event("shutdown")
+def shutdown_server_components() -> None:
+    shutdown_components(server_router_module.components)
 
 
 if __name__ == "__main__":

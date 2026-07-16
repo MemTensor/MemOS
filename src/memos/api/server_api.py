@@ -7,8 +7,9 @@ from fastapi.exceptions import RequestValidationError
 from starlette.staticfiles import StaticFiles
 
 from memos.api.exceptions import APIExceptionHandler
+from memos.api.lifecycle import shutdown_components
 from memos.api.middleware.request_context import RequestContextMiddleware
-from memos.api.routers.server_router import router as server_router
+from memos.api.routers import server_router as server_router_module
 from memos.plugins.manager import plugin_manager
 
 
@@ -35,7 +36,7 @@ app.mount("/download", StaticFiles(directory=os.getenv("FILE_LOCAL_PATH")), name
 
 app.add_middleware(RequestContextMiddleware, source="server_api")
 # Include routers
-app.include_router(server_router)
+app.include_router(server_router_module.router)
 
 
 @app.get("/health")
@@ -46,6 +47,11 @@ def health_check():
         "service": "memos",
         "version": app.version,
     }
+
+
+@app.on_event("shutdown")
+def shutdown_server_components() -> None:
+    shutdown_components(server_router_module.components)
 
 
 # Request validation failed
