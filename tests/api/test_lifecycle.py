@@ -29,3 +29,10 @@ def test_shutdown_components_still_closes_rabbitmq_when_stop_fails():
     shutdown_components({"mem_scheduler": scheduler})
 
     assert scheduler.calls == ["stop", "rabbitmq_close"]
+
+
+def test_shutdown_components_skips_missing_methods():
+    class MinimalScheduler:
+        pass
+
+    shutdown_components({"mem_scheduler": MinimalScheduler()})

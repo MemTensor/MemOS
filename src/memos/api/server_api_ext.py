@@ -18,6 +18,9 @@ Usage in Dockerfile:
 import logging
 import os
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,11 +62,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    yield
+    shutdown_components(server_router_module.components)
+
+
 # Create FastAPI app
 app = FastAPI(
     title="MemOS Server REST APIs (Krolik Extended)",
     description="MemOS API with authentication, rate limiting, and admin endpoints.",
     version="2.0.3-krolik",
+    lifespan=lifespan,
 )
 
 # CORS configuration
@@ -117,11 +127,6 @@ async def health_check():
         "auth_enabled": os.getenv("AUTH_ENABLED", "false").lower() == "true",
         "rate_limit_enabled": RATE_LIMIT_ENABLED,
     }
-
-
-@app.on_event("shutdown")
-def shutdown_server_components() -> None:
-    shutdown_components(server_router_module.components)
 
 
 if __name__ == "__main__":
