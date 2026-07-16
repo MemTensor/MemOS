@@ -18,6 +18,9 @@ Usage in Dockerfile:
 import logging
 import os
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,11 +29,12 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 # Import Krolik extensions
+from memos.api.lifecycle import shutdown_components
 from memos.api.middleware.rate_limit import RateLimitMiddleware
-from memos.api.routers.admin_router import router as admin_router
 
 # Import base routers from MemOS
-from memos.api.routers.server_router import router as server_router
+from memos.api.routers import server_router as server_router_module
+from memos.api.routers.admin_router import router as admin_router
 
 
 # Try to import exception handlers (may vary between MemOS versions)
@@ -58,11 +62,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    yield
+    shutdown_components(server_router_module.components)
+
+
 # Create FastAPI app
 app = FastAPI(
     title="MemOS Server REST APIs (Krolik Extended)",
     description="MemOS API with authentication, rate limiting, and admin endpoints.",
     version="2.0.3-krolik",
+    lifespan=lifespan,
 )
 
 # CORS configuration
@@ -94,7 +105,7 @@ if RATE_LIMIT_ENABLED:
     logger.info("Rate limiting enabled")
 
 # Include routers
-app.include_router(server_router)
+app.include_router(server_router_module.router)
 app.include_router(admin_router)
 
 # Exception handlers
