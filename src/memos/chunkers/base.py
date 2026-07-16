@@ -24,6 +24,12 @@ class URLProtectionMixin:
     """
 
     _URL_PATTERN = r'https?://[^\s<>"{}|\\^`\[\]]+'
+    # Prefix used for the placeholders emitted by :meth:`protect_urls`. Exposed
+    # as a class-level constant so tests (and any other consumer that needs to
+    # detect leaked placeholders) can reference it without hardcoding the
+    # literal — keeping the assertion in sync with the implementation if the
+    # placeholder format ever changes.
+    _URL_PLACEHOLDER_PREFIX = "__URL_"
 
     def protect_urls(self, text: str) -> tuple[str, dict[str, str]]:
         """
@@ -39,7 +45,7 @@ class URLProtectionMixin:
 
         def replace_url(match):
             url = match.group(0)
-            placeholder = f"__URL_{len(url_map)}__"
+            placeholder = f"{self._URL_PLACEHOLDER_PREFIX}{len(url_map)}__"
             url_map[placeholder] = url
             return placeholder
 
