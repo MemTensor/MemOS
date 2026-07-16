@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>鳌太线·像素徒步模拟器（Demo）</title>
+    <link rel="stylesheet" href="./style.css?v=1770209151" />
+    <!-- Pixel-ish font (optional). If blocked, fallback to monospace. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="stage">
+      <div id="main">
+        <!-- Left: independent minimap canvas on top + Phaser main scene below -->
+        <div id="left">
+          <div id="minimap-root">
+            <canvas id="minimap-canvas" aria-label="小地图"></canvas>
+          </div>
+          <div id="game-root"></div>
+        </div>
+
+        <!-- Right: title/status + party status + original three panels -->
+        <div id="right">
+          <div id="right-top">
+            <div id="titlebar">
+              <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div style="flex: 1;">
+                  <div class="title" id="i18n-title">鳌太线·像素徒步模拟器</div>
+                  <div class="sub" id="i18n-subtitle">单人多角色 · 其他角色由生成接口驱动（当前为 mock）</div>
+                  <div id="status"></div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <button id="lang-button" class="lang-btn" type="button" title="中/English">EN</button>
+                  <button id="share-button" class="share-btn" style="display: none;" title="分享游戏记录">分享</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel" id="party-panel">
+              <div class="panel-title" id="i18n-party-panel-title">队伍状态（点击卡片切换角色）</div>
+              <div id="party-status" class="party-strip"></div>
+            </div>
+          </div>
+
+          <div id="panels">
+            <div class="panel" id="interact-panel">
+              <div class="panel-title" id="i18n-interact-panel-title">互动（动作 + 像素聊天）</div>
+
+              <div class="chat-wrap">
+                <div id="chat"></div>
+              </div>
+
+              <div id="actions-panel">
+                <div class="row">
+                  <button data-act="MOVE_FORWARD" id="i18n-btn-forward">前进</button>
+                  <button data-act="REST" id="i18n-btn-rest">休息</button>
+                  <button data-act="CAMP" id="i18n-btn-camp">扎营</button>
+                  <button data-act="OBSERVE" id="i18n-btn-observe">观察</button>
+                </div>
+                <div class="row">
+                  <input id="say-input" placeholder="当前角色说点什么…" />
+                  <button id="btn-say">发送</button>
+                </div>
+                <div id="branch-choices" class="branch-choices" style="display:none"></div>
+                <div class="hint" id="i18n-hint-switch">提示：点击上方“队伍状态”的卡片即可切换当前角色。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Initial role setup modal (shown on first load; removed after creation) -->
+    <div id="role-setup" class="modal-backdrop" style="display:none">
+      <div class="modal">
+        <div class="modal-title" id="i18n-setup-title">创建队伍角色</div>
+        <div class="setup-theme-row" id="setup-theme-row">
+          <span id="i18n-setup-theme-label" class="setup-theme-label">路线主题（决定剧情与默认角色设定）：</span>
+          <div class="setup-option-row">
+            <span id="i18n-setup-lang-label" class="setup-theme-label">语言：</span>
+            <div class="setup-theme-btns">
+              <button type="button" id="setup-lang-zh" class="setup-theme-btn">中文</button>
+              <button type="button" id="setup-lang-en" class="setup-theme-btn">English</button>
+            </div>
+          </div>
+          <div class="setup-option-row">
+            <span id="i18n-setup-map-label" class="setup-theme-label">地图：</span>
+            <div class="setup-theme-btns">
+              <button type="button" id="setup-map-aotai" class="setup-theme-btn">鳌太线</button>
+              <button type="button" id="setup-map-kili" class="setup-theme-btn">乞力马扎罗</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-sub" id="i18n-setup-sub">
+          先创建 1 个或多个角色（名字 + 角色介绍），创建完成后该弹窗会消失。也可以一键快速创建。
+        </div>
+
+        <div class="modal-form">
+          <div class="field">
+            <div class="field-label" id="i18n-setup-name-label">名字</div>
+            <input id="setup-role-name" placeholder="例如：阿鳌" autocomplete="off" />
+          </div>
+          <div class="field">
+            <div class="field-label" id="i18n-setup-persona-label">角色介绍</div>
+            <textarea id="setup-role-persona" rows="3" placeholder="例如：经验丰富的徒步向导，谨慎但乐观。"></textarea>
+          </div>
+          <div class="row">
+            <button id="setup-add-role">加入列表</button>
+            <button id="setup-quickstart">快速创建 3 角色</button>
+          </div>
+        </div>
+
+        <div class="setup-list-title" id="i18n-setup-pending-title">待创建</div>
+        <div id="setup-role-list" class="setup-list"></div>
+        <div id="setup-error" class="setup-error" style="display:none"></div>
+
+        <div class="row setup-actions">
+          <button id="setup-create" class="primary">创建并开始</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Night vote modal -->
+    <div id="night-vote-modal" class="modal-backdrop" style="display:none">
+      <div class="modal" id="night-vote-panel">
+        <div class="modal-title" id="i18n-night-vote-title">夜间票选队长</div>
+        <div class="modal-sub" id="night-vote-sub">
+          请选择一位队长。选择后将展示全员投票与理由。
+        </div>
+        <div id="night-vote-roles" class="vote-grid"></div>
+        <div id="night-vote-log" class="vote-log" style="display:none"></div>
+        <div class="row" id="night-vote-actions" style="display:none">
+          <button id="night-vote-close" class="primary">继续出发</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Share image modal -->
+    <div id="share-modal" class="modal-backdrop" style="display:none">
+      <div class="modal">
+        <!-- 4 层结构：遮罩在 modal-backdrop，上面是卡片底板 + 游戏截图 + PNG 外框 + 噪点层 -->
+        <div id="share-card-base"></div>
+        <div id="share-image-container">
+          <img id="share-image-preview" />
+        </div>
+        <!-- 外框 PNG：需在 assets 中准备 share_frame.png -->
+        <div id="share-card-frame"></div>
+        <!-- 噪点 / 雪点质感层 -->
+        <div id="share-card-noise"></div>
+
+        <!-- UI 文本与按钮层 -->
+        <div class="modal-title" id="i18n-share-modal-title">分享游戏记录</div>
+        <div class="row">
+          <button id="share-download-btn" class="primary">下载图片</button>
+          <button id="share-close-btn">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phaser local copy (avoids CDN/network issues) -->
+    <script src="./vendor/phaser-3.90.0.min.js"></script>
+    <script type="module" src="./main.js?v=dev"></script>
+  </body>
+</html>
