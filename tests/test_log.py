@@ -34,7 +34,7 @@ def test_get_logger_configures_logging_once_per_process(monkeypatch):
     calls = []
 
     monkeypatch.setattr(log, "_LOGGING_CONFIGURED_PID", None)
-    monkeypatch.setattr(log.os, "getpid", lambda: 123)
+    monkeypatch.setattr(log, "_get_current_pid", lambda: 123)
     monkeypatch.setattr(log, "dictConfig", lambda config: calls.append(config))
 
     log.get_logger("first")
@@ -51,7 +51,7 @@ def test_get_logger_reconfigures_after_process_fork(monkeypatch):
         return pid
 
     monkeypatch.setattr(log, "_LOGGING_CONFIGURED_PID", None)
-    monkeypatch.setattr(log.os, "getpid", getpid)
+    monkeypatch.setattr(log, "_get_current_pid", getpid)
     monkeypatch.setattr(log, "dictConfig", lambda config: calls.append(config))
 
     log.get_logger("parent")

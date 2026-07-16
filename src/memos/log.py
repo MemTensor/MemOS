@@ -226,6 +226,10 @@ LOGGING_CONFIG = {
 }
 
 
+def _get_current_pid() -> int:
+    return os.getpid()
+
+
 def configure_logging(force: bool = False) -> None:
     """Configure process-local logging once.
 
@@ -234,12 +238,8 @@ def configure_logging(force: bool = False) -> None:
     """
     global _LOGGING_CONFIGURED_PID
 
-    current_pid = os.getpid()
-    if not force and current_pid == _LOGGING_CONFIGURED_PID:
-        return
-
     with _LOGGING_CONFIG_LOCK:
-        current_pid = os.getpid()
+        current_pid = _get_current_pid()
         if force or current_pid != _LOGGING_CONFIGURED_PID:
             dictConfig(LOGGING_CONFIG)
             _LOGGING_CONFIGURED_PID = current_pid
