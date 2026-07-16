@@ -65,13 +65,11 @@ _PLUGIN_DIR = Path(__file__).resolve().parent
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-from bridge_client import BridgeError, MemosBridgeClient, MemosHttpClient  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 from daemon_manager import (  # noqa: E402
     ensure_bridge_running,
     ensure_viewer_daemon,
     kill_zombie_bridges,
-    probe_viewer_status,
-    startup_lock_active,
 )
 
 
@@ -279,7 +277,7 @@ class MemTensorProvider(MemoryProvider):
     """
 
     def __init__(self) -> None:
-        self._bridge: MemosBridgeClient | MemosHttpClient | None = None
+        self._bridge: MemosBridgeClient | None = None
         self._reconnect_lock = threading.Lock()
         self._session_id: str = ""
         self._episode_id: str = ""
@@ -328,23 +326,6 @@ class MemTensorProvider(MemoryProvider):
             return False
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
-
-    def _connect_http_bridge(self, session_id: str, *, timeout: float = 60.0) -> bool:
-        """Try to connect via HTTP bridge. Sets self._bridge on success."""
-        http_bridge: MemosHttpClient | None = None
-        try:
-            http_bridge = MemosHttpClient()
-            http_bridge.register_host_handler("host.llm.complete", self._handle_host_llm_complete)
-            self._bridge = http_bridge
-            self._open_session(session_id, timeout=timeout)
-            return True
-        except Exception as err:
-            logger.warning("MemOS: HTTP bridge failed, falling back to stdio — %s", err)
-            if http_bridge is not None:
-                with contextlib.suppress(Exception):
-                    http_bridge.close()
-            self._bridge = None
-            return False
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:  # type: ignore[override]
         """Called once at agent startup.
@@ -414,32 +395,13 @@ class MemTensorProvider(MemoryProvider):
         except Exception:
             pass
 
-        # If the daemon is already running on the viewer port, connect
-        # to it over HTTP instead of spawning a new stdio bridge. This
-        # eliminates zombie bridge accumulation.
-        viewer_status = probe_viewer_status()
-        if viewer_status == "running_memos":
-            if self._connect_http_bridge(session_id):
-                logger.info(
-                    "MemOS: bridge ready (HTTP) session=%s platform=%s (episode deferred)",
-                    self._session_id,
-                    self._platform,
-                )
-            else:
-                viewer_status = "free"  # force stdio fallback below
-        elif viewer_status == "free":
-            # Re-probe after a short wait only when another process may be
-            # mid-startup (startup lock is held). On a cold first-launch the
-            # lock doesn't exist, so we skip the delay entirely.
-            if startup_lock_active():
-                time.sleep(1.0)
-                viewer_status = probe_viewer_status()
-            if viewer_status == "running_memos" and self._connect_http_bridge(session_id):
-                logger.info(
-                    "MemOS: bridge ready (HTTP, late probe) session=%s platform=%s (episode deferred)",
-                    self._session_id,
-                    self._platform,
-                )
+        # NOTE: An HTTP bridge path used to live here that connected to a
+        # running viewer daemon over HTTP instead of spawning a stdio
+        # subprocess. It depended on ``MemosHttpClient`` which was never
+        # committed — the class was referenced by name only. Issue #2096
+        # reverts the half-merged HTTP feature; the stdio path below is
+        # the sole connection mechanism until the HTTP client lands as a
+        # complete change.
 
         if self._bridge is None:
             try:
@@ -1958,13 +1920,9 @@ class MemTensorProvider(MemoryProvider):
                 logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
 
             ensure_bridge_running()
-            # Try HTTP first if daemon is running
-            viewer_status = probe_viewer_status()
-            if viewer_status == "running_memos" and self._connect_http_bridge(
-                session_id, timeout=timeout
-            ):
-                logger.info("MemOS: reconnected via HTTP")
-                return
+            # NOTE: HTTP bridge reconnect path was removed alongside issue
+            # #2096. See ``initialize`` for the rationale. Reconnect always
+            # spawns a fresh stdio bridge.
 
             try:
                 ensure_viewer_daemon()
