@@ -1,5 +1,17 @@
-class SimpleTextSplitter:
-    """Simple text splitter wrapper."""
+from memos.chunkers.base import URLProtectionMixin
+
+
+class SimpleTextSplitter(URLProtectionMixin):
+    """Simple text splitter wrapper.
+
+    Fallback used by :mod:`memos.mem_reader.read_multi_modal.utils` when the
+    optional ``langchain_text_splitters``-backed chunkers (``CharacterTextChunker``
+    / ``MarkdownChunker``) cannot be constructed at import time.
+
+    Inherits URL protect/restore helpers from :class:`URLProtectionMixin`
+    (see issue #2115: without the mixin, ``chunk()`` raised ``AttributeError``
+    on every call that reached the fallback path).
+    """
 
     def __init__(self, chunk_size: int, chunk_overlap: int):
         self.chunk_size = chunk_size

@@ -14,16 +14,16 @@ class Chunk:
         self.sentences = sentences
 
 
-class BaseChunker(ABC):
-    """Base class for all text chunkers."""
+class URLProtectionMixin:
+    """Shared URL protect/restore helpers used across chunkers.
 
-    @abstractmethod
-    def __init__(self, config: BaseChunkerConfig):
-        """Initialize the chunker with the given configuration."""
+    Extracted so that lightweight fallbacks such as
+    :class:`memos.chunkers.simple_chunker.SimpleTextSplitter` can reuse the
+    same URL-aware splitting logic as :class:`BaseChunker` without inheriting
+    the full chunker contract (see issue #2115).
+    """
 
-    @abstractmethod
-    def chunk(self, text: str) -> list[Chunk]:
-        """Chunk the given text into smaller chunks."""
+    _URL_PATTERN = r'https?://[^\s<>"{}|\\^`\[\]]+'
 
     def protect_urls(self, text: str) -> tuple[str, dict[str, str]]:
         """
@@ -35,8 +35,7 @@ class BaseChunker(ABC):
         Returns:
             tuple: (Text with URLs replaced by placeholders, URL mapping dictionary)
         """
-        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-        url_map = {}
+        url_map: dict[str, str] = {}
 
         def replace_url(match):
             url = match.group(0)
@@ -44,7 +43,7 @@ class BaseChunker(ABC):
             url_map[placeholder] = url
             return placeholder
 
-        protected_text = re.sub(url_pattern, replace_url, text)
+        protected_text = re.sub(self._URL_PATTERN, replace_url, text)
         return protected_text, url_map
 
     def restore_urls(self, text: str, url_map: dict[str, str]) -> str:
@@ -63,3 +62,15 @@ class BaseChunker(ABC):
             restored_text = restored_text.replace(placeholder, url)
 
         return restored_text
+
+
+class BaseChunker(URLProtectionMixin, ABC):
+    """Base class for all text chunkers."""
+
+    @abstractmethod
+    def __init__(self, config: BaseChunkerConfig):
+        """Initialize the chunker with the given configuration."""
+
+    @abstractmethod
+    def chunk(self, text: str) -> list[Chunk]:
+        """Chunk the given text into smaller chunks."""
