@@ -27,6 +27,8 @@ from memos.context.context import (
 load_dotenv()
 
 selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
+_LOGGING_CONFIG_LOCK = threading.RLock()
+_LOGGING_CONFIGURED_PID: int | None = None
 
 
 def _setup_logfile() -> Path:
@@ -224,12 +226,31 @@ LOGGING_CONFIG = {
 }
 
 
+def configure_logging(force: bool = False) -> None:
+    """Configure process-local logging once.
+
+    Re-running dictConfig replaces and closes existing handlers. Guarding it avoids races with
+    background threads that may be emitting log records while other modules import loggers.
+    """
+    global _LOGGING_CONFIGURED_PID
+
+    current_pid = os.getpid()
+    if not force and current_pid == _LOGGING_CONFIGURED_PID:
+        return
+
+    with _LOGGING_CONFIG_LOCK:
+        current_pid = os.getpid()
+        if force or current_pid != _LOGGING_CONFIGURED_PID:
+            dictConfig(LOGGING_CONFIG)
+            _LOGGING_CONFIGURED_PID = current_pid
+
+
 def get_logger(name: str | None = None) -> logging.Logger:
     """returns the project logger, scoped to a child name if provided
     Args:
         name: will define a child logger
     """
-    dictConfig(LOGGING_CONFIG)
+    configure_logging()
 
     parent_logger = logging.getLogger("")
     if name:

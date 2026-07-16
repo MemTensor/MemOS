@@ -28,3 +28,34 @@ def test_get_logger_returns_logger():
     assert any(isinstance(h, logging.StreamHandler) for h in logger.parent.handlers) or any(
         isinstance(h, logging.FileHandler) for h in logger.parent.handlers
     )
+
+
+def test_get_logger_configures_logging_once_per_process(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(log, "_LOGGING_CONFIGURED_PID", None)
+    monkeypatch.setattr(log.os, "getpid", lambda: 123)
+    monkeypatch.setattr(log, "dictConfig", lambda config: calls.append(config))
+
+    log.get_logger("first")
+    log.get_logger("second")
+
+    assert len(calls) == 1
+
+
+def test_get_logger_reconfigures_after_process_fork(monkeypatch):
+    calls = []
+    pid = 123
+
+    def getpid():
+        return pid
+
+    monkeypatch.setattr(log, "_LOGGING_CONFIGURED_PID", None)
+    monkeypatch.setattr(log.os, "getpid", getpid)
+    monkeypatch.setattr(log, "dictConfig", lambda config: calls.append(config))
+
+    log.get_logger("parent")
+    pid = 456
+    log.get_logger("child")
+
+    assert len(calls) == 2
