@@ -608,6 +608,21 @@ class APISearchRequest(BaseRequest):
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
 
+    # Model-level example so the interactive docs (/docs) show a copy-paste-ready
+    # payload. Without it, Swagger UI renders the leading `str` branch of the
+    # `messages` union as `"string"` (see issue #1505). This only affects the
+    # generated OpenAPI schema, not validation or runtime behaviour.
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "user_id": "8736b16e-1d20-4163-980b-a5063c3facdc",
+                "writable_cube_ids": ["b32d0977-435d-4828-a86f-4f47f8b55bca"],
+                "messages": [{"role": "user", "content": "I am learning ggplot2 in R."}],
+                "async_mode": "async",
+            }
+        }
+    }
+
     # ==== Basic identifiers ====
     user_id: str = Field(None, description="User ID")
     session_id: str | None = Field(
