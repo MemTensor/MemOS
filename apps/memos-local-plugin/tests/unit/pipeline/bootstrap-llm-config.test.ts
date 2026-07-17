@@ -131,4 +131,37 @@ l3Llm:
       reasoning: { enabled: true, maxTokens: 4_000 },
     });
   });
+
+  it("normalizes missing dedicated OpenRouter flags to false", async () => {
+    const { bootstrapMemoryCore } = await import("../../../core/pipeline/memory-core.js");
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: `
+llm:
+  provider: local_only
+  model: main
+skillEvolver:
+  provider: openai_compatible
+  model: skill-model
+l3Llm:
+  provider: openai_compatible
+  model: l3-model
+`,
+    });
+    const config = {
+      ...home.config,
+      skillEvolver: { ...home.config.skillEvolver, openRouter: undefined },
+      l3Llm: { ...home.config.l3Llm, openRouter: undefined },
+    } as unknown as typeof home.config;
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config,
+      pkgVersion: "bootstrap-test",
+    });
+
+    expect(capturedLlmConfigs.find((cfg) => cfg.model === "skill-model")?.openRouter).toBe(false);
+    expect(capturedLlmConfigs.find((cfg) => cfg.model === "l3-model")?.openRouter).toBe(false);
+  });
 });

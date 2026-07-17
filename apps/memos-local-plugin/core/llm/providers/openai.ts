@@ -75,8 +75,9 @@ export class OpenAiLlmProvider implements LlmProvider {
     };
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
-    if (applyOpenRouterProviderRouting(config, body) && config.reasoning) {
-      body.reasoning = serializeOpenRouterReasoning(config.reasoning);
+    if (applyOpenRouterProviderRouting(config, body)) {
+      const reasoning = config.reasoning && serializeOpenRouterReasoning(config.reasoning);
+      if (reasoning) body.reasoning = reasoning;
     }
 
     const headers: Record<string, string> = {};
@@ -142,8 +143,9 @@ export class OpenAiLlmProvider implements LlmProvider {
     };
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
-    if (applyOpenRouterProviderRouting(config, body) && config.reasoning) {
-      body.reasoning = serializeOpenRouterReasoning(config.reasoning);
+    if (applyOpenRouterProviderRouting(config, body)) {
+      const reasoning = config.reasoning && serializeOpenRouterReasoning(config.reasoning);
+      if (reasoning) body.reasoning = reasoning;
     }
 
     const headers: Record<string, string> = {};
@@ -212,12 +214,12 @@ function normalizeEndpoint(url: string): string {
   return `${stripped}/chat/completions`;
 }
 
-function serializeOpenRouterReasoning(reasoning: ReasoningConfig): Record<string, unknown> {
+function serializeOpenRouterReasoning(reasoning: ReasoningConfig): Record<string, unknown> | undefined {
   const result: Record<string, unknown> = {};
   if (reasoning.enabled !== undefined) result.enabled = reasoning.enabled;
   if (reasoning.effort !== undefined) result.effort = reasoning.effort;
   if (reasoning.maxTokens !== undefined) result.max_tokens = reasoning.maxTokens;
-  return result;
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function mapFinish(reason: string | undefined): ProviderCompletion["finishReason"] {

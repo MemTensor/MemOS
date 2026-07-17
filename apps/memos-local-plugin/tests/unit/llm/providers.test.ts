@@ -159,6 +159,21 @@ describe("llm/providers", () => {
       expect("reasoning" in body).toBe(false);
     });
 
+    it("omits an empty OpenRouter reasoning block to preserve model defaults", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "{}" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(cfg({
+          endpoint: "https://openrouter.ai/api/v1",
+          reasoning: {},
+        })),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect("reasoning" in body).toBe(false);
+    });
+
     it("adds OpenRouter provider preferences for non-streaming calls", async () => {
       const cap = captureFetch({ choices: [{ message: { content: "ok" } }] });
       const p = new OpenAiLlmProvider();

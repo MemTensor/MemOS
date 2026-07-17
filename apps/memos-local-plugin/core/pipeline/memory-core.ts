@@ -410,7 +410,7 @@ export async function bootstrapMemoryCoreFull(
         timeoutMs: evolver?.timeoutMs ?? 60_000,
         providerIgnore: evolver?.providerIgnore,
         providerOrder: evolver?.providerOrder,
-        openRouter: evolver?.openRouter,
+        openRouter: evolver?.openRouter ?? false,
         reasoning: evolver?.reasoning,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
@@ -472,7 +472,7 @@ export async function bootstrapMemoryCoreFull(
         timeoutMs: l3c?.timeoutMs ?? 60_000,
         providerIgnore: l3c?.providerIgnore,
         providerOrder: l3c?.providerOrder,
-        openRouter: l3c?.openRouter,
+        openRouter: l3c?.openRouter ?? false,
         reasoning: l3c?.reasoning,
         maxRetries: 3,
         fallbackToHost: true,

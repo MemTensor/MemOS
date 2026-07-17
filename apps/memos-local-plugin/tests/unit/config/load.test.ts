@@ -102,6 +102,13 @@ algorithm:
     expect(cfg.llm.reasoning?.effort).toBe("xhigh");
   });
 
+  it("keeps an empty OpenRouter reasoning block free of overrides", () => {
+    const cfg = resolveConfig({
+      llm: { reasoning: {} },
+    });
+    expect(cfg.llm.reasoning).toEqual({});
+  });
+
   it("rejects a non-positive OpenRouter reasoning token budget", () => {
     expect(() => resolveConfig({
       llm: { reasoning: { maxTokens: 0 } },

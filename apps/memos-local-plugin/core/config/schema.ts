@@ -56,7 +56,7 @@ const ReasoningSchema = Type.Object({
    * OpenRouter-compatible reasoning toggle. Omit the whole block to keep
    * the provider/model default.
    */
-  enabled: Type.Optional(Bool(true)),
+  enabled: Type.Optional(Type.Boolean()),
   /** Optional provider effort hint for reasoning-capable models. */
   effort: Type.Optional(Type.Union([
     Type.Literal("minimal"),
