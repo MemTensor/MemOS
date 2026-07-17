@@ -1,7 +1,6 @@
 # Bridge Shutdown Path Audit
 
 **Date:** 2026-05-24  
-**Branch:** companion-stable  
 **Purpose:** Verify the 20s `withShutdownTimeout` patch covers every path where
 `core.shutdown()` is called and a hang could orphan the bridge process.
 
@@ -9,7 +8,7 @@
 
 ## Shutdown call sites
 
-### 1. Daemon SIGTERM / SIGINT — `bridge.cts:373–381`
+### 1. Daemon SIGTERM / SIGINT — `bridge.cts:471`
 
 ```ts
 const shutdownDaemon = async (sig: string) => {
@@ -22,11 +21,11 @@ process.on("SIGINT",  () => void shutdownDaemon("SIGINT"));
 process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));
 ```
 
-**Verdict:** covered by the existing patch (commit `56ebe7a3`).
+**Verdict:** covered by the existing patch.
 
 ---
 
-### 2. Non-daemon SIGTERM / SIGINT — `bridge.cts:479–494`
+### 2. Non-daemon SIGTERM / SIGINT — `bridge.cts:546`
 
 ```ts
 const shutdown = async (sig: string) => {
@@ -42,7 +41,7 @@ const shutdown = async (sig: string) => {
 
 ---
 
-### 3. Headless stdin-EOF exit — `bridge.cts:517–520`
+### 3. Headless stdin-EOF exit — `bridge.cts:574`
 
 ```ts
 removeOwnedPidFile();
@@ -54,7 +53,7 @@ process.exit(0);
 
 ---
 
-### 4. Viewer-running keepalive path — `bridge.cts:500–515` ⚠️ PREVIOUSLY UNCOVERED
+### 4. Viewer-running keepalive path — `bridge.cts:563` ⚠️ PREVIOUSLY UNCOVERED
 
 Reached when stdin closes but the HTTP viewer is still serving.
 Before this patch:
@@ -76,7 +75,7 @@ void withShutdownTimeout(core.shutdown()).then(() => process.exit(0));  // ✅ F
 
 ---
 
-### 5. Daemon EADDRINUSE / viewer-error exit — `bridge.cts:358–370` ⚠️ PREVIOUSLY UNCOVERED
+### 5. Daemon EADDRINUSE / viewer-error exit — `bridge.cts:456` ⚠️ PREVIOUSLY UNCOVERED
 
 Two sequential error paths when the daemon can't bind the viewer port:
 
