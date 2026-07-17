@@ -181,6 +181,8 @@ export interface ProviderConfig {
   providerIgnore?: string[];
   /** OpenRouter provider routing — preferred order. */
   providerOrder?: string[];
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter?: boolean;
   capabilities?: SharingCapabilities;
 }
 

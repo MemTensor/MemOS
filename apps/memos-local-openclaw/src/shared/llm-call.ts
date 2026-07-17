@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { SummarizerConfig, SummaryProvider, Logger, PluginContext, OpenClawAPI } from "../types";
 import { parseJsonOrJson5 } from "./json5";
+import { applyOpenRouterProviderRouting } from "./openrouter";
 
 /**
  * Resolve a SecretInput (string | SecretRef) to a plain string.
@@ -233,19 +234,6 @@ async function callLLMOnceOpenAI(
 
   const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
   return json.choices[0]?.message?.content?.trim() ?? "";
-}
-
-function applyOpenRouterProviderRouting(
-  cfg: SummarizerConfig,
-  body: Record<string, unknown>,
-): void {
-  const endpoint = cfg.endpoint ?? "";
-  if (!endpoint.includes("openrouter.ai")) return;
-
-  const providerPrefs: Record<string, unknown> = {};
-  if (cfg.providerIgnore?.length) providerPrefs.ignore = cfg.providerIgnore;
-  if (cfg.providerOrder?.length) providerPrefs.order = cfg.providerOrder;
-  if (Object.keys(providerPrefs).length > 0) body.provider = providerPrefs;
 }
 
 /**

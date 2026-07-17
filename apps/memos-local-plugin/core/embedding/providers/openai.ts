@@ -10,6 +10,7 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
+import { applyOpenRouterProviderRouting } from "../../openrouter.js";
 import { httpPostJson } from "../fetcher.js";
 import type {
   EmbedRole,
@@ -83,17 +84,4 @@ function normalizeEndpoint(url: string): string {
   const stripped = url.replace(/\/+$/, "");
   if (stripped.endsWith("/embeddings")) return stripped;
   return `${stripped}/embeddings`;
-}
-
-function applyOpenRouterProviderRouting(
-  config: ProviderCallCtx["config"],
-  body: Record<string, unknown>,
-): void {
-  const endpoint = config.endpoint ?? "";
-  if (!endpoint.includes("openrouter.ai")) return;
-
-  const providerPrefs: Record<string, unknown> = {};
-  if (config.providerIgnore?.length) providerPrefs.ignore = config.providerIgnore;
-  if (config.providerOrder?.length) providerPrefs.order = config.providerOrder;
-  if (Object.keys(providerPrefs).length > 0) body.provider = providerPrefs;
 }

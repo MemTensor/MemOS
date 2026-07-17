@@ -27,8 +27,14 @@ describe("config/loadConfig", () => {
     expect(cfg.llm.providerOrder).toEqual([]);
     expect(cfg.skillEvolver.providerIgnore).toEqual([]);
     expect(cfg.skillEvolver.providerOrder).toEqual([]);
+    expect(cfg.l3Llm.providerIgnore).toEqual([]);
+    expect(cfg.l3Llm.providerOrder).toEqual([]);
     expect(cfg.embedding.providerIgnore).toEqual([]);
     expect(cfg.embedding.providerOrder).toEqual([]);
+    expect(cfg.llm.openRouter).toBe(false);
+    expect(cfg.skillEvolver.openRouter).toBe(false);
+    expect(cfg.l3Llm.openRouter).toBe(false);
+    expect(cfg.embedding.openRouter).toBe(false);
   });
 
   it("merges YAML over defaults and preserves unspecified branches", async () => {
@@ -57,22 +63,43 @@ algorithm:
       llm: {
         providerIgnore: ["together", "deepinfra"],
         providerOrder: ["google", "anthropic"],
+        openRouter: true,
       },
       skillEvolver: {
         providerIgnore: ["novita"],
         providerOrder: ["openai"],
+        openRouter: true,
+      },
+      l3Llm: {
+        providerIgnore: ["novita"],
+        providerOrder: ["openai"],
+        openRouter: true,
       },
       embedding: {
         providerIgnore: ["deepinfra"],
         providerOrder: ["openai"],
+        openRouter: true,
       },
     });
     expect(cfg.llm.providerIgnore).toEqual(["together", "deepinfra"]);
     expect(cfg.llm.providerOrder).toEqual(["google", "anthropic"]);
     expect(cfg.skillEvolver.providerIgnore).toEqual(["novita"]);
     expect(cfg.skillEvolver.providerOrder).toEqual(["openai"]);
+    expect(cfg.l3Llm.providerIgnore).toEqual(["novita"]);
+    expect(cfg.l3Llm.providerOrder).toEqual(["openai"]);
     expect(cfg.embedding.providerIgnore).toEqual(["deepinfra"]);
     expect(cfg.embedding.providerOrder).toEqual(["openai"]);
+    expect(cfg.llm.openRouter).toBe(true);
+    expect(cfg.skillEvolver.openRouter).toBe(true);
+    expect(cfg.l3Llm.openRouter).toBe(true);
+    expect(cfg.embedding.openRouter).toBe(true);
+  });
+
+  it("accepts OpenRouter reasoning effort aliases", () => {
+    const cfg = resolveConfig({
+      llm: { reasoning: { effort: "xhigh" } },
+    });
+    expect(cfg.llm.reasoning?.effort).toBe("xhigh");
   });
 
   it("rejects invalid types with a helpful error", async () => {

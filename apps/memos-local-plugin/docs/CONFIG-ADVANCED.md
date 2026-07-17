@@ -77,9 +77,11 @@ llm:
 ```
 
 The same `providerIgnore` and `providerOrder` fields are accepted on
-`skillEvolver`, `entityExtractor`, `l3Llm`, and `embedding` config blocks.
+`skillEvolver`, `l3Llm`, and `embedding` config blocks.
 They map to OpenRouter's `provider.ignore` and `provider.order` request
 fields and are omitted when empty or when the endpoint is not OpenRouter.
+OpenRouter is detected from the normalized `openrouter.ai` hostname. For a
+reverse proxy or CNAME, set `openRouter: true` on that config block to opt in.
 
 ### `algorithm`
 Direct mapping to the V7 spec (γ, support, gain, top-K, etc.). Change only

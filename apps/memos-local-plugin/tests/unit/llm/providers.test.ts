@@ -100,12 +100,34 @@ describe("llm/providers", () => {
       await expect(p.complete(msgs, call(), ctxFor(cfg({ apiKey: "" })))).rejects.toBeInstanceOf(MemosError);
     });
 
-    it("forwards config.reasoning into the request body", async () => {
+    it("forwards config.reasoning into an OpenRouter request body", async () => {
       const cap = captureFetch({ choices: [{ message: { content: "{}" } }] });
       const p = new OpenAiLlmProvider();
-      await p.complete(msgs, call(), ctxFor(cfg({ reasoning: { enabled: false } })));
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(cfg({
+          endpoint: "https://openrouter.ai/api/v1",
+          reasoning: { enabled: false, maxTokens: 8_000 },
+        })),
+      );
       const body = JSON.parse(cap.init!.body as string);
-      expect(body.reasoning).toEqual({ enabled: false });
+      expect(body.reasoning).toEqual({ enabled: false, max_tokens: 8_000 });
+    });
+
+    it("omits reasoning for non-OpenRouter endpoints", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "{}" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(cfg({
+          endpoint: "https://api.openai.com/v1",
+          reasoning: { enabled: false },
+        })),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect("reasoning" in body).toBe(false);
     });
 
     it("omits reasoning from the body when config.reasoning is unset", async () => {
@@ -135,6 +157,52 @@ describe("llm/providers", () => {
         ignore: ["together", "deepinfra"],
         order: ["google", "anthropic"],
       });
+    });
+
+    it("recognizes OpenRouter hostnames case-insensitively", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "ok" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(cfg({
+          endpoint: "https://OpenRouter.AI/api/v1",
+          providerIgnore: ["together"],
+        })),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect(body.provider).toEqual({ ignore: ["together"] });
+    });
+
+    it("does not treat a URL path containing openrouter.ai as OpenRouter", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "ok" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(cfg({
+          endpoint: "https://proxy.example.com/openrouter.ai/v1",
+          providerIgnore: ["together"],
+        })),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect("provider" in body).toBe(false);
+    });
+
+    it("allows an explicit OpenRouter opt-in for reverse proxies", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "ok" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(cfg({
+          endpoint: "https://llm-proxy.example.com/v1",
+          providerIgnore: ["together"],
+          openRouter: true,
+        } as Partial<LlmConfig>)),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect(body.provider).toEqual({ ignore: ["together"] });
     });
 
     it("omits provider preferences for non-OpenRouter endpoints", async () => {
@@ -177,6 +245,7 @@ describe("llm/providers", () => {
             endpoint: "https://openrouter.ai/api/v1",
             providerIgnore: ["novita"],
             providerOrder: ["google"],
+            reasoning: { enabled: true, maxTokens: 4_000 },
           }),
         ),
       )) {
@@ -187,6 +256,7 @@ describe("llm/providers", () => {
         ignore: ["novita"],
         order: ["google"],
       });
+      expect(body.reasoning).toEqual({ enabled: true, max_tokens: 4_000 });
     });
   });
 

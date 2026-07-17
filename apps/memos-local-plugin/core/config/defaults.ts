@@ -29,6 +29,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     providerIgnore: [],
     providerOrder: [],
+    openRouter: false,
     cache: {
       enabled: true,
       maxItems: 20_000,
@@ -45,6 +46,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     maxRetries: 3,
     providerIgnore: [],
     providerOrder: [],
+    openRouter: false,
   },
   l3Llm: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -58,6 +60,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     temperature: 0,
     timeoutMs: 60_000,
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -71,6 +76,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     timeoutMs: 60_000,
     providerIgnore: [],
     providerOrder: [],
+    openRouter: false,
   },
   storage: {
     ftsTokenizer: "trigram",

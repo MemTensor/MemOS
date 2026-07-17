@@ -89,12 +89,26 @@ llm:
 skillEvolver:
   provider: openai_compatible
   endpoint: https://openrouter.ai/api/v1
+  openRouter: true
   model: skill-model
   apiKey: sk-test
   providerIgnore:
     - together
   providerOrder:
     - anthropic
+l3Llm:
+  provider: openai_compatible
+  endpoint: https://llm-proxy.example.com/v1
+  openRouter: true
+  model: l3-model
+  apiKey: sk-test
+  providerIgnore:
+    - novita
+  providerOrder:
+    - openai
+  reasoning:
+    enabled: true
+    maxTokens: 4000
 `,
     });
 
@@ -108,6 +122,13 @@ skillEvolver:
     expect(capturedLlmConfigs.find((cfg) => cfg.model === "skill-model")).toMatchObject({
       providerIgnore: ["together"],
       providerOrder: ["anthropic"],
+      openRouter: true,
+    });
+    expect(capturedLlmConfigs.find((cfg) => cfg.model === "l3-model")).toMatchObject({
+      providerIgnore: ["novita"],
+      providerOrder: ["openai"],
+      openRouter: true,
+      reasoning: { enabled: true, maxTokens: 4_000 },
     });
   });
 });

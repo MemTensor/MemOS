@@ -43,6 +43,8 @@ const EmbeddingSchema = Type.Object({
   providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
   /** OpenRouter provider routing — preferred order. */
   providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
@@ -57,9 +59,13 @@ const ReasoningSchema = Type.Object({
   enabled: Type.Optional(Bool(true)),
   /** Optional provider effort hint for reasoning-capable models. */
   effort: Type.Optional(Type.Union([
+    Type.Literal("minimal"),
+    Type.Literal("none"),
     Type.Literal("low"),
     Type.Literal("medium"),
     Type.Literal("high"),
+    Type.Literal("xhigh"),
+    Type.Literal("max"),
   ])),
   /** Optional token budget for reasoning-capable providers. */
   maxTokens: Type.Optional(NumberInRange(0, 0)),
@@ -89,6 +95,8 @@ const LlmSchema = Type.Object({
   providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
   /** OpenRouter provider routing — preferred order. */
   providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });
@@ -119,6 +127,8 @@ const SkillEvolverSchema = Type.Object({
   providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
   /** OpenRouter provider routing — preferred order. */
   providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });

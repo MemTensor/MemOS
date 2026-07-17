@@ -88,7 +88,6 @@ import {
 import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
-import type { ReasoningConfig } from "../llm/types.js";
 import {
   getHostLlmBridge,
   registerHostLlmBridge,
@@ -131,6 +130,7 @@ type DedicatedLlmConfig = {
   timeoutMs?: number;
   providerIgnore?: string[];
   providerOrder?: string[];
+  openRouter?: boolean;
   reasoning?: ReasoningConfig;
 };
 export interface BootstrapOptions {
@@ -409,6 +409,7 @@ export async function bootstrapMemoryCoreFull(
         timeoutMs: evolver?.timeoutMs ?? 60_000,
         providerIgnore: evolver?.providerIgnore,
         providerOrder: evolver?.providerOrder,
+        openRouter: evolver?.openRouter,
         reasoning: evolver?.reasoning,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
@@ -457,7 +458,7 @@ export async function bootstrapMemoryCoreFull(
   // impact on companion latency. Blank → falls back to the main `llm`.
   let l3Llm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const l3c = (config as { l3Llm?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).l3Llm;
+    const l3c = (config as { l3Llm?: DedicatedLlmConfig }).l3Llm;
     const l3Model = (l3c?.model ?? "").trim();
     const l3Provider = (l3c?.provider ?? "").trim();
     if (l3Model && l3Provider) {
@@ -468,6 +469,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: l3c?.apiKey ?? "",
         temperature: l3c?.temperature ?? 0,
         timeoutMs: l3c?.timeoutMs ?? 60_000,
+        providerIgnore: l3c?.providerIgnore,
+        providerOrder: l3c?.providerOrder,
+        openRouter: l3c?.openRouter,
+        reasoning: l3c?.reasoning,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>

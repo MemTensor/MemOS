@@ -40,6 +40,34 @@ describe("shared/llm-call", () => {
     });
   });
 
+  it("allows an explicit OpenRouter opt-in for reverse proxies", async () => {
+    const cap: { init?: RequestInit } = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: unknown) => {
+        cap.init = init as RequestInit;
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const cfg = {
+      provider: "openai_compatible",
+      endpoint: "https://llm-proxy.example.com/v1",
+      apiKey: "sk-test",
+      model: "google/gemini-test",
+      providerIgnore: ["together"],
+      openRouter: true,
+    } as SummarizerConfig;
+
+    await callLLMOnce(cfg, "summarize this");
+
+    const body = JSON.parse(cap.init!.body as string);
+    expect(body.provider).toEqual({ ignore: ["together"] });
+  });
+
   it("omits provider preferences for non-OpenRouter OpenAI-compatible calls", async () => {
     const cap: { init?: RequestInit } = {};
     vi.stubGlobal(

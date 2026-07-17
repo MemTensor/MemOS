@@ -17,7 +17,7 @@ export type LlmProviderName =
 
 export interface ReasoningConfig {
   enabled?: boolean;
-  effort?: "low" | "medium" | "high";
+  effort?: "minimal" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
   maxTokens?: number;
   [key: string]: unknown;
 }
@@ -39,6 +39,8 @@ export interface LlmConfig {
   providerIgnore?: string[];
   /** OpenRouter provider routing — preferred order. */
   providerOrder?: string[];
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter?: boolean;
   /** OpenRouter-compatible reasoning controls. Omit for model defaults. */
   reasoning?: ReasoningConfig;
   /** Optional per-call default. Default: 1024. */
