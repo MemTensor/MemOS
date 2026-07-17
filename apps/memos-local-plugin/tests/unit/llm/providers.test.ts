@@ -37,6 +37,7 @@ function cfg(partial: Partial<LlmConfig> = {}): LlmConfig {
     timeoutMs: 5_000,
     maxRetries: 0,
     fallbackToHost: false,
+    openRouter: false,
     ...partial,
   };
 }
@@ -113,6 +114,26 @@ describe("llm/providers", () => {
       );
       const body = JSON.parse(cap.init!.body as string);
       expect(body.reasoning).toEqual({ enabled: false, max_tokens: 8_000 });
+    });
+
+    it("forwards only supported OpenRouter reasoning fields", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "{}" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(
+        msgs,
+        call(),
+        ctxFor(cfg({
+          endpoint: "https://openrouter.ai/api/v1",
+          reasoning: {
+            enabled: true,
+            effort: "high",
+            maxTokens: 8_000,
+            misspelledOption: "ignored",
+          } as unknown as LlmConfig["reasoning"],
+        })),
+      );
+      const body = JSON.parse(cap.init!.body as string);
+      expect(body.reasoning).toEqual({ enabled: true, effort: "high", max_tokens: 8_000 });
     });
 
     it("omits reasoning for non-OpenRouter endpoints", async () => {

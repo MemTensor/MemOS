@@ -1,10 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { callLLMOnce } from "../src/shared/llm-call";
+import { applyOpenRouterProviderRouting } from "../src/shared/openrouter";
 import type { SummarizerConfig } from "../src/types";
 
 describe("shared/llm-call", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("reports whether OpenRouter provider routing was applied", () => {
+    const body: Record<string, unknown> = {};
+
+    expect(applyOpenRouterProviderRouting({
+      endpoint: "https://openrouter.ai/api/v1",
+      providerIgnore: ["together"],
+    }, body)).toBe(true);
+    expect(body.provider).toEqual({ ignore: ["together"] });
+    expect(applyOpenRouterProviderRouting({ endpoint: "https://api.openai.com/v1" }, {})).toBe(false);
+  });
 
   it("adds OpenRouter provider preferences for OpenAI-compatible calls", async () => {
     const cap: { url?: string; init?: RequestInit } = {};

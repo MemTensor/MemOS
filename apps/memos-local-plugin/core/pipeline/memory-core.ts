@@ -133,6 +133,7 @@ type DedicatedLlmConfig = {
   openRouter?: boolean;
   reasoning?: ReasoningConfig;
 };
+
 export interface BootstrapOptions {
   agent: AgentKind;
   namespace?: RuntimeNamespace;

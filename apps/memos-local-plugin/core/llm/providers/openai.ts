@@ -213,8 +213,11 @@ function normalizeEndpoint(url: string): string {
 }
 
 function serializeOpenRouterReasoning(reasoning: ReasoningConfig): Record<string, unknown> {
-  const { maxTokens, ...rest } = reasoning;
-  return maxTokens === undefined ? rest : { ...rest, max_tokens: maxTokens };
+  const result: Record<string, unknown> = {};
+  if (reasoning.enabled !== undefined) result.enabled = reasoning.enabled;
+  if (reasoning.effort !== undefined) result.effort = reasoning.effort;
+  if (reasoning.maxTokens !== undefined) result.max_tokens = reasoning.maxTokens;
+  return result;
 }
 
 function mapFinish(reason: string | undefined): ProviderCompletion["finishReason"] {

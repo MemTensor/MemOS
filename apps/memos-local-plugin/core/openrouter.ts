@@ -10,7 +10,7 @@ export interface OpenRouterRoutingConfig {
 
 const OPENROUTER_HOSTS = new Set(["openrouter.ai"]);
 
-export function isOpenRouter(config: OpenRouterRoutingConfig): boolean {
+function isOpenRouter(config: OpenRouterRoutingConfig): boolean {
   if (config.openRouter) return true;
   if (!config.endpoint) return false;
   try {

@@ -32,7 +32,7 @@ export interface EmbeddingConfig {
   /** OpenRouter provider routing — preferred order. */
   providerOrder?: string[];
   /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
-  openRouter?: boolean;
+  openRouter: boolean;
   cache: {
     enabled: boolean;
     maxItems: number;

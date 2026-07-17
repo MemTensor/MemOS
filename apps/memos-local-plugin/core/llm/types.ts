@@ -5,6 +5,8 @@
  * Providers stay internal to `core/llm/`.
  */
 
+import type { ReasoningConfig as ConfigReasoningConfig } from "../config/schema.js";
+
 // ─── Providers & config ──────────────────────────────────────────────────────
 
 export type LlmProviderName =
@@ -15,12 +17,7 @@ export type LlmProviderName =
   | "bedrock"
   | "host";
 
-export interface ReasoningConfig {
-  enabled?: boolean;
-  effort?: "minimal" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
-  maxTokens?: number;
-  [key: string]: unknown;
-}
+export type ReasoningConfig = ConfigReasoningConfig;
 
 /**
  * Resolved LLM config, post-defaults. Subset of `ResolvedConfig.llm` so
@@ -40,7 +37,7 @@ export interface LlmConfig {
   /** OpenRouter provider routing — preferred order. */
   providerOrder?: string[];
   /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
-  openRouter?: boolean;
+  openRouter: boolean;
   /** OpenRouter-compatible reasoning controls. Omit for model defaults. */
   reasoning?: ReasoningConfig;
   /** Optional per-call default. Default: 1024. */

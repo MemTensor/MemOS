@@ -31,6 +31,7 @@ function cfg(partial: Partial<EmbeddingConfig>): EmbeddingConfig {
     model: "m",
     dimensions: 3,
     endpoint: "",
+    openRouter: false,
     apiKey: "KEY",
     cache: { enabled: false, maxItems: 0 },
     ...partial,

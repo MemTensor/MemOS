@@ -102,6 +102,12 @@ algorithm:
     expect(cfg.llm.reasoning?.effort).toBe("xhigh");
   });
 
+  it("rejects a non-positive OpenRouter reasoning token budget", () => {
+    expect(() => resolveConfig({
+      llm: { reasoning: { maxTokens: 0 } },
+    })).toThrow(/schema validation/);
+  });
+
   it("rejects invalid types with a helpful error", async () => {
     // Don't use makeTmpHome here — it would eagerly loadConfig and throw
     // before we can capture it. Lay out the dir manually instead.

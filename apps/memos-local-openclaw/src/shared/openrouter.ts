@@ -13,13 +13,14 @@ const OPENROUTER_HOSTS = new Set(["openrouter.ai"]);
 export function applyOpenRouterProviderRouting(
   config: OpenRouterRoutingConfig,
   body: Record<string, unknown>,
-): void {
-  if (!isOpenRouter(config)) return;
+): boolean {
+  if (!isOpenRouter(config)) return false;
 
   const provider: Record<string, unknown> = {};
   if (config.providerIgnore?.length) provider.ignore = config.providerIgnore;
   if (config.providerOrder?.length) provider.order = config.providerOrder;
   if (Object.keys(provider).length > 0) body.provider = provider;
+  return true;
 }
 
 function isOpenRouter(config: OpenRouterRoutingConfig): boolean {

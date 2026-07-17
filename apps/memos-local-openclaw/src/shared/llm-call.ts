@@ -190,8 +190,8 @@ async function callLLMOnceAnthropic(
   });
 
   if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`LLM call failed (${resp.status}): ${body}`);
+    const errorText = await resp.text();
+    throw new Error(`LLM call failed (${resp.status}): ${errorText}`);
   }
 
   const json = (await resp.json()) as { content: Array<{ type: string; text: string }> };
@@ -212,24 +212,24 @@ async function callLLMOnceOpenAI(
     Authorization: `Bearer ${cfg.apiKey}`,
     ...cfg.headers,
   };
-  const body: Record<string, unknown> = {
+  const requestBody: Record<string, unknown> = {
     model,
     temperature: opts.temperature ?? 0.1,
     max_tokens: opts.maxTokens ?? 1024,
     messages: [{ role: "user", content: prompt }],
   };
-  applyOpenRouterProviderRouting(cfg, body);
+  applyOpenRouterProviderRouting(cfg, requestBody);
 
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
     signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
   });
 
   if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`LLM call failed (${resp.status}): ${body}`);
+    const errorText = await resp.text();
+    throw new Error(`LLM call failed (${resp.status}): ${errorText}`);
   }
 
   const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
