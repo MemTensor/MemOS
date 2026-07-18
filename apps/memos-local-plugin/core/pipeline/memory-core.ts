@@ -86,6 +86,7 @@ import {
   FLOAT32_BYTES,
 } from "../storage/repos/index.js";
 import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
+import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -1555,7 +1556,7 @@ export function createMemoryCore(
     return page;
   }
 
-  function isDirtyClosedScanCursor(value: unknown): value is { startedAt: number; id: string } {
+  function isDirtyClosedScanCursor(value: unknown): value is ClosedEpisodeCursor {
     return Boolean(
       value &&
       typeof value === "object" &&
