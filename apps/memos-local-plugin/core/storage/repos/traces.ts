@@ -1,3 +1,4 @@
+import type { ToolCallDTO } from "../../../agent-contract/dto.js";
 import type { EmbeddingVector, EpisodeId, SessionId, ShareScope, TraceId, TraceRow } from "../../types.js";
 import type { StorageDb, TraceListFilter } from "../types.js";
 import { buildInClause, buildInsert, buildUpdate } from "../tx.js";
@@ -57,6 +58,39 @@ export type TraceSearchMeta = {
   tags_json?: string;
   error_signatures_json?: string;
 };
+
+/**
+ * Narrow row shape returned by {@link listDedupRowsForEpisode}. Includes
+ * exactly the fields the capture-side dedup path needs (see
+ * `traceIdentitySignature` / `runLite` / `runLightweight` in
+ * `core/capture/capture.ts`). Deliberately excludes the two big BLOB
+ * columns (`vec_summary`, `vec_action`) so an episode with 500k rows
+ * can be scanned without pulling ~4 GB of embeddings into JS memory —
+ * the root pathology in #2076.
+ */
+export interface TraceDedupRow {
+  ts: number;
+  turnId: number;
+  userText: string;
+  agentText: string;
+  toolCalls: ToolCallDTO[];
+}
+
+interface RawDedupRow {
+  ts: number;
+  turn_id: number;
+  user_text: string;
+  agent_text: string;
+  tool_calls_json: string;
+}
+
+const DEDUP_COLUMNS = [
+  "ts",
+  "turn_id",
+  "user_text",
+  "agent_text",
+  "tool_calls_json",
+] as const;
 
 export function makeTracesRepo(db: StorageDb) {
   const insert = db.prepare(buildInsert({ table: "traces", columns: COLUMNS }));
@@ -219,9 +253,97 @@ export function makeTracesRepo(db: StorageDb) {
       }
       if (tr.sql) fragments.push(tr.sql);
       const where = joinWhere(fragments);
-      const page = buildPageClauses(filter, "ts");
+      const shouldUseUncappedEpisodeScan =
+        Boolean(filter.episodeId) &&
+        filter.limit === undefined &&
+        filter.offset === undefined;
+      const page = shouldUseUncappedEpisodeScan
+        ? `ORDER BY ts ${filter.newestFirst === false ? "ASC" : "DESC"}`
+        : buildPageClauses(filter, "ts");
       const sql = `SELECT ${COLUMNS.join(", ")} FROM traces ${where} ${page}`;
       return db.prepare<typeof params, RawTraceRow>(sql).all(params).map(mapRow);
+    },
+
+    /**
+     * Full episode-scoped trace fetch with NO pagination cap.
+     *
+     * Fetches ALL columns including the large `vec_summary` and
+     * `vec_action` BLOB columns, mapped into full `TraceRow` shape.
+     * Use this only when the caller genuinely needs those BLOBs
+     * (e.g. `runReflect`, which re-embeds and rewrites every field).
+     *
+     * **For dedup-only reads** — where only `ts`, `turnId`,
+     * `userText`, `agentText`, and `toolCalls` are needed — use
+     * {@link listDedupRowsForEpisode} instead to avoid loading
+     * multi-GB of embeddings into JS memory.
+     *
+     * Why an uncapped read exists at all: the paginated
+     * `list({ episodeId })` path silently truncates to
+     * `PageOptions.limit` (default 500). That cap breaks capture-side
+     * dedup (#2076): when an episode grows past the cap, the next
+     * runLite / runReflect only sees the newest 500 rows, treats
+     * every older step as "novel", and re-inserts the whole tail
+     * every cycle. In the reporter's 4.2 GB / 6.8 GB failure,
+     * 518,375 trace rows had shrunk to 80,583 distinct
+     * `(episode_id, turn_id, user_text, agent_text, tool_calls_json)`
+     * signatures — 84 % duplicates driven by exactly this loop.
+     *
+     * Rows are ordered by `ts ASC` so the causal chain matches the
+     * order runLite / runReflect built.
+     */
+    listAllForEpisode(episodeId: EpisodeId | string): TraceRow[] {
+      if (!episodeId) return [];
+      const sql = `SELECT ${COLUMNS.join(
+        ", ",
+      )} FROM traces WHERE episode_id = @episode_id ORDER BY ts ASC`;
+      const rows = db
+        .prepare<{ episode_id: string }, RawTraceRow>(sql)
+        .all({ episode_id: String(episodeId) });
+      return rows.map(mapRow);
+    },
+
+    /**
+     * Narrow-projection episode fetch for capture-side dedup.
+     *
+     * Sibling to {@link listAllForEpisode}, but projects only the five
+     * scalar dedup-identity columns
+     * (`ts` / `turn_id` / `user_text` / `agent_text` / `tool_calls_json`)
+     * and NEVER touches `vec_summary` / `vec_action`. That is the real
+     * saving: on the reporter's DB in #2076 the two BLOB columns
+     * dominated row size, so skipping them cuts per-row bytes by
+     * ~1000× regardless of how many rows the episode contains.
+     *
+     * Uses `stmt.iterate()` internally to avoid better-sqlite3's
+     * intermediate `.all()` allocation, but the result is still
+     * materialised into a `TraceDedupRow[]` and returned to the
+     * caller — this is not a streaming API. Peak JS memory therefore
+     * scales linearly with row count × the small scalar payload,
+     * which is what capture-side dedup actually needs.
+     *
+     * Every capture-side dedup call-site (`runLite`, `runLightweight`,
+     * `persistRows` in `core/capture/capture.ts`) uses this helper
+     * so no BLOBs load during the dedup pass.
+     *
+     * Same episode-scoping / `ts ASC` ordering contract as
+     * `listAllForEpisode`.
+     */
+    listDedupRowsForEpisode(episodeId: EpisodeId | string): TraceDedupRow[] {
+      if (!episodeId) return [];
+      const sql = `SELECT ${DEDUP_COLUMNS.join(
+        ", ",
+      )} FROM traces WHERE episode_id = @episode_id ORDER BY ts ASC`;
+      const stmt = db.prepare<{ episode_id: string }, RawDedupRow>(sql);
+      const rows: TraceDedupRow[] = [];
+      for (const r of stmt.iterate({ episode_id: String(episodeId) })) {
+        rows.push({
+          ts: r.ts,
+          turnId: r.turn_id,
+          userText: r.user_text,
+          agentText: r.agent_text,
+          toolCalls: fromJsonText<ToolCallDTO[]>(r.tool_calls_json, []),
+        });
+      }
+      return rows;
     },
 
     /**

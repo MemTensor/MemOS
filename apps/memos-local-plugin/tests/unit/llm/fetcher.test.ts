@@ -101,6 +101,31 @@ describe("llm/fetcher", () => {
     }
   });
 
+  it("logs a truncated response body for non-ok JSON responses", async () => {
+    const warn = vi.fn();
+    const body = "x".repeat(600);
+    mockFetch([new Response(body, { status: 400 })]);
+
+    await expect(
+      httpPostJson({
+        url: "https://x",
+        body: {},
+        timeoutMs: 5_000,
+        maxRetries: 0,
+        provider: "openai_compatible",
+        log: { ...nullLog(), warn },
+      }),
+    ).rejects.toBeInstanceOf(MemosError);
+
+    expect(warn).toHaveBeenCalledWith(
+      "http.non_ok",
+      expect.objectContaining({
+        status: 400,
+        body: "x".repeat(512),
+      }),
+    );
+  });
+
   it("timeout → LLM_TIMEOUT", async () => {
     const timeout = new DOMException("The operation was aborted due to timeout", "TimeoutError");
     mockFetch([timeout]);
@@ -170,6 +195,29 @@ describe("llm/fetcher", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(MemosError);
     }
+  });
+
+  it("logs response body for non-ok streaming responses", async () => {
+    const warn = vi.fn();
+    mockFetch([new Response("stream rejected", { status: 400 })]);
+
+    await expect(
+      httpPostStream({
+        url: "https://x",
+        body: {},
+        timeoutMs: 5_000,
+        provider: "openai_compatible",
+        log: { ...nullLog(), warn },
+      }),
+    ).rejects.toBeInstanceOf(MemosError);
+
+    expect(warn).toHaveBeenCalledWith(
+      "http.non_ok",
+      expect.objectContaining({
+        status: 400,
+        body: "stream rejected",
+      }),
+    );
   });
 
   it("decodeSse splits events at blank lines and drops [DONE] sentinel handling to caller", async () => {
