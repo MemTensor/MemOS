@@ -1,7 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { MemosError } from "../../../agent-contract/errors.js";
-import { createEmbedderWithProvider } from "../../../core/embedding/embedder.js";
+import { DEFAULT_MAX_INPUT_CHARS } from "../../../core/embedding/constants.js";
+import {
+  createEmbedderWithProvider,
+  resolveMaxInputChars,
+} from "../../../core/embedding/embedder.js";
 import { initTestLogger, memoryBuffer } from "../../../core/logger/index.js";
 import type {
   EmbedRole,
@@ -270,15 +274,31 @@ describe("embedder facade", () => {
       expect(p.calls[0]!.texts[0]!.length).toBe(9000);
     });
 
-    it("defaults maxInputChars to 6000 when the field is absent", async () => {
+    it("defaults maxInputChars to DEFAULT_MAX_INPUT_CHARS when the field is absent", async () => {
       const p = new FakeProvider();
       const c = cfg();
       // Explicitly delete maxInputChars so we can prove the default kicks in.
       delete (c as { maxInputChars?: number }).maxInputChars;
       const e = createEmbedderWithProvider(c, p);
-      const longText = "y".repeat(9000);
+      const longText = "y".repeat(DEFAULT_MAX_INPUT_CHARS + 3000);
       await e.embedMany([longText]);
-      expect(p.calls[0]!.texts[0]!.length).toBe(6000);
+      expect(p.calls[0]!.texts[0]!.length).toBe(DEFAULT_MAX_INPUT_CHARS);
+    });
+
+    /**
+     * `resolveMaxInputChars` boundary semantics:
+     *   - invalid values (NaN) must fall back to the default — a typo'd
+     *     config must not silently disable the #2121 guard
+     *   - 0 / negative / Infinity are explicit opt-outs → 0 (disabled)
+     */
+    it("resolveMaxInputChars: invalid falls back to default; opt-outs disable", () => {
+      expect(resolveMaxInputChars(undefined)).toBe(DEFAULT_MAX_INPUT_CHARS);
+      expect(resolveMaxInputChars(Number.NaN)).toBe(DEFAULT_MAX_INPUT_CHARS);
+      expect(resolveMaxInputChars(0)).toBe(0);
+      expect(resolveMaxInputChars(-1)).toBe(0);
+      expect(resolveMaxInputChars(Number.NEGATIVE_INFINITY)).toBe(0);
+      expect(resolveMaxInputChars(Number.POSITIVE_INFINITY)).toBe(0);
+      expect(resolveMaxInputChars(1234.9)).toBe(1234);
     });
 
     it("emits a warn per embedMany call when truncation fires (batched, not per input)", async () => {

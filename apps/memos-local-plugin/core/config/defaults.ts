@@ -4,6 +4,7 @@
  * to change.
  */
 
+import { DEFAULT_MAX_INPUT_CHARS } from "../embedding/constants.js";
 import type { ResolvedConfig } from "./schema.js";
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
@@ -31,7 +32,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       enabled: true,
       maxItems: 20_000,
     },
-    maxInputChars: 6000,
+    maxInputChars: DEFAULT_MAX_INPUT_CHARS,
   },
   llm: {
     provider: "",

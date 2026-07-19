@@ -50,6 +50,13 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
         // error codes (e.g. 智谱 `code:1210` for over-length inputs)
         // directly from gateway.log without needing a debugger — see
         // issue #2121.
+        //
+        // SENSITIVITY: `body` is a verbatim excerpt of a third-party
+        // response. Providers sometimes echo fragments of the submitted
+        // input (which may contain personal memory content) back inside
+        // error payloads, so operators must treat log sinks carrying
+        // this field with the same care as raw memory content — see
+        // "Caveats" in core/embedding/README.md.
         opts.log.warn("http.non_ok", {
           url: opts.url,
           status: resp.status,

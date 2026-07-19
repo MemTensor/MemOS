@@ -24,6 +24,7 @@ import {
   makeCacheKey,
   type EmbedCache,
 } from "./cache.js";
+import { DEFAULT_MAX_INPUT_CHARS } from "./constants.js";
 import { postProcess } from "./normalize.js";
 import { CohereEmbeddingProvider } from "./providers/cohere.js";
 import { GeminiEmbeddingProvider } from "./providers/gemini.js";
@@ -355,17 +356,22 @@ export function createEmbedderWithProvider(
 // ─── Provider lookup ─────────────────────────────────────────────────────────
 
 /**
- * Default per-input character cap. Chosen at 6000 chars ≈ 2700 CJK
- * tokens ≈ well under 智谱 embedding-3's 3072-token single-input hard
- * limit, and safe for the 8K-context sentence-transformer models we
- * ship with local. Callers can override via `EmbeddingConfig.maxInputChars`;
- * setting it to `0` disables truncation. See issue #2121.
+ * Resolve the effective per-input character cap from config.
+ *
+ * Semantics (mirrors the `EmbeddingConfig.maxInputChars` JSDoc):
+ *   - `undefined`          → `DEFAULT_MAX_INPUT_CHARS` (guard on by default)
+ *   - `NaN`                → `DEFAULT_MAX_INPUT_CHARS` (invalid value — e.g.
+ *                            a typo'd config — must NOT silently disable the
+ *                            guard, or issue #2121 sneaks back in)
+ *   - `0` / negative       → `0` (documented explicit opt-out)
+ *   - `Infinity`           → `0` ("no cap" — explicit opt-out)
+ *   - any other number     → `Math.floor(value)`
  */
-const DEFAULT_MAX_INPUT_CHARS = 6000;
-
 export function resolveMaxInputChars(configured: number | undefined): number {
-  if (configured === undefined) return DEFAULT_MAX_INPUT_CHARS;
-  if (!Number.isFinite(configured) || configured < 0) return 0;
+  if (configured === undefined || Number.isNaN(configured)) {
+    return DEFAULT_MAX_INPUT_CHARS;
+  }
+  if (configured < 0 || !Number.isFinite(configured)) return 0;
   return Math.floor(configured);
 }
 

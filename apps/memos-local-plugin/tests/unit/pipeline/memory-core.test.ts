@@ -30,7 +30,7 @@ import { RECOVERY_REASONS } from "../../../core/pipeline/recovery-constants.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
-import type { MemosError } from "../../../agent-contract/errors.js";
+import { MemosError } from "../../../agent-contract/errors.js";
 import type { SkillId, SkillRow, TraceRow } from "../../../core/types.js";
 
 let db: TmpDbHandle | null = null;
@@ -372,6 +372,126 @@ describe("MemoryCore façade", () => {
     const badRow = db!.repos.traces.getById("tr_bad" as never);
     expect(badRow?.vecSummary).toBeNull();
     expect(badRow?.vecAction?.length).toBe(TEST_EMBED_DIMENSIONS);
+  });
+
+  /**
+   * Companion to the isolation test above: transient/systemic provider
+   * failures (network down, 5xx, 429 — thrown by the fetcher as
+   * `MemosError` AFTER its internal retries are exhausted) must NOT
+   * trigger the divide-and-conquer split. Splitting a systemic failure
+   * multiplies provider calls by O(log N) with zero chance of success.
+   * The whole batch fails in a single call; the next run retries it.
+   */
+  it("rebuildEmbeddings does not split the batch on transient provider errors", async () => {
+    let embedCalls = 0;
+    const deps = buildDeps(db!);
+    deps.embedder = {
+      ...deps.embedder!,
+      async embedMany() {
+        embedCalls++;
+        // Shape thrown by `httpPostJson` for a 503 after retry exhaustion.
+        throw new MemosError(
+          "embedding_unavailable",
+          "HTTP 503 from openai_compatible",
+          { provider: "openai_compatible", url: "https://x", status: 503 },
+        );
+      },
+    } as typeof deps.embedder;
+
+    pipeline = createPipeline(deps);
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    await core.importBundle({
+      version: 1,
+      traces: Array.from({ length: 4 }, (_, i) => ({
+        id: `tr_tra_${i}`,
+        episodeId: `ep_tra_${i}`,
+        sessionId: `se_tra_${i}`,
+        ts: 1_700_000_000_000 + i,
+        userText: `user text ${i}`,
+        agentText: `agent text ${i}`,
+        summary: `summary ${i}`,
+        toolCalls: [],
+        value: 0,
+        alpha: 0,
+        priority: 0,
+        turnId: 1_700_000_000_000 + i,
+      })),
+    });
+
+    const result = await core.rebuildEmbeddings({ mode: "repair", limit: 100 });
+    // 4 rows × 2 slots — all failed, in exactly ONE embedMany call
+    // (no halving cascade: 8 slots would otherwise cost up to 15 calls).
+    expect(result.updated).toBe(0);
+    expect(result.failed).toBe(8);
+    expect(result.error).toMatch(/HTTP 503/);
+    expect(embedCalls).toBe(1);
+  });
+
+  /**
+   * Contract-violation diagnostics: when `embedMany` resolves with
+   * fewer vectors than inputs, the missing slots must fail WITH a
+   * `firstError` describing which slot got no vector — previously this
+   * mode was silent and indistinguishable from an update failure.
+   */
+  it("rebuildEmbeddings surfaces an error when embedMany returns short", async () => {
+    const deps = buildDeps(db!);
+    // Phase flag: import-time embedding must fail wholesale so both
+    // slots stay missing; only the rebuild call returns short.
+    let shortMode = false;
+    deps.embedder = {
+      ...deps.embedder!,
+      async embedMany(inputs) {
+        if (!shortMode) throw new Error("import-phase embedding disabled");
+        // Drop the last vector — a contract violation.
+        return inputs.slice(0, -1).map(() => {
+          const v = new Float32Array(TEST_EMBED_DIMENSIONS);
+          v[0] = 1;
+          return v;
+        });
+      },
+    } as typeof deps.embedder;
+
+    pipeline = createPipeline(deps);
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    await core.importBundle({
+      version: 1,
+      traces: [{
+        id: "tr_short",
+        episodeId: "ep_short",
+        sessionId: "se_short",
+        ts: 1_700_000_000_000,
+        userText: "user text long enough to embed",
+        agentText: "agent text long enough to embed",
+        summary: "summary of the short-return regression trace",
+        toolCalls: [],
+        value: 0,
+        alpha: 0,
+        priority: 0,
+        turnId: 1_700_000_000_000,
+      }],
+    });
+
+    const before = await core.embeddingMaintenanceStats();
+    expect(before.byKind.trace.missing).toBe(2);
+
+    shortMode = true;
+    const result = await core.rebuildEmbeddings({ mode: "repair", limit: 100 });
+    // 1 row × 2 slots; the dropped vector fails its slot with a message.
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.error).toMatch(/returned no vector for slot/);
   });
 
   it("does not require action vectors for lightweight memory traces", async () => {
