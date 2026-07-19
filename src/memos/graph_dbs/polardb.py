@@ -1173,14 +1173,22 @@ class PolarDBGraphDB(BaseGraphDB):
     ) -> list[dict[str, Any]]:
         """Get children nodes with their embeddings."""
         user_name = user_name if user_name else self._get_config_value("user_name")
-        where_user = f"AND p.user_name = '{user_name}' AND c.user_name = '{user_name}'"
+        # Escape single quotes to prevent Cypher/SQL injection since AGE cypher()
+        # requires literal query text and does not support parameter binding here.
+        safe_id = escape_sql_string(str(id))
+        safe_user = escape_sql_string(str(user_name)) if user_name is not None else ""
+        where_user = (
+            f"AND p.user_name = '{safe_user}' AND c.user_name = '{safe_user}'"
+            if user_name is not None
+            else ""
+        )
 
         query = f"""
             WITH t as (
                 SELECT *
                 FROM cypher('{self.db_name}_graph', $$
                 MATCH (p:Memory)-[r:PARENT]->(c:Memory)
-                WHERE p.id = '{id}' {where_user}
+                WHERE p.id = '{safe_id}' {where_user}
                 RETURN id(c) as cid, c.id AS id, c.memory AS memory
                 $$) as (cid agtype, id agtype, memory agtype)
                 )
