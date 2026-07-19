@@ -107,7 +107,29 @@ export function createEmbedderWithProvider(
     requests += inputs.length;
     if (inputs.length === 0) return [];
 
-    const normalized = inputs.map(toInput);
+    // Per-input character cap. Truncation runs BEFORE cache-key hashing
+    // so a repeated call with the same head text hits the LRU. Guards
+    // against provider single-input token caps (e.g. 智谱 embedding-3
+    // rejects >3072 tokens with HTTP 400 code:1210 — see issue #2121).
+    const cap = resolveMaxInputChars(config.maxInputChars);
+    let truncatedCount = 0;
+    const normalized = inputs.map(toInput).map((inp) => {
+      if (cap > 0 && inp.text.length > cap) {
+        truncatedCount++;
+        return { ...inp, text: inp.text.slice(0, cap) };
+      }
+      return inp;
+    });
+    if (truncatedCount > 0) {
+      logger.warn("input_truncated", {
+        provider: provider.name,
+        model: config.model,
+        cap,
+        count: truncatedCount,
+        of: normalized.length,
+      });
+    }
+
     const results = new Array<EmbeddingVector | null>(normalized.length).fill(null);
     const dedupEnabled = config.cache.enabled;
     const keys = normalized.map((inp, i) => {
@@ -331,6 +353,21 @@ export function createEmbedderWithProvider(
 }
 
 // ─── Provider lookup ─────────────────────────────────────────────────────────
+
+/**
+ * Default per-input character cap. Chosen at 6000 chars ≈ 2700 CJK
+ * tokens ≈ well under 智谱 embedding-3's 3072-token single-input hard
+ * limit, and safe for the 8K-context sentence-transformer models we
+ * ship with local. Callers can override via `EmbeddingConfig.maxInputChars`;
+ * setting it to `0` disables truncation. See issue #2121.
+ */
+const DEFAULT_MAX_INPUT_CHARS = 6000;
+
+export function resolveMaxInputChars(configured: number | undefined): number {
+  if (configured === undefined) return DEFAULT_MAX_INPUT_CHARS;
+  if (!Number.isFinite(configured) || configured < 0) return 0;
+  return Math.floor(configured);
+}
 
 export function makeProviderFor(name: EmbeddingProviderName): EmbeddingProvider {
   switch (name) {

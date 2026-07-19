@@ -46,12 +46,17 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       if (!resp.ok) {
         const text = await safeText(resp);
         const transient = resp.status >= 500 || resp.status === 429;
+        // Include a truncated body so operators can pinpoint provider
+        // error codes (e.g. 智谱 `code:1210` for over-length inputs)
+        // directly from gateway.log without needing a debugger — see
+        // issue #2121.
         opts.log.warn("http.non_ok", {
           url: opts.url,
           status: resp.status,
           attempt,
           transient,
           durationMs: Date.now() - start,
+          body: text ? text.slice(0, 512) : undefined,
         });
         if (transient && attempt <= maxRetries) {
           await backoff(attempt);

@@ -43,6 +43,15 @@ const EmbeddingSchema = Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
   }, { default: {} }),
+  /**
+   * Per-input character cap applied inside the `Embedder` facade before
+   * hashing / calling the provider. Guards against remote embedding
+   * models with a per-request token limit — most notably 智谱
+   * `embedding-3` (3072 tokens ≈ 6-7 KB CJK), which returns HTTP 400
+   * `code:1210` for over-length inputs and used to nuke the whole
+   * rebuild batch (issue #2121). Set to `0` to disable truncation.
+   */
+  maxInputChars: NumberInRange(6000, 0),
 }, { default: {} });
 
 const LlmSchema = Type.Object({

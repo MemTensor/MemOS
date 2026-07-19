@@ -31,6 +31,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       enabled: true,
       maxItems: 20_000,
     },
+    maxInputChars: 6000,
   },
   llm: {
     provider: "",

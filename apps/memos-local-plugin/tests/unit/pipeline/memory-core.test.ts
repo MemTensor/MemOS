@@ -280,6 +280,100 @@ describe("MemoryCore façade", () => {
     expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
   });
 
+  /**
+   * Regression: issue #2121. Before the fix, `rebuildEmbeddings` caught
+   * any provider throw and set `failed = batch.length` — one 30 KB
+   * trace nuked the whole batch, so short valid rows next to it were
+   * counted as failed. The divide-and-conquer retry must isolate the
+   * poisonous input to only its own slot.
+   */
+  it("rebuildEmbeddings isolates a single-slot provider failure", async () => {
+    const poison = "POISON";
+    // Custom embedder that throws whenever the batch contains `poison`.
+    const deps = buildDeps(db!);
+    deps.embedder = {
+      ...deps.embedder!,
+      async embedMany(inputs) {
+        const texts = inputs.map((i) => (typeof i === "string" ? i : i.text));
+        if (texts.some((t) => t.includes(poison))) {
+          throw new Error("boom: over-length input");
+        }
+        // Deterministic non-zero vector.
+        return texts.map(() => {
+          const v = new Float32Array(TEST_EMBED_DIMENSIONS);
+          v[0] = 1;
+          return v;
+        });
+      },
+      async embedOne(input) {
+        const text = typeof input === "string" ? input : input.text;
+        if (text.includes(poison)) throw new Error("boom");
+        const v = new Float32Array(TEST_EMBED_DIMENSIONS);
+        v[0] = 1;
+        return v;
+      },
+    } as typeof deps.embedder;
+
+    pipeline = createPipeline(deps);
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const rows = [
+      { id: "tr_ok_1", summary: "clean summary one" },
+      { id: "tr_ok_2", summary: "clean summary two" },
+      { id: "tr_bad",  summary: `${poison} tail text`   },
+      { id: "tr_ok_3", summary: "clean summary three" },
+      { id: "tr_ok_4", summary: "clean summary four" },
+    ];
+    await core.importBundle({
+      version: 1,
+      traces: rows.map((r, i) => ({
+        id: r.id,
+        episodeId: `ep_iso_${i}`,
+        sessionId: `se_iso_${i}`,
+        ts: 1_700_000_000_000 + i,
+        userText: `user text ${i}`,
+        agentText: `agent text ${i}`,
+        summary: r.summary,
+        toolCalls: [],
+        value: 0,
+        alpha: 0,
+        priority: 0,
+        turnId: 1_700_000_000_000 + i,
+      })),
+    });
+
+    const before = await core.embeddingMaintenanceStats();
+    expect(before.byKind.trace.missing).toBe(rows.length * 2);
+
+    const result = await core.rebuildEmbeddings({ mode: "repair", limit: 100 });
+    // Every row has 2 slots (summary + action). Only the poison row's
+    // `vec_summary` slot must fail. `vec_action` is derived from
+    // `agentText` which contains no poison, so it must still succeed.
+    // Expected: 9 updated, 1 failed.
+    expect(result.processed).toBe(rows.length * 2);
+    expect(result.updated).toBe(rows.length * 2 - 1);
+    expect(result.failed).toBe(1);
+    expect(result.error).toMatch(/boom/);
+
+    // The clean rows must actually have vectors written.
+    for (const r of rows) {
+      if (r.id === "tr_bad") continue;
+      const row = db!.repos.traces.getById(r.id as never);
+      expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+      expect(row?.vecAction?.length).toBe(TEST_EMBED_DIMENSIONS);
+    }
+    // The poison row: `vec_summary` never applied, `vec_action` should
+    // still be populated (agentText has no poison).
+    const badRow = db!.repos.traces.getById("tr_bad" as never);
+    expect(badRow?.vecSummary).toBeNull();
+    expect(badRow?.vecAction?.length).toBe(TEST_EMBED_DIMENSIONS);
+  });
+
   it("does not require action vectors for lightweight memory traces", async () => {
     pipeline = createPipeline(buildDeps(db!, configWithLightweightMemory(true)));
     core = createMemoryCore(

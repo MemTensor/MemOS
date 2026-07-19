@@ -4283,28 +4283,10 @@ export function createMemoryCore(
     let failed = 0;
     let error: string | undefined;
     if (batch.length > 0) {
-      try {
-        const vecs = await handle.embedder.embedMany(
-          batch.map((slot) => ({ text: slot.sourceText || "(empty)", role: "document" as const })),
-        );
-        for (let i = 0; i < batch.length; i++) {
-          const slot = batch[i]!;
-          const vec = vecs[i];
-          if (!vec) {
-            failed++;
-            continue;
-          }
-          try {
-            if (slot.update(vec)) updated++;
-            else failed++;
-          } catch {
-            failed++;
-          }
-        }
-      } catch (err) {
-        failed = batch.length;
-        error = err instanceof Error ? err.message : String(err);
-      }
+      const outcome = await embedAndApplySlots(batch);
+      updated = outcome.updated;
+      failed = outcome.failed;
+      error = outcome.firstError;
     }
 
     const statsAfter = computeEmbeddingMaintenanceStats();
@@ -4324,6 +4306,60 @@ export function createMemoryCore(
       statsAfter,
       error,
     };
+  }
+
+  /**
+   * Divide-and-conquer embed + write for `rebuildEmbeddings`.
+   *
+   * Before this refactor `rebuildEmbeddings` blanket-failed a whole
+   * batch on any provider throw — one 30 KB trace nuked the counters
+   * for every short trace next to it (issue #2121). Now, on provider
+   * failure the sub-batch is halved and each half retried; when a
+   * single-slot sub-batch still fails, only that one slot is counted
+   * as failed. Worst case is O(N log N) round trips for pathological
+   * inputs; in practice poison slots are ≪ 1 %.
+   */
+  async function embedAndApplySlots(sub: EmbeddingSlot[]): Promise<{
+    updated: number;
+    failed: number;
+    firstError?: string;
+  }> {
+    if (sub.length === 0) return { updated: 0, failed: 0 };
+    try {
+      const vecs = await handle.embedder!.embedMany(
+        sub.map((slot) => ({ text: slot.sourceText || "(empty)", role: "document" as const })),
+      );
+      let updated = 0;
+      let failed = 0;
+      for (let i = 0; i < sub.length; i++) {
+        const slot = sub[i]!;
+        const vec = vecs[i];
+        if (!vec) {
+          failed++;
+          continue;
+        }
+        try {
+          if (slot.update(vec)) updated++;
+          else failed++;
+        } catch {
+          failed++;
+        }
+      }
+      return { updated, failed };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Base case: a single-slot sub-batch still failed — mark this
+      // one slot as failed and bubble the message up.
+      if (sub.length === 1) return { updated: 0, failed: 1, firstError: msg };
+      const mid = sub.length >> 1;
+      const left = await embedAndApplySlots(sub.slice(0, mid));
+      const right = await embedAndApplySlots(sub.slice(mid));
+      return {
+        updated: left.updated + right.updated,
+        failed: left.failed + right.failed,
+        firstError: left.firstError ?? right.firstError ?? msg,
+      };
+    }
   }
 
   type EmbeddingSlotKind = "trace" | "policy" | "world_model" | "skill";
