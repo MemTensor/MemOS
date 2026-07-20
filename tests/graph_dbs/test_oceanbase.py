@@ -97,9 +97,10 @@ def test_get_neighbors(graph_db, cursor):
 
 
 def test_search_by_embedding_threshold(graph_db, cursor):
-    cursor.fetchall.return_value = [("n1", 0.9), ("n2", 0.4)]
+    # score == threshold (0.5) must be included (implementation uses score >= threshold).
+    cursor.fetchall.return_value = [("n1", 0.9), ("n3", 0.5), ("n2", 0.4)]
     results = graph_db.search_by_embedding([0.1, 0.2, 0.3], top_k=5, threshold=0.5)
-    assert results == [{"id": "n1", "score": 0.9}]
+    assert results == [{"id": "n1", "score": 0.9}, {"id": "n3", "score": 0.5}]
 
 
 def test_get_path_cte(graph_db, cursor):

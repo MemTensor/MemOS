@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
 from memos.configs.vec_db import VectorDBConfigFactory
+from memos.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class BaseGraphDBConfig(BaseConfig):
@@ -285,9 +289,17 @@ class OceanBaseGraphDBConfig(BaseConfig):
     @classmethod
     def validate_table_prefix(cls, value: str) -> str:
         """Reject prefixes that could break out of the identifier when built into DDL."""
+        # Longest derived identifier is idx_{prefix}_nodes_embedding (prefix + 20 chars);
+        # MySQL / OceanBase cap identifiers at 64 characters.
+        max_prefix_len = 44
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
             raise ValueError(
                 "`table_prefix` must match [A-Za-z_][A-Za-z0-9_]* (letters, digits, underscore)"
+            )
+        if len(value) > max_prefix_len:
+            raise ValueError(
+                f"`table_prefix` must be at most {max_prefix_len} characters to keep derived "
+                "index names within MySQL/OceanBase's 64-character identifier limit"
             )
         return value
 
@@ -298,6 +310,11 @@ class OceanBaseGraphDBConfig(BaseConfig):
             raise ValueError("`db_name` must be provided")
         if not self.use_multi_db and not self.user_name:
             raise ValueError("In single-database mode, `user_name` must be provided")
+        if not self.password:
+            logger.warning(
+                "OceanBase graph DB is configured with an empty password; "
+                "make sure this is intentional (e.g. a local dev instance)."
+            )
         return self
 
 

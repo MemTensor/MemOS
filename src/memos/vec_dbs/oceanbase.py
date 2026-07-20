@@ -43,7 +43,13 @@ class OceanBaseVecDB(BaseVecDB):
         import pyseekdb
 
         self.config = config
-        self._distance = _DISTANCE_MAP.get(config.distance_metric or "cosine", "cosine")
+        metric = config.distance_metric or "cosine"
+        if metric not in _DISTANCE_MAP:
+            raise ValueError(
+                f"Unsupported distance_metric '{metric}'. "
+                f"Valid options are: {list(_DISTANCE_MAP.keys())}"
+            )
+        self._distance = _DISTANCE_MAP[metric]
 
         self.client = pyseekdb.Client(
             host=config.host,
@@ -143,7 +149,7 @@ class OceanBaseVecDB(BaseVecDB):
             query_embeddings=query_vector,
             n_results=top_k,
             where=filter or None,
-            include=["documents", "metadatas", "embeddings"],
+            include=["metadatas", "embeddings", "distances"],
         )
         ids = (response.get("ids") or [[]])[0]
         metadatas = (response.get("metadatas") or [[]])[0]
@@ -278,7 +284,7 @@ class OceanBaseVecDB(BaseVecDB):
         """Update an item in the collection."""
         item = self._normalize_item(data)
         metadata = item.payload
-        if item.vector:
+        if item.vector is not None:
             self.collection.update(
                 ids=id,
                 embeddings=item.vector,

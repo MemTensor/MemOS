@@ -55,15 +55,29 @@ class _PyMySQLConnectionPool:
     def acquire(self):
         if self._closed:
             raise GraphDBError("Connection pool is closed")
+        # Decide whether to create a new connection while holding the lock, but run
+        # the (potentially slow) connect outside the lock so it never blocks peers.
         with self._lock:
-            if self._created < self._maxconn and self._idle.empty():
+            should_create = self._created < self._maxconn and self._idle.empty()
+            if should_create:
                 self._created += 1
-                try:
-                    return self._connect_fn()
-                except Exception:
+        if should_create:
+            try:
+                return self._connect_fn()
+            except Exception:
+                with self._lock:
                     self._created -= 1
-                    raise
+                raise
         return self._idle.get()
+
+    def discard(self, conn) -> None:
+        """Permanently drop a (likely broken) connection and free its pool slot."""
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
+        with self._lock:
+            if self._created > 0:
+                self._created -= 1
 
     def release(self, conn) -> None:
         if conn is None:
@@ -106,10 +120,13 @@ def _normalize_dt(value: Any) -> str:
     """Normalize an ISO datetime string to a MySQL-compatible ``DATETIME`` literal."""
     if value is None:
         value = datetime.utcnow().isoformat()
-    text = str(value).replace("T", " ")
-    # Drop timezone suffix / fractional beyond seconds tolerated by DATETIME.
-    if "+" in text:
-        text = text.split("+", 1)[0]
+    text = str(value).replace("T", " ").strip()
+    # Strip the timezone suffix (+HH:MM / -HH:MM / Z) without touching the date's
+    # own hyphens: only the time part after the first space can carry a tz.
+    if " " in text:
+        date_part, time_part = text.split(" ", 1)
+        time_part = re.split(r"[Z+\-]", time_part, maxsplit=1)[0].strip()
+        text = f"{date_part} {time_part}"
     return text.strip()
 
 
@@ -167,21 +184,26 @@ class OceanBaseGraphDB(BaseGraphDB):
         if self._closed:
             raise GraphDBError("OceanBaseGraphDB connection is closed")
 
-    def _healthy(self, conn):
-        """Ping the borrowed connection, replacing it if the socket is dead."""
+    def _acquire_live(self):
+        """Get a live connection from the pool.
+
+        If the borrowed connection's socket is dead, discard it through the pool
+        (so ``_created`` stays accurate) and acquire a fresh one, avoiding the
+        counter drift that a raw out-of-band reconnect would cause.
+        """
+        conn = self._pool.acquire()
         try:
             conn.ping(reconnect=True)
             return conn
         except Exception:
-            with suppress(Exception):
-                conn.close()
-            return self._pymysql.connect(**self._conn_kwargs)
+            self._pool.discard(conn)
+            return self._pool.acquire()
 
     @contextmanager
     def _borrow(self):
         """Borrow a single connection for one auto-committed operation."""
         self._ensure_open()
-        conn = self._healthy(self._pool.acquire())
+        conn = self._acquire_live()
         try:
             yield conn
         finally:
@@ -191,7 +213,7 @@ class OceanBaseGraphDB(BaseGraphDB):
     def _transaction(self):
         """Borrow a connection and run several statements as one atomic unit."""
         self._ensure_open()
-        conn = self._healthy(self._pool.acquire())
+        conn = self._acquire_live()
         cur = None
         try:
             cur = conn.cursor()
@@ -1047,10 +1069,20 @@ class OceanBaseGraphDB(BaseGraphDB):
         params: dict[str, Any] | None = None,
         user_name: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Count nodes grouped by the given JSON property fields."""
+        """Count nodes grouped by the given JSON property fields.
+
+        ``where_clause`` is intentionally not supported: splicing a raw SQL
+        string would be an injection vector, and no current caller uses it.
+        Express additional filters through the structured filter helpers instead.
+        """
         user_name = user_name or self.user_name
         if not group_fields:
             raise ValueError("group_fields cannot be empty")
+        if where_clause:
+            raise ValueError(
+                "get_grouped_counts() does not support a raw `where_clause`; "
+                "use structured filters instead"
+            )
         for field in group_fields:
             if not self._is_safe_field_name(field):
                 raise ValueError(f"Invalid group field: {field}")
@@ -1067,15 +1099,6 @@ class OceanBaseGraphDB(BaseGraphDB):
 
         conditions = ["user_name = %s"]
         query_params: list[Any] = [user_name]
-
-        if where_clause:
-            where_clause = where_clause.strip()
-            if where_clause.upper().startswith("WHERE"):
-                where_clause = where_clause[5:].strip()
-            if where_clause:
-                conditions.append(where_clause)
-                if params:
-                    query_params.extend(params.values())
 
         where_sql = " AND ".join(conditions)
 

@@ -916,7 +916,7 @@ class APIConfig:
             "table_prefix": os.getenv("OCEANBASE_TABLE_PREFIX", "memos_graph"),
             "user_name": user_name,
             "use_multi_db": False,
-            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "768")),
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
             "maxconn": int(os.getenv("OCEANBASE_MAX_CONN", "20")),
         }
 

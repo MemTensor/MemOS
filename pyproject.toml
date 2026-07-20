@@ -114,7 +114,7 @@ tavily = [
 
 # OceanBase / seekdb unified vector + graph provider
 ob-mem = [
-    "pyseekdb (>=1.4.0,<2.0.0)",  # Unified client for seekdb / OceanBase (Collection + raw SQL)
+    "pyseekdb (>=1.4.0,<1.5.0)",  # Unified client for seekdb / OceanBase (Collection + raw SQL)
 ]
 
 # All optional dependencies
@@ -145,7 +145,7 @@ all = [
     "rake-nltk (>=1.0.6,<1.1.0)",
     "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
     "tavily-python (>=0.5.0,<1.0.0)",
-    "pyseekdb (>=1.4.0,<2.0.0)",
+    "pyseekdb (>=1.4.0,<1.5.0)",
 
     # Uncategorized dependencies
 ]
