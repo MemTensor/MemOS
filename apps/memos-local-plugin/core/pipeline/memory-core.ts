@@ -3188,6 +3188,7 @@ export function createMemoryCore(
     sessionId?: SessionId;
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<EpisodeId[]> {
     ensureLive();
     const rows = handle.repos.episodes.list({
@@ -3196,7 +3197,7 @@ export function createMemoryCore(
       offset: input.offset ?? 0,
     });
     return rows
-      .filter((r: EpisodeRow) => visibleToCurrent(r))
+      .filter((r: EpisodeRow) => input.includeAllNamespaces || visibleToCurrent(r))
       .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
@@ -3763,7 +3764,7 @@ export function createMemoryCore(
     });
   }
 
-  async function metrics(input?: { days?: number }): Promise<{
+  async function metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;
@@ -3908,9 +3909,12 @@ export function createMemoryCore(
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
     // Apply namespace visibility so the count matches the filtered list.
+    // Viewer callers pass `includeAllNamespaces` — `activeNamespace` is
+    // rewritten by every turn/session, so binding this count to it made
+    // the dashboard total collapse whenever another profile's turn ran.
     const totalTurns = handle.repos.traces.countTurns(
       {},
-      visibilityWhere(activeNamespace),
+      input?.includeAllNamespaces ? undefined : visibilityWhere(activeNamespace),
     );
 
     return {

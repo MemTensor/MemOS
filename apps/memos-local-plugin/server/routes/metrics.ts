@@ -41,8 +41,11 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/metrics", async (ctx) => {
     const raw = ctx.url.searchParams.get("days");
     const days = raw ? Number(raw) : undefined;
+    // Viewer analytics cover the whole local database — see overview.ts
+    // for why viewer reads must not follow the turn-scoped namespace.
     return await deps.core.metrics({
       days: Number.isFinite(days) ? days : undefined,
+      includeAllNamespaces: true,
     });
   });
 
@@ -112,7 +115,7 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     // web / whatever the agent ran. Fold them in with the api_logs
     // rows so the panel answers "is anything slow?" regardless of
     // whether the slowness was internal or user-visible.
-    const traces = await deps.core.listTraces({ limit: 2_000, offset: 0 });
+    const traces = await deps.core.listTraces({ limit: 2_000, offset: 0, includeAllNamespaces: true });
     for (const tr of traces) {
       if (tr.ts < sinceMs) continue;
       for (const tc of tr.toolCalls ?? []) {

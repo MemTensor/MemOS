@@ -470,7 +470,8 @@ describe("HTTP server — REST routes", () => {
     expect(Array.isArray(body.traces)).toBe(true);
     expect(body.traces[0]?.id).toBe("tr-1");
     expect(body.traces[0]?.summary).toBe("greeted");
-    // The route must forward the query string into the core call.
+    // The route must forward the query string into the core call, and
+    // pin the viewer to all-namespace reads (#2131 drift regression).
     expect(core.listTraces).toHaveBeenCalledWith({
       limit: 25,
       offset: 0,
@@ -479,6 +480,7 @@ describe("HTTP server — REST routes", () => {
       groupByTurn: false,
       ownerAgentKind: undefined,
       ownerProfileId: undefined,
+      includeAllNamespaces: true,
     });
   });
 

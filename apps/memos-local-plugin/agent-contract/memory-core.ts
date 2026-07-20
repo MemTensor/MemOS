@@ -369,7 +369,7 @@ export interface MemoryCore {
   archiveWorldModel(id: string): Promise<WorldModelDTO | null>;
   /** Reverse of {@link archiveWorldModel}. */
   unarchiveWorldModel(id: string): Promise<WorldModelDTO | null>;
-  listEpisodes(input: { sessionId?: SessionId; limit?: number; offset?: number }): Promise<EpisodeId[]>;
+  listEpisodes(input: { sessionId?: SessionId; limit?: number; offset?: number; includeAllNamespaces?: boolean }): Promise<EpisodeId[]>;
   /**
    * Like `listEpisodes` but returns rich per-row metadata the viewer
    * needs to render its task list without a second round trip
@@ -504,7 +504,7 @@ export interface MemoryCore {
    * Aggregate counts for the viewer's Analytics tab. `days` controls
    * the window the `dailyWrites` histogram covers.
    */
-  metrics(input?: { days?: number }): Promise<{
+  metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;

@@ -451,6 +451,74 @@ describe("MemoryCore façade", () => {
     expect(await core.listTraces({ limit: 10, groupByTurn: true })).toHaveLength(1);
   });
 
+  // Regression for #2131: viewer dashboard counts must not "drift to
+  // zero" when a turn/session from a different sub-agent profile flips
+  // the core's active namespace. The viewer is a local single-user
+  // admin surface, so its aggregate reads pass `includeAllNamespaces`
+  // (same convention as diag.ts / session.ts routes) and must stay
+  // stable regardless of which namespace processed the last turn.
+  it("keeps metrics + listEpisodes stable across a namespace flip (includeAllNamespaces)", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const mainNs = { agentKind: "openclaw", profileId: "main" };
+    const subagentNs = { agentKind: "openclaw", profileId: "subagent-x" };
+
+    // 1. A turn under the boot namespace writes one memory.
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      namespace: mainNs,
+      sessionId: "s-main",
+      userText: "remember the deploy checklist",
+      ts: 1_700_000_000_001,
+    });
+    await core.onTurnEnd({
+      agent: "openclaw",
+      namespace: mainNs,
+      sessionId: "s-main",
+      episodeId: start.query.episodeId!,
+      agentText: "stored the deploy checklist",
+      toolCalls: [],
+      ts: 1_700_000_000_002,
+    });
+
+    const before = await core.metrics({ days: 1, includeAllNamespaces: true });
+    expect(before.total).toBe(1);
+    const episodesBefore = await core.listEpisodes({
+      limit: 10,
+      includeAllNamespaces: true,
+    });
+    expect(episodesBefore).toHaveLength(1);
+
+    // 2. A session under a DIFFERENT profile flips activeNamespace
+    // (this is what the gateway/sub-agents do in production).
+    await core.openSession({
+      agent: "openclaw",
+      sessionId: "s-sub",
+      namespace: subagentNs,
+    });
+
+    // Namespace-scoped reads hide the other profile's row (intended
+    // multi-profile isolation)…
+    const scoped = await core.metrics({ days: 1 });
+    expect(scoped.total).toBe(0);
+    await expect(core.listEpisodes({ limit: 10 })).resolves.toHaveLength(0);
+
+    // …but the viewer's all-namespace reads must NOT drift.
+    const after = await core.metrics({ days: 1, includeAllNamespaces: true });
+    expect(after.total).toBe(1);
+    const episodesAfter = await core.listEpisodes({
+      limit: 10,
+      includeAllNamespaces: true,
+    });
+    expect(episodesAfter).toHaveLength(1);
+  });
+
   it("records visible subagent task and result in the parent episode", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
