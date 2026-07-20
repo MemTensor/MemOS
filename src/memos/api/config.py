@@ -897,6 +897,30 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_oceanbase_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get OceanBase / seekdb configuration for MemOS graph storage.
+
+        Single MySQL-compatible database with logical tenant isolation by
+        ``user_name``; nodes/edges live in ``{table_prefix}_nodes`` / ``_edges``.
+        """
+        user_name = os.getenv("MEMOS_USER_NAME", "default")
+        if user_id:
+            user_name = f"memos_{user_id.replace('-', '')}"
+
+        return {
+            "host": os.getenv("OCEANBASE_HOST", "localhost"),
+            "port": int(os.getenv("OCEANBASE_PORT", "2881")),
+            "user": os.getenv("OCEANBASE_USER", "root"),
+            "password": os.getenv("OCEANBASE_PASSWORD", ""),
+            "db_name": os.getenv("OCEANBASE_DB", "memos"),
+            "table_prefix": os.getenv("OCEANBASE_TABLE_PREFIX", "memos_graph"),
+            "user_name": user_name,
+            "use_multi_db": False,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "768")),
+            "maxconn": int(os.getenv("OCEANBASE_MAX_CONN", "20")),
+        }
+
+    @staticmethod
     def get_mysql_config() -> dict[str, Any]:
         """Get MySQL configuration."""
         return {
