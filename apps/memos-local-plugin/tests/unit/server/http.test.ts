@@ -522,6 +522,20 @@ describe("HTTP server — REST routes", () => {
     expect(Array.isArray(body.dailyWrites)).toBe(true);
   });
 
+  it("GET /api/v1/metrics/tools scopes both data feeds to all namespaces", async () => {
+    const r = await fetch(`${handle.url}/api/v1/metrics/tools?minutes=60`);
+    expect(r.status).toBe(200);
+    // The tool panel folds api_logs entries and trace tool-calls into
+    // one aggregation; both feeds must be pinned to all-namespace reads
+    // or the chart under-reports after a namespace flip (#2131).
+    expect(core.listApiLogs).toHaveBeenCalledWith(
+      expect.objectContaining({ includeAllNamespaces: true }),
+    );
+    expect(core.listTraces).toHaveBeenCalledWith(
+      expect.objectContaining({ includeAllNamespaces: true }),
+    );
+  });
+
   it("GET /api/v1/config returns resolved config", async () => {
     const r = await fetch(`${handle.url}/api/v1/config`);
     expect(r.status).toBe(200);
