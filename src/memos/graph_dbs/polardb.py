@@ -94,8 +94,15 @@ def clean_properties(props):
 
 
 def escape_sql_string(value: str) -> str:
-    """Escape single quotes in SQL string."""
-    return value.replace("'", "''")
+    """Escape single quotes and neutralize dollar-quote delimiters in SQL string.
+
+    Values escaped by this helper are interpolated into Apache AGE cypher(...) calls
+    whose Cypher body is wrapped in a PostgreSQL dollar-quoted string ($$...$$).
+    Escaping single quotes alone is insufficient: an input containing the substring
+    "$$" would prematurely terminate the dollar-quoted block and allow injection.
+    We therefore also strip any "$$" occurrences.
+    """
+    return value.replace("'", "''").replace("$$", "")
 
 
 class PolarDBGraphDB(BaseGraphDB):
@@ -4310,8 +4317,8 @@ class PolarDBGraphDB(BaseGraphDB):
         if filter:
             # Helper function to escape string value for SQL
             def escape_sql_string(value: str) -> str:
-                """Escape single quotes in SQL string."""
-                return value.replace("'", "''")
+                """Escape single quotes and neutralize dollar-quote delimiters."""
+                return value.replace("'", "''").replace("$$", "")
 
             # Helper function to build a single filter condition
             def build_filter_condition(condition_dict: dict) -> str:
