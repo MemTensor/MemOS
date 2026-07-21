@@ -357,13 +357,14 @@ export async function classifyTopicAnthropic(
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<TopicClassifyResult> {
+  if (!cfg.apiKey) throw new Error("Anthropic topic-classifier: apiKey is required");
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
   const model = cfg.model ?? "claude-3-haiku-20240307";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "x-api-key": cfg.apiKey ?? "",
-    "anthropic-version": "2023-06-01",
     ...cfg.headers,
+    "x-api-key": cfg.apiKey,
+    "anthropic-version": "2023-06-01",
   };
 
   const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
@@ -386,8 +387,9 @@ export async function classifyTopicAnthropic(
     throw new Error(`Anthropic topic-classifier failed (${resp.status}): ${body}`);
   }
 
-  const json = (await resp.json()) as { content: Array<{ type: string; text: string }> };
-  const raw = json.content.find((c) => c.type === "text")?.text?.trim() ?? "";
+  const json = (await resp.json()) as { content?: Array<{ type: string; text: string }> };
+  const content = Array.isArray(json?.content) ? json.content : [];
+  const raw = content.find((c) => c.type === "text")?.text?.trim() ?? "";
   log.debug(`Topic classifier raw: "${raw}"`);
   return parseTopicClassifyResult(raw, log);
 }
@@ -398,13 +400,14 @@ export async function arbitrateTopicSplitAnthropic(
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<string> {
+  if (!cfg.apiKey) throw new Error("Anthropic topic-arbitration: apiKey is required");
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
   const model = cfg.model ?? "claude-3-haiku-20240307";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "x-api-key": cfg.apiKey ?? "",
-    "anthropic-version": "2023-06-01",
     ...cfg.headers,
+    "x-api-key": cfg.apiKey,
+    "anthropic-version": "2023-06-01",
   };
 
   const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
@@ -414,7 +417,7 @@ export async function arbitrateTopicSplitAnthropic(
     headers,
     body: JSON.stringify({
       model,
-      max_tokens: 60,
+      max_tokens: 10,
       temperature: 0,
       system: TOPIC_ARBITRATION_PROMPT,
       messages: [{ role: "user", content: userContent }],
@@ -427,8 +430,9 @@ export async function arbitrateTopicSplitAnthropic(
     throw new Error(`Anthropic topic-arbitration failed (${resp.status}): ${body}`);
   }
 
-  const json = (await resp.json()) as { content: Array<{ type: string; text: string }> };
-  const answer = json.content.find((c) => c.type === "text")?.text?.trim().toUpperCase() ?? "";
+  const json = (await resp.json()) as { content?: Array<{ type: string; text: string }> };
+  const content = Array.isArray(json?.content) ? json.content : [];
+  const answer = content.find((c) => c.type === "text")?.text?.trim().toUpperCase() ?? "";
   log.debug(`Topic arbitration result: "${answer}"`);
   return answer.startsWith("NEW") ? "NEW" : "SAME";
 }

@@ -440,6 +440,11 @@ export async function arbitrateTopicSplitBedrock(
   const json = (await resp.json()) as { output: { message: { content: Array<{ text: string }> } } };
   const answer = json.output?.message?.content?.[0]?.text?.trim().toUpperCase() ?? "";
   log.debug(`Topic arbitration result: "${answer}"`);
+  if (!answer) {
+    log.warn("Bedrock topic-arbitration returned empty text; defaulting to SAME");
+  } else if (!answer.startsWith("NEW") && !answer.startsWith("SAME")) {
+    log.warn(`Bedrock topic-arbitration returned unexpected value "${answer}"; defaulting to SAME`);
+  }
   return answer.startsWith("NEW") ? "NEW" : "SAME";
 }
 

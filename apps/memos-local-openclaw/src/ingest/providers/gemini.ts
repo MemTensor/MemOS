@@ -356,12 +356,15 @@ export async function classifyTopicGemini(
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<TopicClassifyResult> {
+  if (!cfg.apiKey) throw new Error("Gemini topic-classifier: apiKey is required");
   const model = cfg.model ?? "gemini-1.5-flash";
   const endpoint =
     cfg.endpoint ??
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-  const url = `${endpoint}?key=${cfg.apiKey}`;
+  const u = new URL(endpoint);
+  u.searchParams.set("key", cfg.apiKey);
+  const url = u.toString();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...cfg.headers,
@@ -397,12 +400,15 @@ export async function arbitrateTopicSplitGemini(
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<string> {
+  if (!cfg.apiKey) throw new Error("Gemini topic-arbitration: apiKey is required");
   const model = cfg.model ?? "gemini-1.5-flash";
   const endpoint =
     cfg.endpoint ??
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-  const url = `${endpoint}?key=${cfg.apiKey}`;
+  const u = new URL(endpoint);
+  u.searchParams.set("key", cfg.apiKey);
+  const url = u.toString();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...cfg.headers,
