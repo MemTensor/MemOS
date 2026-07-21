@@ -1,3 +1,5 @@
+import ast
+import inspect
 import time
 
 from unittest.mock import MagicMock, patch
@@ -177,8 +179,16 @@ def test_searcher_creates_shared_executors_in_init():
         assert isinstance(executor, ContextThreadPoolExecutor), (
             f"{attr} must be a ContextThreadPoolExecutor, got {type(executor)!r}"
         )
-        assert executor._max_workers == expected_workers, (
-            f"{attr} max_workers={executor._max_workers}, expected {expected_workers}"
+        # NOTE: ThreadPoolExecutor does not expose max_workers publicly, so we
+        # inspect the private `_max_workers` attribute. This is stable on
+        # CPython 3.9-3.13 (the versions this project tests against); use
+        # getattr so a future rename fails with a clear assertion message
+        # instead of an AttributeError.
+        actual_workers = getattr(executor, "_max_workers", None)
+        assert actual_workers == expected_workers, (
+            f"{attr} max_workers={actual_workers}, expected {expected_workers} "
+            "(None means the private _max_workers attribute is gone — "
+            "update this test for the current Python version)"
         )
 
 
@@ -219,14 +229,14 @@ def test_searcher_reuses_pool_across_retrieve_paths_calls():
             mode="fast",
             memory_type="WorkingMemory",
         )
-        # Second call
+        # Second call (distinct valid mode to also cover the 'fine' path)
         s._retrieve_paths(
             query="q",
             parsed_goal=parsed_goal,
             query_embedding=[[0.1] * 5],
             info={},
             top_k=1,
-            mode="WorkingMemory",
+            mode="fine",
             memory_type="WorkingMemory",
         )
 
@@ -242,39 +252,99 @@ def test_searcher_reuses_pool_across_retrieve_paths_calls():
     )
 
 
+def _searcher_method_ast(method_name: str) -> ast.FunctionDef:
+    """Return the AST node of a Searcher method, resolved from the module
+    source. Unlike ``inspect.getsource(getattr(Searcher, name))`` this is
+    immune to decorators such as ``@timed`` (which does not use
+    ``functools.wraps``, so the bound method's ``__code__`` points at the
+    decorator's wrapper, not the real method body)."""
+    tree = ast.parse(inspect.getsource(searcher_module))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "Searcher":
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == method_name:
+                    return item
+    raise AssertionError(f"method {method_name} not found on Searcher")
+
+
+def _is_as_completed_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and (
+        (isinstance(node.func, ast.Name) and node.func.id == "as_completed")
+        or (isinstance(node.func, ast.Attribute) and node.func.attr == "as_completed")
+    )
+
+
 def test_searcher_future_result_calls_use_timeout():
-    """Regression for #1273: future.result() calls in the four affected methods
-    MUST pass a timeout so a hung sub-task cannot block a request forever."""
+    """Regression for #1273: waiting on sub-task futures in the four affected
+    methods must be time-bounded so a hung sub-task cannot block a request
+    forever. A wait is bounded when either:
+    - ``future.result(timeout=...)`` is passed a timeout directly, or
+    - futures are collected via ``as_completed(..., timeout=...)`` — futures
+      yielded by ``as_completed`` are already done, so their ``.result()``
+      correctly takes no timeout.
+    """
     assert hasattr(searcher_module, "SEARCH_FUTURE_RESULT_TIMEOUT"), (
         "expected module-level SEARCH_FUTURE_RESULT_TIMEOUT constant"
     )
     assert isinstance(searcher_module.SEARCH_FUTURE_RESULT_TIMEOUT, (int, float))
     assert searcher_module.SEARCH_FUTURE_RESULT_TIMEOUT > 0
 
-    import inspect
-
-    src = inspect.getsource(searcher_module)
-    # No naked .result() with no arguments in the source of the four methods.
     for method_name in [
         "_retrieve_paths",
         "_retrieve_from_long_term_and_user",
         "_retrieve_from_tool_memory",
         "_deduplicate_rawfile_results",
     ]:
-        method = getattr(Searcher, method_name)
-        method_src = inspect.getsource(method)
-        # Every .result(...) call in these methods must reference the constant
-        # (either directly, or via a helper that uses it).
-        for line in method_src.splitlines():
-            stripped = line.strip()
-            if ".result()" in stripped and not stripped.startswith("#"):
-                pytest.fail(
-                    f"{method_name}: naked future.result() found — must pass "
-                    f"timeout=SEARCH_FUTURE_RESULT_TIMEOUT. line: {stripped!r}"
-                )
-    assert "SEARCH_FUTURE_RESULT_TIMEOUT" in src, (
+        method_ast = _searcher_method_ast(method_name)
+        result_calls = [
+            node
+            for node in ast.walk(method_ast)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "result"
+        ]
+        assert result_calls, f"{method_name}: expected at least one future .result() call"
+
+        has_bounded_as_completed = any(
+            _is_as_completed_call(node) and any(kw.arg == "timeout" for kw in node.keywords)
+            for node in ast.walk(method_ast)
+        )
+        for call in result_calls:
+            has_timeout_kwarg = any(kw.arg == "timeout" for kw in call.keywords)
+            assert has_timeout_kwarg or has_bounded_as_completed, (
+                f"{method_name}: unbounded future .result() call at line "
+                f"{call.lineno} — pass timeout=SEARCH_FUTURE_RESULT_TIMEOUT or "
+                f"iterate futures via as_completed(..., timeout=...)"
+            )
+
+    assert "SEARCH_FUTURE_RESULT_TIMEOUT" in inspect.getsource(searcher_module), (
         "SEARCH_FUTURE_RESULT_TIMEOUT constant must be applied in searcher.py"
     )
+
+
+def test_searcher_close_shuts_down_all_executors():
+    """Searcher.close() (and the context-manager protocol) must shut down all
+    five shared executors so worker threads do not outlive the instance."""
+    executor_attrs = [
+        "_usage_executor",
+        "_search_paths_executor",
+        "_search_long_term_executor",
+        "_search_tool_mem_executor",
+        "_search_dedup_executor",
+    ]
+
+    s = _make_searcher()
+    s.close()
+    for attr in executor_attrs:
+        assert getattr(s, attr)._shutdown, f"{attr} must be shut down after close()"
+    # close() must be idempotent
+    s.close()
+
+    with _make_searcher() as s2:
+        for attr in executor_attrs:
+            assert not getattr(s2, attr)._shutdown
+    for attr in executor_attrs:
+        assert getattr(s2, attr)._shutdown, f"{attr} must be shut down on context exit"
 
 
 def test_searcher_survives_slow_subtask(monkeypatch):

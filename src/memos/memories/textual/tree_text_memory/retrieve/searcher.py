@@ -104,6 +104,32 @@ class Searcher:
             max_workers=10, thread_name_prefix="search-dedup"
         )
 
+    def close(self) -> None:
+        """Shut down all shared thread-pool executors owned by this Searcher.
+
+        The five class-level pools created in ``__init__`` (usage tracking +
+        the four search pools introduced for #1273) hold non-daemon worker
+        threads that would otherwise outlive the instance. Callers that
+        create short-lived ``Searcher`` objects should call ``close()`` when
+        done, or use the instance as a context manager
+        (``with Searcher(...) as searcher: ...``). ``shutdown(wait=False)``
+        is used so a hung sub-task cannot block the caller; idempotent.
+        """
+        for executor in (
+            self._usage_executor,
+            self._search_paths_executor,
+            self._search_long_term_executor,
+            self._search_tool_mem_executor,
+            self._search_dedup_executor,
+        ):
+            executor.shutdown(wait=False)
+
+    def __enter__(self) -> "Searcher":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     def _maybe_rerank(
         self,
         enabled: bool,
@@ -1369,7 +1395,10 @@ class Searcher:
         try:
             for future in as_completed(futures, timeout=SEARCH_FUTURE_RESULT_TIMEOUT):
                 try:
-                    edges = future.result(timeout=SEARCH_FUTURE_RESULT_TIMEOUT)
+                    # No inner timeout: a future yielded by as_completed() is
+                    # already done, so result() returns immediately. Passing a
+                    # second timeout here would be redundant and misleading.
+                    edges = future.result()
                     for edge in edges:
                         summary_target_id = edge.get("to")
                         if summary_target_id:
