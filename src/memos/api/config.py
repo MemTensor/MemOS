@@ -261,11 +261,13 @@ class APIConfig:
     """Centralized configuration management for MemOS APIs."""
 
     @staticmethod
-    def _preference_extractor_extra_body(model_name: str) -> dict[str, Any] | None:
+    def _qwen_flash_extra_body(model_name: str) -> dict[str, Any] | None:
         normalized_model = model_name.strip().lower()
         if normalized_model.startswith(("qwen3.5", "qwen3.6")):
             return {"enable_thinking": False}
         return None
+
+    _preference_extractor_extra_body = _qwen_flash_extra_body
 
     @staticmethod
     def get_profile_memory_reserved_top_k() -> int:
@@ -514,6 +516,38 @@ class APIConfig:
                 "config": config,
             }
         # Fallback to general_llm config (which itself falls back to OpenAI)
+        return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
+    def get_feedback_llm_config() -> dict[str, Any]:
+        """Get LLM configuration for feedback processing.
+
+        Used for: feedback judgement, semantic add/update decisions, and update safety review.
+
+        Fallback chain: FEEDBACK_MODEL -> general_llm -> memreader config.
+        """
+        feedback_model = os.getenv("FEEDBACK_MODEL")
+        if feedback_model:
+            extra_body = APIConfig._qwen_flash_extra_body(feedback_model)
+            config = {
+                "model_name_or_path": feedback_model,
+                "temperature": 0.8,
+                "max_tokens": 8000,
+                "top_p": 0.95,
+                "top_k": 20,
+                "api_key": os.getenv("FEEDBACK_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")),
+                "api_base": os.getenv(
+                    "FEEDBACK_API_BASE",
+                    os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                ),
+                "remove_think_prefix": True,
+            }
+            if extra_body is not None:
+                config["extra_body"] = extra_body
+            return {
+                "backend": "openai",
+                "config": config,
+            }
         return APIConfig.get_memreader_general_llm_config()
 
     @staticmethod
