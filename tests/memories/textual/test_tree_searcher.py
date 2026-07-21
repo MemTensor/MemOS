@@ -1,8 +1,12 @@
-from unittest.mock import MagicMock
+import time
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.tree_text_memory.retrieve import searcher as searcher_module
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.base import BaseReranker
 
@@ -143,3 +147,171 @@ def test_searcher_respects_memory_type(mock_searcher):
     )
     # WorkingMemory triggers only once path A
     assert mock_searcher.graph_retriever.retrieve.call_args[1]["memory_scope"] == "WorkingMemory"
+
+
+# ---------------------------------------------------------------------------
+# Bug #1273 regression: bounded thread pools
+# ---------------------------------------------------------------------------
+
+
+def _make_searcher():
+    dispatcher_llm = MagicMock()
+    graph_store = MagicMock()
+    embedder = MagicMock()
+    reranker = MagicMock(spec=BaseReranker)
+    return Searcher(dispatcher_llm, graph_store, embedder, reranker)
+
+
+def test_searcher_creates_shared_executors_in_init():
+    """Regression for #1273: Searcher must pre-allocate class-level shared
+    ContextThreadPoolExecutor instances instead of constructing them per request."""
+    s = _make_searcher()
+    for attr, expected_workers in [
+        ("_search_paths_executor", 5),
+        ("_search_long_term_executor", 3),
+        ("_search_tool_mem_executor", 2),
+        ("_search_dedup_executor", 10),
+    ]:
+        assert hasattr(s, attr), f"Searcher must expose {attr}"
+        executor = getattr(s, attr)
+        assert isinstance(executor, ContextThreadPoolExecutor), (
+            f"{attr} must be a ContextThreadPoolExecutor, got {type(executor)!r}"
+        )
+        assert executor._max_workers == expected_workers, (
+            f"{attr} max_workers={executor._max_workers}, expected {expected_workers}"
+        )
+
+
+def test_searcher_reuses_pool_across_retrieve_paths_calls():
+    """Regression for #1273: repeated _retrieve_paths calls must NOT spawn a
+    fresh ContextThreadPoolExecutor each time. The class-level pool must be
+    reused, keeping thread count bounded regardless of QPS."""
+    s = _make_searcher()
+
+    # stub internals so _retrieve_paths returns immediately
+    s.task_goal_parser = MagicMock()
+    s.graph_retriever = MagicMock()
+    s.graph_retriever.retrieve.return_value = []
+    s.reasoner = MagicMock()
+
+    parsed_goal = MagicMock()
+    parsed_goal.memories = []
+    parsed_goal.rephrased_query = None
+    s.task_goal_parser.parse.return_value = parsed_goal
+    s.embedder.embed.return_value = [[0.1] * 5]
+
+    pool_ids_seen = []
+    original_paths_executor = s._search_paths_executor
+    orig_submit = original_paths_executor.submit
+
+    def tracking_submit(fn, *args, **kwargs):
+        pool_ids_seen.append(id(original_paths_executor))
+        return orig_submit(fn, *args, **kwargs)
+
+    with patch.object(original_paths_executor, "submit", side_effect=tracking_submit):
+        # First call
+        s._retrieve_paths(
+            query="q",
+            parsed_goal=parsed_goal,
+            query_embedding=[[0.1] * 5],
+            info={},
+            top_k=1,
+            mode="fast",
+            memory_type="WorkingMemory",
+        )
+        # Second call
+        s._retrieve_paths(
+            query="q",
+            parsed_goal=parsed_goal,
+            query_embedding=[[0.1] * 5],
+            info={},
+            top_k=1,
+            mode="WorkingMemory",
+            memory_type="WorkingMemory",
+        )
+
+    assert pool_ids_seen, "expected at least one submit to the shared paths executor"
+    assert len(set(pool_ids_seen)) == 1, (
+        "the paths executor must be a single shared instance across calls; "
+        f"saw distinct ids: {set(pool_ids_seen)}"
+    )
+    # Executor must NOT have been shut down by the with-block
+    assert not original_paths_executor._shutdown, (
+        "shared paths executor must remain open between requests; "
+        "presence of shutdown indicates per-request lifetime and bug #1273 regression"
+    )
+
+
+def test_searcher_future_result_calls_use_timeout():
+    """Regression for #1273: future.result() calls in the four affected methods
+    MUST pass a timeout so a hung sub-task cannot block a request forever."""
+    assert hasattr(searcher_module, "SEARCH_FUTURE_RESULT_TIMEOUT"), (
+        "expected module-level SEARCH_FUTURE_RESULT_TIMEOUT constant"
+    )
+    assert isinstance(searcher_module.SEARCH_FUTURE_RESULT_TIMEOUT, (int, float))
+    assert searcher_module.SEARCH_FUTURE_RESULT_TIMEOUT > 0
+
+    import inspect
+
+    src = inspect.getsource(searcher_module)
+    # No naked .result() with no arguments in the source of the four methods.
+    for method_name in [
+        "_retrieve_paths",
+        "_retrieve_from_long_term_and_user",
+        "_retrieve_from_tool_memory",
+        "_deduplicate_rawfile_results",
+    ]:
+        method = getattr(Searcher, method_name)
+        method_src = inspect.getsource(method)
+        # Every .result(...) call in these methods must reference the constant
+        # (either directly, or via a helper that uses it).
+        for line in method_src.splitlines():
+            stripped = line.strip()
+            if ".result()" in stripped and not stripped.startswith("#"):
+                pytest.fail(
+                    f"{method_name}: naked future.result() found — must pass "
+                    f"timeout=SEARCH_FUTURE_RESULT_TIMEOUT. line: {stripped!r}"
+                )
+    assert "SEARCH_FUTURE_RESULT_TIMEOUT" in src, (
+        "SEARCH_FUTURE_RESULT_TIMEOUT constant must be applied in searcher.py"
+    )
+
+
+def test_searcher_survives_slow_subtask(monkeypatch):
+    """Regression for #1273: if a submitted sub-task exceeds
+    SEARCH_FUTURE_RESULT_TIMEOUT, .search() must recover with a warning
+    instead of raising or hanging."""
+    # shrink timeout so the test runs fast
+    monkeypatch.setattr(searcher_module, "SEARCH_FUTURE_RESULT_TIMEOUT", 0.1)
+
+    s = _make_searcher()
+    s.task_goal_parser = MagicMock()
+    s.graph_retriever = MagicMock()
+    s.reasoner = MagicMock()
+
+    parsed_goal = MagicMock()
+    parsed_goal.memories = []
+    parsed_goal.rephrased_query = None
+    s.task_goal_parser.parse.return_value = parsed_goal
+    s.embedder.embed.return_value = [[0.1] * 5]
+
+    def slow_retrieve(*_args, **_kwargs):
+        time.sleep(0.5)  # 5x the timeout
+        return [make_item("late", 0.1)[0]]
+
+    s.graph_retriever.retrieve.side_effect = slow_retrieve
+    s.reranker.rerank.return_value = []
+
+    start = time.time()
+    result = s.search(
+        query="anything",
+        top_k=1,
+        info={"user_id": "u"},
+        mode="fast",
+        memory_type="WorkingMemory",
+    )
+    elapsed = time.time() - start
+
+    # Must return (not raise), and quickly (well below the sleep of 0.5s).
+    assert elapsed < 0.45, f"search took {elapsed:.3f}s, expected <0.45s once timeout={0.1}s fires"
+    assert isinstance(result, list)
