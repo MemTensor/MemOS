@@ -1,0 +1,121 @@
+from unittest.mock import MagicMock, patch
+
+from memos.api.config import APIConfig
+from memos.mem_reader.multi_modal_struct import MultiModalStructMemReader
+
+
+def test_task_qwen_model_uses_qwen_provider_env(monkeypatch):
+    monkeypatch.setenv("PREFERENCE_EXTRACTOR_MODEL", "qwen3.6-flash")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://openai.example/v1")
+
+    config = APIConfig.get_preference_extractor_llm_config()
+
+    assert config["backend"] == "qwen"
+    assert config["config"]["model_name_or_path"] == "qwen3.6-flash"
+    assert config["config"]["api_key"] == "qwen-key"
+    assert config["config"]["api_base"] == "https://dashscope.example/v1"
+    assert config["config"]["extra_body"] == {"enable_thinking": False}
+
+
+def test_task_openai_model_uses_openai_provider_env(monkeypatch):
+    monkeypatch.setenv("IMAGE_PARSER_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://openai.example/v1")
+
+    config = APIConfig.get_image_parser_llm_config()
+
+    assert config["backend"] == "openai"
+    assert config["config"]["model_name_or_path"] == "gpt-4.1-mini"
+    assert config["config"]["api_key"] == "openai-key"
+    assert config["config"]["api_base"] == "https://openai.example/v1"
+
+
+def test_qwen_llm_only_uses_model_and_provider_endpoint_env(monkeypatch):
+    monkeypatch.setenv("QWEN_MODEL", "qwen-flash")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("QWEN_TEMPERATURE", "1.9")
+    monkeypatch.setenv("QWEN_MAX_TOKENS", "123")
+    monkeypatch.setenv("QWEN_TOP_P", "0.1")
+    monkeypatch.setenv("QWEN_TOP_K", "3")
+    monkeypatch.setenv("QWEN_REMOVE_THINK_PREFIX", "false")
+
+    config = APIConfig.get_qwen_llm_config()
+
+    assert config["backend"] == "qwen"
+    assert config["config"]["model_name_or_path"] == "qwen-flash"
+    assert config["config"]["api_key"] == "qwen-key"
+    assert config["config"]["api_base"] == "https://dashscope.example/v1"
+    assert config["config"]["temperature"] == 0.8
+    assert config["config"]["max_tokens"] == 8000
+    assert config["config"]["top_p"] == 0.9
+    assert config["config"]["top_k"] == 50
+    assert config["config"]["remove_think_prefix"] is True
+
+
+def test_feedback_model_ignores_task_scoped_endpoint_env(monkeypatch):
+    monkeypatch.setenv("FEEDBACK_MODEL", "qwen3.6-flash")
+    monkeypatch.setenv("FEEDBACK_API_KEY", "legacy-feedback-key")
+    monkeypatch.setenv("FEEDBACK_API_BASE", "https://legacy-feedback.example/v1")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+
+    config = APIConfig.get_feedback_llm_config()
+
+    assert config["backend"] == "qwen"
+    assert config["config"]["api_key"] == "qwen-key"
+    assert config["config"]["api_base"] == "https://dashscope.example/v1"
+
+
+def test_memreader_general_model_only_needs_model_name_and_provider_env(monkeypatch):
+    monkeypatch.setenv("MEMREADER_GENERAL_MODEL", "qwen-flash")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.delenv("MEMREADER_GENERAL_API_KEY", raising=False)
+    monkeypatch.delenv("MEMREADER_GENERAL_API_BASE", raising=False)
+
+    config = APIConfig.get_memreader_general_llm_config()
+
+    assert config["backend"] == "qwen"
+    assert config["config"]["model_name_or_path"] == "qwen-flash"
+    assert config["config"]["api_key"] == "qwen-key"
+    assert config["config"]["api_base"] == "https://dashscope.example/v1"
+
+
+def test_memreader_backup_uses_provider_env_for_general_model(monkeypatch):
+    monkeypatch.setenv("MEMREADER_ENABLE_BACKUP", "true")
+    monkeypatch.setenv("MEMREADER_GENERAL_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://openai.example/v1")
+    monkeypatch.setenv("MEMREADER_GENERAL_API_KEY", "legacy-general-key")
+    monkeypatch.setenv("MEMREADER_GENERAL_API_BASE", "https://legacy-general.example/v1")
+
+    config = APIConfig.get_memreader_config()
+
+    assert config["config"]["backup_client"] is True
+    assert config["config"]["backup_model_name_or_path"] == "gpt-4.1-mini"
+    assert config["config"]["backup_api_key"] == "openai-key"
+    assert config["config"]["backup_api_base"] == "https://openai.example/v1"
+
+
+def test_multi_view_extractor_model_uses_provider_env(monkeypatch):
+    monkeypatch.setenv("MULTI_VIEW_EXTRACTOR_MODEL", "qwen-flash")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    reader = MultiModalStructMemReader.__new__(MultiModalStructMemReader)
+    llm = MagicMock()
+
+    with patch("memos.llms.factory.LLMFactory.from_config", return_value=llm) as from_config:
+        result = reader._get_multi_view_extractor_llm()
+
+    config = from_config.call_args.args[0]
+    assert result is llm
+    assert config.backend == "qwen"
+    assert config.config.model_name_or_path == "qwen-flash"
+    assert config.config.api_key == "qwen-key"
+    assert config.config.api_base == "https://dashscope.example/v1"
