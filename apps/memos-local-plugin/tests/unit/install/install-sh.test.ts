@@ -77,6 +77,12 @@ describe("install.sh — CLI surface", () => {
     expect(script).toContain('"extensions": ["${OPENCLAW_RUNTIME_ENTRY}"]');
     expect(script).toContain('"contracts": {');
     expect(script).toContain('"memos_search"');
+    expect(script).toContain('"memory_search": {');
+    expect(script).toContain('"memory_add": {');
+    expect(script).toContain(
+      '"Enable memory_search tool registration and automatic turn-start retrieval."',
+    );
+    expect(script).toContain('"Enable memory_add capture on agent_end."');
     expect(script).toContain("const MEMOS_TOOL_NAMES = [");
     expect(script).toContain("if (!Array.isArray(config.tools.alsoAllow)) config.tools.alsoAllow = []");
     expect(script).toContain("config.tools.alsoAllow.push(toolName)");

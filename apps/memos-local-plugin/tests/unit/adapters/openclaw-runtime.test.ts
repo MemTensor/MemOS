@@ -57,7 +57,7 @@ function makeCore() {
   };
 }
 
-function makeApi(): MockApi {
+function makeApi(pluginConfig?: Record<string, unknown>): MockApi {
   const services: ServiceDescriptor[] = [];
   const hooks = new Map<OpenClawHookName, OpenClawHookHandlerMap[OpenClawHookName]>();
   const logger = {
@@ -81,6 +81,7 @@ function makeApi(): MockApi {
     registerService: vi.fn((svc: ServiceDescriptor) => {
       services.push(svc);
     }),
+    pluginConfig,
   };
 }
 
@@ -190,6 +191,57 @@ describe("OpenClaw adapter runtime lifecycle", () => {
       expect.stringContaining("running headless"),
     );
     expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
+  });
+
+  it("allows a duplicate headless runtime when memory_add is disabled", async () => {
+    const home = useTempMemosHome();
+    const lockDir = path.join(home.daemonDir, "openclaw-runtime.lock");
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({
+        pluginId: "memos-local-plugin",
+        version: "test",
+        pid: process.pid,
+        token: "existing-owner",
+        startedAt: Date.now(),
+        dbFile: home.dbFile,
+        viewerPort: 18799,
+      }),
+    );
+
+    const core = makeCore();
+    const bootstrapMemoryCoreFull = vi.fn(async () => ({
+      core,
+      config: DEFAULT_CONFIG,
+      home,
+    }));
+    const startHttpServer = vi.fn(async () => ({
+      url: "http://127.0.0.1:18799",
+      port: 18799,
+      closed: false,
+      close: vi.fn(async () => {}),
+    }));
+    const plugin = await loadPluginWithMocks(bootstrapMemoryCoreFull, startHttpServer);
+
+    const api = makeApi({
+      memory_search: { enabled: true },
+      memory_add: { enabled: false },
+    });
+    expect(() => plugin.register(api)).not.toThrow();
+
+    await api.services[0]!.start?.();
+
+    expect(bootstrapMemoryCoreFull).toHaveBeenCalledTimes(1);
+    expect(core.init).toHaveBeenCalledTimes(1);
+    expect(startHttpServer).not.toHaveBeenCalled();
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("duplicate runtime allowed because memory_add is disabled"),
+    );
+
+    await api.services[0]!.stop?.();
+    expect(core.shutdown).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(lockDir)).toBe(true);
   });
 });
 

@@ -474,8 +474,32 @@ install_openclaw() {
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
-    "description": "Edit ${home}/config.yaml to tune LLM / embedding / viewer.",
+    "description": "MemOS Local OpenClaw runtime switches. Edit ${home}/config.yaml to tune LLM / embedding / viewer.",
     "properties": {
+      "memory_search": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Control whether MemOS Local exposes and performs memory_search.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable memory_search tool registration and automatic turn-start retrieval."
+          }
+        }
+      },
+      "memory_add": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Control whether MemOS Local writes conversation turns into memory.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable memory_add capture on agent_end."
+          }
+        }
+      },
       "viewerPort": { "type": "number", "description": "Memory Viewer HTTP port (default ${OPENCLAW_PORT})" }
     }
   }

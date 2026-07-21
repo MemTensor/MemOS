@@ -198,6 +198,26 @@ describe("pipeline/orchestrator", () => {
     expect(stats?.embedding?.attempted).toBe(false);
   });
 
+  it("uses the normal retrieval scheduler without opening a session in read-only mode", async () => {
+    const embedder = fakeEmbedder({ dimensions: 384 });
+    pipeline = createPipeline(buildDeps(dbHandle!, embedder));
+
+    const packet = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-readonly-chitchat",
+      userText: "hello",
+      contextHints: { __memosReadOnlyTurnStart: true },
+      ts: 1_700_000_000_000,
+    });
+    const stats = pipeline.consumeRetrievalStats(packet.packetId);
+
+    expect(packet.snippets).toHaveLength(0);
+    expect(embedder.stats().requests).toBe(0);
+    expect(stats?.scenarioId).toBe("CHITCHAT");
+    expect(pipeline.sessionManager.getSession("s-readonly-chitchat")).toBeNull();
+    expect(dbHandle!.repos.episodes.list({ limit: 10 })).toHaveLength(0);
+  });
+
   it("uses current-turn intent when appending to an existing episode", async () => {
     const embedder = fakeEmbedder({ dimensions: 384 });
     pipeline = createPipeline(buildDeps(dbHandle!, embedder));

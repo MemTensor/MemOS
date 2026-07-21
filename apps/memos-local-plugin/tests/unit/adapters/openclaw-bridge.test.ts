@@ -31,6 +31,7 @@ import {
   flattenMessages,
   renderContextBlock,
 } from "../../../adapters/openclaw/bridge.js";
+import { resolveOpenClawPluginConfig } from "../../../adapters/openclaw/plugin-config.js";
 import { registerOpenClawTools } from "../../../adapters/openclaw/tools.js";
 import type {
   AgentToolDescriptor,
@@ -788,6 +789,35 @@ describe("bridgeSessionId", () => {
   });
 });
 
+describe("OpenClaw plugin feature config", () => {
+  it("defaults memory_search and memory_add to enabled", () => {
+    expect(resolveOpenClawPluginConfig(undefined)).toEqual({
+      memorySearchEnabled: true,
+      memoryAddEnabled: true,
+    });
+  });
+
+  it("reads nested OpenClaw switches", () => {
+    expect(resolveOpenClawPluginConfig({
+      memory_search: { enabled: false },
+      memory_add: { enabled: false },
+    })).toEqual({
+      memorySearchEnabled: false,
+      memoryAddEnabled: false,
+    });
+  });
+
+  it("supports direct and legacy boolean switch forms", () => {
+    expect(resolveOpenClawPluginConfig({
+      memory_search: false,
+      memoryAddEnabled: false,
+    })).toEqual({
+      memorySearchEnabled: false,
+      memoryAddEnabled: false,
+    });
+  });
+});
+
 describe("ephemeral-session filter", () => {
   // Regression: OpenClaw's slug-generator sub-agent shares the plugin
   // host via `sessionKey: "temp:slug-generator"`. Before this filter,
@@ -957,6 +987,71 @@ describe("createOpenClawBridge", () => {
         ).toContain(key);
       }
     }
+  });
+
+  it("keeps turn-start retrieval read-only when memory_add is disabled", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      memorySearchEnabled: true,
+      memoryAddEnabled: false,
+    });
+    const ctx = hookCtx({ sessionKey: "search-only" });
+
+    await bridge.handleBeforePrompt(
+      { prompt: "find previous deployment experience", messages: [] },
+      ctx,
+    );
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "find previous deployment experience" },
+          { role: "assistant", content: [{ type: "text", text: "done" }] },
+        ],
+      },
+      ctx,
+    );
+
+    await expect(mc.listEpisodeRows({ limit: 10 })).resolves.toHaveLength(0);
+    await expect(mc.listTraces({ limit: 10 })).resolves.toHaveLength(0);
+  });
+
+  it("keeps capture enabled while skipping retrieval when memory_search is disabled", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      memorySearchEnabled: false,
+      memoryAddEnabled: true,
+    });
+    const ctx = hookCtx({ sessionKey: "capture-only" });
+    const result = await bridge.handleBeforePrompt(
+      { prompt: "capture this turn without recall", messages: [] },
+      ctx,
+    );
+    expect(result).toBeUndefined();
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "capture this turn without recall" },
+          { role: "assistant", content: [{ type: "text", text: "captured" }] },
+        ],
+      },
+      ctx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    await expect(mc.listTraces({ limit: 10 })).resolves.toHaveLength(1);
   });
 
   it("handleAgentEnd feeds onTurnEnd and produces trace + episode.closed events", async () => {
@@ -1615,6 +1710,23 @@ describe("registerOpenClawTools", () => {
       expect(typeof t.descriptor.execute).toBe("function");
       expect(t.descriptor.parameters).toBeDefined();
     }
+  });
+
+  it("does not register memos_search when memory_search is disabled", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    const { api, tools } = collectTools();
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      memorySearchEnabled: false,
+    });
+
+    const names = tools.map((t) => t.descriptor.name);
+    expect(names).not.toContain("memos_search");
+    expect(names).toContain("memos_get");
   });
 
   it("memos_search executes against the core and returns well-formed hits", async () => {
