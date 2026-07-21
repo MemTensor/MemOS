@@ -193,23 +193,8 @@ describe("OpenClaw adapter runtime lifecycle", () => {
     expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
   });
 
-  it("allows a duplicate headless runtime when memory_add is disabled", async () => {
+  it("passes the independent memory switches to the OpenClaw bridge", async () => {
     const home = useTempMemosHome();
-    const lockDir = path.join(home.daemonDir, "openclaw-runtime.lock");
-    fs.mkdirSync(lockDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(lockDir, "owner.json"),
-      JSON.stringify({
-        pluginId: "memos-local-plugin",
-        version: "test",
-        pid: process.pid,
-        token: "existing-owner",
-        startedAt: Date.now(),
-        dbFile: home.dbFile,
-        viewerPort: 18799,
-      }),
-    );
-
     const core = makeCore();
     const bootstrapMemoryCoreFull = vi.fn(async () => ({
       core,
@@ -222,26 +207,30 @@ describe("OpenClaw adapter runtime lifecycle", () => {
       closed: false,
       close: vi.fn(async () => {}),
     }));
-    const plugin = await loadPluginWithMocks(bootstrapMemoryCoreFull, startHttpServer);
+    const bridge = buildBridgeStub();
+    const createOpenClawBridge = vi.fn(() => bridge);
+    const plugin = await loadPluginWithMocks(
+      bootstrapMemoryCoreFull,
+      startHttpServer,
+      createOpenClawBridge,
+    );
 
     const api = makeApi({
-      memory_search: { enabled: true },
+      memory_search: { enabled: false },
       memory_add: { enabled: false },
     });
-    expect(() => plugin.register(api)).not.toThrow();
+    plugin.register(api);
 
     await api.services[0]!.start?.();
 
-    expect(bootstrapMemoryCoreFull).toHaveBeenCalledTimes(1);
-    expect(core.init).toHaveBeenCalledTimes(1);
-    expect(startHttpServer).not.toHaveBeenCalled();
-    expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("duplicate runtime allowed because memory_add is disabled"),
+    expect(createOpenClawBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memorySearchEnabled: false,
+        memoryAddEnabled: false,
+      }),
     );
 
     await api.services[0]!.stop?.();
-    expect(core.shutdown).toHaveBeenCalledTimes(1);
-    expect(fs.existsSync(lockDir)).toBe(true);
   });
 });
 

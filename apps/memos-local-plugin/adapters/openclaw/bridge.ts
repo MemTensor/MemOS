@@ -1217,10 +1217,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       if (!prompt) return;
 
       const namespace = namespaceFromAgentCtx(ctx);
-      const readOnlyTurnStart = memoryWritesDisabled();
-      const sessionId = readOnlyTurnStart && memorySearchEnabled
-        ? bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default")
-        : await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
+      const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
       clearToolFailureStreaksForTurn(toolFailureStreaks, {
         runId: ctx.runId,
         sessionId: ctx.sessionId ?? sessionId,
@@ -1241,7 +1238,6 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           sessionId: ctx.sessionId,
           runId: ctx.runId,
           workspaceDir: ctx.workspaceDir,
-          __memosReadOnlyTurnStart: readOnlyTurnStart,
         },
       };
 

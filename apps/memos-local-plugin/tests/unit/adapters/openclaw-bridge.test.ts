@@ -989,7 +989,7 @@ describe("createOpenClawBridge", () => {
     }
   });
 
-  it("keeps turn-start retrieval read-only when memory_add is disabled", async () => {
+  it("keeps retrieval enabled while skipping capture when memory_add is disabled", async () => {
     const mc = buildCore();
     await mc.init();
 
@@ -1017,7 +1017,6 @@ describe("createOpenClawBridge", () => {
       ctx,
     );
 
-    await expect(mc.listEpisodeRows({ limit: 10 })).resolves.toHaveLength(0);
     await expect(mc.listTraces({ limit: 10 })).resolves.toHaveLength(0);
   });
 

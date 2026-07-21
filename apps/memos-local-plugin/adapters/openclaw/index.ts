@@ -36,7 +36,6 @@ import {
 } from "./runtime-lock.js";
 import {
   OPENCLAW_PLUGIN_CONFIG_SCHEMA,
-  type OpenClawPluginFeatureConfig,
   resolveOpenClawPluginConfig,
 } from "./plugin-config.js";
 import { registerOpenClawTools } from "./tools.js";
@@ -137,24 +136,10 @@ function resolveViewerStaticRoot(): string | undefined {
 
 const OPENCLAW_VIEWER_PORT = 18799;
 
-function truthyEnv(name: string): boolean {
-  const value = process.env[name];
-  return value != null && !["", "0", "false", "no", "off"].includes(value.trim().toLowerCase());
-}
-
-function memoryWritesDisabled(featureConfig: OpenClawPluginFeatureConfig): boolean {
-  return (
-    featureConfig.memoryAddEnabled === false ||
-    truthyEnv("MEMOS_MEMORY_ADD_DISABLED") ||
-    truthyEnv("EVOAGENTBENCH_MEMOS_DISABLE_ADD")
-  );
-}
-
 async function createRuntime(
   api: OpenClawPluginApi,
-  runtimeLock: OpenClawRuntimeLockHandle | null,
-  featureConfig: OpenClawPluginFeatureConfig,
-  opts: { headlessDuplicateSearchOnly?: boolean } = {},
+  runtimeLock: OpenClawRuntimeLockHandle,
+  featureConfig: ReturnType<typeof resolveOpenClawPluginConfig>,
 ): Promise<PluginRuntime> {
   const log = rootLogger.child({ channel: "adapters.openclaw" });
   log.info("plugin.bootstrap", {
@@ -215,47 +200,40 @@ async function createRuntime(
       memoryAddEnabled: featureConfig.memoryAddEnabled,
     });
 
-    if (opts.headlessDuplicateSearchOnly) {
-      api.logger.warn(
-        "memos-local: duplicate runtime allowed because memory_add is disabled; " +
-          "running search-only headless embedded runtime.",
+    // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
+    // We ignore `config.viewer.port` for the same reason `bridge.cts`
+    // does: old config.yaml files baked in the legacy single-port
+    // :18799 used by both agents, and we don't want hermes to collide
+    // with us because of stale YAML.
+    try {
+      viewer = await startHttpServer(
+        {
+          core,
+          home,
+          logTail: () => memoryBuffer().tail({ limit: 200 }),
+          telemetry,
+        },
+        {
+          port: OPENCLAW_VIEWER_PORT,
+          host: config.viewer.bindHost,
+          staticRoot: resolveViewerStaticRoot(),
+          agent: "openclaw",
+        },
       );
-    } else {
-      // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
-      // We ignore `config.viewer.port` for the same reason `bridge.cts`
-      // does: old config.yaml files baked in the legacy single-port
-      // :18799 used by both agents, and we don't want hermes to collide
-      // with us because of stale YAML.
-      try {
-        viewer = await startHttpServer(
-          {
-            core,
-            home,
-            logTail: () => memoryBuffer().tail({ limit: 200 }),
-            telemetry,
-          },
-          {
-            port: OPENCLAW_VIEWER_PORT,
-            host: config.viewer.bindHost,
-            staticRoot: resolveViewerStaticRoot(),
-            agent: "openclaw",
-          },
+      api.logger.info(`memos-local: viewer live at ${viewer.url}`);
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e?.code === "EADDRINUSE") {
+        api.logger.error(
+          `memos-local: viewer port :${OPENCLAW_VIEWER_PORT} is already in use — ` +
+            `refusing duplicate/headless OpenClaw runtime.`,
         );
-        api.logger.info(`memos-local: viewer live at ${viewer.url}`);
-      } catch (err) {
-        const e = err as NodeJS.ErrnoException;
-        if (e?.code === "EADDRINUSE") {
-          api.logger.error(
-            `memos-local: viewer port :${OPENCLAW_VIEWER_PORT} is already in use — ` +
-              `refusing duplicate/headless OpenClaw runtime.`,
-          );
-        } else {
-          api.logger.error("memos-local: viewer failed to start", {
-            err: e?.message ?? String(err),
-          });
-        }
-        throw err;
+      } else {
+        api.logger.error("memos-local: viewer failed to start", {
+          err: e?.message ?? String(err),
+        });
       }
+      throw err;
     }
 
     const runtimeCore = core;
@@ -281,7 +259,7 @@ async function createRuntime(
             err: err instanceof Error ? err.message : String(err),
           });
         }
-        runtimeLock?.release();
+        runtimeLock.release();
       },
     };
   } catch (err) {
@@ -293,7 +271,7 @@ async function createRuntime(
         /* best-effort cleanup after failed bootstrap */
       }
     }
-    runtimeLock?.release();
+    runtimeLock.release();
     throw err;
   }
 }
@@ -340,8 +318,7 @@ function register(api: OpenClawPluginApi): void {
   const featureConfig = resolveOpenClawPluginConfig(api.pluginConfig);
   const diagnosticMode = isDiagnosticMode();
 
-  let runtimeLock: OpenClawRuntimeLockHandle | null = null;
-  let headlessDuplicateSearchOnly = false;
+  let runtimeLock: OpenClawRuntimeLockHandle;
   try {
     runtimeLock = acquireOpenClawRuntimeLock({
       home: resolveHome("openclaw"),
@@ -356,16 +333,11 @@ function register(api: OpenClawPluginApi): void {
     }
   } catch (err) {
     const duplicate = err instanceof DuplicateOpenClawRuntimeError;
-    const writesDisabled = memoryWritesDisabled(featureConfig);
-    const level = duplicate && writesDisabled ? "warn" : "error";
-    api.logger[level]("memos-local: duplicate OpenClaw runtime blocked", {
+    api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
       err: err instanceof Error ? err.message : String(err),
       code: duplicate ? err.code : (err as { code?: unknown }).code,
-      memoryAddEnabled: featureConfig.memoryAddEnabled,
-      writesDisabled,
     });
-    if (!duplicate || !writesDisabled) throw err;
-    headlessDuplicateSearchOnly = true;
+    throw err;
   }
 
   // 1. Memory capability (prompt prelude) — register synchronously so the
@@ -426,9 +398,7 @@ function register(api: OpenClawPluginApi): void {
   //    tools register a shell now and wait for runtime inside execute().
   let runtime: PluginRuntime | null = null;
   let bootstrapError: Error | null = null;
-  const bootstrapPromise = createRuntime(api, runtimeLock, featureConfig, {
-    headlessDuplicateSearchOnly,
-  })
+  const bootstrapPromise = createRuntime(api, runtimeLock, featureConfig)
     .then((r) => {
       runtime = r;
       api.logger.info("memos-local: plugin ready");
