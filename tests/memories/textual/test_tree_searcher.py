@@ -1,5 +1,6 @@
 import ast
 import inspect
+import threading
 import time
 
 from unittest.mock import MagicMock, patch
@@ -164,32 +165,69 @@ def _make_searcher():
     return Searcher(dispatcher_llm, graph_store, embedder, reranker)
 
 
+def _assert_pool_concurrency(executor, expected_workers: int, attr: str) -> None:
+    """Verify the executor's worker bound using only the public
+    submit()/result() API: submit ``expected_workers + 1`` blocking tasks —
+    at least ``expected_workers`` must start concurrently, and the surplus
+    task must stay queued until a slot frees up. This avoids private,
+    undocumented CPython internals such as ``_max_workers``."""
+    release = threading.Event()
+    lock = threading.Lock()
+    started: list[str] = []
+
+    def blocker() -> None:
+        with lock:
+            started.append(threading.current_thread().name)
+        release.wait(timeout=10.0)
+
+    futures = [executor.submit(blocker) for _ in range(expected_workers + 1)]
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            with lock:
+                if len(started) >= expected_workers:
+                    break
+            time.sleep(0.01)
+        with lock:
+            count = len(started)
+        assert count >= expected_workers, (
+            f"{attr}: only {count} of {expected_workers} expected workers started within 5s"
+        )
+        # Give the surplus task a chance to (incorrectly) start running.
+        time.sleep(0.2)
+        with lock:
+            count = len(started)
+        assert count == expected_workers, (
+            f"{attr}: {count} tasks ran concurrently, expected at most "
+            f"{expected_workers} (pool sized larger than configured)"
+        )
+    finally:
+        release.set()
+        for f in futures:
+            f.result(timeout=10.0)
+
+
 def test_searcher_creates_shared_executors_in_init():
     """Regression for #1273: Searcher must pre-allocate class-level shared
-    ContextThreadPoolExecutor instances instead of constructing them per request."""
+    ContextThreadPoolExecutor instances instead of constructing them per
+    request. Worker bounds are verified behaviorally through the public
+    submit()/result() API — no private attributes involved."""
     s = _make_searcher()
-    for attr, expected_workers in [
-        ("_search_paths_executor", 5),
-        ("_search_long_term_executor", 3),
-        ("_search_tool_mem_executor", 2),
-        ("_search_dedup_executor", 10),
-    ]:
-        assert hasattr(s, attr), f"Searcher must expose {attr}"
-        executor = getattr(s, attr)
-        assert isinstance(executor, ContextThreadPoolExecutor), (
-            f"{attr} must be a ContextThreadPoolExecutor, got {type(executor)!r}"
-        )
-        # NOTE: ThreadPoolExecutor does not expose max_workers publicly, so we
-        # inspect the private `_max_workers` attribute. This is stable on
-        # CPython 3.9-3.13 (the versions this project tests against); use
-        # getattr so a future rename fails with a clear assertion message
-        # instead of an AttributeError.
-        actual_workers = getattr(executor, "_max_workers", None)
-        assert actual_workers == expected_workers, (
-            f"{attr} max_workers={actual_workers}, expected {expected_workers} "
-            "(None means the private _max_workers attribute is gone — "
-            "update this test for the current Python version)"
-        )
+    try:
+        for attr, expected_workers in [
+            ("_search_paths_executor", 5),
+            ("_search_long_term_executor", 3),
+            ("_search_tool_mem_executor", 2),
+            ("_search_dedup_executor", 10),
+        ]:
+            assert hasattr(s, attr), f"Searcher must expose {attr}"
+            executor = getattr(s, attr)
+            assert isinstance(executor, ContextThreadPoolExecutor), (
+                f"{attr} must be a ContextThreadPoolExecutor, got {type(executor)!r}"
+            )
+            _assert_pool_concurrency(executor, expected_workers, attr)
+    finally:
+        s.close()
 
 
 def test_searcher_reuses_pool_across_retrieve_paths_calls():
@@ -245,10 +283,14 @@ def test_searcher_reuses_pool_across_retrieve_paths_calls():
         "the paths executor must be a single shared instance across calls; "
         f"saw distinct ids: {set(pool_ids_seen)}"
     )
-    # Executor must NOT have been shut down by the with-block
-    assert not original_paths_executor._shutdown, (
+    # The executor must NOT have been shut down between requests. Verified
+    # behaviorally via the public API: a live executor accepts new work,
+    # while submit() after shutdown raises RuntimeError (documented
+    # concurrent.futures behavior) — no private attributes involved.
+    probe = original_paths_executor.submit(lambda: "alive")
+    assert probe.result(timeout=5.0) == "alive", (
         "shared paths executor must remain open between requests; "
-        "presence of shutdown indicates per-request lifetime and bug #1273 regression"
+        "a shut-down executor indicates per-request lifetime and bug #1273 regression"
     )
 
 
@@ -322,6 +364,17 @@ def test_searcher_future_result_calls_use_timeout():
     )
 
 
+def _assert_executor_shut_down(executor, attr: str, context: str) -> None:
+    """A shut-down executor rejects new work with RuntimeError — this is
+    documented public behavior of concurrent.futures.Executor.shutdown(),
+    so no private attributes are needed."""
+    try:
+        executor.submit(lambda: None)
+    except RuntimeError:
+        return
+    pytest.fail(f"{attr} must reject new work after {context}")
+
+
 def test_searcher_close_shuts_down_all_executors():
     """Searcher.close() (and the context-manager protocol) must shut down all
     five shared executors so worker threads do not outlive the instance."""
@@ -336,15 +389,18 @@ def test_searcher_close_shuts_down_all_executors():
     s = _make_searcher()
     s.close()
     for attr in executor_attrs:
-        assert getattr(s, attr)._shutdown, f"{attr} must be shut down after close()"
+        _assert_executor_shut_down(getattr(s, attr), attr, "close()")
     # close() must be idempotent
     s.close()
 
     with _make_searcher() as s2:
         for attr in executor_attrs:
-            assert not getattr(s2, attr)._shutdown
+            # Executors must still accept work inside the context.
+            assert getattr(s2, attr).submit(lambda: "alive").result(timeout=5.0) == "alive", (
+                f"{attr} must be usable before context exit"
+            )
     for attr in executor_attrs:
-        assert getattr(s2, attr)._shutdown, f"{attr} must be shut down on context exit"
+        _assert_executor_shut_down(getattr(s2, attr), attr, "context exit")
 
 
 def test_searcher_survives_slow_subtask(monkeypatch):
