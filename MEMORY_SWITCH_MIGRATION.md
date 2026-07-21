@@ -18,6 +18,17 @@ memory_add:
 
 两个开关默认均为 `true`，未配置时保持原有行为。
 
+老版本配置文件不包含这两个字段时，解析结果仍为：
+
+```yaml
+memory_search:
+  enabled: true
+memory_add:
+  enabled: true
+```
+
+只配置其中一个开关时，另一个开关也会独立回退到 `true`。已有的 Viewer、hook 等其他配置字段不会影响这两个默认值。
+
 ## 2. 开关行为
 
 | memory_search | memory_add | 行为 |

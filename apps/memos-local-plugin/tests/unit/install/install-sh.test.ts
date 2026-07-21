@@ -23,6 +23,7 @@ import { readFileSync } from "node:fs";
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SCRIPT = path.join(REPO_ROOT, "install.sh");
 const PACKAGE_JSON = path.join(REPO_ROOT, "package.json");
+const OPENCLAW_MANIFEST = path.join(REPO_ROOT, "openclaw.plugin.json");
 
 function run(args: string[], env: Record<string, string> = {}) {
   const r = spawnSync("bash", [SCRIPT, ...args], {
@@ -88,6 +89,17 @@ describe("install.sh — CLI surface", () => {
     expect(script).toContain("config.tools.alsoAllow.push(toolName)");
     expect(script).toContain("config.plugins.entries[pluginId].hooks.allowConversationAccess = true");
     expect(script).not.toContain('"extensions": ["./adapters/openclaw/index.ts"]');
+  });
+
+  it("declares both memory switches as enabled by default", () => {
+    const manifest = JSON.parse(readFileSync(OPENCLAW_MANIFEST, "utf8")) as {
+      configSchema: {
+        properties: Record<string, { properties: { enabled: { default: boolean } } }>;
+      };
+    };
+
+    expect(manifest.configSchema.properties.memory_search?.properties.enabled.default).toBe(true);
+    expect(manifest.configSchema.properties.memory_add?.properties.enabled.default).toBe(true);
   });
 
   it("publishes package runtime output without docs or tests", () => {

@@ -797,6 +797,31 @@ describe("OpenClaw plugin feature config", () => {
     });
   });
 
+  it("keeps both switches enabled for legacy config files without these fields", () => {
+    expect(resolveOpenClawPluginConfig({
+      viewerPort: 18799,
+      hooks: { allowConversationAccess: true },
+    })).toEqual({
+      memorySearchEnabled: true,
+      memoryAddEnabled: true,
+    });
+  });
+
+  it("defaults an omitted switch to enabled when only the other switch is configured", () => {
+    expect(resolveOpenClawPluginConfig({
+      memory_search: { enabled: false },
+    })).toEqual({
+      memorySearchEnabled: false,
+      memoryAddEnabled: true,
+    });
+    expect(resolveOpenClawPluginConfig({
+      memory_add: { enabled: false },
+    })).toEqual({
+      memorySearchEnabled: true,
+      memoryAddEnabled: false,
+    });
+  });
+
   it("reads nested OpenClaw switches", () => {
     expect(resolveOpenClawPluginConfig({
       memory_search: { enabled: false },
