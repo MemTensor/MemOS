@@ -336,6 +336,102 @@ import { DEDUP_JUDGE_PROMPT, parseDedupResult } from "./openai";
 import type { DedupResult } from "./openai";
 export type { DedupResult } from "./openai";
 
+// ─── Structured Topic Classifier / Arbitration ───
+//
+// Native Gemini generateContent transport for the topic classifier +
+// arbitration. Shares prompt strings and the JSON parser with openai.ts so
+// all providers stay behaviorally identical modulo the wire format.
+
+import {
+  TOPIC_CLASSIFIER_PROMPT,
+  TOPIC_ARBITRATION_PROMPT,
+  parseTopicClassifyResult,
+} from "./openai";
+import type { TopicClassifyResult } from "./openai";
+export type { TopicClassifyResult } from "./openai";
+
+export async function classifyTopicGemini(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<TopicClassifyResult> {
+  const model = cfg.model ?? "gemini-1.5-flash";
+  const endpoint =
+    cfg.endpoint ??
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  const url = `${endpoint}?key=${cfg.apiKey}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...cfg.headers,
+  };
+
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: TOPIC_CLASSIFIER_PROMPT }] },
+      contents: [{ parts: [{ text: userContent }] }],
+      generationConfig: { temperature: 0, maxOutputTokens: 60 },
+    }),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Gemini topic-classifier failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
+  const raw = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+  log.debug(`Topic classifier raw: "${raw}"`);
+  return parseTopicClassifyResult(raw, log);
+}
+
+export async function arbitrateTopicSplitGemini(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<string> {
+  const model = cfg.model ?? "gemini-1.5-flash";
+  const endpoint =
+    cfg.endpoint ??
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  const url = `${endpoint}?key=${cfg.apiKey}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...cfg.headers,
+  };
+
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: TOPIC_ARBITRATION_PROMPT }] },
+      contents: [{ parts: [{ text: userContent }] }],
+      generationConfig: { temperature: 0, maxOutputTokens: 60 },
+    }),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Gemini topic-arbitration failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
+  const answer = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toUpperCase() ?? "";
+  log.debug(`Topic arbitration result: "${answer}"`);
+  return answer.startsWith("NEW") ? "NEW" : "SAME";
+}
+
 export async function judgeDedupGemini(
   newSummary: string,
   candidates: Array<{ index: number; summary: string; chunkId: string }>,

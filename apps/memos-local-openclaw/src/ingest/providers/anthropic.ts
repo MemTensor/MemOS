@@ -336,6 +336,103 @@ import { DEDUP_JUDGE_PROMPT, parseDedupResult } from "./openai";
 import type { DedupResult } from "./openai";
 export type { DedupResult } from "./openai";
 
+// ─── Structured Topic Classifier / Arbitration ───
+//
+// Native Anthropic Messages transport for the topic classifier + arbitration.
+// The prompt strings (TOPIC_CLASSIFIER_PROMPT / TOPIC_ARBITRATION_PROMPT) and
+// the parser (parseTopicClassifyResult) are re-imported from openai.ts so all
+// providers stay behaviorally identical modulo the wire format.
+
+import {
+  TOPIC_CLASSIFIER_PROMPT,
+  TOPIC_ARBITRATION_PROMPT,
+  parseTopicClassifyResult,
+} from "./openai";
+import type { TopicClassifyResult } from "./openai";
+export type { TopicClassifyResult } from "./openai";
+
+export async function classifyTopicAnthropic(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<TopicClassifyResult> {
+  const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
+  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-api-key": cfg.apiKey ?? "",
+    "anthropic-version": "2023-06-01",
+    ...cfg.headers,
+  };
+
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      max_tokens: 60,
+      temperature: 0,
+      system: TOPIC_CLASSIFIER_PROMPT,
+      messages: [{ role: "user", content: userContent }],
+    }),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Anthropic topic-classifier failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { content: Array<{ type: string; text: string }> };
+  const raw = json.content.find((c) => c.type === "text")?.text?.trim() ?? "";
+  log.debug(`Topic classifier raw: "${raw}"`);
+  return parseTopicClassifyResult(raw, log);
+}
+
+export async function arbitrateTopicSplitAnthropic(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<string> {
+  const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
+  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-api-key": cfg.apiKey ?? "",
+    "anthropic-version": "2023-06-01",
+    ...cfg.headers,
+  };
+
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      max_tokens: 60,
+      temperature: 0,
+      system: TOPIC_ARBITRATION_PROMPT,
+      messages: [{ role: "user", content: userContent }],
+    }),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Anthropic topic-arbitration failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { content: Array<{ type: string; text: string }> };
+  const answer = json.content.find((c) => c.type === "text")?.text?.trim().toUpperCase() ?? "";
+  log.debug(`Topic arbitration result: "${answer}"`);
+  return answer.startsWith("NEW") ? "NEW" : "SAME";
+}
+
 export async function judgeDedupAnthropic(
   newSummary: string,
   candidates: Array<{ index: number; summary: string; chunkId: string }>,
