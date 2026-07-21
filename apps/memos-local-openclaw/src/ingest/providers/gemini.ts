@@ -350,13 +350,17 @@ import {
 import type { TopicClassifyResult } from "./openai";
 export type { TopicClassifyResult } from "./openai";
 
-export async function classifyTopicGemini(
-  taskState: string,
-  newMessage: string,
+// Shared Gemini generateContent transport for the topic classifier +
+// arbitration. Scoped to these two callers only so pre-existing gemini
+// helpers keep their inline URL construction (minimum-diff discipline).
+async function callGeminiTopic(
+  systemPrompt: string,
+  userContent: string,
   cfg: SummarizerConfig,
-  log: Logger,
-): Promise<TopicClassifyResult> {
-  if (!cfg.apiKey) throw new Error("Gemini topic-classifier: apiKey is required");
+  maxOutputTokens: number,
+  errorLabel: string,
+): Promise<string> {
+  if (!cfg.apiKey) throw new Error(`Gemini ${errorLabel}: apiKey is required`);
   const model = cfg.model ?? "gemini-1.5-flash";
   const endpoint =
     cfg.endpoint ??
@@ -370,26 +374,40 @@ export async function classifyTopicGemini(
     ...cfg.headers,
   };
 
-  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
-
   const resp = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: TOPIC_CLASSIFIER_PROMPT }] },
+      systemInstruction: { parts: [{ text: systemPrompt }] },
       contents: [{ parts: [{ text: userContent }] }],
-      generationConfig: { temperature: 0, maxOutputTokens: 60 },
+      generationConfig: { temperature: 0, maxOutputTokens },
     }),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error(`Gemini topic-classifier failed (${resp.status}): ${body}`);
+    throw new Error(`Gemini ${errorLabel} failed (${resp.status}): ${body}`);
   }
 
-  const json = (await resp.json()) as { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
-  const raw = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+  const json = (await resp.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text: string }> } }> };
+  return json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+}
+
+export async function classifyTopicGemini(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<TopicClassifyResult> {
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+  const raw = await callGeminiTopic(
+    TOPIC_CLASSIFIER_PROMPT,
+    userContent,
+    cfg,
+    60,
+    "topic-classifier",
+  );
   log.debug(`Topic classifier raw: "${raw}"`);
   return parseTopicClassifyResult(raw, log);
 }
@@ -400,41 +418,21 @@ export async function arbitrateTopicSplitGemini(
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<string> {
-  if (!cfg.apiKey) throw new Error("Gemini topic-arbitration: apiKey is required");
-  const model = cfg.model ?? "gemini-1.5-flash";
-  const endpoint =
-    cfg.endpoint ??
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-
-  const u = new URL(endpoint);
-  u.searchParams.set("key", cfg.apiKey);
-  const url = u.toString();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...cfg.headers,
-  };
-
   const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: TOPIC_ARBITRATION_PROMPT }] },
-      contents: [{ parts: [{ text: userContent }] }],
-      generationConfig: { temperature: 0, maxOutputTokens: 60 },
-    }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
-  });
-
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Gemini topic-arbitration failed (${resp.status}): ${body}`);
-  }
-
-  const json = (await resp.json()) as { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
-  const answer = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toUpperCase() ?? "";
+  const text = await callGeminiTopic(
+    TOPIC_ARBITRATION_PROMPT,
+    userContent,
+    cfg,
+    10,
+    "topic-arbitration",
+  );
+  const answer = text.toUpperCase();
   log.debug(`Topic arbitration result: "${answer}"`);
+  if (!answer) {
+    log.warn("Gemini topic-arbitration returned empty text; defaulting to SAME");
+  } else if (!answer.startsWith("NEW") && !answer.startsWith("SAME")) {
+    log.warn(`Gemini topic-arbitration returned unexpected value "${answer}"; defaulting to SAME`);
+  }
   return answer.startsWith("NEW") ? "NEW" : "SAME";
 }
 

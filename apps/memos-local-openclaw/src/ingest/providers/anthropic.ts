@@ -351,13 +351,19 @@ import {
 import type { TopicClassifyResult } from "./openai";
 export type { TopicClassifyResult } from "./openai";
 
-export async function classifyTopicAnthropic(
-  taskState: string,
-  newMessage: string,
+// Shared Anthropic Messages transport for the topic classifier + arbitration.
+// Scoped to these two callers only so pre-existing anthropic helpers keep
+// their inline implementations (minimum-diff discipline). Header order below
+// is deliberate: cfg.headers is spread FIRST so user-supplied headers cannot
+// override the credential and required `anthropic-version` that follow.
+async function callAnthropicMessagesTopic(
+  systemPrompt: string,
+  userContent: string,
   cfg: SummarizerConfig,
-  log: Logger,
-): Promise<TopicClassifyResult> {
-  if (!cfg.apiKey) throw new Error("Anthropic topic-classifier: apiKey is required");
+  maxTokens: number,
+  errorLabel: string,
+): Promise<string> {
+  if (!cfg.apiKey) throw new Error(`Anthropic ${errorLabel}: apiKey is required`);
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
   const model = cfg.model ?? "claude-3-haiku-20240307";
   const headers: Record<string, string> = {
@@ -367,16 +373,14 @@ export async function classifyTopicAnthropic(
     "anthropic-version": "2023-06-01",
   };
 
-  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
-
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify({
       model,
-      max_tokens: 60,
+      max_tokens: maxTokens,
       temperature: 0,
-      system: TOPIC_CLASSIFIER_PROMPT,
+      system: systemPrompt,
       messages: [{ role: "user", content: userContent }],
     }),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
@@ -384,12 +388,28 @@ export async function classifyTopicAnthropic(
 
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error(`Anthropic topic-classifier failed (${resp.status}): ${body}`);
+    throw new Error(`Anthropic ${errorLabel} failed (${resp.status}): ${body}`);
   }
 
   const json = (await resp.json()) as { content?: Array<{ type: string; text: string }> };
   const content = Array.isArray(json?.content) ? json.content : [];
-  const raw = content.find((c) => c.type === "text")?.text?.trim() ?? "";
+  return content.find((c) => c.type === "text")?.text?.trim() ?? "";
+}
+
+export async function classifyTopicAnthropic(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<TopicClassifyResult> {
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+  const raw = await callAnthropicMessagesTopic(
+    TOPIC_CLASSIFIER_PROMPT,
+    userContent,
+    cfg,
+    60,
+    "topic-classifier",
+  );
   log.debug(`Topic classifier raw: "${raw}"`);
   return parseTopicClassifyResult(raw, log);
 }
@@ -400,39 +420,15 @@ export async function arbitrateTopicSplitAnthropic(
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<string> {
-  if (!cfg.apiKey) throw new Error("Anthropic topic-arbitration: apiKey is required");
-  const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
-  const model = cfg.model ?? "claude-3-haiku-20240307";
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...cfg.headers,
-    "x-api-key": cfg.apiKey,
-    "anthropic-version": "2023-06-01",
-  };
-
   const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
-
-  const resp = await fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      max_tokens: 10,
-      temperature: 0,
-      system: TOPIC_ARBITRATION_PROMPT,
-      messages: [{ role: "user", content: userContent }],
-    }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
-  });
-
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Anthropic topic-arbitration failed (${resp.status}): ${body}`);
-  }
-
-  const json = (await resp.json()) as { content?: Array<{ type: string; text: string }> };
-  const content = Array.isArray(json?.content) ? json.content : [];
-  const answer = content.find((c) => c.type === "text")?.text?.trim().toUpperCase() ?? "";
+  const text = await callAnthropicMessagesTopic(
+    TOPIC_ARBITRATION_PROMPT,
+    userContent,
+    cfg,
+    10,
+    "topic-arbitration",
+  );
+  const answer = text.toUpperCase();
   log.debug(`Topic arbitration result: "${answer}"`);
   return answer.startsWith("NEW") ? "NEW" : "SAME";
 }

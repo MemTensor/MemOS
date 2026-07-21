@@ -359,16 +359,24 @@ import {
 import type { TopicClassifyResult } from "./openai";
 export type { TopicClassifyResult } from "./openai";
 
-export async function classifyTopicBedrock(
-  taskState: string,
-  newMessage: string,
+// Default Bedrock model for the topic-classifier / arbitration helpers.
+// Scoped to the two functions below to avoid churn in pre-existing helpers.
+const DEFAULT_BEDROCK_TOPIC_MODEL = "anthropic.claude-3-haiku-20240307-v1:0";
+
+// Shared Converse transport used by the topic classifier and arbitration.
+// Only these two callers use it — pre-existing bedrock helpers keep their
+// original inline implementations to minimise diff.
+async function bedrockConverseTopic(
+  systemPrompt: string,
+  userContent: string,
   cfg: SummarizerConfig,
-  log: Logger,
-): Promise<TopicClassifyResult> {
-  const model = cfg.model ?? "anthropic.claude-3-haiku-20240307-v1:0";
+  maxTokens: number,
+  errorLabel: string,
+): Promise<string> {
+  const model = cfg.model ?? DEFAULT_BEDROCK_TOPIC_MODEL;
   const endpoint = cfg.endpoint;
   if (!endpoint) {
-    throw new Error("Bedrock topic-classifier requires 'endpoint'");
+    throw new Error(`Bedrock ${errorLabel} requires 'endpoint'`);
   }
 
   const url = `${endpoint}/model/${model}/converse`;
@@ -377,26 +385,40 @@ export async function classifyTopicBedrock(
     ...cfg.headers,
   };
 
-  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
-
   const resp = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      system: [{ text: TOPIC_CLASSIFIER_PROMPT }],
+      system: [{ text: systemPrompt }],
       messages: [{ role: "user", content: [{ text: userContent }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 60 },
+      inferenceConfig: { temperature: 0, maxTokens },
     }),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
 
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error(`Bedrock topic-classifier failed (${resp.status}): ${body}`);
+    throw new Error(`Bedrock ${errorLabel} failed (${resp.status}): ${body}`);
   }
 
-  const json = (await resp.json()) as { output: { message: { content: Array<{ text: string }> } } };
-  const raw = json.output?.message?.content?.[0]?.text?.trim() ?? "";
+  const json = (await resp.json()) as { output?: { message?: { content?: Array<{ text: string }> } } };
+  return json.output?.message?.content?.[0]?.text?.trim() ?? "";
+}
+
+export async function classifyTopicBedrock(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<TopicClassifyResult> {
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+  const raw = await bedrockConverseTopic(
+    TOPIC_CLASSIFIER_PROMPT,
+    userContent,
+    cfg,
+    60,
+    "topic-classifier",
+  );
   log.debug(`Topic classifier raw: "${raw}"`);
   return parseTopicClassifyResult(raw, log);
 }
@@ -407,38 +429,15 @@ export async function arbitrateTopicSplitBedrock(
   cfg: SummarizerConfig,
   log: Logger,
 ): Promise<string> {
-  const model = cfg.model ?? "anthropic.claude-3-haiku-20240307-v1:0";
-  const endpoint = cfg.endpoint;
-  if (!endpoint) {
-    throw new Error("Bedrock topic-arbitration requires 'endpoint'");
-  }
-
-  const url = `${endpoint}/model/${model}/converse`;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...cfg.headers,
-  };
-
   const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      system: [{ text: TOPIC_ARBITRATION_PROMPT }],
-      messages: [{ role: "user", content: [{ text: userContent }] }],
-      inferenceConfig: { temperature: 0, maxTokens: 60 },
-    }),
-    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
-  });
-
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Bedrock topic-arbitration failed (${resp.status}): ${body}`);
-  }
-
-  const json = (await resp.json()) as { output: { message: { content: Array<{ text: string }> } } };
-  const answer = json.output?.message?.content?.[0]?.text?.trim().toUpperCase() ?? "";
+  const text = await bedrockConverseTopic(
+    TOPIC_ARBITRATION_PROMPT,
+    userContent,
+    cfg,
+    10,
+    "topic-arbitration",
+  );
+  const answer = text.toUpperCase();
   log.debug(`Topic arbitration result: "${answer}"`);
   if (!answer) {
     log.warn("Bedrock topic-arbitration returned empty text; defaulting to SAME");
