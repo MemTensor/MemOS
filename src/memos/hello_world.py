@@ -72,7 +72,7 @@ def memos_chentang_hello_world(user_id: str = "locomo_exp_user_1", version: str 
                     "temperature": 0,
                     "max_tokens": 8192,
                     "api_key": os.getenv("OPENAI_API_KEY"),
-                    "api_base": os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                    "api_base": os.environ.get("OPENAI_API_BASE") or "https://api.openai.com/v1",
                 },
             },
             "vector_db": {

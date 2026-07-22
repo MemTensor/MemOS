@@ -900,11 +900,12 @@ class MemFeedback(BaseMemFeedback):
         for item in dehalluded_operations:
             if item["operation"].lower() == "add":
                 add_text = item.get("text")
-                if add_text and add_text in add_texts:
+                if not add_text:
+                    continue
+                if add_text in add_texts:
                     continue
                 llm_operations.append(item)
-                if add_text:
-                    add_texts.append(add_text)
+                add_texts.append(add_text)
             elif item["operation"].lower() == "update":
                 llm_operations.append(item)
         logger.info(

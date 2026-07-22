@@ -115,6 +115,22 @@ def test_standard_operations_keeps_downgraded_add_when_other_updates_exist():
     )
 
 
+def test_standard_operations_skips_add_without_text():
+    feedback = MemFeedback.__new__(MemFeedback)
+
+    operations = feedback.standard_operations(
+        [
+            {"operation": "ADD"},
+            {"operation": "ADD", "text": ""},
+            {"operation": "ADD", "text": "用户喜欢简洁回答。"},
+            {"operation": "ADD", "text": "用户喜欢简洁回答。"},
+        ],
+        current_memories=[],
+    )
+
+    assert operations == [{"operation": "ADD", "text": "用户喜欢简洁回答。"}]
+
+
 def test_update_judgement_prompt_omits_memory_text_from_response_schema():
     for prompt in [OPERATION_UPDATE_JUDGEMENT, OPERATION_UPDATE_JUDGEMENT_ZH]:
         output_section = prompt.split("Output Format")[-1].split("Example 1")[0]
