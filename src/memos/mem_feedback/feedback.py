@@ -859,9 +859,15 @@ class MemFeedback(BaseMemFeedback):
 
                 if not should_keep_update(data["text"], data["old_memory"]):
                     logger.warning(
-                        f"[0107 Feedback Core: correct_item] Due to the excessive proportion of changes, skip update: {data}"
+                        "[0107 Feedback Core: correct_item] Due to the excessive proportion "
+                        "of changes, downgrade update to add: %s",
+                        data,
                     )
-                    return None
+                    return {
+                        "operation": "ADD",
+                        "text": data["text"],
+                        "_downgraded_from_update": True,
+                    }
 
                 # id dehallucination
                 original_id = data["id"]
@@ -892,11 +898,14 @@ class MemFeedback(BaseMemFeedback):
         add_texts = []
         llm_operations = []
         for item in dehalluded_operations:
-            if item["operation"].lower() == "add" and "text" in item and item["text"]:
-                if item["text"] in add_texts:
+            if item["operation"].lower() == "add":
+                add_text = item.get("text")
+                if not add_text:
+                    continue
+                if add_text in add_texts:
                     continue
                 llm_operations.append(item)
-                add_texts.append(item["text"])
+                add_texts.append(add_text)
             elif item["operation"].lower() == "update":
                 llm_operations.append(item)
         logger.info(
@@ -907,10 +916,15 @@ class MemFeedback(BaseMemFeedback):
         has_update = any(item.get("operation").lower() == "update" for item in llm_operations)
         if has_update:
             filtered_items = [
-                item for item in llm_operations if item.get("operation").lower() == "add"
+                item
+                for item in llm_operations
+                if item.get("operation").lower() == "add"
+                and not item.get("_downgraded_from_update")
             ]
             update_items = [
-                item for item in llm_operations if item.get("operation").lower() != "add"
+                item
+                for item in llm_operations
+                if item.get("operation").lower() != "add" or item.get("_downgraded_from_update")
             ]
             if filtered_items:
                 logger.info(

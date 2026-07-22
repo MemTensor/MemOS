@@ -14,6 +14,19 @@ from memos.utils import timed_with_status
 logger = get_logger(__name__)
 
 
+def _embedding_log_extra_args(embedder: "UniversalAPIEmbedder", texts: list[str] | str) -> dict:
+    text_items = [texts] if isinstance(texts, str) else texts
+    return {
+        "model_name_or_path": getattr(
+            embedder.config, "model_name_or_path", "text-embedding-3-large"
+        ),
+        "backup_model_name_or_path": getattr(embedder.config, "backup_model_name_or_path", None),
+        "use_backup_client": getattr(embedder, "use_backup_client", False),
+        "text_len": len(text_items),
+        "text_content": text_items,
+    }
+
+
 def _sanitize_unicode(text: str) -> str:
     """
     Remove Unicode surrogates and other problematic characters.
@@ -60,11 +73,7 @@ class UniversalAPIEmbedder(BaseEmbedder):
 
     @timed_with_status(
         log_prefix="model_timed_embedding",
-        log_extra_args=lambda self, texts: {
-            "model_name_or_path": "text-embedding-3-large",
-            "text_len": len(texts),
-            "text_content": texts,
-        },
+        log_extra_args=_embedding_log_extra_args,
     )
     def embed(self, texts: list[str]) -> list[list[float]]:
         if isinstance(texts, str):
