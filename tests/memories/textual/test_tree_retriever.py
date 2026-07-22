@@ -80,6 +80,62 @@ def test_vector_recall_combines_and_dedups(retriever, mock_graph_store):
     assert all(isinstance(r, TextualMemoryItem) for r in results)
 
 
+def test_vector_recall_uses_lightweight_hits_without_get_nodes(
+    retriever, mock_graph_store, monkeypatch
+):
+    monkeypatch.setenv("MEMOS_POLARDB_LIGHTWEIGHT_SEARCH_ENABLED", "true")
+    mock_graph_store.supports_lightweight_vector_search = True
+    node_id = str(uuid.uuid4())
+    mock_graph_store.search_by_embedding.return_value = [
+        {
+            "id": node_id,
+            "score": 0.91,
+            "memory": "remembered content",
+            "memory_type": "LongTermMemory",
+            "user_name": "cube-a",
+            "key": "topic",
+            "tags": ["tag-a"],
+        }
+    ]
+
+    results = retriever._vector_recall([[0.1] * 5], "LongTermMemory", top_k=5, user_name="cube-a")
+
+    assert len(results) == 1
+    assert results[0].id == node_id
+    assert results[0].memory == "remembered content"
+    assert results[0].metadata.memory_type == "LongTermMemory"
+    assert results[0].metadata.user_name == "cube-a"
+    assert results[0].metadata.relativity == pytest.approx(0.91)
+    mock_graph_store.get_nodes.assert_not_called()
+    search_kwargs = mock_graph_store.search_by_embedding.call_args.kwargs
+    assert search_kwargs["light_weight_mode"] is True
+    assert "memory" in search_kwargs["return_fields"]
+    assert "memory_type" in search_kwargs["return_fields"]
+    assert "user_name" in search_kwargs["return_fields"]
+    assert "embedding" not in search_kwargs["return_fields"]
+
+
+def test_vector_recall_falls_back_when_lightweight_hit_lacks_required_fields(
+    retriever, mock_graph_store, monkeypatch
+):
+    monkeypatch.setenv("MEMOS_POLARDB_LIGHTWEIGHT_SEARCH_ENABLED", "true")
+    mock_graph_store.supports_lightweight_vector_search = True
+    node_id = str(uuid.uuid4())
+    mock_graph_store.search_by_embedding.return_value = [{"id": node_id, "score": 0.8}]
+    mock_graph_store.get_nodes.return_value = [
+        {
+            "id": node_id,
+            "memory": "fallback content",
+            "metadata": {"memory_type": "LongTermMemory"},
+        }
+    ]
+
+    results = retriever._vector_recall([[0.1] * 5], "LongTermMemory", top_k=5)
+
+    assert results[0].memory == "fallback content"
+    mock_graph_store.get_nodes.assert_called_once()
+
+
 def test_retrieve_merges_graph_and_vector(retriever, mock_graph_store):
     parsed_goal = ParsedTaskGoal(keys=["k"], tags=["t"])
 
