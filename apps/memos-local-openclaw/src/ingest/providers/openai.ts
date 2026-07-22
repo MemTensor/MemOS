@@ -1,4 +1,5 @@
 import type { SummarizerConfig, Logger } from "../../types";
+import { applyOpenRouterProviderRouting } from "../../shared/openrouter";
 
 const SYSTEM_PROMPT = `You generate a retrieval-friendly title.
 
@@ -592,5 +593,6 @@ function buildRequestBody(cfg: SummarizerConfig, body: Record<string, unknown>):
   if (isZhipuEndpoint(endpoint)) {
     body.thinking = { type: "disabled" };
   }
+  applyOpenRouterProviderRouting(cfg, body);
   return body;
 }

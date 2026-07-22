@@ -57,6 +57,32 @@ storage:
 words and mixed ASCII+CJK terms searchable in the keyword channel, which helps
 queries such as `早报`, `配置`, and `API配置`.
 
+For OpenRouter-backed OpenAI-compatible models, you can ask OpenRouter to
+skip providers that are unreliable for reflection/scoring prompts:
+
+```yaml
+llm:
+  provider: openai_compatible
+  endpoint: https://openrouter.ai/api/v1
+  model: google/gemini-2.5-flash-lite
+  apiKey: sk-or-v1-...
+  providerIgnore:
+    - together
+    - deepinfra
+    - novita
+  # providerOrder:
+  #   - google
+  #   - anthropic
+  #   - openai
+```
+
+The same `providerIgnore` and `providerOrder` fields are accepted on
+`skillEvolver`, `l3Llm`, and `embedding` config blocks.
+They map to OpenRouter's `provider.ignore` and `provider.order` request
+fields and are omitted when empty or when the endpoint is not OpenRouter.
+OpenRouter is detected from the normalized `openrouter.ai` hostname. For a
+reverse proxy or CNAME, set `openRouter: true` on that config block to opt in.
+
 ### `algorithm`
 Direct mapping to the V7 spec (γ, support, gain, top-K, etc.). Change only
 if you know what you're doing — defaults are calibrated for the paper.

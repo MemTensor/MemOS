@@ -71,6 +71,18 @@ class MemOSClient:
         if bool(user_id) == bool(agent_id):
             raise ValueError("exactly one of user_id or agent_id is required")
 
+    @staticmethod
+    def _normalize_task_status_response(
+        response_data: dict[str, Any], task_id: str
+    ) -> dict[str, Any]:
+        data = response_data.get("data")
+        if not (isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict)):
+            return response_data
+
+        normalized_data = data[0].copy()
+        normalized_data.setdefault("task_id", task_id)
+        return {**response_data, "data": normalized_data}
+
     def _post_json_dict(
         self, endpoint: str, payload: dict[str, Any], operation: str
     ) -> dict[str, Any] | None:
@@ -549,6 +561,7 @@ class MemOSClient:
                 )
                 response.raise_for_status()
                 response_data = response.json()
+                response_data = self._normalize_task_status_response(response_data, task_id)
 
                 return MemOSGetTaskStatusResponse(**response_data)
             except Exception as e:

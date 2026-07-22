@@ -39,10 +39,36 @@ const EmbeddingSchema = Type.Object({
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
   apiKey: StringWithDefault(""),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
   }, { default: {} }),
+}, { default: {} });
+
+const ReasoningSchema = Type.Object({
+  /**
+   * OpenRouter-compatible reasoning toggle. Omit the whole block to keep
+   * the provider/model default.
+   */
+  enabled: Type.Optional(Type.Boolean()),
+  /** Optional provider effort hint for reasoning-capable models. */
+  effort: Type.Optional(Type.Union([
+    Type.Literal("minimal"),
+    Type.Literal("none"),
+    Type.Literal("low"),
+    Type.Literal("medium"),
+    Type.Literal("high"),
+    Type.Literal("xhigh"),
+    Type.Literal("max"),
+  ])),
+  /** Optional token budget for reasoning-capable providers. */
+  maxTokens: Type.Optional(Type.Number({ minimum: 1 })),
 }, { default: {} });
 
 const LlmSchema = Type.Object({
@@ -65,6 +91,14 @@ const LlmSchema = Type.Object({
   timeoutMs: NumberInRange(45_000, 1_000),
   /** Max retries on transient errors. */
   maxRetries: NumberInRange(3, 0, 10),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });
 
 /**
@@ -89,6 +123,14 @@ const SkillEvolverSchema = Type.Object({
   apiKey: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
   timeoutMs: NumberInRange(60_000, 1_000),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });
 
 const StorageSchema = Type.Object({
@@ -601,4 +643,5 @@ export const ConfigSchema = Type.Object({
   logging: LoggingSchema,
 }, { default: {} });
 
+export type ReasoningConfig = Static<typeof ReasoningSchema>;
 export type ResolvedConfig = Static<typeof ConfigSchema>;
