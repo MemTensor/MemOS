@@ -1,7 +1,4 @@
-from unittest.mock import MagicMock, patch
-
 from memos.api.config import APIConfig
-from memos.mem_reader.multi_modal_struct import MultiModalStructMemReader
 
 
 def test_task_qwen_model_uses_qwen_provider_env(monkeypatch):
@@ -101,21 +98,3 @@ def test_memreader_backup_uses_provider_env_for_general_model(monkeypatch):
     assert config["config"]["backup_model_name_or_path"] == "gpt-4.1-mini"
     assert config["config"]["backup_api_key"] == "openai-key"
     assert config["config"]["backup_api_base"] == "https://openai.example/v1"
-
-
-def test_multi_view_extractor_model_uses_provider_env(monkeypatch):
-    monkeypatch.setenv("MULTI_VIEW_EXTRACTOR_MODEL", "qwen-flash")
-    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
-    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
-    reader = MultiModalStructMemReader.__new__(MultiModalStructMemReader)
-    llm = MagicMock()
-
-    with patch("memos.llms.factory.LLMFactory.from_config", return_value=llm) as from_config:
-        result = reader._get_multi_view_extractor_llm()
-
-    config = from_config.call_args.args[0]
-    assert result is llm
-    assert config.backend == "qwen"
-    assert config.config.model_name_or_path == "qwen-flash"
-    assert config.config.api_key == "qwen-key"
-    assert config.config.api_base == "https://dashscope.example/v1"

@@ -127,7 +127,6 @@ def test_memos_chen_tang_hello_world():
         mock_values = {
             "MODEL": "mock-model-name",
             "OPENAI_API_KEY": "mock-api-key",
-            "OPENAI_API_BASE": "mock-api-url",
             "EMBEDDING_MODEL": "mock-embedding-model",
         }
         return mock_values.get(key, default)

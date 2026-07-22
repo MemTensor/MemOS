@@ -1,6 +1,5 @@
 import concurrent.futures
 import json
-import os
 import re
 import traceback
 import uuid
@@ -30,12 +29,6 @@ if TYPE_CHECKING:
 
 
 logger = log.get_logger(__name__)
-
-_DEFAULT_MULTI_VIEW_EXTRACTOR_MODEL = "gpt-4.1-mini"
-
-
-def _get_multi_view_extractor_model() -> str:
-    return os.getenv("MULTI_VIEW_EXTRACTOR_MODEL", _DEFAULT_MULTI_VIEW_EXTRACTOR_MODEL)
 
 
 class MultiModalStructMemReader(SimpleStructMemReader):
@@ -87,22 +80,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             parser=None,
             direct_markdown_hostnames=direct_markdown_hostnames,
         )
-
-    def _get_multi_view_extractor_llm(self):
-        """Return the OpenAI-backed LLM reserved for multi-view extraction."""
-        cached_llm = getattr(self, "_multi_view_extractor_llm", None)
-        if cached_llm is not None:
-            return cached_llm
-
-        from memos.api.config import APIConfig
-        from memos.configs.llm import LLMConfigFactory
-        from memos.llms.factory import LLMFactory
-
-        config = LLMConfigFactory.model_validate(
-            APIConfig._build_provider_llm_config(_get_multi_view_extractor_model())
-        )
-        self._multi_view_extractor_llm = LLMFactory.from_config(config)
-        return self._multi_view_extractor_llm
 
     def _embed_memory_items(self, items: list[TextualMemoryItem]) -> None:
         """Compute embeddings for a list of memory items in-place.
