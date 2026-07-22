@@ -471,6 +471,32 @@ def test_task_status_response_parses_current_object_shape(client_module: Any) ->
     assert response.data.memory_views == {"added": 1}
 
 
+def test_get_task_status_normalizes_legacy_list_response(
+    client: Any, client_module: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, **kwargs: Any) -> DummyResponse:
+        calls.append({"url": url, **kwargs})
+        return DummyResponse(
+            {
+                "code": 200,
+                "message": "ok",
+                "data": [{"status": "completed"}],
+            }
+        )
+
+    monkeypatch.setattr(client_module.requests, "post", fake_post)
+
+    response = client.get_task_status("task-legacy")
+
+    assert response is not None
+    assert response.data.task_id == "task-legacy"
+    assert response.data.status == "completed"
+    assert response.data.memory_views is None
+    assert len(calls) == 1
+
+
 def test_search_response_keeps_all_current_memory_view_lists(client_module: Any) -> None:
     response = client_module.MemOSSearchResponse(
         code=200,
