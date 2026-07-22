@@ -863,7 +863,11 @@ class MemFeedback(BaseMemFeedback):
                         "of changes, downgrade update to add: %s",
                         data,
                     )
-                    return {"operation": "ADD", "_downgraded_from_update": True}
+                    return {
+                        "operation": "ADD",
+                        "text": data["text"],
+                        "_downgraded_from_update": True,
+                    }
 
                 # id dehallucination
                 original_id = data["id"]

@@ -69,7 +69,13 @@ def test_standard_operations_downgrades_large_update_to_add():
         current_memories,
     )
 
-    assert operations == [{"operation": "ADD", "_downgraded_from_update": True}]
+    assert operations == [
+        {
+            "operation": "ADD",
+            "text": new_memory,
+            "_downgraded_from_update": True,
+        }
+    ]
 
 
 def test_standard_operations_keeps_downgraded_add_when_other_updates_exist():
@@ -99,7 +105,11 @@ def test_standard_operations_keeps_downgraded_add_when_other_updates_exist():
         current_memories,
     )
 
-    assert {"operation": "ADD", "_downgraded_from_update": True} in operations
+    assert {
+        "operation": "ADD",
+        "text": "完全不同的新事实，涉及商城订单售后调价风险、退款金额差异和业务确认事项。",
+        "_downgraded_from_update": True,
+    } in operations
     assert any(
         item.get("operation") == "UPDATE" and item.get("id") == update_id for item in operations
     )
