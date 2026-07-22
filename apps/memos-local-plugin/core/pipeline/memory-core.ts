@@ -93,6 +93,7 @@ import {
   registerHostLlmBridge,
   type HostLlmBridge,
 } from "../llm/host-bridge.js";
+import type { ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";
@@ -119,6 +120,20 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
+
+type DedicatedLlmConfig = {
+  provider?: string;
+  model?: string;
+  endpoint?: string;
+  apiKey?: string;
+  temperature?: number;
+  timeoutMs?: number;
+  providerIgnore?: string[];
+  providerOrder?: string[];
+  openRouter?: boolean;
+  reasoning?: ReasoningConfig;
+};
+
 export interface BootstrapOptions {
   agent: AgentKind;
   namespace?: RuntimeNamespace;
@@ -382,7 +397,7 @@ export async function bootstrapMemoryCoreFull(
   // back to the main `llm` when skillEvolver.model is blank.
   let reflectLlm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const evolver = (config as { skillEvolver?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).skillEvolver;
+    const evolver = (config as { skillEvolver?: DedicatedLlmConfig }).skillEvolver;
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
@@ -393,6 +408,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: evolver?.apiKey ?? "",
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
+        providerIgnore: evolver?.providerIgnore,
+        providerOrder: evolver?.providerOrder,
+        openRouter: evolver?.openRouter ?? false,
+        reasoning: evolver?.reasoning,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -440,7 +459,7 @@ export async function bootstrapMemoryCoreFull(
   // impact on companion latency. Blank → falls back to the main `llm`.
   let l3Llm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const l3c = (config as { l3Llm?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).l3Llm;
+    const l3c = (config as { l3Llm?: DedicatedLlmConfig }).l3Llm;
     const l3Model = (l3c?.model ?? "").trim();
     const l3Provider = (l3c?.provider ?? "").trim();
     if (l3Model && l3Provider) {
@@ -451,6 +470,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: l3c?.apiKey ?? "",
         temperature: l3c?.temperature ?? 0,
         timeoutMs: l3c?.timeoutMs ?? 60_000,
+        providerIgnore: l3c?.providerIgnore,
+        providerOrder: l3c?.providerOrder,
+        openRouter: l3c?.openRouter ?? false,
+        reasoning: l3c?.reasoning,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
