@@ -463,14 +463,14 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     }
 
     // Batch reflection + α across every step of the now-closed
-    // episode. Falls back to per-step scoring when over the threshold
-    // or when batching fails / no LLM is wired. The reflect pass uses
+    // episode. Long episodes are chunk-batched at `batchThreshold`;
+    // failed chunks fall back to per-step scoring. The reflect pass uses
     // `reflectLlm` (skill-evolver model when configured) for higher
     // quality reflections; per-turn lite capture still uses `llm`.
     const reflectStart = now();
     const rLlm = deps.reflectLlm ?? deps.llm;
-    const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
-    const contextEnabled = contextModeFor(deps.cfg, useBatch, normalized.length);
+    const scoringPlan = planScoring(deps.cfg, normalized.length, rLlm !== null);
+    const contextEnabled = contextModeFor(deps.cfg, scoringPlan, normalized.length);
     const taskSummary = contextEnabled.includeTask
       ? buildTaskReflectionSummary(input.episode, normalized, deps.cfg.taskContextMaxChars)
       : null;
@@ -481,7 +481,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       episodeId: input.episode.id,
       sessionId: input.episode.sessionId,
       steps: normalized.length,
-      mode: useBatch ? "batch" : contextEnabled.includeDownstream ? "per_step_downstream" : "per_step",
+      mode: scoringPlan === "per_step" && contextEnabled.includeDownstream ? "per_step_downstream" : scoringPlan,
+      chunks: scoringPlan === "chunk_batch"
+        ? Math.ceil(normalized.length / Math.max(1, deps.cfg.batchThreshold))
+        : undefined,
       reflectionContextMode: deps.cfg.reflectionContextMode,
       downstreamPreview: contextEnabled.includeDownstream,
       provider: rLlm?.provider ?? "none",
@@ -489,10 +492,13 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       taskSummary: taskSummary ? taskSummary.slice(0, 240) : null,
     });
     let scored: ScoredStep[] = [];
-    if (useBatch) {
+    if (scoringPlan === "batch") {
       scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
     }
-    if (!useBatch || scored.length === 0) {
+    if (scoringPlan === "chunk_batch") {
+      scored = await runChunkedBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
+    }
+    if (scoringPlan === "per_step" || scored.length === 0) {
       scored = await runPerStepScoring(
         normalized,
         rLlm,
@@ -1062,30 +1068,30 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 /**
- * Decide whether to use the batched reflection+α path.
+ * Decide which reflection+α path to use.
  *
  * `per_step`     → never (legacy path).
- * `per_episode`  → always, when an LLM is available.
- * `auto`         → batch when step count fits inside `batchThreshold`.
+ * `per_episode`  → batch up to threshold, then chunk-batch.
+ * `auto`         → batch up to threshold, then chunk-batch.
  */
-function shouldBatch(cfg: CaptureConfig, stepCount: number, hasLlm: boolean): boolean {
-  if (!hasLlm) return false;
-  if (stepCount === 0) return false;
-  if (cfg.batchMode === "per_step") return false;
-  if (cfg.batchMode === "per_episode") return true;
-  // "auto"
-  return stepCount <= cfg.batchThreshold;
+type ScoringPlan = "per_step" | "batch" | "chunk_batch";
+
+function planScoring(cfg: CaptureConfig, stepCount: number, hasLlm: boolean): ScoringPlan {
+  if (!hasLlm) return "per_step";
+  if (stepCount === 0) return "per_step";
+  if (cfg.batchMode === "per_step") return "per_step";
+  return stepCount <= Math.max(1, cfg.batchThreshold) ? "batch" : "chunk_batch";
 }
 
 function contextModeFor(
   cfg: CaptureConfig,
-  useBatch: boolean,
+  scoringPlan: ScoringPlan,
   stepCount: number,
 ): { includeTask: boolean; includeDownstream: boolean } {
   const mode = cfg.reflectionContextMode;
   const includeTask = mode === "task" || mode === "task_downstream";
   const wantsDownstream = mode === "downstream" || mode === "task_downstream";
-  const longPerStep = !useBatch && stepCount > cfg.batchThreshold;
+  const longPerStep = scoringPlan === "per_step" && stepCount > cfg.batchThreshold;
   const includeDownstream =
     wantsDownstream &&
     cfg.longEpisodeReflectMode === "per_step_downstream" &&
@@ -1143,6 +1149,37 @@ async function runBatchScoring(
     });
     return [];
   }
+}
+
+async function runChunkedBatchScoring(
+  normalized: NormalizedStep[],
+  llm: LlmClient,
+  deps: CaptureDeps,
+  warnings: CaptureResult["warnings"],
+  llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
+  episodeId: string,
+  taskSummary: string | null,
+): Promise<ScoredStep[]> {
+  const chunkSize = Math.max(1, deps.cfg.batchThreshold);
+  const chunks: NormalizedStep[][] = [];
+  for (let start = 0; start < normalized.length; start += chunkSize) {
+    chunks.push(normalized.slice(start, start + chunkSize));
+  }
+  const concurrency = Math.max(1, deps.cfg.llmConcurrency);
+  const scoredChunks = await runConcurrently(chunks, concurrency, async (chunk): Promise<ScoredStep[]> => {
+    const scored = await runBatchScoring(chunk, llm, deps, warnings, llmCalls, episodeId, taskSummary);
+    if (scored.length > 0) return scored;
+    return runPerStepScoring(
+      chunk,
+      llm,
+      deps,
+      warnings,
+      llmCalls,
+      episodeId,
+      buildReflectionContexts(chunk, taskSummary, chunk.map(() => [])),
+    );
+  });
+  return scoredChunks.flat();
 }
 
 async function runPerStepScoring(
