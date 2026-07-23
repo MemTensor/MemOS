@@ -65,6 +65,14 @@ const LlmSchema = Type.Object({
   timeoutMs: NumberInRange(45_000, 1_000),
   /** Max retries on transient errors. */
   maxRetries: NumberInRange(3, 0, 10),
+  /**
+   * Max output tokens per LLM call. Default 4_000 — sufficient budget for
+   * reasoning models (deepseek-reasoner, o1*, gpt-5-thinking) that burn
+   * hundreds of tokens on chain-of-thought before content. Below ~2_000
+   * the JSON reflection / synth prompts get truncated mid-string and the
+   * bridge logs `llm.json malformed`.
+   */
+  maxTokens: NumberInRange(4_000, 1_024, 32_768),
 }, { default: {} });
 
 /**
@@ -89,6 +97,13 @@ const SkillEvolverSchema = Type.Object({
   apiKey: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
   timeoutMs: NumberInRange(60_000, 1_000),
+  /**
+   * Max output tokens per skill-evolver LLM call. Same reasoning budget
+   * as `llm.maxTokens` — 4_000 covers typical crystallisation JSON
+   * (multi-policy evidence rollup + decision rationale) without hitting
+   * the 32k OpenAI ceiling.
+   */
+  maxTokens: NumberInRange(4_000, 1_024, 32_768),
 }, { default: {} });
 
 const StorageSchema = Type.Object({
