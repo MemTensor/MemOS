@@ -27,19 +27,25 @@ export function registerOverviewRoutes(routes: Routes, deps: ServerDeps): void {
     // headless callers. Routing the ping through the viewer's mount
     // hook keeps the semantics honest (a browser actually opened
     // the page) and is naturally deduped by browser tab lifetime.
+    // The viewer is a local single-user admin surface: its aggregate
+    // counts must reflect the whole database, not the namespace of
+    // whichever agent profile processed the most recent turn. The core
+    // rewrites its active namespace on every turn/session, so scoped
+    // reads here made the dashboard "drift to zero" as soon as a
+    // message arrived (#2131). Same convention as diag.ts / session.ts.
     const [health, episodeIds, skills, policies, worldModels, metrics] =
       await Promise.all([
         deps.core.health(),
-        deps.core.listEpisodes({ limit: 5_000 }),
-        deps.core.listSkills({ limit: 500 }),
+        deps.core.listEpisodes({ limit: 5_000, includeAllNamespaces: true }),
+        deps.core.listSkills({ limit: 500, includeAllNamespaces: true }),
         // Core only exposes `listPolicies({ status? })`; the viewer wants
         // the grand total + per-status so we request the biggest page and
         // break it down here. 500 is plenty — fresh installs have dozens.
-        deps.core.listPolicies({ limit: 500 }),
-        deps.core.listWorldModels({ limit: 500 }),
+        deps.core.listPolicies({ limit: 500, includeAllNamespaces: true }),
+        deps.core.listWorldModels({ limit: 500, includeAllNamespaces: true }),
         // `metrics.total` is the grand total of traces — cheaper than a
         // dedicated count RPC and already cached by the core.
-        deps.core.metrics({ days: 1 }),
+        deps.core.metrics({ days: 1, includeAllNamespaces: true }),
       ]);
 
     const skillStats = {

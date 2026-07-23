@@ -451,6 +451,131 @@ describe("MemoryCore façade", () => {
     expect(await core.listTraces({ limit: 10, groupByTurn: true })).toHaveLength(1);
   });
 
+  // Regression for #2131: viewer dashboard counts must not "drift to
+  // zero" when a turn/session from a different sub-agent profile flips
+  // the core's active namespace. The viewer is a local single-user
+  // admin surface, so its aggregate reads pass `includeAllNamespaces`
+  // (same convention as diag.ts / session.ts routes) and must stay
+  // stable regardless of which namespace processed the last turn.
+  it("keeps metrics + listEpisodes stable across a namespace flip (includeAllNamespaces)", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const mainNs = { agentKind: "openclaw", profileId: "main" };
+    const subagentNs = { agentKind: "openclaw", profileId: "subagent-x" };
+
+    // 1. A turn under the boot namespace writes one memory.
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      namespace: mainNs,
+      sessionId: "s-main",
+      userText: "remember the deploy checklist",
+      ts: 1_700_000_000_001,
+    });
+    await core.onTurnEnd({
+      agent: "openclaw",
+      namespace: mainNs,
+      sessionId: "s-main",
+      episodeId: start.query.episodeId!,
+      agentText: "stored the deploy checklist",
+      toolCalls: [],
+      ts: 1_700_000_000_002,
+    });
+
+    const before = await core.metrics({ days: 1, includeAllNamespaces: true });
+    expect(before.total).toBe(1);
+    const episodesBefore = await core.listEpisodes({
+      limit: 10,
+      includeAllNamespaces: true,
+    });
+    expect(episodesBefore).toHaveLength(1);
+
+    // 2. A session under a DIFFERENT profile flips activeNamespace
+    // (this is what the gateway/sub-agents do in production).
+    await core.openSession({
+      agent: "openclaw",
+      sessionId: "s-sub",
+      namespace: subagentNs,
+    });
+
+    // Namespace-scoped reads hide the other profile's row (intended
+    // multi-profile isolation)…
+    const scoped = await core.metrics({ days: 1 });
+    expect(scoped.total).toBe(0);
+    await expect(core.listEpisodes({ limit: 10 })).resolves.toHaveLength(0);
+
+    // …but the viewer's all-namespace reads must NOT drift.
+    const after = await core.metrics({ days: 1, includeAllNamespaces: true });
+    expect(after.total).toBe(1);
+    const episodesAfter = await core.listEpisodes({
+      limit: 10,
+      includeAllNamespaces: true,
+    });
+    expect(episodesAfter).toHaveLength(1);
+  });
+
+  // Namespace-scoped listEpisodes must apply `limit` AFTER the
+  // visibility filter. Paging at the repo level under-fills pages when
+  // rows from other namespaces occupy the fetched window, which reads
+  // as a false end-of-data to paginating callers.
+  it("fills scoped listEpisodes pages past other namespaces' rows", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const mainNs = { agentKind: "openclaw", profileId: "main" };
+    const subNs = { agentKind: "openclaw", profileId: "subagent-x" };
+
+    const runTurn = async (
+      ns: typeof mainNs,
+      sessionId: string,
+      ts: number,
+    ): Promise<void> => {
+      const start = await core!.onTurnStart({
+        agent: "openclaw",
+        namespace: ns,
+        sessionId,
+        userText: `note for ${sessionId}`,
+        ts,
+      });
+      await core!.onTurnEnd({
+        agent: "openclaw",
+        namespace: ns,
+        sessionId,
+        episodeId: start.query.episodeId!,
+        agentText: `stored for ${sessionId}`,
+        toolCalls: [],
+        ts: ts + 1,
+      });
+    };
+
+    // Three episodes, newest-first order: main-2, sub-1, main-1 — the
+    // sub-profile row sits inside the first page window of size 2.
+    await runTurn(mainNs, "s-main-1", 1_700_000_000_010);
+    await runTurn(subNs, "s-sub-1", 1_700_000_000_020);
+    await runTurn(mainNs, "s-main-2", 1_700_000_000_030);
+
+    // Active namespace is `main` after the last turn. A scoped page of
+    // 2 must contain BOTH main episodes, skipping the interleaved
+    // sub-profile row instead of consuming a page slot on it.
+    const page = await core.listEpisodes({ limit: 2 });
+    expect(page).toHaveLength(2);
+
+    // And the all-namespace read still sees everything.
+    await expect(
+      core.listEpisodes({ limit: 10, includeAllNamespaces: true }),
+    ).resolves.toHaveLength(3);
+  });
+
   it("records visible subagent task and result in the parent episode", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(

@@ -3211,15 +3211,30 @@ export function createMemoryCore(
     sessionId?: SessionId;
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<EpisodeId[]> {
     ensureLive();
-    const rows = handle.repos.episodes.list({
-      sessionId: input.sessionId,
-      limit: input.limit ?? 50,
-      offset: input.offset ?? 0,
-    });
-    return rows
+    const limit = input.limit ?? 50;
+    const offset = input.offset ?? 0;
+    if (input.includeAllNamespaces) {
+      // Every row passes the visibility filter, so repo-level paging
+      // is both correct and cheap.
+      return handle.repos.episodes
+        .list({ sessionId: input.sessionId, limit, offset })
+        .map((r: EpisodeRow) => r.id as EpisodeId);
+    }
+    // Namespace-scoped path: paging at the repo level would apply
+    // `limit` before the visibility filter runs, silently under-filling
+    // pages (callers can't tell a short page from end-of-data). Fetch
+    // the widest window the repo allows, filter, then page in memory —
+    // same idiom as `listEpisodeRows` / `countEpisodes`. The repo
+    // clamps the fetch window to 500 rows (`clampLimit`), so scoped
+    // paging is exact within the newest 500 episodes; beyond that the
+    // same shared limitation applies to the sibling list/count methods.
+    return handle.repos.episodes
+      .list({ sessionId: input.sessionId, limit: 100_000 })
       .filter((r: EpisodeRow) => visibleToCurrent(r))
+      .slice(offset, offset + limit)
       .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
@@ -3422,8 +3437,16 @@ export function createMemoryCore(
     toolNames?: readonly string[];
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<{ logs: ApiLogDTO[]; total: number }> {
     ensureLive();
+    // `includeAllNamespaces` is accepted for contract symmetry with the
+    // other viewer list* methods (#2131). The `api_logs` write path does
+    // not currently stamp per-namespace owner columns, so every row is
+    // effectively cross-namespace regardless of this flag. Callers that
+    // fan into viewer aggregations still pass `true` so their intent is
+    // explicit if a per-namespace write path is added later.
+    void input?.includeAllNamespaces;
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const rows = handle.repos.apiLogs.list({
@@ -3786,7 +3809,7 @@ export function createMemoryCore(
     });
   }
 
-  async function metrics(input?: { days?: number }): Promise<{
+  async function metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;
@@ -3824,6 +3847,14 @@ export function createMemoryCore(
     const oneDayMs = 86_400_000;
     const sinceMs = now - days * oneDayMs;
 
+    // NOTE: `traces` is fetched unfiltered (all namespaces) below so
+    // that `sessions` / `writesToday` / `embeddings` / `dailyWrites`
+    // populate the viewer chart even after a turn from a different
+    // profile flips the active namespace (#2131). Only `total`
+    // (totalTurns) respects `includeAllNamespaces`. If a per-namespace
+    // scoping is ever needed for these derived fields (e.g. per-agent
+    // views), thread `visibilityWhere(activeNamespace)` through the
+    // repo query the same way `countTurns` does.
     const traces = handle.repos.traces.list({ limit: 10_000 });
     const sessions = new Set<string>();
     let writesToday = 0;
@@ -3931,9 +3962,12 @@ export function createMemoryCore(
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
     // Apply namespace visibility so the count matches the filtered list.
+    // Viewer callers pass `includeAllNamespaces` — `activeNamespace` is
+    // rewritten by every turn/session, so binding this count to it made
+    // the dashboard total collapse whenever another profile's turn ran.
     const totalTurns = handle.repos.traces.countTurns(
       {},
-      visibilityWhere(activeNamespace),
+      input?.includeAllNamespaces ? undefined : visibilityWhere(activeNamespace),
     );
 
     return {
