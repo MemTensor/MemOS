@@ -288,6 +288,11 @@ async function main(): Promise<void> {
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
     home: resolvedHome,
+    // Standalone bridge owns its stdio — initialize the logger from
+    // config.logging (timezone, level, channels, file sinks). Without this the
+    // logger stays on the bootstrap console default (tz pinned to "UTC"), which
+    // makes logging.timezone inert in the daemon.
+    initLogging: true,
   });
 
   const telemetry = new Telemetry(

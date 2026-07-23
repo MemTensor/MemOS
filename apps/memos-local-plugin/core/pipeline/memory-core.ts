@@ -75,7 +75,7 @@ import type {
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
 import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
-import { rootLogger } from "../logger/index.js";
+import { initLogger, rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
@@ -165,6 +165,13 @@ export interface BootstrapOptions {
   hostLlmBridge?: HostLlmBridge | null;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /**
+   * When true, initialize the global logger from `config.logging` (timezone,
+   * level, channels, file/audit/llm/perf/events sinks). The standalone daemon
+   * (`bridge.cts`) owns its stdio and must set this; embedded plugin hosts
+   * leave it false so the host keeps control of logging.
+   */
+  initLogging?: boolean;
 }
 
 export interface BootstrapResult {
@@ -203,6 +210,13 @@ export async function bootstrapMemoryCoreFull(
     ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
     : await loadConfig(home);
   const config = configResult.config;
+
+  // Standalone daemon: wire the global logger from config (timezone, level,
+  // channels, file sinks) before anything logs. Embedded hosts skip this and
+  // keep their own logger. Idempotent — re-init swaps the active root in place.
+  if (options.initLogging) {
+    initLogger(config, home);
+  }
 
   const log = rootLogger.child({
     channel: "core.pipeline.bootstrap",
