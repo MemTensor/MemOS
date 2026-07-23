@@ -78,8 +78,7 @@ priority once reward arrives.
 ## V7 §3.2 batched variant — `batch-scorer.ts`
 
 The per-step path (`reflection-synth.ts` + `alpha-scorer.ts`) issues 2N
-LLM calls per N-step episode. `batch-scorer.ts` collapses up to
-`batchThreshold` steps into one call:
+LLM calls per N-step episode. `batch-scorer.ts` collapses them into ONE:
 
 ```
 inputs   = [{idx, state, action, outcome, reflection, synth_allowed}, …]
@@ -92,8 +91,8 @@ Dispatch (in `capture.ts`):
 | `cfg.batchMode`   | `cfg.batchThreshold` | behavior |
 |-------------------|----------------------|----------|
 | `per_step`        | (ignored)            | legacy: 2N calls |
-| `per_episode`     | chunk size           | batch when `N ≤ threshold`; else chunk-batch |
-| `auto` (default)  | `12`                 | batch when `N ≤ 12`; else chunk-batch |
+| `per_episode`     | (ignored)            | always batch |
+| `auto` (default)  | `12`                 | batch when `N ≤ 12`; else per-step |
 
 The dispatcher also refuses to batch when no LLM is wired — same fallback
 path as missing-LLM in per-step mode.
@@ -108,15 +107,15 @@ Failure handling:
 
 - LLM throws / facade gives up after `malformedRetries=1` → capture
   catches in `runBatchScoring`, surfaces a `{stage: "batch"}` warning,
-  and the per-step path runs as a fallback for that chunk.
+  and the per-step path runs as a fallback.
 - Validator rejects on length mismatch, missing/non-numeric `alpha`,
   non-boolean `usable`, non-string `reflection_text`. Same fallback.
 
 Bookkeeping (`CaptureResult.llmCalls`):
 
-- `batchedReflection`: number of successful batch/chunk calls.
+- `batchedReflection`: 0 or 1 per episode (1 on a successful batch).
 - `reflectionSynth` / `alphaScoring`: only nonzero when the per-step path
-  ran (either selected directly, or as fallback after a chunk failure).
+  ran (either selected directly, or as fallback after a batch failure).
 
 Stable prompt fingerprint:
 

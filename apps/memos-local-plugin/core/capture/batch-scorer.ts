@@ -16,12 +16,11 @@
  *   `transferability` axes benefit directly.
  *
  * Trade-offs (encoded in capture.ts dispatch):
- *   - Prompt grows linearly with N steps. Each call is capped at
- *     `batchThreshold`; long episodes run as several bounded chunks.
- *   - One bad chunk forces a single batched retry for that chunk instead
- *     of N isolated retries — but the facade already does
- *     `malformedRetries` for us, and on hard failure capture.ts falls
- *     back to per-step for that chunk only.
+ *   - Prompt grows linearly with N steps. Capped via `batchThreshold`;
+ *     long episodes degrade to the per-step path automatically.
+ *   - One bad output value forces a single batched retry instead of N
+ *     isolated retries — but the facade already does `malformedRetries`
+ *     for us, and on hard failure capture.ts falls back to per-step.
  *
  * Wire format ↔ prompt:
  *   Send `{ host_context?, task_context?, steps: [{idx, state, action, outcome, reflection, synth_allowed}] }`.
@@ -171,7 +170,6 @@ export async function batchScoreReflections(
       validate: (v) => validateBatchPayload(v, inputs.length),
       malformedRetries: 1,
       temperature: 0,
-      maxTokens: batchMaxTokens(inputs.length),
     },
   );
 
@@ -321,15 +319,6 @@ function validateBatchPayload(v: unknown, expected: number): void {
       );
     }
   }
-}
-
-function batchMaxTokens(stepCount: number): number {
-  // Batch output scales with step count; keep a per-step budget but cap below
-  // the 16k range that triggered avoidable reasoning spend on mimo replay.
-  const perStepOutputBudget = 512;
-  const baseBudget = 768;
-  const ceiling = 8_192;
-  return Math.min(ceiling, baseBudget + Math.max(1, stepCount) * perStepOutputBudget);
 }
 
 function lastToolOutcome(step: NormalizedStep, max: number): string {
