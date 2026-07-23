@@ -86,6 +86,7 @@ import {
   FLOAT32_BYTES,
 } from "../storage/repos/index.js";
 import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
+import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -644,6 +645,8 @@ export function createMemoryCore(
   const MAX_DIRTY_REWARD_ATTEMPTS = 3;
   const DIRTY_REWARD_BACKOFF_BASE_MS = 60 * 60 * 1000; // 1h
   const DIRTY_REWARD_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000; // 24h
+  const DIRTY_CLOSED_SCAN_PAGE_SIZE = 500;
+  const DIRTY_CLOSED_SCAN_CURSOR_KEY = "pipeline.dirty_closed_scan_cursor.v1";
 
   // ─── Startup recovery background promise (issue #1776 + #1808) ──
   // `init()` used to `await` the entire reflect → reward → L2 chain for
@@ -727,8 +730,7 @@ export function createMemoryCore(
     // must be a no-op.
     if (handle.algorithm.lightweightMemory.enabled) return;
     try {
-      const allDirty = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
+      const allDirty = collectDirtyClosedEpisodes()
         .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
       // Apply the same backoff filter as init() so the 10-min periodic
       // scan does not hammer episodes whose LLM call keeps failing.
@@ -1106,8 +1108,7 @@ export function createMemoryCore(
         dirtyClosedForBackground = [];
       } else {
         const nowForDirty = Date.now();
-        const allDirty = handle.repos.episodes
-          .list({ status: "closed", limit: 500 })
+        const allDirty = collectDirtyClosedEpisodes()
           .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
         const dirtyClosed: typeof allDirty = [];
         for (const ep of allDirty) {
@@ -1549,6 +1550,42 @@ export function createMemoryCore(
         handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
       }
     }
+  }
+
+  function collectDirtyClosedEpisodes(): Array<EpisodeRow & { meta?: Record<string, unknown> }> {
+    const storedCursor = handle.repos.kv.get<unknown>(DIRTY_CLOSED_SCAN_CURSOR_KEY, null);
+    const cursor = isDirtyClosedScanCursor(storedCursor) ? storedCursor : null;
+    if (storedCursor !== null && !cursor) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    }
+    const page = handle.repos.episodes.listClosedPage({
+      limit: DIRTY_CLOSED_SCAN_PAGE_SIZE,
+      before: cursor,
+    });
+    if (page.length === 0) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+      return [];
+    }
+
+    const last = page[page.length - 1]!;
+    if (page.length < DIRTY_CLOSED_SCAN_PAGE_SIZE) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    } else {
+      handle.repos.kv.set(DIRTY_CLOSED_SCAN_CURSOR_KEY, {
+        startedAt: last.startedAt,
+        id: last.id,
+      });
+    }
+    return page;
+  }
+
+  function isDirtyClosedScanCursor(value: unknown): value is ClosedEpisodeCursor {
+    return Boolean(
+      value &&
+      typeof value === "object" &&
+      typeof (value as { startedAt?: unknown }).startedAt === "number" &&
+      typeof (value as { id?: unknown }).id === "string",
+    );
   }
 
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {

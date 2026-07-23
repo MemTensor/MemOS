@@ -1644,6 +1644,129 @@ algorithm:
     expect(meta.reward?.traceIds).toEqual(["tr_missing_reward"]);
   });
 
+  it("continues a bounded dirty-closed scan past 500 rows across restart", async () => {
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 10_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_dirty_page_cursor", "openclaw", ts, ts, "{}");
+    const insertEpisode = writeDb.prepare(
+      `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+    );
+    for (let i = 0; i < 500; i++) {
+      insertEpisode.run(
+        `ep_clean_${i}`,
+        "se_dirty_page_cursor",
+        ts + i,
+        ts + i + 1,
+        "[]",
+        0,
+        JSON.stringify({ closeReason: "finalized" }),
+      );
+    }
+    insertEpisode.run(
+      "ep_dirty_past_first_page",
+      "se_dirty_page_cursor",
+      ts - 1,
+      ts,
+      JSON.stringify(["tr_dirty_past_first_page"]),
+      null,
+      JSON.stringify({ closeReason: "finalized" }),
+    );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_dirty_past_first_page",
+        "ep_dirty_past_first_page",
+        "se_dirty_page_cursor",
+        ts,
+        "Please recover the closed episode beyond the initial page.",
+        "The recovery should eventually score this episode.",
+        "Recovery pagination regression",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    const first = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-first-scan",
+    });
+    await first.init();
+    await first.waitForStartupRecovery?.();
+    await first.shutdown();
+
+    const betweenScansDb = new Sqlite(home.home.dbFile);
+    betweenScansDb.prepare(
+      `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+    ).run(
+      "ep_inserted_between_scans",
+      "se_dirty_page_cursor",
+      ts + 10_000,
+      ts + 10_001,
+      "[]",
+      0,
+      JSON.stringify({ closeReason: "finalized" }),
+    );
+    betweenScansDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-second-scan",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_dirty_past_first_page") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBe(0);
+    expect(JSON.parse(episode!.meta_json)).toMatchObject({
+      recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+    });
+  });
+
   it("init() returns immediately even when a stale orphan's recovery chain stalls (issue #1808)", async () => {
     // Issue #1808: on databases with 30k+ traces, the dreaming chain
     // synchronous-await inside `init()` blocked the OpenClaw Gateway's
