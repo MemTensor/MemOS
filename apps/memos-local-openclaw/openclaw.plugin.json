@@ -38,20 +38,26 @@
   ],
   "contracts": {
     "tools": [
-      "memory_search",
       "memory_get",
-      "memory_timeline",
-      "memory_viewer",
-      "task_summary",
-      "skill_search",
-      "skill_install",
-      "skill_upgrade",
+      "memory_search",
       "memory_share",
+      "memory_timeline",
       "memory_unshare",
-      "skill_publish",
-      "skill_unpublish",
+      "memory_viewer",
+      "memory_write_public",
+      "network_memory_detail",
       "network_skill_pull",
-      "network_team_info"
+      "network_team_info",
+      "skill_file_get",
+      "skill_files",
+      "skill_get",
+      "skill_install",
+      "skill_publish",
+      "skill_search",
+      "skill_unpublish",
+      "task_share",
+      "task_summary",
+      "task_unshare"
     ]
   }
 }
