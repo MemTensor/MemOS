@@ -154,4 +154,55 @@ describe("storage/migrator", () => {
       db.close();
     }
   });
+
+  it("namespace-visibility migration does not rewrite existing NULL share_scope rows (regression #1787)", () => {
+    // Regression test for https://github.com/MemTensor/MemOS/issues/1787:
+    // The namespace-visibility migration originally issued
+    // `UPDATE traces SET share_scope='private' WHERE share_scope IS NULL`
+    // against the entire traces table. On databases >500 MB that UPDATE
+    // held the bootstrap transaction in CPU-bound row rewriting (re-validating
+    // JSON CHECK constraints) for many minutes, manifesting as a bridge hang.
+    //
+    // The fix removed the bulk UPDATE. This test verifies that rows with
+    // NULL share_scope stay NULL after migration (the application layer
+    // treats NULL as 'private' via COALESCE).
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      runMigrations(db);
+      db.exec(`
+        INSERT INTO sessions (id, agent, started_at, last_seen_at)
+        VALUES ('session-1', 'openclaw', 1, 1);
+        INSERT INTO episodes (id, session_id, started_at)
+        VALUES ('episode-1', 'session-1', 1);
+      `);
+      // Seed test rows: two with NULL share_scope, two with explicit values.
+      db.exec(`
+        INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, turn_id, share_scope
+        ) VALUES
+          ('t-null-a', 'episode-1', 'session-1', 10, 'user a', 'agent a', 10, NULL),
+          ('t-null-b', 'episode-1', 'session-1', 20, 'user b', 'agent b', 20, NULL),
+          ('t-private', 'episode-1', 'session-1', 30, 'user c', 'agent c', 30, 'private'),
+          ('t-public', 'episode-1', 'session-1', 40, 'user d', 'agent d', 40, 'public')
+      `);
+      const rows = db
+        .prepare<unknown, { id: string; share_scope: string | null }>(
+          `SELECT id, share_scope FROM traces ORDER BY id`,
+        )
+        .all();
+      // The crucial assertion: NULL stays NULL. If the legacy bulk
+      // UPDATE were still in place the two `t-null-*` rows would have
+      // been rewritten to 'private'. Non-NULL rows are untouched.
+      expect(rows).toEqual([
+        { id: "t-null-a", share_scope: null },
+        { id: "t-null-b", share_scope: null },
+        { id: "t-private", share_scope: "private" },
+        { id: "t-public", share_scope: "public" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
 });

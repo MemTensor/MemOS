@@ -7237,7 +7237,7 @@ var _providerDefaults={
   gemini:{endpoint:'',embModel:'text-embedding-004',chatModel:'gemini-2.0-flash'},
   zhipu:{endpoint:'https://open.bigmodel.cn/api/paas/v4',embModel:'embedding-3',chatModel:'glm-4-flash'},
   deepseek:{endpoint:'https://api.deepseek.com/v1',chatModel:'deepseek-chat'},
-  bailian:{endpoint:'https://dashscope.aliyuncs.com/compatible-mode/v1',embModel:'text-embedding-v3',chatModel:'qwen-max'},
+  bailian:{endpoint:'https://coding.dashscope.aliyuncs.com/v1',embModel:'text-embedding-v3',chatModel:'qwen-max'},
   moonshot:{endpoint:'https://api.moonshot.cn/v1',chatModel:'moonshot-v1-8k'}
 };
 function onProviderChange(section){

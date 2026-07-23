@@ -44,7 +44,46 @@ export function formatDurationMs(ms: number): string {
   return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`;
 }
 
-/** Convenience: ISO 8601 string for a given epoch ms (UTC). */
-export function isoFromEpochMs(ms: EpochMs): string {
-  return new Date(ms).toISOString();
+export interface IsoFromEpochOptions {
+  /** Include numeric UTC offset for localized timestamps. UTC fast path stays unchanged. */
+  offset?: boolean;
+}
+
+/** Convenience: ISO 8601 string for a given epoch ms. Defaults to UTC. */
+export function isoFromEpochMs(ms: EpochMs, tz?: string, opts: IsoFromEpochOptions = {}): string {
+  if (!tz || tz === "UTC") return new Date(ms).toISOString();
+  const d = new Date(ms);
+  const parts = dateTimeParts(d, tz);
+  const base = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond ?? "000"}`;
+  return opts.offset ? base + offsetForTimeZone(d, tz) : base;
+}
+
+function dateTimeParts(d: Date, tz: string): Record<string, string> {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+    hour12: false,
+  });
+  const out: Record<string, string> = {};
+  for (const part of fmt.formatToParts(d)) {
+    if (part.type !== "literal") out[part.type] = part.value;
+  }
+  return out;
+}
+
+function offsetForTimeZone(d: Date, tz: string): string {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    timeZoneName: "longOffset",
+    hour: "2-digit",
+  });
+  const zone = fmt.formatToParts(d).find((part) => part.type === "timeZoneName")?.value;
+  if (!zone || zone === "GMT" || zone === "UTC") return "+00:00";
+  return zone.replace(/^GMT/, "");
 }

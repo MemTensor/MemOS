@@ -1,14 +1,12 @@
 import asyncio
 import os
-import time
 
 from openai import AzureOpenAI as AzureClient
 from openai import OpenAI as OpenAIClient
 
 from memos.configs.embedder import UniversalAPIEmbedderConfig
-from memos.embedders.base import BaseEmbedder
+from memos.embedders.base import BaseEmbedder, log_embedding_call
 from memos.log import get_logger
-from memos.utils import timed_with_status
 
 
 logger = get_logger(__name__)
@@ -58,14 +56,7 @@ class UniversalAPIEmbedder(BaseEmbedder):
                 else None,
             )
 
-    @timed_with_status(
-        log_prefix="model_timed_embedding",
-        log_extra_args=lambda self, texts: {
-            "model_name_or_path": "text-embedding-3-large",
-            "text_len": len(texts),
-            "text_content": texts,
-        },
-    )
+    @log_embedding_call
     def embed(self, texts: list[str]) -> list[list[float]]:
         if isinstance(texts, str):
             texts = [texts]
@@ -73,7 +64,6 @@ class UniversalAPIEmbedder(BaseEmbedder):
         texts = [_sanitize_unicode(t) for t in texts]
         # Truncate texts if max_tokens is configured
         texts = self._truncate_texts(texts)
-        logger.info(f"Embeddings request with input: {texts}")
         if self.provider == "openai" or self.provider == "azure":
             try:
 
@@ -83,18 +73,17 @@ class UniversalAPIEmbedder(BaseEmbedder):
                         input=texts,
                     )
 
-                init_time = time.time()
                 response = asyncio.run(
                     asyncio.wait_for(
                         _create_embeddings(), timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5))
                     )
                 )
-                logger.info(f"Embeddings request succeeded with {time.time() - init_time} seconds")
                 return [r.embedding for r in response.data]
             except Exception as e:
                 if self.use_backup_client:
                     logger.warning(
-                        f"Embeddings request ended with {type(e).__name__} error: {e}, try backup client"
+                        "Embedding request failed error_type=%s; trying backup client",
+                        type(e).__name__,
                     )
                     try:
 
@@ -108,17 +97,12 @@ class UniversalAPIEmbedder(BaseEmbedder):
                                 input=texts,
                             )
 
-                        init_time = time.time()
                         response = asyncio.run(
                             asyncio.wait_for(
                                 _create_embeddings_backup(),
                                 timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5)),
                             )
                         )
-                        logger.info(
-                            f"Backup embeddings request succeeded with {time.time() - init_time} seconds"
-                        )
-                        logger.info(f"Backup embeddings request response: {response}")
                         return [r.embedding for r in response.data]
                     except Exception as e:
                         raise ValueError(f"Backup embeddings request ended with error: {e}") from e

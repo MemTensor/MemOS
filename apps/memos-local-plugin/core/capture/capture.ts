@@ -33,6 +33,7 @@ import { extractSteps } from "./step-extractor.js";
 import { createSummarizer, type Summarizer } from "./summarizer.js";
 import { tagsForStep } from "./tagger.js";
 import { extractErrorSignatures } from "./error-signature.js";
+import { RECOVERY_REASONS } from "../pipeline/recovery-constants.js";
 import type {
   CaptureConfig,
   CaptureEvent,
@@ -133,8 +134,17 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // ─── Extract + dedup (skip steps we've already written this episode) ──
     const extractStart = now();
     const rawAll = extractSteps(input.episode);
-    const existingTraces = deps.tracesRepo.list({ episodeId: input.episode.id });
-    const seenTs = new Set<number>(existingTraces.map((t) => t.ts));
+    // #2076: MUST use listDedupRowsForEpisode (uncapped, streaming, no
+    // BLOB projection). The paginated `list` path silently truncates to
+    // 500 rows, which breaks dedup once an episode grows past that and
+    // causes the tail to be re-inserted every cycle (bloating `traces`
+    // unboundedly + starving the vector scan). Using the narrow-column
+    // dedup projection here also keeps peak RSS proportional to scalar
+    // fields, not embedding footprint (open code review on #2077).
+    const existingDedupRows = deps.tracesRepo.listDedupRowsForEpisode(input.episode.id);
+    const seenTs = new Set<number>(existingDedupRows.map((t) => t.ts));
+    // Reused later by persistRows so we don't scan the episode twice.
+    const seenSignatures = new Set(existingDedupRows.map(traceIdentitySignature));
     const raw = rawAll.filter((s) => !seenTs.has(s.ts));
     const extractMs = now() - extractStart;
     log.debug("stage.extract.done", {
@@ -183,7 +193,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // Persist as new rows. Reflection / α deliberately empty.
     const persistStart = now();
     const rows = buildRows(scored, summaries, vecs, input.episode);
-    const persisted = await persistRows(rows, input, warnings);
+    const persisted = await persistRows(rows, input, warnings, {}, seenSignatures);
     if (!persisted) {
       // emit capture.failed handled inside persistRows on hard fail.
       return finalResult(
@@ -251,12 +261,16 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 
     const extractStart = now();
     const rawAll = extractSteps(input.episode);
-    const existingTraces = deps.tracesRepo.list({ episodeId: input.episode.id });
+    // #2076 + #2077 OCR: uncapped, narrow-projection dedup read.
+    // See `runLite` for the full rationale — one scan, no BLOBs.
+    const existingDedupRows = deps.tracesRepo.listDedupRowsForEpisode(input.episode.id);
     const seenTurnIds = new Set(
-      existingTraces
+      existingDedupRows
         .map((t) => t.turnId)
         .filter((v): v is number => typeof v === "number" && Number.isFinite(v)),
     );
+    // Reused later by persistRows so we don't scan the episode twice.
+    const seenSignatures = new Set(existingDedupRows.map(traceIdentitySignature));
     const rawByTurn = new Map<number, StepCandidate[]>();
     for (const step of rawAll) {
       const turnId = pickTurnId(step.meta, step.ts);
@@ -308,7 +322,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     });
     const persisted = await persistRows(rows, input, warnings, {
       skipActionVectorRetry: true,
-    });
+    }, seenSignatures);
     if (!persisted) {
       return finalResult(
         input,
@@ -396,33 +410,47 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     for (const tr of existing) traceByTs.set(tr.ts, tr);
     const orphan = normalized.filter((s) => !traceByTs.has(s.ts));
     if (orphan.length > 0) {
-      log.warn("reflect.orphan_steps", {
-        episodeId: input.episode.id,
-        count: orphan.length,
-        action: "fallback_insert",
-      });
-      // These steps never went through runLite (likely a test path or a
-      // dropped event). Insert them now with reflection=null so the
-      // batch pass below can patch them like the rest.
-      const summStart = now();
-      const { summaries } = await runSummarize(
-        orphan.map((s) => ({
+      // During dirty-reward recovery (recoverDirtyClosedEpisodes), the episode
+      // snapshot is rebuilt from trace_ids_json. Any "orphan" steps here are
+      // artifact mismatches between snapshot timestamps and DB rows — NOT
+      // genuinely missing traces. Inserting them would grow trace_ids_json,
+      // keep reward.traceCount !== traceIds.length, and restart the recovery
+      // loop on every bridge start.
+      if (input.episode.meta?.recoveryReason === RECOVERY_REASONS.DIRTY_REWARD_RESCORE) {
+        log.warn("reflect.orphan_steps_skipped_recovery", {
+          episodeId: input.episode.id,
+          count: orphan.length,
+          reason: "dirty_reward_rescore — skipping insert to break recovery loop",
+        });
+      } else {
+        log.warn("reflect.orphan_steps", {
+          episodeId: input.episode.id,
+          count: orphan.length,
+          action: "fallback_insert",
+        });
+        // These steps never went through runLite (likely a test path or a
+        // dropped event). Insert them now with reflection=null so the
+        // batch pass below can patch them like the rest.
+        const summStart = now();
+        const { summaries } = await runSummarize(
+          orphan.map((s) => ({
+            ...s,
+            reflection: { text: null, alpha: 0, usable: false, source: "none" },
+          })),
+          summStart,
+          llmCalls,
+          warnings,
+          { episodeId: input.episode.id, phase: "reflect" },
+        );
+        const orphanScored: ScoredStep[] = orphan.map((s) => ({
           ...s,
           reflection: { text: null, alpha: 0, usable: false, source: "none" },
-        })),
-        summStart,
-        llmCalls,
-        warnings,
-        { episodeId: input.episode.id, phase: "reflect" },
-      );
-      const orphanScored: ScoredStep[] = orphan.map((s) => ({
-        ...s,
-        reflection: { text: null, alpha: 0, usable: false, source: "none" },
-      }));
-      const { vecs } = await runEmbed(orphanScored, summaries, warnings);
-      const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
-      await persistRows(orphanRows, input, warnings);
-      for (const r of orphanRows) traceByTs.set(r.ts, r);
+        }));
+        const { vecs } = await runEmbed(orphanScored, summaries, warnings);
+        const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
+        await persistRows(orphanRows, input, warnings);
+        for (const r of orphanRows) traceByTs.set(r.ts, r);
+      }
     }
 
     if (normalized.length === 0) {
@@ -435,14 +463,14 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     }
 
     // Batch reflection + α across every step of the now-closed
-    // episode. Falls back to per-step scoring when over the threshold
-    // or when batching fails / no LLM is wired. The reflect pass uses
+    // episode. Long episodes are chunk-batched at `batchThreshold`;
+    // failed chunks fall back to per-step scoring. The reflect pass uses
     // `reflectLlm` (skill-evolver model when configured) for higher
     // quality reflections; per-turn lite capture still uses `llm`.
     const reflectStart = now();
     const rLlm = deps.reflectLlm ?? deps.llm;
-    const useBatch = shouldBatch(deps.cfg, normalized.length, rLlm !== null);
-    const contextEnabled = contextModeFor(deps.cfg, useBatch, normalized.length);
+    const scoringPlan = planScoring(deps.cfg, normalized.length, rLlm !== null);
+    const contextEnabled = contextModeFor(deps.cfg, scoringPlan, normalized.length);
     const taskSummary = contextEnabled.includeTask
       ? buildTaskReflectionSummary(input.episode, normalized, deps.cfg.taskContextMaxChars)
       : null;
@@ -453,7 +481,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       episodeId: input.episode.id,
       sessionId: input.episode.sessionId,
       steps: normalized.length,
-      mode: useBatch ? "batch" : contextEnabled.includeDownstream ? "per_step_downstream" : "per_step",
+      mode: scoringPlan === "per_step" && contextEnabled.includeDownstream ? "per_step_downstream" : scoringPlan,
+      chunks: scoringPlan === "chunk_batch"
+        ? Math.ceil(normalized.length / Math.max(1, deps.cfg.batchThreshold))
+        : undefined,
       reflectionContextMode: deps.cfg.reflectionContextMode,
       downstreamPreview: contextEnabled.includeDownstream,
       provider: rLlm?.provider ?? "none",
@@ -461,10 +492,13 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       taskSummary: taskSummary ? taskSummary.slice(0, 240) : null,
     });
     let scored: ScoredStep[] = [];
-    if (useBatch) {
+    if (scoringPlan === "batch") {
       scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
     }
-    if (!useBatch || scored.length === 0) {
+    if (scoringPlan === "chunk_batch") {
+      scored = await runChunkedBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
+    }
+    if (scoringPlan === "per_step" || scored.length === 0) {
       scored = await runPerStepScoring(
         normalized,
         rLlm,
@@ -768,9 +802,23 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     input: CaptureInput,
     warnings: CaptureResult["warnings"],
     opts: { skipActionVectorRetry?: boolean } = {},
+    existingSignatures?: Set<string>,
   ): Promise<boolean> {
-    const existingBeforeInsert = deps.tracesRepo.list({ episodeId: input.episode.id });
-    const seenSignatures = new Set(existingBeforeInsert.map(traceIdentitySignature));
+    // #2076 + #2077 OCR: uncapped, narrow-projection dedup read. The
+    // paginated `list` path missed all rows past the 500 cap and let
+    // duplicate signatures re-insert every cycle. When the caller has
+    // already computed the signature set upstream (runLite /
+    // runLightweight / runReflect all do), skip the second full scan
+    // and reuse it — otherwise fall back to a fresh streaming scan.
+    // We clone the caller-supplied set so the intra-batch dedup below
+    // doesn't leak new signatures back into the caller's Set instance.
+    const seenSignatures = existingSignatures
+      ? new Set(existingSignatures)
+      : new Set(
+          deps.tracesRepo
+            .listDedupRowsForEpisode(input.episode.id)
+            .map(traceIdentitySignature),
+        );
     const uniqueRows = rows.filter((row) => {
       const signature = traceIdentitySignature(row);
       if (seenSignatures.has(signature)) return false;
@@ -891,7 +939,9 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     return ["user", turnId, step.ts, step.userText.trim()].join("\x1f");
   }
 
-  function traceIdentitySignature(row: TraceRow): string {
+  function traceIdentitySignature(
+    row: Pick<TraceRow, "toolCalls" | "turnId" | "ts" | "agentText" | "userText">,
+  ): string {
     const tool = row.toolCalls[0];
     if (tool) {
       const hasRealTiming =
@@ -1018,30 +1068,30 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 /**
- * Decide whether to use the batched reflection+α path.
+ * Decide which reflection+α path to use.
  *
  * `per_step`     → never (legacy path).
- * `per_episode`  → always, when an LLM is available.
- * `auto`         → batch when step count fits inside `batchThreshold`.
+ * `per_episode`  → batch up to threshold, then chunk-batch.
+ * `auto`         → batch up to threshold, then chunk-batch.
  */
-function shouldBatch(cfg: CaptureConfig, stepCount: number, hasLlm: boolean): boolean {
-  if (!hasLlm) return false;
-  if (stepCount === 0) return false;
-  if (cfg.batchMode === "per_step") return false;
-  if (cfg.batchMode === "per_episode") return true;
-  // "auto"
-  return stepCount <= cfg.batchThreshold;
+type ScoringPlan = "per_step" | "batch" | "chunk_batch";
+
+function planScoring(cfg: CaptureConfig, stepCount: number, hasLlm: boolean): ScoringPlan {
+  if (!hasLlm) return "per_step";
+  if (stepCount === 0) return "per_step";
+  if (cfg.batchMode === "per_step") return "per_step";
+  return stepCount <= Math.max(1, cfg.batchThreshold) ? "batch" : "chunk_batch";
 }
 
 function contextModeFor(
   cfg: CaptureConfig,
-  useBatch: boolean,
+  scoringPlan: ScoringPlan,
   stepCount: number,
 ): { includeTask: boolean; includeDownstream: boolean } {
   const mode = cfg.reflectionContextMode;
   const includeTask = mode === "task" || mode === "task_downstream";
   const wantsDownstream = mode === "downstream" || mode === "task_downstream";
-  const longPerStep = !useBatch && stepCount > cfg.batchThreshold;
+  const longPerStep = scoringPlan === "per_step" && stepCount > cfg.batchThreshold;
   const includeDownstream =
     wantsDownstream &&
     cfg.longEpisodeReflectMode === "per_step_downstream" &&
@@ -1099,6 +1149,37 @@ async function runBatchScoring(
     });
     return [];
   }
+}
+
+async function runChunkedBatchScoring(
+  normalized: NormalizedStep[],
+  llm: LlmClient,
+  deps: CaptureDeps,
+  warnings: CaptureResult["warnings"],
+  llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
+  episodeId: string,
+  taskSummary: string | null,
+): Promise<ScoredStep[]> {
+  const chunkSize = Math.max(1, deps.cfg.batchThreshold);
+  const chunks: NormalizedStep[][] = [];
+  for (let start = 0; start < normalized.length; start += chunkSize) {
+    chunks.push(normalized.slice(start, start + chunkSize));
+  }
+  const concurrency = Math.max(1, deps.cfg.llmConcurrency);
+  const scoredChunks = await runConcurrently(chunks, concurrency, async (chunk): Promise<ScoredStep[]> => {
+    const scored = await runBatchScoring(chunk, llm, deps, warnings, llmCalls, episodeId, taskSummary);
+    if (scored.length > 0) return scored;
+    return runPerStepScoring(
+      chunk,
+      llm,
+      deps,
+      warnings,
+      llmCalls,
+      episodeId,
+      buildReflectionContexts(chunk, taskSummary, chunk.map(() => [])),
+    );
+  });
+  return scoredChunks.flat();
 }
 
 async function runPerStepScoring(

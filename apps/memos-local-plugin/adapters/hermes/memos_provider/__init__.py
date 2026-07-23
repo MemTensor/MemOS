@@ -48,10 +48,12 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import re
 import sys
 import threading
 import time
+import weakref
 
 from pathlib import Path
 from typing import Any
@@ -64,7 +66,11 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
-from daemon_manager import ensure_bridge_running, ensure_viewer_daemon  # noqa: E402
+from daemon_manager import (  # noqa: E402
+    ensure_bridge_running,
+    ensure_viewer_daemon,
+    kill_zombie_bridges,
+)
 
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
@@ -88,6 +94,34 @@ _TOOL_FAILURE_REPAIR_HINT = (
     "`memos_search` for relevant past experience before deciding what to do next."
 )
 _TOOL_FAILURE_HINT_THRESHOLD = 3
+
+
+def _long_rpc_timeout_default() -> float:
+    """Resolve the timeout used for long-running JSON-RPC calls.
+
+    After 1-2 hours of Hermes use the memory / capture / reflection
+    pipeline grows past the 30s JSON-RPC default and surfaces as
+    ``[timeout] memory.search did not respond within 30.0s`` and
+    ``[timeout] turn.end did not respond within 30.0s`` in the host
+    logs (issue #2028). ``feedback.submit`` already opts into 75s;
+    ``sync_turn``'s ``_ensure_bridge`` also uses 75s. Aligning the
+    heavy retrieval / capture RPCs with the same 75s ceiling gives
+    the pipeline enough headroom without turning genuinely hung
+    calls into an indefinite wait. The value is overridable via
+    ``MEMOS_HERMES_LONG_RPC_TIMEOUT`` for site-specific tuning; any
+    unparseable / non-positive value falls back to the default.
+    """
+    raw = os.environ.get("MEMOS_HERMES_LONG_RPC_TIMEOUT", "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 75.0
+    if value <= 0:
+        return 75.0
+    return value
+
+
+_LONG_RPC_TIMEOUT = _long_rpc_timeout_default()
 
 _HERMES_INTERNAL_REVIEW_PREFIXES = (
     "review the conversation above and consider saving to memory if appropriate.",
@@ -304,44 +338,100 @@ class MemTensorProvider(MemoryProvider):
         is deferred to ``_ensure_episode()`` (called from the first
         ``on_turn_start``), so the actual user message can be passed as
         the episode's initial text instead of a generic placeholder.
+
+        Idempotency (issue #1910): the host occasionally re-enters
+        ``initialize()`` on the same provider instance (plugin reload,
+        session restart). Without the close-before-spawn guard below the
+        previous ``MemosBridgeClient`` would be replaced by reference
+        only, orphaning the previous Node subprocess and accumulating
+        a fresh ``bridge.cjs`` per turn.
         """
+        # Hermes can call `initialize()` multiple times across a single
+        # parent process (e.g. on reconnect or a new session). Each call
+        # spawns a fresh `MemosBridgeClient` (and therefore a new
+        # `--no-viewer` Node subprocess); if we simply overwrite
+        # `self._bridge` we leak the old subprocess — its parent stays
+        # alive so `_reap_stale_headless_bridges_locked` never collects
+        # it. Close the previous bridge first, mirroring the safe pattern
+        # already used by `_reconnect_bridge()`. See #1927.
+        previous_bridge = self._bridge
+        if previous_bridge is not None:
+            old_pid = getattr(previous_bridge, "pid", "?")
+            logger.info(
+                "MemOS: closing previous bridge (pid=%s) before re-init",
+                old_pid,
+            )
+            with contextlib.suppress(Exception):
+                previous_bridge.close()
+            self._bridge = None
+
         self._session_id = session_id or self._session_id
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
+        if self._bridge is not None:
+            prev_pid = getattr(self._bridge, "pid", "?")
+            logger.info(
+                "MemOS: initialize() invoked while bridge already exists; "
+                "closing previous bridge (pid=%s) before respawn",
+                prev_pid,
+            )
+            old_bridge = self._bridge
+            self._bridge = None
+            with contextlib.suppress(Exception):
+                old_bridge.close()
         try:
             ensure_bridge_running()
         except Exception as err:
             logger.warning("MemOS: failed to start bridge — %s", err)
             return
+
+        # Kill zombie bridges from previous sessions before deciding
+        # how to connect.
         try:
-            ensure_viewer_daemon()
-        except Exception as err:
-            logger.warning("MemOS: viewer daemon check failed — %s", err)
-        new_bridge: MemosBridgeClient | None = None
-        try:
-            new_bridge = MemosBridgeClient()
-            # Register the fallback LLM handler BEFORE we open the
-            # session so it is available the very first time the
-            # plugin's facade asks for help (e.g. on the first
-            # `turn.start` retrieval call).
-            new_bridge.register_host_handler(
-                "host.llm.complete",
-                self._handle_host_llm_complete,
-            )
-            self._bridge = new_bridge
-            self._open_session(session_id)
-            logger.info(
-                "MemOS: bridge ready session=%s platform=%s (episode deferred)",
-                self._session_id,
-                self._platform,
-            )
-        except Exception as err:
-            logger.warning("MemOS: bridge init failed — %s", err)
-            if new_bridge is not None:
-                with contextlib.suppress(Exception):
-                    new_bridge.close()
-            self._bridge = None
+            zombies = kill_zombie_bridges()
+            if zombies:
+                logger.info("MemOS: killed %d zombie bridge(s)", zombies)
+        except Exception:
+            pass
+
+        # NOTE: An HTTP bridge path used to live here that connected to a
+        # running viewer daemon over HTTP instead of spawning a stdio
+        # subprocess. It depended on ``MemosHttpClient`` which was never
+        # committed — the class was referenced by name only. Issue #2096
+        # reverts the half-merged HTTP feature; the stdio path below is
+        # the sole connection mechanism until the HTTP client lands as a
+        # complete change.
+
+        if self._bridge is None:
+            try:
+                ensure_viewer_daemon()
+            except Exception as err:
+                logger.warning("MemOS: viewer daemon check failed — %s", err)
+            new_bridge: MemosBridgeClient | None = None
+            try:
+                new_bridge = MemosBridgeClient()
+                # Register the fallback LLM handler BEFORE we open the
+                # session so it is available the very first time the
+                # plugin's facade asks for help (e.g. on the first
+                # `turn.start` retrieval call).
+                new_bridge.register_host_handler(
+                    "host.llm.complete",
+                    self._handle_host_llm_complete,
+                )
+                self._bridge = new_bridge
+                self._open_session(session_id, timeout=60.0)
+                logger.info(
+                    "MemOS: bridge ready (stdio) session=%s platform=%s (episode deferred)",
+                    self._session_id,
+                    self._platform,
+                )
+            except Exception as err:
+                logger.warning("MemOS: bridge init failed — %s", err)
+                if new_bridge is not None:
+                    with contextlib.suppress(Exception):
+                        new_bridge.close()
+                self._bridge = None
         # Register a Hermes plugin hook to capture tool calls as they
         # happen. The `post_tool_call` hook fires after every tool
         # dispatch (write_file, terminal, search_files, etc.) with the
@@ -1280,9 +1370,10 @@ class MemTensorProvider(MemoryProvider):
                 }
                 if bool(args.get("sessionScope", False)):
                     params["sessionId"] = self._session_id
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.search",
                     params,
+                    timeout=_LONG_RPC_TIMEOUT,
                 )
                 return json.dumps({"hits": resp.get("hits", [])})
             if tool_name == "memos_get":
@@ -1298,7 +1389,7 @@ class MemTensorProvider(MemoryProvider):
                 method = methods.get(kind)
                 if method is None:
                     return json.dumps({"error": f"unknown memory kind: {kind}"})
-                item = self._bridge.request(
+                item = self._bridge_request_with_retry(
                     method, {"id": item_id, "namespace": self._runtime_namespace()}
                 )
                 if not item:
@@ -1343,7 +1434,7 @@ class MemTensorProvider(MemoryProvider):
                     }
                 )
             if tool_name == "memos_timeline":
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.timeline",
                     {
                         "episodeId": args.get("episodeId", self._episode_id),
@@ -1358,12 +1449,12 @@ class MemTensorProvider(MemoryProvider):
                 params = {"limit": limit, "namespace": self._runtime_namespace()}
                 if args.get("status"):
                     params["status"] = args["status"]
-                return json.dumps(self._bridge.request("skill.list", params))
+                return json.dumps(self._bridge_request_with_retry("skill.list", params))
             if tool_name == "memos_environment":
                 query = (args.get("query") or "").strip()
                 limit = self._int_arg(args, "limit", 5, 1, 30)
                 if not query:
-                    resp = self._bridge.request(
+                    resp = self._bridge_request_with_retry(
                         "memory.list_world_models",
                         {"limit": limit, "offset": 0, "namespace": self._runtime_namespace()},
                     )
@@ -1379,7 +1470,7 @@ class MemTensorProvider(MemoryProvider):
                             "queried": False,
                         }
                     )
-                resp = self._bridge.request(
+                resp = self._bridge_request_with_retry(
                     "memory.search",
                     {
                         "agent": "hermes",
@@ -1387,6 +1478,7 @@ class MemTensorProvider(MemoryProvider):
                         "query": query,
                         "topK": {"tier1": 0, "tier2": 0, "tier3": limit},
                     },
+                    timeout=_LONG_RPC_TIMEOUT,
                 )
                 hits = [
                     h
@@ -1412,7 +1504,7 @@ class MemTensorProvider(MemoryProvider):
                 skill_id = (args.get("id") or "").strip()
                 if not skill_id:
                     return json.dumps({"error": "missing id"})
-                skill = self._bridge.request(
+                skill = self._bridge_request_with_retry(
                     "skill.get",
                     {
                         "id": skill_id,
@@ -1506,8 +1598,33 @@ class MemTensorProvider(MemoryProvider):
         # the core will pause or finalize the open episode according to
         # topic-boundary rules so interrupted Hermes sessions can resume
         # into the same task later.
-        with contextlib.suppress(Exception):
-            self._bridge.request("session.close", {"sessionId": self._session_id})
+        #
+        # Fire session.close in a daemon thread — the response is unused, so
+        # this is semantically fire-and-forget. Calling urlopen() inline blocks
+        # the asyncio event loop (gateway/run.py calls us synchronously from
+        # _handle_reset_command) and causes Discord heartbeat timeouts when the
+        # bridge is unresponsive. 5 s timeout keeps it bounded.
+        _bridge = self._bridge
+        _sid = self._session_id
+
+        def _close() -> None:
+            with contextlib.suppress(Exception):
+                _bridge.request("session.close", {"sessionId": _sid}, timeout=5.0)
+
+        threading.Thread(target=_close, daemon=True).start()
+
+    def __del__(self) -> None:
+        # Safety net — if shutdown() was never called (e.g. caller forgot,
+        # Hermes agent routed model change with self.agent = None), clean
+        # up the bridge subprocess and keepalive thread on GC.
+        if self._bridge is not None or (
+            self._bridge_keepalive_thread is not None and self._bridge_keepalive_thread.is_alive()
+        ):
+            logger.warning(
+                "MemOS: __del__ cleaning up leaked provider — shutdown() was never called"
+            )
+            with contextlib.suppress(Exception):
+                self.shutdown()
 
     def shutdown(self) -> None:  # type: ignore[override]
         self._bridge_keepalive_stop.set()
@@ -1718,11 +1835,80 @@ class MemTensorProvider(MemoryProvider):
         )
         self._session_id = resp.get("sessionId") or requested_session
 
+    def _bridge_request_with_retry(
+        self,
+        method: str,
+        params: Any,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Read-path helper: reconnect + retry once on ``transport_closed``.
+
+        Layer 4 (#2028): the read-path memory tools previously issued a
+        single ``self._bridge.request(...)`` and surfaced any error
+        verbatim to the model. When the Node bridge has died since the
+        last user turn, that first call now raises
+        ``transport_closed`` fast (thanks to Layer 1/2). This helper
+        mirrors the pattern ``sync_turn`` already uses: reconnect the
+        bridge once and re-issue the same request. A second failure is
+        left to propagate — the ``except`` block in
+        ``handle_tool_call`` will surface the error text verbatim.
+        """
+        assert self._bridge is not None
+        try:
+            if timeout is None:
+                return self._bridge.request(method, params)
+            return self._bridge.request(method, params, timeout=timeout)
+        except BridgeError as err:
+            if not self._is_transport_closed(err):
+                raise
+            logger.info(
+                "MemOS: bridge transport closed on %s; reconnecting and retrying once — %s",
+                method,
+                err,
+            )
+            self._reconnect_bridge(self._session_id, timeout=30.0)
+            assert self._bridge is not None
+            if timeout is None:
+                return self._bridge.request(method, params)
+            return self._bridge.request(method, params, timeout=timeout)
+
     def _is_transport_closed(self, err: Exception) -> bool:
         if isinstance(err, BridgeError) and err.code == "transport_closed":
             return True
         msg = str(err).lower()
         return "broken pipe" in msg or "bridge closed" in msg or "transport_closed" in msg
+
+    def _should_reconnect_after_keepalive_failure(self, err: Exception) -> bool:
+        """Decide whether a keepalive failure warrants a bridge reconnect.
+
+        Layer 3 (#2028): the keepalive previously reconnected only on
+        ``BridgeError("transport_closed", …)``. A hung Node bridge
+        surfaces instead as ``BridgeError("timeout", …)`` (the client
+        gave up waiting for a response); that error was dropped at
+        DEBUG and the stale client kept being reused, so every
+        subsequent memory tool timed out for another 30 s. Reconnect
+        also when the subprocess has already exited (belt-and-braces
+        for hangs that didn't raise a transport error).
+
+        A live subprocess raising a generic (non-transport) error must
+        NOT trigger a reconnect — otherwise transient parse noise
+        would create a reconnect storm.
+        """
+        if self._is_transport_closed(err):
+            return True
+        if isinstance(err, BridgeError) and err.code == "timeout":
+            return True
+        # Ask the underlying subprocess: is it still alive?
+        bridge = self._bridge
+        if bridge is not None:
+            try:
+                exit_code = bridge._proc.poll()  # type: ignore[attr-defined]
+            except Exception:
+                exit_code = None
+            if exit_code is not None:
+                return True
+        return False
 
     def _reconnect_bridge(self, session_id: str = "", *, timeout: float = 30.0) -> None:
         # Don't reconnect if we're shutting down
@@ -1746,6 +1932,10 @@ class MemTensorProvider(MemoryProvider):
                 logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
 
             ensure_bridge_running()
+            # NOTE: HTTP bridge reconnect path was removed alongside issue
+            # #2096. See ``initialize`` for the rationale. Reconnect always
+            # spawns a fresh stdio bridge.
+
             try:
                 ensure_viewer_daemon()
             except Exception as err:
@@ -1790,18 +1980,32 @@ class MemTensorProvider(MemoryProvider):
             return
         self._bridge_keepalive_stop.clear()
 
+        _self_ref = weakref.ref(self)
+
         def _run() -> None:
-            while not self._bridge_keepalive_stop.wait(5.0):
-                if not self._ensure_bridge(self._session_id, timeout=10.0):
+            while True:
+                # Stop signal set (e.g. shutdown called by another thread).
+                # When self is garbage-collected the weakref resolves to None
+                # and we exit gracefully instead of keeping the thread + bridge
+                # subprocess alive forever.
+                provider = _self_ref()
+                if provider is None:
+                    break
+                if provider._bridge_keepalive_stop.wait(5.0):
+                    break
+                if not provider._ensure_bridge(provider._session_id, timeout=10.0):
                     continue
                 try:
-                    assert self._bridge is not None
-                    self._bridge.request("core.health", {}, timeout=10.0)
+                    assert provider._bridge is not None
+                    provider._bridge.request("core.health", {}, timeout=10.0)
                 except Exception as err:
-                    if self._is_transport_closed(err):
-                        logger.info("MemOS: bridge keepalive reconnecting after transport close")
+                    if provider._should_reconnect_after_keepalive_failure(err):
+                        logger.info(
+                            "MemOS: bridge keepalive reconnecting after failure — %s",
+                            err,
+                        )
                         with contextlib.suppress(Exception):
-                            self._reconnect_bridge(self._session_id, timeout=10.0)
+                            provider._reconnect_bridge(provider._session_id, timeout=10.0)
                     else:
                         logger.debug("MemOS: bridge keepalive failed — %s", err)
 
@@ -1829,6 +2033,7 @@ class MemTensorProvider(MemoryProvider):
                 },
                 "ts": int(time.time() * 1000),
             },
+            timeout=_LONG_RPC_TIMEOUT,
         )
         # Stash the real episode id the pipeline auto-created (V7
         # §0.1 may have boundary-cut the previous episode and started
@@ -1875,7 +2080,7 @@ class MemTensorProvider(MemoryProvider):
         }
         if agent_thinking:
             payload["agentThinking"] = agent_thinking
-        result = self._bridge.request("turn.end", payload)
+        result = self._bridge.request("turn.end", payload, timeout=_LONG_RPC_TIMEOUT)
         # Capture the trace ID for feedback submission
         if result and isinstance(result, dict):
             trace_ids = result.get("traceIds", [])

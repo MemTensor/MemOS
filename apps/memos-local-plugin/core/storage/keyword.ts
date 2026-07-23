@@ -4,9 +4,9 @@
  * Two utilities live here:
  *
  *   1. `prepareFtsMatch(query)` — sanitise a free-form user query for an
- *      FTS5 MATCH clause. We split on whitespace, drop tokens shorter
- *      than the trigram window where useful, escape internal quotes and
- *      AND the resulting phrases.
+ *      FTS5 MATCH clause. We split on whitespace, apply the configured
+ *      keyword token mode, escape internal quotes and AND the resulting
+ *      phrases.
  *
  *   2. `extractPatternTerms(query)` — return short tokens (length 2)
  *      and CJK bigrams (sliding 2-char windows over CJK runs). These
@@ -25,22 +25,37 @@ const PATTERN_MIN = 2;
 const MAX_FTS_TOKENS = 12;
 const MAX_PATTERN_TERMS = 16;
 
+export type FtsTokenizerMode = "trigram" | "cjk";
+
+export interface PrepareFtsMatchOptions {
+  tokenizer?: FtsTokenizerMode;
+}
+
 /**
  * Sanitised FTS5 MATCH expression.
  *
  * Returns `null` when no usable token is left (caller should skip the
  * FTS channel rather than issue an empty MATCH).
  */
-export function prepareFtsMatch(query: string): string | null {
+export function prepareFtsMatch(
+  query: string,
+  opts: PrepareFtsMatchOptions = {},
+): string | null {
   if (!query) return null;
   const cleaned = String(query).replace(PUNCT, " ").trim();
   if (!cleaned) return null;
+  const tokenizer = opts.tokenizer ?? "trigram";
 
   // Split on whitespace AND on CJK boundaries: a CJK run becomes its
   // own token so we don't end up with 50-character "phrases".
   const rough = cleaned.split(/\s+/).filter(Boolean);
   const expanded: string[] = [];
   for (const tok of rough) {
+    if (tokenizer === "cjk") {
+      expanded.push(...expandCjkToken(tok));
+      continue;
+    }
+
     // If the token has both ASCII and CJK, split out CJK runs as their
     // own tokens; trigram handles each well.
     const cjkRuns = tok.match(CJK_RUN) ?? [];
@@ -60,6 +75,34 @@ export function prepareFtsMatch(query: string): string | null {
   // CJK can't break parsing. Multiple phrases joined by space → AND.
   const safe = limited.map((t) => `"${t.replace(/"/g, '""')}"`);
   return safe.join(" ");
+}
+
+function expandCjkToken(token: string): string[] {
+  const out: string[] = [];
+  const cjkRuns = token.match(CJK_RUN) ?? [];
+  let stripped = token;
+  for (const run of cjkRuns) {
+    stripped = stripped.replace(run, " ");
+    if (run.length === 1) {
+      out.push(run);
+      continue;
+    }
+    for (let i = 0; i <= run.length - PATTERN_MIN; i++) {
+      out.push(run.slice(i, i + PATTERN_MIN));
+    }
+  }
+
+  for (const sub of stripped.split(/\s+/).filter(Boolean)) {
+    if (sub.length >= PATTERN_MIN) out.push(sub);
+  }
+
+  const hasNonCjk = /[^\u4e00-\u9fff]/.test(token);
+  const hasCjk = /[\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF]/.test(token);
+  if (token.length >= PATTERN_MIN && hasNonCjk && hasCjk) {
+    out.push(token);
+  }
+
+  return out;
 }
 
 /**

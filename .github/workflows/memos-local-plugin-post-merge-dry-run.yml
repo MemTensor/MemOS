@@ -1,0 +1,29 @@
+name: MemOS Local Plugin — Post-Merge Dry Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/memos-local-plugin-publish.yml"
+      - ".github/workflows/memos-local-plugin-post-merge-dry-run.yml"
+      - ".github/scripts/draft-local-plugin-release-notes.mjs"
+      - ".github/scripts/draft-local-plugin-release-notes.test.mjs"
+      - ".github/scripts/retry.sh"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dry-run:
+    if: ${{ github.repository == 'MemTensor/MemOS' }}
+    uses: ./.github/workflows/memos-local-plugin-publish.yml
+    with:
+      version: "2.0.10"
+      tag: "latest"
+      git_ref: ""
+      release_notes: ""
+      dry_run: true
+      recover_existing_npm_release: false
+    secrets: inherit

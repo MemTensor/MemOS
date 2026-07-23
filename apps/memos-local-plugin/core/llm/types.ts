@@ -5,6 +5,8 @@
  * Providers stay internal to `core/llm/`.
  */
 
+import type { ReasoningConfig as ConfigReasoningConfig } from "../config/schema.js";
+
 // ─── Providers & config ──────────────────────────────────────────────────────
 
 export type LlmProviderName =
@@ -14,6 +16,8 @@ export type LlmProviderName =
   | "gemini"
   | "bedrock"
   | "host";
+
+export type ReasoningConfig = ConfigReasoningConfig;
 
 /**
  * Resolved LLM config, post-defaults. Subset of `ResolvedConfig.llm` so
@@ -28,6 +32,14 @@ export interface LlmConfig {
   apiKey?: string;
   timeoutMs: number;
   maxRetries: number;
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore?: string[];
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder?: string[];
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: boolean;
+  /** OpenRouter-compatible reasoning controls. Omit for model defaults. */
+  reasoning?: ReasoningConfig;
   /** Optional per-call default. Default: 1024. */
   maxTokens?: number;
   /** Extra HTTP headers for outgoing requests. */
@@ -47,6 +59,33 @@ export interface LlmConfig {
    * daemon can display status produced by a separate stdio bridge.
    */
   onStatus?: (detail: LlmStatusDetail) => void;
+  /**
+   * Optional circuit breaker config. The breaker trips on terminal
+   * provider errors (HTTP 401/402/403, or well-known phrases like
+   * "insufficient balance" / "invalid api key" / "unauthorized" /
+   * "account suspended" / "billing") and short-circuits subsequent
+   * calls for a cool-down window. Defaults to enabled. See
+   * `apps/memos-local-plugin/openspec/changes/.../design.md`
+   * (issue #1897) for the full state machine.
+   */
+  circuitBreaker?: LlmCircuitBreakerConfig;
+}
+
+export interface LlmCircuitBreakerConfig {
+  /** Default true. Set false to restore legacy (no-breaker) behavior. */
+  enabled?: boolean;
+  /**
+   * Cool-down window before the breaker enters half-open. Default
+   * 300_000 ms (5 minutes); minimum clamped to 30_000 ms.
+   */
+  cooldownMs?: number;
+  /**
+   * Override the default classifier. Returns true if the error should
+   * trip the breaker (terminal / non-recoverable).
+   */
+  isTerminal?: (err: unknown) => boolean;
+  /** Injected clock for tests. Default `Date.now`. */
+  now?: () => number;
 }
 
 export interface LlmErrorDetail {
@@ -67,7 +106,7 @@ export interface LlmErrorDetail {
 }
 
 export interface LlmStatusDetail {
-  status: "ok" | "fallback" | "error";
+  status: "ok" | "fallback" | "error" | "circuit_open";
   provider: LlmProviderName | string;
   model: string;
   message?: string;
@@ -260,6 +299,17 @@ export interface LlmClientStats extends LastCallStatus {
   retries: number;
   totalPromptTokens: number;
   totalCompletionTokens: number;
+  /**
+   * True while the per-client circuit breaker is open (and any
+   * cooldown timer has not yet elapsed). When true, further calls are
+   * short-circuited inside the facade and throw immediately without
+   * touching the provider. See issue #1897.
+   */
+  circuitOpen: boolean;
+  /** Epoch ms at which the open breaker becomes eligible for half-open probe. */
+  circuitOpenUntil: number | null;
+  /** Free-text reason from the error that opened the breaker. */
+  circuitOpenedReason: string | null;
 }
 
 export interface LlmClient {

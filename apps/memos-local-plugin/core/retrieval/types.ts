@@ -234,6 +234,8 @@ export interface RetrievalConfig {
 
   /** Per-tier keyword (FTS + pattern) channel size. Default 20. */
   keywordTopK?: number;
+  /** Keyword tokenizer mode used when compiling FTS5 MATCH expressions. */
+  ftsTokenizer?: "trigram" | "cjk";
   /**
    * Drop candidates with `relevance < topRelevance · this`. 0 disables
    * the relative cutoff. Default 0.4.
@@ -316,6 +318,16 @@ export interface RetrievalConfig {
   llmFilterCandidateBodyChars?: number;
   /** Low-cost mode: retrieve raw trace memories only. */
   lightweightMemory?: boolean;
+  /**
+   * Tier-2 vector scan time-window bound (ms). When > 0, the cosine
+   * scan path only considers `traces` rows whose `ts` is within the
+   * last `vectorScanMaxAgeMs` milliseconds. Set to `0` to disable
+   * (legacy full-table brute-force scan). See
+   * https://github.com/MemTensor/MemOS/issues/1929 for the original
+   * starvation report and `core/config/schema.ts` for the YAML
+   * binding + validation rules.
+   */
+  vectorScanMaxAgeMs?: number;
 }
 
 /**
@@ -737,6 +749,7 @@ export interface RetrievalStats {
     | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
+    | "llm_filtered_refilled"
     | "llm_failed_safe_cutoff";
   llmFilterSufficient?: boolean;
   llmFilterKept?: number;
