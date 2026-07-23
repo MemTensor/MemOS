@@ -167,6 +167,55 @@ def _bridge_command(*, daemon: bool) -> list[str]:
     return [node, "--import", "tsx", *bridge_args]
 
 
+def _rebuild_if_stale() -> bool:
+    """Run `npm run build` if any TypeScript source is newer than dist/bridge.cjs.
+
+    Returns True if the binary is current or the build succeeded.
+    Returns False if the build failed — caller should continue with
+    the existing binary rather than blocking gateway startup.
+    """
+    plugin_root = _plugin_root()
+    compiled = plugin_root / "dist" / "bridge.cjs"
+
+    if compiled.exists():
+        compiled_mtime = compiled.stat().st_mtime
+        newest_source = max(
+            (p.stat().st_mtime for p in plugin_root.rglob("*.ts")),
+            default=0.0,
+        )
+        if newest_source <= compiled_mtime:
+            return True
+
+    logger.info("MemOS: TypeScript source newer than dist/bridge.cjs — rebuilding...")
+    npm = shutil.which("npm")
+    if not npm:
+        logger.warning("MemOS: npm not found on PATH; skipping bridge rebuild")
+        return False
+    try:
+        result = subprocess.run(
+            [npm, "run", "build"],
+            cwd=str(plugin_root),
+            check=True,
+            timeout=120,
+            capture_output=True,
+            text=True,
+        )
+        logger.info("MemOS: bridge daemon rebuilt successfully")
+        if result.stderr:
+            logger.debug("MemOS: build stderr: %s", result.stderr.strip())
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error("MemOS: bridge rebuild failed:\n%s", e.stderr)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("MemOS: bridge rebuild timed out after 120s")
+        return False
+    except Exception as e:
+        logger.error("MemOS: bridge rebuild error: %s", e)
+        return False
+
+
+
 def ensure_bridge_running(*, probe_only: bool = False) -> bool:
     """Return True when the bridge is (or can be) operational.
 

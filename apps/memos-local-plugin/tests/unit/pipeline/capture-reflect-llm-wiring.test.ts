@@ -12,7 +12,7 @@
  *
  * This test locks the wiring at the pipeline layer: no matter what the
  * caller sets on `deps.reflectLlm`, `buildPipelineSubscribers` must pass
- * `deps.llm` to `createCaptureRunner`'s `reflectLlm` slot.
+ * the same rate-limited main-LLM client to both capture-runner slots.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -159,8 +159,9 @@ describe("pipeline/deps captureRunner wiring (issue #2148)", () => {
     expect(captureRunnerCalls).toHaveLength(1);
     const call = captureRunnerCalls[0];
 
-    // The main `llm` slot is unchanged: still the main model.
+    // Both slots use the same rate-limited main-model client.
     expect(call.llm?.model).toBe("main-llm");
+    expect(call.reflectLlm).toBe(call.llm);
 
     // Regression guard: even though `deps.reflectLlm` is a distinct
     // skill-evolver model (with e.g. enableThinking=true in real use),
@@ -185,6 +186,7 @@ describe("pipeline/deps captureRunner wiring (issue #2148)", () => {
     expect(captureRunnerCalls).toHaveLength(1);
     const call = captureRunnerCalls[0];
     expect(call.llm?.model).toBe("main-llm");
+    expect(call.reflectLlm).toBe(call.llm);
     expect(call.reflectLlm?.model).toBe("main-llm");
   });
 });

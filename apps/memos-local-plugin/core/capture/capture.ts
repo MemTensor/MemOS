@@ -33,7 +33,6 @@ import { extractSteps } from "./step-extractor.js";
 import { createSummarizer, type Summarizer } from "./summarizer.js";
 import { tagsForStep } from "./tagger.js";
 import { extractErrorSignatures } from "./error-signature.js";
-import { RECOVERY_REASONS } from "../pipeline/recovery-constants.js";
 import type {
   CaptureConfig,
   CaptureEvent,
@@ -402,46 +401,60 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const normalized = normalizeSteps(rawAll, deps.cfg);
     const normalizeMs = now() - normStart;
 
-    // Pair each normalized step with its already-persisted trace row
-    // (matched by ts). If runLite was skipped for any step, fall back
-    // to a fresh insert path so we don't lose data.
-    const existing = deps.tracesRepo.list({ episodeId: input.episode.id });
-    const traceByTs = new Map<number, (typeof existing)[number]>();
-    for (const tr of existing) traceByTs.set(tr.ts, tr);
-    const orphan = normalized.filter((s) => !traceByTs.has(s.ts));
-    if (orphan.length > 0) {
-      // During dirty-reward recovery (recoverDirtyClosedEpisodes), the episode
-      // snapshot is rebuilt from trace_ids_json. Any "orphan" steps here are
-      // artifact mismatches between snapshot timestamps and DB rows — NOT
-      // genuinely missing traces. Inserting them would grow trace_ids_json,
-      // keep reward.traceCount !== traceIds.length, and restart the recovery
-      // loop on every bridge start.
-      if (input.episode.meta?.recoveryReason === RECOVERY_REASONS.DIRTY_REWARD_RESCORE) {
-        log.warn("reflect.orphan_steps_skipped_recovery", {
-          episodeId: input.episode.id,
-          count: orphan.length,
-          reason: "dirty_reward_rescore — skipping insert to break recovery loop",
+    // Pair each normalized step with its already-persisted trace row.
+    // Matching by timestamp alone is not stable during startup recovery:
+    // recovered snapshots are rebuilt from trace rows and the extractor may
+    // shift duplicate tool timestamps. Use content signatures first, and in
+    // recovered replay allow a timing-insensitive tool signature fallback.
+    const existing = deps.tracesRepo.listAllForEpisode(input.episode.id);
+    const recoveredReplay = isRecoveredReplay(input.episode);
+    const matcher = createTraceMatcher(existing, { allowRelaxedToolTiming: recoveredReplay });
+    const matchedRows = normalized.map((s) => matcher.take(s));
+    const orphanEntries = normalized
+      .map((step, index) => ({ step, index }))
+      .filter(({ index }) => matchedRows[index] === null);
+    if (orphanEntries.length > 0) {
+      log.warn("reflect.orphan_steps", {
+        episodeId: input.episode.id,
+        count: orphanEntries.length,
+        action: recoveredReplay ? "skip_recovery_insert" : "fallback_insert",
+      });
+      const maxRecoveryOrphans = Math.max(0, Math.floor(deps.cfg.maxRecoveryOrphanInserts));
+      const insertableEntries = recoveredReplay
+        ? orphanEntries.slice(0, maxRecoveryOrphans)
+        : orphanEntries;
+      const skipped = orphanEntries.length - insertableEntries.length;
+      if (skipped > 0) {
+        warnings.push({
+          stage: "persist",
+          message: "skipped recovered orphan trace inserts to avoid replay duplicates",
+          detail: {
+            episodeId: input.episode.id,
+            skipped,
+            maxRecoveryOrphanInserts: maxRecoveryOrphans,
+          },
         });
-      } else {
-        log.warn("reflect.orphan_steps", {
-          episodeId: input.episode.id,
-          count: orphan.length,
-          action: "fallback_insert",
-        });
-        // These steps never went through runLite (likely a test path or a
-        // dropped event). Insert them now with reflection=null so the
-        // batch pass below can patch them like the rest.
+      }
+      // These steps never went through runLite (likely a test path or a
+      // dropped event). Insert them now with reflection=null so the
+      // batch pass below can patch them like the rest.
+      if (insertableEntries.length > 0) {
+        const orphan = insertableEntries.map(({ step }) => step);
         const summStart = now();
-        const { summaries } = await runSummarize(
-          orphan.map((s) => ({
-            ...s,
-            reflection: { text: null, alpha: 0, usable: false, source: "none" },
-          })),
-          summStart,
-          llmCalls,
-          warnings,
-          { episodeId: input.episode.id, phase: "reflect" },
-        );
+        const { summaries } = recoveredReplay
+          ? {
+              summaries: orphan.map(heuristicTraceSummary),
+            }
+          : await runSummarize(
+              orphan.map((s) => ({
+                ...s,
+                reflection: { text: null, alpha: 0, usable: false, source: "none" },
+              })),
+              summStart,
+              llmCalls,
+              warnings,
+              { episodeId: input.episode.id, phase: "reflect" },
+            );
         const orphanScored: ScoredStep[] = orphan.map((s) => ({
           ...s,
           reflection: { text: null, alpha: 0, usable: false, source: "none" },
@@ -449,7 +462,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         const { vecs } = await runEmbed(orphanScored, summaries, warnings);
         const orphanRows = buildRows(orphanScored, summaries, vecs, input.episode);
         await persistRows(orphanRows, input, warnings);
-        for (const r of orphanRows) traceByTs.set(r.ts, r);
+        orphanRows.forEach((row, i) => {
+          const entry = insertableEntries[i];
+          if (entry) matchedRows[entry.index] = row;
+        });
       }
     }
 
@@ -492,11 +508,30 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       taskSummary: taskSummary ? taskSummary.slice(0, 240) : null,
     });
     let scored: ScoredStep[] = [];
+    const reflectBudget = createReflectLlmBudget(deps.cfg.maxReflectLlmCalls, warnings, input.episode.id);
     if (scoringPlan === "batch") {
-      scored = await runBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
+      scored = await runBatchScoring(
+        normalized,
+        rLlm!,
+        deps,
+        warnings,
+        llmCalls,
+        input.episode.id,
+        taskSummary,
+        reflectBudget,
+      );
     }
     if (scoringPlan === "chunk_batch") {
-      scored = await runChunkedBatchScoring(normalized, rLlm!, deps, warnings, llmCalls, input.episode.id, taskSummary);
+      scored = await runChunkedBatchScoring(
+        normalized,
+        rLlm!,
+        deps,
+        warnings,
+        llmCalls,
+        input.episode.id,
+        taskSummary,
+        reflectBudget,
+      );
     }
     if (scoringPlan === "per_step" || scored.length === 0) {
       scored = await runPerStepScoring(
@@ -507,6 +542,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         llmCalls,
         input.episode.id,
         buildReflectionContexts(normalized, taskSummary, downstreamByStep),
+        reflectBudget,
       );
     }
     const reflectMs = now() - reflectStart;
@@ -516,12 +552,13 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // orphan-fallback above) are skipped with a warning.
     const persistStart = now();
     const patchedTraceIds: string[] = [];
-    for (const s of scored) {
-      const row = traceByTs.get(s.ts);
+    for (let i = 0; i < scored.length; i++) {
+      const s = scored[i]!;
+      const row = matchedRows[i];
       if (!row) {
         warnings.push({
           stage: "persist",
-          message: "reflect: no trace row for step ts; skipping",
+          message: "reflect: no trace row for step signature; skipping",
           detail: { ts: s.ts, key: s.key },
         });
         continue;
@@ -561,8 +598,8 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     // assignment). For reflect-phase rows we re-emit ScoredStep-shaped
     // candidates carrying the freshly computed reflection + α; the
     // already-existing trace ids come from the matched DB rows.
-    const traces: TraceCandidate[] = scored.map((s) => {
-      const row = traceByTs.get(s.ts);
+    const traces: TraceCandidate[] = scored.map((s, i) => {
+      const row = matchedRows[i];
       return {
         ...s,
         traceId: (row?.id ?? "") as TraceId,
@@ -916,6 +953,65 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     return out;
   }
 
+  function createTraceMatcher(
+    rows: TraceRow[],
+    opts: { allowRelaxedToolTiming: boolean },
+  ): { take(step: StepCandidate): TraceRow | null } {
+    const exact = indexRows(rows, traceIdentitySignature);
+    const relaxed = opts.allowRelaxedToolTiming
+      ? indexRows(rows, traceRelaxedIdentitySignature)
+      : new Map<string, TraceRow[]>();
+    const used = new Set<TraceId>();
+
+    function takeFrom(index: Map<string, TraceRow[]>, signature: string): TraceRow | null {
+      const candidates = index.get(signature) ?? [];
+      for (const row of candidates) {
+        if (used.has(row.id)) continue;
+        used.add(row.id);
+        return row;
+      }
+      return null;
+    }
+
+    return {
+      take(step) {
+        const exactMatch = takeFrom(exact, stepIdentitySignature(step));
+        if (exactMatch) return exactMatch;
+        if (!opts.allowRelaxedToolTiming) return null;
+        return takeFrom(relaxed, stepRelaxedIdentitySignature(step));
+      },
+    };
+  }
+
+  function indexRows(
+    rows: TraceRow[],
+    signatureOf: (row: TraceRow) => string,
+  ): Map<string, TraceRow[]> {
+    const out = new Map<string, TraceRow[]>();
+    for (const row of rows) {
+      const signature = signatureOf(row);
+      const bucket = out.get(signature);
+      if (bucket) bucket.push(row);
+      else out.set(signature, [row]);
+    }
+    return out;
+  }
+
+  function isRecoveredReplay(episode: CaptureInput["episode"]): boolean {
+    const meta = episode.meta ?? {};
+    return Boolean(meta.recoveredAtStartup) || typeof meta.recoveryReason === "string";
+  }
+
+  function heuristicTraceSummary(step: NormalizedStep): string {
+    const tool = step.toolCalls[0];
+    const base = firstNonEmpty([
+      step.userText,
+      step.agentText,
+      tool ? `Tool ${tool.name}` : "",
+    ]) || "(empty turn)";
+    return base.replace(/\s+/g, " ").trim().slice(0, 140);
+  }
+
   function stepIdentitySignature(step: StepCandidate): string {
     const tool = step.toolCalls[0];
     const turnId = pickTurnId(step.meta, step.ts);
@@ -937,6 +1033,25 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       return ["assistant", turnId, step.ts, step.agentText.trim()].join("\x1f");
     }
     return ["user", turnId, step.ts, step.userText.trim()].join("\x1f");
+  }
+
+  function stepRelaxedIdentitySignature(step: StepCandidate): string {
+    const tool = step.toolCalls[0];
+    const turnId = pickTurnId(step.meta, step.ts);
+    if (tool) {
+      return [
+        "tool",
+        turnId,
+        tool.name,
+        stableJson(tool.input),
+        stableJson(tool.output),
+        tool.errorCode ?? "",
+      ].join("\x1f");
+    }
+    if (step.agentText.trim()) {
+      return ["assistant", turnId, step.agentText.trim()].join("\x1f");
+    }
+    return ["user", turnId, step.userText.trim()].join("\x1f");
   }
 
   function traceIdentitySignature(
@@ -961,6 +1076,24 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       return ["assistant", row.turnId, row.ts, row.agentText.trim()].join("\x1f");
     }
     return ["user", row.turnId, row.ts, row.userText.trim()].join("\x1f");
+  }
+
+  function traceRelaxedIdentitySignature(row: TraceRow): string {
+    const tool = row.toolCalls[0];
+    if (tool) {
+      return [
+        "tool",
+        row.turnId,
+        tool.name,
+        stableJson(tool.input),
+        stableJson(tool.output),
+        tool.errorCode ?? "",
+      ].join("\x1f");
+    }
+    if (row.agentText.trim()) {
+      return ["assistant", row.turnId, row.agentText.trim()].join("\x1f");
+    }
+    return ["user", row.turnId, row.userText.trim()].join("\x1f");
   }
 
   function stableJson(value: unknown): string {
@@ -1120,11 +1253,14 @@ async function runBatchScoring(
   llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
   episodeId: string,
   taskSummary: string | null,
+  budget: ReflectLlmBudget,
 ): Promise<ScoredStep[]> {
   const inputs: BatchScoreInput[] = normalized.map((step) => ({
     step,
     existingReflection: extractReflection(step),
   }));
+
+  if (!budget.tryUse("batch")) return [];
 
   try {
     const out = await batchScoreReflections(llm, inputs, {
@@ -1139,6 +1275,7 @@ async function runBatchScoring(
       reflection: out.scores[i] ?? disabledScore(null, "none"),
     }));
   } catch (err) {
+    budget.stopIfTerminal(err, "batch");
     // Single failure mode: the batched call (or its validator) threw.
     // Fall back to per-step in the caller. We surface a warning so the
     // viewer can show "batch path degraded" without crashing capture.
@@ -1159,6 +1296,7 @@ async function runChunkedBatchScoring(
   llmCalls: { reflectionSynth: number; alphaScoring: number; batchedReflection: number },
   episodeId: string,
   taskSummary: string | null,
+  budget: ReflectLlmBudget,
 ): Promise<ScoredStep[]> {
   const chunkSize = Math.max(1, deps.cfg.batchThreshold);
   const chunks: NormalizedStep[][] = [];
@@ -1167,7 +1305,16 @@ async function runChunkedBatchScoring(
   }
   const concurrency = Math.max(1, deps.cfg.llmConcurrency);
   const scoredChunks = await runConcurrently(chunks, concurrency, async (chunk): Promise<ScoredStep[]> => {
-    const scored = await runBatchScoring(chunk, llm, deps, warnings, llmCalls, episodeId, taskSummary);
+    const scored = await runBatchScoring(
+      chunk,
+      llm,
+      deps,
+      warnings,
+      llmCalls,
+      episodeId,
+      taskSummary,
+      budget,
+    );
     if (scored.length > 0) return scored;
     return runPerStepScoring(
       chunk,
@@ -1177,6 +1324,7 @@ async function runChunkedBatchScoring(
       llmCalls,
       episodeId,
       buildReflectionContexts(chunk, taskSummary, chunk.map(() => [])),
+      budget,
     );
   });
   return scoredChunks.flat();
@@ -1190,13 +1338,14 @@ async function runPerStepScoring(
   llmCalls: { reflectionSynth: number; alphaScoring: number },
   episodeId: string,
   contexts: ReflectionContext[],
+  budget: ReflectLlmBudget,
 ): Promise<ScoredStep[]> {
   const concurrency = Math.max(1, deps.cfg.llmConcurrency);
   return runConcurrently(normalized, concurrency, async (step, idx): Promise<ScoredStep> => {
     const context = contexts[idx] ?? {};
-    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId, context);
+    const { score, synthCount } = await resolveReflection(step, llm, deps, warnings, episodeId, context, budget);
     llmCalls.reflectionSynth += synthCount;
-    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId, context);
+    const finalScore = await resolveAlpha(step, score, llm, deps, warnings, episodeId, context, budget);
     if (finalScore !== score) llmCalls.alphaScoring += 1;
     return { ...step, reflection: finalScore };
   });
@@ -1209,6 +1358,7 @@ async function resolveReflection(
   warnings: CaptureResult["warnings"],
   episodeId: string,
   context: ReflectionContext,
+  budget: ReflectLlmBudget,
 ): Promise<{ score: ReflectionScore; synthCount: number }> {
   const adapterProvided = step.rawReflection !== null && step.rawReflection.trim().length > 0;
   const extracted = extractReflection(step);
@@ -1219,6 +1369,9 @@ async function resolveReflection(
     };
   }
   if (!deps.cfg.synthReflections || !llm) {
+    return { score: disabledScore(null, "none"), synthCount: 0 };
+  }
+  if (!budget.tryUse("reflection.synth")) {
     return { score: disabledScore(null, "none"), synthCount: 0 };
   }
   try {
@@ -1237,6 +1390,7 @@ async function resolveReflection(
     }
     return { score: disabledScore(null, "none"), synthCount: 1 };
   } catch (err) {
+    budget.stopIfTerminal(err, "reflection.synth");
     warnings.push({
       stage: "reflection.synth",
       message: "synth failed",
@@ -1254,9 +1408,11 @@ async function resolveAlpha(
   warnings: CaptureResult["warnings"],
   episodeId: string,
   context: ReflectionContext,
+  budget: ReflectLlmBudget,
 ): Promise<ReflectionScore> {
   if (!current.text) return current; // nothing to grade
   if (!deps.cfg.alphaScoring || !llm) return current;
+  if (!budget.tryUse("alpha")) return current;
 
   try {
     const scored = await scoreReflection(llm, {
@@ -1276,6 +1432,7 @@ async function resolveAlpha(
       model: scored.model,
     };
   } catch (err) {
+    budget.stopIfTerminal(err, "alpha");
     warnings.push({
       stage: "alpha",
       message: "alpha scoring failed; keeping neutral α",
@@ -1305,6 +1462,78 @@ async function runConcurrently<T, R>(
   }
   await Promise.all(workers);
   return out;
+}
+
+interface ReflectLlmBudget {
+  tryUse(stage: string): boolean;
+  stopIfTerminal(err: unknown, stage: string): void;
+}
+
+function createReflectLlmBudget(
+  configuredLimit: number,
+  warnings: CaptureResult["warnings"],
+  episodeId: string,
+): ReflectLlmBudget {
+  const limit = Math.max(0, Math.floor(configuredLimit));
+  let used = 0;
+  let stopped = false;
+  let exhaustedWarned = false;
+  let terminalWarned = false;
+
+  return {
+    tryUse(stage) {
+      if (stopped || used >= limit) {
+        if (!exhaustedWarned) {
+          exhaustedWarned = true;
+          warnings.push({
+            stage,
+            message: "reflect LLM budget exhausted; using non-LLM fallback for remaining steps",
+            detail: { episodeId, limit, used, stopped },
+          });
+        }
+        return false;
+      }
+      used += 1;
+      return true;
+    },
+    stopIfTerminal(err, stage) {
+      if (!isTerminalReflectLlmError(err)) return;
+      stopped = true;
+      if (terminalWarned) return;
+      terminalWarned = true;
+      warnings.push({
+        stage,
+        message: "terminal reflect LLM error; stopped remaining reflect LLM calls",
+        detail: { episodeId, limit, used, ...errDetail(err) },
+      });
+    },
+  };
+}
+
+function isTerminalReflectLlmError(err: unknown): boolean {
+  if (!(err instanceof MemosError)) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return terminalMessage(msg);
+  }
+  if (err.code !== ERROR_CODES.LLM_UNAVAILABLE) return terminalMessage(err.message);
+  const details = (err.details ?? {}) as Record<string, unknown>;
+  if (details.circuitOpen === true) return true;
+  const status = Number(details.status);
+  if (status === 401 || status === 402 || status === 403) return true;
+  return terminalMessage(err.message);
+}
+
+function terminalMessage(message: string): boolean {
+  const msg = message.toLowerCase();
+  return (
+    msg.includes("circuit_open") ||
+    msg.includes("insufficient balance") ||
+    msg.includes("invalid api key") ||
+    msg.includes("invalid_api_key") ||
+    msg.includes("unauthorized") ||
+    msg.includes("account suspended") ||
+    msg.includes("billing")
+  );
 }
 
 function errDetail(err: unknown): Record<string, unknown> {

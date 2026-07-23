@@ -100,6 +100,12 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // still contribute useful α values.
       synthReflections: true,
       llmConcurrency: 4,
+      // Bound topic-end reflect work so dirty startup recovery cannot replay
+      // a huge historical episode into thousands of paid LLM calls.
+      maxReflectLlmCalls: 128,
+      // Recovered episodes are reconstructed from persisted traces; replay
+      // orphans are usually matching drift, so do not insert duplicate rows.
+      maxRecoveryOrphanInserts: 0,
       // V7 §3.2 batched variant. With "auto" we issue a single LLM call
       // per episode for both reflection synth and α scoring as long as
       // the episode is short enough — this collapses 2N per-step calls
@@ -249,6 +255,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     session: {
       followUpMode: "merge_follow_ups",
       mergeMaxGapMs: 2 * 60 * 60 * 1000,
+      maxTurnsPerEpisode: 30,
+      classifyTimeoutMs: 5000,
+      bgLlmConcurrency: 2,
     },
     retrieval: {
       tier1TopK: 3,
