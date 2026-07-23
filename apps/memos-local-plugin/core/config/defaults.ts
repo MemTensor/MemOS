@@ -255,6 +255,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     session: {
       followUpMode: "merge_follow_ups",
       mergeMaxGapMs: 2 * 60 * 60 * 1000,
+      maxTurnsPerEpisode: 30,
+      classifyTimeoutMs: 5000,
+      bgLlmConcurrency: 2,
     },
     retrieval: {
       tier1TopK: 3,
