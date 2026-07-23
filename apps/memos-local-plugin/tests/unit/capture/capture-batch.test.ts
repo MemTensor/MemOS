@@ -7,15 +7,14 @@
  *   2. existing reflections are preserved verbatim;
  *   3. synth-disabled steps stay at α=0 even when the LLM tries to write
  *      one for them;
- *   4. `auto` mode chunk-batches when stepCount > batchThreshold;
- *   5. a malformed chunk degrades only that chunk into the per-step path
- *      instead of dropping the whole episode to per-step.
+ *   4. `auto` mode falls back to per-step when stepCount > batchThreshold;
+ *   5. a malformed batched response degrades into the per-step path
+ *      instead of crashing capture.
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createCaptureRunner, type CaptureRunner } from "../../../core/capture/capture.js";
-import { batchScoreReflections } from "../../../core/capture/batch-scorer.js";
 import { createCaptureEventBus } from "../../../core/capture/events.js";
 import {
   BATCH_REFLECTION_PROMPT,
@@ -313,31 +312,20 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     expect(t.alpha).toBe(0); // V7 disabledScore semantics
   });
 
-  it("auto mode chunk-batches when stepCount > batchThreshold", async () => {
-    const batchStates: string[][] = [];
+  it("auto mode falls back to per-step when stepCount > batchThreshold", async () => {
     const llm = fakeLlm({
       completeJson: {
-        [batchOp]: (input) => {
-          const messages = input as Array<{ role: string; content: string }>;
-          const payload = JSON.parse(messages[messages.length - 1]!.content) as {
-            steps: Array<{ idx: number; state: string }>;
-          };
-          batchStates.push(payload.steps.map((s) => s.state));
-          return {
-            scores: payload.steps.map((step) => ({
-              idx: step.idx,
-              reflection_text: `reflection ${step.state}`,
-              alpha: step.idx === 0 ? 0.2 : 0.4,
-              usable: true,
-              reason: "ok",
-            })),
-          };
-        },
+        // ONLY per-step alpha mock; if batched gets called, the test fails
+        // with "no completeJson mock for op=...batch...".
+        [alphaOp]: { alpha: 0.5, usable: true, reason: "ok" },
+      },
+      complete: {
+        "capture.reflection.synth": "I made this decision deliberately.",
       },
     });
     const runner = buildRunner({ batchMode: "auto", batchThreshold: 2 }, llm);
 
-    // 3 steps → above threshold → two bounded batch chunks.
+    // 3 steps → above threshold → per-step path.
     const ep = episodeSnapshot({
       id: "ep_1",
       sessionId: "se_1",
@@ -353,17 +341,10 @@ describe("capture/pipeline (batched ρ+α path)", () => {
 
     const result = await runCapture(runner, ep);
     expect(result.traceIds).toHaveLength(3);
-    expect(batchStates).toEqual([["a", "b"], ["c"]]);
-    expect(result.llmCalls.batchedReflection).toBe(2);
-    expect(result.llmCalls.reflectionSynth).toBe(0);
-    expect(result.llmCalls.alphaScoring).toBe(0);
-
-    const rows = result.traceIds.map((id) => tmp.repos.traces.getById(id)!);
-    expect(rows.map((row) => row.reflection)).toEqual([
-      "reflection a",
-      "reflection b",
-      "reflection c",
-    ]);
+    expect(result.llmCalls.batchedReflection).toBe(0);
+    // 3 synth + 3 alpha calls in per-step mode.
+    expect(result.llmCalls.reflectionSynth).toBe(3);
+    expect(result.llmCalls.alphaScoring).toBe(3);
   });
 
   it("long per-step downstream mode injects up to three following steps", async () => {
@@ -387,7 +368,7 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     });
     const runner = buildRunner(
       {
-        batchMode: "per_step",
+        batchMode: "auto",
         batchThreshold: 2,
         reflectionContextMode: "task_downstream",
         longEpisodeReflectMode: "per_step_downstream",
@@ -434,27 +415,16 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     expect(step3Prompt).not.toContain("[step+3]");
   });
 
-  it("per_episode mode chunk-batches when step count is large", async () => {
-    const chunkSizes: number[] = [];
+  it("per_episode mode batches even when step count is large", async () => {
+    const scores = Array.from({ length: 5 }, (_, i) => ({
+      idx: i,
+      reflection_text: `reflection #${i}`,
+      alpha: 0.4,
+      usable: true,
+      reason: "ok",
+    }));
     const llm = fakeLlm({
-      completeJson: {
-        [batchOp]: (input) => {
-          const messages = input as Array<{ role: string; content: string }>;
-          const payload = JSON.parse(messages[messages.length - 1]!.content) as {
-            steps: Array<{ idx: number; state: string }>;
-          };
-          chunkSizes.push(payload.steps.length);
-          return {
-            scores: payload.steps.map((step) => ({
-              idx: step.idx,
-              reflection_text: `reflection ${step.state}`,
-              alpha: 0.4,
-              usable: true,
-              reason: "ok",
-            })),
-          };
-        },
-      },
+      completeJson: { [batchOp]: { scores } },
     });
     const runner = buildRunner({ batchMode: "per_episode", batchThreshold: 2 }, llm);
 
@@ -466,109 +436,8 @@ describe("capture/pipeline (batched ρ+α path)", () => {
     const ep = episodeSnapshot({ id: "ep_1", sessionId: "se_1", turns });
     const result = await runCapture(runner, ep);
     expect(result.traceIds).toHaveLength(5);
-    expect(chunkSizes).toEqual([2, 2, 1]);
-    expect(result.llmCalls.batchedReflection).toBe(3);
+    expect(result.llmCalls.batchedReflection).toBe(1);
     expect(result.llmCalls.alphaScoring).toBe(0);
-  });
-
-  it("chunk-batch falls back to per-step only for the failed chunk", async () => {
-    const llm = fakeLlm({
-      completeJson: {
-        [batchOp]: (input) => {
-          const messages = input as Array<{ role: string; content: string }>;
-          const payload = JSON.parse(messages[messages.length - 1]!.content) as {
-            steps: Array<{ idx: number; state: string }>;
-          };
-          if (payload.steps[0]?.state === "q2") {
-            throw new Error("chunk failed");
-          }
-          return {
-            scores: payload.steps.map((step) => ({
-              idx: step.idx,
-              reflection_text: `batch ${step.state}`,
-              alpha: step.state === "q4" ? 0.5 : 0.2,
-              usable: true,
-              reason: "ok",
-            })),
-          };
-        },
-        [alphaOp]: { alpha: 0.9, usable: true, reason: "fallback" },
-      },
-      complete: {
-        "capture.reflection.synth": "per-step fallback reflection",
-      },
-    });
-    const runner = buildRunner({ batchMode: "auto", batchThreshold: 2 }, llm);
-
-    const turns: EpisodeTurn[] = [];
-    for (let i = 0; i < 5; i++) {
-      turns.push(turn("user", `q${i}`, 1_000 + i * 100));
-      turns.push(turn("assistant", `a${i}`, 1_050 + i * 100));
-    }
-    const ep = episodeSnapshot({ id: "ep_1", sessionId: "se_1", turns });
-
-    const result = await runCapture(runner, ep);
-    expect(result.traceIds).toHaveLength(5);
-    expect(result.llmCalls.batchedReflection).toBe(2);
-    expect(result.llmCalls.reflectionSynth).toBe(2);
-    expect(result.llmCalls.alphaScoring).toBe(2);
-    expect(result.warnings.filter((w) => w.stage === "batch")).toHaveLength(1);
-
-    const rows = result.traceIds.map((id) => tmp.repos.traces.getById(id)!);
-    expect(rows.map((row) => row.reflection)).toEqual([
-      "batch q0",
-      "batch q1",
-      "per-step fallback reflection",
-      "per-step fallback reflection",
-      "batch q4",
-    ]);
-    expect(rows.map((row) => row.alpha)).toEqual([0.2, 0.2, 0.9, 0.9, 0.5]);
-  });
-
-  it("batch scorer passes an explicit maxTokens budget", async () => {
-    let seenMaxTokens: number | undefined;
-    const llm = fakeLlm({
-      completeJson: {
-        [batchOp]: (_input, opts) => {
-          seenMaxTokens = (opts as { maxTokens?: number }).maxTokens;
-          return {
-            scores: [
-              {
-                idx: 0,
-                reflection_text: "I made a useful choice.",
-                alpha: 0.5,
-                usable: true,
-                reason: "ok",
-              },
-            ],
-          };
-        },
-      },
-    });
-
-    await batchScoreReflections(
-      llm,
-      [
-        {
-          step: {
-            key: "s1",
-            ts: 1_000 as EpochMs,
-            type: "text",
-            userText: "q",
-            agentText: "a",
-            agentThinking: null,
-            toolCalls: [],
-            rawReflection: null,
-            meta: {},
-          },
-          existingReflection: null,
-        },
-      ],
-      { synthReflections: true },
-    );
-
-    expect(seenMaxTokens).toBeGreaterThan(0);
-    expect(seenMaxTokens).toBeLessThan(16_384);
   });
 
   it("malformed batched response → falls back to per-step + emits warning", async () => {
