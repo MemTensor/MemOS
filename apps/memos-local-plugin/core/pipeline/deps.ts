@@ -213,7 +213,18 @@ export function buildPipelineSubscribers(
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
     embedder: deps.embedder,
     llm: deps.llm,
-    reflectLlm: deps.reflectLlm,
+    // Issue #2148: capture batch reflection is a JSON-output task, so
+    // it must run on the main `llm` — NOT `deps.reflectLlm` (the
+    // skill-evolver model). When the operator configures
+    // `skillEvolver.enableThinking=true` alongside
+    // `llm.enableThinking=false` (typical Qwen3 setup), passing
+    // `reflectLlm` here makes the reflection call return prose with
+    // `<think>...</think>` blocks, which break JSON parsing and produce
+    // `malformed JSON` errors during summarisation. The dedicated
+    // `reflectLlm` client is still exposed on `PipelineDeps` for the
+    // reward-runner's evaluator metadata (see below) and the overview
+    // health endpoint — capture just picks the JSON-safe main llm.
+    reflectLlm: deps.llm,
     bus: buses.capture,
     cfg: algorithm.capture,
     now: deps.now,
