@@ -23,6 +23,10 @@ on:
         required: true
         type: boolean
         default: true
+      publish_confirmation:
+        description: "Required only when dry_run=false. Must exactly equal: PUBLISH v<version>"
+        required: false
+        default: ""
       recover_existing_npm_release:
         description: "Allow reconstructing a missing tag/Release for an npm version. Keep false for normal releases."
         required: true
@@ -54,6 +58,11 @@ on:
         required: false
         type: boolean
         default: true
+      publish_confirmation:
+        description: "Required only when dry_run=false. Must exactly equal: PUBLISH v<version>"
+        required: false
+        type: string
+        default: ""
       recover_existing_npm_release:
         description: "Allow reconstructing a missing tag/Release for an npm version. Keep false for normal releases."
         required: false
@@ -73,7 +82,32 @@ permissions:
   pull-requests: write
 
 jobs:
+  validate-release-inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate release inputs
+        working-directory: .
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          PUBLISH_CONFIRMATION: ${{ inputs.publish_confirmation }}
+        run: node .github/scripts/validate-release-confirmation.mjs
+
+      - name: Run release guard tests
+        working-directory: .
+        run: node --test .github/scripts/validate-release-confirmation.test.mjs
+
   build-prebuilds:
+    needs: validate-release-inputs
     strategy:
       matrix:
         include:
