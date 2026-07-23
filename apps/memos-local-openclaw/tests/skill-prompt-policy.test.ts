@@ -18,4 +18,14 @@ describe("skill prompt policy", () => {
     expect(STEP1_SKILL_MD_PROMPT).toContain("Abstract the mistake");
     expect(STEP1_SKILL_MD_PROMPT).toContain("project name, product version");
   });
+
+  it("keeps generated skills concise and discoverable", () => {
+    expect(STEP1_SKILL_MD_PROMPT).toContain("2-4 words in English kebab-case");
+    expect(STEP1_SKILL_MD_PROMPT).toContain("ONLY `name` and `description`");
+    expect(STEP1_SKILL_MD_PROMPT).not.toContain("metadata:");
+    expect(STEP1_SKILL_MD_PROMPT).not.toContain("## When to use this skill");
+    expect(STEP1_SKILL_MD_PROMPT).toContain("multi-variant skills");
+    expect(STEP1_SKILL_MD_PROMPT).toContain("README.md");
+    expect(STEP1_SKILL_MD_PROMPT).toContain("does not already know");
+  });
 });
