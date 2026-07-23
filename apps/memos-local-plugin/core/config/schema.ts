@@ -581,6 +581,8 @@ const LoggingSchema = Type.Object({
   ], { default: "info" }),
   /** Viewer-only switch: expose detailed logs, lifecycle tags and chain view. */
   detailedView: Bool(false),
+  /** IANA timezone for log timestamp display. */
+  timezone: StringWithDefault("UTC"),
   console: Type.Object({
     enabled: Bool(true),
     pretty: Bool(true),

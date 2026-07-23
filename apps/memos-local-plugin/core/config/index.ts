@@ -86,6 +86,12 @@ export function resolveConfig(raw: unknown, warnings?: string[]): ResolvedConfig
     });
   }
 
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: completed.logging.timezone }).format(0);
+  } catch {
+    throw new MemosError("config_invalid", `invalid logging.timezone: ${completed.logging.timezone}`);
+  }
+
   return Object.freeze(completed) as ResolvedConfig;
 }
 
