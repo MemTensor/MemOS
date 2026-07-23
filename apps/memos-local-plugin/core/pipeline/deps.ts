@@ -221,9 +221,17 @@ export function buildPipelineSubscribers(
     // `reflectLlm` here makes the reflection call return prose with
     // `<think>...</think>` blocks, which break JSON parsing and produce
     // `malformed JSON` errors during summarisation. The dedicated
-    // `reflectLlm` client is still exposed on `PipelineDeps` for the
-    // reward-runner's evaluator metadata (see below) and the overview
-    // health endpoint — capture just picks the JSON-safe main llm.
+    // `reflectLlm` client is still exposed on `PipelineDeps` for two
+    // read-only, non-JSON consumers only:
+    //   1. the reward-runner's evaluator metadata (see below) — just
+    //      provider/model strings, no LLM call runs on `reflectLlm`
+    //      from here.
+    //   2. the Overview health card — reads `handle.reflectLlm.stats()`
+    //      via `resolveSkillEvolver` in `memory-core.ts` to paint the
+    //      skill-evolver slot.
+    // No other subscriber (capture / skill / l2 / l3 / feedback) is
+    // wired to `reflectLlm`; capture in particular picks the JSON-safe
+    // main llm here.
     reflectLlm: deps.llm,
     bus: buses.capture,
     cfg: algorithm.capture,
