@@ -66,7 +66,11 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
-from daemon_manager import ensure_bridge_running, ensure_viewer_daemon  # noqa: E402
+from daemon_manager import (  # noqa: E402
+    ensure_bridge_running,
+    ensure_viewer_daemon,
+    kill_zombie_bridges,
+)
 
 
 try:  # pragma: no cover — host-provided base class, absent in unit tests
@@ -381,34 +385,53 @@ class MemTensorProvider(MemoryProvider):
         except Exception as err:
             logger.warning("MemOS: failed to start bridge — %s", err)
             return
+
+        # Kill zombie bridges from previous sessions before deciding
+        # how to connect.
         try:
-            ensure_viewer_daemon()
-        except Exception as err:
-            logger.warning("MemOS: viewer daemon check failed — %s", err)
-        new_bridge: MemosBridgeClient | None = None
-        try:
-            new_bridge = MemosBridgeClient()
-            # Register the fallback LLM handler BEFORE we open the
-            # session so it is available the very first time the
-            # plugin's facade asks for help (e.g. on the first
-            # `turn.start` retrieval call).
-            new_bridge.register_host_handler(
-                "host.llm.complete",
-                self._handle_host_llm_complete,
-            )
-            self._bridge = new_bridge
-            self._open_session(session_id)
-            logger.info(
-                "MemOS: bridge ready session=%s platform=%s (episode deferred)",
-                self._session_id,
-                self._platform,
-            )
-        except Exception as err:
-            logger.warning("MemOS: bridge init failed — %s", err)
-            if new_bridge is not None:
-                with contextlib.suppress(Exception):
-                    new_bridge.close()
-            self._bridge = None
+            zombies = kill_zombie_bridges()
+            if zombies:
+                logger.info("MemOS: killed %d zombie bridge(s)", zombies)
+        except Exception:
+            pass
+
+        # NOTE: An HTTP bridge path used to live here that connected to a
+        # running viewer daemon over HTTP instead of spawning a stdio
+        # subprocess. It depended on ``MemosHttpClient`` which was never
+        # committed — the class was referenced by name only. Issue #2096
+        # reverts the half-merged HTTP feature; the stdio path below is
+        # the sole connection mechanism until the HTTP client lands as a
+        # complete change.
+
+        if self._bridge is None:
+            try:
+                ensure_viewer_daemon()
+            except Exception as err:
+                logger.warning("MemOS: viewer daemon check failed — %s", err)
+            new_bridge: MemosBridgeClient | None = None
+            try:
+                new_bridge = MemosBridgeClient()
+                # Register the fallback LLM handler BEFORE we open the
+                # session so it is available the very first time the
+                # plugin's facade asks for help (e.g. on the first
+                # `turn.start` retrieval call).
+                new_bridge.register_host_handler(
+                    "host.llm.complete",
+                    self._handle_host_llm_complete,
+                )
+                self._bridge = new_bridge
+                self._open_session(session_id, timeout=60.0)
+                logger.info(
+                    "MemOS: bridge ready (stdio) session=%s platform=%s (episode deferred)",
+                    self._session_id,
+                    self._platform,
+                )
+            except Exception as err:
+                logger.warning("MemOS: bridge init failed — %s", err)
+                if new_bridge is not None:
+                    with contextlib.suppress(Exception):
+                        new_bridge.close()
+                self._bridge = None
         # Register a Hermes plugin hook to capture tool calls as they
         # happen. The `post_tool_call` hook fires after every tool
         # dispatch (write_file, terminal, search_files, etc.) with the
@@ -1575,8 +1598,20 @@ class MemTensorProvider(MemoryProvider):
         # the core will pause or finalize the open episode according to
         # topic-boundary rules so interrupted Hermes sessions can resume
         # into the same task later.
-        with contextlib.suppress(Exception):
-            self._bridge.request("session.close", {"sessionId": self._session_id})
+        #
+        # Fire session.close in a daemon thread — the response is unused, so
+        # this is semantically fire-and-forget. Calling urlopen() inline blocks
+        # the asyncio event loop (gateway/run.py calls us synchronously from
+        # _handle_reset_command) and causes Discord heartbeat timeouts when the
+        # bridge is unresponsive. 5 s timeout keeps it bounded.
+        _bridge = self._bridge
+        _sid = self._session_id
+
+        def _close() -> None:
+            with contextlib.suppress(Exception):
+                _bridge.request("session.close", {"sessionId": _sid}, timeout=5.0)
+
+        threading.Thread(target=_close, daemon=True).start()
 
     def __del__(self) -> None:
         # Safety net — if shutdown() was never called (e.g. caller forgot,
@@ -1897,6 +1932,10 @@ class MemTensorProvider(MemoryProvider):
                 logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
 
             ensure_bridge_running()
+            # NOTE: HTTP bridge reconnect path was removed alongside issue
+            # #2096. See ``initialize`` for the rationale. Reconnect always
+            # spawns a fresh stdio bridge.
+
             try:
                 ensure_viewer_daemon()
             except Exception as err:

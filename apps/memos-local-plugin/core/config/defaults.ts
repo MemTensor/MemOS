@@ -27,6 +27,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     endpoint: "",
     model: "Xenova/all-MiniLM-L6-v2",
     apiKey: "",
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
     cache: {
       enabled: true,
       maxItems: 20_000,
@@ -41,6 +44,25 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     timeoutMs: 45_000,
     maxRetries: 3,
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
+  },
+  l3Llm: {
+    // Empty by default — falls back to the shared `llm` settings.
+    // Operators set this when they want a stronger model for L3
+    // abstraction. L3 runs off the turn-response path, so a slower
+    // but more reliable model improves world-model quality without
+    // affecting companion latency.
+    provider: "",
+    endpoint: "",
+    model: "",
+    apiKey: "",
+    temperature: 0,
+    timeoutMs: 60_000,
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -52,6 +74,12 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     temperature: 0,
     timeoutMs: 60_000,
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
+  },
+  storage: {
+    ftsTokenizer: "trigram",
   },
   algorithm: {
     lightweightMemory: {
@@ -314,6 +342,7 @@ export const SECRET_FIELD_PATHS: readonly string[] = Object.freeze([
   "embedding.apiKey",
   "llm.apiKey",
   "skillEvolver.apiKey",
+  "l3Llm.apiKey",
   "hub.teamToken",
   "hub.userToken",
 ]);

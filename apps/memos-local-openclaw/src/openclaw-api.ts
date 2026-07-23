@@ -12,6 +12,7 @@ import type { Logger, OpenClawAPI } from "./types";
 export interface OpenClawEmbedRequest {
   texts: string[];
   model?: string;
+  inputType?: string;
 }
 
 export interface OpenClawEmbedResponse {
@@ -98,7 +99,11 @@ export class OpenClawAPIClient implements OpenClawAPI {
     const resp = await fetch(endpoint, {
       method: "POST",
       headers: buildHeaders(provider),
-      body: JSON.stringify({ input: request.texts, model }),
+      body: JSON.stringify({
+        input: request.texts,
+        model,
+        ...(request.inputType ? { input_type: request.inputType } : {}),
+      }),
       signal: AbortSignal.timeout(30_000),
     });
 

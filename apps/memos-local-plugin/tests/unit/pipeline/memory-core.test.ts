@@ -26,6 +26,7 @@ import {
   __resetHostLlmBridgeForTests,
   type HostLlmBridge,
 } from "../../../core/llm/index.js";
+import { RECOVERY_REASONS } from "../../../core/pipeline/recovery-constants.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
@@ -448,6 +449,131 @@ describe("MemoryCore façade", () => {
     expect(hubRows).toHaveLength(1);
     expect(hubRows[0]?.share?.scope).toBe("hub");
     expect(await core.listTraces({ limit: 10, groupByTurn: true })).toHaveLength(1);
+  });
+
+  // Regression for #2131: viewer dashboard counts must not "drift to
+  // zero" when a turn/session from a different sub-agent profile flips
+  // the core's active namespace. The viewer is a local single-user
+  // admin surface, so its aggregate reads pass `includeAllNamespaces`
+  // (same convention as diag.ts / session.ts routes) and must stay
+  // stable regardless of which namespace processed the last turn.
+  it("keeps metrics + listEpisodes stable across a namespace flip (includeAllNamespaces)", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const mainNs = { agentKind: "openclaw", profileId: "main" };
+    const subagentNs = { agentKind: "openclaw", profileId: "subagent-x" };
+
+    // 1. A turn under the boot namespace writes one memory.
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      namespace: mainNs,
+      sessionId: "s-main",
+      userText: "remember the deploy checklist",
+      ts: 1_700_000_000_001,
+    });
+    await core.onTurnEnd({
+      agent: "openclaw",
+      namespace: mainNs,
+      sessionId: "s-main",
+      episodeId: start.query.episodeId!,
+      agentText: "stored the deploy checklist",
+      toolCalls: [],
+      ts: 1_700_000_000_002,
+    });
+
+    const before = await core.metrics({ days: 1, includeAllNamespaces: true });
+    expect(before.total).toBe(1);
+    const episodesBefore = await core.listEpisodes({
+      limit: 10,
+      includeAllNamespaces: true,
+    });
+    expect(episodesBefore).toHaveLength(1);
+
+    // 2. A session under a DIFFERENT profile flips activeNamespace
+    // (this is what the gateway/sub-agents do in production).
+    await core.openSession({
+      agent: "openclaw",
+      sessionId: "s-sub",
+      namespace: subagentNs,
+    });
+
+    // Namespace-scoped reads hide the other profile's row (intended
+    // multi-profile isolation)…
+    const scoped = await core.metrics({ days: 1 });
+    expect(scoped.total).toBe(0);
+    await expect(core.listEpisodes({ limit: 10 })).resolves.toHaveLength(0);
+
+    // …but the viewer's all-namespace reads must NOT drift.
+    const after = await core.metrics({ days: 1, includeAllNamespaces: true });
+    expect(after.total).toBe(1);
+    const episodesAfter = await core.listEpisodes({
+      limit: 10,
+      includeAllNamespaces: true,
+    });
+    expect(episodesAfter).toHaveLength(1);
+  });
+
+  // Namespace-scoped listEpisodes must apply `limit` AFTER the
+  // visibility filter. Paging at the repo level under-fills pages when
+  // rows from other namespaces occupy the fetched window, which reads
+  // as a false end-of-data to paginating callers.
+  it("fills scoped listEpisodes pages past other namespaces' rows", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const mainNs = { agentKind: "openclaw", profileId: "main" };
+    const subNs = { agentKind: "openclaw", profileId: "subagent-x" };
+
+    const runTurn = async (
+      ns: typeof mainNs,
+      sessionId: string,
+      ts: number,
+    ): Promise<void> => {
+      const start = await core!.onTurnStart({
+        agent: "openclaw",
+        namespace: ns,
+        sessionId,
+        userText: `note for ${sessionId}`,
+        ts,
+      });
+      await core!.onTurnEnd({
+        agent: "openclaw",
+        namespace: ns,
+        sessionId,
+        episodeId: start.query.episodeId!,
+        agentText: `stored for ${sessionId}`,
+        toolCalls: [],
+        ts: ts + 1,
+      });
+    };
+
+    // Three episodes, newest-first order: main-2, sub-1, main-1 — the
+    // sub-profile row sits inside the first page window of size 2.
+    await runTurn(mainNs, "s-main-1", 1_700_000_000_010);
+    await runTurn(subNs, "s-sub-1", 1_700_000_000_020);
+    await runTurn(mainNs, "s-main-2", 1_700_000_000_030);
+
+    // Active namespace is `main` after the last turn. A scoped page of
+    // 2 must contain BOTH main episodes, skipping the interleaved
+    // sub-profile row instead of consuming a page slot on it.
+    const page = await core.listEpisodes({ limit: 2 });
+    expect(page).toHaveLength(2);
+
+    // And the all-namespace read still sees everything.
+    await expect(
+      core.listEpisodes({ limit: 10, includeAllNamespaces: true }),
+    ).resolves.toHaveLength(3);
   });
 
   it("records visible subagent task and result in the parent episode", async () => {
@@ -1418,7 +1544,7 @@ algorithm:
       reward?: { traceCount?: number; traceIds?: string[] };
     };
     expect(meta.rewardDirty).toBeUndefined();
-    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.recoveryReason).toBe(RECOVERY_REASONS.DIRTY_REWARD_RESCORE);
     expect(meta.reward?.traceCount).toBe(1);
     expect(meta.reward?.traceIds).toEqual(["tr_dirty"]);
   });
@@ -1513,9 +1639,132 @@ algorithm:
       recoveryReason?: string;
       reward?: { traceCount?: number; traceIds?: string[] };
     };
-    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.recoveryReason).toBe(RECOVERY_REASONS.DIRTY_REWARD_RESCORE);
     expect(meta.reward?.traceCount).toBe(1);
     expect(meta.reward?.traceIds).toEqual(["tr_missing_reward"]);
+  });
+
+  it("continues a bounded dirty-closed scan past 500 rows across restart", async () => {
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 10_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_dirty_page_cursor", "openclaw", ts, ts, "{}");
+    const insertEpisode = writeDb.prepare(
+      `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+    );
+    for (let i = 0; i < 500; i++) {
+      insertEpisode.run(
+        `ep_clean_${i}`,
+        "se_dirty_page_cursor",
+        ts + i,
+        ts + i + 1,
+        "[]",
+        0,
+        JSON.stringify({ closeReason: "finalized" }),
+      );
+    }
+    insertEpisode.run(
+      "ep_dirty_past_first_page",
+      "se_dirty_page_cursor",
+      ts - 1,
+      ts,
+      JSON.stringify(["tr_dirty_past_first_page"]),
+      null,
+      JSON.stringify({ closeReason: "finalized" }),
+    );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_dirty_past_first_page",
+        "ep_dirty_past_first_page",
+        "se_dirty_page_cursor",
+        ts,
+        "Please recover the closed episode beyond the initial page.",
+        "The recovery should eventually score this episode.",
+        "Recovery pagination regression",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    const first = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-first-scan",
+    });
+    await first.init();
+    await first.waitForStartupRecovery?.();
+    await first.shutdown();
+
+    const betweenScansDb = new Sqlite(home.home.dbFile);
+    betweenScansDb.prepare(
+      `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+    ).run(
+      "ep_inserted_between_scans",
+      "se_dirty_page_cursor",
+      ts + 10_000,
+      ts + 10_001,
+      "[]",
+      0,
+      JSON.stringify({ closeReason: "finalized" }),
+    );
+    betweenScansDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-second-scan",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_dirty_past_first_page") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBe(0);
+    expect(JSON.parse(episode!.meta_json)).toMatchObject({
+      recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+    });
   });
 
   it("init() returns immediately even when a stale orphan's recovery chain stalls (issue #1808)", async () => {
