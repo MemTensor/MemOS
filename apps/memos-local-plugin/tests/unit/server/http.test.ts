@@ -237,6 +237,13 @@ describe("HTTP server — REST routes", () => {
     expect(core.health).toHaveBeenCalled();
   });
 
+  it("strips /memos reverse-proxy prefix before route dispatch", async () => {
+    const r = await fetch(`${handle.url}/memos/api/v1/health`);
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body).toMatchObject({ ok: true, version: "test" });
+  });
+
   it("GET /api/v1/health includes optional bridge status", async () => {
     await handle.close();
     handle = await startHttpServer({
@@ -463,7 +470,8 @@ describe("HTTP server — REST routes", () => {
     expect(Array.isArray(body.traces)).toBe(true);
     expect(body.traces[0]?.id).toBe("tr-1");
     expect(body.traces[0]?.summary).toBe("greeted");
-    // The route must forward the query string into the core call.
+    // The route must forward the query string into the core call, and
+    // pin the viewer to all-namespace reads (#2131 drift regression).
     expect(core.listTraces).toHaveBeenCalledWith({
       limit: 25,
       offset: 0,
@@ -472,6 +480,7 @@ describe("HTTP server — REST routes", () => {
       groupByTurn: false,
       ownerAgentKind: undefined,
       ownerProfileId: undefined,
+      includeAllNamespaces: true,
     });
   });
 
@@ -513,6 +522,20 @@ describe("HTTP server — REST routes", () => {
     expect(Array.isArray(body.dailyWrites)).toBe(true);
   });
 
+  it("GET /api/v1/metrics/tools scopes both data feeds to all namespaces", async () => {
+    const r = await fetch(`${handle.url}/api/v1/metrics/tools?minutes=60`);
+    expect(r.status).toBe(200);
+    // The tool panel folds api_logs entries and trace tool-calls into
+    // one aggregation; both feeds must be pinned to all-namespace reads
+    // or the chart under-reports after a namespace flip (#2131).
+    expect(core.listApiLogs).toHaveBeenCalledWith(
+      expect.objectContaining({ includeAllNamespaces: true }),
+    );
+    expect(core.listTraces).toHaveBeenCalledWith(
+      expect.objectContaining({ includeAllNamespaces: true }),
+    );
+  });
+
   it("GET /api/v1/config returns resolved config", async () => {
     const r = await fetch(`${handle.url}/api/v1/config`);
     expect(r.status).toBe(200);
@@ -530,6 +553,66 @@ describe("HTTP server — REST routes", () => {
     expect(core.patchConfig).toHaveBeenCalledWith({
       llm: { provider: "openai_compatible" },
     });
+  });
+
+  // Issue #1929 — when `core.patchConfig` rejects a body because of
+  // schema validation (Typebox `NumberInRange`, type mismatch, etc.)
+  // the route must surface that as 400 `invalid_argument`. The
+  // pre-fix behaviour was to let `MemosError("config_invalid", …)`
+  // bubble up to the global handler and return 500 `internal`, which
+  // tripped the rerun harness's
+  // `test_invalid_type_does_not_crash_or_corrupt` and
+  // `test_concurrent_patch_and_search_no_5xx` contracts.
+  it("PATCH /api/v1/config maps schema validation errors to 400", async () => {
+    const { MemosError } = await import("../../../agent-contract/errors.js");
+    (core.patchConfig as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new MemosError("config_invalid", "config failed schema validation: bad"),
+    );
+    const r = await fetch(`${handle.url}/api/v1/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        algorithm: { retrieval: { vectorScanMaxAgeMs: -1 } },
+      }),
+    });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("invalid_argument");
+    expect(body.error.message).toMatch(/schema validation/);
+  });
+
+  // `config_write_failed` is raised only when the atomic config rename
+  // fails (disk full / permission denied) — a server-side I/O fault, not
+  // bad client input. It must surface as 500 so operators get paged and
+  // clients are not misled into thinking their (valid) payload was the
+  // problem. Only `config_invalid` (schema validation) maps to 400.
+  it("PATCH /api/v1/config keeps writer failures as 500 (server fault)", async () => {
+    const { MemosError } = await import("../../../agent-contract/errors.js");
+    (core.patchConfig as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new MemosError("config_write_failed", "rename failed"),
+    );
+    const r = await fetch(`${handle.url}/api/v1/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ viewer: { port: 19000 } }),
+    });
+    expect(r.status).toBe(500);
+    const body = (await r.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("internal");
+  });
+
+  it("PATCH /api/v1/config still 500s on unexpected errors", async () => {
+    (core.patchConfig as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("boom"),
+    );
+    const r = await fetch(`${handle.url}/api/v1/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ viewer: { port: 19000 } }),
+    });
+    expect(r.status).toBe(500);
+    const body = (await r.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("internal");
   });
 
   it("GET /api/v1/export returns a JSON bundle", async () => {

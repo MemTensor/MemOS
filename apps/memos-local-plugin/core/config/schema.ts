@@ -39,10 +39,36 @@ const EmbeddingSchema = Type.Object({
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
   apiKey: StringWithDefault(""),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
   }, { default: {} }),
+}, { default: {} });
+
+const ReasoningSchema = Type.Object({
+  /**
+   * OpenRouter-compatible reasoning toggle. Omit the whole block to keep
+   * the provider/model default.
+   */
+  enabled: Type.Optional(Type.Boolean()),
+  /** Optional provider effort hint for reasoning-capable models. */
+  effort: Type.Optional(Type.Union([
+    Type.Literal("minimal"),
+    Type.Literal("none"),
+    Type.Literal("low"),
+    Type.Literal("medium"),
+    Type.Literal("high"),
+    Type.Literal("xhigh"),
+    Type.Literal("max"),
+  ])),
+  /** Optional token budget for reasoning-capable providers. */
+  maxTokens: Type.Optional(Type.Number({ minimum: 1 })),
 }, { default: {} });
 
 const LlmSchema = Type.Object({
@@ -65,6 +91,14 @@ const LlmSchema = Type.Object({
   timeoutMs: NumberInRange(45_000, 1_000),
   /** Max retries on transient errors. */
   maxRetries: NumberInRange(3, 0, 10),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });
 
 /**
@@ -89,6 +123,26 @@ const SkillEvolverSchema = Type.Object({
   apiKey: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
   timeoutMs: NumberInRange(60_000, 1_000),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
+}, { default: {} });
+
+const StorageSchema = Type.Object({
+  /**
+   * Keyword tokenizer mode used when compiling FTS5 MATCH expressions.
+   * `trigram` preserves the historical SQLite trigram behavior; `cjk`
+   * keeps short Chinese words and mixed ASCII+CJK tokens searchable.
+   */
+  ftsTokenizer: Type.Union([
+    Type.Literal("trigram"),
+    Type.Literal("cjk"),
+  ], { default: "trigram" }),
 }, { default: {} });
 
 const AlgorithmSchema = Type.Object({
@@ -480,6 +534,28 @@ const AlgorithmSchema = Type.Object({
      * slightly larger window pays for itself).
      */
     llmFilterCandidateBodyChars: NumberInRange(500, 120, 2000),
+    /**
+     * Tier-2 vector scan time-window bound (ms). When > 0, the
+     * vector scan path (`scanAndTopK` in `core/storage/vector.ts`)
+     * only considers traces written within the last
+     * `vectorScanMaxAgeMs` milliseconds. Set to `0` to disable the
+     * cap (legacy behaviour: full-table brute-force scan).
+     *
+     * Background: at 93K rows × 1536 dims the unbounded scan blocks
+     * the Node event loop for 5–30 s every `onTurnStart`
+     * (https://github.com/MemTensor/MemOS/issues/1929). A 24-hour
+     * window keeps onTurnStart latency under control without
+     * sacrificing recall for active-session memories. FTS keyword
+     * channels still cover older traces, so this bound only affects
+     * the cosine-only path.
+     *
+     * Hard cap is one year (31_536_000_000 ms) — anything larger is
+     * indistinguishable from "unbounded" at the corpus sizes where
+     * the bound starts to matter, and accepting absurdly large
+     * values lets misconfigured deployments silently revert to the
+     * old behaviour.
+     */
+    vectorScanMaxAgeMs: NumberInRange(0, 0, 31_536_000_000),
   }, { default: {} }),
 }, { default: {} });
 
@@ -509,6 +585,8 @@ const LoggingSchema = Type.Object({
   ], { default: "info" }),
   /** Viewer-only switch: expose detailed logs, lifecycle tags and chain view. */
   detailedView: Bool(false),
+  /** IANA timezone for log timestamp display. */
+  timezone: StringWithDefault("UTC"),
   console: Type.Object({
     enabled: Bool(true),
     pretty: Bool(true),
@@ -561,11 +639,15 @@ export const ConfigSchema = Type.Object({
   bridge: BridgeSchema,
   embedding: EmbeddingSchema,
   llm: LlmSchema,
+  /** Dedicated model slot for L3 abstraction. Same shape as skillEvolver. */
+  l3Llm: SkillEvolverSchema,
   skillEvolver: SkillEvolverSchema,
+  storage: StorageSchema,
   algorithm: AlgorithmSchema,
   hub: HubSchema,
   telemetry: TelemetrySchema,
   logging: LoggingSchema,
 }, { default: {} });
 
+export type ReasoningConfig = Static<typeof ReasoningSchema>;
 export type ResolvedConfig = Static<typeof ConfigSchema>;

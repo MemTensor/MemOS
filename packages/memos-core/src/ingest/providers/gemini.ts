@@ -336,6 +336,106 @@ import { DEDUP_JUDGE_PROMPT, parseDedupResult } from "./openai";
 import type { DedupResult } from "./openai";
 export type { DedupResult } from "./openai";
 
+// ─── Structured Topic Classifier / Arbitration ───
+//
+// Native Gemini generateContent transport for the topic classifier +
+// arbitration. Shares prompt strings and the JSON parser with openai.ts so
+// all providers stay behaviorally identical modulo the wire format.
+
+import {
+  TOPIC_CLASSIFIER_PROMPT,
+  TOPIC_ARBITRATION_PROMPT,
+  parseTopicClassifyResult,
+} from "./openai";
+import type { TopicClassifyResult } from "./openai";
+export type { TopicClassifyResult } from "./openai";
+
+// Shared Gemini generateContent transport for the topic classifier +
+// arbitration. Scoped to these two callers only so pre-existing gemini
+// helpers keep their inline URL construction (minimum-diff discipline).
+async function callGeminiTopic(
+  systemPrompt: string,
+  userContent: string,
+  cfg: SummarizerConfig,
+  maxOutputTokens: number,
+  errorLabel: string,
+): Promise<string> {
+  if (!cfg.apiKey) throw new Error(`Gemini ${errorLabel}: apiKey is required`);
+  const model = cfg.model ?? "gemini-1.5-flash";
+  const endpoint =
+    cfg.endpoint ??
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  const u = new URL(endpoint);
+  u.searchParams.set("key", cfg.apiKey);
+  const url = u.toString();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...cfg.headers,
+  };
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: userContent }] }],
+      generationConfig: { temperature: 0, maxOutputTokens },
+    }),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Gemini ${errorLabel} failed (${resp.status}): ${body}`);
+  }
+
+  const json = (await resp.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text: string }> } }> };
+  return json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+}
+
+export async function classifyTopicGemini(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<TopicClassifyResult> {
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+  const raw = await callGeminiTopic(
+    TOPIC_CLASSIFIER_PROMPT,
+    userContent,
+    cfg,
+    60,
+    "topic-classifier",
+  );
+  log.debug(`Topic classifier raw: "${raw}"`);
+  return parseTopicClassifyResult(raw, log);
+}
+
+export async function arbitrateTopicSplitGemini(
+  taskState: string,
+  newMessage: string,
+  cfg: SummarizerConfig,
+  log: Logger,
+): Promise<string> {
+  const userContent = `TASK:\n${taskState}\n\nMSG:\n${newMessage}`;
+  const text = await callGeminiTopic(
+    TOPIC_ARBITRATION_PROMPT,
+    userContent,
+    cfg,
+    10,
+    "topic-arbitration",
+  );
+  const answer = text.toUpperCase();
+  log.debug(`Topic arbitration result: "${answer}"`);
+  if (!answer) {
+    log.warn("Gemini topic-arbitration returned empty text; defaulting to SAME");
+  } else if (!answer.startsWith("NEW") && !answer.startsWith("SAME")) {
+    log.warn(`Gemini topic-arbitration returned unexpected value "${answer}"; defaulting to SAME`);
+  }
+  return answer.startsWith("NEW") ? "NEW" : "SAME";
+}
+
 export async function judgeDedupGemini(
   newSummary: string,
   candidates: Array<{ index: number; summary: string; chunkId: string }>,

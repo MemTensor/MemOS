@@ -732,13 +732,22 @@ except Exception:
   success "plugins/memory: ${plugin_dir}"
 
   step "Linking memtensor provider"
-  local target="${plugin_dir}/memtensor"
-  if [[ -L "${target}" ]]; then rm "${target}"
-  elif [[ -e "${target}" ]]; then rm -rf "${target}"
-  fi
-  ln -s "${adapter_dir}/memos_provider" "${target}"
+  local user_plugin_dir="${HOME}/.hermes/plugins/memory"
+  mkdir -p "${user_plugin_dir}"
+  # Ensure the provider directory is fully populated before symlinking so
+  # the second symlink (user-level) already points at a complete tree.
   cp "${adapter_dir}/plugin.yaml" "${adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null || true
-  success "Symlinked → ${target}"
+  local provider_targets=(
+    "${plugin_dir}/memtensor"
+    "${user_plugin_dir}/memtensor"
+  )
+  local target
+  for target in "${provider_targets[@]}"; do
+    # Use `ln -sfn` for atomic, idempotent replace; matches install.hermes.sh.
+    if [[ -e "${target}" && ! -L "${target}" ]]; then rm -rf "${target}"; fi
+    ln -sfn "${adapter_dir}/memos_provider" "${target}"
+    success "Symlinked → ${target}"
+  done
 
   step "Verifying provider & patching config"
   local verify

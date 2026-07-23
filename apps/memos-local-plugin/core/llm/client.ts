@@ -228,7 +228,24 @@ export function createLlmClientWithProvider(
     if (!Array.isArray(input) || input.length === 0) {
       throw new MemosError(ERROR_CODES.INVALID_ARGUMENT, "LLM messages array is empty");
     }
-    return input;
+    // Ensure system messages are always at the beginning.
+    // Some models (e.g. Qwen3.6 via vLLM) enforce "system must be first"
+    // in their Jinja2 chat templates, returning HTTP 400 otherwise.
+    // See: https://github.com/MemTensor/MemOS/issues/XXXX
+    const systems = input.filter((m) => m.role === "system");
+    const nonSystems = input.filter((m) => m.role !== "system");
+    if (systems.length === 0) return input;
+    // Fast path: single system already at position 0, no later systems.
+    if (
+      systems.length === 1 &&
+      input[0]?.role === "system" &&
+      !input.slice(1).some((m) => m.role === "system")
+    ) {
+      return input;
+    }
+    // Merge all system contents into one leading message, preserving order.
+    const merged = systems.map((s) => s.content).join("\n\n");
+    return [{ role: "system", content: merged }, ...nonSystems];
   }
 
   function inject(messages: LlmMessage[], systemInsert: string): LlmMessage[] {
@@ -241,6 +258,21 @@ export function createLlmClientWithProvider(
       ];
     }
     return [{ role: "system", content: systemInsert }, ...messages];
+  }
+
+  function ensureJsonWordInUserMessage(messages: LlmMessage[]): LlmMessage[] {
+    const lastUserIdx = messages.map((m) => m.role).lastIndexOf("user");
+    if (lastUserIdx < 0) return [...messages, { role: "user", content: "Return valid json only." }];
+
+    const msg = messages[lastUserIdx];
+    if (/\bjson\b/i.test(msg.content)) return messages;
+
+    const out = messages.slice();
+    out[lastUserIdx] = {
+      ...msg,
+      content: `${msg.content}\n\nReturn valid json only.`,
+    };
+    return out;
   }
 
   function buildCallInput(opts: LlmCallOptions | undefined, jsonMode: boolean): ProviderCallInput {
@@ -446,7 +478,7 @@ export function createLlmClientWithProvider(
   ): Promise<LlmCompletion> {
     const messages = normalizeMessages(input);
     const msgsWithJsonHint = opts?.jsonMode
-      ? inject(messages, buildJsonSystemHint())
+      ? ensureJsonWordInUserMessage(inject(messages, buildJsonSystemHint()))
       : messages;
     const call = buildCallInput(opts, opts?.jsonMode === true);
     const { completion } = await callWithFallback(msgsWithJsonHint, call, opts, opts?.op ?? "complete");
@@ -459,7 +491,7 @@ export function createLlmClientWithProvider(
   ): Promise<LlmJsonCompletion<T>> {
     const messages = normalizeMessages(input);
     const systemHint = buildJsonSystemHint(opts.schemaHint);
-    const msgs = inject(messages, systemHint);
+    const msgs = ensureJsonWordInUserMessage(inject(messages, systemHint));
     const call = buildCallInput(opts, true);
     const op = opts.op ?? "complete.json";
     const maxMalformedRetries = Math.max(0, opts.malformedRetries ?? 1);

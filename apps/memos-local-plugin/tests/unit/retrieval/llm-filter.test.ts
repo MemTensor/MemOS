@@ -57,6 +57,33 @@ function trace(id: string, score: number): RankedCandidate {
   };
 }
 
+/**
+ * Build a trace candidate with no LLM-generated summary / reflection
+ * and only a short acknowledgement-style `agentText` — i.e. exactly the
+ * "near-duplicate question trace" shape from issue #1913 where the
+ * user re-asked a stored fact across multiple sessions and the
+ * assistant only acked it. The current LLM filter prompt classes these
+ * as "scaffolding chatter" and is allowed to drop them all.
+ */
+function chatterTrace(
+  id: string,
+  score: number,
+  overrides: { agentText?: string; userText?: string } = {},
+): RankedCandidate {
+  const r = trace(id, score);
+  const cand = r.candidate as TraceCandidate;
+  return {
+    ...r,
+    candidate: {
+      ...cand,
+      userText: overrides.userText ?? `What does HERMES_REAL_E2E_1910 mean? (${id})`,
+      agentText: overrides.agentText ?? "OK",
+      summary: null,
+      reflection: null,
+    },
+  };
+}
+
 describe("retrieval/llm-filter", () => {
   it("disabled → passthrough with null sufficient", async () => {
     const result = await llmFilterCandidates(
@@ -135,7 +162,100 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBe(true);
   });
 
-  it("LLM returns empty selection → drops everything and marks insufficient", async () => {
+  it("LLM returns empty selection over non-empty ranked → rescues top-K informative candidates (#1913)", async () => {
+    // Issue #1913 repro shape: 3 near-duplicate question traces from
+    // previous sessions plus 1 answer-bearing trace. Previous filter
+    // honoured `selected: []` and collapsed to empty injection.
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    const ranked = [
+      chatterTrace("q1", 0.95),
+      chatterTrace("q2", 0.94),
+      // Answer-bearing trace: long informative agentText, even though
+      // the ranker placed it below the question duplicates.
+      (() => {
+        const r = trace("answer", 0.85);
+        const c = r.candidate as TraceCandidate;
+        return {
+          ...r,
+          candidate: {
+            ...c,
+            userText:
+              "Remember this fact: HERMES_REAL_E2E_1910 means the bridge leak fix verification.",
+            agentText: "Noted. HERMES_REAL_E2E_1910 → bridge leak fix verification.",
+            summary:
+              "HERMES_REAL_E2E_1910 marks the bridge-leak fix verification.",
+            reflection: null,
+          },
+        };
+      })(),
+      chatterTrace("q3", 0.8),
+    ];
+    const result = await llmFilterCandidates(
+      { query: "What does HERMES_REAL_E2E_1910 mean?", ranked },
+      { llm, log, config: cfg },
+    );
+    expect(result.outcome).toBe("llm_filtered_refilled");
+    expect(result.kept.length).toBeGreaterThanOrEqual(1);
+    expect(result.kept[0]!.candidate.refId).toBe("answer");
+    expect(result.sufficient).toBe(false);
+    // Strong negative assertion: the bug returned kept=[], dropped=ranked.
+    expect(result.dropped.length).toBeLessThan(ranked.length);
+  });
+
+  it("rescue fires even when every ranked candidate is short-ack chatter", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    const ranked = [
+      chatterTrace("q1", 0.9, { agentText: "OK" }),
+      chatterTrace("q2", 0.85, { agentText: "记住了" }),
+      chatterTrace("q3", 0.8, { agentText: "👍" }),
+    ];
+    const result = await llmFilterCandidates(
+      { query: "What does HERMES_REAL_E2E_1910 mean?", ranked },
+      { llm, log, config: cfg },
+    );
+    expect(result.outcome).toBe("llm_filtered_refilled");
+    // No informative candidate exists — rescue still keeps top-K by
+    // ranker score so the agent at least sees one memory.
+    expect(result.kept.length).toBeGreaterThanOrEqual(1);
+    expect(result.kept[0]!.candidate.refId).toBe("q1"); // highest score
+    expect(result.sufficient).toBe(false);
+  });
+
+  it("rescue respects llmFilterMaxKeep cap", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    const ranked = [
+      trace("a", 0.95),
+      trace("b", 0.9),
+      trace("c", 0.85),
+      trace("d", 0.8),
+    ];
+    const result = await llmFilterCandidates(
+      { query: "q", ranked },
+      { llm, log, config: { ...cfg, llmFilterMaxKeep: 2 } },
+    );
+    expect(result.outcome).toBe("llm_filtered_refilled");
+    expect(result.kept.length).toBe(2);
+    expect(result.dropped.length).toBe(2);
+  });
+
+  it("llmFilterMaxKeep=0 disables rescue: honours empty selection (drop-everything override)", async () => {
+    // This is the only configured way to ask the filter to truly drop
+    // everything; keep it explicit so operators have an escape hatch.
     const llm: any = {
       completeJson: vi.fn().mockResolvedValue({
         value: { selected: [], sufficient: false },
@@ -145,12 +265,28 @@ describe("retrieval/llm-filter", () => {
     const ranked = [trace("a", 0.9), trace("b", 0.8)];
     const result = await llmFilterCandidates(
       { query: "q", ranked },
-      { llm, log, config: cfg },
+      { llm, log, config: { ...cfg, llmFilterMaxKeep: 0 } },
     );
     expect(result.outcome).toBe("llm_filtered");
     expect(result.kept.length).toBe(0);
     expect(result.dropped.length).toBe(2);
     expect(result.sufficient).toBe(false);
+  });
+
+  it("LLM returns empty selection with empty ranked list → unchanged (still llm_filtered, kept=[])", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    // ranked empty but minCandidates=0 so the filter still runs
+    const result = await llmFilterCandidates(
+      { query: "q", ranked: [] },
+      { llm, log, config: { ...cfg, llmFilterMinCandidates: 0 } },
+    );
+    expect(result.outcome).toBe("below_threshold");
+    expect(result.kept.length).toBe(0);
   });
 
   it("coerces string / number `sufficient` fields sent by lax models", async () => {

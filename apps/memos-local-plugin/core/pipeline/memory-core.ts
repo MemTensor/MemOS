@@ -79,7 +79,14 @@ import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
-import { makeRepos } from "../storage/repos/index.js";
+import {
+  makeRepos,
+  embeddingMaintenanceCounts,
+  inferStoredEmbeddingByteLen,
+  FLOAT32_BYTES,
+} from "../storage/repos/index.js";
+import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
+import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -87,8 +94,10 @@ import {
   registerHostLlmBridge,
   type HostLlmBridge,
 } from "../llm/host-bridge.js";
+import type { ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
+import { RECOVERY_REASONS } from "./recovery-constants.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
 import type { PipelineDeps, PipelineHandle } from "./types.js";
 import {
@@ -112,6 +121,19 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
+
+type DedicatedLlmConfig = {
+  provider?: string;
+  model?: string;
+  endpoint?: string;
+  apiKey?: string;
+  temperature?: number;
+  timeoutMs?: number;
+  providerIgnore?: string[];
+  providerOrder?: string[];
+  openRouter?: boolean;
+  reasoning?: ReasoningConfig;
+};
 
 export interface BootstrapOptions {
   agent: AgentKind;
@@ -376,7 +398,7 @@ export async function bootstrapMemoryCoreFull(
   // back to the main `llm` when skillEvolver.model is blank.
   let reflectLlm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const evolver = (config as { skillEvolver?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).skillEvolver;
+    const evolver = (config as { skillEvolver?: DedicatedLlmConfig }).skillEvolver;
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
@@ -387,6 +409,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: evolver?.apiKey ?? "",
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
+        providerIgnore: evolver?.providerIgnore,
+        providerOrder: evolver?.providerOrder,
+        openRouter: evolver?.openRouter ?? false,
+        reasoning: evolver?.reasoning,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -425,6 +451,49 @@ export async function bootstrapMemoryCoreFull(
     });
   }
 
+
+  // Dedicated LLM for L3 abstraction (mirrors skillEvolver above).
+  // L3 clustering → world-model abstraction is an infrequent async pass
+  // that is quality- and shape-sensitive (cheap models over-extract and
+  // truncate the JSON, producing "'constraints' must be an array"). It runs
+  // off the turn-response path, so a slower-but-correct model here has no
+  // impact on companion latency. Blank → falls back to the main `llm`.
+  let l3Llm: ReturnType<typeof createLlmClient> | null = null;
+  try {
+    const l3c = (config as { l3Llm?: DedicatedLlmConfig }).l3Llm;
+    const l3Model = (l3c?.model ?? "").trim();
+    const l3Provider = (l3c?.provider ?? "").trim();
+    if (l3Model && l3Provider) {
+      l3Llm = createLlmClient({
+        provider: l3Provider,
+        model: l3Model,
+        endpoint: l3c?.endpoint ?? "",
+        apiKey: l3c?.apiKey ?? "",
+        temperature: l3c?.temperature ?? 0,
+        timeoutMs: l3c?.timeoutMs ?? 60_000,
+        providerIgnore: l3c?.providerIgnore,
+        providerOrder: l3c?.providerOrder,
+        openRouter: l3c?.openRouter ?? false,
+        reasoning: l3c?.reasoning,
+        maxRetries: 3,
+        fallbackToHost: true,
+        onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
+          log.warn("l3Llm.llm_error", d),
+      } as never);
+      log.info("l3Llm.ready", {
+        provider: l3Provider,
+        model: l3Model,
+        source: "l3Llm",
+      });
+    }
+  } catch (err) {
+    log.warn("l3Llm.unavailable", {
+      err: err instanceof Error ? err.message : String(err),
+      fallback: "main llm",
+    });
+  }
+
+
   // 3. Pipeline.
   const deps: PipelineDeps = {
     agent: options.agent,
@@ -434,6 +503,7 @@ export async function bootstrapMemoryCoreFull(
     repos,
     llm,
     reflectLlm: reflectLlm ?? llm,
+    l3Llm: l3Llm ?? llm,
     embedder,
     log,
     namespace,
@@ -561,12 +631,44 @@ export function createMemoryCore(
     handle.config.algorithm.session.mergeMaxGapMs * 2,
     4 * 60 * 60 * 1000,
   );
+
+  // ─── Dirty closed-episode rescore backoff (issue #1808) ──
+  // Failed reward / reflect runs on dirty closed episodes used to be
+  // retried on every restart and every periodic rescan. The OpenClaw
+  // Gateway report at #1808 attributed >3s `eventLoopMax` bursts to this
+  // tight retry loop hammering the LLM on already-broken rows. We now
+  // track per-episode failure counts in `meta.rewardDirty` and require
+  // an exponential cool-down before retrying a row that has already
+  // failed `MAX_DIRTY_REWARD_ATTEMPTS` times. Manual feedback /
+  // `runManually` still rescore unconditionally — the backoff only
+  // applies to the automatic rescan paths.
+  const MAX_DIRTY_REWARD_ATTEMPTS = 3;
+  const DIRTY_REWARD_BACKOFF_BASE_MS = 60 * 60 * 1000; // 1h
+  const DIRTY_REWARD_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000; // 24h
+  const DIRTY_CLOSED_SCAN_PAGE_SIZE = 500;
+  const DIRTY_CLOSED_SCAN_CURSOR_KEY = "pipeline.dirty_closed_scan_cursor.v1";
+
+  // ─── Startup recovery background promise (issue #1776 + #1808) ──
+  // `init()` used to `await` the entire reflect → reward → L2 chain for
+  // every stale / dirty episode found in SQLite. On databases with
+  // 30k+ traces this blocked the Gateway's main event loop for 3-5s+,
+  // long enough to time out the WebSocket read probe (3s budget) used
+  // by TUI / Control UI clients. We now keep the synchronous
+  // classification on the main thread (it only touches the DB) and
+  // detach the slow recovery to this promise. `waitForStartupRecovery`
+  // exposes it so tests can opt back into the deterministic semantics.
+  let startupRecoveryPromise: Promise<void> = Promise.resolve();
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
     const nowMs = Date.now();
     if (nowMs - lastStaleScan < 30_000) return;
     lastStaleScan = nowMs;
+    // Issue #2063: lightweight mode disables reward / L2 / L3 / skill;
+    // the periodic auto-finalize used to emit `episode.finalized` for
+    // every stale open topic, which still cascaded into the evolution
+    // chain in earlier releases. Close them silently instead.
+    const lightweightMode = handle.algorithm.lightweightMemory.enabled;
     try {
       const openEpisodes = handle.repos.episodes
         .list({ status: "open", limit: 200 })
@@ -585,7 +687,32 @@ export function createMemoryCore(
           stale.push(ep);
         }
       }
-      if (stale.length > 0) await recoverOpenEpisodesAsSessionEnd(stale);
+      if (stale.length === 0) return;
+      if (lightweightMode) {
+        for (const ep of stale) {
+          try {
+            // Write the lightweight flag BEFORE close() so that even if
+            // close() throws mid-way, `isLightweightEpisode()` still
+            // returns true and the periodic non-lightweight rescan paths
+            // (autoRescoreDirtyClosedEpisodes) skip this episode instead
+            // of feeding it into the reward / L2 / L3 pipeline.
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              lightweightMemory: true,
+              closeReason: "lightweight_stale",
+              closedAtMs: nowMs,
+              recoveryReason: "lightweight_stale_topic_close",
+            });
+            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+          } catch (err) {
+            log.debug("stale_topic.lightweight_close_error", {
+              episodeId: ep.id,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        return;
+      }
+      await recoverOpenEpisodesAsSessionEnd(stale);
     } catch (err) {
       log.debug("stale_topic.scan_error", {
         err: err instanceof Error ? err.message : String(err),
@@ -597,10 +724,17 @@ export function createMemoryCore(
     const nowMs = Date.now();
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
+    // Issue #2063: lightweight mode explicitly disables reward — the
+    // periodic dirty-closed rescan (which would emit
+    // `episode.finalized` and call `handle.rewardRunner.run(...)`)
+    // must be a no-op.
+    if (handle.algorithm.lightweightMemory.enabled) return;
     try {
-      const dirtyClosed = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
+      const allDirty = collectDirtyClosedEpisodes()
         .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+      // Apply the same backoff filter as init() so the 10-min periodic
+      // scan does not hammer episodes whose LLM call keeps failing.
+      const dirtyClosed = allDirty.filter((ep) => dirtyEpisodeBackoffElapsed(ep, nowMs));
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -879,49 +1013,158 @@ export function createMemoryCore(
     // not evidence that the topic ended; the next user turn gets routed
     // through relation classification. Only hard-stale open topics are
     // finalized here so the pipeline eventually catches up.
+    //
+    // ── Issue #1776 + #1808: stale + dirty recovery used to run inside
+    // `await` here, blocking `init()` for seconds-to-minutes on big
+    // databases and starving the OpenClaw Gateway event loop. We now
+    // collect the slow inputs synchronously (the DB list + classify is
+    // cheap) and detach the actual reflect / reward chain onto
+    // `startupRecoveryPromise`. Tests that need the historic semantics
+    // call `core.waitForStartupRecovery()` after `init()`.
+    let staleForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
+    let dirtyClosedForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
     try {
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
         const nowMs = Date.now();
-        const lightweight = orphans.filter((ep) => isLightweightEpisode(ep));
-        for (const ep of lightweight) {
-          handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
-          handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
-            lightweightMemory: true,
-            closeReason: "finalized",
-            recoveredAtStartup: nowMs,
-            recoveryReason: "lightweight_startup_close",
-          });
+        // Issue #2063: when `algorithm.lightweightMemory.enabled` is
+        // true, treat EVERY orphan episode as lightweight — legacy rows
+        // written before the flag was flipped lack
+        // `meta.lightweightMemory=true`, and prior versions still
+        // re-emitted `episode.finalized` on them at startup which
+        // cascaded into reward / L2 / L3 / skill LLM calls (the
+        // "backlog of evolution calls after every bridge restart"
+        // reported by the issue). Closing them silently here matches
+        // the schema-comment guarantee that the flag disables the
+        // whole evolution pipeline.
+        const lightweightMode = handle.algorithm.lightweightMemory.enabled;
+        const treatAsLightweight = lightweightMode
+          ? orphans
+          : orphans.filter((ep) => isLightweightEpisode(ep));
+        for (const ep of treatAsLightweight) {
+          const isBackfill = lightweightMode && !isLightweightEpisode(ep);
+          let recoveryReason: string;
+          if (isBackfill) {
+            recoveryReason = "lightweight_startup_close_backfill";
+          } else {
+            recoveryReason = "lightweight_startup_close";
+          }
+          try {
+            // Write the lightweight flag BEFORE close() so that even if
+            // close() throws, `isLightweightEpisode()` still returns true
+            // for this row and the periodic non-lightweight rescan paths
+            // (autoRescoreDirtyClosedEpisodes) skip it instead of feeding
+            // it into the reward / L2 / L3 pipeline. Mirrors the ordering
+            // used by the periodic stale-topic close above.
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              lightweightMemory: true,
+              // Legacy rows being backfilled were never actually
+              // finalized through the evolution pipeline; tag them with
+              // a distinct closeReason so analytics can distinguish a
+              // real finalize from a lightweight backfill.
+              closeReason: isBackfill ? "lightweight_backfill" : "finalized",
+              recoveredAtStartup: nowMs,
+              recoveryReason,
+            });
+            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+          } catch (err) {
+            // Isolate per-episode failures so a single DB lock /
+            // constraint violation cannot abort the whole startup
+            // orphan-close loop. Mirrors the periodic stale-topic path.
+            log.debug("init.lightweight_close_error", {
+              episodeId: ep.id,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
-        const normalOrphans = orphans.filter((ep) => !isLightweightEpisode(ep));
-        const stale = normalOrphans.filter(
-          (ep) =>
-            ep.rTask != null ||
-            (ep.traceIds?.length ?? 0) > 0 ||
-            nowMs - (ep.endedAt ?? ep.startedAt) > STALE_EPISODE_TIMEOUT_MS,
-        );
-        const recent = normalOrphans.filter((ep) => !stale.includes(ep));
-        for (const ep of recent) {
-          handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
-            topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
-            pauseReason: (ep.meta?.pauseReason as string | undefined) ?? "startup_recovered_open_topic",
-            recoveredAtStartup: nowMs,
-          });
-        }
-        if (stale.length > 0) {
-          await recoverOpenEpisodesAsSessionEnd(stale);
+        if (lightweightMode) {
+          // No reward / L2 / L3 / skill work is scheduled when the
+          // pipeline is lightweight — leave both background queues
+          // empty so the recovery promise short-circuits below.
+          staleForBackground = [];
+          dirtyClosedForBackground = [];
+        } else {
+          const normalOrphans = orphans.filter((ep) => !isLightweightEpisode(ep));
+          const stale = normalOrphans.filter(
+            (ep) =>
+              ep.rTask != null ||
+              (ep.traceIds?.length ?? 0) > 0 ||
+              nowMs - (ep.endedAt ?? ep.startedAt) > STALE_EPISODE_TIMEOUT_MS,
+          );
+          const recent = normalOrphans.filter((ep) => !stale.includes(ep));
+          for (const ep of recent) {
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
+              pauseReason: (ep.meta?.pauseReason as string | undefined) ?? "startup_recovered_open_topic",
+              recoveredAtStartup: nowMs,
+            });
+          }
+          staleForBackground = stale;
         }
       }
-      const dirtyClosed = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
-      if (dirtyClosed.length > 0) {
-        await recoverDirtyClosedEpisodes(dirtyClosed);
+      if (handle.algorithm.lightweightMemory.enabled) {
+        // Same story for dirty-closed episodes — never rescore them
+        // when the pipeline is intentionally light.
+        dirtyClosedForBackground = [];
+      } else {
+        const nowForDirty = Date.now();
+        const allDirty = collectDirtyClosedEpisodes()
+          .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+        const dirtyClosed: typeof allDirty = [];
+        for (const ep of allDirty) {
+          if (dirtyEpisodeBackoffElapsed(ep, nowForDirty)) {
+            dirtyClosed.push(ep);
+          } else {
+            const dirtyMeta = (ep.meta?.rewardDirty as
+              | { failedAttempts?: number; lastFailureAt?: number }
+              | undefined) ?? {};
+            log.debug("init.dirty_closed_episodes.skip_backoff", {
+              episodeId: ep.id,
+              failedAttempts: dirtyMeta.failedAttempts ?? 0,
+              lastFailureAt: dirtyMeta.lastFailureAt ?? 0,
+            });
+          }
+        }
+        dirtyClosedForBackground = dirtyClosed;
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
         err: err instanceof Error ? err.message : String(err),
       });
+    }
+
+    // Kick the slow recovery chain off the main thread. `init()` returns
+    // as soon as the synchronous classification above finishes, so the
+    // Gateway can start accepting WebSocket upgrades immediately.
+    if (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0) {
+      const stale = staleForBackground;
+      const dirtyClosed = dirtyClosedForBackground;
+      log.info("init.background_recovery_started", {
+        staleCount: stale.length,
+        dirtyClosedCount: dirtyClosed.length,
+      });
+      const recoveryStartedAt = Date.now();
+      startupRecoveryPromise = (async () => {
+        try {
+          if (stale.length > 0) {
+            await recoverOpenEpisodesAsSessionEnd(stale);
+          }
+          if (dirtyClosed.length > 0) {
+            await recoverDirtyClosedEpisodes(dirtyClosed);
+          }
+          log.info("init.background_recovery_finished", {
+            staleCount: stale.length,
+            dirtyClosedCount: dirtyClosed.length,
+            durationMs: Date.now() - recoveryStartedAt,
+          });
+        } catch (err) {
+          log.warn("init.background_recovery_failed", {
+            err: err instanceof Error ? err.message : String(err),
+            staleCount: stale.length,
+            dirtyClosedCount: dirtyClosed.length,
+          });
+        }
+      })();
     }
 
     // Periodic rescore timer for episodes that miss the startup scan or
@@ -1252,17 +1495,28 @@ export function createMemoryCore(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
+    // Snapshot the prior failure counters so we can increment them later
+    // (after the bus chain settles) without an extra DB read.
+    const priorFailedAttempts = new Map<EpisodeId, number>();
     for (const ep of episodes) {
       if (isLightweightEpisode(ep)) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
+      const prevDirty = (ep.meta?.rewardDirty as
+        | { failedAttempts?: unknown }
+        | undefined) ?? {};
+      const prevAttempts =
+        typeof prevDirty.failedAttempts === "number"
+          ? prevDirty.failedAttempts
+          : 0;
+      priorFailedAttempts.set(episodeId, prevAttempts);
       handle.repos.episodes.updateMeta(episodeId, {
         closeReason: "finalized",
         recoveredAtStartup: endedAt,
-        recoveryReason: "dirty_reward_rescore",
+        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
       });
       const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
-        recoveryReason: "dirty_reward_rescore",
+        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
       });
       handle.buses.session.emit({
         kind: "episode.finalized",
@@ -1271,6 +1525,67 @@ export function createMemoryCore(
       });
     }
     await handle.flush();
+    // After the reward / reflect chain has finished, account for the
+    // outcome: clear `meta.rewardDirty` on episodes that are no longer
+    // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
+    // that still match the dirty predicate (LLM failure / no-op). This
+    // closes the "retried indefinitely" loop reported in issue #1808.
+    const now = Date.now();
+    for (const [episodeId, prevAttempts] of priorFailedAttempts) {
+      const after = handle.repos.episodes.getById(episodeId);
+      if (!after) continue;
+      const stillDirty = episodeRewardIsDirty(after);
+      if (stillDirty) {
+        handle.repos.episodes.updateMeta(episodeId, {
+          rewardDirty: {
+            failedAttempts: prevAttempts + 1,
+            lastFailureAt: now,
+          },
+        });
+      } else if (
+        after.meta &&
+        typeof after.meta === "object" &&
+        "rewardDirty" in after.meta
+      ) {
+        handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
+      }
+    }
+  }
+
+  function collectDirtyClosedEpisodes(): Array<EpisodeRow & { meta?: Record<string, unknown> }> {
+    const storedCursor = handle.repos.kv.get<unknown>(DIRTY_CLOSED_SCAN_CURSOR_KEY, null);
+    const cursor = isDirtyClosedScanCursor(storedCursor) ? storedCursor : null;
+    if (storedCursor !== null && !cursor) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    }
+    const page = handle.repos.episodes.listClosedPage({
+      limit: DIRTY_CLOSED_SCAN_PAGE_SIZE,
+      before: cursor,
+    });
+    if (page.length === 0) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+      return [];
+    }
+
+    const last = page[page.length - 1]!;
+    if (page.length < DIRTY_CLOSED_SCAN_PAGE_SIZE) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    } else {
+      handle.repos.kv.set(DIRTY_CLOSED_SCAN_CURSOR_KEY, {
+        startedAt: last.startedAt,
+        id: last.id,
+      });
+    }
+    return page;
+  }
+
+  function isDirtyClosedScanCursor(value: unknown): value is ClosedEpisodeCursor {
+    return Boolean(
+      value &&
+      typeof value === "object" &&
+      typeof (value as { startedAt?: unknown }).startedAt === "number" &&
+      typeof (value as { id?: unknown }).id === "string",
+    );
   }
 
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
@@ -1294,7 +1609,20 @@ export function createMemoryCore(
     if (!reward || typeof reward !== "object") return false;
     const traceCount = (reward as { traceCount?: unknown }).traceCount;
     if (typeof traceCount === "number") {
-      return traceCount !== (ep.traceIds?.length ?? 0);
+      // Compare against the count of trace IDs that ACTUALLY exist in the
+      // traces table, not the raw length of `ep.traceIds`. Otherwise a
+      // single "ghost" trace ID lingering in `trace_ids_json` (deleted
+      // trace row, manual cleanup, partial migration) keeps the episode
+      // dirty forever and triggers a rescore every 10 minutes —
+      // https://github.com/MemTensor/MemOS/issues/1966 (590 wasted calls
+      // / ~14.5 RMB in the reporter's case). `countExisting` is a single
+      // `SELECT COUNT(*)` per chunk, so it stays cheap even on big DBs.
+      const traceIds = (ep.traceIds ?? []) as TraceId[];
+      const existingCount =
+        traceIds.length === 0
+          ? 0
+          : handle.repos.traces.countExisting(traceIds);
+      return traceCount !== existingCount;
     }
 
     // Backward compatibility for episodes scored before reward coverage
@@ -1313,6 +1641,37 @@ export function createMemoryCore(
     const traceIds = (ep.traceIds ?? []) as TraceId[];
     if (traceIds.length === 0) return false;
     return handle.repos.traces.hasAnyNewerThan(traceIds, scoredAt);
+  }
+
+  /**
+   * Backoff filter for the automatic dirty-rescore scans (issue #1808).
+   *
+   * Returns true when the row is eligible for another reward rescore on
+   * the auto path (init scan + 10-minute periodic). When a row has
+   * failed `MAX_DIRTY_REWARD_ATTEMPTS` consecutive automatic rescores,
+   * we wait an exponentially increasing window (1h → 24h cap) before
+   * attempting again. This stops the "retried indefinitely with no
+   * backoff" symptom reported on the OpenClaw Gateway.
+   *
+   * Manual paths (`submitFeedback`, `runManually`) do NOT consult this
+   * filter — explicit user / operator intent should always re-trigger.
+   */
+  function dirtyEpisodeBackoffElapsed(
+    ep: EpisodeRow & { meta?: Record<string, unknown> },
+    nowMs: number,
+  ): boolean {
+    const dirty = (ep.meta?.rewardDirty as
+      | { failedAttempts?: unknown; lastFailureAt?: unknown }
+      | undefined) ?? {};
+    const attempts = typeof dirty.failedAttempts === "number" ? dirty.failedAttempts : 0;
+    if (attempts < MAX_DIRTY_REWARD_ATTEMPTS) return true;
+    const lastFailureAt = typeof dirty.lastFailureAt === "number" ? dirty.lastFailureAt : 0;
+    const exponent = Math.min(attempts - MAX_DIRTY_REWARD_ATTEMPTS, 5);
+    const wait = Math.min(
+      DIRTY_REWARD_BACKOFF_BASE_MS * (1 << exponent),
+      DIRTY_REWARD_BACKOFF_MAX_MS,
+    );
+    return nowMs - lastFailureAt >= wait;
   }
 
   function snapshotFromRecoveredEpisode(
@@ -1422,6 +1781,16 @@ export function createMemoryCore(
     if (shutDown) return;
     shutDown = true;
     try {
+      // Make sure the background startup recovery (issue #1808) has
+      // finished before we tear down the bus / DB handle. Without this
+      // wait, a fast `init → shutdown` race during tests or a quick
+      // gateway reload would close SQLite while reflect / reward is
+      // mid-flush, producing `SQLITE_MISUSE` noise on the way down.
+      try {
+        await startupRecoveryPromise;
+      } catch {
+        /* already logged inside the recovery promise */
+      }
       try {
         await hubRuntime?.stop();
       } catch (err) {
@@ -1452,10 +1821,20 @@ export function createMemoryCore(
       /* fall through to in-memory */
     }
 
+    // The Overview cards' source of truth for "what model is this slot
+    // running?" is config.yaml (= the Settings page). Runtime stats
+    // (lastOkAt / lastError / fallback timestamps) still come from the
+    // in-memory facades — that's the right split: the slot label is
+    // user intent, the colour/error reflects whether the runtime has
+    // actually been able to talk to the configured upstream. See #1596.
+    const effectiveConfig = diskConfig ?? handle.config;
+
     const llmInfo = llmHealth(handle.llm, latestTraceTs());
     const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    applyConfiguredModelDisplay(effectiveConfig, llmInfo, embedderInfo);
+
     const skillEvolverInfo = resolveSkillEvolver(
-      diskConfig ?? handle.config,
+      effectiveConfig,
       // Prefer the dedicated reflect LLM stats so an independently
       // configured skill-evolver model reports its OWN failures
       // instead of inheriting the (possibly healthy) summary LLM's
@@ -1463,6 +1842,7 @@ export function createMemoryCore(
       // skillEvolver blank — bootstrap aliases reflectLlm to llm
       // in that case anyway.
       handle.reflectLlm ?? handle.llm,
+      llmInfo,
       latestTraceTs(),
     );
 
@@ -1474,21 +1854,6 @@ export function createMemoryCore(
     // are still null. Now the card colour is driven purely by
     // in-memory stats — if you want to inspect past failures, head
     // to LogsView → 系统 tag.
-
-    // Override model names from disk config if they differ from the
-    // in-memory client (user saved new settings but hasn't restarted).
-    if (diskConfig) {
-      const diskLlm = diskConfig.llm as { model?: string; provider?: string } | undefined;
-      if (diskLlm?.model && diskLlm.model !== llmInfo.model) {
-        llmInfo.model = diskLlm.model;
-        if (diskLlm.provider) llmInfo.provider = diskLlm.provider;
-      }
-      const diskEmb = diskConfig.embedding as { model?: string; provider?: string } | undefined;
-      if (diskEmb?.model && diskEmb.model !== embedderInfo.model) {
-        embedderInfo.model = diskEmb.model;
-        if (diskEmb.provider) embedderInfo.provider = diskEmb.provider;
-      }
-    }
 
     applyPersistedModelStatus(handle.repos, "llm", llmInfo);
     applyPersistedModelStatus(handle.repos, "embedding", embedderInfo);
@@ -2883,15 +3248,30 @@ export function createMemoryCore(
     sessionId?: SessionId;
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<EpisodeId[]> {
     ensureLive();
-    const rows = handle.repos.episodes.list({
-      sessionId: input.sessionId,
-      limit: input.limit ?? 50,
-      offset: input.offset ?? 0,
-    });
-    return rows
+    const limit = input.limit ?? 50;
+    const offset = input.offset ?? 0;
+    if (input.includeAllNamespaces) {
+      // Every row passes the visibility filter, so repo-level paging
+      // is both correct and cheap.
+      return handle.repos.episodes
+        .list({ sessionId: input.sessionId, limit, offset })
+        .map((r: EpisodeRow) => r.id as EpisodeId);
+    }
+    // Namespace-scoped path: paging at the repo level would apply
+    // `limit` before the visibility filter runs, silently under-filling
+    // pages (callers can't tell a short page from end-of-data). Fetch
+    // the widest window the repo allows, filter, then page in memory —
+    // same idiom as `listEpisodeRows` / `countEpisodes`. The repo
+    // clamps the fetch window to 500 rows (`clampLimit`), so scoped
+    // paging is exact within the newest 500 episodes; beyond that the
+    // same shared limitation applies to the sibling list/count methods.
+    return handle.repos.episodes
+      .list({ sessionId: input.sessionId, limit: 100_000 })
       .filter((r: EpisodeRow) => visibleToCurrent(r))
+      .slice(offset, offset + limit)
       .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
@@ -3094,8 +3474,16 @@ export function createMemoryCore(
     toolNames?: readonly string[];
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<{ logs: ApiLogDTO[]; total: number }> {
     ensureLive();
+    // `includeAllNamespaces` is accepted for contract symmetry with the
+    // other viewer list* methods (#2131). The `api_logs` write path does
+    // not currently stamp per-namespace owner columns, so every row is
+    // effectively cross-namespace regardless of this flag. Callers that
+    // fan into viewer aggregations still pass `true` so their intent is
+    // explicit if a per-namespace write path is added later.
+    void input?.includeAllNamespaces;
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const rows = handle.repos.apiLogs.list({
@@ -3458,7 +3846,7 @@ export function createMemoryCore(
     });
   }
 
-  async function metrics(input?: { days?: number }): Promise<{
+  async function metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;
@@ -3496,6 +3884,14 @@ export function createMemoryCore(
     const oneDayMs = 86_400_000;
     const sinceMs = now - days * oneDayMs;
 
+    // NOTE: `traces` is fetched unfiltered (all namespaces) below so
+    // that `sessions` / `writesToday` / `embeddings` / `dailyWrites`
+    // populate the viewer chart even after a turn from a different
+    // profile flips the active namespace (#2131). Only `total`
+    // (totalTurns) respects `includeAllNamespaces`. If a per-namespace
+    // scoping is ever needed for these derived fields (e.g. per-agent
+    // views), thread `visibilityWhere(activeNamespace)` through the
+    // repo query the same way `countTurns` does.
     const traces = handle.repos.traces.list({ limit: 10_000 });
     const sessions = new Set<string>();
     let writesToday = 0;
@@ -3603,9 +3999,12 @@ export function createMemoryCore(
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
     // Apply namespace visibility so the count matches the filtered list.
+    // Viewer callers pass `includeAllNamespaces` — `activeNamespace` is
+    // rewritten by every turn/session, so binding this count to it made
+    // the dashboard total collapse whenever another profile's turn ran.
     const totalTurns = handle.repos.traces.countTurns(
       {},
-      visibilityWhere(activeNamespace),
+      input?.includeAllNamespaces ? undefined : visibilityWhere(activeNamespace),
     );
 
     return {
@@ -4032,24 +4431,39 @@ export function createMemoryCore(
   };
 
   function computeEmbeddingMaintenanceStats(): EmbeddingMaintenanceStats {
+    // SQL-only fast path (issue #1929).
+    //
+    // The previous implementation paginated `traces` / `policies` /
+    // `world_model` / `skills` end-to-end via `repos.<table>.list()`,
+    // which hydrates the full row — BLOB vector columns included —
+    // through `mapRow()`. On a production deployment with ~93K rows
+    // and ~270 MB of vector BLOBs that single call blocked the Node
+    // event loop for 4+ minutes at 100% CPU.
+    //
+    // `embeddingMaintenanceCounts` runs five `SELECT COUNT(*) +
+    // SUM(CASE WHEN ...)` queries — `LENGTH(blob)` reads only the BLOB
+    // header, never the payload — so we keep the same per-bucket
+    // semantics without touching a single vector byte.
     const configuredDimension = handle.embedder?.dimensions ?? 0;
-    const allSlots = collectEmbeddingSlots();
-    const dimension = configuredDimension > 0 ? configuredDimension : inferStoredEmbeddingDimension(allSlots);
-    const byKind = emptyEmbeddingStatsByKind();
-    for (const slot of allSlots) {
-      const bucket = byKind[slot.kind];
-      bucket.totalSlots++;
-      if (!slot.vec) {
-        bucket.missing++;
-      } else if (dimension > 0 && slot.vec.length !== dimension) {
-        bucket.dimMismatch++;
-      } else {
-        bucket.ready++;
-      }
-    }
-    for (const bucket of Object.values(byKind)) {
-      bucket.needsRepair = bucket.missing + bucket.dimMismatch;
-    }
+    const expectedByteLenFromEmbedder = configuredDimension > 0
+      ? configuredDimension * FLOAT32_BYTES
+      : 0;
+    // When the embedder has not been probed yet, fall back to the most common
+    // stored BLOB byte length (mirrors the pre-fix `inferStoredEmbeddingDimension`
+    // path, but computed via SQL `GROUP BY LENGTH(vec_summary)` — never touches
+    // the BLOB bodies).
+    const expectedByteLen = expectedByteLenFromEmbedder > 0
+      ? expectedByteLenFromEmbedder
+      : inferStoredEmbeddingByteLen(handle.db);
+    const dimension = expectedByteLen > 0 ? expectedByteLen / FLOAT32_BYTES : 0;
+
+    const raw = embeddingMaintenanceCounts(handle.db, { expectedByteLen });
+    const byKind: EmbeddingMaintenanceStats["byKind"] = {
+      trace: addNeedsRepair(raw.trace),
+      policy: addNeedsRepair(raw.policy),
+      world_model: addNeedsRepair(raw.world_model),
+      skill: addNeedsRepair(raw.skill),
+    };
     const totalSlots = sumEmbeddingStats(byKind, "totalSlots");
     const ready = sumEmbeddingStats(byKind, "ready");
     const missing = sumEmbeddingStats(byKind, "missing");
@@ -4066,6 +4480,15 @@ export function createMemoryCore(
     };
   }
 
+  function addNeedsRepair(
+    bucket: EmbeddingCountsBucket,
+  ): EmbeddingCountsBucket & { needsRepair: number } {
+    return {
+      ...bucket,
+      needsRepair: bucket.missing + bucket.dimMismatch,
+    };
+  }
+
   async function ensureEmbeddingDimensionKnown(): Promise<void> {
     if (!handle.embedder || handle.embedder.dimensions > 0) return;
     try {
@@ -4078,23 +4501,6 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
-  }
-
-  function inferStoredEmbeddingDimension(slots: readonly EmbeddingSlot[]): number {
-    const counts = new Map<number, number>();
-    for (const slot of slots) {
-      if (!slot.vec) continue;
-      counts.set(slot.vec.length, (counts.get(slot.vec.length) ?? 0) + 1);
-    }
-    let bestDim = 0;
-    let bestCount = 0;
-    for (const [dim, count] of counts) {
-      if (count > bestCount) {
-        bestDim = dim;
-        bestCount = count;
-      }
-    }
-    return bestDim;
   }
 
   function shouldTraceHaveEmbeddings(row: TraceRow): boolean {
@@ -4204,22 +4610,6 @@ export function createMemoryCore(
 
   function isLightweightMemoryTrace(row: TraceRow): boolean {
     return row.tags.includes("lightweight_memory");
-  }
-
-  function emptyEmbeddingStatsByKind(): EmbeddingMaintenanceStats["byKind"] {
-    const empty = () => ({
-      totalSlots: 0,
-      ready: 0,
-      missing: 0,
-      dimMismatch: 0,
-      needsRepair: 0,
-    });
-    return {
-      trace: empty(),
-      policy: empty(),
-      world_model: empty(),
-      skill: empty(),
-    };
   }
 
   function sumEmbeddingStats(
@@ -4498,6 +4888,7 @@ export function createMemoryCore(
     init,
     shutdown,
     health,
+    waitForStartupRecovery: () => startupRecoveryPromise,
     bindTelemetry(t: import("../telemetry/index.js").Telemetry) { telemetry = t; },
     openSession,
     closeSession,
@@ -5357,6 +5748,7 @@ function embedderHealth(
 function resolveSkillEvolver(
   config: PipelineHandle["config"],
   llm: PipelineHandle["llm"],
+  inheritedLlmInfo: CoreHealth["llm"],
   fallbackTs: number | null,
 ): CoreHealth["skillEvolver"] {
   const evolver = (config as { skillEvolver?: { provider?: string; model?: string } })
@@ -5378,16 +5770,60 @@ function resolveSkillEvolver(
       lastError: s?.lastError ?? null,
     };
   }
-  const fallback = llmHealth(llm, fallbackTs);
+  // Inherited skillEvolver mirrors the (already-disk-aware) llm slot,
+  // so the Overview's three model cards never disagree about what the
+  // current Settings say. Runtime stats still come from the llm
+  // client; we just copy whatever the Overview will show for the LLM
+  // slot itself. See #1596.
   return {
-    available: fallback.available,
-    provider: fallback.provider,
-    model: fallback.model,
+    available: inheritedLlmInfo.available,
+    provider: inheritedLlmInfo.provider,
+    model: inheritedLlmInfo.model,
     inherited: true,
-    lastOkAt: fallback.lastOkAt,
-    lastFallbackAt: fallback.lastFallbackAt,
-    lastError: fallback.lastError,
+    lastOkAt: inheritedLlmInfo.lastOkAt,
+    lastFallbackAt: inheritedLlmInfo.lastFallbackAt,
+    lastError: inheritedLlmInfo.lastError,
   };
+  // Reserved for future signature change — keep fallbackTs parameter
+  // so callers passing `latestTraceTs()` don't need to change.
+  void fallbackTs;
+}
+
+/**
+ * Patch the llm + embedder health snapshots so their `model` and
+ * `provider` fields reflect what's currently in `config.yaml` — i.e.
+ * what the Settings page shows. The runtime stats (available,
+ * lastOkAt, lastError) stay sourced from the in-memory facade because
+ * those represent "did the upstream actually answer", which only the
+ * runtime can know. See #1596: Overview cards used to lag behind a
+ * Settings save when only the provider changed (model name unchanged),
+ * or when the user cleared a model name back to empty.
+ */
+function applyConfiguredModelDisplay(
+  config: PipelineHandle["config"],
+  llmInfo: CoreHealth["llm"],
+  embedderInfo: CoreHealth["embedder"],
+): void {
+  const cfg = config as {
+    llm?: { model?: unknown; provider?: unknown };
+    embedding?: { model?: unknown; provider?: unknown };
+  };
+  if (cfg.llm) {
+    if (typeof cfg.llm.model === "string") {
+      llmInfo.model = cfg.llm.model;
+    }
+    if (typeof cfg.llm.provider === "string" && cfg.llm.provider.length > 0) {
+      llmInfo.provider = cfg.llm.provider;
+    }
+  }
+  if (cfg.embedding) {
+    if (typeof cfg.embedding.model === "string") {
+      embedderInfo.model = cfg.embedding.model;
+    }
+    if (typeof cfg.embedding.provider === "string" && cfg.embedding.provider.length > 0) {
+      embedderInfo.provider = cfg.embedding.provider;
+    }
+  }
 }
 
 function writeApiLog(

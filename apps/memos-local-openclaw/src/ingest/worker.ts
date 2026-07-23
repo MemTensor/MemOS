@@ -286,7 +286,10 @@ export class IngestWorker {
 
     this.store.insertChunk(chunk);
     if (embedding && dedupStatus === "active") {
-      this.store.upsertEmbedding(chunkId, embedding);
+      this.store.upsertEmbedding(chunkId, embedding, {
+        provider: this.embedder.provider,
+        model: this.embedder.model,
+      });
     }
     this.ctx.log.debug(`Stored chunk=${chunkId} kind=${kind} role=${msg.role} dedup=${dedupStatus} len=${content.length} hasVec=${!!embedding && dedupStatus === "active"}`);
 
