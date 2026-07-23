@@ -318,6 +318,10 @@ NODE
 info "Stop OpenClaw Gateway, 停止 OpenClaw Gateway..."
 "${OPENCLAW_BIN}" gateway stop >/dev/null 2>&1 || true
 
+# Ensure the gateway is restarted if the install fails after this point.
+# The trap is cleared once the normal start step at the end succeeds.
+trap '"${OPENCLAW_BIN}" gateway start >/dev/null 2>&1 || true' ERR
+
 if command -v lsof >/dev/null 2>&1; then
   PIDS="$(lsof -i :"${PORT}" -t 2>/dev/null || true)"
   if [[ -n "$PIDS" ]]; then
@@ -406,6 +410,8 @@ info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
 
 success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
 "${OPENCLAW_BIN}" gateway start 2>&1
+# Gateway is back up - clear the error recovery trap.
+trap - ERR
 
 info "Starting Memory Viewer, 正在启动记忆面板..."
 VIEWER_URL="http://127.0.0.1:18799"
