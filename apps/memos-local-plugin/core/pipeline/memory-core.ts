@@ -3764,7 +3764,7 @@ export function createMemoryCore(
     includeAllNamespaces?: boolean;
   }): Promise<number> {
     ensureLive();
-    return handle.repos.skills.list({ status: input?.status, limit: 5_000 }).filter((r) =>
+    return handle.repos.skills.list({ status: input?.status, limit: 100_000 }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
     ).length;
   }
