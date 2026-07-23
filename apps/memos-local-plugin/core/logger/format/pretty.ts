@@ -30,7 +30,7 @@ const KIND_TAG: Record<string, string> = {
 };
 
 export function formatPretty(record: LogRecord, opts: { color: boolean }): string {
-  const ts = isoFromEpochMs(record.ts).slice(11, 23); // HH:mm:ss.SSS
+  const ts = isoFromEpochMs(record.ts, record.tz).slice(11, 23); // HH:mm:ss.SSS
   const lvl = record.level.toUpperCase().padEnd(5);
   const kind = KIND_TAG[record.kind] ?? "";
   const channel = record.channel ?? "?";

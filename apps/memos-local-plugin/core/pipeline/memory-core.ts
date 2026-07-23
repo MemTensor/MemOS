@@ -75,7 +75,7 @@ import type {
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
 import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
-import { rootLogger } from "../logger/index.js";
+import { initLogger, rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
@@ -86,6 +86,7 @@ import {
   FLOAT32_BYTES,
 } from "../storage/repos/index.js";
 import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
+import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -93,6 +94,7 @@ import {
   registerHostLlmBridge,
   type HostLlmBridge,
 } from "../llm/host-bridge.js";
+import type { ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";
@@ -119,6 +121,20 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
+
+type DedicatedLlmConfig = {
+  provider?: string;
+  model?: string;
+  endpoint?: string;
+  apiKey?: string;
+  temperature?: number;
+  timeoutMs?: number;
+  providerIgnore?: string[];
+  providerOrder?: string[];
+  openRouter?: boolean;
+  reasoning?: ReasoningConfig;
+};
+
 export interface BootstrapOptions {
   agent: AgentKind;
   namespace?: RuntimeNamespace;
@@ -149,6 +165,13 @@ export interface BootstrapOptions {
   hostLlmBridge?: HostLlmBridge | null;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /**
+   * When true, initialize the global logger from `config.logging` (timezone,
+   * level, channels, file/audit/llm/perf/events sinks). The standalone daemon
+   * (`bridge.cts`) owns its stdio and must set this; embedded plugin hosts
+   * leave it false so the host keeps control of logging.
+   */
+  initLogging?: boolean;
 }
 
 export interface BootstrapResult {
@@ -187,6 +210,13 @@ export async function bootstrapMemoryCoreFull(
     ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
     : await loadConfig(home);
   const config = configResult.config;
+
+  // Standalone daemon: wire the global logger from config (timezone, level,
+  // channels, file sinks) before anything logs. Embedded hosts skip this and
+  // keep their own logger. Idempotent — re-init swaps the active root in place.
+  if (options.initLogging) {
+    initLogger(config, home);
+  }
 
   const log = rootLogger.child({
     channel: "core.pipeline.bootstrap",
@@ -382,7 +412,7 @@ export async function bootstrapMemoryCoreFull(
   // back to the main `llm` when skillEvolver.model is blank.
   let reflectLlm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const evolver = (config as { skillEvolver?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).skillEvolver;
+    const evolver = (config as { skillEvolver?: DedicatedLlmConfig }).skillEvolver;
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
@@ -393,6 +423,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: evolver?.apiKey ?? "",
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
+        providerIgnore: evolver?.providerIgnore,
+        providerOrder: evolver?.providerOrder,
+        openRouter: evolver?.openRouter ?? false,
+        reasoning: evolver?.reasoning,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -440,7 +474,7 @@ export async function bootstrapMemoryCoreFull(
   // impact on companion latency. Blank → falls back to the main `llm`.
   let l3Llm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const l3c = (config as { l3Llm?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).l3Llm;
+    const l3c = (config as { l3Llm?: DedicatedLlmConfig }).l3Llm;
     const l3Model = (l3c?.model ?? "").trim();
     const l3Provider = (l3c?.provider ?? "").trim();
     if (l3Model && l3Provider) {
@@ -451,6 +485,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: l3c?.apiKey ?? "",
         temperature: l3c?.temperature ?? 0,
         timeoutMs: l3c?.timeoutMs ?? 60_000,
+        providerIgnore: l3c?.providerIgnore,
+        providerOrder: l3c?.providerOrder,
+        openRouter: l3c?.openRouter ?? false,
+        reasoning: l3c?.reasoning,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
@@ -621,6 +659,8 @@ export function createMemoryCore(
   const MAX_DIRTY_REWARD_ATTEMPTS = 3;
   const DIRTY_REWARD_BACKOFF_BASE_MS = 60 * 60 * 1000; // 1h
   const DIRTY_REWARD_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000; // 24h
+  const DIRTY_CLOSED_SCAN_PAGE_SIZE = 500;
+  const DIRTY_CLOSED_SCAN_CURSOR_KEY = "pipeline.dirty_closed_scan_cursor.v1";
 
   // ─── Startup recovery background promise (issue #1776 + #1808) ──
   // `init()` used to `await` the entire reflect → reward → L2 chain for
@@ -704,8 +744,7 @@ export function createMemoryCore(
     // must be a no-op.
     if (handle.algorithm.lightweightMemory.enabled) return;
     try {
-      const allDirty = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
+      const allDirty = collectDirtyClosedEpisodes()
         .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
       // Apply the same backoff filter as init() so the 10-min periodic
       // scan does not hammer episodes whose LLM call keeps failing.
@@ -1083,8 +1122,7 @@ export function createMemoryCore(
         dirtyClosedForBackground = [];
       } else {
         const nowForDirty = Date.now();
-        const allDirty = handle.repos.episodes
-          .list({ status: "closed", limit: 500 })
+        const allDirty = collectDirtyClosedEpisodes()
           .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
         const dirtyClosed: typeof allDirty = [];
         for (const ep of allDirty) {
@@ -1526,6 +1564,42 @@ export function createMemoryCore(
         handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
       }
     }
+  }
+
+  function collectDirtyClosedEpisodes(): Array<EpisodeRow & { meta?: Record<string, unknown> }> {
+    const storedCursor = handle.repos.kv.get<unknown>(DIRTY_CLOSED_SCAN_CURSOR_KEY, null);
+    const cursor = isDirtyClosedScanCursor(storedCursor) ? storedCursor : null;
+    if (storedCursor !== null && !cursor) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    }
+    const page = handle.repos.episodes.listClosedPage({
+      limit: DIRTY_CLOSED_SCAN_PAGE_SIZE,
+      before: cursor,
+    });
+    if (page.length === 0) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+      return [];
+    }
+
+    const last = page[page.length - 1]!;
+    if (page.length < DIRTY_CLOSED_SCAN_PAGE_SIZE) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    } else {
+      handle.repos.kv.set(DIRTY_CLOSED_SCAN_CURSOR_KEY, {
+        startedAt: last.startedAt,
+        id: last.id,
+      });
+    }
+    return page;
+  }
+
+  function isDirtyClosedScanCursor(value: unknown): value is ClosedEpisodeCursor {
+    return Boolean(
+      value &&
+      typeof value === "object" &&
+      typeof (value as { startedAt?: unknown }).startedAt === "number" &&
+      typeof (value as { id?: unknown }).id === "string",
+    );
   }
 
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
@@ -3188,15 +3262,30 @@ export function createMemoryCore(
     sessionId?: SessionId;
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<EpisodeId[]> {
     ensureLive();
-    const rows = handle.repos.episodes.list({
-      sessionId: input.sessionId,
-      limit: input.limit ?? 50,
-      offset: input.offset ?? 0,
-    });
-    return rows
+    const limit = input.limit ?? 50;
+    const offset = input.offset ?? 0;
+    if (input.includeAllNamespaces) {
+      // Every row passes the visibility filter, so repo-level paging
+      // is both correct and cheap.
+      return handle.repos.episodes
+        .list({ sessionId: input.sessionId, limit, offset })
+        .map((r: EpisodeRow) => r.id as EpisodeId);
+    }
+    // Namespace-scoped path: paging at the repo level would apply
+    // `limit` before the visibility filter runs, silently under-filling
+    // pages (callers can't tell a short page from end-of-data). Fetch
+    // the widest window the repo allows, filter, then page in memory —
+    // same idiom as `listEpisodeRows` / `countEpisodes`. The repo
+    // clamps the fetch window to 500 rows (`clampLimit`), so scoped
+    // paging is exact within the newest 500 episodes; beyond that the
+    // same shared limitation applies to the sibling list/count methods.
+    return handle.repos.episodes
+      .list({ sessionId: input.sessionId, limit: 100_000 })
       .filter((r: EpisodeRow) => visibleToCurrent(r))
+      .slice(offset, offset + limit)
       .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
@@ -3399,8 +3488,16 @@ export function createMemoryCore(
     toolNames?: readonly string[];
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<{ logs: ApiLogDTO[]; total: number }> {
     ensureLive();
+    // `includeAllNamespaces` is accepted for contract symmetry with the
+    // other viewer list* methods (#2131). The `api_logs` write path does
+    // not currently stamp per-namespace owner columns, so every row is
+    // effectively cross-namespace regardless of this flag. Callers that
+    // fan into viewer aggregations still pass `true` so their intent is
+    // explicit if a per-namespace write path is added later.
+    void input?.includeAllNamespaces;
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const rows = handle.repos.apiLogs.list({
@@ -3763,7 +3860,7 @@ export function createMemoryCore(
     });
   }
 
-  async function metrics(input?: { days?: number }): Promise<{
+  async function metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;
@@ -3801,6 +3898,14 @@ export function createMemoryCore(
     const oneDayMs = 86_400_000;
     const sinceMs = now - days * oneDayMs;
 
+    // NOTE: `traces` is fetched unfiltered (all namespaces) below so
+    // that `sessions` / `writesToday` / `embeddings` / `dailyWrites`
+    // populate the viewer chart even after a turn from a different
+    // profile flips the active namespace (#2131). Only `total`
+    // (totalTurns) respects `includeAllNamespaces`. If a per-namespace
+    // scoping is ever needed for these derived fields (e.g. per-agent
+    // views), thread `visibilityWhere(activeNamespace)` through the
+    // repo query the same way `countTurns` does.
     const traces = handle.repos.traces.list({ limit: 10_000 });
     const sessions = new Set<string>();
     let writesToday = 0;
@@ -3908,9 +4013,12 @@ export function createMemoryCore(
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
     // Apply namespace visibility so the count matches the filtered list.
+    // Viewer callers pass `includeAllNamespaces` — `activeNamespace` is
+    // rewritten by every turn/session, so binding this count to it made
+    // the dashboard total collapse whenever another profile's turn ran.
     const totalTurns = handle.repos.traces.countTurns(
       {},
-      visibilityWhere(activeNamespace),
+      input?.includeAllNamespaces ? undefined : visibilityWhere(activeNamespace),
     );
 
     return {

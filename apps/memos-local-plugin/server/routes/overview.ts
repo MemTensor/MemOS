@@ -27,26 +27,54 @@ export function registerOverviewRoutes(routes: Routes, deps: ServerDeps): void {
     // headless callers. Routing the ping through the viewer's mount
     // hook keeps the semantics honest (a browser actually opened
     // the page) and is naturally deduped by browser tab lifetime.
+    // The viewer is a local single-user admin surface: its aggregate
+    // counts must reflect the whole database, not the namespace of
+    // whichever agent profile processed the most recent turn. The core
+    // rewrites its active namespace on every turn/session, so scoped
+    // reads here made the dashboard "drift to zero" as soon as a
+    // message arrived (#2131). Same convention as diag.ts / session.ts.
     const [
       health,
       episodeCount,
-      skillActive, skillCandidate, skillArchived,
-      policyActive, policyCandidate, policyArchived,
+      skillActive,
+      skillCandidate,
+      skillArchived,
+      policyActive,
+      policyCandidate,
+      policyArchived,
       worldModelCount,
       metrics,
     ] = await Promise.all([
       deps.core.health(),
-      deps.core.countEpisodes(),
-      deps.core.countSkills({ status: "active" }),
-      deps.core.countSkills({ status: "candidate" }),
-      deps.core.countSkills({ status: "archived" }),
-      deps.core.countPolicies({ status: "active" }),
-      deps.core.countPolicies({ status: "candidate" }),
-      deps.core.countPolicies({ status: "archived" }),
-      deps.core.countWorldModels(),
+      deps.core.countEpisodes({ includeAllNamespaces: true }),
+      deps.core.countSkills({
+        status: "active",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countSkills({
+        status: "candidate",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countSkills({
+        status: "archived",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countPolicies({
+        status: "active",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countPolicies({
+        status: "candidate",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countPolicies({
+        status: "archived",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countWorldModels({ includeAllNamespaces: true }),
       // `metrics.total` is the grand total of traces — cheaper than a
       // dedicated count RPC and already cached by the core.
-      deps.core.metrics({ days: 1 }),
+      deps.core.metrics({ days: 1, includeAllNamespaces: true }),
     ]);
 
     const skillStats = {

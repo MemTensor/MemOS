@@ -1,13 +1,17 @@
 import atexit
+import hashlib
 import logging
 import os
 import threading
 import time
 
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
+from typing import Any
 
 import requests
 
@@ -29,6 +33,74 @@ load_dotenv()
 selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
 _LOGGING_CONFIG_LOCK = threading.RLock()
 _LOGGING_CONFIGURED_PID: int | None = None
+
+
+def text_hash(texts: str | Sequence[str]) -> str:
+    """Return a stable short hash without retaining the source text."""
+    normalized_texts = [texts] if isinstance(texts, str) else texts
+    digest = hashlib.sha256()
+    for text in normalized_texts:
+        encoded = str(text or "").encode("utf-8", errors="replace")
+        digest.update(len(encoded).to_bytes(8, byteorder="big"))
+        digest.update(encoded)
+    return digest.hexdigest()[:16]
+
+
+def summarize_search_request(request: Any) -> dict[str, Any]:
+    """Summarize search controls without logging query or user content."""
+    query = str(getattr(request, "query", "") or "")
+    mode = getattr(request, "mode", None)
+    readable_cube_ids = getattr(request, "readable_cube_ids", None) or []
+    views = getattr(request, "include_memory_view", None) or []
+    return {
+        "query_chars": len(query),
+        "query_hash": text_hash(query),
+        "mode": getattr(mode, "value", mode),
+        "readable_cube_count": len(readable_cube_ids),
+        "views": list(views),
+        "top_k": getattr(request, "memory_limit_number", None),
+        "dedup": getattr(request, "dedup", None),
+        "rerank": getattr(request, "rerank", None),
+    }
+
+
+def summarize_search_results(results: Mapping[str, Any]) -> dict[str, Any]:
+    """Count result buckets and items without serializing result payloads."""
+    bucket_counts: dict[str, int] = {}
+    item_counts: dict[str, int] = {}
+    for key, value in results.items():
+        if not isinstance(value, list):
+            continue
+        bucket_counts[key] = len(value)
+        item_counts[key] = sum(
+            len(bucket.get("memories") or [])
+            if isinstance(bucket, Mapping) and isinstance(bucket.get("memories"), list)
+            else 1
+            for bucket in value
+        )
+    return {
+        "bucket_counts": bucket_counts,
+        "item_counts": item_counts,
+        "total_items": sum(item_counts.values()),
+    }
+
+
+def summarize_textual_memories(memories: Sequence[Any]) -> dict[str, Any]:
+    """Count textual memories by type without reading their content or metadata values."""
+    type_counts: Counter[str] = Counter()
+    for item in memories:
+        metadata = (
+            item.get("metadata") if isinstance(item, Mapping) else getattr(item, "metadata", None)
+        )
+        if isinstance(metadata, Mapping):
+            memory_type = metadata.get("memory_type")
+        else:
+            memory_type = getattr(metadata, "memory_type", None)
+        type_counts[str(memory_type or "unknown")] += 1
+    return {
+        "total_items": len(memories),
+        "type_counts": dict(type_counts),
+    }
 
 
 def _setup_logfile() -> Path:

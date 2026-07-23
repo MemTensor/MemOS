@@ -369,7 +369,7 @@ export interface MemoryCore {
   archiveWorldModel(id: string): Promise<WorldModelDTO | null>;
   /** Reverse of {@link archiveWorldModel}. */
   unarchiveWorldModel(id: string): Promise<WorldModelDTO | null>;
-  listEpisodes(input: { sessionId?: SessionId; limit?: number; offset?: number }): Promise<EpisodeId[]>;
+  listEpisodes(input: { sessionId?: SessionId; limit?: number; offset?: number; includeAllNamespaces?: boolean }): Promise<EpisodeId[]>;
   /**
    * Like `listEpisodes` but returns rich per-row metadata the viewer
    * needs to render its task list without a second round trip
@@ -435,6 +435,20 @@ export interface MemoryCore {
     toolNames?: readonly string[];
     limit?: number;
     offset?: number;
+    /**
+     * When true, ignore the (turn-scoped) active namespace and return
+     * rows from every namespace. Viewer callers set this so the Logs
+     * page and metrics aggregations stay stable across profile flips
+     * (#2131); matches the pattern already used by `listTraces` /
+     * `listSkills` / `listPolicies`.
+     *
+     * Note: the write path currently does not stamp per-namespace
+     * owner columns on `api_logs`, so this flag is a no-op today —
+     * every listing is effectively cross-namespace. Keeping the
+     * parameter formalises the contract now so a future per-namespace
+     * write can be added without breaking viewer callers.
+     */
+    includeAllNamespaces?: boolean;
   }): Promise<{ logs: ApiLogDTO[]; total: number }>;
 
   // ── skills ──
@@ -504,7 +518,7 @@ export interface MemoryCore {
    * Aggregate counts for the viewer's Analytics tab. `days` controls
    * the window the `dailyWrites` histogram covers.
    */
-  metrics(input?: { days?: number }): Promise<{
+  metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;

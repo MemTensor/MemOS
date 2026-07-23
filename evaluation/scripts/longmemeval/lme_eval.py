@@ -277,7 +277,7 @@ async def main(frame, version, nlp_options, num_runs=3, num_workers=5):
     print(f"Starting evaluation for {frame} version {version}...")
 
     load_dotenv()
-    oai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL"))
+    oai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE"))
 
     response_path = f"results/lme/{frame}-{version}/{frame}_lme_responses.json"
     judged_path = f"results/lme/{frame}-{version}/{frame}_lme_judged.json"
