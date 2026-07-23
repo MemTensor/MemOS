@@ -419,6 +419,18 @@ wait_for_viewer() {
   return 1
 }
 
+# ─── Gateway recovery helper ──────────────────────────────────────────────
+# If the install fails after stopping the OpenClaw gateway (set -e / die),
+# this trap ensures the gateway is restarted so the user is not left with
+# a downed service.
+_gateway_recovery() {
+  local oc_bin
+  oc_bin="$(find_openclaw_cli 2>/dev/null || true)"
+  if [[ -n "${oc_bin}" ]]; then
+    "${oc_bin}" gateway start >/dev/null 2>&1 || true
+  fi
+}
+
 # ─── OpenClaw install ─────────────────────────────────────────────────────
 install_openclaw() {
   STEP_CURRENT=0
@@ -429,11 +441,16 @@ install_openclaw() {
   mkdir -p "${HOME}/.openclaw"
 
   local oc_bin=""
+  local _gateway_was_stopped="false"
   if oc_bin="$(find_openclaw_cli)"; then
     step "Stopping OpenClaw gateway"
     "${oc_bin}" gateway stop >/dev/null 2>&1 || true
     sleep 1
     success "Gateway stopped"
+    _gateway_was_stopped="true"
+    # Ensure the gateway is restarted if the install fails after this point.
+    # The trap is cleared once the normal start step at the end succeeds.
+    trap '_gateway_recovery' ERR
   fi
 
   deploy_tarball_to_prefix "${prefix}"
@@ -616,6 +633,8 @@ NODE
   else
     success "OpenClaw gateway started"
   fi
+  # Gateway is back up — clear the error recovery trap.
+  trap - ERR
 
   step "Waiting for Memory Viewer"
   if wait_for_viewer "${OPENCLAW_PORT}"; then
