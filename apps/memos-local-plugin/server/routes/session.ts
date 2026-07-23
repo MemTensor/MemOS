@@ -91,7 +91,12 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
         ownerProfileId,
         includeAllNamespaces: true,
       });
-      const episodeIds = await deps.core.listEpisodes({ sessionId, limit, offset });
+      const episodeIds = await deps.core.listEpisodes({
+        sessionId,
+        limit,
+        offset,
+        includeAllNamespaces: true,
+      });
       return {
         episodeIds,
         limit,

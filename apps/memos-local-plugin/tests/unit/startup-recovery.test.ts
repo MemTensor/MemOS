@@ -15,20 +15,21 @@ function initBody(): string {
   return source.slice(start, end);
 }
 
-function stripScheduledRecoveryCallbacks(body: string): string {
+function stripBackgroundRecoveryCallback(body: string): string {
   return body.replace(
-    /scheduleStartupRecovery\([\s\S]*?\n        \}\);/g,
-    "scheduleStartupRecovery(<background task>);",
+    /startupRecoveryPromise = \(async \(\) => \{[\s\S]*?\n\s*\}\)\(\);/g,
+    "startupRecoveryPromise = <background task>;",
   );
 }
 
 describe("memory-core startup recovery", () => {
   it("does not block init on stale/dirty episode recovery", () => {
-    const synchronousInitBody = stripScheduledRecoveryCallbacks(initBody());
+    const body = initBody();
+    const synchronousInitBody = stripBackgroundRecoveryCallback(body);
 
     expect(synchronousInitBody).not.toContain("await recoverOpenEpisodesAsSessionEnd(stale)");
     expect(synchronousInitBody).not.toContain("await recoverDirtyClosedEpisodes(dirtyClosed)");
-    expect(initBody()).toContain("scheduleStartupRecovery(\"startup.open_recovery\"");
-    expect(initBody()).toContain("scheduleStartupRecovery(\"startup.dirty_closed_recovery\"");
+    expect(body).toContain("startupRecoveryPromise = (async () => {");
+    expect(body).not.toContain("await startupRecoveryPromise");
   });
 });

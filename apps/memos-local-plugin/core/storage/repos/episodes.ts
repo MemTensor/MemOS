@@ -3,6 +3,7 @@ import type { EpisodeListFilter, StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
 import {
   buildPageClauses,
+  clampLimit,
   fromJsonText,
   joinWhere,
   normalizeShareForStorage,
@@ -29,6 +30,11 @@ const COLUMNS = [
 
 export interface EpisodeMetaRow {
   meta?: Record<string, unknown>;
+}
+
+export interface ClosedEpisodeCursor {
+  startedAt: number;
+  id: string;
 }
 
 export function makeEpisodesRepo(db: StorageDb) {
@@ -173,6 +179,29 @@ export function makeEpisodesRepo(db: StorageDb) {
       const where = joinWhere(fragments);
       const page = buildPageClauses(filter, "started_at");
       const sql = `SELECT ${COLUMNS.join(", ")} FROM episodes ${where} ${page}`;
+      return db.prepare<typeof params, RawEpisodeRow>(sql).all(params).map(mapRow);
+    },
+
+    /**
+     * Return one stable, newest-first page of closed episodes. A cursor keeps
+     * scans progressing when new rows are inserted ahead of an earlier page.
+     */
+    listClosedPage(opts: {
+      limit?: number;
+      before?: ClosedEpisodeCursor | null;
+    } = {}): Array<EpisodeRow & EpisodeMetaRow> {
+      const limit = clampLimit(opts.limit ?? 500);
+      const params: Record<string, unknown> = { status: "closed" };
+      const fragments = ["status = @status"];
+      if (opts.before) {
+        fragments.push(
+          "(started_at < @before_started_at OR (started_at = @before_started_at AND id < @before_id))",
+        );
+        params.before_started_at = opts.before.startedAt;
+        params.before_id = opts.before.id;
+      }
+      const where = joinWhere(fragments);
+      const sql = `SELECT ${COLUMNS.join(", ")} FROM episodes ${where} ORDER BY started_at DESC, id DESC LIMIT ${limit}`;
       return db.prepare<typeof params, RawEpisodeRow>(sql).all(params).map(mapRow);
     },
 
