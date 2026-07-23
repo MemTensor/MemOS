@@ -36,6 +36,15 @@ const url = require("node:url") as typeof import("node:url");
 const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
 const BRIDGE_STATUS_STALE_MS = 20_000;
 const BRIDGE_STATUS_FILE = "bridge-status.json";
+// If core.shutdown() or waitForShutdown() blocks (e.g. L2/L3 LLM calls
+// hanging during flush), the bridge process would never exit after stdin
+// EOF or SIGTERM. Race against this deadline so the process always exits
+// within a bounded time even when the parent is already gone.
+const SHUTDOWN_TIMEOUT_MS = 20_000;
+
+function withShutdownTimeout(p: Promise<void>): Promise<void> {
+  return Promise.race([p, new Promise<void>((r) => setTimeout(r, SHUTDOWN_TIMEOUT_MS))]);
+}
 
 interface BridgeArgs {
   daemon: boolean;
@@ -462,13 +471,13 @@ async function main(): Promise<void> {
           process.stderr.write(
             `bridge: daemon port :${viewerPort} still in use after ${maxBindAttempts}s — exiting.\n`,
           );
-          await core.shutdown();
+          await withShutdownTimeout(core.shutdown());
           process.exit(1);
         }
         process.stderr.write(
           `bridge: daemon viewer failed: ${(err as Error)?.message ?? String(err)}\n`,
         );
-        await core.shutdown();
+        await withShutdownTimeout(core.shutdown());
         process.exit(1);
       }
     }
@@ -477,7 +486,7 @@ async function main(): Promise<void> {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
       removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
-      await core.shutdown();
+      await withShutdownTimeout(core.shutdown());
       process.exit(0);
     };
     process.on("SIGINT", () => void shutdownDaemon("SIGINT"));
@@ -548,7 +557,7 @@ async function main(): Promise<void> {
         /* best-effort */
       }
     }
-    await waitForShutdown(core, activeStdio);
+    await withShutdownTimeout(waitForShutdown(core, activeStdio));
     process.exit(0);
   };
 
@@ -569,7 +578,7 @@ async function main(): Promise<void> {
       if (viewer!.closed) {
         clearInterval(keepalive);
         removeOwnedPidFile();
-        void core.shutdown().then(() => process.exit(0));
+        void withShutdownTimeout(core.shutdown()).then(() => process.exit(0));
       }
     }, 5_000);
     (keepalive as unknown as { unref?: () => void }).unref?.();
@@ -578,7 +587,7 @@ async function main(): Promise<void> {
 
   // No viewer (headless bridge) — clean exit.
   removeOwnedPidFile();
-  await core.shutdown();
+  await withShutdownTimeout(core.shutdown());
   process.exit(0);
 }
 
