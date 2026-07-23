@@ -222,7 +222,13 @@ export function buildPipelineSubscribers(
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
     embedder: deps.embedder,
     llm: bgLlm,
-    reflectLlm: bgReflectLlm,
+    // Issue #2148: capture batch reflection emits JSON, so it must use
+    // the main model rather than the potentially thinking-enabled
+    // skill-evolver model. Keep the background wrapper so capture also
+    // participates in the shared concurrency limit. `bgReflectLlm`
+    // remains read-only evaluator metadata below; the original
+    // `deps.reflectLlm` is also exposed to the Overview health card.
+    reflectLlm: bgLlm,
     bus: buses.capture,
     cfg: algorithm.capture,
     now: deps.now,
