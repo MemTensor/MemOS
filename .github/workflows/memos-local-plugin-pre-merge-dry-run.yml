@@ -1,9 +1,9 @@
-name: MemOS Local Plugin — Post-Merge Dry Run
+name: MemOS Local Plugin — Pre-Merge Dry Run
 
 on:
   push:
     branches:
-      - main
+      - "docs-sync/**"
     paths:
       - ".github/workflows/memos-local-plugin-publish.yml"
       - ".github/workflows/memos-local-plugin-pre-merge-dry-run.yml"

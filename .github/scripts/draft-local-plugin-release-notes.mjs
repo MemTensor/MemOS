@@ -83,7 +83,9 @@ export function versionFromTag(tag) {
 
 export function parseSemver(version) {
   const cleaned = cleanVersion(version);
-  const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:[-+]([0-9A-Za-z.-]+))?$/);
+  const match = cleaned.match(
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+  );
   if (!match) return null;
   return {
     major: Number(match[1]),
@@ -93,6 +95,34 @@ export function parseSemver(version) {
   };
 }
 
+function comparePrereleaseIdentifiers(left, right) {
+  const leftNumeric = /^(0|[1-9]\d*)$/.test(left);
+  const rightNumeric = /^(0|[1-9]\d*)$/.test(right);
+  if (leftNumeric && rightNumeric) return Number(left) - Number(right);
+  if (leftNumeric) return -1;
+  if (rightNumeric) return 1;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function comparePrerelease(left, right) {
+  if (left === right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index];
+    const rightPart = rightParts[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    const order = comparePrereleaseIdentifiers(leftPart, rightPart);
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
 export function compareSemver(a, b) {
   const av = parseSemver(a);
   const bv = parseSemver(b);
@@ -100,10 +130,7 @@ export function compareSemver(a, b) {
   for (const key of ["major", "minor", "patch"]) {
     if (av[key] !== bv[key]) return av[key] - bv[key];
   }
-  if (av.prerelease === bv.prerelease) return 0;
-  if (!av.prerelease) return 1;
-  if (!bv.prerelease) return -1;
-  return av.prerelease.localeCompare(bv.prerelease);
+  return comparePrerelease(av.prerelease, bv.prerelease);
 }
 
 function gitShowJson(ref, path) {

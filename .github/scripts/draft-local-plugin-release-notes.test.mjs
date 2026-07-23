@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +8,11 @@ import test from "node:test";
 import {
   cleanVersion,
   categoryHintsForCommits,
+  compareSemver,
   draftForInspection,
   evidenceForInspection,
   ensureSourceHint,
+  findPreviousTag,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
   reportExternalFailureFromEnv,
@@ -44,6 +47,44 @@ test("normalizes only real local-plugin tag families", () => {
   assert.equal(versionFromTag("memos-local-plugin-v2.0.10"), "2.0.10");
   assert.equal(versionFromTag("openclaw-local-plugin-v2.0.9"), "2.0.9");
   assert.equal(versionFromTag("v2.0.10"), "");
+});
+
+test("compares SemVer prerelease identifiers numerically and ignores build metadata", () => {
+  assert.equal(compareSemver("2.0.0-beta.10", "2.0.0-beta.9") > 0, true);
+  assert.equal(compareSemver("2.0.0-beta.20", "2.0.0-beta.19") > 0, true);
+  assert.equal(compareSemver("2.0.0", "2.0.0-beta.99") > 0, true);
+  assert.equal(compareSemver("2.0.0-beta.1+build.2", "2.0.0-beta.1+build.1"), 0);
+  assert.equal(compareSemver("2.0.0-alpha.1", "2.0.0-alpha.beta") < 0, true);
+});
+
+test("finds previous local-plugin tags using SemVer precedence for prerelease numbers", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "local-plugin-semver-tags-"));
+  const previousCwd = process.cwd();
+  try {
+    process.chdir(tmp);
+    assert.equal(execFileSync("git", ["init"], { encoding: "utf8" }).includes("Initialized"), true);
+    execFileSync("git", ["config", "user.name", "test"], { stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { stdio: "ignore" });
+    writeFileSync("package.json", '{"private":true}\n', "utf8");
+    execFileSync("git", ["add", "package.json"], { stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init"], { stdio: "ignore" });
+    for (const tag of [
+      "memos-local-plugin-v2.0.0-beta.1",
+      "memos-local-plugin-v2.0.0-beta.2",
+      "memos-local-plugin-v2.0.0-beta.9",
+      "memos-local-plugin-v2.0.0-beta.10",
+      "memos-local-plugin-v2.0.0-beta.19",
+      "openclaw-local-plugin-v2.0.0-beta.18",
+    ]) {
+      execFileSync("git", ["tag", tag], { stdio: "ignore" });
+    }
+
+    assert.equal(findPreviousTag("2.0.0-beta.10", "memos-local-plugin-v2.0.0-beta.10"), "memos-local-plugin-v2.0.0-beta.9");
+    assert.equal(findPreviousTag("2.0.0-beta.20", "memos-local-plugin-v2.0.0-beta.20"), "memos-local-plugin-v2.0.0-beta.19");
+  } finally {
+    process.chdir(previousCwd);
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("uses an existing release tag as the evidence endpoint", () => {
