@@ -1,3 +1,5 @@
+import logging
+
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.reranker.cosine_local import CosineLocalReranker
 from memos.reranker.noop import NoopReranker
@@ -77,3 +79,34 @@ def test_cosine_local_reranker_fills_missing_embeddings_with_negative_score():
 
     assert ranked[0][0] == embedded
     assert ranked[1] == (missing, -1.0)
+
+
+def test_cosine_local_reranker_logs_summary_without_candidate_payload(caplog):
+    private_memory = "private candidate payload"
+    private_embedding_value = 0.123456789
+    item = _memory_item(
+        "00000000-0000-0000-0000-000000000001",
+        private_memory,
+        embedding=[private_embedding_value] * 128,
+    )
+
+    with caplog.at_level(logging.INFO):
+        CosineLocalReranker().rerank(
+            "private query",
+            [item],
+            top_k=1,
+            query_embedding=[private_embedding_value] * 128,
+        )
+
+    message = next(
+        record.getMessage()
+        for record in caplog.records
+        if "CosineLocalReranker rerank result" in record.getMessage()
+    )
+    assert "input_count=1" in message
+    assert "embedded_count=1" in message
+    assert "output_count=1" in message
+    assert "top_score=" in message
+    assert private_memory not in message
+    assert str(private_embedding_value) not in message
+    assert "embedding" not in message

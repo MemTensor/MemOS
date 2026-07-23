@@ -227,6 +227,43 @@ class TestPolarDBExtractFieldsFromProperties:
         assert "n.memory_type = 'DreamDiary'" in query
         assert ids == ["node-1"]
 
+    def test_lightweight_embedding_search_projects_only_requested_fields(self, polardb_instance):
+        polardb_instance.db_name = "test_db"
+        polardb_instance.config = {"user_name": "default_user"}
+        polardb_instance._build_user_name_and_kb_ids_conditions_sql = MagicMock(return_value=[])
+        polardb_instance._build_filter_conditions_sql = MagicMock(return_value=[])
+
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            (1, None, None, '"node-1"', 0.2, '"hello"', '["tag-a"]', 0.8)
+        ]
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cursor
+
+        @contextmanager
+        def fake_connection():
+            yield conn
+
+        polardb_instance._get_connection = fake_connection
+
+        results = polardb_instance.search_by_embedding(
+            vector=[0.1] * 1024,
+            user_name="cube-a",
+            return_fields=["memory", "tags"],
+            light_weight_mode=True,
+        )
+
+        query = cursor.execute.call_args[0][0]
+        assert "NULL::agtype AS properties" in query
+        assert "AS return_memory" in query
+        assert "AS return_tags" in query
+        assert results == [
+            {"id": "node-1", "score": pytest.approx(0.6), "memory": "hello", "tags": ["tag-a"]}
+        ]
+
+    def test_polardb_declares_lightweight_vector_search_support(self, polardb_instance):
+        assert polardb_instance.supports_lightweight_vector_search is True
+
 
 class TestFieldNameValidation:
     """Tests for _validate_return_fields injection prevention."""
