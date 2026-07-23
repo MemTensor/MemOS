@@ -16,26 +16,110 @@ the dependency graph for the Hermes plugin stays acyclic:
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
+import re
 import shutil
+import signal
 import subprocess
 import threading
+import time
+import urllib.error
+import urllib.request
 
 from pathlib import Path
 
 
 logger = logging.getLogger(__name__)
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 _bridge_ok: bool | None = None
+_bridge_ok_at: float = 0.0
+_viewer_status: str | None = None
+_viewer_last_probe_at = 0.0
+_viewer_process: subprocess.Popen | None = None
+
+HERMES_VIEWER_PORT = 18800
+VIEWER_PROBE_TTL_SEC = 30.0
+VIEWER_START_LOCK_TIMEOUT_SEC = 20.0
+VIEWER_START_LOCK_STALE_SEC = 60.0
+# Bound how long a cached `_bridge_ok` answer is trusted. Without this, a
+# single transient `_node_available()` failure during gateway startup
+# (subprocess race, `.env` loaded after the first probe) would pin the
+# provider to "unavailable" for the lifetime of the process — see #1797.
+BRIDGE_OK_TTL_SEC = 60.0
+
+
+@contextlib.contextmanager
+def _viewer_start_lock(timeout: float = VIEWER_START_LOCK_TIMEOUT_SEC):
+    """Cross-process guard for the Hermes viewer daemon startup path."""
+    lock_dir = _plugin_root() / "daemon" / "viewer-start.lock"
+    lock_dir.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + timeout
+    acquired = False
+
+    while True:
+        try:
+            lock_dir.mkdir()
+            acquired = True
+            with contextlib.suppress(Exception):
+                (lock_dir / "owner").write_text(
+                    f"pid={os.getpid()} started_at={time.time()}\n",
+                    encoding="utf-8",
+                )
+            break
+        except FileExistsError:
+            stale = False
+            with contextlib.suppress(Exception):
+                stale = time.time() - lock_dir.stat().st_mtime > VIEWER_START_LOCK_STALE_SEC
+            if stale:
+                with contextlib.suppress(Exception):
+                    shutil.rmtree(lock_dir)
+                continue
+            if time.time() >= deadline:
+                yield False
+                return
+            time.sleep(0.1)
+
+    try:
+        yield True
+    finally:
+        if acquired:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(lock_dir)
 
 
 def _bridge_script() -> Path:
-    return Path(__file__).resolve().parent.parent.parent.parent / "bridge.cts"
+    """Pick the viewer-daemon entrypoint, preferring pure ESM.
+
+    See ``bridge_client._bridge_script`` for the rationale. The two
+    helpers intentionally share the same precedence so that the stdio
+    bridge spawned by ``MemosBridgeClient`` and the viewer daemon
+    spawned by ``ensure_viewer_daemon`` always end up on the same Node
+    entry binary.
+    """
+    plugin_root = _plugin_root()
+    candidates = (
+        plugin_root / "dist" / "bridge.mjs",
+        plugin_root / "dist" / "bridge.cjs",
+        plugin_root / "bridge.mts",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return plugin_root / "bridge.cts"
+
+
+def _plugin_root() -> Path:
+    plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+    if plugin_root.name == "dist":
+        return plugin_root.parent
+    return plugin_root
 
 
 def _node_available() -> bool:
-    node = shutil.which("node")
+    node = _node_binary()
     if not node:
         return False
     try:
@@ -45,32 +129,442 @@ def _node_available() -> bool:
         return False
 
 
+def _installed_node_binary(plugin_root: Path) -> str | None:
+    marker = plugin_root / ".memos-node-bin"
+    try:
+        candidate = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
+def _node_binary() -> str | None:
+    plugin_root = _plugin_root()
+    return (
+        os.environ.get("MEMOS_NODE_BINARY")
+        or _installed_node_binary(plugin_root)
+        or shutil.which("node")
+    )
+
+
+def _bridge_command(*, daemon: bool) -> list[str]:
+    plugin_root = _plugin_root()
+    node = _node_binary()
+    if not node:
+        raise RuntimeError("Node.js not found on PATH")
+    script_path = _bridge_script()
+    script = str(script_path)
+    tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
+    bridge_args = [script, "--agent=hermes"]
+    if daemon:
+        bridge_args.append("--daemon")
+    if script_path.suffix in (".mjs", ".cjs"):
+        return [node, *bridge_args]
+    if tsx_cli.exists():
+        return [node, str(tsx_cli), *bridge_args]
+    return [node, "--import", "tsx", *bridge_args]
+
+
+def _rebuild_if_stale() -> bool:
+    """Run `npm run build` if any TypeScript source is newer than dist/bridge.cjs.
+
+    Returns True if the binary is current or the build succeeded.
+    Returns False if the build failed — caller should continue with
+    the existing binary rather than blocking gateway startup.
+    """
+    plugin_root = _plugin_root()
+    compiled = plugin_root / "dist" / "bridge.cjs"
+
+    if compiled.exists():
+        compiled_mtime = compiled.stat().st_mtime
+        newest_source = max(
+            (p.stat().st_mtime for p in plugin_root.rglob("*.ts")),
+            default=0.0,
+        )
+        if newest_source <= compiled_mtime:
+            return True
+
+    logger.info("MemOS: TypeScript source newer than dist/bridge.cjs — rebuilding...")
+    npm = shutil.which("npm")
+    if not npm:
+        logger.warning("MemOS: npm not found on PATH; skipping bridge rebuild")
+        return False
+    try:
+        result = subprocess.run(
+            [npm, "run", "build"],
+            cwd=str(plugin_root),
+            check=True,
+            timeout=120,
+            capture_output=True,
+            text=True,
+        )
+        logger.info("MemOS: bridge daemon rebuilt successfully")
+        if result.stderr:
+            logger.debug("MemOS: build stderr: %s", result.stderr.strip())
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error("MemOS: bridge rebuild failed:\n%s", e.stderr)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("MemOS: bridge rebuild timed out after 120s")
+        return False
+    except Exception as e:
+        logger.error("MemOS: bridge rebuild error: %s", e)
+        return False
+
+
+
 def ensure_bridge_running(*, probe_only: bool = False) -> bool:
     """Return True when the bridge is (or can be) operational.
 
     ``probe_only=True`` performs a lightweight availability check without
     launching a long-lived subprocess. This is what
     ``MemTensorProvider.is_available`` calls during Hermes startup.
+
+    The cached answer is honoured only inside ``BRIDGE_OK_TTL_SEC``; once
+    it expires we revalidate. A transient ``_node_available()`` failure
+    therefore self-heals on the next probe instead of permanently
+    disabling the provider (see issue #1797).
     """
-    global _bridge_ok
+    global _bridge_ok, _bridge_ok_at
     with _lock:
-        if _bridge_ok is not None and probe_only:
+        now = time.time()
+        if _bridge_ok is not None and probe_only and (now - _bridge_ok_at) < BRIDGE_OK_TTL_SEC:
             return _bridge_ok
         script = _bridge_script()
         if not script.exists():
             logger.warning("MemOS: bridge script missing at %s", script)
             _bridge_ok = False
+            _bridge_ok_at = now
             return False
-        if not _node_available():
-            logger.warning("MemOS: Node.js not found on PATH")
-            _bridge_ok = False
+        if _node_available():
+            _bridge_ok = True
+            _bridge_ok_at = now
+            return True
+        # Node binary check just failed. A MemOS bridge already running on
+        # :18800 is definitive proof Node works on this host (the daemon
+        # itself was launched via Node); trust it and recover rather than
+        # report unavailable forever.
+        if _probe_viewer() == "running_memos":
+            _bridge_ok = True
+            _bridge_ok_at = now
+            return True
+        logger.warning("MemOS: Node.js not found on PATH")
+        _bridge_ok = False
+        _bridge_ok_at = now
+        return False
+
+
+def _probe_viewer() -> str:
+    """Classify the service currently listening on Hermes' viewer port."""
+    ping_url = f"http://127.0.0.1:{HERMES_VIEWER_PORT}/api/v1/ping"
+    ping_status = _probe_json_url(ping_url)
+    if ping_status == "free":
+        return "free"
+    if isinstance(ping_status, dict) and ping_status.get("service") == "memos-local-plugin":
+        return "running_memos"
+
+    # Backwards compatibility for already-running viewers installed before
+    # `/api/v1/ping` carried a service marker.
+    health_url = f"http://127.0.0.1:{HERMES_VIEWER_PORT}/api/v1/health"
+    health_status = _probe_json_url(health_url)
+    if health_status == "free":
+        return "free"
+    if not isinstance(health_status, dict):
+        return "blocked"
+    if (
+        health_status.get("service") == "memos-local-plugin"
+        and health_status.get("agent") == "hermes"
+    ):
+        return "running_memos"
+    if health_status.get("agent") == "hermes" and isinstance(health_status.get("version"), str):
+        return "running_memos"
+    return "blocked"
+
+
+def _probe_json_url(url: str) -> dict | str:
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            content_type = resp.headers.get("content-type", "")
+            raw = resp.read(8192)
+    except urllib.error.URLError as err:
+        reason = getattr(err, "reason", None)
+        errno = getattr(reason, "errno", None)
+        if errno in {61, 111}:  # macOS/Linux connection refused
+            return "free"
+        msg = str(err).lower()
+        if "connection refused" in msg or "failed to establish" in msg:
+            return "free"
+        return "blocked"
+    except TimeoutError:
+        return "blocked"
+    except Exception:
+        return "blocked"
+
+    if "json" not in content_type.lower() and raw[:1] not in (b"{", b"["):
+        return "blocked"
+    try:
+        import json
+
+        return json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return "blocked"
+
+
+def ensure_viewer_daemon(*, probe_only: bool = False) -> bool:
+    """Ensure the singleton Hermes Viewer daemon owns :18800.
+
+    Returns True when the MemOS Hermes Viewer is already running or was
+    started. Returns False when the port is occupied by another service, Node
+    is unavailable, or the daemon did not become healthy quickly. This status
+    must not affect stdio memory capture.
+    """
+    global _viewer_last_probe_at, _viewer_process, _viewer_status
+    with _lock:
+        now = time.time()
+        if (
+            probe_only
+            and _viewer_status == "running_memos"
+            and now - _viewer_last_probe_at < VIEWER_PROBE_TTL_SEC
+        ):
+            return True
+
+        status = _probe_viewer()
+        _viewer_status = status
+        _viewer_last_probe_at = now
+        if status == "running_memos":
+            return True
+        if status == "blocked":
+            logger.warning(
+                "MemOS: viewer port %d is occupied by a non-MemOS service; "
+                "memory capture will continue without the web panel",
+                HERMES_VIEWER_PORT,
+            )
             return False
-        _bridge_ok = True
-        return True
+        if probe_only:
+            return False
+        with _viewer_start_lock() as lock_acquired:
+            status = _probe_viewer()
+            _viewer_status = status
+            _viewer_last_probe_at = time.time()
+            if status == "running_memos":
+                return True
+            if status == "blocked":
+                logger.warning(
+                    "MemOS: viewer port %d is occupied by a non-MemOS service; "
+                    "memory capture will continue without the web panel",
+                    HERMES_VIEWER_PORT,
+                )
+                return False
+            if not lock_acquired:
+                logger.warning(
+                    "MemOS: timed out waiting for viewer daemon startup lock; "
+                    "memory capture will continue without the web panel",
+                )
+                return False
+            if not ensure_bridge_running():
+                return False
+
+            plugin_root = _plugin_root()
+            logs_dir = plugin_root / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_file = logs_dir / "daemon-start.log"
+            try:
+                log_handle = log_file.open("a", encoding="utf-8")
+                _viewer_process = subprocess.Popen(
+                    _bridge_command(daemon=True),
+                    cwd=str(plugin_root),
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    start_new_session=True,
+                )
+                log_handle.close()
+            except Exception as err:
+                with contextlib.suppress(Exception):
+                    log_handle.close()  # type: ignore[possibly-undefined]
+                logger.warning("MemOS: failed to start viewer daemon — %s", err)
+                return False
+
+            # 45s is generous for cold Node.js starts (tsx compile + SQLite
+            # open + FTS warmup). Fast probes for the first 15s, then back
+            # off to 2s to avoid hammering a slow-starting daemon.
+            deadline = time.time() + 45.0
+            while time.time() < deadline:
+                if _viewer_process.poll() is not None:
+                    logger.warning(
+                        "MemOS: viewer daemon exited early with code %s",
+                        _viewer_process.returncode,
+                    )
+                    return False
+                status = _probe_viewer()
+                _viewer_status = status
+                _viewer_last_probe_at = time.time()
+                if status == "running_memos":
+                    logger.info("MemOS: viewer daemon running on port %d", HERMES_VIEWER_PORT)
+                    return True
+                if status == "blocked":
+                    logger.warning(
+                        "MemOS: viewer port %d became occupied by a non-MemOS service",
+                        HERMES_VIEWER_PORT,
+                    )
+                    return False
+                time.sleep(0.5 if (deadline - time.time()) > 30 else 2.0)
+            logger.warning("MemOS: viewer daemon did not become healthy within 45s")
+            return False
 
 
 def shutdown_bridge() -> None:
     """Best-effort cleanup; each client owns its own subprocess."""
-    global _bridge_ok
+    global _bridge_ok, _bridge_ok_at
     with _lock:
         _bridge_ok = None
+        _bridge_ok_at = 0.0
+
+
+def probe_viewer_status() -> str:
+    """Return the current viewer daemon status without side effects.
+
+    Returns one of: ``"running_memos"``, ``"free"``, ``"blocked"``.
+    This is a cheap, lock-free probe suitable for deciding whether to
+    spawn a new stdio bridge or connect to the existing daemon over HTTP.
+    """
+    return _probe_viewer()
+
+
+def startup_lock_active() -> bool:
+    """Return True when the viewer-start.lock directory exists.
+
+    Used by the provider to skip the cold-start sleep when there is no
+    concurrent daemon launch in progress.
+    """
+    return (_plugin_root() / "daemon" / "viewer-start.lock").exists()
+
+
+def kill_zombie_bridges() -> int:
+    """Kill all bridge.cjs processes that are NOT the daemon on port 18800.
+
+    Returns the number of zombies killed. The daemon (the process that
+    owns port 18800) is left alone. This should be called early in the
+    provider's lifecycle to clean up leftovers from crashed sessions.
+    """
+    # Find the PID that owns port 18800 (the real daemon).
+    # ss(8) is Linux-only; fall back to lsof on macOS.
+    daemon_pid: int | None = None
+    try:
+        ss_out = subprocess.check_output(
+            ["ss", "-tlnp"],
+            timeout=2.0,
+            text=True,
+        )
+        for line in ss_out.splitlines():
+            if ":18800" in line:
+                # ss output: users:(("node",pid=21246,fd=24))
+                m = re.search(r"pid=(\d+)", line)
+                if m:
+                    daemon_pid = int(m.group(1))
+                    break
+    except Exception:
+        pass
+
+    if daemon_pid is None:
+        # macOS fallback — lsof is available on both Linux and macOS.
+        try:
+            lsof_out = subprocess.check_output(
+                ["lsof", "-iTCP:18800", "-sTCP:LISTEN", "-n", "-P"],
+                timeout=2.0,
+                text=True,
+            )
+            for line in lsof_out.splitlines()[1:]:  # skip header
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        daemon_pid = int(parts[1])
+                        break
+                    except ValueError:
+                        continue
+        except Exception:
+            pass
+
+    # If we still can't identify the daemon PID, skip killing entirely to
+    # avoid terminating the daemon itself.
+    if daemon_pid is None:
+        logger.debug("MemOS: zombie scan skipped — could not identify daemon PID on port 18800")
+        return 0
+
+    # Find all bridge.cjs processes
+    killed = 0
+    try:
+        ps_out = subprocess.check_output(
+            ["ps", "aux"],
+            timeout=2.0,
+            text=True,
+        )
+        for line in ps_out.splitlines():
+            if "bridge.cjs" not in line or "grep" in line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[1])
+            except ValueError:
+                continue
+            if pid == daemon_pid:
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+                killed += 1
+                logger.info("MemOS: killed zombie bridge pid=%d", pid)
+            except (OSError, ProcessLookupError):
+                pass
+    except Exception as err:
+        logger.debug("MemOS: zombie scan failed — %s", err)
+
+    return killed
+
+
+def wait_for_process_exit(pid: int, timeout: float = 5.0) -> bool:
+    """Wait for a process to exit.
+
+    Returns True if the process has exited, False if still running after timeout.
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            # Check if process exists (signal 0 doesn't actually send a signal)
+            os.kill(pid, 0)
+            time.sleep(0.1)
+        except (OSError, ProcessLookupError):
+            # Process doesn't exist = has exited
+            return True
+    return False
+
+
+def terminate_bridge_process(pid: int, timeout: float = 7.0) -> bool:
+    """Terminate a bridge process gracefully, then forcefully if needed.
+
+    Returns True if the process was successfully terminated.
+    """
+    try:
+        # Check if process exists first
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError):
+        return True  # Already gone
+
+    try:
+        # 1. Send SIGTERM (graceful shutdown)
+        os.kill(pid, signal.SIGTERM)
+        if wait_for_process_exit(pid, timeout=5.0):
+            return True
+
+        # 2. If still running, send SIGKILL (force kill)
+        logger.warning("MemOS: bridge process %d did not exit after SIGTERM, sending SIGKILL", pid)
+        os.kill(pid, signal.SIGKILL)
+        return wait_for_process_exit(pid, timeout=2.0)
+    except (OSError, ProcessLookupError):
+        return True

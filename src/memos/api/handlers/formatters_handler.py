@@ -13,6 +13,13 @@ from memos.templates.instruction_completion import instruct_completion
 
 logger = get_logger(__name__)
 
+__all__ = [
+    "format_memory_item",
+    "post_process_textual_mem",
+    "rerank_knowledge_mem",
+    "to_iter",
+]
+
 
 def to_iter(running: Any) -> list[Any]:
     """
@@ -164,6 +171,7 @@ def rerank_knowledge_mem(
     text_mem: list[dict[str, Any]],
     top_k: int,
     file_mem_proportion: float = 0.5,
+    strip_conversation_sources: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Rerank knowledge memories and keep conversation memories.
@@ -193,8 +201,9 @@ def rerank_knowledge_mem(
         item["memory"] = item["metadata"]["sources"][0]["content"]
         item["metadata"]["sources"] = []
 
-    for item in conversation_mem:
-        item.setdefault("metadata", {})["sources"] = []
+    if strip_conversation_sources:
+        for item in conversation_mem:
+            item.setdefault("metadata", {})["sources"] = []
 
     # deduplicate: remove items with duplicate memory content
     original_count = len(reranked_knowledge_mem)

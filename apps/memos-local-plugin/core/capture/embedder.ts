@@ -33,6 +33,7 @@ export async function embedSteps(
    * the viewer displays.
    */
   summaryOverrides?: readonly string[],
+  opts: { summaryOnly?: boolean } = {},
 ): Promise<VecPair[]> {
   const log = rootLogger.child({ channel: "core.capture.embed" });
   if (steps.length === 0) return [];
@@ -43,6 +44,17 @@ export async function embedSteps(
     return summaryText(s);
   });
   const actionTexts = steps.map(actionText);
+  if (opts.summaryOnly) {
+    try {
+      const vecs = await embedder.embedMany(
+        summaryTexts.map((t) => ({ text: t || "(empty)", role: "document" as const })),
+      );
+      return steps.map((_, i) => ({ summary: vecs[i] ?? null, action: null }));
+    } catch (err) {
+      log.warn("embed.failed_all", { err: errDetail(err), stepCount: steps.length });
+      return steps.map(() => ({ summary: null, action: null }));
+    }
+  }
   // Pack summary first then action — both in the same batch to amortize
   // HTTP round trips when the provider is remote.
   const inputs = [

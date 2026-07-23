@@ -85,14 +85,17 @@ def build_llm_config() -> dict[str, Any]:
     )
 
 
-def build_chat_llm_config() -> list[dict[str, Any]]:
+def build_chat_llm_config(env_name: str = "CHAT_MODEL_LIST") -> list[dict[str, Any]]:
     """
     Build chat LLM configuration.
 
     Returns:
         Validated chat LLM configuration dictionary
+    Args:
+        env_name: Environment variable that contains the JSON chat model list.
+
     """
-    configs = json.loads(os.getenv("CHAT_MODEL_LIST", "[]"))
+    configs = json.loads(os.getenv(env_name, "[]"))
     return [
         {
             "config_class": LLMConfigFactory.model_validate(
@@ -152,6 +155,16 @@ def build_feedback_reranker_config() -> dict[str, Any]:
         Validated reranker configuration dictionary
     """
     return RerankerConfigFactory.model_validate(APIConfig.get_feedback_reranker_config())
+
+
+def build_feedback_llm_config() -> dict[str, Any]:
+    """
+    Build feedback LLM configuration.
+
+    Returns:
+        Validated feedback LLM configuration dictionary
+    """
+    return LLMConfigFactory.model_validate(APIConfig.get_feedback_llm_config())
 
 
 def build_internet_retriever_config() -> dict[str, Any]:

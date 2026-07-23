@@ -7,23 +7,43 @@ using dependency injection for better modularity and testability.
 
 import copy
 import math
+import os
 
+from contextlib import suppress
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
-from memos.log import get_logger
+from memos.dream.contextualization import CONTEXT_MEMORY_TYPE
+from memos.log import get_logger, summarize_search_request, summarize_search_results
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     cosine_similarity_matrix,
 )
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
-from memos.plugins.hooks import hookable
+from memos.plugins.hook_defs import H
+from memos.plugins.hooks import hookable, trigger_hook
 
 
 logger = get_logger(__name__)
+
+_ENV_CONTEXT_RECALL = "MEMOS_DREAM_CONTEXT_RECALL"
+_ENV_CONTEXT_RECALL_TOP_K = "MEMOS_DREAM_CONTEXT_RECALL_TOP_K"
+_DEFAULT_CONTEXT_RECALL_TOP_K = 2
+_ENV_MMR_CANDIDATE_PRUNING = "MEMOS_MMR_CANDIDATE_PRUNING_ENABLED"
+_MMR_CANDIDATE_MULTIPLIER = 2
+
+
+def _env_enabled(name: str, default: str = "off") -> bool:
+    return os.getenv(name, default).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int) -> int:
+    with suppress(TypeError, ValueError):
+        return int(os.getenv(name, str(default)))
+    return default
 
 
 class SearchHandler(BaseHandler):
@@ -59,7 +79,10 @@ class SearchHandler(BaseHandler):
         Returns:
             SearchResponse with formatted results
         """
-        self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
+        self.logger.info(
+            "[SearchHandler] Search request summary: %s",
+            summarize_search_request(search_req),
+        )
 
         # Use deepcopy to avoid modifying the original request object
         search_req_local = copy.deepcopy(search_req)
@@ -71,6 +94,14 @@ class SearchHandler(BaseHandler):
         # Search and deduplicate
         cube_view = self._build_cube_view(search_req_local)
         results = cube_view.search_memories(search_req_local)
+        hooked_results = trigger_hook(
+            H.SEARCH_MEMORY_RESULTS,
+            handler=self,
+            search_req=search_req_local,
+            results=results,
+        )
+        if hooked_results is not None:
+            results = hooked_results
         if not search_req_local.relativity:
             search_req_local.relativity = 0
         self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
@@ -92,15 +123,132 @@ class SearchHandler(BaseHandler):
             top_k=search_req_local.top_k,
             file_mem_proportion=0.5,
         )
+        hooked_results = trigger_hook(
+            H.SEARCH_RESULTS_AFTER_RERANK,
+            handler=self,
+            search_req=search_req_local,
+            results=results,
+        )
+        if hooked_results is not None:
+            results = hooked_results
+
+        hooked_results = trigger_hook(
+            H.SEARCH_CONTEXT_RENDER,
+            handler=self,
+            search_req=search_req_local,
+            results=results,
+        )
+        if hooked_results is not None:
+            results = hooked_results
 
         self.logger.info(
-            f"[SearchHandler] Final search results: count={len(results)} results={results}"
+            "[SearchHandler] Final search result summary: %s",
+            summarize_search_results(results),
         )
 
         return SearchResponse(
             message="Search completed successfully",
             data=results,
         )
+
+    def _merge_context_recall(
+        self, *, results: dict[str, Any], search_req: APISearchRequest
+    ) -> None:
+        if not _env_enabled(_ENV_CONTEXT_RECALL, "off"):
+            return
+
+        top_k = max(0, _env_int(_ENV_CONTEXT_RECALL_TOP_K, _DEFAULT_CONTEXT_RECALL_TOP_K))
+        if top_k <= 0:
+            return
+
+        context_buckets = self._recall_context_buckets(search_req=search_req, top_k=top_k)
+        if not context_buckets:
+            return
+
+        results.setdefault("text_mem", []).extend(context_buckets)
+
+    def _recall_context_buckets(
+        self, *, search_req: APISearchRequest, top_k: int
+    ) -> list[dict[str, Any]]:
+        graph_db = self.graph_db or getattr(self.searcher, "graph_store", None)
+        embedder = self.embedder or getattr(self.searcher, "embedder", None)
+        if graph_db is None or embedder is None:
+            self.logger.info(
+                "[SearchHandler] Context recall skipped: graph_db or embedder unavailable."
+            )
+            return []
+
+        try:
+            query_embedding = embedder.embed([search_req.query])[0]
+        except Exception:
+            self.logger.warning("[SearchHandler] Context recall embedding failed.", exc_info=True)
+            return []
+
+        buckets: list[dict[str, Any]] = []
+        for cube_id in self._resolve_cube_ids(search_req):
+            try:
+                hits = graph_db.search_by_embedding(
+                    query_embedding,
+                    top_k=top_k,
+                    scope=CONTEXT_MEMORY_TYPE,
+                    status="activated",
+                    user_name=cube_id,
+                    return_fields=[
+                        "memory",
+                        "key",
+                        "created_at",
+                        "updated_at",
+                        "source",
+                        "internal_info",
+                    ],
+                )
+            except Exception:
+                self.logger.warning(
+                    "[SearchHandler] Context recall search failed for cube=%s.",
+                    cube_id,
+                    exc_info=True,
+                )
+                continue
+
+            memories = [self._format_context_hit(hit) for hit in hits or [] if hit.get("memory")]
+            if not memories:
+                continue
+            buckets.append(
+                {
+                    "cube_id": cube_id,
+                    "memories": memories,
+                    "total_nodes": len(memories),
+                }
+            )
+        return buckets
+
+    @staticmethod
+    def _format_context_hit(hit: dict[str, Any]) -> dict[str, Any]:
+        context_id = str(hit.get("id", ""))
+        score = float(hit.get("score", 0.0) or 0.0)
+        metadata = {
+            "id": context_id,
+            "memory": hit.get("memory", ""),
+            "memory_type": CONTEXT_MEMORY_TYPE,
+            "source": hit.get("source") or "dream",
+            "key": hit.get("key", ""),
+            "relativity": score,
+            "score": score,
+            "embedding": [],
+            "sources": [],
+            "usage": [],
+            "ref_id": f"[{context_id.split('-')[0]}]" if context_id else "[context]",
+        }
+        for field in ("created_at", "updated_at", "internal_info"):
+            if hit.get(field) is not None:
+                metadata[field] = hit[field]
+
+        return {
+            "id": context_id,
+            "memory": hit.get("memory", ""),
+            "metadata": metadata,
+            "ref_id": metadata["ref_id"],
+        }
 
     @staticmethod
     def _apply_relativity_threshold(results: dict[str, Any], relativity: float) -> dict[str, Any]:
@@ -205,6 +353,12 @@ class SearchHandler(BaseHandler):
         # Early return if no memories to deduplicate
         if not text_buckets and not pref_buckets:
             return results
+
+        self._prune_mmr_candidates_by_bucket(
+            results,
+            text_top_k=text_top_k,
+            pref_top_k=pref_top_k,
+        )
 
         # Flatten all memories with their type and scores
         # flat structure: (memory_type, bucket_idx, mem, score)
@@ -409,6 +563,87 @@ class SearchHandler(BaseHandler):
             bucket["memories"] = [flat[i][2] for i in selected_indices]
 
         return results
+
+    def _prune_mmr_candidates_by_bucket(
+        self,
+        results: dict[str, Any],
+        *,
+        text_top_k: int,
+        pref_top_k: int,
+    ) -> dict[str, Any]:
+        """Keep at most twice the final quota for each memory type in each bucket."""
+        if not _env_enabled(_ENV_MMR_CANDIDATE_PRUNING, "off"):
+            return results
+
+        total_before = 0
+        total_after = 0
+        bucket_counts: list[tuple[int, int]] = []
+
+        for result_key, target_top_k in (
+            ("text_mem", text_top_k),
+            ("pref_mem", pref_top_k),
+        ):
+            buckets = results.get(result_key)
+            if not isinstance(buckets, list):
+                continue
+
+            candidate_limit = max(0, int(target_top_k)) * _MMR_CANDIDATE_MULTIPLIER
+            for bucket in buckets:
+                memories = bucket.get("memories") if isinstance(bucket, dict) else None
+                if not isinstance(memories, list):
+                    continue
+
+                before_count = len(memories)
+                total_before += before_count
+                memories_by_type: dict[str, list[dict[str, Any]]] = {}
+                for memory in memories:
+                    if not isinstance(memory, dict):
+                        continue
+                    metadata = memory.get("metadata")
+                    memory_type = (
+                        metadata.get("memory_type") if isinstance(metadata, dict) else None
+                    )
+                    memories_by_type.setdefault(str(memory_type or result_key), []).append(memory)
+
+                selected: list[dict[str, Any]] = []
+                if candidate_limit > 0:
+                    for typed_memories in memories_by_type.values():
+                        selected.extend(
+                            sorted(
+                                typed_memories,
+                                key=self._mmr_candidate_score,
+                                reverse=True,
+                            )[:candidate_limit]
+                        )
+                    selected.sort(key=self._mmr_candidate_score, reverse=True)
+
+                bucket["memories"] = selected
+                if "total_nodes" in bucket:
+                    bucket["total_nodes"] = len(selected)
+                total_after += len(selected)
+                bucket_counts.append((before_count, len(selected)))
+
+        self.logger.info(
+            "[SearchHandler] MMR candidate pruning: multiplier=%s before=%s after=%s "
+            "dropped=%s bucket_counts=%s",
+            _MMR_CANDIDATE_MULTIPLIER,
+            total_before,
+            total_after,
+            total_before - total_after,
+            bucket_counts,
+        )
+        return results
+
+    @staticmethod
+    def _mmr_candidate_score(memory: dict[str, Any]) -> float:
+        metadata = memory.get("metadata")
+        if not isinstance(metadata, dict):
+            return 0.0
+        score = metadata.get("score", metadata.get("relativity", 0.0))
+        try:
+            return float(score or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def _is_unrelated(

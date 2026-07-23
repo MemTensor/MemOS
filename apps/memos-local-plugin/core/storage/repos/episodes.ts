@@ -3,6 +3,7 @@ import type { EpisodeListFilter, StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
 import {
   buildPageClauses,
+  clampLimit,
   fromJsonText,
   joinWhere,
   normalizeShareForStorage,
@@ -29,6 +30,11 @@ const COLUMNS = [
 
 export interface EpisodeMetaRow {
   meta?: Record<string, unknown>;
+}
+
+export interface ClosedEpisodeCursor {
+  startedAt: number;
+  id: string;
 }
 
 export function makeEpisodesRepo(db: StorageDb) {
@@ -121,7 +127,13 @@ export function makeEpisodesRepo(db: StorageDb) {
     },
 
     appendTrace(id: EpisodeId, traceIds: string[]): void {
-      appendTrace.run({ id, trace_ids_json: toJsonText(traceIds) });
+      // Strip ghost trace IDs (entries that do not exist in the `traces`
+      // table) before persisting. Otherwise a single orphan ID lingering in
+      // `trace_ids_json` keeps the reward dirty-check tripping in a loop
+      // (#1966 — 590 wasted rescore calls in 5 days). The filter preserves
+      // input order and de-duplicates.
+      const validated = filterTraceIdsToExisting(db, traceIds);
+      appendTrace.run({ id, trace_ids_json: toJsonText(validated) });
     },
 
     removeTraceIds(id: EpisodeId, traceIds: readonly string[]): void {
@@ -170,6 +182,29 @@ export function makeEpisodesRepo(db: StorageDb) {
       return db.prepare<typeof params, RawEpisodeRow>(sql).all(params).map(mapRow);
     },
 
+    /**
+     * Return one stable, newest-first page of closed episodes. A cursor keeps
+     * scans progressing when new rows are inserted ahead of an earlier page.
+     */
+    listClosedPage(opts: {
+      limit?: number;
+      before?: ClosedEpisodeCursor | null;
+    } = {}): Array<EpisodeRow & EpisodeMetaRow> {
+      const limit = clampLimit(opts.limit ?? 500);
+      const params: Record<string, unknown> = { status: "closed" };
+      const fragments = ["status = @status"];
+      if (opts.before) {
+        fragments.push(
+          "(started_at < @before_started_at OR (started_at = @before_started_at AND id < @before_id))",
+        );
+        params.before_started_at = opts.before.startedAt;
+        params.before_id = opts.before.id;
+      }
+      const where = joinWhere(fragments);
+      const sql = `SELECT ${COLUMNS.join(", ")} FROM episodes ${where} ORDER BY started_at DESC, id DESC LIMIT ${limit}`;
+      return db.prepare<typeof params, RawEpisodeRow>(sql).all(params).map(mapRow);
+    },
+
     count(filter: Omit<EpisodeListFilter, "limit" | "offset"> = {}): number {
       const tr = timeRangeWhere(filter, "started_at");
       const fragments: string[] = [];
@@ -210,7 +245,7 @@ function mapRow(r: RawEpisodeRow): EpisodeRow & EpisodeMetaRow {
     id: r.id,
     sessionId: r.session_id,
     ...ownerFieldsFromRaw(r),
-    share: { scope: normalizeShareForStorage(r.share_scope) as "private" | "local" | "public" | "hub" },
+    share: { scope: normalizeShareForStorage(r.share_scope) },
     startedAt: r.started_at,
     endedAt: r.ended_at,
     traceIds: fromJsonText<string[]>(r.trace_ids_json, []),
@@ -218,4 +253,27 @@ function mapRow(r: RawEpisodeRow): EpisodeRow & EpisodeMetaRow {
     status: r.status,
     meta: fromJsonText<Record<string, unknown>>(r.meta_json, {}),
   };
+}
+
+/**
+ * Return the subset of `traceIds` that have a backing row in the `traces`
+ * table, preserving input order and de-duplicating. Empty array short-circuits.
+ *
+ * Lives in `episodes.ts` so the repo is self-contained — it does not import
+ * `traces.ts` to avoid a circular module. Uses the same chunking strategy as
+ * `traces.filterExistingIds` to stay under SQLite's bound-parameter limit.
+ */
+function filterTraceIdsToExisting(db: StorageDb, traceIds: string[]): string[] {
+  if (!traceIds || traceIds.length === 0) return [];
+  const dedup = Array.from(new Set(traceIds));
+  const existing = new Set<string>();
+  const CHUNK_SIZE = 900;
+  for (let i = 0; i < dedup.length; i += CHUNK_SIZE) {
+    const chunk = dedup.slice(i, i + CHUNK_SIZE);
+    const placeholders = chunk.map(() => "?").join(",");
+    const sql = `SELECT id FROM traces WHERE id IN (${placeholders})`;
+    const rows = db.prepare<readonly string[], { id: string }>(sql).all(chunk);
+    for (const r of rows) existing.add(r.id);
+  }
+  return dedup.filter((id) => existing.has(id));
 }

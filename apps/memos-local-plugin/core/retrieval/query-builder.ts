@@ -10,10 +10,18 @@
  */
 
 import { extractErrorSignatures } from "../capture/error-signature.js";
-import { extractPatternTerms, prepareFtsMatch } from "../storage/keyword.js";
+import {
+  extractPatternTerms,
+  prepareFtsMatch,
+  type FtsTokenizerMode,
+} from "../storage/keyword.js";
 import type { RetrievalCtx } from "./types.js";
 
 const MAX_QUERY_CHARS = 1_500;
+
+export interface BuildQueryOptions {
+  ftsTokenizer?: FtsTokenizerMode;
+}
 
 /** Public tag list kept in sync with `capture/tagger.ts#KEYWORD_TAGS`. */
 const KEYWORD_TAGS: ReadonlyArray<{ re: RegExp; tag: string }> = [
@@ -68,30 +76,36 @@ export interface CompiledQuery {
  * Build a `CompiledQuery` from a retrieval context. Behavior varies per
  * reason so that e.g. `decision_repair` biases toward the failing tool name.
  */
-export function buildQuery(ctx: RetrievalCtx): CompiledQuery {
+export function buildQuery(ctx: RetrievalCtx, opts: BuildQueryOptions = {}): CompiledQuery {
   switch (ctx.reason) {
     case "turn_start": {
       const hintText = hintToText(ctx.contextHints);
       const parts = [ctx.userText?.trim() ?? ""];
       if (hintText) parts.push(hintText);
-      return finalize(parts.join("\n"));
+      return finalize(parts.join("\n"), opts);
     }
     case "tool_driven": {
+      if (typeof ctx.args?.query === "string" && ctx.args.query.trim()) {
+        const rest = { ...ctx.args };
+        delete rest.query;
+        const restText = Object.keys(rest).length > 0 ? renderArgs(rest) : "";
+        return finalize([ctx.args.query.trim(), restText].filter(Boolean).join("\n"), opts);
+      }
       const args = renderArgs(ctx.args);
-      return finalize(`tool:${ctx.tool}\n${args}`);
+      return finalize(`tool:${ctx.tool}\n${args}`, opts);
     }
     case "skill_invoke": {
       const head = ctx.skillId ? `skill:${ctx.skillId}\n` : "";
-      return finalize(head + (ctx.query ?? ""));
+      return finalize(head + (ctx.query ?? ""), opts);
     }
     case "sub_agent": {
       const profile = ctx.profile ? `profile:${ctx.profile}\n` : "";
-      return finalize(profile + (ctx.mission ?? ""));
+      return finalize(profile + (ctx.mission ?? ""), opts);
     }
     case "decision_repair": {
       const head = `failing_tool:${ctx.failingTool}\nfailures:${ctx.failureCount}\n`;
       const tail = ctx.lastErrorCode ? `error:${ctx.lastErrorCode}` : "";
-      return finalize(head + tail);
+      return finalize(head + tail, opts);
     }
     default: {
       // Exhaustiveness — compile-time check.
@@ -120,7 +134,7 @@ export function extractTags(text: string): string[] {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function finalize(raw: string): CompiledQuery {
+function finalize(raw: string, opts: BuildQueryOptions): CompiledQuery {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
     return {
@@ -143,7 +157,7 @@ function finalize(raw: string): CompiledQuery {
   // Keyword channels — derived from the original text *before* truncation
   // so we don't lose tail content. The actual queries are bounded by the
   // helpers themselves.
-  const ftsMatch = prepareFtsMatch(trimmed);
+  const ftsMatch = prepareFtsMatch(trimmed, { tokenizer: opts.ftsTokenizer });
   const patternTerms = extractPatternTerms(trimmed);
   if (trimmed.length <= MAX_QUERY_CHARS) {
     return {

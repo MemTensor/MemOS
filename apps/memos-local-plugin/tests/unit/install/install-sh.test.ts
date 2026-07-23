@@ -76,7 +76,10 @@ describe("install.sh — CLI surface", () => {
     expect(script).toContain('OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"');
     expect(script).toContain('"extensions": ["${OPENCLAW_RUNTIME_ENTRY}"]');
     expect(script).toContain('"contracts": {');
-    expect(script).toContain('"memory_search"');
+    expect(script).toContain('"memos_search"');
+    expect(script).toContain("const MEMOS_TOOL_NAMES = [");
+    expect(script).toContain("if (!Array.isArray(config.tools.alsoAllow)) config.tools.alsoAllow = []");
+    expect(script).toContain("config.tools.alsoAllow.push(toolName)");
     expect(script).toContain("config.plugins.entries[pluginId].hooks.allowConversationAccess = true");
     expect(script).not.toContain('"extensions": ["./adapters/openclaw/index.ts"]');
   });

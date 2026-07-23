@@ -61,6 +61,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
+        self.name = "MultiModalStructMemReader"
         self.memory_version_switch = getattr(config, "memory_version_switch", "off")
 
         # Image parser LLM (requires vision model)
@@ -377,7 +378,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if aggregated_file_ids:
             extra_kwargs["file_ids"] = aggregated_file_ids
 
-        # Propagate manager_user_id and project_id from constituent items
+        # Propagate manager_user_id, project_id, and related_id from constituent items
         for item in items:
             metadata = getattr(item, "metadata", None)
             if metadata is not None:
@@ -1035,7 +1036,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     process_preference_fine,
                     non_file_url_fast_items,
                     info,
-                    self.general_llm,
+                    getattr(self, "preference_extractor_llm", self.general_llm),
                     self.embedder,
                     **kwargs,
                 )
@@ -1127,7 +1128,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 process_preference_fine,
                 non_file_url_nodes,
                 info,
-                self.general_llm,
+                getattr(self, "preference_extractor_llm", self.general_llm),
                 self.embedder,
                 **kwargs,
             )

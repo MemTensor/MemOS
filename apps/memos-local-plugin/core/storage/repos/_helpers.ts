@@ -7,7 +7,7 @@
 import { rootLogger } from "../../logger/index.js";
 import { decodeVector, encodeVector } from "../vector.js";
 import type { EmbeddingVector } from "../../types.js";
-import type { RuntimeNamespace } from "../../../agent-contract/dto.js";
+import type { RuntimeNamespace, ShareScope } from "../../../agent-contract/dto.js";
 import {
   normalizeShareScope,
   ownerFromNamespace,
@@ -48,13 +48,13 @@ export function nullable<T>(v: T | undefined): T | null {
 
 export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string): string {
   const newestFirst = opts?.newestFirst !== false;
-  const limit = clampLimit(opts?.limit ?? 50);
+  const limit = clampLimit(opts?.limit ?? 500);
   const offset = Math.max(opts?.offset ?? 0, 0);
   return `ORDER BY ${tsColumn} ${newestFirst ? "DESC" : "ASC"} LIMIT ${limit} OFFSET ${offset}`;
 }
 
 export function clampLimit(n: number): number {
-  if (!Number.isFinite(n) || n <= 0) return 50;
+  if (!Number.isFinite(n) || n <= 0) return 500;
   return Math.min(Math.trunc(n), 500);
 }
 
@@ -134,7 +134,7 @@ export function visibilityWhere(ns: RuntimeNamespace, alias = ""): {
   return runtimeVisibilityWhere(ns, alias);
 }
 
-export function normalizeShareForStorage(scope: unknown): string {
+export function normalizeShareForStorage(scope: unknown): ShareScope {
   return normalizeShareScope(scope);
 }
 

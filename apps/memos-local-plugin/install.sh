@@ -338,20 +338,25 @@ deploy_tarball_to_prefix() {
   success "Package extracted"
 
   step "Installing npm dependencies"
-  command -v node > "${prefix}/.memos-node-bin"
-  ( cd "${prefix}" && MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
+  local node_bin node_dir node_version
+  node_bin="$(command -v node || true)"
+  [[ -n "${node_bin}" && -x "${node_bin}" ]] || die "Node.js not found after bootstrap."
+  node_dir="$(dirname "${node_bin}")"
+  node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
+  printf "%s\n" "${node_bin}" > "${prefix}/.memos-node-bin"
+  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
   [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
 
   if [[ -d "${prefix}/node_modules/better-sqlite3" ]]; then
-    step "Rebuilding better-sqlite3 for Node $(node -v)"
-    ( cd "${prefix}" && npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
-      || ( cd "${prefix}" && npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
+    step "Rebuilding better-sqlite3 for Node ${node_version}"
+    ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
+      || ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
       || warn "better-sqlite3 rebuild did not complete cleanly."
-    if ( cd "${prefix}" && node -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
+    if ( cd "${prefix}" && "${node_bin}" -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
       success "better-sqlite3 native module OK"
     else
       warn "better-sqlite3 not loadable — plugin will fail at startup."
-      printf "       ${DIM}Fix: cd ${prefix} && npm rebuild better-sqlite3${NC}\n" >&2
+      printf "       ${DIM}Fix: cd ${prefix} && PATH=${node_dir}:\$PATH npm rebuild better-sqlite3${NC}\n" >&2
     fi
   fi
   success "Dependencies ready"
@@ -458,12 +463,12 @@ install_openclaw() {
   "extensions": ["${OPENCLAW_RUNTIME_ENTRY}"],
   "contracts": {
     "tools": [
-      "memory_search",
-      "memory_get",
-      "memory_timeline",
-      "skill_list",
-      "memory_environment",
-      "skill_get"
+      "memos_search",
+      "memos_get",
+      "memos_timeline",
+      "memos_skill_list",
+      "memos_environment",
+      "memos_skill_get"
     ]
   },
   "configSchema": {
@@ -493,6 +498,14 @@ const {
   PLUGIN_VERSION: pluginVersion, LEGACY_JSON: legacyCsv,
 } = process.env;
 const legacyIds = (legacyCsv || '').split(',').filter(Boolean);
+const MEMOS_TOOL_NAMES = [
+  'memos_search',
+  'memos_get',
+  'memos_timeline',
+  'memos_environment',
+  'memos_skill_list',
+  'memos_skill_get',
+];
 
 let config = {};
 if (fs.existsSync(configPath)) {
@@ -507,6 +520,14 @@ if (!config.gateway || typeof config.gateway !== 'object' || Array.isArray(confi
   config.gateway = {};
 }
 if (!config.gateway.mode) config.gateway.mode = 'local';
+
+if (!config.tools || typeof config.tools !== 'object' || Array.isArray(config.tools)) {
+  config.tools = {};
+}
+if (!Array.isArray(config.tools.alsoAllow)) config.tools.alsoAllow = [];
+for (const toolName of MEMOS_TOOL_NAMES) {
+  if (!config.tools.alsoAllow.includes(toolName)) config.tools.alsoAllow.push(toolName);
+}
 
 if (!config.plugins || typeof config.plugins !== 'object' || Array.isArray(config.plugins)) {
   config.plugins = {};
@@ -541,6 +562,9 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
+// OpenClaw blocks conversation-level typed hooks for non-bundled plugins
+// unless the user config explicitly grants access. The memory plugin needs
+// agent_end to capture completed turns.
 if (
   !config.plugins.entries[pluginId].hooks ||
   typeof config.plugins.entries[pluginId].hooks !== 'object' ||
@@ -548,9 +572,6 @@ if (
 ) {
   config.plugins.entries[pluginId].hooks = {};
 }
-// OpenClaw >= 2026.5 gates conversation transcript hooks for non-bundled
-// plugins. MemOS needs agent_end/before_prompt_build access to capture turns
-// and inject retrieval context, so keep this explicit capability on install.
 config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
 if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
@@ -633,15 +654,15 @@ install_hermes() {
 
   step "Stopping existing bridge daemon"
   local bridge_pids=""
-  bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+  bridge_pids="$(pgrep -f "bridge\\.(cts|cjs)" 2>/dev/null || true)"
   if [[ -n "${bridge_pids}" ]]; then
     kill ${bridge_pids} >/dev/null 2>&1 || true
     local i
     for i in {1..10}; do
       sleep 1
-      pgrep -f "bridge.cts" >/dev/null 2>&1 || break
+      pgrep -f "bridge\\.(cts|cjs)" >/dev/null 2>&1 || break
     done
-    bridge_pids="$(pgrep -f "bridge.cts" 2>/dev/null || true)"
+    bridge_pids="$(pgrep -f "bridge\\.(cts|cjs)" 2>/dev/null || true)"
     if [[ -n "${bridge_pids}" ]]; then
       kill -9 ${bridge_pids} >/dev/null 2>&1 || true
       sleep 1
@@ -674,7 +695,9 @@ install_hermes() {
   step "Configuring runtime environment"
   ensure_runtime_home "hermes" "${home}" "${prefix}"
 
-  echo "${prefix}/bridge.cts" > "${adapter_dir}/bridge_path.txt"
+  local bridge_entry="${prefix}/dist/bridge.cjs"
+  [[ -f "${bridge_entry}" ]] || bridge_entry="${prefix}/bridge.cts"
+  echo "${bridge_entry}" > "${adapter_dir}/bridge_path.txt"
   success "Bridge path recorded"
 
   step "Locating Hermes Python environment"
@@ -709,13 +732,22 @@ except Exception:
   success "plugins/memory: ${plugin_dir}"
 
   step "Linking memtensor provider"
-  local target="${plugin_dir}/memtensor"
-  if [[ -L "${target}" ]]; then rm "${target}"
-  elif [[ -e "${target}" ]]; then rm -rf "${target}"
-  fi
-  ln -s "${adapter_dir}/memos_provider" "${target}"
+  local user_plugin_dir="${HOME}/.hermes/plugins/memory"
+  mkdir -p "${user_plugin_dir}"
+  # Ensure the provider directory is fully populated before symlinking so
+  # the second symlink (user-level) already points at a complete tree.
   cp "${adapter_dir}/plugin.yaml" "${adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null || true
-  success "Symlinked → ${target}"
+  local provider_targets=(
+    "${plugin_dir}/memtensor"
+    "${user_plugin_dir}/memtensor"
+  )
+  local target
+  for target in "${provider_targets[@]}"; do
+    # Use `ln -sfn` for atomic, idempotent replace; matches install.hermes.sh.
+    if [[ -e "${target}" && ! -L "${target}" ]]; then rm -rf "${target}"; fi
+    ln -sfn "${adapter_dir}/memos_provider" "${target}"
+    success "Symlinked → ${target}"
+  done
 
   step "Verifying provider & patching config"
   local verify
@@ -955,14 +987,21 @@ CFGEOF
     step "Starting Memory Viewer daemon"
     local node_bin
     node_bin="$(cat "${prefix}/.memos-node-bin" 2>/dev/null || command -v node || true)"
-    local tsx_bin="${prefix}/node_modules/.bin/tsx"
+    local tsx_bin="${prefix}/node_modules/tsx/dist/cli.mjs"
     local bridge_cts="${prefix}/bridge.cts"
-    if [[ -n "${node_bin}" && -x "${node_bin}" && -x "${tsx_bin}" && -f "${bridge_cts}" ]]; then
+    local bridge_cjs="${prefix}/dist/bridge.cjs"
+    local bridge_entry="${bridge_cjs}"
+    [[ -f "${bridge_entry}" ]] || bridge_entry="${bridge_cts}"
+    if [[ -n "${node_bin}" && -x "${node_bin}" && -f "${bridge_entry}" && ( "${bridge_entry}" == *.cjs || -f "${tsx_bin}" ) ]]; then
       local daemon_log="${prefix}/logs/daemon-start.log"
       mkdir -p "${prefix}/logs"
       # Launch bridge in --daemon mode (pure HTTP, no stdio).
       # The process stays alive to serve the Memory Viewer.
-      ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_cts}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      if [[ "${bridge_entry}" == *.cjs ]]; then
+        ( cd "${prefix}" && nohup "${node_bin}" "${bridge_entry}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      else
+        ( cd "${prefix}" && nohup "${node_bin}" "${tsx_bin}" "${bridge_entry}" --agent=hermes --daemon >"${daemon_log}" 2>&1 & )
+      fi
 
       if wait_for_viewer "${HERMES_PORT}" 120; then
         success "Memory Viewer daemon running"
@@ -972,7 +1011,7 @@ CFGEOF
         return 1
       fi
     else
-      warn "node or tsx not found — skipping daemon start."
+      warn "node or bridge runtime not found — skipping daemon start."
     fi
   fi
 

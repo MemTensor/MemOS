@@ -8,7 +8,7 @@
  *   GET /api/v1/metrics/tools?minutes=N  (alias: ?days=N)
  *     Per-tool call latency + success-rate table. Data source: the
  *     `api_logs` table, which records every plugin internal operation
- *     (memory_search / memory_add / policy_generate / skill_generate /
+ *     (memos_search / memory_add / policy_generate / skill_generate /
  *     world_model_generate / task_done / task_failed) with its
  *     `durationMs` and `success` flag. We also fold in any agent-side
  *     tool invocations recorded on `traces.tool_calls_json` so the
@@ -41,8 +41,11 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/metrics", async (ctx) => {
     const raw = ctx.url.searchParams.get("days");
     const days = raw ? Number(raw) : undefined;
+    // Viewer analytics cover the whole local database — see overview.ts
+    // for why viewer reads must not follow the turn-scoped namespace.
     return await deps.core.metrics({
       days: Number.isFinite(days) ? days : undefined,
+      includeAllNamespaces: true,
     });
   });
 
@@ -92,7 +95,7 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
 
     // 1. Plugin internal operations — from api_logs. We only surface
     // entries that represent **actual tool/handler calls the agent
-    // made or the user cares about latency for**: `memory_search`
+    // made or the user cares about latency for**: `memos_search`
     // and `memory_add`. Purely internal pipeline lifecycle events
     // (`task_done`, `task_failed`, `skill_generate`, `skill_evolve`,
     // `policy_generate`, `policy_evolve`, `world_model_generate`,
@@ -100,8 +103,17 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     // with names like "task_failed" that users don't recognise as
     // tools, and their timings reflect background work rather than
     // response latency.
-    const PUBLIC_API_LOG_TOOLS = new Set(["memory_search", "memory_add"]);
-    const { logs } = await deps.core.listApiLogs({ limit: 5_000, offset: 0 });
+    const PUBLIC_API_LOG_TOOLS = new Set(["memos_search", "memory_search", "memory_add"]);
+    // Same convention as the `listTraces` call below (#2131): the tool
+    // panel folds api_logs entries and trace tool-calls into a single
+    // aggregation, so both feeds must be scoped identically. Passing
+    // `includeAllNamespaces: true` here keeps them aligned even if a
+    // future per-namespace write path lands on api_logs.
+    const { logs } = await deps.core.listApiLogs({
+      limit: 5_000,
+      offset: 0,
+      includeAllNamespaces: true,
+    });
     for (const lg of logs) {
       if (lg.calledAt < sinceMs) continue;
       if (!PUBLIC_API_LOG_TOOLS.has(lg.toolName)) continue;
@@ -112,7 +124,7 @@ export function registerMetricsRoutes(routes: Routes, deps: ServerDeps): void {
     // web / whatever the agent ran. Fold them in with the api_logs
     // rows so the panel answers "is anything slow?" regardless of
     // whether the slowness was internal or user-visible.
-    const traces = await deps.core.listTraces({ limit: 2_000, offset: 0 });
+    const traces = await deps.core.listTraces({ limit: 2_000, offset: 0, includeAllNamespaces: true });
     for (const tr of traces) {
       if (tr.ts < sinceMs) continue;
       for (const tc of tr.toolCalls ?? []) {

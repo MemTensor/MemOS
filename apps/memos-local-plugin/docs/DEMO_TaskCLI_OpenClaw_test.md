@@ -185,7 +185,7 @@ sqlite3 ~/.openclaw/memos-plugin/data/memos.db \
 
 - 命令返回 `"stopReason": "stop"` 后**手动 Ctrl+C**（agent 会进入 hub retry 循环，不会自动退出）
 - 每轮 Ctrl+C 后**等 40-60 秒**让 capture / reward / L2 / L3 / skill 订阅者收尾，再去面板验证
-- **召回看日志页**：每轮 `memory_search` 卡片展开后有「初步召回 / Hub 远端 / LLM 筛选后」三段，被注入 assistant 的就是「LLM 筛选后」
+- **召回看日志页**：每轮 `memos_search` 卡片展开后有「初步召回 / Hub 远端 / LLM 筛选后」三段，被注入 assistant 的就是「LLM 筛选后」
 
 ---
 
@@ -212,8 +212,8 @@ openclaw agent --session-id "$SESSION" --timeout 120 --json --message \
 | 记忆 | 多条 step trace（一次 tool call 一条 trace + 一条总结 trace） |
 | 任务 | 1 个**进行中**的 episode，r_task 暂时 null |
 | 经验 / 环境认知 / 技能 | 0 |
-| 日志 → `memory_search` | **「初步召回」为空** `candidates: []` —— 完美的"冷启动空召回" |
-| 日志 | `memory_add` + `memory_search` 各 1 条 |
+| 日志 → `memos_search` | **「初步召回」为空** `candidates: []` —— 完美的"冷启动空召回" |
+| 日志 | `memory_add` + `memos_search` 各 1 条 |
 
 > ✅ 这一步演示了 **L1 trace 写入 + 反思加权 V 框架已就位**。注意 V/α 此刻仍然是 0，要等 Round 2 的 `new_task` 信号触发 R1 的 reward 评分后才回填。
 
@@ -259,7 +259,7 @@ openclaw agent --session-id "$SESSION" --timeout 120 --json --message \
 |---|---|
 | 任务 → R2 episode | status=closed、r_task≈0.75 |
 | 经验 | 第 1 条 L2 policy 应已出现（可能 `candidate`，可能升 `active`，看阈值） |
-| **日志 → `memory_search`** | **第一次出现 Tier 2 trace 召回！**「初步召回」里有 R1/R2 的 storage 实现 trace，score 0.7+，「LLM 筛选后」保留并**注入 prompt** |
+| **日志 → `memos_search`** | **第一次出现 Tier 2 trace 召回！**「初步召回」里有 R1/R2 的 storage 实现 trace，score 0.7+，「LLM 筛选后」保留并**注入 prompt** |
 
 > ✅ **生成→召回闭环的第一次显形**：R1/R2 写盘的代码被 Tier 2 召回，进入 R3 的 prompt——assistant 写 SQLite 时能直接参考之前的 storage 风格。
 
@@ -326,7 +326,7 @@ openclaw agent --session-id "$SESSION" --timeout 120 --json --message \
 |---|---|
 | 经验 | pytest policy `support` 升到 3 |
 | 技能 | 可能 version 升到 2（rebuild），eta 上调 |
-| **日志 → `memory_search`** | **Tier 1 技能召回首次出现** —— 「初步召回」第一条是 Skill：`validate_python_syntax_compile (η=0.5)`，技能 invocation guide 注入 prompt |
+| **日志 → `memos_search`** | **Tier 1 技能召回首次出现** —— 「初步召回」第一条是 Skill：`validate_python_syntax_compile (η=0.5)`，技能 invocation guide 注入 prompt |
 
 > ✅ **演示第二个高潮**：技能召回首次接管任务，OpenClaw 直接照已结晶的 pytest 模板写。
 
@@ -401,11 +401,11 @@ openclaw agent --session-id task-cli-demo-recall-show --timeout 150 --json --mes
 
 ### 5.3 召回查证 — 看注入 prompt 的实际内容
 
-#### 5.3.1 数据库查 `memory_search.candidates`（最直接）
+#### 5.3.1 数据库查 `memos_search.candidates`（最直接）
 
 ```bash
 sqlite3 ~/.openclaw/memos-plugin/data/memos.db \
-  "SELECT output_json FROM api_logs WHERE tool_name='memory_search' ORDER BY called_at DESC LIMIT 1;" \
+  "SELECT output_json FROM api_logs WHERE tool_name='memos_search' ORDER BY called_at DESC LIMIT 1;" \
 | python3 -c "
 import json, sys
 data = json.loads(sys.stdin.read())
@@ -458,12 +458,12 @@ print(body)
 IMPORTANT: The following are facts from previous conversations with this user.
 You MUST treat these as established knowledge and use them directly when answering.
 
-## Candidate skills (call `skill_get` to load any you decide to use)
+## Candidate skills (call `memos_skill_get` to load any you decide to use)
 
 1. validate_python_syntax_compile
    validate_python_syntax_compile — η=0.50, status=candidate
    验证Python文件语法正确性
-   → call `skill_get(id="sk_xxxxxxx")` to load the full procedure if you decide to use it
+   → call `memos_skill_get(id="sk_xxxxxxx")` to load the full procedure if you decide to use it
 
 ## Memories
 
@@ -483,14 +483,14 @@ You MUST treat these as established knowledge and use them directly when answeri
    各自实现统一的 load(path)/save(path, tasks) 接口；CLI 子命令在 task_cli/commands/ 下，...
 
 Available follow-up tools:
-- `skill_get(id)` — ...
-- `memory_search(query, maxResults?)` — ...
+- `memos_skill_get(id)` — ...
+- `memos_search(query, maxResults?)` — ...
 </memos_context>
 ```
 
 #### 5.3.3 面板「日志」tab 看（适合演示时秀给观众）
 
-打开 `http://127.0.0.1:18799` → 「日志」tab → 找最新的 `memory_search` 卡片展开，能看到：
+打开 `http://127.0.0.1:18799` → 「日志」tab → 找最新的 `memos_search` 卡片展开，能看到：
 
 - **「初步召回」段** — Tier 1 / Tier 2 / Tier 3 三种 candidate 都列出来
 - **「Hub 远端」段** — 演示场景下应该是空
@@ -531,7 +531,7 @@ assistant 的回答应该明显使用了召回的内容：
 
 | V7 概念 | 第几轮出现 | 在面板哪里看 |
 |---|---|---|
-| 冷启动空召回 | Round 1 | 日志 → `memory_search` candidates=[] |
+| 冷启动空召回 | Round 1 | 日志 → `memos_search` candidates=[] |
 | **Tier 2 记忆召回** | Round 3 起 | 日志 → 初步召回出现 trace |
 | **Tier 1 技能召回** | Round 6 起 | 日志 → 初步召回首条是 Skill |
 | **三层同时召回** | **收官轮 R10** | 日志 → 同时出现 Skill + Trace + WorldModel |

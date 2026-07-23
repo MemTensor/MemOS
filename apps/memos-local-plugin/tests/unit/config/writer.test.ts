@@ -65,6 +65,17 @@ llm:
     expect(reloaded.config.algorithm.skill.minSupport).toBe(7);
   });
 
+  it("patches lightweight memory mode without disturbing other algorithm fields", async () => {
+    const ctx = await makeTmpHome({ agent: "openclaw" });
+    cleanup = ctx.cleanup;
+    await patchConfig(ctx.home, {
+      algorithm: { lightweightMemory: { enabled: true } },
+    });
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.algorithm.lightweightMemory.enabled).toBe(true);
+    expect(reloaded.config.algorithm.skill.minSupport).toBeGreaterThan(0);
+  });
+
   /**
    * Regression: before commit <yaml-map-fix>, patching a nested map slot
    * whose existing value was a bare-null scalar (`skillEvolver:`), an

@@ -6,12 +6,12 @@
   "kind": "memory",
   "contracts": {
     "tools": [
-      "memory_search",
-      "memory_get",
-      "memory_timeline",
-      "memory_environment",
-      "skill_list",
-      "skill_get"
+      "memos_search",
+      "memos_get",
+      "memos_timeline",
+      "memos_environment",
+      "memos_skill_list",
+      "memos_skill_get"
     ]
   },
   "configSchema": {

@@ -29,6 +29,7 @@ import type {
   TurnResultDTO,
   WorldModelDTO,
   RuntimeNamespace,
+  ShareScope,
 } from "./dto.js";
 import type { CoreEvent } from "./events.js";
 import type { LogRecord } from "./log-record.js";
@@ -164,6 +165,22 @@ export interface MemoryCore {
   health(): Promise<CoreHealth>;
   /** Late-bind ARMS telemetry (called after config is available). */
   bindTelemetry?(t: unknown): void;
+  /**
+   * Resolve when the background recovery kicked off by `init()` settles.
+   *
+   * `init()` returns as soon as the synchronous orphan / dirty-episode
+   * classification finishes; the actual reflect / reward / L2 recovery
+   * chain runs on a background promise so the host's event loop stays
+   * responsive (see issues #1776 + #1808). This method exposes that
+   * promise for callers that need the historic "await everything"
+   * semantics — primarily tests and one-shot batch tools.
+   *
+   * Implementations MUST never reject from this promise. Failures are
+   * logged on the `init.background_recovery_failed` channel instead.
+   * Adapters that have no startup recovery may omit the method; an
+   * absent implementation is equivalent to `() => Promise.resolve()`.
+   */
+  waitForStartupRecovery?(): Promise<void>;
 
   // ── session / episode ──
   openSession(input: {
@@ -236,7 +253,7 @@ export interface MemoryCore {
   shareTrace(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -308,7 +325,7 @@ export interface MemoryCore {
   sharePolicy(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -320,7 +337,7 @@ export interface MemoryCore {
   shareWorldModel(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -352,7 +369,7 @@ export interface MemoryCore {
   archiveWorldModel(id: string): Promise<WorldModelDTO | null>;
   /** Reverse of {@link archiveWorldModel}. */
   unarchiveWorldModel(id: string): Promise<WorldModelDTO | null>;
-  listEpisodes(input: { sessionId?: SessionId; limit?: number; offset?: number }): Promise<EpisodeId[]>;
+  listEpisodes(input: { sessionId?: SessionId; limit?: number; offset?: number; includeAllNamespaces?: boolean }): Promise<EpisodeId[]>;
   /**
    * Like `listEpisodes` but returns rich per-row metadata the viewer
    * needs to render its task list without a second round trip
@@ -410,7 +427,7 @@ export interface MemoryCore {
 
   /**
    * Paged listing of the rich api_logs table ({@link ApiLogDTO}).
-   * Fuels the viewer's Logs page — shows every memory_search and
+   * Fuels the viewer's Logs page — shows every memos_search and
    * memory_add call with the full input/output JSON.
    */
   listApiLogs(input?: {
@@ -418,6 +435,20 @@ export interface MemoryCore {
     toolNames?: readonly string[];
     limit?: number;
     offset?: number;
+    /**
+     * When true, ignore the (turn-scoped) active namespace and return
+     * rows from every namespace. Viewer callers set this so the Logs
+     * page and metrics aggregations stay stable across profile flips
+     * (#2131); matches the pattern already used by `listTraces` /
+     * `listSkills` / `listPolicies`.
+     *
+     * Note: the write path currently does not stamp per-namespace
+     * owner columns on `api_logs`, so this flag is a no-op today —
+     * every listing is effectively cross-namespace. Keeping the
+     * parameter formalises the contract now so a future per-namespace
+     * write can be added without breaking viewer callers.
+     */
+    includeAllNamespaces?: boolean;
   }): Promise<{ logs: ApiLogDTO[]; total: number }>;
 
   // ── skills ──
@@ -458,7 +489,7 @@ export interface MemoryCore {
   shareSkill(
     id: SkillId,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -476,12 +507,18 @@ export interface MemoryCore {
    */
   patchConfig(patch: Record<string, unknown>): Promise<Record<string, unknown>>;
 
+  // ── optional Hub runtime hooks (HTTP viewer uses these when present) ──
+  hubAdminSnapshot?(): Promise<unknown>;
+  approveHubUser?(userId: string): Promise<unknown>;
+  rejectHubUser?(userId: string): Promise<unknown>;
+  removeHubUser?(userId: string): Promise<unknown>;
+
   // ── analytics (viewer dashboard) ──
   /**
    * Aggregate counts for the viewer's Analytics tab. `days` controls
    * the window the `dailyWrites` histogram covers.
    */
-  metrics(input?: { days?: number }): Promise<{
+  metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;

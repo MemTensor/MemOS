@@ -37,6 +37,7 @@ import type {
   RetrievalQueryDTO,
   RetrievalResultDTO,
   SessionId,
+  ShareScope,
   SkillDTO,
   SkillId,
   SubagentOutcomeDTO,
@@ -74,11 +75,18 @@ import type {
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
 import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
-import { rootLogger } from "../logger/index.js";
+import { initLogger, rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
-import { makeRepos } from "../storage/repos/index.js";
+import {
+  makeRepos,
+  embeddingMaintenanceCounts,
+  inferStoredEmbeddingByteLen,
+  FLOAT32_BYTES,
+} from "../storage/repos/index.js";
+import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
+import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -86,8 +94,10 @@ import {
   registerHostLlmBridge,
   type HostLlmBridge,
 } from "../llm/host-bridge.js";
+import type { ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
+import { RECOVERY_REASONS } from "./recovery-constants.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
 import type { PipelineDeps, PipelineHandle } from "./types.js";
 import {
@@ -98,10 +108,32 @@ import {
   isVisibleTo,
   visibilityWhere,
 } from "../runtime/namespace.js";
-import type { RetrievalConfig } from "../retrieval/types.js";
+import { createHubRuntime, type HubMemorySearchHit, type HubRuntime } from "../hub/runtime.js";
+import { llmFilterCandidates } from "../retrieval/llm-filter.js";
+import type { RankedCandidate } from "../retrieval/ranker.js";
+import type {
+  RetrievalConfig,
+  TraceCandidate,
+} from "../retrieval/types.js";
 import type { UserFeedback } from "../reward/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
+
+const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
+const IMPORT_WRITE_BATCH_SIZE = 500;
+
+type DedicatedLlmConfig = {
+  provider?: string;
+  model?: string;
+  endpoint?: string;
+  apiKey?: string;
+  temperature?: number;
+  timeoutMs?: number;
+  providerIgnore?: string[];
+  providerOrder?: string[];
+  openRouter?: boolean;
+  reasoning?: ReasoningConfig;
+};
 
 export interface BootstrapOptions {
   agent: AgentKind;
@@ -133,6 +165,13 @@ export interface BootstrapOptions {
   hostLlmBridge?: HostLlmBridge | null;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /**
+   * When true, initialize the global logger from `config.logging` (timezone,
+   * level, channels, file/audit/llm/perf/events sinks). The standalone daemon
+   * (`bridge.cts`) owns its stdio and must set this; embedded plugin hosts
+   * leave it false so the host keeps control of logging.
+   */
+  initLogging?: boolean;
 }
 
 export interface BootstrapResult {
@@ -167,14 +206,30 @@ export async function bootstrapMemoryCoreFull(
   options: BootstrapOptions,
 ): Promise<BootstrapResult> {
   const home = options.home ?? resolveHome(options.agent);
-  const config =
-    options.config ??
-    (await loadConfig(home)).config;
+  const configResult = options.config
+    ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
+    : await loadConfig(home);
+  const config = configResult.config;
+
+  // Standalone daemon: wire the global logger from config (timezone, level,
+  // channels, file sinks) before anything logs. Embedded hosts skip this and
+  // keep their own logger. Idempotent — re-init swaps the active root in place.
+  if (options.initLogging) {
+    initLogger(config, home);
+  }
 
   const log = rootLogger.child({
     channel: "core.pipeline.bootstrap",
     ctx: { agent: options.agent },
   });
+
+  // Log configuration warnings (e.g., missing config file)
+  if (configResult.warnings.length > 0) {
+    for (const warning of configResult.warnings) {
+      log.warn("config.warning", { message: warning });
+    }
+  }
+
   const namespace = normalizeNamespace(options.namespace, options.agent);
 
   // 1. Storage.
@@ -357,7 +412,7 @@ export async function bootstrapMemoryCoreFull(
   // back to the main `llm` when skillEvolver.model is blank.
   let reflectLlm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const evolver = (config as { skillEvolver?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).skillEvolver;
+    const evolver = (config as { skillEvolver?: DedicatedLlmConfig }).skillEvolver;
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
@@ -368,6 +423,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: evolver?.apiKey ?? "",
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
+        providerIgnore: evolver?.providerIgnore,
+        providerOrder: evolver?.providerOrder,
+        openRouter: evolver?.openRouter ?? false,
+        reasoning: evolver?.reasoning,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -406,6 +465,49 @@ export async function bootstrapMemoryCoreFull(
     });
   }
 
+
+  // Dedicated LLM for L3 abstraction (mirrors skillEvolver above).
+  // L3 clustering → world-model abstraction is an infrequent async pass
+  // that is quality- and shape-sensitive (cheap models over-extract and
+  // truncate the JSON, producing "'constraints' must be an array"). It runs
+  // off the turn-response path, so a slower-but-correct model here has no
+  // impact on companion latency. Blank → falls back to the main `llm`.
+  let l3Llm: ReturnType<typeof createLlmClient> | null = null;
+  try {
+    const l3c = (config as { l3Llm?: DedicatedLlmConfig }).l3Llm;
+    const l3Model = (l3c?.model ?? "").trim();
+    const l3Provider = (l3c?.provider ?? "").trim();
+    if (l3Model && l3Provider) {
+      l3Llm = createLlmClient({
+        provider: l3Provider,
+        model: l3Model,
+        endpoint: l3c?.endpoint ?? "",
+        apiKey: l3c?.apiKey ?? "",
+        temperature: l3c?.temperature ?? 0,
+        timeoutMs: l3c?.timeoutMs ?? 60_000,
+        providerIgnore: l3c?.providerIgnore,
+        providerOrder: l3c?.providerOrder,
+        openRouter: l3c?.openRouter ?? false,
+        reasoning: l3c?.reasoning,
+        maxRetries: 3,
+        fallbackToHost: true,
+        onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
+          log.warn("l3Llm.llm_error", d),
+      } as never);
+      log.info("l3Llm.ready", {
+        provider: l3Provider,
+        model: l3Model,
+        source: "l3Llm",
+      });
+    }
+  } catch (err) {
+    log.warn("l3Llm.unavailable", {
+      err: err instanceof Error ? err.message : String(err),
+      fallback: "main llm",
+    });
+  }
+
+
   // 3. Pipeline.
   const deps: PipelineDeps = {
     agent: options.agent,
@@ -415,6 +517,7 @@ export async function bootstrapMemoryCoreFull(
     repos,
     llm,
     reflectLlm: reflectLlm ?? llm,
+    l3Llm: l3Llm ?? llm,
     embedder,
     log,
     namespace,
@@ -468,6 +571,8 @@ export function createMemoryCore(
   let shutDown = false;
   /** Per-episode monotonic step counter for tool outcomes. */
   const toolStepByEpisode = new Map<string, number>();
+  let hubRuntime: HubRuntime | null = null;
+  let hubRuntimeConfig: ResolvedConfig = handle.config;
   const skillStartedAtByPolicy = new Map<string, number>();
   const skillRunDurationBySkill = new Map<string, number>();
   const l2StartedAtByEpisode = new Map<string, number>();
@@ -527,6 +632,10 @@ export function createMemoryCore(
     return row.ownerAgentKind === ns.agentKind && row.ownerProfileId === ns.profileId;
   }
 
+  function isLightweightEpisode(row: { meta?: Record<string, unknown> | null }): boolean {
+    return row.meta?.lightweightMemory === true;
+  }
+
   // ─── Stale topic auto-finalize ──
   // Open topics are allowed to survive clean session closes and process
   // restarts so the next user turn can be classified against them. Once a
@@ -536,14 +645,48 @@ export function createMemoryCore(
     handle.config.algorithm.session.mergeMaxGapMs * 2,
     4 * 60 * 60 * 1000,
   );
+
+  // ─── Dirty closed-episode rescore backoff (issue #1808) ──
+  // Failed reward / reflect runs on dirty closed episodes used to be
+  // retried on every restart and every periodic rescan. The OpenClaw
+  // Gateway report at #1808 attributed >3s `eventLoopMax` bursts to this
+  // tight retry loop hammering the LLM on already-broken rows. We now
+  // track per-episode failure counts in `meta.rewardDirty` and require
+  // an exponential cool-down before retrying a row that has already
+  // failed `MAX_DIRTY_REWARD_ATTEMPTS` times. Manual feedback /
+  // `runManually` still rescore unconditionally — the backoff only
+  // applies to the automatic rescan paths.
+  const MAX_DIRTY_REWARD_ATTEMPTS = 3;
+  const DIRTY_REWARD_BACKOFF_BASE_MS = 60 * 60 * 1000; // 1h
+  const DIRTY_REWARD_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000; // 24h
+  const DIRTY_CLOSED_SCAN_PAGE_SIZE = 500;
+  const DIRTY_CLOSED_SCAN_CURSOR_KEY = "pipeline.dirty_closed_scan_cursor.v1";
+
+  // ─── Startup recovery background promise (issue #1776 + #1808) ──
+  // `init()` used to `await` the entire reflect → reward → L2 chain for
+  // every stale / dirty episode found in SQLite. On databases with
+  // 30k+ traces this blocked the Gateway's main event loop for 3-5s+,
+  // long enough to time out the WebSocket read probe (3s budget) used
+  // by TUI / Control UI clients. We now keep the synchronous
+  // classification on the main thread (it only touches the DB) and
+  // detach the slow recovery to this promise. `waitForStartupRecovery`
+  // exposes it so tests can opt back into the deterministic semantics.
+  let startupRecoveryPromise: Promise<void> = Promise.resolve();
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
     const nowMs = Date.now();
     if (nowMs - lastStaleScan < 30_000) return;
     lastStaleScan = nowMs;
+    // Issue #2063: lightweight mode disables reward / L2 / L3 / skill;
+    // the periodic auto-finalize used to emit `episode.finalized` for
+    // every stale open topic, which still cascaded into the evolution
+    // chain in earlier releases. Close them silently instead.
+    const lightweightMode = handle.algorithm.lightweightMemory.enabled;
     try {
-      const openEpisodes = handle.repos.episodes.list({ status: "open", limit: 200 });
+      const openEpisodes = handle.repos.episodes
+        .list({ status: "open", limit: 200 })
+        .filter((ep) => !isLightweightEpisode(ep));
       if (openEpisodes.length === 0) return;
       const stale: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
       for (const ep of openEpisodes) {
@@ -558,7 +701,32 @@ export function createMemoryCore(
           stale.push(ep);
         }
       }
-      if (stale.length > 0) await recoverOpenEpisodesAsSessionEnd(stale);
+      if (stale.length === 0) return;
+      if (lightweightMode) {
+        for (const ep of stale) {
+          try {
+            // Write the lightweight flag BEFORE close() so that even if
+            // close() throws mid-way, `isLightweightEpisode()` still
+            // returns true and the periodic non-lightweight rescan paths
+            // (autoRescoreDirtyClosedEpisodes) skip this episode instead
+            // of feeding it into the reward / L2 / L3 pipeline.
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              lightweightMemory: true,
+              closeReason: "lightweight_stale",
+              closedAtMs: nowMs,
+              recoveryReason: "lightweight_stale_topic_close",
+            });
+            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+          } catch (err) {
+            log.debug("stale_topic.lightweight_close_error", {
+              episodeId: ep.id,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        return;
+      }
+      await recoverOpenEpisodesAsSessionEnd(stale);
     } catch (err) {
       log.debug("stale_topic.scan_error", {
         err: err instanceof Error ? err.message : String(err),
@@ -570,10 +738,17 @@ export function createMemoryCore(
     const nowMs = Date.now();
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
+    // Issue #2063: lightweight mode explicitly disables reward — the
+    // periodic dirty-closed rescan (which would emit
+    // `episode.finalized` and call `handle.rewardRunner.run(...)`)
+    // must be a no-op.
+    if (handle.algorithm.lightweightMemory.enabled) return;
     try {
-      const dirtyClosed = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => episodeRewardIsDirty(ep));
+      const allDirty = collectDirtyClosedEpisodes()
+        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+      // Apply the same backoff filter as init() so the 10-min periodic
+      // scan does not hammer episodes whose LLM call keeps failing.
+      const dirtyClosed = allDirty.filter((ep) => dirtyEpisodeBackoffElapsed(ep, nowMs));
       if (dirtyClosed.length > 0) {
         await recoverDirtyClosedEpisodes(dirtyClosed);
       }
@@ -582,6 +757,258 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  function makeHubRuntime(config: ResolvedConfig): HubRuntime {
+    return createHubRuntime({
+      repos: handle.repos,
+      config,
+      log: rootLogger.child({ channel: "core.hub" }),
+      agent: handle.agent,
+      version: pkgVersion,
+    });
+  }
+
+  async function searchHubMemoryHits(
+    query: string,
+    limit = 5,
+  ): Promise<RetrievalHitDTO[]> {
+    if (!hubRuntimeConfig.hub.enabled || !hubRuntime || !query.trim()) return [];
+    try {
+      const hits = await withTimeout(
+        hubRuntime.searchMemories(query, limit),
+        1_500,
+        "hub_search_timeout",
+      );
+      return hits.map(hubMemoryToRetrievalHit);
+    } catch (err) {
+      log.debug("hub.search.failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  }
+
+  function hubMemoryToRetrievalHit(hit: HubMemorySearchHit): RetrievalHitDTO {
+    const source = hit.sourceAgent ? ` from ${hit.sourceAgent}` : "";
+    return {
+      tier: 2,
+      refKind: "trace",
+      refId: `hub:${hit.id}`,
+      score: hit.score,
+      snippet: clipText(
+        [
+          `Team Hub memory${source}`,
+          hit.summary ? `Summary: ${hit.summary}` : "",
+          hit.content,
+        ].filter(Boolean).join("\n"),
+        900,
+      ),
+      ownerAgentKind: hit.sourceAgent || undefined,
+      ownerProfileId: hit.sourceUserId,
+      shareScope: "hub",
+      sourceTraceId: hit.sourceTraceId,
+    };
+  }
+
+  async function finalFilterMergedHits(input: {
+    query: string;
+    localHits: readonly RetrievalHitDTO[];
+    hubHits: readonly RetrievalHitDTO[];
+    localAlreadyFiltered: boolean;
+    config: RetrievalConfig;
+    episodeId?: string;
+  }): Promise<{
+    hits: RetrievalHitDTO[];
+    dropped: RetrievalHitDTO[];
+    outcome: string;
+    sufficient: boolean | null;
+    deduped: number;
+  }> {
+    const merged = dedupeMergedRetrievalHits(input.localHits, input.hubHits);
+    const deduped = input.localHits.length + input.hubHits.length - merged.length;
+    const hasHubAfterDedupe = merged.some((hit) => hit.shareScope === "hub");
+    if (merged.length === 0 || (input.localAlreadyFiltered && !hasHubAfterDedupe)) {
+      return {
+        hits: merged,
+        dropped: [],
+        outcome: input.hubHits.length === 0
+          ? "no_hub"
+          : merged.length === 0
+          ? "empty"
+          : "hub_deduped",
+        sufficient: null,
+        deduped,
+      };
+    }
+
+    const rankedPairs = merged.map((hit, index) => ({
+      hit,
+      ranked: rankedCandidateFromRetrievalHit(hit, index),
+    }));
+    let filtered = await llmFilterCandidates(
+      {
+        query: input.query,
+        ranked: rankedPairs.map((pair) => pair.ranked),
+        episodeId: input.episodeId,
+      },
+      {
+        llm: handle.retrievalDeps().llm ?? null,
+        log,
+        timeoutMs: FINAL_HUB_LLM_FILTER_TIMEOUT_MS,
+        config: input.config,
+      },
+    );
+    const kept = new Set(filtered.kept);
+    const dropped = new Set(filtered.dropped);
+    return {
+      hits: rankedPairs.filter((pair) => kept.has(pair.ranked)).map((pair) => pair.hit),
+      dropped: rankedPairs.filter((pair) => dropped.has(pair.ranked)).map((pair) => pair.hit),
+      outcome: filtered.outcome,
+      sufficient: filtered.sufficient,
+      deduped,
+    };
+  }
+
+  function dedupeMergedRetrievalHits(
+    localHits: readonly RetrievalHitDTO[],
+    hubHits: readonly RetrievalHitDTO[],
+  ): RetrievalHitDTO[] {
+    const localTraceIds = new Set(localHits.map((hit) => hit.refId));
+    const out: RetrievalHitDTO[] = [];
+    const normalizedSeen: string[] = [];
+    for (const hit of [...localHits, ...hubHits]) {
+      if (hit.shareScope === "hub" && hit.sourceTraceId && localTraceIds.has(hit.sourceTraceId)) {
+        continue;
+      }
+      const normalized = normalizeRetrievedSnippet(hit.snippet);
+      if (normalized && normalizedSeen.some((seen) => retrievedTextLooksDuplicate(seen, normalized))) {
+        continue;
+      }
+      out.push(hit);
+      if (normalized) normalizedSeen.push(normalized);
+    }
+    return out;
+  }
+
+  function rankedCandidateFromRetrievalHit(hit: RetrievalHitDTO, index: number): RankedCandidate {
+    const score = Number.isFinite(hit.score) ? Math.max(0, hit.score) : 0;
+    const text = hit.snippet.trim();
+    const candidate: TraceCandidate = {
+      tier: "tier2",
+      refKind: "trace",
+      refId: hit.refId as TraceId,
+      cosine: Math.min(1, score),
+      ts: Date.now(),
+      vec: null,
+      channels: [{
+        channel: "pattern",
+        rank: index,
+        score: Math.min(1, Math.max(0.001, score)),
+      }],
+      value: 0,
+      priority: Math.min(1, score),
+      episodeId: (`final-filter:${index}`) as EpisodeId,
+      sessionId: "final-filter" as SessionId,
+      vecKind: "summary",
+      userText: text,
+      agentText: "",
+      summary: firstNonEmptyLine(text),
+      reflection: null,
+      tags: hit.shareScope === "hub" ? ["hub"] : [],
+    };
+    return {
+      candidate,
+      relevance: score,
+      rrf: 0,
+      score,
+      normSq: null,
+    };
+  }
+
+  function renderFinalHitsContext(hits: readonly RetrievalHitDTO[]): string {
+    if (hits.length === 0) return "";
+    return [
+      "## Retrieved Memories",
+      ...hits.map((hit, index) => {
+        const source = hit.shareScope === "hub" ? "Hub" : "Local";
+        const title = `${index + 1}. [${source} ${hit.refKind}]`;
+        return `${title} ${clipText(hit.snippet, 1_000).replace(/\n/g, "\n   ")}`;
+      }),
+    ].join("\n\n");
+  }
+
+  function normalizeRetrievedSnippet(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/^team hub memory[^\n]*\n?/gim, "")
+      .replace(/\bsummary:\s*/gi, "")
+      .replace(/\[(user|assistant|note)\]\s*/gi, "")
+      .replace(/\b(user|assistant|note)\s*[:：]\s*/gi, "")
+      .replace(/[《》"'“”‘’`*_#>\-:：\s]+/g, "")
+      .trim();
+  }
+
+  function retrievedTextLooksDuplicate(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const min = Math.min(a.length, b.length);
+    return min >= 12 && (a.includes(b) || b.includes(a));
+  }
+
+  function firstNonEmptyLine(text: string): string {
+    return text.split(/\n+/).map((line) => line.trim()).find(Boolean)?.slice(0, 240) ?? "";
+  }
+
+  function logCandidatesFromHits(hits: readonly RetrievalHitDTO[]): Array<{
+    tier: number;
+    refKind: string;
+    refId: string;
+    score: number;
+    snippet: string;
+    sourceTraceId?: string;
+  }> {
+    return hits.map((h) => ({
+      tier: h.tier,
+      refKind: h.refKind,
+      refId: h.refId,
+      score: h.score,
+      snippet: h.snippet,
+      sourceTraceId: h.sourceTraceId,
+    }));
+  }
+
+  async function ensureHubRuntimeStarted(config: ResolvedConfig): Promise<void> {
+    hubRuntimeConfig = config;
+    if (!config.hub.enabled) {
+      if (hubRuntime) {
+        await hubRuntime.stop();
+        hubRuntime = null;
+      }
+      return;
+    }
+    if (!hubRuntime) {
+      hubRuntime = makeHubRuntime(config);
+    }
+    await hubRuntime.start();
+  }
+
+  async function restartHubRuntime(config: ResolvedConfig): Promise<void> {
+    hubRuntimeConfig = config;
+    const previous = hubRuntime;
+    hubRuntime = null;
+    if (previous) {
+      try {
+        await previous.stop();
+      } catch (err) {
+        log.warn("hub.runtime.stop_failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (!config.hub.enabled) return;
+    hubRuntime = makeHubRuntime(config);
+    await hubRuntime.start();
   }
 
   // ─── Lifecycle ──
@@ -594,43 +1021,178 @@ export function createMemoryCore(
     }
     initialized = true;
 
+    await ensureHubRuntimeStarted(handle.config);
+
     // Preserve recent open topics across restarts. A crash or Ctrl+C is
     // not evidence that the topic ended; the next user turn gets routed
     // through relation classification. Only hard-stale open topics are
     // finalized here so the pipeline eventually catches up.
+    //
+    // ── Issue #1776 + #1808: stale + dirty recovery used to run inside
+    // `await` here, blocking `init()` for seconds-to-minutes on big
+    // databases and starving the OpenClaw Gateway event loop. We now
+    // collect the slow inputs synchronously (the DB list + classify is
+    // cheap) and detach the actual reflect / reward chain onto
+    // `startupRecoveryPromise`. Tests that need the historic semantics
+    // call `core.waitForStartupRecovery()` after `init()`.
+    let staleForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
+    let dirtyClosedForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
     try {
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
         const nowMs = Date.now();
-        const stale = orphans.filter(
-          (ep) =>
-            ep.rTask != null ||
-            (ep.traceIds?.length ?? 0) > 0 ||
-            nowMs - (ep.endedAt ?? ep.startedAt) > STALE_EPISODE_TIMEOUT_MS,
-        );
-        const recent = orphans.filter((ep) => !stale.includes(ep));
-        for (const ep of recent) {
-          handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
-            topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
-            pauseReason: (ep.meta?.pauseReason as string | undefined) ?? "startup_recovered_open_topic",
-            recoveredAtStartup: nowMs,
-          });
+        // Issue #2063: when `algorithm.lightweightMemory.enabled` is
+        // true, treat EVERY orphan episode as lightweight — legacy rows
+        // written before the flag was flipped lack
+        // `meta.lightweightMemory=true`, and prior versions still
+        // re-emitted `episode.finalized` on them at startup which
+        // cascaded into reward / L2 / L3 / skill LLM calls (the
+        // "backlog of evolution calls after every bridge restart"
+        // reported by the issue). Closing them silently here matches
+        // the schema-comment guarantee that the flag disables the
+        // whole evolution pipeline.
+        const lightweightMode = handle.algorithm.lightweightMemory.enabled;
+        const treatAsLightweight = lightweightMode
+          ? orphans
+          : orphans.filter((ep) => isLightweightEpisode(ep));
+        for (const ep of treatAsLightweight) {
+          const isBackfill = lightweightMode && !isLightweightEpisode(ep);
+          let recoveryReason: string;
+          if (isBackfill) {
+            recoveryReason = "lightweight_startup_close_backfill";
+          } else {
+            recoveryReason = "lightweight_startup_close";
+          }
+          try {
+            // Write the lightweight flag BEFORE close() so that even if
+            // close() throws, `isLightweightEpisode()` still returns true
+            // for this row and the periodic non-lightweight rescan paths
+            // (autoRescoreDirtyClosedEpisodes) skip it instead of feeding
+            // it into the reward / L2 / L3 pipeline. Mirrors the ordering
+            // used by the periodic stale-topic close above.
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              lightweightMemory: true,
+              // Legacy rows being backfilled were never actually
+              // finalized through the evolution pipeline; tag them with
+              // a distinct closeReason so analytics can distinguish a
+              // real finalize from a lightweight backfill.
+              closeReason: isBackfill ? "lightweight_backfill" : "finalized",
+              recoveredAtStartup: nowMs,
+              recoveryReason,
+            });
+            handle.repos.episodes.close(ep.id as EpisodeId, nowMs, ep.rTask ?? undefined);
+          } catch (err) {
+            // Isolate per-episode failures so a single DB lock /
+            // constraint violation cannot abort the whole startup
+            // orphan-close loop. Mirrors the periodic stale-topic path.
+            log.debug("init.lightweight_close_error", {
+              episodeId: ep.id,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
-        if (stale.length > 0) {
-          await recoverOpenEpisodesAsSessionEnd(stale);
+        if (lightweightMode) {
+          // No reward / L2 / L3 / skill work is scheduled when the
+          // pipeline is lightweight — leave both background queues
+          // empty so the recovery promise short-circuits below.
+          staleForBackground = [];
+          dirtyClosedForBackground = [];
+        } else {
+          const normalOrphans = orphans.filter((ep) => !isLightweightEpisode(ep));
+          const stale = normalOrphans.filter(
+            (ep) =>
+              ep.rTask != null ||
+              (ep.traceIds?.length ?? 0) > 0 ||
+              nowMs - (ep.endedAt ?? ep.startedAt) > STALE_EPISODE_TIMEOUT_MS,
+          );
+          const recent = normalOrphans.filter((ep) => !stale.includes(ep));
+          for (const ep of recent) {
+            handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+              topicState: (ep.meta?.topicState as string | undefined) ?? "interrupted",
+              pauseReason: (ep.meta?.pauseReason as string | undefined) ?? "startup_recovered_open_topic",
+              recoveredAtStartup: nowMs,
+            });
+          }
+          staleForBackground = stale;
         }
       }
-      const dirtyClosed = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
-        .filter((ep) => episodeRewardIsDirty(ep));
-      if (dirtyClosed.length > 0) {
-        await recoverDirtyClosedEpisodes(dirtyClosed);
+      if (handle.algorithm.lightweightMemory.enabled) {
+        // Same story for dirty-closed episodes — never rescore them
+        // when the pipeline is intentionally light.
+        dirtyClosedForBackground = [];
+      } else {
+        const nowForDirty = Date.now();
+        const allDirty = collectDirtyClosedEpisodes()
+          .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+        const dirtyClosed: typeof allDirty = [];
+        for (const ep of allDirty) {
+          if (dirtyEpisodeBackoffElapsed(ep, nowForDirty)) {
+            dirtyClosed.push(ep);
+          } else {
+            const dirtyMeta = (ep.meta?.rewardDirty as
+              | { failedAttempts?: number; lastFailureAt?: number }
+              | undefined) ?? {};
+            log.debug("init.dirty_closed_episodes.skip_backoff", {
+              episodeId: ep.id,
+              failedAttempts: dirtyMeta.failedAttempts ?? 0,
+              lastFailureAt: dirtyMeta.lastFailureAt ?? 0,
+            });
+          }
+        }
+        dirtyClosedForBackground = dirtyClosed;
       }
     } catch (err) {
       log.debug("init.orphan_scan.failed", {
         err: err instanceof Error ? err.message : String(err),
       });
     }
+
+    // Kick the slow recovery chain off the main thread. `init()` returns
+    // as soon as the synchronous classification above finishes, so the
+    // Gateway can start accepting WebSocket upgrades immediately.
+    if (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0) {
+      const stale = staleForBackground;
+      const dirtyClosed = dirtyClosedForBackground;
+      log.info("init.background_recovery_started", {
+        staleCount: stale.length,
+        dirtyClosedCount: dirtyClosed.length,
+      });
+      const recoveryStartedAt = Date.now();
+      startupRecoveryPromise = (async () => {
+        try {
+          if (stale.length > 0) {
+            await recoverOpenEpisodesAsSessionEnd(stale);
+          }
+          if (dirtyClosed.length > 0) {
+            await recoverDirtyClosedEpisodes(dirtyClosed);
+          }
+          log.info("init.background_recovery_finished", {
+            staleCount: stale.length,
+            dirtyClosedCount: dirtyClosed.length,
+            durationMs: Date.now() - recoveryStartedAt,
+          });
+        } catch (err) {
+          log.warn("init.background_recovery_failed", {
+            err: err instanceof Error ? err.message : String(err),
+            staleCount: stale.length,
+            dirtyClosedCount: dirtyClosed.length,
+          });
+        }
+      })();
+    }
+
+    // Periodic rescore timer for episodes that miss the startup scan or
+    // retry of failed reward runs. 10-minute interval is safe because
+    // autoRescoreDirtyClosedEpisodes has its own 30-second dedup guard.
+    const rescoreInterval = setInterval(() => {
+      void autoRescoreDirtyClosedEpisodes().catch((err) => {
+        log.debug("periodic_rescore.error", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, 10 * 60 * 1000);
+    // Mark as unref so the timer doesn't block shutdown
+    (rescoreInterval as unknown as { unref?: () => void }).unref?.();
 
     // Wire `memory_add` into the api_logs table on EVERY turn so the
     // Logs viewer shows per-turn capture activity. `capture.lite.done`
@@ -688,7 +1250,7 @@ export function createMemoryCore(
     // ─── Skill lifecycle → api_logs(skill_*) ──────────────────────────
     // Emit structured rows for the Logs page so users can watch skill
     // generation / verification / retirement events with the same JSON
-    // detail the memory_search / memory_add cards show. Event shapes
+    // detail the memos_search / memory_add cards show. Event shapes
     // vary per kind — we spread the raw event into `output` (with any
     // sensitive fields already redacted upstream) rather than hand-
     // rolling per-kind schemas.
@@ -855,6 +1417,7 @@ export function createMemoryCore(
 
     const needsRewardFallback: EpisodeId[] = [];
     for (const ep of orphans) {
+      if (isLightweightEpisode(ep)) continue;
       try {
         const episodeId = ep.id as EpisodeId;
         const traceIds = (ep.traceIds ?? []) as TraceId[];
@@ -946,16 +1509,28 @@ export function createMemoryCore(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
+    // Snapshot the prior failure counters so we can increment them later
+    // (after the bus chain settles) without an extra DB read.
+    const priorFailedAttempts = new Map<EpisodeId, number>();
     for (const ep of episodes) {
+      if (isLightweightEpisode(ep)) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
+      const prevDirty = (ep.meta?.rewardDirty as
+        | { failedAttempts?: unknown }
+        | undefined) ?? {};
+      const prevAttempts =
+        typeof prevDirty.failedAttempts === "number"
+          ? prevDirty.failedAttempts
+          : 0;
+      priorFailedAttempts.set(episodeId, prevAttempts);
       handle.repos.episodes.updateMeta(episodeId, {
         closeReason: "finalized",
         recoveredAtStartup: endedAt,
-        recoveryReason: "dirty_reward_rescore",
+        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
       });
       const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
-        recoveryReason: "dirty_reward_rescore",
+        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
       });
       handle.buses.session.emit({
         kind: "episode.finalized",
@@ -964,10 +1539,72 @@ export function createMemoryCore(
       });
     }
     await handle.flush();
+    // After the reward / reflect chain has finished, account for the
+    // outcome: clear `meta.rewardDirty` on episodes that are no longer
+    // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
+    // that still match the dirty predicate (LLM failure / no-op). This
+    // closes the "retried indefinitely" loop reported in issue #1808.
+    const now = Date.now();
+    for (const [episodeId, prevAttempts] of priorFailedAttempts) {
+      const after = handle.repos.episodes.getById(episodeId);
+      if (!after) continue;
+      const stillDirty = episodeRewardIsDirty(after);
+      if (stillDirty) {
+        handle.repos.episodes.updateMeta(episodeId, {
+          rewardDirty: {
+            failedAttempts: prevAttempts + 1,
+            lastFailureAt: now,
+          },
+        });
+      } else if (
+        after.meta &&
+        typeof after.meta === "object" &&
+        "rewardDirty" in after.meta
+      ) {
+        handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
+      }
+    }
+  }
+
+  function collectDirtyClosedEpisodes(): Array<EpisodeRow & { meta?: Record<string, unknown> }> {
+    const storedCursor = handle.repos.kv.get<unknown>(DIRTY_CLOSED_SCAN_CURSOR_KEY, null);
+    const cursor = isDirtyClosedScanCursor(storedCursor) ? storedCursor : null;
+    if (storedCursor !== null && !cursor) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    }
+    const page = handle.repos.episodes.listClosedPage({
+      limit: DIRTY_CLOSED_SCAN_PAGE_SIZE,
+      before: cursor,
+    });
+    if (page.length === 0) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+      return [];
+    }
+
+    const last = page[page.length - 1]!;
+    if (page.length < DIRTY_CLOSED_SCAN_PAGE_SIZE) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    } else {
+      handle.repos.kv.set(DIRTY_CLOSED_SCAN_CURSOR_KEY, {
+        startedAt: last.startedAt,
+        id: last.id,
+      });
+    }
+    return page;
+  }
+
+  function isDirtyClosedScanCursor(value: unknown): value is ClosedEpisodeCursor {
+    return Boolean(
+      value &&
+      typeof value === "object" &&
+      typeof (value as { startedAt?: unknown }).startedAt === "number" &&
+      typeof (value as { id?: unknown }).id === "string",
+    );
   }
 
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
+    if (meta.lightweightMemory === true) return false;
     if (meta.rewardDirty && typeof meta.rewardDirty === "object") return true;
 
     const reward = meta.reward;
@@ -977,26 +1614,78 @@ export function createMemoryCore(
     if (
       ep.rTask == null &&
       (ep.traceIds?.length ?? 0) > 0 &&
-      (meta.closeReason === "finalized" || meta.recoveryReason === "missed_session_end")
+      (meta.closeReason === "finalized" ||
+        meta.closeReason === "abandoned" ||
+        meta.recoveryReason === "missed_session_end")
     ) {
       return true;
     }
     if (!reward || typeof reward !== "object") return false;
     const traceCount = (reward as { traceCount?: unknown }).traceCount;
     if (typeof traceCount === "number") {
-      return traceCount !== (ep.traceIds?.length ?? 0);
+      // Compare against the count of trace IDs that ACTUALLY exist in the
+      // traces table, not the raw length of `ep.traceIds`. Otherwise a
+      // single "ghost" trace ID lingering in `trace_ids_json` (deleted
+      // trace row, manual cleanup, partial migration) keeps the episode
+      // dirty forever and triggers a rescore every 10 minutes —
+      // https://github.com/MemTensor/MemOS/issues/1966 (590 wasted calls
+      // / ~14.5 RMB in the reporter's case). `countExisting` is a single
+      // `SELECT COUNT(*)` per chunk, so it stays cheap even on big DBs.
+      const traceIds = (ep.traceIds ?? []) as TraceId[];
+      const existingCount =
+        traceIds.length === 0
+          ? 0
+          : handle.repos.traces.countExisting(traceIds);
+      return traceCount !== existingCount;
     }
 
     // Backward compatibility for episodes scored before reward coverage
     // metadata existed: if a trace was appended after the recorded reward
     // time, the old task score no longer covers the full episode.
+    //
+    // Use the lightweight `hasAnyNewerThan` exists-check (a single
+    // `SELECT 1 ... LIMIT 1`) instead of `getManyByIds().some(...)`.
+    // The latter pulled every column of every trace — embedding BLOBs
+    // and big `tool_calls_json` strings included — purely to inspect
+    // one timestamp. On the multi-hundred-MB databases reported in
+    // https://github.com/MemTensor/MemOS/issues/1787 that single scan
+    // dwarfed everything else during bridge bootstrap.
     const scoredAt = (reward as { scoredAt?: unknown }).scoredAt;
     if (typeof scoredAt !== "number") return false;
     const traceIds = (ep.traceIds ?? []) as TraceId[];
     if (traceIds.length === 0) return false;
-    return handle.repos.traces
-      .getManyByIds(traceIds)
-      .some((tr) => tr.ts > scoredAt);
+    return handle.repos.traces.hasAnyNewerThan(traceIds, scoredAt);
+  }
+
+  /**
+   * Backoff filter for the automatic dirty-rescore scans (issue #1808).
+   *
+   * Returns true when the row is eligible for another reward rescore on
+   * the auto path (init scan + 10-minute periodic). When a row has
+   * failed `MAX_DIRTY_REWARD_ATTEMPTS` consecutive automatic rescores,
+   * we wait an exponentially increasing window (1h → 24h cap) before
+   * attempting again. This stops the "retried indefinitely with no
+   * backoff" symptom reported on the OpenClaw Gateway.
+   *
+   * Manual paths (`submitFeedback`, `runManually`) do NOT consult this
+   * filter — explicit user / operator intent should always re-trigger.
+   */
+  function dirtyEpisodeBackoffElapsed(
+    ep: EpisodeRow & { meta?: Record<string, unknown> },
+    nowMs: number,
+  ): boolean {
+    const dirty = (ep.meta?.rewardDirty as
+      | { failedAttempts?: unknown; lastFailureAt?: unknown }
+      | undefined) ?? {};
+    const attempts = typeof dirty.failedAttempts === "number" ? dirty.failedAttempts : 0;
+    if (attempts < MAX_DIRTY_REWARD_ATTEMPTS) return true;
+    const lastFailureAt = typeof dirty.lastFailureAt === "number" ? dirty.lastFailureAt : 0;
+    const exponent = Math.min(attempts - MAX_DIRTY_REWARD_ATTEMPTS, 5);
+    const wait = Math.min(
+      DIRTY_REWARD_BACKOFF_BASE_MS * (1 << exponent),
+      DIRTY_REWARD_BACKOFF_MAX_MS,
+    );
+    return nowMs - lastFailureAt >= wait;
   }
 
   function snapshotFromRecoveredEpisode(
@@ -1106,6 +1795,23 @@ export function createMemoryCore(
     if (shutDown) return;
     shutDown = true;
     try {
+      // Make sure the background startup recovery (issue #1808) has
+      // finished before we tear down the bus / DB handle. Without this
+      // wait, a fast `init → shutdown` race during tests or a quick
+      // gateway reload would close SQLite while reflect / reward is
+      // mid-flush, producing `SQLITE_MISUSE` noise on the way down.
+      try {
+        await startupRecoveryPromise;
+      } catch {
+        /* already logged inside the recovery promise */
+      }
+      try {
+        await hubRuntime?.stop();
+      } catch (err) {
+        log.warn("hub.stop_failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
       await handle.shutdown("memory-core.shutdown");
     } finally {
       if (telemetry) {
@@ -1129,10 +1835,20 @@ export function createMemoryCore(
       /* fall through to in-memory */
     }
 
+    // The Overview cards' source of truth for "what model is this slot
+    // running?" is config.yaml (= the Settings page). Runtime stats
+    // (lastOkAt / lastError / fallback timestamps) still come from the
+    // in-memory facades — that's the right split: the slot label is
+    // user intent, the colour/error reflects whether the runtime has
+    // actually been able to talk to the configured upstream. See #1596.
+    const effectiveConfig = diskConfig ?? handle.config;
+
     const llmInfo = llmHealth(handle.llm, latestTraceTs());
     const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    applyConfiguredModelDisplay(effectiveConfig, llmInfo, embedderInfo);
+
     const skillEvolverInfo = resolveSkillEvolver(
-      diskConfig ?? handle.config,
+      effectiveConfig,
       // Prefer the dedicated reflect LLM stats so an independently
       // configured skill-evolver model reports its OWN failures
       // instead of inheriting the (possibly healthy) summary LLM's
@@ -1140,6 +1856,7 @@ export function createMemoryCore(
       // skillEvolver blank — bootstrap aliases reflectLlm to llm
       // in that case anyway.
       handle.reflectLlm ?? handle.llm,
+      llmInfo,
       latestTraceTs(),
     );
 
@@ -1151,21 +1868,6 @@ export function createMemoryCore(
     // are still null. Now the card colour is driven purely by
     // in-memory stats — if you want to inspect past failures, head
     // to LogsView → 系统 tag.
-
-    // Override model names from disk config if they differ from the
-    // in-memory client (user saved new settings but hasn't restarted).
-    if (diskConfig) {
-      const diskLlm = diskConfig.llm as { model?: string; provider?: string } | undefined;
-      if (diskLlm?.model && diskLlm.model !== llmInfo.model) {
-        llmInfo.model = diskLlm.model;
-        if (diskLlm.provider) llmInfo.provider = diskLlm.provider;
-      }
-      const diskEmb = diskConfig.embedding as { model?: string; provider?: string } | undefined;
-      if (diskEmb?.model && diskEmb.model !== embedderInfo.model) {
-        embedderInfo.model = diskEmb.model;
-        if (diskEmb.provider) embedderInfo.provider = diskEmb.provider;
-      }
-    }
 
     applyPersistedModelStatus(handle.repos, "llm", llmInfo);
     applyPersistedModelStatus(handle.repos, "embedding", embedderInfo);
@@ -1300,17 +2002,32 @@ export function createMemoryCore(
     const startedAt = Date.now();
     let ok = true;
     let packet: Awaited<ReturnType<typeof handle.onTurnStart>> | null = null;
+    let hubCandidates: Array<{
+      tier: number;
+      refKind: string;
+      refId: string;
+      score: number;
+      snippet: string;
+    }> = [];
+    let finalFilteredCandidates: typeof hubCandidates = [];
+    let finalDroppedCandidates: typeof hubCandidates = [];
+    let finalFilterStats: RetrievalStatsLogPayload["finalFilter"] | undefined;
+    let finalHubKept = 0;
+    let hubHits: RetrievalHitDTO[] = [];
     const ns = namespaceFor(turn.agent, turn);
     activeNamespace = ns;
-    const namespacedTurn = {
-      ...turn,
-      namespace: ns,
-      contextHints: {
-        ...(turn.contextHints ?? {}),
-        ...namespaceMeta(ns),
-      },
-    };
     try {
+      hubHits = await searchHubMemoryHits(turn.userText, 5);
+      hubCandidates = logCandidatesFromHits(hubHits);
+      const namespacedTurn = {
+        ...turn,
+        namespace: ns,
+        contextHints: {
+          ...(turn.contextHints ?? {}),
+          ...namespaceMeta(ns),
+          ...(hubHits.length > 0 ? { __memosDeferLlmFilterToCaller: true } : {}),
+        },
+      };
       packet = await handle.onTurnStart(namespacedTurn);
 
       // The orchestrator stamps the *routed* session / episode id onto the
@@ -1338,10 +2055,32 @@ export function createMemoryCore(
           snippet: snip.body,
         };
       });
+      const final = await finalFilterMergedHits({
+        query: turn.userText,
+        localHits: hits,
+        hubHits,
+        localAlreadyFiltered: hubHits.length === 0,
+        config: handle.retrievalDeps().config,
+        episodeId: packet.episodeId,
+      });
+      finalFilteredCandidates = logCandidatesFromHits(final.hits);
+      finalDroppedCandidates = logCandidatesFromHits(final.dropped);
+      finalFilterStats = hubHits.length > 0
+        ? {
+            outcome: final.outcome,
+            kept: final.hits.length,
+            dropped: final.dropped.length,
+            sufficient: final.sufficient,
+            deduped: final.deduped,
+          }
+        : undefined;
+      finalHubKept = final.hits.filter((hit) => hit.shareScope === "hub").length;
       return {
         query,
-        hits,
-        injectedContext: packet.rendered,
+        hits: final.hits,
+        injectedContext: hubHits.length > 0
+          ? renderFinalHitsContext(final.hits)
+          : packet.rendered,
         tierLatencyMs: packet.tierLatencyMs,
       };
     } catch (err) {
@@ -1360,7 +2099,7 @@ export function createMemoryCore(
     } finally {
       // Log every retrieval — not just adhoc `searchMemory` calls —
       // so the viewer's Logs page can show what was recalled for
-      // each real agent turn. Without this, `memory_search` rows
+      // each real agent turn. Without this, `memos_search` rows
       // only showed up when the viewer's search box was used.
       try {
         const snippets = packet?.snippets ?? [];
@@ -1374,11 +2113,17 @@ export function createMemoryCore(
         const droppedIds = new Set(
           (packet?.droppedByLlm ?? []).map((s) => s.refId as string),
         );
-        const filtered = candidates.filter((c) => !droppedIds.has(c.refId));
-        const dropped = candidates.filter((c) => droppedIds.has(c.refId));
+        const localFiltered = candidates.filter((c) => !droppedIds.has(c.refId));
+        const filtered = hubCandidates.length > 0
+          ? finalFilteredCandidates
+          : localFiltered;
+        const localDropped = candidates.filter((c) => droppedIds.has(c.refId));
+        const dropped = hubCandidates.length > 0
+          ? [...localDropped, ...finalDroppedCandidates]
+          : localDropped;
         const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
-          toolName: "memory_search",
+          toolName: "memos_search",
           input: {
             type: "turn_start",
             agent: turn.agent,
@@ -1389,10 +2134,18 @@ export function createMemoryCore(
           output: ok
             ? {
                 candidates,
-                hubCandidates: [] as unknown[],
+                hubCandidates,
                 filtered,
                 droppedByLlm: dropped,
-                stats: stats ? retrievalStatsPayload(stats) : undefined,
+                stats: stats
+                  ? withHubStats(
+                      retrievalStatsPayload(stats),
+                      hubCandidates.length,
+                      filtered.length,
+                      finalHubKept,
+                      finalFilterStats,
+                    )
+                  : undefined,
               }
             : { error: "turn_start_retrieval_failed" },
           durationMs: Date.now() - startedAt,
@@ -1400,7 +2153,7 @@ export function createMemoryCore(
           calledAt: startedAt,
         });
       } catch (logErr) {
-        log.debug("apiLogs.memory_search.turn_start.skipped", {
+        log.debug("apiLogs.memos_search.turn_start.skipped", {
           err: logErr instanceof Error ? logErr.message : String(logErr),
         });
       }
@@ -1492,6 +2245,18 @@ export function createMemoryCore(
       : null;
     const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
     const text = feedbackText(row);
+    const lightweightFeedback = handle.algorithm.lightweightMemory.enabled ||
+      (episode ? isLightweightEpisode(episode) : false);
+
+    if (lightweightFeedback) {
+      if (telemetry) {
+        telemetry.trackFeedback(
+          handle.namespace.agentKind,
+          feedback.polarity,
+        );
+      }
+      return toFeedbackDTO(row);
+    }
 
     if (episode && sessionId) {
       const rewardFeedback: UserFeedback = {
@@ -1941,7 +2706,7 @@ export function createMemoryCore(
       namespace: ns,
       repos: wrapRetrievalRepos(handle.repos, ns),
     };
-    const { turnStartRetrieve } = await import("../retrieval/retrieve.js");
+    const { toolDrivenRetrieve } = await import("../retrieval/retrieve.js");
     const sessionId =
       query.sessionId ??
       ("adhoc-session-" + randomUUID().slice(0, 8) as SessionId);
@@ -1956,40 +2721,23 @@ export function createMemoryCore(
       snippet: string;
     }> = [];
     let filtered: typeof candidates = [];
-    let retrievalStats: {
-      raw?: number;
-      ranked?: number;
-      droppedByThreshold?: number;
-      thresholdFloor?: number;
-      topRelevance?: number;
-      llmFilter?: {
-        outcome?: string;
-        kept?: number;
-        dropped?: number;
-        sufficient?: boolean | null;
-      };
-      channelHits?: Record<string, number>;
-      queryTokens?: number;
-      queryTags?: string[];
-      embedding?: {
-        attempted: boolean;
-        ok: boolean;
-        degraded: boolean;
-        errorCode?: string;
-        errorMessage?: string;
-      };
-    } | undefined;
+    let droppedByFinalFilter: typeof candidates = [];
+    let hubCandidates: typeof candidates = [];
+    let retrievalStats: RetrievalStatsLogPayload | undefined;
+    let finalHubKept = 0;
     try {
-      const result = await turnStartRetrieve(deps, {
-        reason: "turn_start",
+      const hubHits = await searchHubMemoryHits(query.query, query.topK?.tier2 ?? 5);
+      hubCandidates = logCandidatesFromHits(hubHits);
+      const result = await toolDrivenRetrieve(deps, {
+        reason: "tool_driven",
         agent: query.agent,
         namespace: ns,
         sessionId,
         episodeId: query.episodeId,
-        userText: query.query,
-        contextHints: query.filters ?? {},
+        tool: "memos_search",
+        args: { ...(query.filters ?? {}), query: query.query },
         ts,
-      });
+      }, { skipLlmFilter: hubHits.length > 0 });
       let hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
         tier: inferTier(snip.refKind),
         refId: snip.refId,
@@ -2021,6 +2769,27 @@ export function createMemoryCore(
         });
       }
 
+      const final = await finalFilterMergedHits({
+        query: query.query,
+        localHits: hits,
+        hubHits,
+        localAlreadyFiltered: hubHits.length === 0,
+        config: deps.config,
+        episodeId: query.episodeId,
+      });
+      const returnedHits = final.hits;
+      const finalFilterStats: RetrievalStatsLogPayload["finalFilter"] | undefined =
+        hubHits.length > 0
+          ? {
+              outcome: final.outcome,
+              kept: final.hits.length,
+              dropped: final.dropped.length,
+              sufficient: final.sufficient,
+              deduped: final.deduped,
+            }
+          : undefined;
+      finalHubKept = final.hits.filter((hit) => hit.shareScope === "hub").length;
+
       // Build the logs-page payload BEFORE returning so the row
       // reflects the exact shape the adapter sees. `candidates` lists
       // everything tiered/retrieved; `filtered` is what the injector
@@ -2033,14 +2802,21 @@ export function createMemoryCore(
         score: h.score,
         snippet: h.snippet,
       }));
-      filtered = candidates; // post-filter is what we return → same list.
+      filtered = logCandidatesFromHits(returnedHits); // final list returned to the adapter.
+      droppedByFinalFilter = logCandidatesFromHits(final.dropped);
 
       // Three-stage observability — surfaced verbatim so the viewer's
       // Logs page can render "raw → threshold → ranked → LLM filter"
       // funnels. All fields are optional on the producer side so older
       // consumers keep working.
       const s = result.stats;
-      retrievalStats = retrievalStatsPayload(s);
+      retrievalStats = withHubStats(
+        retrievalStatsPayload(s),
+        hubCandidates.length,
+        filtered.length,
+        finalHubKept,
+        finalFilterStats,
+      );
       if (s.embedding?.degraded) {
         handle.repos.apiLogs.insert({
           toolName: "system_error",
@@ -2060,15 +2836,17 @@ export function createMemoryCore(
 
       return {
         query,
-        hits,
-        injectedContext: result.packet.rendered,
+        hits: returnedHits,
+        injectedContext: hubHits.length > 0
+          ? renderFinalHitsContext(returnedHits)
+          : result.packet.rendered,
         tierLatencyMs: result.packet.tierLatencyMs,
       };
     } catch (err) {
       ok = false;
       if (telemetry) {
         telemetry.trackError(
-          "memory_search",
+          handle.algorithm.lightweightMemory.enabled ? "memory_search" : "memos_search",
           err instanceof MemosError ? err.code : "unknown",
         );
       }
@@ -2076,7 +2854,7 @@ export function createMemoryCore(
     } finally {
       try {
         handle.repos.apiLogs.insert({
-          toolName: "memory_search",
+          toolName: "memos_search",
           input: {
             type: "tool_call",
             agent: query.agent,
@@ -2088,8 +2866,9 @@ export function createMemoryCore(
           output: ok
             ? {
                 candidates,
-                hubCandidates: [] as unknown[],
+                hubCandidates,
                 filtered,
+                droppedByLlm: droppedByFinalFilter,
                 stats: retrievalStats,
               }
             : { error: "retrieval_failed" },
@@ -2098,7 +2877,7 @@ export function createMemoryCore(
           calledAt: startedAt,
         });
       } catch (logErr) {
-        log.debug("apiLogs.memory_search.skipped", {
+        log.debug("apiLogs.memos_search.skipped", {
           err: logErr instanceof Error ? logErr.message : String(logErr),
         });
       }
@@ -2142,10 +2921,14 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.repos.traces.getById(id);
     if (!existing || !ownedByCurrent(existing)) return { deleted: false };
+    const wasHubShared = existing.share?.scope === "hub";
     handle.db.tx(() => {
       handle.repos.episodes.removeTraceIds(existing.episodeId, [id]);
       handle.repos.traces.deleteById(id);
     });
+    if (wasHubShared) {
+      await runHubSync(() => hubRuntime?.unpublishTrace(id), "trace", id);
+    }
     return { deleted: true };
   }
 
@@ -2157,10 +2940,14 @@ export function createMemoryCore(
     for (const id of ids) {
       const existing = handle.repos.traces.getById(id);
       if (!existing || !ownedByCurrent(existing)) continue;
+      const wasHubShared = existing.share?.scope === "hub";
       handle.db.tx(() => {
         handle.repos.episodes.removeTraceIds(existing.episodeId, [id]);
         handle.repos.traces.deleteById(id);
       });
+      if (wasHubShared) {
+        await runHubSync(() => hubRuntime?.unpublishTrace(id), "trace", id);
+      }
       deleted++;
     }
     return { deleted };
@@ -2169,7 +2956,7 @@ export function createMemoryCore(
   async function shareTrace(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -2179,6 +2966,9 @@ export function createMemoryCore(
     if (!existing || !ownedByCurrent(existing)) return null;
     handle.repos.traces.updateShare(id, share);
     const updated = handle.repos.traces.getById(id);
+    if (updated) {
+      await syncHubTraceShare(traceRowToDTO(updated, handle.repos.episodes.getById(updated.episodeId)));
+    }
     return updated
       ? traceRowToDTO(updated, handle.repos.episodes.getById(updated.episodeId))
       : null;
@@ -2270,7 +3060,11 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.repos.policies.getById(id);
     if (!existing || !ownedByCurrent(existing)) return { deleted: false };
+    const wasHubShared = existing.share?.scope === "hub";
     handle.repos.policies.deleteById(id);
+    if (wasHubShared) {
+      await runHubSync(() => hubRuntime?.unpublishPolicy(id), "policy", id);
+    }
     return { deleted: true };
   }
 
@@ -2362,14 +3156,18 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.repos.worldModel.getById(id);
     if (!existing || !ownedByCurrent(existing)) return { deleted: false };
+    const wasHubShared = existing.share?.scope === "hub";
     handle.repos.worldModel.deleteById(id);
+    if (wasHubShared) {
+      await runHubSync(() => hubRuntime?.unpublishWorldModel(id), "world_model", id);
+    }
     return { deleted: true };
   }
 
   async function sharePolicy(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -2379,13 +3177,14 @@ export function createMemoryCore(
     if (!existing || !ownedByCurrent(existing)) return null;
     handle.repos.policies.updateShare(id, share);
     const updated = handle.repos.policies.getById(id);
+    if (updated) await syncHubPolicyShare(policyRowToDTO(updated));
     return updated ? policyRowToDTO(updated) : null;
   }
 
   async function shareWorldModel(
     id: string,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -2395,6 +3194,7 @@ export function createMemoryCore(
     if (!existing || !ownedByCurrent(existing)) return null;
     handle.repos.worldModel.updateShare(id, share);
     const updated = handle.repos.worldModel.getById(id);
+    if (updated) await syncHubWorldModelShare(worldModelRowToDTO(updated));
     return updated ? worldModelRowToDTO(updated) : null;
   }
 
@@ -2462,14 +3262,31 @@ export function createMemoryCore(
     sessionId?: SessionId;
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<EpisodeId[]> {
     ensureLive();
-    const rows = handle.repos.episodes.list({
-      sessionId: input.sessionId,
-      limit: input.limit ?? 50,
-      offset: input.offset ?? 0,
-    });
-    return rows.filter((r: EpisodeRow) => visibleToCurrent(r)).map((r: EpisodeRow) => r.id as EpisodeId);
+    const limit = input.limit ?? 50;
+    const offset = input.offset ?? 0;
+    if (input.includeAllNamespaces) {
+      // Every row passes the visibility filter, so repo-level paging
+      // is both correct and cheap.
+      return handle.repos.episodes
+        .list({ sessionId: input.sessionId, limit, offset })
+        .map((r: EpisodeRow) => r.id as EpisodeId);
+    }
+    // Namespace-scoped path: paging at the repo level would apply
+    // `limit` before the visibility filter runs, silently under-filling
+    // pages (callers can't tell a short page from end-of-data). Fetch
+    // the widest window the repo allows, filter, then page in memory —
+    // same idiom as `listEpisodeRows` / `countEpisodes`. The repo
+    // clamps the fetch window to 500 rows (`clampLimit`), so scoped
+    // paging is exact within the newest 500 episodes; beyond that the
+    // same shared limitation applies to the sibling list/count methods.
+    return handle.repos.episodes
+      .list({ sessionId: input.sessionId, limit: 100_000 })
+      .filter((r: EpisodeRow) => visibleToCurrent(r))
+      .slice(offset, offset + limit)
+      .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
   async function countEpisodes(input?: {
@@ -2480,7 +3297,8 @@ export function createMemoryCore(
   }): Promise<number> {
     ensureLive();
     return handle.repos.episodes.list({ sessionId: input?.sessionId, limit: 100_000 }).filter((r) =>
-      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+      (input?.includeAllNamespaces || visibleToCurrent(r)) &&
+      matchesNamespaceFilter(r, input)
     ).length;
   }
 
@@ -2505,7 +3323,8 @@ export function createMemoryCore(
       limit: input?.ownerAgentKind || input?.ownerProfileId ? 100_000 : input?.limit ?? 50,
       offset: input?.ownerAgentKind || input?.ownerProfileId ? 0 : input?.offset ?? 0,
     }).filter((r) =>
-      (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
+      (input?.includeAllNamespaces || visibleToCurrent(r)) &&
+      matchesNamespaceFilter(r, input)
     );
     const pagedRows = input?.ownerAgentKind || input?.ownerProfileId
       ? rows.slice(input?.offset ?? 0, (input?.offset ?? 0) + (input?.limit ?? 50))
@@ -2654,7 +3473,6 @@ export function createMemoryCore(
     ensureLive();
     if (input.namespace) activeNamespace = input.namespace;
     const episode = handle.repos.episodes.getById(input.episodeId);
-    if (episode && !input.includeAllNamespaces && !visibleToCurrent(episode)) return [];
     const rows = handle.repos.traces.list({
       episodeId: input.episodeId,
       limit: 500,
@@ -2670,8 +3488,16 @@ export function createMemoryCore(
     toolNames?: readonly string[];
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<{ logs: ApiLogDTO[]; total: number }> {
     ensureLive();
+    // `includeAllNamespaces` is accepted for contract symmetry with the
+    // other viewer list* methods (#2131). The `api_logs` write path does
+    // not currently stamp per-namespace owner columns, so every row is
+    // effectively cross-namespace regardless of this flag. Callers that
+    // fan into viewer aggregations still pass `true` so their intent is
+    // explicit if a per-namespace write path is added later.
+    void input?.includeAllNamespaces;
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const rows = handle.repos.apiLogs.list({
@@ -2726,7 +3552,7 @@ export function createMemoryCore(
         sessionId: input?.sessionId,
         ownerAgentKind: input?.ownerAgentKind,
         ownerProfileId: input?.ownerProfileId,
-      });
+      }, vis);
     }
     // q substring scan — mirror `listTraces`. Walk all matching
     // traces from the repo (no limit) and apply the same filter.
@@ -2755,7 +3581,7 @@ export function createMemoryCore(
     includeAllNamespaces?: boolean;
   }): Promise<TraceDTO[]> {
     ensureLive();
-    const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
+    const limit = Math.max(1, Math.min(10_000, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const needle = (input?.q ?? "").trim().toLowerCase();
 
@@ -2938,7 +3764,7 @@ export function createMemoryCore(
     includeAllNamespaces?: boolean;
   }): Promise<number> {
     ensureLive();
-    return handle.repos.skills.list({ status: input?.status, limit: 5_000 }).filter((r) =>
+    return handle.repos.skills.list({ status: input?.status, limit: 100_000 }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
     ).length;
   }
@@ -2959,17 +3785,35 @@ export function createMemoryCore(
   ): Promise<SkillDTO | null> {
     ensureLive();
     if (opts?.namespace) activeNamespace = opts.namespace;
-    const row = handle.repos.skills.getById(id);
+    const row = resolveSkillRowForGet(id, opts);
     if (!row || (!opts?.includeAllNamespaces && !visibleToCurrent(row))) return null;
     if (opts?.recordUse) {
-      handle.repos.skills.recordUse(id, Date.now());
+      handle.repos.skills.recordUse(row.id, Date.now());
       if (opts.recordTrial) {
-        recordSkillTrial(id, opts);
+        recordSkillTrial(row.id, opts);
       }
-      const updated = handle.repos.skills.getById(id);
+      const updated = handle.repos.skills.getById(row.id);
       return updated ? skillRowToDTO(updated) : skillRowToDTO(row);
     }
     return skillRowToDTO(row);
+  }
+
+  function resolveSkillRowForGet(
+    id: SkillId,
+    opts?: { includeAllNamespaces?: boolean },
+  ) {
+    const exact = handle.repos.skills.getById(id);
+    if (exact) return exact;
+
+    const rawId = String(id);
+    const shortId = rawId.includes(":") ? rawId.slice(rawId.lastIndexOf(":") + 1) : rawId;
+    const candidates = handle.repos.skills.list({ limit: 5_000 }).filter((row) => {
+      if (!opts?.includeAllNamespaces && !visibleToCurrent(row)) return false;
+      if (row.name === rawId || row.name === shortId) return true;
+      if (rawId.includes(":")) return row.id === shortId;
+      return row.id.endsWith(`:${rawId}`);
+    });
+    return candidates.length === 1 ? candidates[0]! : null;
   }
 
   function recordSkillTrial(
@@ -3011,12 +3855,12 @@ export function createMemoryCore(
       createdAt: Date.now(),
       resolvedAt: null,
       evidence: {
-        source: "skill_get",
+        source: "memos_skill_get",
       },
     });
   }
 
-  async function metrics(input?: { days?: number }): Promise<{
+  async function metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;
@@ -3054,6 +3898,14 @@ export function createMemoryCore(
     const oneDayMs = 86_400_000;
     const sinceMs = now - days * oneDayMs;
 
+    // NOTE: `traces` is fetched unfiltered (all namespaces) below so
+    // that `sessions` / `writesToday` / `embeddings` / `dailyWrites`
+    // populate the viewer chart even after a turn from a different
+    // profile flips the active namespace (#2131). Only `total`
+    // (totalTurns) respects `includeAllNamespaces`. If a per-namespace
+    // scoping is ever needed for these derived fields (e.g. per-agent
+    // views), thread `visibilityWhere(activeNamespace)` through the
+    // repo query the same way `countTurns` does.
     const traces = handle.repos.traces.list({ limit: 10_000 });
     const sessions = new Set<string>();
     let writesToday = 0;
@@ -3161,9 +4013,12 @@ export function createMemoryCore(
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
     // Apply namespace visibility so the count matches the filtered list.
+    // Viewer callers pass `includeAllNamespaces` — `activeNamespace` is
+    // rewritten by every turn/session, so binding this count to it made
+    // the dashboard total collapse whenever another profile's turn ran.
     const totalTurns = handle.repos.traces.countTurns(
       {},
-      visibilityWhere(activeNamespace),
+      input?.includeAllNamespaces ? undefined : visibilityWhere(activeNamespace),
     );
 
     return {
@@ -3239,186 +4094,254 @@ export function createMemoryCore(
     // deterministic for the user — they opt in via a de-duplicating
     // pre-pass if they want merging.
     const traces = Array.isArray(bundle.traces) ? bundle.traces : [];
-
-    // Phase 0 — ensure every referenced (sessionId, episodeId) row
-    // exists before we try to `traces.insert`. Without this the FK
-    // constraint on `traces.episode_id REFERENCES episodes(id)` makes
-    // every legacy/external row bounce with "FOREIGN KEY constraint
-    // failed". This was the "Imported 0 traces, 0 skills, 0 tasks"
-    // bug the user reported on the legacy import button.
+    const defaultOwner = ownerFromNamespace(activeNamespace);
     const seenSessions = new Set<string>();
     const seenEpisodes = new Set<string>();
-    for (const raw of traces) {
-      const dto = raw as TraceDTO;
-      if (!dto?.id || !dto.episodeId || !dto.sessionId) continue;
-      if (!seenSessions.has(dto.sessionId)) {
-        try {
-          if (!handle.repos.sessions.getById(dto.sessionId)) {
-            handle.repos.sessions.upsert({
-              id: dto.sessionId,
-              agent: handle.agent,
-              startedAt: dto.ts ?? Date.now(),
-              lastSeenAt: dto.ts ?? Date.now(),
-              meta: { source: "import" },
-            } as never);
-          }
-        } catch {
-          // If the synthetic session row is rejected, the FK insert
-          // below will fail and be counted as `skipped`. Don't abort
-          // the entire import batch for one bad session.
-        }
-        seenSessions.add(dto.sessionId);
-      }
-      if (!seenEpisodes.has(dto.episodeId)) {
-        try {
-          if (!handle.repos.episodes.getById(dto.episodeId)) {
-            handle.repos.episodes.upsert({
-              id: dto.episodeId,
-              sessionId: dto.sessionId,
-              startedAt: dto.ts ?? Date.now(),
-              endedAt: dto.ts ?? Date.now(),
-              traceIds: [],
-              rTask: null,
-              status: "closed",
-              meta: { source: "import" },
-            } as never);
-          }
-        } catch {
-          /* see comment above */
-        }
-        seenEpisodes.add(dto.episodeId);
-      }
-    }
 
-    for (const raw of traces) {
-      try {
-        const dto = raw as TraceDTO;
-        if (!dto?.id) { skipped++; continue; }
-        const existing = handle.repos.traces.getById(dto.id);
-        if (existing) { skipped++; continue; }
-        // The trace table requires a fuller row shape than TraceDTO.
-        // We reconstitute a stub row. Vectors start null here; the
-        // embedding maintenance endpoint can backfill them with the
-        // currently configured embedding model after import.
-        handle.repos.traces.insert({
-          id: dto.id,
-          episodeId: dto.episodeId,
-          sessionId: dto.sessionId,
-          ts: dto.ts,
-          userText: dto.userText,
-          agentText: dto.agentText,
-          toolCalls: dto.toolCalls ?? [],
-          reflection: dto.reflection ?? null,
-          value: dto.value ?? 0,
-          alpha: dto.alpha ?? 0,
-          rHuman: dto.rHuman ?? null,
-          priority: dto.priority ?? 0,
-          tags: [],
-          vecSummary: null,
-          vecAction: null,
-          turnId: dto.turnId,
-          schemaVersion: 1,
-        } as TraceRow);
-        imported++;
-      } catch {
-        skipped++;
-      }
+    for (const batch of chunkArray(traces, IMPORT_WRITE_BATCH_SIZE)) {
+      const result = handle.db.tx(() => {
+        let batchImported = 0;
+        let batchSkipped = 0;
+        const valid = batch
+          .map((raw) => raw as TraceDTO)
+          .filter((dto) => dto?.id && dto.episodeId && dto.sessionId);
+        batchSkipped += batch.length - valid.length;
+
+        // Phase 0 — ensure every referenced (sessionId, episodeId) row
+        // exists before `traces.insert`, otherwise the FK constraint would
+        // bounce imported legacy/external rows.
+        for (const dto of valid) {
+          const owner = importOwnerFields(dto, defaultOwner);
+          const ts = Number.isFinite(dto.ts) ? dto.ts : Date.now();
+          if (!seenSessions.has(dto.sessionId)) {
+            try {
+              if (!handle.repos.sessions.getById(dto.sessionId)) {
+                handle.repos.sessions.upsert({
+                  id: dto.sessionId,
+                  agent: dto.ownerAgentKind ?? handle.agent,
+                  ...owner,
+                  startedAt: ts,
+                  lastSeenAt: ts,
+                  meta: { source: "import" },
+                } as never);
+              }
+            } catch {
+              // If the synthetic session row is rejected, the FK insert
+              // below will fail and be counted as `skipped`.
+            }
+            seenSessions.add(dto.sessionId);
+          }
+          if (!seenEpisodes.has(dto.episodeId)) {
+            try {
+              if (!handle.repos.episodes.getById(dto.episodeId)) {
+                handle.repos.episodes.upsert({
+                  id: dto.episodeId,
+                  sessionId: dto.sessionId,
+                  ...owner,
+                  share: dto.share ?? null,
+                  startedAt: ts,
+                  endedAt: ts,
+                  traceIds: [],
+                  rTask: null,
+                  status: "closed",
+                  meta: { source: "import" },
+                } as never);
+              }
+            } catch {
+              /* see comment above */
+            }
+            seenEpisodes.add(dto.episodeId);
+          }
+        }
+
+        const existingIds = new Set(
+          handle.repos.traces
+            .getManyByIds(valid.map((dto) => dto.id as TraceId))
+            .map((row) => row.id),
+        );
+        const addedByEpisode = new Map<EpisodeId, TraceId[]>();
+        for (const dto of valid) {
+          try {
+            if (existingIds.has(dto.id)) { batchSkipped++; continue; }
+            const owner = importOwnerFields(dto, defaultOwner);
+            const ts = Number.isFinite(dto.ts) ? dto.ts : Date.now();
+            const turnId = Number.isFinite(dto.turnId) ? dto.turnId : ts;
+            handle.repos.traces.insert({
+              ...owner,
+              id: dto.id,
+              episodeId: dto.episodeId,
+              sessionId: dto.sessionId,
+              ts,
+              userText: dto.userText ?? "",
+              agentText: dto.agentText ?? "",
+              summary: dto.summary ?? null,
+              share: dto.share ?? null,
+              toolCalls: dto.toolCalls ?? [],
+              agentThinking: dto.agentThinking ?? null,
+              reflection: dto.reflection ?? null,
+              value: dto.value ?? 0,
+              alpha: dto.alpha ?? 0,
+              rHuman: dto.rHuman ?? null,
+              priority: dto.priority ?? 0,
+              tags: dto.tags ?? [],
+              vecSummary: null,
+              vecAction: null,
+              turnId,
+              schemaVersion: 1,
+            } as TraceRow);
+            existingIds.add(dto.id);
+            if (!addedByEpisode.has(dto.episodeId)) addedByEpisode.set(dto.episodeId, []);
+            addedByEpisode.get(dto.episodeId)!.push(dto.id as TraceId);
+            batchImported++;
+          } catch {
+            batchSkipped++;
+          }
+        }
+        for (const [episodeId, ids] of addedByEpisode) {
+          const episode = handle.repos.episodes.getById(episodeId);
+          if (!episode) continue;
+          handle.repos.episodes.appendTrace(
+            episodeId,
+            dedupeTraceIds([...episode.traceIds, ...ids]) as string[],
+          );
+        }
+        return { imported: batchImported, skipped: batchSkipped };
+      });
+      imported += result.imported;
+      skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
     // Policies / world models / skills use existing repo.insert shape.
-    for (const raw of bundle.policies ?? []) {
-      try {
-        const dto = raw as PolicyDTO;
-        if (!dto?.id || handle.repos.policies.getById(dto.id)) { skipped++; continue; }
-        handle.repos.policies.insert({
-          id: dto.id,
-          title: dto.title,
-          trigger: dto.trigger,
-          procedure: dto.procedure,
-          verification: dto.verification,
-          boundary: dto.boundary,
-          support: dto.support ?? 0,
-          gain: dto.gain ?? 0,
-          status: dto.status,
-          experienceType: dto.experienceType ?? "success_pattern",
-          evidencePolarity: dto.evidencePolarity ?? "positive",
-          salience: dto.salience ?? 0,
-          confidence: dto.confidence ?? 0.5,
-          skillEligible: dto.skillEligible !== false,
-          sourceEpisodeIds: dto.sourceEpisodeIds ?? [],
-          sourceFeedbackIds: dto.sourceFeedbackIds ?? [],
-          sourceTraceIds: dto.sourceTraceIds ?? [],
-          inducedBy: "import",
-          decisionGuidance: {
-            preference: [...(dto.preference ?? [])],
-            antiPattern: [...(dto.antiPattern ?? [])],
-          },
-          verifierMeta: dto.verifierMeta ?? null,
-          vec: null,
-          createdAt: dto.createdAt ?? Date.now(),
-          updatedAt: dto.updatedAt ?? Date.now(),
-        });
-        imported++;
-      } catch {
-        skipped++;
-      }
+    for (const batch of chunkArray(bundle.policies ?? [], IMPORT_WRITE_BATCH_SIZE)) {
+      const result = handle.db.tx(() => {
+        let batchImported = 0;
+        let batchSkipped = 0;
+        for (const raw of batch) {
+          try {
+            const dto = raw as PolicyDTO;
+            if (!dto?.id || handle.repos.policies.getById(dto.id)) { batchSkipped++; continue; }
+            handle.repos.policies.insert({
+              ...importOwnerFields(dto, defaultOwner),
+              id: dto.id,
+              title: dto.title,
+              trigger: dto.trigger,
+              procedure: dto.procedure,
+              verification: dto.verification,
+              boundary: dto.boundary,
+              support: dto.support ?? 0,
+              gain: dto.gain ?? 0,
+              status: dto.status,
+              experienceType: dto.experienceType ?? "success_pattern",
+              evidencePolarity: dto.evidencePolarity ?? "positive",
+              salience: dto.salience ?? 0,
+              confidence: dto.confidence ?? 0.5,
+              skillEligible: dto.skillEligible !== false,
+              sourceEpisodeIds: dto.sourceEpisodeIds ?? [],
+              sourceFeedbackIds: dto.sourceFeedbackIds ?? [],
+              sourceTraceIds: dto.sourceTraceIds ?? [],
+              inducedBy: "import",
+              decisionGuidance: {
+                preference: [...(dto.preference ?? [])],
+                antiPattern: [...(dto.antiPattern ?? [])],
+              },
+              verifierMeta: dto.verifierMeta ?? null,
+              share: dto.share ?? null,
+              vec: null,
+              createdAt: dto.createdAt ?? Date.now(),
+              updatedAt: dto.updatedAt ?? Date.now(),
+            });
+            batchImported++;
+          } catch {
+            batchSkipped++;
+          }
+        }
+        return { imported: batchImported, skipped: batchSkipped };
+      });
+      imported += result.imported;
+      skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
-    for (const raw of bundle.skills ?? []) {
-      try {
-        const dto = raw as SkillDTO;
-        if (!dto?.id || handle.repos.skills.getById(dto.id)) { skipped++; continue; }
-        handle.repos.skills.insert({
-          id: dto.id,
-          name: dto.name,
-          status: dto.status,
-          invocationGuide: dto.invocationGuide,
-          eta: dto.eta ?? 0,
-          support: dto.support ?? 0,
-          gain: dto.gain ?? 0,
-          trialsAttempted: 0,
-          trialsPassed: 0,
-          sourcePolicyIds: dto.sourcePolicyIds ?? [],
-          sourceWorldModelIds: dto.sourceWorldModelIds ?? [],
-          evidenceAnchors: dto.evidenceAnchors ?? [],
-          procedureJson: {},
-          vec: null,
-          createdAt: dto.createdAt ?? Date.now(),
-          updatedAt: dto.updatedAt ?? Date.now(),
-          version: dto.version ?? 1,
-          usageCount: dto.usageCount ?? 0,
-          lastUsedAt: dto.lastUsedAt ?? null,
-        } as SkillRow);
-        imported++;
-      } catch {
-        skipped++;
-      }
+    for (const batch of chunkArray(bundle.skills ?? [], IMPORT_WRITE_BATCH_SIZE)) {
+      const result = handle.db.tx(() => {
+        let batchImported = 0;
+        let batchSkipped = 0;
+        for (const raw of batch) {
+          try {
+            const dto = raw as SkillDTO;
+            if (!dto?.id || handle.repos.skills.getById(dto.id)) { batchSkipped++; continue; }
+            handle.repos.skills.insert({
+              ...importOwnerFields(dto, defaultOwner),
+              id: dto.id,
+              name: dto.name,
+              status: dto.status,
+              invocationGuide: dto.invocationGuide,
+              eta: dto.eta ?? 0,
+              support: dto.support ?? 0,
+              gain: dto.gain ?? 0,
+              trialsAttempted: 0,
+              trialsPassed: 0,
+              sourcePolicyIds: dto.sourcePolicyIds ?? [],
+              sourceWorldModelIds: dto.sourceWorldModelIds ?? [],
+              evidenceAnchors: dto.evidenceAnchors ?? [],
+              procedureJson: {},
+              share: dto.share ?? null,
+              vec: null,
+              createdAt: dto.createdAt ?? Date.now(),
+              updatedAt: dto.updatedAt ?? Date.now(),
+              version: dto.version ?? 1,
+              usageCount: dto.usageCount ?? 0,
+              lastUsedAt: dto.lastUsedAt ?? null,
+            } as SkillRow);
+            batchImported++;
+          } catch {
+            batchSkipped++;
+          }
+        }
+        return { imported: batchImported, skipped: batchSkipped };
+      });
+      imported += result.imported;
+      skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
-    for (const raw of bundle.worldModels ?? []) {
-      try {
-        const dto = raw as WorldModelDTO;
-        if (!dto?.id || handle.repos.worldModel.getById(dto.id)) { skipped++; continue; }
-        handle.repos.worldModel.insert({
-          id: dto.id,
-          title: dto.title,
-          body: dto.body,
-          structure: { environment: [], inference: [], constraints: [] },
-          domainTags: [],
-          confidence: 0.5,
-          policyIds: dto.policyIds ?? [],
-          sourceEpisodeIds: [],
-          inducedBy: "import",
-          vec: null,
-          createdAt: dto.createdAt ?? Date.now(),
-          updatedAt: dto.updatedAt ?? Date.now(),
-          version: dto.version ?? 1,
-          status: dto.status ?? "active",
-        } as WorldModelRow);
-        imported++;
-      } catch {
-        skipped++;
-      }
+    for (const batch of chunkArray(bundle.worldModels ?? [], IMPORT_WRITE_BATCH_SIZE)) {
+      const result = handle.db.tx(() => {
+        let batchImported = 0;
+        let batchSkipped = 0;
+        for (const raw of batch) {
+          try {
+            const dto = raw as WorldModelDTO;
+            if (!dto?.id || handle.repos.worldModel.getById(dto.id)) { batchSkipped++; continue; }
+            handle.repos.worldModel.insert({
+              ...importOwnerFields(dto, defaultOwner),
+              id: dto.id,
+              title: dto.title,
+              body: dto.body,
+              structure: { environment: [], inference: [], constraints: [] },
+              domainTags: [],
+              confidence: 0.5,
+              policyIds: dto.policyIds ?? [],
+              sourceEpisodeIds: [],
+              inducedBy: "import",
+              share: dto.share ?? null,
+              vec: null,
+              createdAt: dto.createdAt ?? Date.now(),
+              updatedAt: dto.updatedAt ?? Date.now(),
+              version: dto.version ?? 1,
+              status: dto.status ?? "active",
+            } as WorldModelRow);
+            batchImported++;
+          } catch {
+            batchSkipped++;
+          }
+        }
+        return { imported: batchImported, skipped: batchSkipped };
+      });
+      imported += result.imported;
+      skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
     return { imported, skipped };
@@ -3522,24 +4445,39 @@ export function createMemoryCore(
   };
 
   function computeEmbeddingMaintenanceStats(): EmbeddingMaintenanceStats {
+    // SQL-only fast path (issue #1929).
+    //
+    // The previous implementation paginated `traces` / `policies` /
+    // `world_model` / `skills` end-to-end via `repos.<table>.list()`,
+    // which hydrates the full row — BLOB vector columns included —
+    // through `mapRow()`. On a production deployment with ~93K rows
+    // and ~270 MB of vector BLOBs that single call blocked the Node
+    // event loop for 4+ minutes at 100% CPU.
+    //
+    // `embeddingMaintenanceCounts` runs five `SELECT COUNT(*) +
+    // SUM(CASE WHEN ...)` queries — `LENGTH(blob)` reads only the BLOB
+    // header, never the payload — so we keep the same per-bucket
+    // semantics without touching a single vector byte.
     const configuredDimension = handle.embedder?.dimensions ?? 0;
-    const allSlots = collectEmbeddingSlots();
-    const dimension = configuredDimension > 0 ? configuredDimension : inferStoredEmbeddingDimension(allSlots);
-    const byKind = emptyEmbeddingStatsByKind();
-    for (const slot of allSlots) {
-      const bucket = byKind[slot.kind];
-      bucket.totalSlots++;
-      if (!slot.vec) {
-        bucket.missing++;
-      } else if (dimension > 0 && slot.vec.length !== dimension) {
-        bucket.dimMismatch++;
-      } else {
-        bucket.ready++;
-      }
-    }
-    for (const bucket of Object.values(byKind)) {
-      bucket.needsRepair = bucket.missing + bucket.dimMismatch;
-    }
+    const expectedByteLenFromEmbedder = configuredDimension > 0
+      ? configuredDimension * FLOAT32_BYTES
+      : 0;
+    // When the embedder has not been probed yet, fall back to the most common
+    // stored BLOB byte length (mirrors the pre-fix `inferStoredEmbeddingDimension`
+    // path, but computed via SQL `GROUP BY LENGTH(vec_summary)` — never touches
+    // the BLOB bodies).
+    const expectedByteLen = expectedByteLenFromEmbedder > 0
+      ? expectedByteLenFromEmbedder
+      : inferStoredEmbeddingByteLen(handle.db);
+    const dimension = expectedByteLen > 0 ? expectedByteLen / FLOAT32_BYTES : 0;
+
+    const raw = embeddingMaintenanceCounts(handle.db, { expectedByteLen });
+    const byKind: EmbeddingMaintenanceStats["byKind"] = {
+      trace: addNeedsRepair(raw.trace),
+      policy: addNeedsRepair(raw.policy),
+      world_model: addNeedsRepair(raw.world_model),
+      skill: addNeedsRepair(raw.skill),
+    };
     const totalSlots = sumEmbeddingStats(byKind, "totalSlots");
     const ready = sumEmbeddingStats(byKind, "ready");
     const missing = sumEmbeddingStats(byKind, "missing");
@@ -3553,6 +4491,15 @@ export function createMemoryCore(
       dimMismatch,
       needsRepair: missing + dimMismatch,
       byKind,
+    };
+  }
+
+  function addNeedsRepair(
+    bucket: EmbeddingCountsBucket,
+  ): EmbeddingCountsBucket & { needsRepair: number } {
+    return {
+      ...bucket,
+      needsRepair: bucket.missing + bucket.dimMismatch,
     };
   }
 
@@ -3570,21 +4517,23 @@ export function createMemoryCore(
     }
   }
 
-  function inferStoredEmbeddingDimension(slots: readonly EmbeddingSlot[]): number {
-    const counts = new Map<number, number>();
-    for (const slot of slots) {
-      if (!slot.vec) continue;
-      counts.set(slot.vec.length, (counts.get(slot.vec.length) ?? 0) + 1);
+  function shouldTraceHaveEmbeddings(row: TraceRow): boolean {
+    // Skip traces where both user and agent text are very short
+    const userLen = row.userText.trim().length;
+    const agentLen = row.agentText.trim().length;
+
+    // If both are under 10 chars, definitely skip
+    if (userLen < 10 && agentLen < 10) {
+      return false;
     }
-    let bestDim = 0;
-    let bestCount = 0;
-    for (const [dim, count] of counts) {
-      if (count > bestCount) {
-        bestDim = dim;
-        bestCount = count;
-      }
+
+    // If total combined length is under 20 chars, skip
+    // (covers cases like "ok" / "Got it, processing..." which aren't meaningful memories)
+    if (userLen + agentLen < 20) {
+      return false;
     }
-    return bestDim;
+
+    return true;
   }
 
   function collectEmbeddingSlots(): EmbeddingSlot[] {
@@ -3593,6 +4542,11 @@ export function createMemoryCore(
     for (let offset = 0;; offset += pageSize) {
       const rows = handle.repos.traces.list({ limit: pageSize, offset, newestFirst: false });
       for (const row of rows) {
+        // Skip traces that shouldn't have embeddings
+        if (!shouldTraceHaveEmbeddings(row)) {
+          continue;
+        }
+
         slots.push({
           kind: "trace",
           id: row.id,
@@ -3601,14 +4555,16 @@ export function createMemoryCore(
           sourceText: row.summary?.trim() || row.userText.trim() || "(empty)",
           update: (vec) => handle.repos.traces.updateVector(row.id, "vecSummary", vec),
         });
-        slots.push({
-          kind: "trace",
-          id: row.id,
-          field: "vec_action",
-          vec: row.vecAction,
-          sourceText: traceActionEmbeddingText(row),
-          update: (vec) => handle.repos.traces.updateVector(row.id, "vecAction", vec),
-        });
+        if (!isLightweightMemoryTrace(row)) {
+          slots.push({
+            kind: "trace",
+            id: row.id,
+            field: "vec_action",
+            vec: row.vecAction,
+            sourceText: traceActionEmbeddingText(row),
+            update: (vec) => handle.repos.traces.updateVector(row.id, "vecAction", vec),
+          });
+        }
       }
       if (rows.length < pageSize) break;
     }
@@ -3666,20 +4622,8 @@ export function createMemoryCore(
     return !slot.vec || (dimension > 0 && slot.vec.length !== dimension);
   }
 
-  function emptyEmbeddingStatsByKind(): EmbeddingMaintenanceStats["byKind"] {
-    const empty = () => ({
-      totalSlots: 0,
-      ready: 0,
-      missing: 0,
-      dimMismatch: 0,
-      needsRepair: 0,
-    });
-    return {
-      trace: empty(),
-      policy: empty(),
-      world_model: empty(),
-      skill: empty(),
-    };
+  function isLightweightMemoryTrace(row: TraceRow): boolean {
+    return row.tags.includes("lightweight_memory");
   }
 
   function sumEmbeddingStats(
@@ -3763,6 +4707,9 @@ export function createMemoryCore(
     // empty in the UI without wiping their existing value.
     const filtered = stripEmptySecrets(patch);
     const result = await applyPatch(handle.home, filtered);
+    if (patchTouchesHub(filtered)) {
+      await restartHubRuntime(result.config);
+    }
     return maskSecrets(result.config as unknown as Record<string, unknown>);
   }
 
@@ -3842,7 +4789,7 @@ export function createMemoryCore(
   async function shareSkill(
     id: SkillId,
     share: {
-      scope: "private" | "local" | "public" | "hub" | null;
+      scope: ShareScope | null;
       target?: string | null;
       sharedAt?: number | null;
     },
@@ -3852,7 +4799,86 @@ export function createMemoryCore(
     if (!existing || !ownedByCurrent(existing)) return null;
     handle.repos.skills.updateShare(id, share);
     const updated = handle.repos.skills.getById(id);
+    if (updated) await syncHubSkillShare(skillRowToDTO(updated));
     return updated ? skillRowToDTO(updated) : null;
+  }
+
+  async function syncHubTraceShare(trace: TraceDTO): Promise<void> {
+    const row = handle.repos.traces.getById(trace.id);
+    await runHubSync(
+      trace.share?.scope === "hub"
+        ? () => hubRuntime?.publishTrace(trace, row?.vecSummary ?? null)
+        : () => hubRuntime?.unpublishTrace(trace.id),
+      "trace",
+      trace.id,
+    );
+  }
+
+  async function syncHubPolicyShare(policy: PolicyDTO): Promise<void> {
+    await runHubSync(
+      policy.share?.scope === "hub"
+        ? () => hubRuntime?.publishPolicy(policy)
+        : () => hubRuntime?.unpublishPolicy(policy.id),
+      "policy",
+      policy.id,
+    );
+  }
+
+  async function syncHubWorldModelShare(world: WorldModelDTO): Promise<void> {
+    await runHubSync(
+      world.share?.scope === "hub"
+        ? () => hubRuntime?.publishWorldModel(world)
+        : () => hubRuntime?.unpublishWorldModel(world.id),
+      "world_model",
+      world.id,
+    );
+  }
+
+  async function syncHubSkillShare(skill: SkillDTO): Promise<void> {
+    await runHubSync(
+      skill.share?.scope === "hub"
+        ? () => hubRuntime?.publishSkill(skill)
+        : () => hubRuntime?.unpublishSkill(skill.id),
+      "skill",
+      skill.id,
+    );
+  }
+
+  async function runHubSync(
+    op: () => Promise<unknown> | unknown,
+    kind: string,
+    id: string,
+  ): Promise<void> {
+    if (!hubRuntimeConfig.hub.enabled) return;
+    try {
+      await op();
+    } catch (err) {
+      log.warn("hub.sync_failed", {
+        kind,
+        id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function hubAdminSnapshot(): Promise<unknown> {
+    ensureLive();
+    return await hubRuntime?.adminSnapshot() ?? { enabled: !!hubRuntimeConfig.hub.enabled };
+  }
+
+  async function approveHubUser(userId: string): Promise<unknown> {
+    ensureLive();
+    return await hubRuntime?.approveUser(userId) ?? { ok: false };
+  }
+
+  async function rejectHubUser(userId: string): Promise<unknown> {
+    ensureLive();
+    return await hubRuntime?.rejectUser(userId) ?? { ok: false };
+  }
+
+  async function removeHubUser(userId: string): Promise<unknown> {
+    ensureLive();
+    return await hubRuntime?.removeUser(userId) ?? { ok: false };
   }
 
   // ─── Observability ──
@@ -3876,6 +4902,7 @@ export function createMemoryCore(
     init,
     shutdown,
     health,
+    waitForStartupRecovery: () => startupRecoveryPromise,
     bindTelemetry(t: import("../telemetry/index.js").Telemetry) { telemetry = t; },
     openSession,
     closeSession,
@@ -3923,6 +4950,10 @@ export function createMemoryCore(
     reactivateSkill,
     updateSkill,
     shareSkill,
+    hubAdminSnapshot,
+    approveHubUser,
+    rejectHubUser,
+    removeHubUser,
     getConfig,
     patchConfig,
     metrics,
@@ -4008,6 +5039,10 @@ function stripEmptySecrets(patch: Record<string, unknown>): Record<string, unkno
     }
   }
   return out;
+}
+
+function patchTouchesHub(patch: Record<string, unknown>): boolean {
+  return Object.prototype.hasOwnProperty.call(patch, "hub");
 }
 
 function orderTraceRowsForEpisode(
@@ -4222,6 +5257,48 @@ function compareTraceRowsForEpisodeOrder(
     }
   }
   return a.ts - b.ts;
+}
+
+function importOwnerFields(
+  row: {
+    ownerAgentKind?: AgentKind;
+    ownerProfileId?: string;
+    ownerWorkspaceId?: string | null;
+  },
+  fallback: ReturnType<typeof ownerFromNamespace>,
+): {
+  ownerAgentKind: AgentKind;
+  ownerProfileId: string;
+  ownerWorkspaceId: string | null;
+} {
+  return {
+    ownerAgentKind: row.ownerAgentKind ?? fallback.ownerAgentKind,
+    ownerProfileId: row.ownerProfileId ?? fallback.ownerProfileId,
+    ownerWorkspaceId: row.ownerWorkspaceId ?? fallback.ownerWorkspaceId ?? null,
+  };
+}
+
+function dedupeTraceIds(ids: readonly TraceId[]): TraceId[] {
+  const seen = new Set<TraceId>();
+  const out: TraceId[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function chunkArray<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 // ─── Row → DTO mappers ───────────────────────────────────────────────────────
@@ -4549,7 +5626,9 @@ function findLatestPersistedModelStatus(
   return null;
 }
 
-function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats): {
+type RetrievalStatsLogPayload = {
+  scenarioId?: string;
+  plannedTiers?: { tier1: boolean; tier2: boolean; tier3: boolean };
   raw?: number;
   ranked?: number;
   droppedByThreshold?: number;
@@ -4565,8 +5644,23 @@ function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats
   queryTokens?: number;
   queryTags?: string[];
   embedding?: import("../retrieval/types.js").RetrievalStats["embedding"];
-} {
+  localReturned?: number;
+  hubReturned?: number;
+  hubKept?: number;
+  finalReturned?: number;
+  finalFilter?: {
+    outcome?: string;
+    kept?: number;
+    dropped?: number;
+    sufficient?: boolean | null;
+    deduped?: number;
+  };
+};
+
+function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats): RetrievalStatsLogPayload {
   return {
+    scenarioId: s.scenarioId,
+    plannedTiers: s.plannedTiers,
     raw: s.rawCandidateCount,
     ranked: s.rankedCount,
     droppedByThreshold: s.droppedByThresholdCount,
@@ -4582,6 +5676,23 @@ function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats
     queryTokens: s.queryTokens,
     queryTags: s.queryTags,
     embedding: s.embedding,
+  };
+}
+
+function withHubStats(
+  stats: RetrievalStatsLogPayload,
+  hubReturned: number,
+  finalReturned: number,
+  hubKept: number,
+  finalFilter?: RetrievalStatsLogPayload["finalFilter"],
+): RetrievalStatsLogPayload {
+  return {
+    ...stats,
+    localReturned: Math.max(0, finalReturned - hubKept),
+    hubReturned,
+    hubKept,
+    finalReturned,
+    ...(finalFilter ? { finalFilter } : {}),
   };
 }
 
@@ -4651,6 +5762,7 @@ function embedderHealth(
 function resolveSkillEvolver(
   config: PipelineHandle["config"],
   llm: PipelineHandle["llm"],
+  inheritedLlmInfo: CoreHealth["llm"],
   fallbackTs: number | null,
 ): CoreHealth["skillEvolver"] {
   const evolver = (config as { skillEvolver?: { provider?: string; model?: string } })
@@ -4672,16 +5784,60 @@ function resolveSkillEvolver(
       lastError: s?.lastError ?? null,
     };
   }
-  const fallback = llmHealth(llm, fallbackTs);
+  // Inherited skillEvolver mirrors the (already-disk-aware) llm slot,
+  // so the Overview's three model cards never disagree about what the
+  // current Settings say. Runtime stats still come from the llm
+  // client; we just copy whatever the Overview will show for the LLM
+  // slot itself. See #1596.
   return {
-    available: fallback.available,
-    provider: fallback.provider,
-    model: fallback.model,
+    available: inheritedLlmInfo.available,
+    provider: inheritedLlmInfo.provider,
+    model: inheritedLlmInfo.model,
     inherited: true,
-    lastOkAt: fallback.lastOkAt,
-    lastFallbackAt: fallback.lastFallbackAt,
-    lastError: fallback.lastError,
+    lastOkAt: inheritedLlmInfo.lastOkAt,
+    lastFallbackAt: inheritedLlmInfo.lastFallbackAt,
+    lastError: inheritedLlmInfo.lastError,
   };
+  // Reserved for future signature change — keep fallbackTs parameter
+  // so callers passing `latestTraceTs()` don't need to change.
+  void fallbackTs;
+}
+
+/**
+ * Patch the llm + embedder health snapshots so their `model` and
+ * `provider` fields reflect what's currently in `config.yaml` — i.e.
+ * what the Settings page shows. The runtime stats (available,
+ * lastOkAt, lastError) stay sourced from the in-memory facade because
+ * those represent "did the upstream actually answer", which only the
+ * runtime can know. See #1596: Overview cards used to lag behind a
+ * Settings save when only the provider changed (model name unchanged),
+ * or when the user cleared a model name back to empty.
+ */
+function applyConfiguredModelDisplay(
+  config: PipelineHandle["config"],
+  llmInfo: CoreHealth["llm"],
+  embedderInfo: CoreHealth["embedder"],
+): void {
+  const cfg = config as {
+    llm?: { model?: unknown; provider?: unknown };
+    embedding?: { model?: unknown; provider?: unknown };
+  };
+  if (cfg.llm) {
+    if (typeof cfg.llm.model === "string") {
+      llmInfo.model = cfg.llm.model;
+    }
+    if (typeof cfg.llm.provider === "string" && cfg.llm.provider.length > 0) {
+      llmInfo.provider = cfg.llm.provider;
+    }
+  }
+  if (cfg.embedding) {
+    if (typeof cfg.embedding.model === "string") {
+      embedderInfo.model = cfg.embedding.model;
+    }
+    if (typeof cfg.embedding.provider === "string" && cfg.embedding.provider.length > 0) {
+      embedderInfo.provider = cfg.embedding.provider;
+    }
+  }
 }
 
 function writeApiLog(
@@ -4920,6 +6076,20 @@ export function deriveSkillStatus(
 function formatThreshold(n: number): string {
   if (!Number.isFinite(n)) return String(n);
   return Number(n.toFixed(3)).toString();
+}
+
+function clipText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 /**

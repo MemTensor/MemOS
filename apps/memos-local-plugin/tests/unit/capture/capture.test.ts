@@ -87,6 +87,8 @@ function baseConfig(overrides: Partial<CaptureConfig> = {}): CaptureConfig {
     alphaScoring: true,
     synthReflections: false,
     llmConcurrency: 2,
+    maxReflectLlmCalls: 128,
+    maxRecoveryOrphanInserts: 0,
     // Default to per-step here so the existing assertions on
     // `llmCalls.alphaScoring`/`reflectionSynth` continue to hold. The
     // batched path has its own dedicated test file.
@@ -133,15 +135,18 @@ function episodeSnapshot(opts: {
 
 function traceRow(opts: {
   id: string;
+  episodeId?: string;
+  sessionId?: string;
   ts: number;
+  turnId?: number;
   userText?: string;
   agentText?: string;
   toolCalls?: TraceRow["toolCalls"];
 }): TraceRow {
   return {
     id: opts.id as TraceId,
-    episodeId: "ep_1" as EpisodeId,
-    sessionId: "se_1" as SessionId,
+    episodeId: (opts.episodeId ?? "ep_1") as EpisodeId,
+    sessionId: (opts.sessionId ?? "se_1") as SessionId,
     ts: opts.ts as EpochMs,
     userText: opts.userText ?? "",
     agentText: opts.agentText ?? "",
@@ -157,7 +162,7 @@ function traceRow(opts: {
     errorSignatures: [],
     vecSummary: null,
     vecAction: null,
-    turnId: 1_000 as EpochMs,
+    turnId: (opts.turnId ?? 1_000) as EpochMs,
     schemaVersion: 1,
   };
 }
@@ -216,6 +221,173 @@ describe("capture/pipeline (end-to-end)", () => {
       cfg: baseConfig(overrides),
     });
   }
+
+  it("recovered replay matches tool traces by payload when timestamps drift", async () => {
+    tmp.repos.traces.insert(traceRow({
+      id: "tr_tool",
+      ts: 1_001,
+      turnId: 1_000,
+      userText: "run search",
+      toolCalls: [{
+        name: "search",
+        input: { q: "memos" },
+        output: "ok",
+      }],
+    }));
+    tmp.repos.traces.insert(traceRow({
+      id: "tr_response",
+      ts: 1_003,
+      turnId: 1_000,
+      agentText: "done",
+    }));
+
+    const runner = buildRunner({
+      alphaScoring: false,
+      synthReflections: false,
+      embedTraces: false,
+    }, null, null);
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "run search", 1_000),
+        turn("tool", "ok", 1_002, {
+          name: "search",
+          input: { q: "memos" },
+          output: "ok",
+        }),
+        turn("assistant", "done", 1_003),
+      ],
+    });
+    ep.meta = { recoveredAtStartup: 1_004, recoveryReason: "dirty_reward_rescore" };
+
+    const result = await runner.runReflect({ episode: ep, closedBy: "finalized" });
+
+    expect(result.traceIds).toHaveLength(2);
+    expect(result.warnings.some((w) => w.message.includes("skipped recovered orphan"))).toBe(false);
+    expect(tmp.repos.traces.listAllForEpisode("ep_1" as EpisodeId)).toHaveLength(2);
+  });
+
+  it("does not insert replay orphans for startup-recovered episodes by default", async () => {
+    const runner = buildRunner({
+      alphaScoring: false,
+      synthReflections: false,
+      embedTraces: false,
+    }, null, null);
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "hello", 1_000),
+        turn("assistant", "hi", 1_010),
+      ],
+    });
+    ep.meta = { recoveredAtStartup: 1_020, recoveryReason: "dirty_reward_rescore" };
+
+    const result = await runner.runReflect({ episode: ep, closedBy: "finalized" });
+
+    expect(tmp.repos.traces.listAllForEpisode("ep_1" as EpisodeId)).toHaveLength(0);
+    expect(result.traceIds).toHaveLength(0);
+    expect(result.warnings.some((w) => w.message.includes("skipped recovered orphan"))).toBe(true);
+  });
+
+  it("caps reflect-phase LLM calls per episode", async () => {
+    tmp.repos.traces.insert(traceRow({
+      id: "tr_1",
+      ts: 1_100,
+      turnId: 1_000,
+      userText: "u1",
+      agentText: "a1",
+    }));
+    tmp.repos.traces.insert(traceRow({
+      id: "tr_2",
+      ts: 2_100,
+      turnId: 2_000,
+      userText: "u2",
+      agentText: "a2",
+    }));
+    tmp.repos.traces.insert(traceRow({
+      id: "tr_3",
+      ts: 3_100,
+      turnId: 3_000,
+      userText: "u3",
+      agentText: "a3",
+    }));
+    const llm = fakeLlm({
+      complete: {
+        "capture.reflection.synth": "I chose the next action for this task.",
+      },
+    });
+    const runner = buildRunner({
+      alphaScoring: false,
+      synthReflections: true,
+      embedTraces: false,
+      batchMode: "per_step",
+      maxReflectLlmCalls: 1,
+    }, llm, null);
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "u1", 1_000),
+        turn("assistant", "a1", 1_100),
+        turn("user", "u2", 2_000),
+        turn("assistant", "a2", 2_100),
+        turn("user", "u3", 3_000),
+        turn("assistant", "a3", 3_100),
+      ],
+    });
+
+    const result = await runner.runReflect({ episode: ep, closedBy: "finalized" });
+
+    expect(result.llmCalls.reflectionSynth).toBe(1);
+    expect(result.warnings.some((w) => w.message.includes("reflect LLM budget exhausted"))).toBe(true);
+    expect(llm.stats().requests).toBe(1);
+  });
+
+  it("lightweight capture merges one turn into one memory with summary-only embedding", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "capture.summarize": { summary: "looked up sales and reported final answer" },
+      },
+    });
+    const embedder = fakeEmbedder({ dimensions: 8 });
+    const runner = buildRunner({ alphaScoring: true, synthReflections: true }, llm, embedder);
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "look up current sales", 1_000),
+        turn("tool", JSON.stringify({ total: 42 }), 1_100, {
+          tool: "db_query",
+          input: { sql: "select total from sales" },
+          output: { total: 42 },
+          startedAt: 1_050,
+          endedAt: 1_100,
+        }),
+        turn("assistant", "current sales are 42", 1_200),
+      ],
+    });
+
+    const result = await runner.runLightweight({ episode: ep });
+    const rows = tmp.repos.traces.list({ episodeId: "ep_1" as EpisodeId });
+
+    expect(result.traceIds).toHaveLength(1);
+    expect(result.llmCalls.summarize).toBe(1);
+    expect(result.llmCalls.reflectionSynth).toBe(0);
+    expect(result.llmCalls.alphaScoring).toBe(0);
+    expect(embedder.stats().requests).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.userText).toBe("look up current sales");
+    expect(rows[0]!.agentText).toBe("current sales are 42");
+    expect(rows[0]!.toolCalls).toHaveLength(1);
+    expect(rows[0]!.summary).toBe("looked up sales and reported final answer");
+    expect(rows[0]!.tags).toContain("lightweight_memory");
+    expect(rows[0]!.vecSummary).toBeInstanceOf(Float32Array);
+    expect(rows[0]!.vecAction).toBeNull();
+    expect(tmp.repos.embeddingRetryQueue.countByStatus("pending")).toBe(0);
+    expect(seen.map((e) => e.kind)).toEqual(["capture.started", "capture.lite.done"]);
+  });
 
   it("writes one trace per step with α=0 when alpha disabled and no reflection present", async () => {
     const runner = buildRunner({ alphaScoring: false });
@@ -379,6 +551,7 @@ describe("capture/pipeline (end-to-end)", () => {
     const t = tmp.repos.traces.getById(result.traceIds[0]!)!;
     expect(t.reflection).toContain("shell tool");
     expect(t.alpha).toBeCloseTo(0.8, 5);
+    expect(result.traces[0]?.reflection.reason).toBe("concrete");
   });
 
   it("clamps α to 0 when LLM marks reflection unusable", async () => {

@@ -15,10 +15,7 @@ config = MemoryConfigFactory(
             "config": {
                 "model_name_or_path": "gpt-4o-mini",
                 "api_key": os.environ.get("OPENAI_API_KEY"),
-                "api_base": os.environ.get(
-                    "OPENAI_BASE_URL",
-                    os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
-                ),
+                "api_base": os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
                 "temperature": 0.0,
                 "remove_think_prefix": True,
             },

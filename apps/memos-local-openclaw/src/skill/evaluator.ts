@@ -19,7 +19,7 @@ export interface UpgradeEvalResult {
   confidence: number;
 }
 
-const CREATE_EVAL_PROMPT = `You are a strict experience evaluation expert. Based on the completed task record below, decide whether this task contains **reusable, transferable** experience worth distilling into a "skill".
+export const CREATE_EVAL_PROMPT = `You are a strict experience evaluation expert. Based on the completed task record below, decide whether this task contains **reusable, transferable** experience worth distilling into a "skill".
 
 A skill is a reusable guide that helps an AI agent handle **the same type of task** better in the future. The key question is: "Will someone likely need to do this exact type of thing again?"
 
@@ -47,6 +47,13 @@ NOT worth distilling (if ANY matches, return shouldGenerate=false):
 - Organizing/listing personal information (work history, resume, contacts)
 - Generic product/system overviews without specific operational steps
 - Tasks where the "steps" are just the AI answering questions (no real workflow)
+- Simple tool installation plus basic preference/config setup that an experienced developer would already know how to do
+- Exploratory tasks where the final conclusion was to revert, abandon, or keep the original approach without a reusable diagnostic method
+- Tasks whose primary output is discussion, comparison, or evaluation rather than an actionable workflow that can be repeated
+
+Before deciding shouldGenerate=true, ask yourself:
+"If an experienced developer encounters this type of problem, would they already know how to handle it without this skill?"
+If yes, return shouldGenerate=false.
 
 Task title: {TITLE}
 Task summary:

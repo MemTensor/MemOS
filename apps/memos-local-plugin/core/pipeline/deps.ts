@@ -99,6 +99,8 @@ import type {
   PipelineSubscriptions,
 } from "./types.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
+import { createSemaphore } from "../util/semaphore.js";
+import { rateLimitLlmClient } from "../util/rate-limited-llm.js";
 
 // ─── Algorithm config slice helper ────────────────────────────────────────
 
@@ -115,6 +117,9 @@ export function extractAlgorithmConfig(
 ): PipelineAlgorithmConfig {
   const alg = deps.config.algorithm;
   return {
+    lightweightMemory: {
+      enabled: alg.lightweightMemory.enabled,
+    },
     capture: alg.capture,
     reward: alg.reward,
     l2Induction: {
@@ -126,6 +131,7 @@ export function extractAlgorithmConfig(
       minTraceValue: alg.l2Induction.minTraceValue,
       minEpisodesForInduction: alg.l2Induction.minEpisodesForInduction,
       inductionTraceCharCap: alg.l2Induction.traceCharCap,
+      gainEmaAlpha: alg.l2Induction.gainEmaAlpha,
     },
     l3Abstraction: alg.l3Abstraction,
     skill: alg.skill,
@@ -144,6 +150,7 @@ export function extractAlgorithmConfig(
       minTraceSim: alg.retrieval.minTraceSim,
       tagFilter: alg.retrieval.tagFilter,
       keywordTopK: alg.retrieval.keywordTopK,
+      ftsTokenizer: deps.config.storage.ftsTokenizer,
       relativeThresholdFloor: alg.retrieval.relativeThresholdFloor,
       skillEtaBlend: alg.retrieval.skillEtaBlend,
       smartSeed: alg.retrieval.smartSeed,
@@ -152,14 +159,19 @@ export function extractAlgorithmConfig(
       skillInjectionMode: alg.retrieval.skillInjectionMode,
       skillSummaryChars: alg.retrieval.skillSummaryChars,
       decayHalfLifeDays: alg.reward.decayHalfLifeDays,
-      llmFilterEnabled: alg.retrieval.llmFilterEnabled,
+      llmFilterEnabled: alg.lightweightMemory.enabled ? true : alg.retrieval.llmFilterEnabled,
       llmFilterMaxKeep: alg.retrieval.llmFilterMaxKeep,
-      llmFilterMinCandidates: alg.retrieval.llmFilterMinCandidates,
+      llmFilterMinCandidates: alg.lightweightMemory.enabled ? 1 : alg.retrieval.llmFilterMinCandidates,
       llmFilterCandidateBodyChars: alg.retrieval.llmFilterCandidateBodyChars,
+      lightweightMemory: alg.lightweightMemory.enabled,
+      vectorScanMaxAgeMs: alg.retrieval.vectorScanMaxAgeMs,
     },
     session: {
       followUpMode: alg.session.followUpMode,
       mergeMaxGapMs: alg.session.mergeMaxGapMs,
+      maxTurnsPerEpisode: alg.session.maxTurnsPerEpisode,
+      classifyTimeoutMs: alg.session.classifyTimeoutMs,
+      bgLlmConcurrency: alg.session.bgLlmConcurrency,
     },
   };
 }
@@ -198,31 +210,62 @@ export function buildPipelineSubscribers(
   session?: PipelineSessionSet,
 ): PipelineSubscriberSet {
   const log = deps.log ?? rootLogger.child({ channel: "core.pipeline" });
+  const bgLlmSemaphore = createSemaphore(algorithm.session.bgLlmConcurrency);
+  const bgLlm = rateLimitLlmClient(deps.llm, bgLlmSemaphore);
+  const bgReflectLlm = rateLimitLlmClient(deps.reflectLlm, bgLlmSemaphore);
+  const bgL3Llm = rateLimitLlmClient(deps.l3Llm ?? deps.llm, bgLlmSemaphore);
+  const lightweightMode = algorithm.lightweightMemory.enabled;
 
   const captureRunner = createCaptureRunner({
     tracesRepo: deps.repos.traces,
     embeddingRetryQueue: deps.repos.embeddingRetryQueue,
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
     embedder: deps.embedder,
-    llm: deps.llm,
-    reflectLlm: deps.reflectLlm,
+    llm: bgLlm,
+    reflectLlm: bgReflectLlm,
     bus: buses.capture,
     cfg: algorithm.capture,
     now: deps.now,
   });
 
+  // Lightweight mode short-circuits the evolution pipeline: reward /
+  // L2 / L3 / skill / feedback subscribers are NOT attached to their
+  // upstream buses. This matches the schema comment on
+  // `algorithm.lightweightMemory.enabled` which promises that only
+  // summarize + embedding + retrieval filter remain active. Attaching
+  // the subscribers used to be unconditional (issue #2063) — every
+  // `episode.finalized` event still cascaded through the LLM-heavy
+  // evolution chain, defeating the flag.
+  if (lightweightMode) {
+    log.info("pipeline.lightweight_mode.enabled", {
+      skipped: ["reward", "l2", "l3", "skill", "feedback"],
+    });
+    return {
+      captureRunner,
+      rewardRunner: lightweightRewardRunnerStub(),
+      l2: lightweightL2Handle(),
+      l3: lightweightL3Handle(),
+      skills: lightweightSkillHandle(),
+      feedback: lightweightFeedbackHandle(),
+      subscriptions: {
+        capture: lightweightCaptureSubscription(),
+        reward: lightweightRewardSubscription(),
+      },
+    };
+  }
+
   const rewardRunner = createRewardRunner({
     tracesRepo: deps.repos.traces,
     episodesRepo: deps.repos.episodes,
     feedbackRepo: deps.repos.feedback,
-    llm: deps.llm,
+    llm: bgLlm,
     bus: buses.reward,
     cfg: algorithm.reward,
     evaluator: {
-      reflectionProvider: deps.reflectLlm?.provider,
-      reflectionModel: deps.reflectLlm?.model,
-      scorerProvider: deps.llm?.provider,
-      scorerModel: deps.llm?.model,
+      reflectionProvider: bgReflectLlm?.provider,
+      reflectionModel: bgReflectLlm?.model,
+      scorerProvider: bgLlm?.provider,
+      scorerModel: bgLlm?.model,
     },
     now: deps.now,
     // Wire the live episode snapshot so the R_human scorer sees the
@@ -254,7 +297,7 @@ export function buildPipelineSubscribers(
     repos: deps.repos,
     rewardBus: buses.reward,
     l2Bus: buses.l2,
-    llm: deps.llm,
+    llm: bgLlm,
     log: log.child({ channel: "core.memory.l2" }),
     config: algorithm.l2Induction,
     thresholds: {
@@ -268,7 +311,10 @@ export function buildPipelineSubscribers(
     repos: deps.repos,
     l2Bus: buses.l2,
     l3Bus: buses.l3,
-    llm: deps.llm,
+    // Dedicated L3 model when `config.l3Llm.*` is set; otherwise the
+    // bootstrap aliases `l3Llm` to the main `llm`. Both paths share
+    // the same background concurrency budget as the other subscribers.
+    llm: bgL3Llm,
     log: log.child({ channel: "core.memory.l3" }),
     config: algorithm.l3Abstraction,
   });
@@ -276,7 +322,7 @@ export function buildPipelineSubscribers(
   const skillHandle = attachSkillSubscriber({
     repos: deps.repos,
     embedder: deps.embedder,
-    llm: deps.llm,
+    llm: bgLlm,
     bus: buses.skill,
     l2Bus: buses.l2,
     rewardBus: buses.reward,
@@ -286,7 +332,7 @@ export function buildPipelineSubscribers(
 
   const feedbackHandle = attachFeedbackSubscriber({
     repos: deps.repos,
-    llm: deps.llm,
+    llm: bgLlm,
     embedder: deps.embedder,
     bus: buses.feedback,
     log: log.child({ channel: "core.feedback" }),
@@ -320,8 +366,15 @@ export function buildPipelineSession(
   deps: PipelineDeps,
   bus: SessionEventBus,
 ): PipelineSessionSet {
-  const intent = createIntentClassifier({ llm: deps.llm ?? undefined });
-  const relation = createRelationClassifier({ llm: deps.llm ?? undefined });
+  const llmDisabled = deps.config.algorithm.lightweightMemory.enabled;
+  const intent = createIntentClassifier({
+    llm: deps.llm ?? undefined,
+    disableLlm: llmDisabled,
+  });
+  const relation = createRelationClassifier({
+    llm: deps.llm ?? undefined,
+    disableLlm: llmDisabled,
+  });
   const episodeManager = createEpisodeManager({
     sessionsRepo: adaptSessionsRepo(deps.repos.sessions),
     episodesRepo: adaptEpisodesRepo(deps.repos.episodes),
@@ -335,6 +388,7 @@ export function buildPipelineSession(
     bus,
     episodeManager,
     now: deps.now,
+    lightweightMemory: llmDisabled,
   });
   return { intent, relation, sessionManager, episodeManager };
 }
@@ -392,3 +446,156 @@ export type {
   SkillEventBus,
   SkillSubscriberHandle,
 };
+
+// ─── Lightweight-mode subscriber stubs ────────────────────────────────────
+//
+// When `algorithm.lightweightMemory.enabled` is `true`, the pipeline skips
+// mounting the reward / L2 / L3 / skill / feedback runners entirely (see
+// issue #2063). Downstream code (memory-core, orchestrator) still holds
+// references to these handles for shape compatibility (`flush()` /
+// `shutdown()` walk the whole subscriber set) but every caller that would
+// actually invoke a runner is already gated behind the same lightweight
+// check — so these stubs must only satisfy the type shape + drain/stop
+// lifecycle without producing events or LLM traffic.
+
+function throwLightweight(feature: string): never {
+  throw new Error(
+    `pipeline: ${feature} is unavailable while ` +
+      `algorithm.lightweightMemory.enabled=true. Every caller must gate ` +
+      `on the same flag before invoking it.`,
+  );
+}
+
+function lightweightRewardRunnerStub(): RewardRunner {
+  return {
+    async run() {
+      return throwLightweight("rewardRunner.run");
+    },
+  };
+}
+
+function lightweightRewardSubscription(): RewardSubscription {
+  return {
+    submitFeedback() {
+      throwLightweight("rewardSubscription.submitFeedback");
+    },
+    async runManually() {
+      return throwLightweight("rewardSubscription.runManually");
+    },
+    stop() {
+      /* no-op — nothing was attached */
+    },
+    async drain() {
+      /* no-op — no in-flight work in lightweight mode */
+    },
+    pendingCount() {
+      return 0;
+    },
+  };
+}
+
+function lightweightCaptureSubscription(): CaptureSubscription {
+  return {
+    stop() {
+      /* no-op — capture subscriber is not attached in lightweight mode */
+    },
+    async drain() {
+      /* no-op — orchestrator calls runLightweight/runLite directly */
+    },
+    pendingCount() {
+      return 0;
+    },
+  };
+}
+
+function lightweightL2Handle(): L2SubscriberHandle {
+  return {
+    detach() {
+      /* no-op */
+    },
+    async runOnce() {
+      return throwLightweight("l2.runOnce");
+    },
+    async drain() {
+      /* no-op */
+    },
+  };
+}
+
+function lightweightL3Handle(): L3SubscriberHandle {
+  return {
+    detach() {
+      /* no-op */
+    },
+    async drain() {
+      /* no-op */
+    },
+    async runOnce() {
+      return throwLightweight("l3.runOnce");
+    },
+    async adjustFeedback() {
+      return throwLightweight("l3.adjustFeedback");
+    },
+  };
+}
+
+function lightweightSkillHandle(): SkillSubscriberHandle {
+  return {
+    dispose() {
+      /* no-op */
+    },
+    async runOnce() {
+      return throwLightweight("skills.runOnce");
+    },
+    applyFeedback() {
+      throwLightweight("skills.applyFeedback");
+    },
+    async lifecycleTick() {
+      /* no-op */
+    },
+    async flush() {
+      /* no-op */
+    },
+  };
+}
+
+function lightweightFeedbackHandle(): FeedbackSubscriberHandle {
+  const signals: FeedbackSubscriberHandle["signals"] = {
+    recordFailure() {
+      return null;
+    },
+    recordSuccess() {
+      /* no-op */
+    },
+    peek() {
+      return null;
+    },
+    clear() {
+      /* no-op */
+    },
+    stats() {
+      return { states: 0, totalFailures: 0 };
+    },
+  };
+  return {
+    recordToolFailure() {
+      /* no-op — feedback subsystem is off in lightweight mode */
+    },
+    recordToolSuccess() {
+      /* no-op */
+    },
+    async submitUserFeedback() {
+      return throwLightweight("feedback.submitUserFeedback");
+    },
+    async runOnce() {
+      return throwLightweight("feedback.runOnce");
+    },
+    signals,
+    async flush() {
+      /* no-op */
+    },
+    dispose() {
+      /* no-op */
+    },
+  };
+}

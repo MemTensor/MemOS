@@ -60,6 +60,7 @@ export const V7_NEUTRAL_BASELINE = 0.5;
  * samples. Five is roughly "one short episode worth" of signal.
  */
 export const WITHOUT_PRIOR_PSEUDOCOUNT = 5;
+export const MIN_ADAPTIVE_BASELINE = 0.2;
 
 export interface ComputeGainOpts {
   tauSoftmax: number;
@@ -70,10 +71,15 @@ export function computeGain(input: GainInput, opts: ComputeGainOpts): GainResult
   const withMean = arithmeticMeanValue(input.withTraces);
   const withoutMean = arithmeticMeanValue(input.withoutTraces);
   const effectiveWith = input.withTraces.length >= 3 ? weightedWith : withMean;
+  const allTraces = [...input.withTraces, ...input.withoutTraces];
+  const poolMean = allTraces.length > 0
+    ? arithmeticMeanValue(allTraces)
+    : V7_NEUTRAL_BASELINE;
+  const baseline = adaptiveBaseline(poolMean);
   const blendedWithout = shrinkTowardBaseline(
     withoutMean,
     input.withoutTraces.length,
-    V7_NEUTRAL_BASELINE,
+    baseline,
     WITHOUT_PRIOR_PSEUDOCOUNT,
   );
   const gain = effectiveWith - blendedWithout;
@@ -85,7 +91,25 @@ export function computeGain(input: GainInput, opts: ComputeGainOpts): GainResult
     withCount: input.withTraces.length,
     withoutCount: input.withoutTraces.length,
     weightedWith,
+    poolMean,
+    baseline,
   };
+}
+
+export function adaptiveBaseline(poolMean: number): number {
+  if (!Number.isFinite(poolMean)) return V7_NEUTRAL_BASELINE;
+  return Math.max(MIN_ADAPTIVE_BASELINE, Math.min(V7_NEUTRAL_BASELINE, poolMean));
+}
+
+export function smoothGain(args: {
+  newGain: number;
+  currentGain: number;
+  alpha: number;
+  isFirst: boolean;
+}): number {
+  if (args.isFirst) return args.newGain;
+  const alpha = clamp01(args.alpha);
+  return alpha * args.newGain + (1 - alpha) * args.currentGain;
 }
 
 /**
@@ -103,6 +127,11 @@ function shrinkTowardBaseline(
   const denom = nObserved + priorPseudocount;
   if (denom <= 0) return priorMean;
   return (empiricalMean * nObserved + priorMean * priorPseudocount) / denom;
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 /**

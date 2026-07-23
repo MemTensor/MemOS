@@ -34,7 +34,8 @@ import { serveStatic } from "./middleware/static.js";
 import type { ServerDeps, ServerHandle, ServerOptions } from "./types.js";
 
 type AgentName = "openclaw" | "hermes";
-const AGENT_NAMES: readonly AgentName[] = ["openclaw", "hermes"];
+type AgentPrefix = AgentName | "memos";
+const AGENT_PREFIXES: readonly AgentPrefix[] = ["openclaw", "hermes", "memos"];
 
 /**
  * Well-known per-agent viewer port. The picker page links to the
@@ -46,6 +47,8 @@ const AGENT_DEFAULT_PORTS: Record<AgentName, number> = {
   openclaw: 18799,
   hermes: 18800,
 };
+const DEFAULT_MAX_BODY_BYTES = 1_048_576;
+const IMPORT_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 export async function startHttpServer(
   deps: ServerDeps,
@@ -144,11 +147,11 @@ async function dispatch(
   //     downgrade because cross-port redirects are inherently a "follow
   //     this link" gesture; the SPA bundle on the other port re-issues
   //     mutations from form state, not from the original POST body.)
-  for (const name of AGENT_NAMES) {
+  for (const name of AGENT_PREFIXES) {
     const prefix = `/${name}`;
     if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
       const tail = pathname.slice(prefix.length) || "/";
-      if (name === selfAgent) {
+      if (name === "memos" || name === selfAgent) {
         pathname = tail;
         break;
       }
@@ -197,7 +200,7 @@ async function dispatch(
   const key = `${method} ${pathname}`;
   const exact = routes.getExact(key);
   if (exact) {
-    const body = await readBody(req, options.maxBodyBytes ?? 1_048_576);
+    const body = await readBody(req, bodyLimitForPath(pathname, options.maxBodyBytes));
     const result = await exact({ req, res, url, body, deps, params: {} });
     if (!res.headersSent && result !== undefined) {
       writeJson(res, 200, result);
@@ -208,7 +211,7 @@ async function dispatch(
   // Pattern-route fallback (e.g. `/api/v1/traces/:id`).
   const pattern = routes.matchPattern(method, pathname);
   if (pattern) {
-    const body = await readBody(req, options.maxBodyBytes ?? 1_048_576);
+    const body = await readBody(req, bodyLimitForPath(pathname, options.maxBodyBytes));
     const result = await pattern.handler({
       req,
       res,
@@ -234,3 +237,7 @@ async function dispatch(
   void deps;
 }
 
+function bodyLimitForPath(pathname: string, configured?: number): number {
+  if (configured !== undefined) return configured;
+  return pathname === "/api/v1/import" ? IMPORT_MAX_BODY_BYTES : DEFAULT_MAX_BODY_BYTES;
+}

@@ -8,7 +8,7 @@ import type { LogRecord } from "../types.js";
 
 export function formatCompact(record: LogRecord): string {
   const parts: string[] = [];
-  parts.push(isoFromEpochMs(record.ts));
+  parts.push(isoFromEpochMs(record.ts, record.tz, { offset: true }));
   parts.push(record.level);
   parts.push(record.kind);
   parts.push(`channel=${record.channel}`);

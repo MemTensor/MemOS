@@ -128,6 +128,7 @@ class DreamDiaryEntry(BaseModel):
     summary: str
     dream_entry: str = ""
     motive: dict | None = None
+    context_events: list[dict[str, Any]] = Field(default_factory=list)
     themes: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     status: str = "completed"
@@ -137,6 +138,13 @@ class DreamDiaryEntry(BaseModel):
         parts = [self.title, self.summary]
         if self.dream_entry:
             parts.append(self.dream_entry)
+        if self.context_events:
+            context_lines = []
+            for event in self.context_events:
+                label = event.get("label") or event.get("key") or event.get("context_id", "Context")
+                summary = event.get("summary", "")
+                context_lines.append(f"- {label}: {summary}".strip())
+            parts.append("Context updates:\n" + "\n".join(context_lines))
         return "\n\n".join(parts)
 
 

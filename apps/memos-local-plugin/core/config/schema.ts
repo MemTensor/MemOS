@@ -39,10 +39,36 @@ const EmbeddingSchema = Type.Object({
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
   apiKey: StringWithDefault(""),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
   }, { default: {} }),
+}, { default: {} });
+
+const ReasoningSchema = Type.Object({
+  /**
+   * OpenRouter-compatible reasoning toggle. Omit the whole block to keep
+   * the provider/model default.
+   */
+  enabled: Type.Optional(Type.Boolean()),
+  /** Optional provider effort hint for reasoning-capable models. */
+  effort: Type.Optional(Type.Union([
+    Type.Literal("minimal"),
+    Type.Literal("none"),
+    Type.Literal("low"),
+    Type.Literal("medium"),
+    Type.Literal("high"),
+    Type.Literal("xhigh"),
+    Type.Literal("max"),
+  ])),
+  /** Optional token budget for reasoning-capable providers. */
+  maxTokens: Type.Optional(Type.Number({ minimum: 1 })),
 }, { default: {} });
 
 const LlmSchema = Type.Object({
@@ -65,6 +91,14 @@ const LlmSchema = Type.Object({
   timeoutMs: NumberInRange(45_000, 1_000),
   /** Max retries on transient errors. */
   maxRetries: NumberInRange(3, 0, 10),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });
 
 /**
@@ -89,9 +123,38 @@ const SkillEvolverSchema = Type.Object({
   apiKey: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
   timeoutMs: NumberInRange(60_000, 1_000),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
+}, { default: {} });
+
+const StorageSchema = Type.Object({
+  /**
+   * Keyword tokenizer mode used when compiling FTS5 MATCH expressions.
+   * `trigram` preserves the historical SQLite trigram behavior; `cjk`
+   * keeps short Chinese words and mixed ASCII+CJK tokens searchable.
+   */
+  ftsTokenizer: Type.Union([
+    Type.Literal("trigram"),
+    Type.Literal("cjk"),
+  ], { default: "trigram" }),
 }, { default: {} });
 
 const AlgorithmSchema = Type.Object({
+  lightweightMemory: Type.Object({
+    /**
+     * Low-cost mode for users who only want raw conversation memory +
+     * recall. When enabled, the runtime skips task/reward/L2/L3/skill
+     * evolution and keeps only summarize + embedding + retrieval filter.
+     * The viewer exposes the inverse as "memory self-evolution".
+     */
+    enabled: Bool(true),
+  }, { default: {} }),
   capture: Type.Object({
     /** Cap on agent/user text length (chars). Longer content is summarized. */
     maxTextChars: NumberInRange(4_000, 200, 64_000),
@@ -105,6 +168,10 @@ const AlgorithmSchema = Type.Object({
     synthReflections: Bool(false),
     /** Concurrency for α scoring + synth LLM calls (per_step mode only). */
     llmConcurrency: NumberInRange(4, 1, 32),
+    /** Hard cap for one topic-end reflect pass, including recovery replay. */
+    maxReflectLlmCalls: NumberInRange(128, 0, 10_000),
+    /** Max orphan trace inserts allowed during startup-recovered replay. */
+    maxRecoveryOrphanInserts: NumberInRange(0, 0, 10_000),
     /**
      * V7 §3.2 batched variant. When/how to fold per-step reflection synth +
      * α scoring into one episode-level LLM call:
@@ -121,6 +188,38 @@ const AlgorithmSchema = Type.Object({
      * to per-step calls so the batched prompt cannot overflow context.
      */
     batchThreshold: NumberInRange(12, 1, 64),
+    /**
+     * Optional context blocks for per-step reflection and α prompts.
+     * Defaults to "task" to preserve the current task-summary enrichment;
+     * downstream preview remains opt-in.
+     */
+    reflectionContextMode: Type.Union(
+      [
+        Type.Literal("none"),
+        Type.Literal("task"),
+        Type.Literal("downstream"),
+        Type.Literal("task_downstream"),
+      ],
+      { default: "task" },
+    ),
+    /**
+     * Long-episode fallback mode after batch auto-threshold is exceeded.
+     * `per_step_downstream` keeps parallelism but adds step+1..step+3 preview.
+     */
+    longEpisodeReflectMode: Type.Union(
+      [Type.Literal("per_step_parallel"), Type.Literal("per_step_downstream")],
+      { default: "per_step_parallel" },
+    ),
+    /** Max downstream steps attached to a per-step prompt. */
+    downstreamStepCount: NumberInRange(3, 0, 3),
+    /** Character cap for the task-context block. */
+    taskContextMaxChars: NumberInRange(800, 100, 4_000),
+    /** Total character cap for all downstream preview blocks. */
+    downstreamContextMaxChars: NumberInRange(1_200, 0, 8_000),
+    /** Character cap per downstream preview block. */
+    downstreamPerStepMaxChars: NumberInRange(400, 100, 2_000),
+    /** Character cap for current-step tool outcome in synth / α prompts. */
+    synthOutcomeMaxChars: NumberInRange(600, 100, 4_000),
   }, { default: {} }),
   reward: Type.Object({
     /** V7 §0.6 eq. 4/5: discount factor γ for reflection-weighted backprop. */
@@ -185,6 +284,8 @@ const AlgorithmSchema = Type.Object({
     useLlm: Bool(true),
     /** Character cap for traces handed into the `l2.induction` prompt. */
     traceCharCap: NumberInRange(3_000, 600, 16_000),
+    /** EMA alpha for gain updates. 1 means overwrite, lower values preserve history. */
+    gainEmaAlpha: NumberInRange(0.4, 0, 1),
     /** Archive active policies whose gain dips below this value. */
     archiveGain: NumberInRange(-0.05, -1, 1),
   }, { default: {} }),
@@ -253,6 +354,14 @@ const AlgorithmSchema = Type.Object({
     failureWindow: NumberInRange(5, 2, 50),
     /** Min |mean(high) - mean(low)| to fire without an explicit user signal. */
     valueDelta: NumberInRange(0.5, 0, 2),
+    /**
+     * Minimum absolute value threshold for lowValue traces. Only traces with
+     * value < -minLowValueThreshold will be collected as failure evidence
+     * (unless they match isFailureLike patterns). This filters out trivial
+     * negative feedback (e.g., value = -0.001) and focuses on genuine failures.
+     * Default 0.01 — adjust higher (e.g., 0.1) to be more conservative.
+     */
+    minLowValueThreshold: NumberInRange(0.01, 0, 1),
     /** Let the LLM rewrite the preference / anti-pattern lines. */
     useLlm: Bool(true),
     /** Tag the L2 policies referenced by the evidence with the guidance. */
@@ -293,6 +402,23 @@ const AlgorithmSchema = Type.Object({
      * `taskIdleTimeoutMs`.
      */
     mergeMaxGapMs: NumberInRange(2 * 60 * 60 * 1000, 0, 24 * 60 * 60 * 1000),
+    /**
+     * Hard cap on turns in a merged episode. Once reached, the next
+     * turn forces a topic boundary even if relation classification says
+     * follow-up/revision. Keeps task-end processing bounded.
+     */
+    maxTurnsPerEpisode: NumberInRange(30, 5, 200),
+    /**
+     * Max time to wait for relation classification before defaulting
+     * to a conservative new-task boundary so foreground prompt
+     * construction cannot stall indefinitely.
+     */
+    classifyTimeoutMs: NumberInRange(5000, 1000, 30000),
+    /**
+     * Shared LLM concurrency budget for asynchronous background
+     * capture/reward/L2/L3/skill-evolution processing.
+     */
+    bgLlmConcurrency: NumberInRange(2, 1, 8),
   }, { default: {} }),
   retrieval: Type.Object({
     /** How many Skill snippets to inject at turn start. */
@@ -384,8 +510,8 @@ const AlgorithmSchema = Type.Object({
     /**
      * How Tier-1 skills are surfaced in the injected prompt:
      *   - "summary" (default): inject only `name + η + 1-line summary +
-     *     a `skill_get(id="…")` hint`. The agent decides whether to
-     *     fetch the full procedure via the `skill_get` tool. Keeps the
+     *     a `memos_skill_get(id="…")` hint`. The agent decides whether to
+     *     fetch the full procedure via the `memos_skill_get` tool. Keeps the
      *     prompt small and avoids paying for skills the agent never
      *     uses.
      *   - "full": inline the entire `invocationGuide` body (legacy
@@ -425,6 +551,28 @@ const AlgorithmSchema = Type.Object({
      * slightly larger window pays for itself).
      */
     llmFilterCandidateBodyChars: NumberInRange(500, 120, 2000),
+    /**
+     * Tier-2 vector scan time-window bound (ms). When > 0, the
+     * vector scan path (`scanAndTopK` in `core/storage/vector.ts`)
+     * only considers traces written within the last
+     * `vectorScanMaxAgeMs` milliseconds. Set to `0` to disable the
+     * cap (legacy behaviour: full-table brute-force scan).
+     *
+     * Background: at 93K rows × 1536 dims the unbounded scan blocks
+     * the Node event loop for 5–30 s every `onTurnStart`
+     * (https://github.com/MemTensor/MemOS/issues/1929). A 24-hour
+     * window keeps onTurnStart latency under control without
+     * sacrificing recall for active-session memories. FTS keyword
+     * channels still cover older traces, so this bound only affects
+     * the cosine-only path.
+     *
+     * Hard cap is one year (31_536_000_000 ms) — anything larger is
+     * indistinguishable from "unbounded" at the corpus sizes where
+     * the bound starts to matter, and accepting absurdly large
+     * values lets misconfigured deployments silently revert to the
+     * old behaviour.
+     */
+    vectorScanMaxAgeMs: NumberInRange(0, 0, 31_536_000_000),
   }, { default: {} }),
 }, { default: {} });
 
@@ -454,6 +602,8 @@ const LoggingSchema = Type.Object({
   ], { default: "info" }),
   /** Viewer-only switch: expose detailed logs, lifecycle tags and chain view. */
   detailedView: Bool(false),
+  /** IANA timezone for log timestamp display. */
+  timezone: StringWithDefault("UTC"),
   console: Type.Object({
     enabled: Bool(true),
     pretty: Bool(true),
@@ -506,11 +656,15 @@ export const ConfigSchema = Type.Object({
   bridge: BridgeSchema,
   embedding: EmbeddingSchema,
   llm: LlmSchema,
+  /** Dedicated model slot for L3 abstraction. Same shape as skillEvolver. */
+  l3Llm: SkillEvolverSchema,
   skillEvolver: SkillEvolverSchema,
+  storage: StorageSchema,
   algorithm: AlgorithmSchema,
   hub: HubSchema,
   telemetry: TelemetrySchema,
   logging: LoggingSchema,
 }, { default: {} });
 
+export type ReasoningConfig = Static<typeof ReasoningSchema>;
 export type ResolvedConfig = Static<typeof ConfigSchema>;

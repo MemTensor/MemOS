@@ -70,10 +70,35 @@ export interface ReflectionScore {
   alpha: number | null;
   /** LLM `usable` flag: false → alpha forced to 0 per V7 eq. 5. */
   usable: boolean;
+  /** Optional LLM explanation for the α/usable decision. */
+  reason?: string | null;
   /** Source of the reflection text. */
   source: "adapter" | "extracted" | "synth" | "none";
   /** Optional LLM servedBy model label for audit. */
   model?: string;
+}
+
+export type ReflectionContextMode = "none" | "task" | "downstream" | "task_downstream";
+export type LongEpisodeReflectMode = "per_step_parallel" | "per_step_downstream";
+
+export interface DownstreamStepPreview {
+  /** Relative position from the current step: 1 => step+1, 2 => step+2. */
+  offset: 1 | 2 | 3;
+  /** `text` means conversational content; `tooluse` means tool output evidence. */
+  kind: "text" | "tooluse";
+  /** For `text`, the standalone downstream text block. */
+  text?: string;
+  /** For `tooluse`, one or more tool names observed in that downstream step. */
+  toolNames?: string[];
+  /** For `tooluse`, summarized output from the downstream tool call(s). */
+  toolOutput?: string;
+  /** Existing adapter/extracted reflection only; never depends on this run's synth. */
+  reflection?: string | null;
+}
+
+export interface ReflectionContext {
+  taskSummary?: string | null;
+  downstream?: DownstreamStepPreview[];
 }
 
 export interface ScoredStep extends NormalizedStep {
@@ -169,6 +194,19 @@ export interface CaptureConfig {
   synthReflections: boolean;
   llmConcurrency: number;
   /**
+   * Hard cap for LLM calls made by one topic-end reflect pass. This bounds
+   * startup recovery / dirty-episode replay so a single large episode cannot
+   * generate unbounded paid requests.
+   */
+  maxReflectLlmCalls: number;
+  /**
+   * Startup-recovered episodes are reconstructed from already-persisted
+   * traces. Any "orphan" during that replay is usually a matching drift, not
+   * genuinely missing content. Keep inserts disabled by default to avoid
+   * duplicating historical rows while still allowing operators to opt in.
+   */
+  maxRecoveryOrphanInserts: number;
+  /**
    * V7 §3.2 batched variant. Controls when reflection synthesis + α scoring
    * collapse into ONE LLM call per episode instead of N per-step calls.
    *
@@ -190,6 +228,26 @@ export interface CaptureConfig {
    * against prompt-window overflow on very long agent traces.
    */
   batchThreshold: number;
+  /**
+   * Controls which extra context is included in per-step reflection and α
+   * prompts. Defaults to "task"; downstream preview remains opt-in.
+   */
+  reflectionContextMode: ReflectionContextMode;
+  /**
+   * Long episodes can stay legacy parallel per-step, or enrich each per-step
+   * prompt with a precomputed step+1..step+3 preview while remaining parallel.
+   */
+  longEpisodeReflectMode: LongEpisodeReflectMode;
+  /** Max downstream steps attached to a per-step prompt (0..3). */
+  downstreamStepCount: number;
+  /** Character cap for the task-context block. */
+  taskContextMaxChars: number;
+  /** Total character cap for all downstream preview blocks. */
+  downstreamContextMaxChars: number;
+  /** Character cap for each downstream preview block. */
+  downstreamPerStepMaxChars: number;
+  /** Character cap for current-step outcome in synth / alpha prompts. */
+  synthOutcomeMaxChars: number;
 }
 
 // ─── Capture event types (published on their own bus) ──────────────────────

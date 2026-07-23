@@ -16,14 +16,16 @@
  *   `transferability` axes benefit directly.
  *
  * Trade-offs (encoded in capture.ts dispatch):
- *   - Prompt grows linearly with N steps. Capped via `batchThreshold`;
- *     long episodes degrade to the per-step path automatically.
- *   - One bad output value forces a single batched retry instead of N
- *     isolated retries — but the facade already does `malformedRetries`
- *     for us, and on hard failure capture.ts falls back to per-step.
+ *   - Prompt grows linearly with N steps. Each call is capped at
+ *     `batchThreshold`; long episodes run as several bounded chunks.
+ *   - One bad chunk forces a single batched retry for that chunk instead
+ *     of N isolated retries — but the facade already does
+ *     `malformedRetries` for us, and on hard failure capture.ts falls
+ *     back to per-step for that chunk only.
  *
  * Wire format ↔ prompt:
- *   Send `{steps: [{idx, state, action, outcome, reflection, synth_allowed}]}`.
+ *   Send `{ host_context?, task_context?, steps: [{idx, state, action, outcome, reflection, synth_allowed}] }`.
+ *   `task_context` is episode-level task summary (nullable string).
  *   Receive `{scores: [{idx, reflection_text, alpha, usable, reason}]}`.
  *   See `core/llm/prompts/reflection.ts :: BATCH_REFLECTION_PROMPT`.
  */
@@ -57,6 +59,7 @@ export interface BatchScoreOptions {
   synthReflections: boolean;
   episodeId?: string;
   phase?: string;
+  taskSummary?: string | null;
   /**
    * Cap per-field text we shovel into the prompt. Default 1_200 chars per
    * `state`/`outcome`, 1_500 per `action`. Mirrors per-step prompts.
@@ -122,6 +125,7 @@ export async function batchScoreReflections(
 
   const payload = {
     host_context: batchHostContext(inputs, llm),
+    task_context: opts.taskSummary?.trim().slice(0, 1_200) || null,
     steps: inputs.map((input, i) => ({
       idx: i,
       state: clip(input.step.userText, fieldChars.state),
@@ -167,6 +171,7 @@ export async function batchScoreReflections(
       validate: (v) => validateBatchPayload(v, inputs.length),
       malformedRetries: 1,
       temperature: 0,
+      maxTokens: batchMaxTokens(inputs.length),
     },
   );
 
@@ -188,6 +193,7 @@ export async function batchScoreReflections(
     const usable = Boolean(raw.usable);
     const rawAlpha = clamp01(numOrZero(raw.alpha));
     const alpha = usable ? rawAlpha : 0;
+    const reason = typeof raw.reason === "string" ? sanitizeDerivedText(raw.reason) : null;
 
     let finalText: string | null;
     let source: ReflectionScore["source"];
@@ -210,6 +216,7 @@ export async function batchScoreReflections(
       text: finalText,
       alpha,
       usable: usable && finalText !== null,
+      reason,
       source,
       model: rsp.servedBy,
     };
@@ -314,6 +321,15 @@ function validateBatchPayload(v: unknown, expected: number): void {
       );
     }
   }
+}
+
+function batchMaxTokens(stepCount: number): number {
+  // Batch output scales with step count; keep a per-step budget but cap below
+  // the 16k range that triggered avoidable reasoning spend on mimo replay.
+  const perStepOutputBudget = 512;
+  const baseBudget = 768;
+  const ceiling = 8_192;
+  return Math.min(ceiling, baseBudget + Math.max(1, stepCount) * perStepOutputBudget);
 }
 
 function lastToolOutcome(step: NormalizedStep, max: number): string {

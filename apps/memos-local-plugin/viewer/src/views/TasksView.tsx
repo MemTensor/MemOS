@@ -12,11 +12,13 @@ import { api } from "../api/client";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
 import { Pager } from "../components/Pager";
+import { LightweightModeEmpty } from "../components/LightweightModeEmpty";
 import { NamespaceSelect, appendNamespaceParams } from "../components/NamespaceSelect";
 import { route } from "../stores/router";
 import { clearEntryId, linkTo } from "../stores/cross-link";
 import { ChatLog, flattenChat, type TimelineTrace } from "./tasks-chat";
 import { areAllIdsSelected, toggleIdsInSelection } from "../utils/selection";
+import { useLightweightMemoryMode } from "../hooks/useLightweightMemoryMode";
 import {
   deriveEpisodeStatus,
   type DerivedTaskStatus,
@@ -91,6 +93,7 @@ export function TasksView() {
   const [detail, setDetail] = useState<EpisodeRow | null>(null);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const lightweight = useLightweightMemoryMode();
   const toggleSel = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -135,20 +138,33 @@ export function TasksView() {
   };
 
   useEffect(() => {
+    if (lightweight.loading || lightweight.enabled) return;
     if (route.value.params.id) return;
     const ctrl = loadPage(0);
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageSize, status, debouncedQuery, namespaceFilter, route.value.params.id]);
+  }, [pageSize, status, debouncedQuery, namespaceFilter, route.value.params.id, lightweight.loading, lightweight.enabled]);
 
   useEffect(() => {
+    if (lightweight.loading || lightweight.enabled) return;
     const id = route.value.params.id;
     if (!id) return;
     const ctrl = new AbortController();
     void openLinkedEpisode(id, ctrl.signal);
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route.value.params.id, pageSize]);
+  }, [route.value.params.id, pageSize, lightweight.loading, lightweight.enabled]);
+
+  useEffect(() => {
+    if (!lightweight.enabled) return;
+    setRows([]);
+    setHasMore(false);
+    setTotal(0);
+    setPage(0);
+    setDetail(null);
+    setTimeline(null);
+    setSelected(new Set());
+  }, [lightweight.enabled]);
 
   const openLinkedEpisode = async (id: string, signal: AbortSignal) => {
     setQuery("");
@@ -180,6 +196,10 @@ export function TasksView() {
   };
 
   useEffect(() => {
+    if (lightweight.enabled) {
+      setTimeline(null);
+      return;
+    }
     if (!detail) {
       setTimeline(null);
       return;
@@ -192,7 +212,7 @@ export function TasksView() {
       .then(setTimeline)
       .catch(() => setTimeline(null));
     return () => ctrl.abort();
-  }, [detail?.id]);
+  }, [detail?.id, lightweight.enabled]);
 
   // The server is now the single source of truth for filtering — the
   // viewer used to do a per-page `Array.filter` that left the pager
@@ -216,7 +236,8 @@ export function TasksView() {
           <h1>{t("tasks.title")}</h1>
           <p>{t("tasks.subtitle")}</p>
         </div>
-        <div class="view-header__actions">
+        {!lightweight.enabled && (
+          <div class="view-header__actions">
           {/*
            * Refresh — same affordance MemoriesView exposes. Clears the
            * search + status filter, drops any multi-select, and reloads
@@ -234,51 +255,17 @@ export function TasksView() {
               setStatus("");
               setNamespaceFilter("");
               setSelected(new Set());
-              if (!status && !query) loadPage(0);
+              if (!status && !query && !lightweight.enabled) loadPage(0);
             }}
           >
             <Icon name="refresh-cw" size={14} />
             {t("common.refresh")}
           </button>
-        </div>
+          </div>
+        )}
       </div>
 
-      <div class="toolbar">
-        <label class="input-search">
-          <Icon name="search" size={16} />
-          <input
-            class="input input--search"
-            type="search"
-            placeholder={t("tasks.search.placeholder")}
-            value={query}
-            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-          />
-        </label>
-      </div>
-
-      <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
-        <div class="toolbar__group" role="group" aria-label={t("common.filter")}>
-          {[
-            { v: "" as TaskStatusFilter, k: "common.all" as const },
-            { v: "active" as TaskStatusFilter, k: "status.active" as const },
-            { v: "completed" as TaskStatusFilter, k: "status.completed" as const },
-            { v: "skipped" as TaskStatusFilter, k: "status.skipped" as const },
-            { v: "failed" as TaskStatusFilter, k: "status.failed" as const },
-          ].map((opt) => (
-            <button
-              key={opt.v}
-              class="chip"
-              aria-pressed={status === opt.v}
-              onClick={() => setStatus(opt.v)}
-            >
-              {t(opt.k)}
-            </button>
-          ))}
-        </div>
-        <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
-      </div>
-
-      {loading && (
+      {lightweight.loading && (
         <div class="list">
           {[0, 1, 2].map((i) => (
             <div key={i} class="skeleton" style="height:62px" />
@@ -286,139 +273,193 @@ export function TasksView() {
         </div>
       )}
 
-      {!loading && filtered.length === 0 && (
-        <div class="empty">
-          <div class="empty__icon">
-            <Icon name="list-checks" size={22} />
-          </div>
-          <div class="empty__title">
-            {filterActive ? t("tasks.empty.filtered") : t("tasks.empty")}
-          </div>
-        </div>
+      {!lightweight.loading && lightweight.enabled && (
+        <LightweightModeEmpty
+          icon="list-checks"
+          message={t("tasks.lightweight.empty")}
+        />
       )}
 
-      {filtered.length > 0 && (
-        <div class="list">
-          {filtered.map((r) => {
-            const isSel = selected.has(r.id);
-            const taskStatus = deriveStatus(r);
-            // Hide the "skill pipeline queued / generating" placeholder
-            // for tasks that won't ever produce a skill anyway. A
-            // skipped or failed task gets bounced out of the pipeline
-            // before crystallization, so showing "等待中" / "生成中" is
-            // misleading — the queue isn't actually advancing.
-            const showSkillStatus =
-              !!r.skillStatus &&
-              !(
-                (taskStatus === "skipped" || taskStatus === "failed") &&
-                (r.skillStatus === "queued" || r.skillStatus === "generating")
-              );
-            return (
-              <div
-                key={r.id}
-                class={`mem-card${isSel ? " mem-card--selected" : ""}`}
-                onClick={() => setDetail(r)}
-              >
-                <label
-                  class="mem-card__check-wrap"
-                  onClick={(e) => e.stopPropagation()}
+      {!lightweight.loading && !lightweight.enabled && (
+        <>
+          <div class="toolbar">
+            <label class="input-search">
+              <Icon name="search" size={16} />
+              <input
+                class="input input--search"
+                type="search"
+                placeholder={t("tasks.search.placeholder")}
+                value={query}
+                onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+              />
+            </label>
+          </div>
+
+          <div class="toolbar" style="margin-top:calc(-1 * var(--sp-2))">
+            <div class="toolbar__group" role="group" aria-label={t("common.filter")}>
+              {[
+                { v: "" as TaskStatusFilter, k: "common.all" as const },
+                { v: "active" as TaskStatusFilter, k: "status.active" as const },
+                { v: "completed" as TaskStatusFilter, k: "status.completed" as const },
+                { v: "skipped" as TaskStatusFilter, k: "status.skipped" as const },
+                { v: "failed" as TaskStatusFilter, k: "status.failed" as const },
+              ].map((opt) => (
+                <button
+                  key={opt.v}
+                  class="chip"
+                  aria-pressed={status === opt.v}
+                  onClick={() => setStatus(opt.v)}
                 >
-                  <input
-                    type="checkbox"
-                    class="mem-card__check"
-                    checked={isSel}
-                    onChange={() => toggleSel(r.id)}
-                    aria-label="select"
-                  />
-                </label>
-                <div class="mem-card__body">
-                  <div class="mem-card__title">
-                    {r.preview || t("tasks.untitled")}
-                  </div>
-                  <div class="mem-card__meta">
-                    <span class={`pill pill--${taskStatus}`}>
-                      {t(`status.${taskStatus}` as "status.active")}
-                    </span>
-                    {showSkillStatus && (
-                      <span
-                        class={`pill pill--skill-${r.skillStatus}`}
-                        title={r.skillReasonKey
-                          ? t(r.skillReasonKey as any, r.skillReasonParams ?? undefined)
-                          : r.skillReason ?? undefined}
-                      >
-                        {t(`tasks.skill.${r.skillStatus}` as never)}
-                      </span>
-                    )}
-                    <span>{new Date(r.startedAt).toLocaleString()}</span>
-                    {typeof r.turnCount === "number" && (
-                      <span>{r.turnCount} turns</span>
-                    )}
-                    {r.rTask != null && <span>R {r.rTask.toFixed(2)}</span>}
-                  </div>
-                  {statusReason(r) && (
-                    <div
-                      class="muted"
-                      style="font-size:var(--fs-xs);line-height:1.5"
-                    >
-                      {statusReason(r)}
-                    </div>
-                  )}
-                </div>
-                <div class="mem-card__tail">
-                  <Icon name="chevron-right" size={16} />
-                </div>
+                  {t(opt.k)}
+                </button>
+              ))}
+            </div>
+            <NamespaceSelect value={namespaceFilter} onChange={setNamespaceFilter} />
+          </div>
+
+          {loading && (
+            <div class="list">
+              {[0, 1, 2].map((i) => (
+                <div key={i} class="skeleton" style="height:62px" />
+              ))}
+            </div>
+          )}
+
+          {!loading && filtered.length === 0 && (
+            <div class="empty">
+              <div class="empty__icon">
+                <Icon name="list-checks" size={22} />
               </div>
-            );
-          })}
-        </div>
-      )}
+              <div class="empty__title">
+                {filterActive ? t("tasks.empty.filtered") : t("tasks.empty")}
+              </div>
+            </div>
+          )}
 
-      {/*
-       * Hide the pager when the current view has nothing to show.
-       * Without this the pager kept rendering "1/2/3 of 45" while
-       * the list above said "no matches" — every navigation button
-       * would just reload the same empty filter result, which made
-       * users think the data was lost.
-       */}
-      {filtered.length > 0 && (page > 0 || hasMore) && (
-        <Pager
-          page={page}
-          totalItems={total}
-          pageSize={pageSize}
-          hasMore={hasMore}
-          loading={loading}
-          onPageSizeChange={setPageSize}
-          onPageChange={(nextPage) => {
-            loadPage(nextPage);
-          }}
-        />
-      )}
+          {filtered.length > 0 && (
+            <div class="list">
+              {filtered.map((r) => {
+                const isSel = selected.has(r.id);
+                const taskStatus = deriveStatus(r);
+                // Hide the "skill pipeline queued / generating" placeholder
+                // for tasks that won't ever produce a skill anyway. A
+                // skipped or failed task gets bounced out of the pipeline
+                // before crystallization, so showing "等待中" / "生成中" is
+                // misleading — the queue isn't actually advancing.
+                const showSkillStatus =
+                  !!r.skillStatus &&
+                  !(
+                    (taskStatus === "skipped" || taskStatus === "failed") &&
+                    (r.skillStatus === "queued" || r.skillStatus === "generating")
+                  );
+                return (
+                  <div
+                    key={r.id}
+                    class={`mem-card${isSel ? " mem-card--selected" : ""}`}
+                    onClick={() => setDetail(r)}
+                  >
+                    <label
+                      class="mem-card__check-wrap"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        class="mem-card__check"
+                        checked={isSel}
+                        onChange={() => toggleSel(r.id)}
+                        aria-label="select"
+                      />
+                    </label>
+                    <div class="mem-card__body">
+                      <div class="mem-card__title">
+                        {r.preview || t("tasks.untitled")}
+                      </div>
+                      <div class="mem-card__meta">
+                        <span class={`pill pill--${taskStatus}`}>
+                          {t(`status.${taskStatus}` as "status.active")}
+                        </span>
+                        {showSkillStatus && (
+                          <span
+                            class={`pill pill--skill-${r.skillStatus}`}
+                            title={r.skillReasonKey
+                              ? t(r.skillReasonKey as any, r.skillReasonParams ?? undefined)
+                              : r.skillReason ?? undefined}
+                          >
+                            {t(`tasks.skill.${r.skillStatus}` as never)}
+                          </span>
+                        )}
+                        <span>{new Date(r.startedAt).toLocaleString()}</span>
+                        {typeof r.turnCount === "number" && (
+                          <span>{r.turnCount} turns</span>
+                        )}
+                        {r.rTask != null && <span>R {r.rTask.toFixed(2)}</span>}
+                      </div>
+                      {statusReason(r) && (
+                        <div
+                          class="muted"
+                          style="font-size:var(--fs-xs);line-height:1.5"
+                        >
+                          {statusReason(r)}
+                        </div>
+                      )}
+                    </div>
+                    <div class="mem-card__tail">
+                      <Icon name="chevron-right" size={16} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
-      {detail && (
-        <TaskDrawer
-          episode={detail}
-          timeline={timeline}
-          onClose={() => {
-            setDetail(null);
-            clearEntryId();
-          }}
-        />
-      )}
+          {/*
+           * Hide the pager when the current view has nothing to show.
+           * Without this the pager kept rendering "1/2/3 of 45" while
+           * the list above said "no matches" — every navigation button
+           * would just reload the same empty filter result, which made
+           * users think the data was lost.
+           */}
+          {filtered.length > 0 && (page > 0 || hasMore) && (
+            <Pager
+              page={page}
+              totalItems={total}
+              pageSize={pageSize}
+              hasMore={hasMore}
+              loading={loading}
+              onPageSizeChange={setPageSize}
+              onPageChange={(nextPage) => {
+                loadPage(nextPage);
+              }}
+            />
+          )}
 
-      {selected.size > 0 && (
-        <div class="batch-bar" role="region" aria-label="bulk actions">
-          <span class="batch-bar__count">
-            {t("common.selected", { n: selected.size })}
-          </span>
-          <button class="btn btn--sm" onClick={togglePageSelection}>
-            <Icon name="check-square" size={14} />
-            {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
-          </button>
-          <div class="batch-bar__spacer" />
-          <button class="btn btn--ghost btn--sm" onClick={deselectAll}>
-            {t("common.deselect")}
-          </button>
-        </div>
+          {detail && (
+            <TaskDrawer
+              episode={detail}
+              timeline={timeline}
+              onClose={() => {
+                setDetail(null);
+                clearEntryId();
+              }}
+            />
+          )}
+
+          {selected.size > 0 && (
+            <div class="batch-bar" role="region" aria-label="bulk actions">
+              <span class="batch-bar__count">
+                {t("common.selected", { n: selected.size })}
+              </span>
+              <button class="btn btn--sm" onClick={togglePageSelection}>
+                <Icon name="check-square" size={14} />
+                {isPageSelected ? t("common.deselectPage") : t("common.selectPage")}
+              </button>
+              <div class="batch-bar__spacer" />
+              <button class="btn btn--ghost btn--sm" onClick={deselectAll}>
+                {t("common.deselect")}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </>
   );
@@ -761,4 +802,3 @@ function TaskDrawer({
     </div>
   );
 }
-

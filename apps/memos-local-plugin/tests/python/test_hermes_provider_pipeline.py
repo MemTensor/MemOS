@@ -68,10 +68,56 @@ class FailingSessionOpenBridge(FakeBridge):
 
 
 class HermesProviderPipelineTests(unittest.TestCase):
+    def test_module_imports_cleanly(self) -> None:
+        """Regression guard for #2096: asserts that ``MemosHttpClient`` is
+        NOT present in ``memos_provider``, since the class was referenced
+        before it was ever committed (see issue #2096).
+
+        Note: the import itself is already validated at collection time —
+        the ``import memos_provider`` at the top of this file will raise
+        ``ImportError`` if a dangling reference is reintroduced, causing
+        the entire test file to fail to load. This test body only adds:
+
+        * the explicit negative guard on ``MemosHttpClient`` below (unique
+          to this test), which covers both the ``memos_provider``
+          re-export surface *and* ``bridge_client`` itself so a partial
+          re-add of the class only in ``bridge_client`` (with no
+          matching re-export) still fails the guard, and
+        * positive checks on ``MemTensorProvider`` (the class the Hermes
+          host actually instantiates) and on ``bridge_client``'s real
+          contract (``MemosBridgeClient`` / ``BridgeError``), rather than
+          on their incidental re-exports through ``memos_provider`` — the
+          latter only appear on the package namespace because
+          ``__init__.py`` uses a bare ``from bridge_client import ...``,
+          which is an implementation detail we don't want the test to
+          lock in.
+        """
+        import importlib
+
+        # MemTensorProvider is the class hermes-agent host instantiates.
+        self.assertTrue(hasattr(memos_provider, "MemTensorProvider"))
+
+        # Assert the actual contract on bridge_client directly rather
+        # than on its re-exports through memos_provider.
+        bc = importlib.import_module("bridge_client")
+        self.assertTrue(hasattr(bc, "MemosBridgeClient"))
+        self.assertTrue(hasattr(bc, "BridgeError"))
+
+        # ``MemosHttpClient`` was referenced by name in a half-merged HTTP
+        # bridge feature (see #2096). It must not reappear until the class
+        # itself is committed in ``bridge_client``. Guard both the
+        # ``memos_provider`` re-export (which is what the original
+        # ImportError travelled through) and ``bridge_client`` itself —
+        # otherwise a partial re-add of the class in ``bridge_client``
+        # without a matching re-export would slip past this test.
+        self.assertFalse(hasattr(memos_provider, "MemosHttpClient"))
+        self.assertFalse(hasattr(bc, "MemosHttpClient"))
+
     def test_lifecycle_persists_turn_and_closes_real_episode(self) -> None:
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -122,6 +168,105 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         self.assertTrue(bridge.closed)
 
+    def test_initialize_closes_previous_bridge_before_spawning_new_one(self) -> None:
+        """Regression for #1927: re-calling ``initialize()`` must close the
+        previously-spawned bridge instead of leaking it.
+
+        Hermes calls ``initialize()`` on every reconnect / new session.
+        Before the fix, each call replaced ``self._bridge`` with a fresh
+        ``MemosBridgeClient`` (and thus a new ``--no-viewer`` Node
+        subprocess) without closing the old one, leaking ~93 MB per call.
+        """
+        first_bridge = FakeBridge()
+        second_bridge = FakeBridge()
+        bridge_attempts = [first_bridge, second_bridge]
+
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch(
+                "memos_provider.MemosBridgeClient",
+                side_effect=lambda: bridge_attempts.pop(0),
+            ),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("session-1")
+            self.assertIs(provider._bridge, first_bridge)
+            self.assertFalse(first_bridge.closed)
+
+            # Second initialize (e.g. reconnect / new Hermes session) must
+            # close the previous bridge before allocating a new one.
+            provider.initialize("session-2")
+            self.assertTrue(
+                first_bridge.closed,
+                "previous bridge was not closed — leak (#1927)",
+            )
+            self.assertIs(provider._bridge, second_bridge)
+            self.assertFalse(second_bridge.closed)
+
+            provider.shutdown()
+
+        # And the second bridge must be cleaned up by shutdown(), so we
+        # know we did not somehow drop the new reference along the way.
+        self.assertTrue(second_bridge.closed)
+
+    def test_initialize_when_no_previous_bridge_does_not_call_close(self) -> None:
+        """First-ever ``initialize()`` must not blow up on the missing
+        previous bridge — it should just spawn one."""
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            self.assertIsNone(provider._bridge)
+
+            provider.initialize("fresh-session")
+            self.assertIs(provider._bridge, bridge)
+            self.assertFalse(bridge.closed)
+
+            provider.shutdown()
+
+        self.assertTrue(bridge.closed)
+
+    def test_initialize_swallows_exception_from_old_bridge_close(self) -> None:
+        """If the previous bridge's ``close()`` raises (e.g. stuck Node
+        subprocess), ``initialize()`` must still allocate the new bridge
+        and proceed — never leak just because cleanup is flaky."""
+
+        class StuckCloseBridge(FakeBridge):
+            def close(self) -> None:
+                # Mark closed so we can still assert it was attempted,
+                # but raise to mimic a misbehaving subprocess teardown.
+                self.closed = True
+                raise RuntimeError("simulated stuck bridge close")
+
+        stuck_bridge = StuckCloseBridge()
+        healthy_bridge = FakeBridge()
+        bridge_attempts = [stuck_bridge, healthy_bridge]
+
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch(
+                "memos_provider.MemosBridgeClient",
+                side_effect=lambda: bridge_attempts.pop(0),
+            ),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("session-1")
+            self.assertIs(provider._bridge, stuck_bridge)
+
+            # Must not propagate the close() failure to the caller.
+            provider.initialize("session-2")
+            self.assertTrue(stuck_bridge.closed)
+            self.assertIs(provider._bridge, healthy_bridge)
+
+            provider.shutdown()
+
+        self.assertTrue(healthy_bridge.closed)
+
     def test_sync_turn_recovers_when_initial_bridge_open_timed_out(self) -> None:
         failed_bridge = FailingSessionOpenBridge()
         recovered_bridge = FakeBridge()
@@ -132,6 +277,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", side_effect=bridge_factory),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -161,6 +307,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", side_effect=lambda: bridge_attempts.pop(0)),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -185,6 +332,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -209,6 +357,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         )
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -217,7 +366,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             provider.on_turn_start(10, review_prompt)
             self.assertEqual(provider.prefetch(review_prompt), "")
             provider._on_post_tool_call(
-                tool_name="memory_search",
+                tool_name="memos_search",
                 args={"query": "conversation"},
                 result="[]",
                 tool_call_id="tool-1",
@@ -234,6 +383,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -251,6 +401,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -268,6 +419,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -298,6 +450,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -351,6 +504,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             )
             with (
                 patch("memos_provider.ensure_bridge_running", return_value=True),
+                patch("memos_provider.ensure_viewer_daemon", return_value=True),
                 patch("memos_provider.MemosBridgeClient", return_value=bridge),
             ):
                 provider = memos_provider.MemTensorProvider()
@@ -373,6 +527,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -417,6 +572,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -462,6 +618,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -500,10 +657,74 @@ class HermesProviderPipelineTests(unittest.TestCase):
             "好的，这是经典的 Kaggle 房价预测数据集。先创建计划。",
         )
 
+    def test_transform_tool_result_appends_memos_search_hint_after_three_failures(self) -> None:
+        provider = memos_provider.MemTensorProvider()
+        provider.on_turn_start(1, "run failing command")
+
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="boom",
+                is_error=True,
+            )
+        )
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="boom again",
+                is_error=True,
+            )
+        )
+        third = provider._on_transform_tool_result(
+            tool_name="terminal",
+            result="boom third",
+            is_error=True,
+        )
+        self.assertIsNotNone(third)
+        self.assertIn("failed multiple times in a row", third or "")
+        self.assertIn("memos_search", third or "")
+
+        provider._on_transform_tool_result(
+            tool_name="terminal",
+            result="ok",
+            is_error=False,
+        )
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="boom after reset",
+                is_error=True,
+            )
+        )
+
+    def test_transform_tool_result_detects_plain_error_text(self) -> None:
+        provider = memos_provider.MemTensorProvider()
+        provider.on_turn_start(1, "run failing command")
+
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="Error: command failed",
+            )
+        )
+        self.assertIsNone(
+            provider._on_transform_tool_result(
+                tool_name="terminal",
+                result="Error: command failed again",
+            )
+        )
+        third = provider._on_transform_tool_result(
+            tool_name="terminal",
+            result="Error: command failed third time",
+        )
+        self.assertIsNotNone(third)
+        self.assertIn("memos_search", third or "")
+
     def test_post_llm_call_orders_backfilled_tools_before_later_tool_results(self) -> None:
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch("memos_provider.MemosBridgeClient", return_value=bridge),
         ):
             provider = memos_provider.MemTensorProvider()

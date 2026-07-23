@@ -1,12 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { SummarizerConfig, SummaryProvider, Logger, OpenClawAPI } from "../../types";
+import { parseJsonOrJson5 } from "../../shared/json5";
 import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, classifyTopicOpenAI, arbitrateTopicSplitOpenAI, filterRelevantOpenAI, judgeDedupOpenAI, parseFilterResult, parseDedupResult, parseTopicClassifyResult } from "./openai";
 import type { FilterResult, DedupResult, TopicClassifyResult } from "./openai";
 export type { FilterResult, DedupResult, TopicClassifyResult } from "./openai";
-import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";
-import { summarizeGemini, summarizeTaskGemini, generateTaskTitleGemini, judgeNewTopicGemini, filterRelevantGemini, judgeDedupGemini } from "./gemini";
-import { summarizeBedrock, summarizeTaskBedrock, generateTaskTitleBedrock, judgeNewTopicBedrock, filterRelevantBedrock, judgeDedupBedrock } from "./bedrock";
+import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic, classifyTopicAnthropic, arbitrateTopicSplitAnthropic } from "./anthropic";
+import { summarizeGemini, summarizeTaskGemini, generateTaskTitleGemini, judgeNewTopicGemini, filterRelevantGemini, judgeDedupGemini, classifyTopicGemini, arbitrateTopicSplitGemini } from "./gemini";
+import { summarizeBedrock, summarizeTaskBedrock, generateTaskTitleBedrock, judgeNewTopicBedrock, filterRelevantBedrock, judgeDedupBedrock, classifyTopicBedrock, arbitrateTopicSplitBedrock } from "./bedrock";
 
 /**
  * Resolve a SecretInput (string | SecretRef) to a plain string.
@@ -66,7 +67,7 @@ function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | undefined {
       || path.join(process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw"), "openclaw.json");
     if (!fs.existsSync(cfgPath)) return undefined;
 
-    const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
 
     const agentModel: string | undefined = raw?.agents?.defaults?.model?.primary;
     if (!agentModel) return undefined;
@@ -713,9 +714,11 @@ function callTopicClassifier(cfg: SummarizerConfig, taskState: string, newMessag
     case "voyage":
       return classifyTopicOpenAI(taskState, newMessage, cfg, log);
     case "anthropic":
+      return classifyTopicAnthropic(taskState, newMessage, cfg, log);
     case "gemini":
+      return classifyTopicGemini(taskState, newMessage, cfg, log);
     case "bedrock":
-      return classifyTopicOpenAI(taskState, newMessage, cfg, log);
+      return classifyTopicBedrock(taskState, newMessage, cfg, log);
     default:
       throw new Error(`Unknown summarizer provider: ${cfg.provider}`);
   }
@@ -736,9 +739,11 @@ function callTopicArbitration(cfg: SummarizerConfig, taskState: string, newMessa
     case "voyage":
       return arbitrateTopicSplitOpenAI(taskState, newMessage, cfg, log);
     case "anthropic":
+      return arbitrateTopicSplitAnthropic(taskState, newMessage, cfg, log);
     case "gemini":
+      return arbitrateTopicSplitGemini(taskState, newMessage, cfg, log);
     case "bedrock":
-      return arbitrateTopicSplitOpenAI(taskState, newMessage, cfg, log);
+      return arbitrateTopicSplitBedrock(taskState, newMessage, cfg, log);
     default:
       throw new Error(`Unknown summarizer provider: ${cfg.provider}`);
   }
