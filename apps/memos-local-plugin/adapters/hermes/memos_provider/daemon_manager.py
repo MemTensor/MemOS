@@ -215,7 +215,6 @@ def _rebuild_if_stale() -> bool:
         return False
 
 
-
 def ensure_bridge_running(*, probe_only: bool = False) -> bool:
     """Return True when the bridge is (or can be) operational.
 
