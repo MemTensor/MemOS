@@ -81,6 +81,8 @@ function baseConfig(overrides: Partial<CaptureConfig> = {}): CaptureConfig {
     alphaScoring: true,
     synthReflections: true,
     llmConcurrency: 2,
+    maxReflectLlmCalls: 128,
+    maxRecoveryOrphanInserts: 0,
     batchMode: "auto",
     batchThreshold: 12,
     reflectionContextMode: "none",
