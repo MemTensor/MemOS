@@ -75,7 +75,7 @@ import type {
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
 import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
-import { rootLogger } from "../logger/index.js";
+import { initLogger, rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
@@ -203,6 +203,17 @@ export async function bootstrapMemoryCoreFull(
     ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
     : await loadConfig(home);
   const config = configResult.config;
+
+  // Wire up file / audit / llm / perf / events transports as soon as the
+  // resolved config is available. Without this call the logger stays in
+  // `bootstrapConsoleOnly()` mode for the lifetime of the process, so
+  // `MEMOS_HOME/logs/` (memos.log, error.log, audit.log, llm.jsonl,
+  // perf.jsonl, events.jsonl) is never created even though
+  // `config.logging.file.enabled` defaults to true. See issue #2147.
+  //
+  // `initLogger` is idempotent and swaps the active root in place; any
+  // pre-existing `rootLogger.child(...)` handles keep working after the swap.
+  initLogger(config, home);
 
   const log = rootLogger.child({
     channel: "core.pipeline.bootstrap",
