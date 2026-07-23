@@ -33,42 +33,71 @@ export function registerOverviewRoutes(routes: Routes, deps: ServerDeps): void {
     // rewrites its active namespace on every turn/session, so scoped
     // reads here made the dashboard "drift to zero" as soon as a
     // message arrived (#2131). Same convention as diag.ts / session.ts.
-    const [health, episodeIds, skills, policies, worldModels, metrics] =
-      await Promise.all([
-        deps.core.health(),
-        deps.core.listEpisodes({ limit: 5_000, includeAllNamespaces: true }),
-        deps.core.listSkills({ limit: 500, includeAllNamespaces: true }),
-        // Core only exposes `listPolicies({ status? })`; the viewer wants
-        // the grand total + per-status so we request the biggest page and
-        // break it down here. 500 is plenty — fresh installs have dozens.
-        deps.core.listPolicies({ limit: 500, includeAllNamespaces: true }),
-        deps.core.listWorldModels({ limit: 500, includeAllNamespaces: true }),
-        // `metrics.total` is the grand total of traces — cheaper than a
-        // dedicated count RPC and already cached by the core.
-        deps.core.metrics({ days: 1, includeAllNamespaces: true }),
-      ]);
+    const [
+      health,
+      episodeCount,
+      skillActive,
+      skillCandidate,
+      skillArchived,
+      policyActive,
+      policyCandidate,
+      policyArchived,
+      worldModelCount,
+      metrics,
+    ] = await Promise.all([
+      deps.core.health(),
+      deps.core.countEpisodes({ includeAllNamespaces: true }),
+      deps.core.countSkills({
+        status: "active",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countSkills({
+        status: "candidate",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countSkills({
+        status: "archived",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countPolicies({
+        status: "active",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countPolicies({
+        status: "candidate",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countPolicies({
+        status: "archived",
+        includeAllNamespaces: true,
+      }),
+      deps.core.countWorldModels({ includeAllNamespaces: true }),
+      // `metrics.total` is the grand total of traces — cheaper than a
+      // dedicated count RPC and already cached by the core.
+      deps.core.metrics({ days: 1, includeAllNamespaces: true }),
+    ]);
 
     const skillStats = {
-      total: skills.length,
-      active: skills.filter((s) => s.status === "active").length,
-      candidate: skills.filter((s) => s.status === "candidate").length,
-      archived: skills.filter((s) => s.status === "archived").length,
+      total: skillActive + skillCandidate + skillArchived,
+      active: skillActive,
+      candidate: skillCandidate,
+      archived: skillArchived,
     };
     const policyStats = {
-      total: policies.length,
-      active: policies.filter((p) => p.status === "active").length,
-      candidate: policies.filter((p) => p.status === "candidate").length,
-      archived: policies.filter((p) => p.status === "archived").length,
+      total: policyActive + policyCandidate + policyArchived,
+      active: policyActive,
+      candidate: policyCandidate,
+      archived: policyArchived,
     };
 
     return {
       ok: health.ok,
       version: health.version,
-      episodes: episodeIds.length,
+      episodes: episodeCount,
       traces: metrics.total,
       skills: skillStats,
       policies: policyStats,
-      worldModels: worldModels.length,
+      worldModels: worldModelCount,
       llm: health.llm,
       embedder: health.embedder,
       skillEvolver: health.skillEvolver,

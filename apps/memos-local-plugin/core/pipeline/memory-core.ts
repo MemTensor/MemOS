@@ -165,6 +165,13 @@ export interface BootstrapOptions {
   hostLlmBridge?: HostLlmBridge | null;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /**
+   * When true, initialize the global logger from `config.logging` (timezone,
+   * level, channels, file/audit/llm/perf/events sinks). The standalone daemon
+   * (`bridge.cts`) owns its stdio and must set this; embedded plugin hosts
+   * leave it false so the host keeps control of logging.
+   */
+  initLogging?: boolean;
 }
 
 export interface BootstrapResult {
@@ -204,16 +211,12 @@ export async function bootstrapMemoryCoreFull(
     : await loadConfig(home);
   const config = configResult.config;
 
-  // Wire up file / audit / llm / perf / events transports as soon as the
-  // resolved config is available. Without this call the logger stays in
-  // `bootstrapConsoleOnly()` mode for the lifetime of the process, so
-  // `MEMOS_HOME/logs/` (memos.log, error.log, audit.log, llm.jsonl,
-  // perf.jsonl, events.jsonl) is never created even though
-  // `config.logging.file.enabled` defaults to true. See issue #2147.
-  //
-  // `initLogger` is idempotent and swaps the active root in place; any
-  // pre-existing `rootLogger.child(...)` handles keep working after the swap.
-  initLogger(config, home);
+  // Standalone daemon: wire the global logger from config (timezone, level,
+  // channels, file sinks) before anything logs. Embedded hosts skip this and
+  // keep their own logger. Idempotent — re-init swaps the active root in place.
+  if (options.initLogging) {
+    initLogger(config, home);
+  }
 
   const log = rootLogger.child({
     channel: "core.pipeline.bootstrap",
@@ -3761,7 +3764,7 @@ export function createMemoryCore(
     includeAllNamespaces?: boolean;
   }): Promise<number> {
     ensureLive();
-    return handle.repos.skills.list({ status: input?.status, limit: 5_000 }).filter((r) =>
+    return handle.repos.skills.list({ status: input?.status, limit: 100_000 }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
     ).length;
   }
