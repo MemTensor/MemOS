@@ -4283,28 +4283,10 @@ export function createMemoryCore(
     let failed = 0;
     let error: string | undefined;
     if (batch.length > 0) {
-      try {
-        const vecs = await handle.embedder.embedMany(
-          batch.map((slot) => ({ text: slot.sourceText || "(empty)", role: "document" as const })),
-        );
-        for (let i = 0; i < batch.length; i++) {
-          const slot = batch[i]!;
-          const vec = vecs[i];
-          if (!vec) {
-            failed++;
-            continue;
-          }
-          try {
-            if (slot.update(vec)) updated++;
-            else failed++;
-          } catch {
-            failed++;
-          }
-        }
-      } catch (err) {
-        failed = batch.length;
-        error = err instanceof Error ? err.message : String(err);
-      }
+      const outcome = await embedAndApplySlots(batch, handle.embedder);
+      updated = outcome.updated;
+      failed = outcome.failed;
+      error = outcome.firstError;
     }
 
     const statsAfter = computeEmbeddingMaintenanceStats();
@@ -4324,6 +4306,108 @@ export function createMemoryCore(
       statsAfter,
       error,
     };
+  }
+
+  /**
+   * Divide-and-conquer embed + write for `rebuildEmbeddings`.
+   *
+   * Before this refactor `rebuildEmbeddings` blanket-failed a whole
+   * batch on any provider throw — one 30 KB trace nuked the counters
+   * for every short trace next to it (issue #2121). Now, on provider
+   * failure the sub-batch is halved and each half retried; when a
+   * single-slot sub-batch still fails, only that one slot is counted
+   * as failed.
+   *
+   * Splitting only pays off for *content-specific* failures (one
+   * poisonous input rejected by the provider). For transient/systemic
+   * failures (network down, 5xx, 429) the fetcher has already
+   * exhausted its internal retries before the throw reaches us —
+   * halving would multiply total provider calls by O(log N) while
+   * every half fails for the same systemic reason. Those errors
+   * short-circuit: the whole sub-batch is marked failed in one step
+   * and the next `rebuildEmbeddings` run retries it. Worst case for
+   * content errors is O(N log N) round trips; in practice poison
+   * slots are ≪ 1 %.
+   */
+  async function embedAndApplySlots(
+    sub: EmbeddingSlot[],
+    embedder: NonNullable<PipelineHandle["embedder"]>,
+  ): Promise<{
+    updated: number;
+    failed: number;
+    firstError?: string;
+  }> {
+    if (sub.length === 0) return { updated: 0, failed: 0 };
+    try {
+      const vecs = await embedder.embedMany(
+        sub.map((slot) => ({ text: slot.sourceText || "(empty)", role: "document" as const })),
+      );
+      let updated = 0;
+      let failed = 0;
+      let firstError: string | undefined;
+      for (let i = 0; i < sub.length; i++) {
+        const slot = sub[i]!;
+        const vec = vecs[i];
+        if (!vec) {
+          // Contract violation: embedMany returned fewer vectors than
+          // inputs. Surface a diagnostic so the operator-facing `error`
+          // field is not silently empty for this failure mode.
+          failed++;
+          firstError ??= `embedMany returned no vector for slot ${slot.id} (index ${i} of ${sub.length})`;
+          continue;
+        }
+        try {
+          if (slot.update(vec)) updated++;
+          else failed++;
+        } catch {
+          failed++;
+        }
+      }
+      return { updated, failed, firstError };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Base case: a single-slot sub-batch still failed — mark this
+      // one slot as failed and bubble the message up.
+      if (sub.length === 1) return { updated: 0, failed: 1, firstError: msg };
+      // Transient/systemic errors fail every half identically —
+      // splitting would only amplify already-exhausted retries
+      // (O(N log N × maxRetries) HTTP calls). Fail the sub-batch in
+      // one step instead; a later run retries it.
+      if (isTransientEmbeddingError(err)) {
+        return { updated: 0, failed: sub.length, firstError: msg };
+      }
+      const mid = sub.length >> 1;
+      const left = await embedAndApplySlots(sub.slice(0, mid), embedder);
+      const right = await embedAndApplySlots(sub.slice(mid), embedder);
+      return {
+        updated: left.updated + right.updated,
+        failed: left.failed + right.failed,
+        firstError: left.firstError ?? right.firstError ?? msg,
+      };
+    }
+  }
+
+  /**
+   * Positively identify transient/systemic embedding failures so the
+   * divide-and-conquer in `embedAndApplySlots` can short-circuit
+   * instead of amplifying retries. Anything we cannot classify with
+   * confidence is treated as content-specific (split) — mis-splitting
+   * a systemic error costs extra HTTP calls, but mis-short-circuiting
+   * a content error re-nukes whole batches, which is the very bug
+   * (#2121) the splitting exists to fix.
+   *
+   * Classification sources (see `core/embedding/fetcher.ts`):
+   *   - `details.status` 429 / 5xx → transient (retries already
+   *     exhausted inside the fetcher before the throw).
+   *   - No status + fetcher's stable network / retry-exhaustion
+   *     message prefixes → transient.
+   *   - 4xx statuses (e.g. 智谱 400 `code:1210`) → content-specific.
+   */
+  function isTransientEmbeddingError(err: unknown): boolean {
+    if (!(err instanceof MemosError)) return false;
+    const status = (err.details as { status?: unknown } | undefined)?.status;
+    if (typeof status === "number") return status === 429 || status >= 500;
+    return /^Network error calling |^Exhausted retries to /.test(err.message);
   }
 
   type EmbeddingSlotKind = "trace" | "policy" | "world_model" | "skill";

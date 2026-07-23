@@ -10,6 +10,8 @@
 
 import { Type, type Static } from "@sinclair/typebox";
 
+import { DEFAULT_MAX_INPUT_CHARS } from "../embedding/constants.js";
+
 // ─── Reusable building blocks ───────────────────────────────────────────────
 
 const StringWithDefault = (def = "") => Type.String({ default: def });
@@ -43,6 +45,18 @@ const EmbeddingSchema = Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
   }, { default: {} }),
+  /**
+   * Per-input character cap applied inside the `Embedder` facade before
+   * hashing / calling the provider. Guards against remote embedding
+   * models with a per-request token limit — most notably 智谱
+   * `embedding-3` (3072-token single-input cap; CJK averages ~1.3–1.5
+   * chars per token, so the 4000-char default keeps CJK-dominant text
+   * under the limit), which returns HTTP 400 `code:1210` for
+   * over-length inputs and used to nuke the whole rebuild batch
+   * (issue #2121). Set to `0` to disable truncation. The default is
+   * `DEFAULT_MAX_INPUT_CHARS` in `core/embedding/constants.ts`.
+   */
+  maxInputChars: NumberInRange(DEFAULT_MAX_INPUT_CHARS, 0),
 }, { default: {} });
 
 const LlmSchema = Type.Object({

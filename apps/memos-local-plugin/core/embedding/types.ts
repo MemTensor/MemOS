@@ -37,6 +37,21 @@ export interface EmbeddingConfig {
   maxRetries?: number;
   /** Max texts per HTTP round trip. Default: 32. */
   batchSize?: number;
+  /**
+   * Per-input character cap. Inputs longer than this are truncated
+   * (character-wise, not token-wise) before being hashed / sent to the
+   * provider. Guards against provider single-input token caps such as
+   * 智谱 embedding-3 (3072 tokens; CJK ≈ 1.3–1.5 chars/token). Set `0`,
+   * a negative value, or `Infinity` to disable; `NaN` (invalid config)
+   * falls back to the default rather than disabling the guard.
+   * Default: `DEFAULT_MAX_INPUT_CHARS` (4000) from `constants.ts`.
+   *
+   * Truncation happens at the facade boundary so all providers (local,
+   * openai_compatible, gemini, cohere, voyage, mistral) benefit; the
+   * cache key is derived from the *truncated* text so repeat calls that
+   * share the same head text hit the LRU.
+   */
+  maxInputChars?: number;
   /** Extra headers to tack on outgoing HTTP. */
   headers?: Record<string, string>;
   /** If true, all output vectors are L2-normalized. Default: true. */

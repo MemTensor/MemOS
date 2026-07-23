@@ -151,4 +151,67 @@ describe("embedding/fetcher", () => {
       signal: ctrl.signal,
     });
   });
+
+  /**
+   * Regression: issue #2121. The gateway.log line
+   * "embedding_unavailable: HTTP 400 from openai_compatible" carried no
+   * response body, so operators could not see 智谱's code:1210 message.
+   * Truncated body is now attached to the warn detail (first 512 chars).
+   */
+  it("http.non_ok warn detail carries a truncated response body", async () => {
+    mockFetch([
+      new Response(
+        '{"error":{"code":"1210","message":"API 调用参数有误"}}',
+        { status: 400 },
+      ),
+    ]);
+    const warns: Array<{ msg: string; detail?: Record<string, unknown> }> = [];
+    const log: ProviderLogger = {
+      trace: () => {},
+      debug: () => {},
+      info: () => {},
+      warn: (msg, detail) => warns.push({ msg, detail }),
+      error: () => {},
+    };
+    await expect(
+      httpPostJson({
+        url: "https://x",
+        body: {},
+        provider: "openai_compatible",
+        log,
+        maxRetries: 0,
+      }),
+    ).rejects.toBeInstanceOf(MemosError);
+    const nonOk = warns.find((w) => w.msg === "http.non_ok");
+    expect(nonOk, "http.non_ok warn should have been emitted").toBeTruthy();
+    expect(nonOk!.detail).toMatchObject({ status: 400 });
+    expect(typeof nonOk!.detail!.body).toBe("string");
+    expect(nonOk!.detail!.body).toContain("code");
+    expect(nonOk!.detail!.body).toContain("1210");
+  });
+
+  it("http.non_ok body is truncated to at most 512 chars", async () => {
+    const bigBody = "e".repeat(2000);
+    mockFetch([new Response(bigBody, { status: 400 })]);
+    const warns: Array<{ msg: string; detail?: Record<string, unknown> }> = [];
+    const log: ProviderLogger = {
+      trace: () => {},
+      debug: () => {},
+      info: () => {},
+      warn: (msg, detail) => warns.push({ msg, detail }),
+      error: () => {},
+    };
+    await expect(
+      httpPostJson({
+        url: "https://x",
+        body: {},
+        provider: "openai_compatible",
+        log,
+        maxRetries: 0,
+      }),
+    ).rejects.toBeInstanceOf(MemosError);
+    const nonOk = warns.find((w) => w.msg === "http.non_ok");
+    expect(nonOk).toBeTruthy();
+    expect((nonOk!.detail!.body as string).length).toBeLessThanOrEqual(512);
+  });
 });

@@ -24,6 +24,7 @@ import {
   makeCacheKey,
   type EmbedCache,
 } from "./cache.js";
+import { DEFAULT_MAX_INPUT_CHARS } from "./constants.js";
 import { postProcess } from "./normalize.js";
 import { CohereEmbeddingProvider } from "./providers/cohere.js";
 import { GeminiEmbeddingProvider } from "./providers/gemini.js";
@@ -107,7 +108,29 @@ export function createEmbedderWithProvider(
     requests += inputs.length;
     if (inputs.length === 0) return [];
 
-    const normalized = inputs.map(toInput);
+    // Per-input character cap. Truncation runs BEFORE cache-key hashing
+    // so a repeated call with the same head text hits the LRU. Guards
+    // against provider single-input token caps (e.g. 智谱 embedding-3
+    // rejects >3072 tokens with HTTP 400 code:1210 — see issue #2121).
+    const cap = resolveMaxInputChars(config.maxInputChars);
+    let truncatedCount = 0;
+    const normalized = inputs.map(toInput).map((inp) => {
+      if (cap > 0 && inp.text.length > cap) {
+        truncatedCount++;
+        return { ...inp, text: inp.text.slice(0, cap) };
+      }
+      return inp;
+    });
+    if (truncatedCount > 0) {
+      logger.warn("input_truncated", {
+        provider: provider.name,
+        model: config.model,
+        cap,
+        count: truncatedCount,
+        of: normalized.length,
+      });
+    }
+
     const results = new Array<EmbeddingVector | null>(normalized.length).fill(null);
     const dedupEnabled = config.cache.enabled;
     const keys = normalized.map((inp, i) => {
@@ -331,6 +354,26 @@ export function createEmbedderWithProvider(
 }
 
 // ─── Provider lookup ─────────────────────────────────────────────────────────
+
+/**
+ * Resolve the effective per-input character cap from config.
+ *
+ * Semantics (mirrors the `EmbeddingConfig.maxInputChars` JSDoc):
+ *   - `undefined`          → `DEFAULT_MAX_INPUT_CHARS` (guard on by default)
+ *   - `NaN`                → `DEFAULT_MAX_INPUT_CHARS` (invalid value — e.g.
+ *                            a typo'd config — must NOT silently disable the
+ *                            guard, or issue #2121 sneaks back in)
+ *   - `0` / negative       → `0` (documented explicit opt-out)
+ *   - `Infinity`           → `0` ("no cap" — explicit opt-out)
+ *   - any other number     → `Math.floor(value)`
+ */
+export function resolveMaxInputChars(configured: number | undefined): number {
+  if (configured === undefined || Number.isNaN(configured)) {
+    return DEFAULT_MAX_INPUT_CHARS;
+  }
+  if (configured < 0 || !Number.isFinite(configured)) return 0;
+  return Math.floor(configured);
+}
 
 export function makeProviderFor(name: EmbeddingProviderName): EmbeddingProvider {
   switch (name) {

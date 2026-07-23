@@ -157,6 +157,14 @@ Unit tests live in `tests/unit/embedding/`:
 - `gemini`'s `?key=<API_KEY>` puts the secret in the URL; `fetcher.ts`
   redacts query string via the logger's redaction pipeline. Do not log the
   raw URL elsewhere.
+- `fetcher.ts` attaches a truncated (≤ 512 chars) provider response body to
+  `http.non_ok` warn logs so operators can see error codes like 智谱's
+  `code:1210` (issue #2121). This field is a **verbatim third-party
+  payload**: some providers echo fragments of the submitted embedding input
+  (i.e. potentially personal memory content) back inside error responses.
+  Treat any log sink that carries `http.non_ok` (e.g. `gateway.log`) as
+  potentially containing user data — apply the same retention/access rules
+  as for raw memory content.
 - `voyage` and `cohere` charge per token; be mindful when bumping
   `batchSize` — large batches amortize HTTP overhead but hit TPM ceilings.
 - Changing `dimensions` in config after writing vectors to SQLite breaks

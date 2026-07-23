@@ -46,12 +46,24 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       if (!resp.ok) {
         const text = await safeText(resp);
         const transient = resp.status >= 500 || resp.status === 429;
+        // Include a truncated body so operators can pinpoint provider
+        // error codes (e.g. 智谱 `code:1210` for over-length inputs)
+        // directly from gateway.log without needing a debugger — see
+        // issue #2121.
+        //
+        // SENSITIVITY: `body` is a verbatim excerpt of a third-party
+        // response. Providers sometimes echo fragments of the submitted
+        // input (which may contain personal memory content) back inside
+        // error payloads, so operators must treat log sinks carrying
+        // this field with the same care as raw memory content — see
+        // "Caveats" in core/embedding/README.md.
         opts.log.warn("http.non_ok", {
           url: opts.url,
           status: resp.status,
           attempt,
           transient,
           durationMs: Date.now() - start,
+          body: text ? text.slice(0, 512) : undefined,
         });
         if (transient && attempt <= maxRetries) {
           await backoff(attempt);

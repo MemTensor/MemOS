@@ -1,8 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { MemosError } from "../../../agent-contract/errors.js";
-import { createEmbedderWithProvider } from "../../../core/embedding/embedder.js";
-import { initTestLogger } from "../../../core/logger/index.js";
+import { DEFAULT_MAX_INPUT_CHARS } from "../../../core/embedding/constants.js";
+import {
+  createEmbedderWithProvider,
+  resolveMaxInputChars,
+} from "../../../core/embedding/embedder.js";
+import { initTestLogger, memoryBuffer } from "../../../core/logger/index.js";
 import type {
   EmbedRole,
   EmbeddingConfig,
@@ -227,5 +231,100 @@ describe("embedder facade", () => {
     await e.close();
     expect(closed).toBe(1);
     expect(e.stats().hits).toBe(0);
+  });
+
+  /**
+   * Regression: issue #2121. Long trace text (e.g. 30+ KB agent_text)
+   * caused HTTP 400 code:1210 from 智谱 embedding-3 (3072-token cap).
+   * Facade must truncate before hashing / calling the provider, so:
+   *   1. Provider never sees an over-cap input.
+   *   2. Cache key is derived from the truncated text (so a repeat call
+   *      with the same head text hits the LRU).
+   */
+  describe("input truncation guard (#2121)", () => {
+    it("truncates inputs above maxInputChars before the provider call", async () => {
+      const p = new FakeProvider();
+      const e = createEmbedderWithProvider(cfg({ maxInputChars: 10 }), p);
+      const longText = "0123456789ABCDEFGHIJ"; // 20 chars
+      await e.embedMany([longText]);
+      expect(p.calls).toHaveLength(1);
+      expect(p.calls[0]!.texts).toEqual(["0123456789"]);
+    });
+
+    it("hits cache when repeat calls share the truncated prefix", async () => {
+      const p = new FakeProvider();
+      const e = createEmbedderWithProvider(cfg({ maxInputChars: 4 }), p);
+      // Two distinct 10-char inputs with an identical first 4 chars.
+      await e.embedMany(["headTAILONE"]);
+      await e.embedMany(["headTAILTWO"]);
+      // Only the truncated `head` is embedded once; second call is a hit.
+      const s = e.stats();
+      expect(s.roundTrips).toBe(1);
+      expect(s.hits).toBe(1);
+      expect(s.misses).toBe(1);
+      expect(p.calls).toHaveLength(1);
+      expect(p.calls[0]!.texts).toEqual(["head"]);
+    });
+
+    it("does not truncate when maxInputChars is 0 (disabled)", async () => {
+      const p = new FakeProvider();
+      const e = createEmbedderWithProvider(cfg({ maxInputChars: 0 }), p);
+      const longText = "x".repeat(9000);
+      await e.embedMany([longText]);
+      expect(p.calls[0]!.texts[0]!.length).toBe(9000);
+    });
+
+    it("defaults maxInputChars to DEFAULT_MAX_INPUT_CHARS when the field is absent", async () => {
+      const p = new FakeProvider();
+      const c = cfg();
+      // Explicitly delete maxInputChars so we can prove the default kicks in.
+      delete (c as { maxInputChars?: number }).maxInputChars;
+      const e = createEmbedderWithProvider(c, p);
+      const longText = "y".repeat(DEFAULT_MAX_INPUT_CHARS + 3000);
+      await e.embedMany([longText]);
+      expect(p.calls[0]!.texts[0]!.length).toBe(DEFAULT_MAX_INPUT_CHARS);
+    });
+
+    /**
+     * `resolveMaxInputChars` boundary semantics:
+     *   - invalid values (NaN) must fall back to the default — a typo'd
+     *     config must not silently disable the #2121 guard
+     *   - 0 / negative / Infinity are explicit opt-outs → 0 (disabled)
+     */
+    it("resolveMaxInputChars: invalid falls back to default; opt-outs disable", () => {
+      expect(resolveMaxInputChars(undefined)).toBe(DEFAULT_MAX_INPUT_CHARS);
+      expect(resolveMaxInputChars(Number.NaN)).toBe(DEFAULT_MAX_INPUT_CHARS);
+      expect(resolveMaxInputChars(0)).toBe(0);
+      expect(resolveMaxInputChars(-1)).toBe(0);
+      expect(resolveMaxInputChars(Number.NEGATIVE_INFINITY)).toBe(0);
+      expect(resolveMaxInputChars(Number.POSITIVE_INFINITY)).toBe(0);
+      expect(resolveMaxInputChars(1234.9)).toBe(1234);
+    });
+
+    it("emits a warn per embedMany call when truncation fires (batched, not per input)", async () => {
+      const p = new FakeProvider();
+      const e = createEmbedderWithProvider(cfg({ maxInputChars: 3 }), p);
+      // Snapshot the shared memory-buffer state so we count only the
+      // warns triggered by THIS embedMany call (other tests in this
+      // file also fire input_truncated). Note: `initTestLogger` wires
+      // AppLogSink + ErrorLogSink at both writing to the same memory
+      // buffer, so each warn shows up TWICE in the buffer (one per
+      // sink). We only care that our single call added a well-formed
+      // batched warn, not the exact count.
+      const before = memoryBuffer()
+        .tail({ level: "warn", channel: "embedding", limit: 200 })
+        .filter((r) => r.msg === "input_truncated").length;
+      // Three distinct inputs, all over cap — should batch into one warn.
+      await e.embedMany(["aaaaaa", "bbbbbb", "cccccc"]);
+      const after = memoryBuffer()
+        .tail({ level: "warn", channel: "embedding", limit: 200 })
+        .filter((r) => r.msg === "input_truncated");
+      // Two sinks × 1 emit = 2 records — key property is "not one per
+      // input" (which would be 3×2=6).
+      expect(after.length - before).toBeLessThanOrEqual(2);
+      expect(after.length - before).toBeGreaterThanOrEqual(1);
+      // `tail` returns newest-first — the just-emitted warn is at index 0.
+      expect(after[0]!.data).toMatchObject({ count: 3, cap: 3 });
+    });
   });
 });
