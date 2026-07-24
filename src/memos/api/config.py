@@ -689,9 +689,10 @@ class APIConfig:
     def get_internet_config() -> dict[str, Any]:
         """Get internet retriever configuration.
 
-        Supports backends: bocha (default), tavily, google, bing, xinyu.
+        Supports backends: bocha (default), tavily, keenable, google, bing, xinyu.
         Set INTERNET_SEARCH_BACKEND env var to choose the backend.
         For Tavily, set TAVILY_API_KEY env var.
+        For Keenable, KEENABLE_API_KEY is optional (keyless by default).
         For Bocha, set BOCHA_API_KEY env var.
         """
         backend = os.getenv("INTERNET_SEARCH_BACKEND", "bocha").lower()
@@ -704,6 +705,16 @@ class APIConfig:
                     "max_results": 10,
                     "search_depth": os.getenv("TAVILY_SEARCH_DEPTH", "basic"),
                     "include_answer": os.getenv("TAVILY_INCLUDE_ANSWER", "false").lower() == "true",
+                },
+            }
+
+        if backend == "keenable":
+            return {
+                "backend": "keenable",
+                "config": {
+                    # Keyless by default; set KEENABLE_API_KEY to lift the rate limit.
+                    "api_key": os.getenv("KEENABLE_API_KEY", ""),
+                    "max_results": 10,
                 },
             }
 
