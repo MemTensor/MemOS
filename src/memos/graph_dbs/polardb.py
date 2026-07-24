@@ -94,8 +94,15 @@ def clean_properties(props):
 
 
 def escape_sql_string(value: str) -> str:
-    """Escape single quotes in SQL string."""
-    return value.replace("'", "''")
+    """Escape single quotes and neutralize dollar-quote delimiters in SQL string.
+
+    Values escaped by this helper are interpolated into Apache AGE cypher(...) calls
+    whose Cypher body is wrapped in a PostgreSQL dollar-quoted string ($$...$$).
+    Escaping single quotes alone is insufficient: an input containing the substring
+    "$$" would prematurely terminate the dollar-quoted block and allow injection.
+    We therefore also strip any "$$" occurrences.
+    """
+    return value.replace("'", "''").replace("$$", "")
 
 
 class PolarDBGraphDB(BaseGraphDB):
@@ -1173,14 +1180,22 @@ class PolarDBGraphDB(BaseGraphDB):
     ) -> list[dict[str, Any]]:
         """Get children nodes with their embeddings."""
         user_name = user_name if user_name else self._get_config_value("user_name")
-        where_user = f"AND p.user_name = '{user_name}' AND c.user_name = '{user_name}'"
+        # Escape single quotes to prevent Cypher/SQL injection since AGE cypher()
+        # requires literal query text and does not support parameter binding here.
+        safe_id = escape_sql_string(str(id))
+        safe_user = escape_sql_string(str(user_name)) if user_name is not None else ""
+        where_user = (
+            f"AND p.user_name = '{safe_user}' AND c.user_name = '{safe_user}'"
+            if user_name is not None
+            else ""
+        )
 
         query = f"""
             WITH t as (
                 SELECT *
                 FROM cypher('{self.db_name}_graph', $$
                 MATCH (p:Memory)-[r:PARENT]->(c:Memory)
-                WHERE p.id = '{id}' {where_user}
+                WHERE p.id = '{safe_id}' {where_user}
                 RETURN id(c) as cid, c.id AS id, c.memory AS memory
                 $$) as (cid agtype, id agtype, memory agtype)
                 )
@@ -4302,8 +4317,8 @@ class PolarDBGraphDB(BaseGraphDB):
         if filter:
             # Helper function to escape string value for SQL
             def escape_sql_string(value: str) -> str:
-                """Escape single quotes in SQL string."""
-                return value.replace("'", "''")
+                """Escape single quotes and neutralize dollar-quote delimiters."""
+                return value.replace("'", "''").replace("$$", "")
 
             # Helper function to build a single filter condition
             def build_filter_condition(condition_dict: dict) -> str:
