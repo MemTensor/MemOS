@@ -400,7 +400,7 @@ class APIConfig:
 
     @staticmethod
     def get_memreader_config() -> dict[str, Any]:
-        """Get MemReader configuration for chat/doc extraction (fine-tuned 0.6B model).
+        """Get the main MemReader configuration for text/chat extraction.
 
         When MEMREADER_GENERAL_MODEL is configured (i.e. a separate stable LLM exists),
         the backup client is automatically enabled so that primary failures (self-deployed
@@ -444,7 +444,7 @@ class APIConfig:
 
     @staticmethod
     def get_memreader_general_llm_config() -> dict[str, Any]:
-        """Get general LLM configuration for non-chat/doc tasks.
+        """Get general LLM configuration for non-primary extraction tasks.
 
         Used for: hallucination filter, memory rewrite, memory merge,
         tool trajectory extraction, skill memory extraction.
@@ -477,6 +477,24 @@ class APIConfig:
             return APIConfig._build_provider_llm_config(image_model, max_tokens=4096)
         # Fallback to general_llm config (which itself falls back to OpenAI)
         return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
+    def get_document_parser_llm_config() -> dict[str, Any] | None:
+        """Get the dedicated LLM configuration for document extraction.
+
+        The provider endpoint and credentials are selected from QWEN_* or
+        OPENAI_* according to DOCUMENT_PARSER_MODEL.
+
+        Fallback chain: DOCUMENT_PARSER_MODEL -> MEMREADER_GENERAL_MODEL.
+        Returns None when neither model is configured.
+        """
+        document_model = os.getenv("DOCUMENT_PARSER_MODEL") or os.getenv("MEMREADER_GENERAL_MODEL")
+        if not document_model:
+            return None
+        return APIConfig._build_provider_llm_config(
+            document_model,
+            temperature=0.8,
+        )
 
     @staticmethod
     def get_preference_extractor_llm_config() -> dict[str, Any]:
@@ -994,6 +1012,8 @@ class APIConfig:
                     "general_llm": APIConfig.get_memreader_general_llm_config(),
                     # Image parser LLM (requires vision model)
                     "image_parser_llm": APIConfig.get_image_parser_llm_config(),
+                    # Dedicated LLM for document chunk extraction
+                    "document_parser_llm": APIConfig.get_document_parser_llm_config(),
                     # Preference extractor LLM. Reader falls back to general_llm when unset.
                     "preference_extractor_llm": APIConfig.get_preference_extractor_llm_config()
                     if os.getenv("PREFERENCE_EXTRACTOR_MODEL")
@@ -1127,6 +1147,8 @@ class APIConfig:
                     "general_llm": APIConfig.get_memreader_general_llm_config(),
                     # Image parser LLM (requires vision model)
                     "image_parser_llm": APIConfig.get_image_parser_llm_config(),
+                    # Dedicated LLM for document chunk extraction
+                    "document_parser_llm": APIConfig.get_document_parser_llm_config(),
                     # Preference extractor LLM. Reader falls back to general_llm when unset.
                     "preference_extractor_llm": APIConfig.get_preference_extractor_llm_config()
                     if os.getenv("PREFERENCE_EXTRACTOR_MODEL")
