@@ -1,8 +1,9 @@
 /**
  * Wires the skill module to the upstream event buses.
  *
- * Upstream triggers (all debounced via `queueMicrotask` so they never block
- * the emitter):
+ * Upstream triggers are scheduled onto one process-local single-flight lane
+ * so event-driven and explicit/manual runs can never crystallize the same
+ * policy concurrently:
  *
  *   - `l2.policy.induced`        → `runSkill({ trigger, policyId })`
  *   - `l2.policy.status_changed` → `runSkill({ trigger, policyId })` when
@@ -70,41 +71,56 @@ export function attachSkillSubscriber(
     config: deps.config,
   };
 
-  let inflight: Promise<void> | null = null;
-  let queued: { trigger: SkillTrigger; hint?: { policyId?: string; skillId?: SkillId } } | null =
-    null;
+  let schedulerTail: Promise<void> = Promise.resolve();
+  let scheduledCount = 0;
+  const scheduledByKey = new Map<string, Promise<RunSkillResult>>();
 
-  async function drain(): Promise<void> {
-    while (queued) {
-      const next = queued;
-      queued = null;
-      try {
-        await runSkill(
-          { trigger: next.trigger, policyId: next.hint?.policyId, skillId: next.hint?.skillId },
-          runDeps,
-        );
-      } catch (err) {
-        log.error("skill.run.failed", {
-          trigger: next.trigger,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
+  function schedule(input: RunSkillInput): Promise<RunSkillResult> {
+    const key = input.policyId
+      ? `policy:${input.policyId}`
+      : input.skillId
+        ? `skill:${input.skillId}`
+        : "global";
+    const existing = scheduledByKey.get(key);
+    if (existing) {
+      log.debug("skill.run.coalesced", { trigger: input.trigger, key });
+      return existing;
     }
+    scheduledCount += 1;
+    const result = schedulerTail.then(() => runSkill(input, runDeps));
+    scheduledByKey.set(key, result);
+    const clear = () => {
+      if (scheduledByKey.get(key) === result) scheduledByKey.delete(key);
+    };
+    void result.then(clear, clear);
+    schedulerTail = result.then(
+      () => {
+        scheduledCount -= 1;
+      },
+      () => {
+        scheduledCount -= 1;
+      },
+    );
+    return result;
   }
 
   function triggerRun(
     trigger: SkillTrigger,
     hint?: { policyId?: string; skillId?: SkillId },
   ): void {
-    queued = { trigger, hint };
-    if (inflight) {
+    if (scheduledCount > 0) {
       log.debug("skill.run.queued", { trigger });
-      return;
     }
-    const promise = drain().finally(() => {
-      if (inflight === promise) inflight = null;
+    void schedule({
+      trigger,
+      policyId: hint?.policyId,
+      skillId: hint?.skillId,
+    }).catch((err) => {
+      log.error("skill.run.failed", {
+        trigger,
+        err: err instanceof Error ? err.message : String(err),
+      });
     });
-    inflight = promise;
   }
 
   const offInduced = deps.l2Bus.on("l2.policy.induced", (evt: L2Event) => {
@@ -136,18 +152,15 @@ export function attachSkillSubscriber(
     log.info("skill.subscriber.disposed");
   }
 
-  async function runOnce(
+  function runOnce(
     input: Omit<RunSkillInput, "trigger"> & { trigger?: SkillTrigger },
   ): Promise<RunSkillResult> {
     const trigger: SkillTrigger = input.trigger ?? "manual";
-    return runSkill(
-      {
-        trigger,
-        policyId: input.policyId,
-        skillId: input.skillId,
-      },
-      runDeps,
-    );
+    return schedule({
+      trigger,
+      policyId: input.policyId,
+      skillId: input.skillId,
+    });
   }
 
   function applyFeedback(
@@ -204,10 +217,12 @@ export function attachSkillSubscriber(
   }
 
   async function flush(): Promise<void> {
-    // Loop in case additional events arrive while we're draining.
-    while (inflight) {
-      await inflight;
-    }
+    // Loop in case additional events arrive while the observed tail drains.
+    let observed: Promise<void>;
+    do {
+      observed = schedulerTail;
+      await observed;
+    } while (observed !== schedulerTail);
   }
 
   /** Periodic lifecycle pass: promote eligible candidate skills to active. */

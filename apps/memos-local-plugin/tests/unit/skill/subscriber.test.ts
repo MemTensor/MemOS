@@ -154,4 +154,102 @@ describe("skill/subscriber", () => {
     expect(r.crystallized).toBe(1);
     sub.dispose();
   });
+
+  it("serializes manual and event-driven crystallization for one policy", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const l2Bus = createL2EventBus();
+    const rewardBus = createRewardEventBus();
+    const bus = createSkillEventBus();
+    const { episodeId } = seedTracesForPolicy(
+      h,
+      "po_singleflight" as PolicyId,
+    );
+    const policy = seedPolicy(h, {
+      id: "po_singleflight" as PolicyId,
+      sourceEpisodeIds: [episodeId],
+    });
+    let crystallizeCalls = 0;
+    const sub = attachSkillSubscriber({
+      l2Bus,
+      rewardBus,
+      bus,
+      repos: h.repos,
+      embedder: null,
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": async () => {
+            crystallizeCalls += 1;
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            return {
+              ...makeDraft(),
+              name: `singleflight_${crystallizeCalls}`,
+            };
+          },
+        },
+      }),
+      log: rootLogger.child({ channel: "core.skill.subscriber" }),
+      config: makeSkillConfig({ cooldownMs: 0 }),
+    });
+
+    l2Bus.emit({
+      kind: "l2.policy.induced",
+      episodeId,
+      policyId: policy.id,
+      signature: "single|flight|skill|race" as PatternSignature,
+      evidenceTraceIds: [] as TraceId[],
+      evidenceEpisodeIds: [episodeId],
+      title: "single flight",
+    });
+    const manual = sub.runOnce({ trigger: "manual", policyId: policy.id });
+    await manual;
+    await sub.flush();
+
+    expect(crystallizeCalls).toBe(1);
+    expect(h.repos.skills.list()).toHaveLength(1);
+    sub.dispose();
+  });
+
+  it("coalesces concurrent runs for the same policy", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const { episodeId } = seedTracesForPolicy(
+      h,
+      "po_coalesced" as PolicyId,
+    );
+    const policy = seedPolicy(h, {
+      id: "po_coalesced" as PolicyId,
+      sourceEpisodeIds: [episodeId],
+    });
+    let crystallizeCalls = 0;
+    const sub = attachSkillSubscriber({
+      l2Bus: createL2EventBus(),
+      rewardBus: createRewardEventBus(),
+      bus: createSkillEventBus(),
+      repos: h.repos,
+      embedder: null,
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": async () => {
+            crystallizeCalls += 1;
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return makeDraft();
+          },
+        },
+      }),
+      log: rootLogger.child({ channel: "core.skill.subscriber" }),
+      config: makeSkillConfig({ cooldownMs: 0 }),
+    });
+
+    const [first, duplicate] = await Promise.all([
+      sub.runOnce({ trigger: "manual", policyId: policy.id }),
+      sub.runOnce({ trigger: "manual", policyId: policy.id }),
+    ]);
+
+    expect(first.crystallized).toBe(1);
+    expect(duplicate.crystallized).toBe(1);
+    expect(crystallizeCalls).toBe(1);
+    expect(h.repos.skills.list()).toHaveLength(1);
+    sub.dispose();
+  });
 });
