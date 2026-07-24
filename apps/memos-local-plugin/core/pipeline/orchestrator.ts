@@ -80,8 +80,17 @@ import type { LogRecord } from "../../agent-contract/log-record.js";
 import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
 import { createEmbeddingRetryWorker, systemErrorEvent } from "../embedding/index.js";
+import { createEvolutionWorker } from "../evolution/worker.js";
+import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
+import type { UserFeedback } from "../reward/types.js";
 import type { EpisodeSnapshot } from "../session/index.js";
 import type { IntentDecision, RelationDecision, TurnRelation } from "../session/types.js";
+import type {
+  EpisodeId as CoreEpisodeId,
+  FeedbackId,
+  PolicyId,
+  TraceId as CoreTraceId,
+} from "../types.js";
 
 // ─── Factory ──────────────────────────────────────────────────────────────
 
@@ -89,6 +98,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   const log = pipelineLogger(deps);
   const algorithm = extractAlgorithmConfig(deps);
   const lightweightMode = algorithm.lightweightMemory.enabled;
+  const evolutionWorkerEnabled = deps.evolutionWorkerEnabled !== false;
   const buses = buildPipelineBuses();
 
   // Session + intent.
@@ -98,7 +108,66 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // Pass `session` so the reward runner's `getEpisodeSnapshot` hook
   // can resolve the live, in-memory episode (with turns populated)
   // rather than falling back to the empty row from SQLite.
-  const subs = buildPipelineSubscribers(deps, buses, algorithm, session);
+  let subs: ReturnType<typeof buildPipelineSubscribers>;
+  const evolutionWorker = createEvolutionWorker({
+    repo: deps.repos.evolutionJobs,
+    log: log.child({ channel: "core.evolution.worker" }),
+    now: deps.now,
+    execute: async (job) => {
+      switch (job.jobType) {
+        case "turn_enrichment": {
+          const episodeId = requiredPayload(job.id, job.payload, "episodeId") as EpisodeId;
+          const episode = evolutionEpisodeSnapshot(episodeId);
+          await subs.captureRunner.runEnrich?.({
+            episode,
+            traceIds: stringArrayPayload(job.payload, "traceIds"),
+          });
+          return;
+        }
+        case "episode_evolution": {
+          const episodeId = requiredPayload(job.id, job.payload, "episodeId") as EpisodeId;
+          const episode = evolutionEpisodeSnapshot(episodeId);
+          await subs.captureRunner.runEnrich?.({ episode });
+          await subs.captureRunner.runReflect({
+            episode,
+            closedBy: stringPayload(job.payload, "closedBy") === "abandoned"
+              ? "abandoned"
+              : "finalized",
+          });
+          await drainSemanticChain();
+          return;
+        }
+        case "feedback_evolution": {
+          const feedbackId = requiredPayload(job.id, job.payload, "feedbackId");
+          await runFeedbackEvolution(feedbackId);
+          return;
+        }
+      }
+    },
+  });
+  subs = buildPipelineSubscribers(deps, buses, algorithm, session, {
+    scheduleEvolution: (input) => {
+      evolutionWorker.enqueue({
+        jobType: "episode_evolution",
+        dedupeKey: `episode_evolution:${input.episode.id}`,
+        payload: {
+          episodeId: input.episode.id,
+          closedBy: input.closedBy ?? "finalized",
+        },
+      });
+    },
+    persistTurnEvolution: ({ episodeId, turnId, traceIds }) => {
+      evolutionWorker.persist({
+        jobType: "turn_enrichment",
+        dedupeKey: `turn_enrichment:${episodeId}:${turnId}`,
+        payload: { episodeId, turnId, traceIds },
+        preserveTerminal: true,
+      });
+    },
+    notifyTurnEvolution: () => evolutionWorker.notify(),
+  });
+  if (!lightweightMode) recoverPendingEvolutionJobs();
+  if (!lightweightMode && evolutionWorkerEnabled) evolutionWorker.start();
 
   // Core-event aggregator. Every internal bus funnels into one stream.
   const eventListeners = new Set<(e: CoreEvent) => void>();
@@ -264,6 +333,209 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // In-memory index of the open episode per session so we can route
   // `addTurn` calls without a repo round-trip.
   const openEpisodeBySession = new Map<SessionId, EpisodeId>();
+
+  function evolutionEpisodeSnapshot(episodeId: EpisodeId): EpisodeSnapshot {
+    const live = session.sessionManager.getEpisode(episodeId);
+    if (live) return live;
+    const row = deps.repos.episodes.getById(episodeId);
+    if (!row) throw new Error(`evolution episode not found: ${episodeId}`);
+    return snapshotFromOpenEpisodeRow(row);
+  }
+
+  function recoverPendingEvolutionJobs(): void {
+    const groups = deps.repos.traces.listPendingEnrichmentGroups();
+    let recovered = 0;
+    for (const group of groups) {
+      deps.db.tx(() => {
+        const episode = deps.repos.episodes.getById(group.episodeId as EpisodeId);
+        if (episode) {
+          deps.repos.episodes.appendTrace(
+            episode.id,
+            [...new Set([...episode.traceIds, ...group.traceIds])],
+          );
+        }
+        const closed = episode?.status === "closed";
+        evolutionWorker.persist({
+          jobType: closed ? "episode_evolution" : "turn_enrichment",
+          dedupeKey: closed
+            ? `episode_evolution:${group.episodeId}`
+            : `turn_enrichment:${group.episodeId}:${group.turnId}`,
+          payload: {
+            episodeId: group.episodeId,
+            ...(closed
+              ? { closedBy: "finalized" }
+              : { turnId: group.turnId, traceIds: group.traceIds }),
+          },
+          preserveTerminal: true,
+        });
+      });
+      recovered += 1;
+    }
+    if (recovered > 0) {
+      log.warn("evolution.pending_captures.recovered", { recovered });
+    }
+  }
+
+  async function drainSemanticChain(): Promise<void> {
+    const nextTick = () => new Promise<void>((resolve) => setImmediate(resolve));
+    await nextTick();
+    await subs.subscriptions.reward.drain();
+    await nextTick();
+    await subs.l2.drain();
+    await nextTick();
+    await subs.l3.drain();
+    await nextTick();
+    await subs.skills.flush();
+    await subs.skills.lifecycleTick();
+    await subs.feedback.flush();
+  }
+
+  async function runFeedbackEvolution(feedbackId: string): Promise<void> {
+    const row = deps.repos.feedback.getById(feedbackId as FeedbackId);
+    if (!row) throw new Error(`feedback evolution row not found: ${feedbackId}`);
+    const episode = row.episodeId
+      ? deps.repos.episodes.getById(row.episodeId as CoreEpisodeId)
+      : null;
+    const trace = row.traceId
+      ? deps.repos.traces.getById(row.traceId as CoreTraceId)
+      : null;
+    const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
+    const text = feedbackText(row);
+    const stateKey = `feedback.evolution.state.${feedbackId}`;
+    type FeedbackStage =
+      | "reward"
+      | "repair"
+      | "experience"
+      | "l2"
+      | "skill"
+      | "l3"
+      | "flush";
+    interface FeedbackEvolutionState {
+      version: 1;
+      completed: FeedbackStage[];
+      policyId?: string | null;
+    }
+    let state = deps.repos.kv.get<FeedbackEvolutionState>(stateKey, {
+      version: 1,
+      completed: [],
+    });
+    const completed = (stage: FeedbackStage): boolean =>
+      state.completed.includes(stage);
+    const complete = (
+      stage: FeedbackStage,
+      patch: Partial<FeedbackEvolutionState> = {},
+    ): void => {
+      state = {
+        ...state,
+        ...patch,
+        version: 1,
+        completed: [...new Set([...state.completed, stage])],
+      };
+      deps.repos.kv.set(stateKey, state);
+    };
+
+    if (!completed("reward") && episode && sessionId) {
+      const rewardFeedback: UserFeedback = {
+        id: row.id as UserFeedback["id"],
+        episodeId: episode.id,
+        sessionId,
+        traceId: row.traceId as CoreTraceId | null,
+        ts: row.ts,
+        channel: row.channel,
+        polarity: row.polarity,
+        magnitude: row.magnitude,
+        text: text || null,
+        rationale: row.rationale,
+      };
+      try {
+        await subs.rewardRunner.run({
+          episodeId: episode.id,
+          feedback: [rewardFeedback],
+          trigger: "explicit_feedback",
+        });
+      } catch (err) {
+        log.warn("feedback.reward_failed", {
+          episodeId: episode.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    }
+    if (!completed("reward")) complete("reward");
+
+    if (!completed("repair") && text && sessionId) {
+      try {
+        await subs.feedback.submitUserFeedback({
+          text,
+          sessionId,
+          episodeId: episode?.id,
+          context: text.slice(0, 300),
+          repairId: `dr_feedback_${feedbackId}`,
+        });
+      } catch (err) {
+        log.warn("feedback.repair_failed", {
+          episodeId: episode?.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    }
+    if (!completed("repair")) complete("repair");
+
+    let policyId = state.policyId
+      ? state.policyId as PolicyId
+      : undefined;
+    if (!completed("experience")) {
+      try {
+        const experience = await runFeedbackExperience(
+          { feedback: row, episode, trace },
+          {
+            repos: deps.repos,
+            embedder: deps.embedder,
+            llm: deps.llm ?? undefined,
+            namespace: deps.namespace,
+            now,
+          },
+        );
+        policyId = experience.policyId;
+        complete("experience", { policyId: policyId ?? null });
+      } catch (err) {
+        log.warn("feedback.experience_failed", {
+          episodeId: episode?.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    }
+
+    try {
+      if (!completed("l2")) {
+        await subs.l2.drain();
+        complete("l2");
+      }
+      if (!completed("skill") && policyId) {
+        await subs.skills.runOnce({ trigger: "manual", policyId });
+      }
+      if (!completed("skill")) complete("skill");
+      if (!completed("l3") && episode) {
+        await subs.l3.runOnce({ trigger: "manual", episodeId: episode.id });
+      }
+      if (!completed("l3")) complete("l3");
+      if (!completed("flush")) {
+        await subs.skills.flush();
+        await subs.feedback.flush();
+        await subs.l3.drain();
+        complete("flush");
+      }
+    } catch (err) {
+      log.warn("feedback.downstream_flush_failed", {
+        episodeId: episode?.id,
+        policyId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
 
   // Track the most-recently-closed episode per session so V7 §0.1
   // "revision" can reopen it. Cleared on `new_task`.
@@ -1252,7 +1524,8 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       try {
         const captureResult = isLightweightEpisode(liveEpisode)
           ? await subs.captureRunner.runLightweight({ episode: liveEpisode })
-          : await subs.captureRunner.runLite({ episode: liveEpisode });
+          : await (subs.captureRunner.runPersistOnly?.({ episode: liveEpisode })
+              ?? subs.captureRunner.runLite({ episode: liveEpisode }));
         liteTraceIds = captureResult.traceIds;
         if (captureResult.traceIds.length > 0) {
           session.sessionManager.attachTraceIds(episodeId, captureResult.traceIds as string[]);
@@ -1262,6 +1535,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           episodeId,
           err: err instanceof Error ? err.message : String(err),
         });
+        if (!isLightweightEpisode(liveEpisode)) throw err;
       }
     }
 
@@ -1348,6 +1622,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // sets before we ask each one to drain.
     const nextTick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+    if (evolutionWorkerEnabled) await evolutionWorker.flush();
     await subs.subscriptions.capture.drain();
     if (lightweightMode) {
       await embeddingRetryWorker.flush();
@@ -1381,6 +1656,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         err: err instanceof Error ? err.message : String(err),
       });
     }
+    evolutionWorker.stop();
     // Detach subscribers — prevents late events from re-queuing work.
     subs.subscriptions.capture.stop();
     subs.subscriptions.reward.stop();
@@ -1539,6 +1815,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     l3: subs.l3,
     skills: subs.skills,
     feedback: subs.feedback,
+    evolutionWorker,
     buses,
     subscribeEvents,
     getRecentEvents,
@@ -1574,6 +1851,33 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   void _assertConfigShape(algorithm, deps.config.algorithm.feedback);
 
   return handle;
+}
+
+function stringPayload(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function stringArrayPayload(
+  payload: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const value = payload[key];
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  );
+  return strings.length > 0 ? strings : undefined;
+}
+
+function requiredPayload(
+  jobId: string,
+  payload: Record<string, unknown>,
+  key: string,
+): string {
+  const value = stringPayload(payload, key);
+  if (!value) throw new Error(`evolution job ${jobId} is missing ${key}`);
+  return value;
 }
 
 function emptyInjectionPacket(

@@ -39,6 +39,7 @@ import type {
   CaptureRunner,
   CaptureSubscription,
 } from "../capture/index.js";
+import type { CaptureInput } from "../capture/types.js";
 
 import {
   createRewardEventBus,
@@ -203,6 +204,15 @@ export function buildPipelineSubscribers(
   buses: PipelineBuses,
   algorithm: PipelineAlgorithmConfig,
   session?: PipelineSessionSet,
+  runtime?: {
+    scheduleEvolution?: (input: CaptureInput) => void;
+    persistTurnEvolution?: (input: {
+      episodeId: string;
+      turnId: number;
+      traceIds: string[];
+    }) => void;
+    notifyTurnEvolution?: () => void;
+  },
 ): PipelineSubscriberSet {
   const log = deps.log ?? rootLogger.child({ channel: "core.pipeline" });
   const lightweightMode = algorithm.lightweightMemory.enabled;
@@ -216,6 +226,9 @@ export function buildPipelineSubscribers(
     reflectLlm: deps.reflectLlm,
     bus: buses.capture,
     cfg: algorithm.capture,
+    transaction: (operation) => deps.db.tx(operation),
+    persistTurnEvolution: runtime?.persistTurnEvolution,
+    notifyTurnEvolution: runtime?.notifyTurnEvolution,
     now: deps.now,
   });
 
@@ -275,7 +288,9 @@ export function buildPipelineSubscribers(
       : undefined,
   });
 
-  const captureSub = attachCaptureSubscriber(buses.session, captureRunner, {});
+  const captureSub = attachCaptureSubscriber(buses.session, captureRunner, {
+    scheduleEvolution: runtime?.scheduleEvolution,
+  });
   const rewardSub = attachRewardSubscriber(
     buses.capture,
     rewardRunner,

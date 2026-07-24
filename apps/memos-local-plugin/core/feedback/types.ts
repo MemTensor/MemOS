@@ -189,6 +189,8 @@ export type RepairTrigger =
 export interface RepairInput {
   trigger: RepairTrigger;
   contextHash: string;
+  /** Stable id used by durable callers to make persistence retry-safe. */
+  repairId?: string;
   /**
    * Tool identifier that prompted the burst (when `trigger === "failure-burst"`).
    */

@@ -160,6 +160,28 @@ describe("feedback/subscriber", () => {
     sub.dispose();
   });
 
+  it("uses a stable repair id to make feedback retries idempotent", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const { sessionId } = seedScenario(h, "s_user_retry");
+    const sub = attachFeedbackSubscriber(deps(h));
+    const input = {
+      text: "use apk add openssl-dev instead of pip",
+      sessionId: sessionId as SessionId,
+      toolId: "pip.install",
+      context: "alpine",
+      repairId: "dr_feedback_fb_retry",
+    };
+
+    const first = await sub.submitUserFeedback(input);
+    const second = await sub.submitUserFeedback(input);
+
+    expect(first.repairId).toBe("dr_feedback_fb_retry");
+    expect(second.repairId).toBe(first.repairId);
+    expect(h.repos.decisionRepairs.list()).toHaveLength(1);
+    sub.dispose();
+  });
+
   it("runOnce forwards to runRepair directly", async () => {
     handle = makeTmpDb();
     const h = handle;

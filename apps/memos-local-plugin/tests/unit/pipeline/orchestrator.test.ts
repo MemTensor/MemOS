@@ -6,7 +6,7 @@
  * the deterministic embedder so the tests remain hermetic (no network).
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createPipeline,
@@ -88,6 +88,24 @@ describe("pipeline/orchestrator", () => {
     expect(pipeline.l3Llm).toBeNull();
   });
 
+  it("lets a viewer-only runtime leave durable evolution work for a host-capable worker", async () => {
+    dbHandle!.repos.evolutionJobs.enqueue({
+      jobType: "turn_enrichment",
+      dedupeKey: "turn_enrichment:host-required",
+      payload: { episodeId: "ep_host_required" },
+      now: 1_700_000_000_000,
+    });
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      evolutionWorkerEnabled: false,
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(dbHandle!.repos.evolutionJobs.countByStatus("queued")).toBe(1);
+    expect(dbHandle!.repos.evolutionJobs.countByStatus("leased")).toBe(0);
+  });
+
 
   it("wires session → episode → turn end cleanly", async () => {
     pipeline = createPipeline(buildDeps(dbHandle!));
@@ -132,6 +150,211 @@ describe("pipeline/orchestrator", () => {
     // Flush still drains any in-flight lite capture work; reflect
     // won't fire until the next turn closes this topic.
     await pipeline.flush();
+  });
+
+  it("acknowledges turn end after durable L1 capture without waiting for enrichment", async () => {
+    let releaseSummary!: () => void;
+    const summaryBlocked = new Promise<void>((resolve) => {
+      releaseSummary = resolve;
+    });
+    const llm = fakeLlm({
+      completeJson: {
+        "capture.summarize": async () => {
+          await summaryBlocked;
+          return { summary: "enriched later" };
+        },
+      },
+    });
+    pipeline = createPipeline({ ...buildDeps(dbHandle!), llm, reflectLlm: llm });
+    const packet = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-fast-ack",
+      userText: "capture this without blocking",
+      ts: 1_700_000_000_000,
+    });
+
+    const completed = await Promise.race([
+      pipeline.onTurnEnd({
+        agent: "openclaw",
+        sessionId: "s-fast-ack",
+        episodeId: packet.episodeId ?? "ep-ignored",
+        agentText: "captured",
+        toolCalls: [],
+        ts: 1_700_000_000_100,
+      }).then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+    ]);
+
+    releaseSummary();
+    expect(completed).toBe(true);
+    expect(dbHandle!.repos.evolutionJobs.countActive()).toBe(1);
+    await pipeline.flush();
+  });
+
+  it("rolls back L1 capture when its durable evolution job cannot be persisted", async () => {
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      evolutionWorkerEnabled: false,
+    });
+    const packet = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-atomic-capture",
+      userText: "capture atomically",
+      ts: 1_700_000_000_000,
+    });
+    vi.spyOn(dbHandle!.repos.evolutionJobs, "enqueue").mockImplementation(() => {
+      throw new Error("evolution queue unavailable");
+    });
+
+    await expect(pipeline.onTurnEnd({
+      agent: "openclaw",
+      sessionId: "s-atomic-capture",
+      episodeId: packet.episodeId ?? "ep-ignored",
+      agentText: "captured",
+      toolCalls: [],
+      ts: 1_700_000_000_100,
+    })).rejects.toThrow("evolution queue unavailable");
+
+    expect(dbHandle!.repos.traces.list({ sessionId: "s-atomic-capture" })).toHaveLength(0);
+  });
+
+  it("recovers pending traces that predate an evolution job", () => {
+    dbHandle!.repos.sessions.upsert({
+      id: "s-pending-recovery",
+      agent: "openclaw",
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    dbHandle!.repos.episodes.insert({
+      id: "ep-pending-recovery",
+      sessionId: "s-pending-recovery",
+      startedAt: 1_000,
+      endedAt: null,
+      traceIds: [],
+      rTask: null,
+      status: "open",
+      meta: {},
+    });
+    dbHandle!.repos.traces.insert({
+      id: "tr-pending-recovery",
+      episodeId: "ep-pending-recovery",
+      sessionId: "s-pending-recovery",
+      ts: 2_000,
+      userText: "recover me",
+      agentText: "pending",
+      summary: "recover me",
+      reflection: null,
+      agentThinking: null,
+      toolCalls: [],
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: ["capture_pending_enrichment"],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      turnId: 1_000,
+      schemaVersion: 1,
+    } as never);
+
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      evolutionWorkerEnabled: false,
+    });
+
+    expect(dbHandle!.repos.evolutionJobs.list("queued")).toEqual([
+      expect.objectContaining({
+        jobType: "turn_enrichment",
+        dedupeKey: "turn_enrichment:ep-pending-recovery:1000",
+        payload: expect.objectContaining({
+          episodeId: "ep-pending-recovery",
+          turnId: 1_000,
+          traceIds: ["tr-pending-recovery"],
+        }),
+      }),
+    ]);
+    expect(dbHandle!.repos.episodes.getById("ep-pending-recovery" as never)?.traceIds)
+      .toContain("tr-pending-recovery");
+  });
+
+  it("does not resurrect a terminal pending-turn job during startup recovery", () => {
+    dbHandle!.repos.sessions.upsert({
+      id: "s-terminal-recovery",
+      agent: "openclaw",
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    dbHandle!.repos.episodes.insert({
+      id: "ep-terminal-recovery",
+      sessionId: "s-terminal-recovery",
+      startedAt: 1_000,
+      endedAt: null,
+      traceIds: ["tr-terminal-recovery"] as never,
+      rTask: null,
+      status: "open",
+      meta: {},
+    });
+    dbHandle!.repos.traces.insert({
+      id: "tr-terminal-recovery",
+      episodeId: "ep-terminal-recovery",
+      sessionId: "s-terminal-recovery",
+      ts: 2_000,
+      userText: "permanently failing capture",
+      agentText: "pending",
+      summary: "pending",
+      reflection: null,
+      agentThinking: null,
+      toolCalls: [],
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: ["capture_pending_enrichment"],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      turnId: 2_000,
+      schemaVersion: 1,
+    } as never);
+    const terminal = dbHandle!.repos.evolutionJobs.enqueue({
+      jobType: "turn_enrichment",
+      dedupeKey: "turn_enrichment:ep-terminal-recovery:2000",
+      payload: {
+        episodeId: "ep-terminal-recovery",
+        turnId: 2_000,
+        traceIds: ["tr-terminal-recovery"],
+      },
+      maxAttempts: 1,
+      preserveTerminal: true,
+      now: 1_700_000_000_000,
+    });
+    const [leased] = dbHandle!.repos.evolutionJobs.leaseDue({
+      workerId: "terminal-worker",
+      now: 1_700_000_000_000,
+      leaseUntil: 1_700_000_060_000,
+      limit: 1,
+    });
+    expect(leased?.id).toBe(terminal.id);
+    expect(dbHandle!.repos.evolutionJobs.failClaimed({
+      id: terminal.id,
+      workerId: "terminal-worker",
+      leaseUntil: 1_700_000_060_000,
+      error: "permanent model failure",
+      nextAttemptAt: 1_700_000_000_001,
+      now: 1_700_000_000_001,
+    })).toBe("dead_letter");
+
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      evolutionWorkerEnabled: false,
+    });
+
+    expect(dbHandle!.repos.evolutionJobs.list()).toHaveLength(1);
+    expect(dbHandle!.repos.evolutionJobs.get(terminal.id)?.status)
+      .toBe("dead_letter");
   });
 
   it("preserves adapter-provided turn timestamps on captured traces", async () => {
@@ -234,8 +457,6 @@ describe("pipeline/orchestrator", () => {
       toolCalls: [],
       ts: 1_700_000_000_100,
     });
-    const requestsBefore = embedder.stats().requests;
-
     const second = await pipeline.onTurnStart({
       agent: "openclaw",
       sessionId: "s-follow-up",
@@ -246,7 +467,9 @@ describe("pipeline/orchestrator", () => {
 
     expect(second.episodeId).toBe(first.episodeId);
     expect(second.snippets).toHaveLength(0);
-    expect(embedder.stats().requests).toBe(requestsBefore);
+    // Background capture enrichment may use the shared embedder concurrently;
+    // this packet still proves chitchat retrieval itself did not embed.
+    expect(stats?.embedding.attempted).toBe(false);
     expect(stats?.scenarioId).toBe("CHITCHAT");
   });
 

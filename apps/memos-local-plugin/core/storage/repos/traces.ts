@@ -108,6 +108,43 @@ export function makeTracesRepo(db: StorageDb) {
   );
 
   return {
+    /**
+     * Narrow startup-recovery scan for captures committed before their
+     * enrichment job existed. Avoids loading vector BLOBs or paginating.
+     */
+    listPendingEnrichmentGroups(): Array<{
+      episodeId: string;
+      turnId: number;
+      traceIds: string[];
+    }> {
+      const rows = db.prepare<unknown, {
+        episode_id: string;
+        turn_id: number;
+        id: string;
+      }>(
+        `SELECT episode_id, turn_id, id
+           FROM traces
+          WHERE instr(COALESCE(tags_json, ''), '"capture_pending_enrichment"') > 0
+          ORDER BY episode_id ASC, turn_id ASC, ts ASC, id ASC`,
+      ).all();
+      const grouped = new Map<string, {
+        episodeId: string;
+        turnId: number;
+        traceIds: string[];
+      }>();
+      for (const row of rows) {
+        const key = `${row.episode_id}\u0000${row.turn_id}`;
+        const group = grouped.get(key) ?? {
+          episodeId: row.episode_id,
+          turnId: row.turn_id,
+          traceIds: [],
+        };
+        group.traceIds.push(row.id);
+        grouped.set(key, group);
+      }
+      return [...grouped.values()];
+    },
+
     insert(row: TraceRow): void {
       insert.run(rowToParams(row));
     },

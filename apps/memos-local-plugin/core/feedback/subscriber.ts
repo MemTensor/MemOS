@@ -53,6 +53,8 @@ export interface SubmitUserFeedbackInput {
   episodeId?: EpisodeId;
   toolId?: string;
   context?: string;
+  /** Stable id used when the enclosing durable job may retry. */
+  repairId?: string;
 }
 
 export interface FeedbackSubscriberHandle {
@@ -155,6 +157,7 @@ export function attachFeedbackSubscriber(
       const repairInput: RepairInput = {
         trigger: "user.negative",
         contextHash,
+        repairId: input.repairId,
         toolId: input.toolId,
         userText: input.text,
         sessionId: input.sessionId,

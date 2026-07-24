@@ -64,6 +64,33 @@ export interface CoreHealth {
    * The health fields mirror the main LLM client when `inherited=true`.
    */
   skillEvolver: ModelHealth & { inherited: boolean };
+  /** Durable background-evolution queue status for diagnostics/viewers. */
+  evolution?: {
+    active: number;
+    queued: number;
+    leased: number;
+    retrying: number;
+    succeeded: number;
+    deadLetter: number;
+    /** Monotonic count of transitions into dead-letter. */
+    failureSequence?: number;
+  };
+  /** Durable embedding compensation queue status for runtime draining. */
+  embeddingRetry?: {
+    pending: number;
+    inProgress: number;
+    failed: number;
+    succeeded: number;
+    /** Monotonic count of transitions into terminal embedding failure. */
+    failureSequence?: number;
+  };
+  /** Shared-runtime wire compatibility. Absent on legacy/in-process cores. */
+  runtime?: {
+    protocolMajor: number;
+    protocolMinor: number;
+    pluginVersion: string;
+    capabilities: string[];
+  };
 }
 
 export type BridgeHealthStatus =

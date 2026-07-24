@@ -72,6 +72,7 @@ import type {
 } from "../retrieval/types.js";
 import type { CoreEvent } from "../../agent-contract/events.js";
 import type { LogRecord } from "../../agent-contract/log-record.js";
+import type { EvolutionWorker } from "../evolution/worker.js";
 
 // ─── Pipeline configuration slice ─────────────────────────────────────────
 
@@ -149,6 +150,11 @@ export interface PipelineDeps {
   embedder: Embedder | null;
   log: Logger;
   namespace: RuntimeNamespace;
+  /**
+   * Viewer-only processes can disable queue consumption while retaining
+   * read/admin access. Host runtimes leave this enabled (the default).
+   */
+  evolutionWorkerEnabled?: boolean;
   /** Injection hook so tests can provide a fake clock. */
   now?: () => number;
 }
@@ -197,6 +203,8 @@ export interface PipelineHandle {
   readonly l3: L3SubscriberHandle;
   readonly skills: SkillSubscriberHandle;
   readonly feedback: FeedbackSubscriberHandle;
+  /** Runtime-wide durable single-consumer lane for semantic evolution. */
+  readonly evolutionWorker: EvolutionWorker;
 
   // Event buses (pipeline owns + aggregates into a unified CoreEvent stream).
   readonly buses: PipelineBuses;

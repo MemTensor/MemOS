@@ -1006,6 +1006,13 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   const messageCursor = new Map<SessionId, number>();
   // Per-session last-known user text (for tool-outcome context hashing).
   const lastUserTextBySession = new Map<SessionId, string>();
+
+  function clearTrackedSessionState(sessionId: SessionId): void {
+    messageCursor.delete(sessionId);
+    forgetSessionBindings(sessionId);
+    observedToolCallsBySession.delete(sessionId);
+    lastUserTextBySession.delete(sessionId);
+  }
   // Per-session latest episode binding (populated by the core after
   // onTurnStart). The keyed side map lets a delayed `agent_end` find and
   // clear its own turn without deleting a newer turn's mapping.
@@ -1525,17 +1532,25 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       }
 
       if (isExplicitOneShotSessionKey(ctx.sessionKey) && !hasSubagentSpawn) {
-        await opts.core.closeSession(sessionId);
-        messageCursor.delete(sessionId);
-        forgetSessionBindings(sessionId);
-        observedToolCallsBySession.delete(sessionId);
-        lastUserTextBySession.delete(sessionId);
+        try {
+          await opts.core.closeSession(sessionId);
+        } catch (err) {
+          // L1 capture already succeeded. Keep session-close transport errors
+          // separate so they are not misreported as onTurnEnd failures.
+          opts.log.warn("memos.session.close.failed", {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        } finally {
+          clearTrackedSessionState(sessionId);
+        }
       }
     } catch (err) {
       opts.log.warn("memos.onTurnEnd.failed", {
         err: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
       });
+      throw err;
     }
   }
 
@@ -1652,8 +1667,11 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   ): Promise<void> {
     if (!memorySearchEnabled && memoryWritesDisabled()) return;
     if (isEphemeralSessionKey(ctx.sessionKey)) return;
+    const sessionId = bridgeSessionId(
+      ctx.agentId ?? "main",
+      ctx.sessionKey ?? "default",
+    );
     try {
-      const sessionId = bridgeSessionId(ctx.agentId ?? "main", ctx.sessionKey ?? "default");
       if (pendingSubagentSessions.has(sessionId)) {
         opts.log.debug("memos.session.end.deferred_for_subagent", {
           sessionId,
@@ -1663,10 +1681,6 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         return;
       }
       await opts.core.closeSession(sessionId);
-      messageCursor.delete(sessionId);
-      forgetSessionBindings(sessionId);
-      observedToolCallsBySession.delete(sessionId);
-      lastUserTextBySession.delete(sessionId);
       opts.log.debug("memos.session.ended", {
         sessionId: event.sessionId,
         sessionKey: ctx.sessionKey,
@@ -1677,6 +1691,10 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       opts.log.warn("memos.session.end.failed", {
         err: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      if (!pendingSubagentSessions.has(sessionId)) {
+        clearTrackedSessionState(sessionId);
+      }
     }
   }
 

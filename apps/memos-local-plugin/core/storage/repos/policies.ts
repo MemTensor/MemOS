@@ -76,6 +76,20 @@ export function makePoliciesRepo(db: StorageDb) {
   const selectById = db.prepare<{ id: string }, RawPolicyRow>(
     `SELECT ${COLUMNS.join(", ")} FROM policies WHERE id=@id`,
   );
+  const selectBySourceFeedbackId = db.prepare<
+    { feedback_id: string },
+    RawPolicyRow
+  >(
+    `SELECT ${COLUMNS.join(", ")}
+       FROM policies
+      WHERE EXISTS (
+        SELECT 1
+          FROM json_each(COALESCE(source_feedback_ids_json, '[]'))
+         WHERE json_each.value=@feedback_id
+      )
+      ORDER BY updated_at DESC
+      LIMIT 1`,
+  );
 
   return {
     insert(row: PolicyRow): void {
@@ -108,6 +122,11 @@ export function makePoliciesRepo(db: StorageDb) {
       const r = selectById.get({ id });
       if (!r) return null;
       return mapRow(r);
+    },
+
+    findBySourceFeedbackId(feedbackId: string): PolicyRow | null {
+      const row = selectBySourceFeedbackId.get({ feedback_id: feedbackId });
+      return row ? mapRow(row) : null;
     },
 
     list(filter: PolicyListFilter = {}): PolicyRow[] {

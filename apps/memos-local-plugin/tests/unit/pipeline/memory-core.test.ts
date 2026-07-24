@@ -8,7 +8,7 @@
 
 import net from "node:net";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMemoryCore,
@@ -166,6 +166,31 @@ describe("MemoryCore façade", () => {
     expect(h.embedder.available).toBe(true);
     expect(h.embedder.dim).toBe(TEST_EMBED_DIMENSIONS);
     expect(h.llm.available).toBe(false);
+    expect(h.evolution).toEqual({
+      active: 0,
+      queued: 0,
+      leased: 0,
+      retrying: 0,
+      succeeded: 0,
+      deadLetter: 0,
+      failureSequence: 0,
+    });
+  });
+
+  it("closeSession durably closes without draining background evolution", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    const flush = vi.spyOn(pipeline, "flush").mockResolvedValue();
+    const sid = await core.openSession({ agent: "openclaw" });
+
+    await core.closeSession(sid);
+
+    expect(flush).not.toHaveBeenCalled();
   });
 
   it("reloads the hub runtime when hub config changes without a process restart", async () => {
@@ -711,7 +736,10 @@ describe("MemoryCore façade", () => {
   });
 
   it("submitFeedback persists and returns a DTO", async () => {
-    pipeline = createPipeline(buildDeps(db!));
+    pipeline = createPipeline({
+      ...buildDeps(db!),
+      evolutionWorkerEnabled: false,
+    });
     core = createMemoryCore(
       pipeline,
       resolveHome("openclaw", "/tmp/memos-mc-test"),
@@ -730,6 +758,205 @@ describe("MemoryCore façade", () => {
 
     // Verify it's actually in the repo.
     expect(db!.repos.feedback.getById(fb.id)).not.toBeNull();
+    expect(db!.repos.evolutionJobs.list("queued")).toEqual([
+      expect.objectContaining({
+        jobType: "feedback_evolution",
+        dedupeKey: `feedback_evolution:${fb.id}`,
+        payload: { feedbackId: fb.id },
+      }),
+    ]);
+  });
+
+  it("does not backfill old feedback rows into the evolution queue", () => {
+    db!.repos.feedback.insert({
+      id: "feedback-from-old-version",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: 1_699_999_999_000,
+      episodeId: null,
+      traceId: null,
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      rationale: "historical",
+      raw: null,
+    });
+
+    pipeline = createPipeline({
+      ...buildDeps(db!),
+      evolutionWorkerEnabled: false,
+    });
+
+    expect(db!.repos.feedback.getById("feedback-from-old-version")).not.toBeNull();
+    expect(db!.repos.evolutionJobs.countActive()).toBe(0);
+  });
+
+  it("processes manual feedback through the shared evolution worker", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const feedback = await core.submitFeedback({
+      channel: "explicit",
+      polarity: "positive",
+      magnitude: 0.9,
+      rationale: "keep this behavior",
+    });
+    await pipeline.flush();
+
+    expect(db!.repos.evolutionJobs.list("succeeded")).toEqual([
+      expect.objectContaining({
+        jobType: "feedback_evolution",
+        dedupeKey: `feedback_evolution:${feedback.id}`,
+        payload: { feedbackId: feedback.id },
+      }),
+    ]);
+  });
+
+  it("keeps failed feedback evolution retryable instead of marking it succeeded", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    vi.spyOn(db!.repos.policies, "insert").mockImplementation(() => {
+      throw new Error("policy persistence failed");
+    });
+
+    await core.submitFeedback({
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      rationale:
+        "Verifier feedback: failed. Avoid extracting the issuer name from the wrong SEC 13F field next time.",
+    });
+    await pipeline.flush();
+
+    expect(db!.repos.evolutionJobs.countByStatus("succeeded")).toBe(0);
+    expect(db!.repos.evolutionJobs.list("failed")).toEqual([
+      expect.objectContaining({
+        jobType: "feedback_evolution",
+        lastError: expect.stringContaining("policy persistence failed"),
+      }),
+    ]);
+  });
+
+  it("does not duplicate a policy when feedback retry follows a post-insert failure", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    const originalInsert = db!.repos.policies.insert.bind(db!.repos.policies);
+    let failAfterInsert = true;
+    vi.spyOn(db!.repos.policies, "insert").mockImplementation((row) => {
+      originalInsert(row);
+      if (failAfterInsert) {
+        failAfterInsert = false;
+        throw new Error("crash after policy insert");
+      }
+    });
+
+    await core.submitFeedback({
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      rationale:
+        "Verifier feedback: failed. Avoid extracting the issuer name from the wrong SEC 13F field next time.",
+    });
+    await pipeline.flush();
+    const [failed] = db!.repos.evolutionJobs.list("failed");
+    expect(failed).toBeTruthy();
+    db!.db.prepare<{ id: string; now: number }>(
+      `UPDATE evolution_jobs SET available_at=@now WHERE id=@id`,
+    ).run({ id: failed!.id, now: 1_700_000_000_000 });
+
+    await pipeline.flush();
+
+    expect(db!.repos.evolutionJobs.countByStatus("succeeded")).toBe(1);
+    expect(db!.repos.policies.list()).toHaveLength(1);
+    expect(db!.repos.policies.list()[0]?.support).toBe(1);
+  });
+
+  it("rolls back feedback when its evolution job cannot be persisted", async () => {
+    db!.repos.sessions.upsert({
+      id: "s-feedback-atomic",
+      agent: "openclaw",
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep-feedback-atomic",
+      sessionId: "s-feedback-atomic",
+      startedAt: 1_000,
+      endedAt: 2_000,
+      traceIds: ["tr-feedback-atomic"] as never,
+      rTask: null,
+      status: "closed",
+      meta: {},
+    });
+    db!.repos.traces.insert({
+      id: "tr-feedback-atomic",
+      episodeId: "ep-feedback-atomic",
+      sessionId: "s-feedback-atomic",
+      ts: 2_000,
+      userText: "original",
+      agentText: "answer",
+      summary: null,
+      reflection: null,
+      agentThinking: null,
+      toolCalls: [],
+      value: 0.4,
+      alpha: 0.2,
+      rHuman: 0.4,
+      priority: 0.4,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      turnId: 1_000,
+      schemaVersion: 1,
+    } as never);
+    pipeline = createPipeline({
+      ...buildDeps(db!),
+      evolutionWorkerEnabled: false,
+    });
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    vi.spyOn(db!.repos.evolutionJobs, "enqueue").mockImplementation(() => {
+      throw new Error("queue write failed");
+    });
+
+    await expect(core.submitFeedback({
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      rationale: "must be atomic",
+      traceId: "tr-feedback-atomic",
+      episodeId: "ep-feedback-atomic",
+    })).rejects.toThrow("queue write failed");
+
+    expect(db!.repos.feedback.list()).toHaveLength(0);
+    expect(db!.repos.evolutionJobs.countActive()).toBe(0);
+    expect(db!.repos.traces.getById("tr-feedback-atomic" as never)).toMatchObject({
+      value: 0.4,
+      rHuman: 0.4,
+      priority: 0.4,
+    });
   });
 
   it("onTurnEnd returns a real persisted trace id that feedback accepts", async () => {
@@ -845,6 +1072,7 @@ describe("MemoryCore façade", () => {
       traceId: end.traceId,
       episodeId: end.episodeId,
     });
+    await pipeline.flush();
     const scored = db!.repos.traces.getById(end.traceId as never)!;
     expect(scored.value).toBeCloseTo(1 / 3);
     expect(scored.rHuman).toBeCloseTo(1 / 3);

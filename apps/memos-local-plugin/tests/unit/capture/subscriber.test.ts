@@ -97,6 +97,23 @@ describe("capture/subscriber", () => {
     sub.stop();
   });
 
+  it("durably schedules finalized episodes instead of running reflection inline", async () => {
+    const bus = createSessionEventBus();
+    const { runner, calls } = makeRunner(async (inp) => emptyResult(inp.episode.id));
+    const scheduled: CaptureInput[] = [];
+    const sub = attachCaptureSubscriber(bus, runner, {
+      scheduleEvolution: (input) => scheduled.push(input),
+    });
+
+    finalize(bus, "ep_durable");
+    await sub.drain();
+
+    expect(calls).toHaveLength(0);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]!.episode.id).toBe("ep_durable");
+    sub.stop();
+  });
+
   it("skips abandoned episodes when captureAbandoned=false", async () => {
     const bus = createSessionEventBus();
     const { runner, calls } = makeRunner(async (inp) => emptyResult(inp.episode.id));

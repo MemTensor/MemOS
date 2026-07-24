@@ -70,6 +70,22 @@ export async function runRepair(
     toolId: input.toolId,
   });
 
+  if (input.repairId) {
+    const existing = repos.decisionRepairs.getById(input.repairId);
+    if (existing) {
+      return {
+        trigger: input.trigger,
+        contextHash: input.contextHash,
+        repairId: existing.id,
+        draft: null,
+        skipped: true,
+        skippedReason: "already-applied",
+        startedAt,
+        completedAt: nowMs() as EpochMs,
+      };
+    }
+  }
+
   // Cooldown guard — same context, quickly reissued triggers are squelched.
   if (isOnCooldown(repos, input.contextHash, config, startedAt)) {
     log.info("repair.cooldown", { contextHash: input.contextHash });
@@ -184,7 +200,12 @@ export async function runRepair(
     return skip(input, startedAt, synth.reason);
   }
 
-  const row = persistRepair(repos, synth.draft, startedAt);
+  const row = persistRepair(
+    repos,
+    synth.draft,
+    startedAt,
+    input.repairId,
+  );
   log.info("repair.persisted", {
     id: row.id,
     contextHash: row.contextHash,
@@ -278,10 +299,11 @@ function persistRepair(
   repos: Repos,
   draft: DecisionRepairDraft,
   ts: EpochMs,
+  repairId?: string,
 ): DecisionRepairRow {
   const owner = ownerFromRepairEvidence(repos, draft);
   const row: DecisionRepairRow = {
-    id: ids.decisionRepair(),
+    id: repairId ?? ids.decisionRepair(),
     ...owner,
     ts,
     contextHash: draft.contextHash,
@@ -400,4 +422,3 @@ function arraysEqual<T>(a: readonly T[], b: readonly T[]): boolean {
   for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
   return true;
 }
-

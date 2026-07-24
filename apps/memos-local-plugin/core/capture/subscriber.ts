@@ -11,6 +11,7 @@
 import { rootLogger } from "../logger/index.js";
 import type { SessionEventBus } from "../session/types.js";
 import type { CaptureRunner } from "./capture.js";
+import type { CaptureInput } from "./types.js";
 
 export interface CaptureSubscriberOptions {
   /**
@@ -21,6 +22,12 @@ export interface CaptureSubscriberOptions {
   captureAbandoned?: boolean;
   /** Callback for unhandled errors from fire-and-forget captures. */
   onError?: (err: unknown) => void;
+  /**
+   * Optional durable scheduler. When present, finalized episodes are queued
+   * for the runtime-owned evolution worker instead of executing reflection in
+   * this event callback.
+   */
+  scheduleEvolution?: (input: CaptureInput) => void;
 }
 
 export interface CaptureSubscription {
@@ -49,6 +56,10 @@ export function attachCaptureSubscriber(
     }
     if (evt.episode.meta?.lightweightMemory === true) {
       log.debug("subscriber.skip_lightweight", { episodeId: evt.episode.id });
+      return;
+    }
+    if (opts.scheduleEvolution) {
+      opts.scheduleEvolution({ episode: evt.episode, closedBy: evt.closedBy });
       return;
     }
     // Topic ended → batch reflect across every step + emit

@@ -68,6 +68,12 @@ export async function runFeedbackExperience(
   input: FeedbackExperienceInput,
   deps: FeedbackExperienceDeps,
 ): Promise<FeedbackExperienceResult> {
+  const alreadyApplied = deps.repos.policies.findBySourceFeedbackId(
+    input.feedback.id,
+  );
+  if (alreadyApplied) {
+    return { created: false, policyId: alreadyApplied.id };
+  }
   const now = deps.now?.() ?? Date.now();
   const text = feedbackText(input.feedback);
   if (!text) return { created: false, skippedReason: "empty-feedback" };

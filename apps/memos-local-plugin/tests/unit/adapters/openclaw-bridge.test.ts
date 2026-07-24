@@ -1135,6 +1135,79 @@ describe("createOpenClawBridge", () => {
     expect(events).not.toContain("episode.closed");
   });
 
+  it("does not misreport an explicit session-close failure as onTurnEnd failure", async () => {
+    const mc = buildCore();
+    await mc.init();
+    const closeSession = vi
+      .spyOn(mc, "closeSession")
+      .mockRejectedValue(new Error("close transport failed"));
+    const warn = vi.fn();
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: { ...silentLogger(), warn },
+    });
+    const ctx = hookCtx({
+      sessionKey: "agent:main:explicit:test-close-failure",
+    });
+    await bridge.handleBeforePrompt(
+      { prompt: "remember this", messages: [] },
+      ctx,
+    );
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "remember this" },
+          { role: "assistant", content: "remembered" },
+        ],
+      },
+      ctx,
+    );
+
+    expect(closeSession).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      "memos.session.close.failed",
+      expect.objectContaining({ err: "close transport failed" }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      "memos.onTurnEnd.failed",
+      expect.anything(),
+    );
+    expect(bridge.trackedSessions()).toBe(0);
+  });
+
+  it("propagates turn-end persistence failures after logging them", async () => {
+    const mc = buildCore();
+    await mc.init();
+    vi.spyOn(mc, "onTurnEnd").mockRejectedValue(new Error("durable capture failed"));
+    const warn = vi.fn();
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: { ...silentLogger(), warn },
+    });
+    const ctx = hookCtx({ sessionKey: "s-propagate-capture-failure" });
+    await bridge.handleBeforePrompt({ prompt: "remember this", messages: [] }, ctx);
+
+    await expect(bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "remember this" },
+          { role: "assistant", content: "remembered" },
+        ],
+      },
+      ctx,
+    )).rejects.toThrow("durable capture failed");
+
+    expect(warn).toHaveBeenCalledWith(
+      "memos.onTurnEnd.failed",
+      expect.objectContaining({ err: "durable capture failed" }),
+    );
+  });
+
   it("uses tool hook observations when agent_end transcript omits tool blocks", async () => {
     const mc = buildCore();
     await mc.init();

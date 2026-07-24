@@ -128,6 +128,31 @@ describe("feedback experience builder", () => {
     expect(recalled.map((c) => c.refId)).toContain(result.policyId);
   });
 
+  it("does not apply the same feedback to policy support twice", async () => {
+    const input = {
+      feedback: feedback(),
+      episode: {
+        id: "ep_feedback" as EpisodeId,
+        traceIds: [trace.id],
+        rTask: -1,
+      },
+      trace,
+    };
+    const deps = {
+      repos: handle.repos,
+      embedder: fakeEmbedder(),
+      namespace,
+      now: () => NOW,
+    };
+
+    const first = await runFeedbackExperience(input, deps);
+    const second = await runFeedbackExperience(input, deps);
+
+    expect(second.policyId).toBe(first.policyId);
+    expect(handle.repos.policies.list()).toHaveLength(1);
+    expect(handle.repos.policies.getById(first.policyId!)?.support).toBe(1);
+  });
+
   it("treats a partial verifier pass (3/4, reward 0) as a failure, not a success_pattern", async () => {
     const result = await runFeedbackExperience(
       {

@@ -74,7 +74,6 @@ import type {
 } from "../types.js";
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
-import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
@@ -113,7 +112,6 @@ import type {
   RetrievalConfig,
   TraceCandidate,
 } from "../retrieval/types.js";
-import type { UserFeedback } from "../reward/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
@@ -149,6 +147,8 @@ export interface BootstrapOptions {
   hostLlmBridge?: HostLlmBridge | null;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /** Disable durable evolution consumption in viewer-only processes. */
+  evolutionWorkerEnabled?: boolean;
 }
 
 export interface BootstrapResult {
@@ -483,6 +483,7 @@ export async function bootstrapMemoryCoreFull(
     embedder,
     log,
     namespace,
+    evolutionWorkerEnabled: options.evolutionWorkerEnabled,
     now: options.now,
   };
   const handle = createPipeline(deps);
@@ -1819,6 +1820,30 @@ export function createMemoryCore(
       llm: llmInfo,
       embedder: embedderInfo,
       skillEvolver: skillEvolverInfo,
+      evolution: {
+        active: handle.repos.evolutionJobs.countActive(),
+        queued: handle.repos.evolutionJobs.countByStatus("queued"),
+        leased: handle.repos.evolutionJobs.countByStatus("leased"),
+        retrying: handle.repos.evolutionJobs.countByStatus("failed"),
+        succeeded: handle.repos.evolutionJobs.countByStatus("succeeded"),
+        deadLetter: handle.repos.evolutionJobs.countByStatus("dead_letter"),
+        failureSequence: handle.repos.kv.get(
+          "runtime.failure_sequence.evolution",
+          0,
+        ),
+      },
+      embeddingRetry: {
+        pending: handle.repos.embeddingRetryQueue.countByStatus("pending"),
+        inProgress:
+          handle.repos.embeddingRetryQueue.countByStatus("in_progress"),
+        failed: handle.repos.embeddingRetryQueue.countByStatus("failed"),
+        succeeded:
+          handle.repos.embeddingRetryQueue.countByStatus("succeeded"),
+        failureSequence: handle.repos.kv.get(
+          "runtime.failure_sequence.embedding",
+          0,
+        ),
+      },
     };
   }
 
@@ -1860,14 +1885,6 @@ export function createMemoryCore(
       );
     }
     handle.sessionManager.closeSession(sessionId, "client");
-    try {
-      await handle.flush();
-    } catch (err) {
-      log.warn("closeSession.flush_failed", {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
   }
 
   async function openEpisode(input: {
@@ -2172,6 +2189,11 @@ export function createMemoryCore(
       rationale: feedback.rationale ?? null,
       raw: feedback.raw ?? null,
     };
+    const episode = row.episodeId
+      ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
+      : null;
+    const lightweightFeedback = handle.algorithm.lightweightMemory.enabled ||
+      (episode ? isLightweightEpisode(episode) : false);
     handle.db.tx(() => {
       handle.repos.feedback.insert(row);
       if (targetTrace) {
@@ -2185,110 +2207,15 @@ export function createMemoryCore(
           priority: Math.max(targetTrace.priority, Math.abs(explicitValue)),
         });
       }
+      if (!lightweightFeedback) {
+        handle.evolutionWorker.persist({
+          jobType: "feedback_evolution",
+          dedupeKey: `feedback_evolution:${row.id}`,
+          payload: { feedbackId: row.id },
+        });
+      }
     });
-
-    const episode = row.episodeId
-      ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
-      : null;
-    const trace = row.traceId
-      ? handle.repos.traces.getById(row.traceId as TraceId)
-      : null;
-    const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
-    const text = feedbackText(row);
-    const lightweightFeedback = handle.algorithm.lightweightMemory.enabled ||
-      (episode ? isLightweightEpisode(episode) : false);
-
-    if (lightweightFeedback) {
-      if (telemetry) {
-        telemetry.trackFeedback(
-          handle.namespace.agentKind,
-          feedback.polarity,
-        );
-      }
-      return toFeedbackDTO(row);
-    }
-
-    if (episode && sessionId) {
-      const rewardFeedback: UserFeedback = {
-        id: row.id as UserFeedback["id"],
-        episodeId: episode.id,
-        sessionId,
-        traceId: row.traceId as TraceId | null,
-        ts: row.ts,
-        channel: row.channel,
-        polarity: row.polarity,
-        magnitude: row.magnitude,
-        text: text || null,
-        rationale: row.rationale,
-      };
-      try {
-        await handle.rewardRunner.run({
-          episodeId: episode.id,
-          feedback: [rewardFeedback],
-          trigger: "explicit_feedback",
-        });
-      } catch (err) {
-        log.warn("feedback.reward_failed", {
-          episodeId: episode.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    if (text && sessionId) {
-      try {
-        await handle.feedback.submitUserFeedback({
-          text,
-          sessionId,
-          episodeId: episode?.id,
-          context: text.slice(0, 300),
-        });
-      } catch (err) {
-        log.warn("feedback.repair_failed", {
-          episodeId: episode?.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    let policyId: PolicyId | undefined;
-    try {
-      const experience = await runFeedbackExperience(
-        { feedback: row, episode, trace },
-        {
-          repos: handle.repos,
-          embedder: handle.embedder,
-          llm: handle.llm ?? undefined,
-          namespace: handle.namespace,
-          now: Date.now,
-        },
-      );
-      policyId = experience.policyId;
-    } catch (err) {
-      log.warn("feedback.experience_failed", {
-        episodeId: episode?.id,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    try {
-      await handle.l2.drain();
-      if (policyId) {
-        await handle.skills.runOnce({ trigger: "manual", policyId });
-      }
-      if (episode) {
-        await handle.l3.runOnce({ trigger: "manual", episodeId: episode.id });
-      }
-      await handle.skills.flush();
-      await handle.feedback.flush();
-      await handle.l3.drain();
-    } catch (err) {
-      log.warn("feedback.downstream_flush_failed", {
-        episodeId: episode?.id,
-        policyId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
+    if (!lightweightFeedback) handle.evolutionWorker.notify();
 
     if (telemetry) {
       telemetry.trackFeedback(
