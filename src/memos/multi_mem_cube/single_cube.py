@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import traceback
 
@@ -35,6 +36,69 @@ from memos.utils import timed, timed_stage
 
 
 logger = get_logger(__name__)
+
+
+# Memory partitions in `MOSSearchResult` that may carry `metadata.embedding`
+# lists we want to redact from INFO logs. Kept as a module constant so a new
+# partition (e.g. `notif_mem`) can be added by one edit.
+_MEM_PARTITIONS_WITH_EMBEDDING = ("text_mem", "pref_mem", "tool_mem", "skill_mem")
+
+
+def _redact_embeddings_for_log(memories_result: dict[str, Any]) -> dict[str, Any]:
+    """Return a log-safe shallow copy of ``memories_result`` with each
+    ``metadata.embedding`` list replaced by a length placeholder.
+
+    Motivation (GitHub issue #2103):
+        ``format_memory_item(..., include_embedding=True)`` keeps the full
+        embedding vector on each memory when ``dedup`` is ``mmr`` or
+        ``sim``. ``APISearchRequest.dedup`` defaults to ``mmr``, so the
+        raw ``logger.info(memories_result)`` call would dump every high
+        dimensional vector into INFO logs on every search — MBs of noise
+        plus a potential privacy / compliance concern.
+
+    The returned structure is a shallow view suitable for interpolation
+    into a log message; the caller's live ``memories_result`` object is
+    NOT mutated (business logic must still see the real embedding for
+    dedup / downstream consumers).
+    """
+    if not isinstance(memories_result, dict):
+        return memories_result
+
+    redacted: dict[str, Any] = dict(memories_result)
+    for partition in _MEM_PARTITIONS_WITH_EMBEDDING:
+        groups = memories_result.get(partition)
+        if not groups:
+            continue
+        new_groups = []
+        for group in groups:
+            if not isinstance(group, dict):
+                new_groups.append(group)
+                continue
+            new_group = dict(group)
+            new_memories = []
+            # `or []` intentionally handles the `{"memories": None}` case —
+            # `dict.get("memories")` returns `None` (not `[]`) when the value
+            # is explicitly None, and downstream `format_memory_item` /
+            # post-processing may leave that key null on empty partitions.
+            for mem in group.get("memories") or []:
+                if not isinstance(mem, dict):
+                    new_memories.append(mem)
+                    continue
+                metadata = mem.get("metadata")
+                if isinstance(metadata, dict) and "embedding" in metadata:
+                    embedding = metadata.get("embedding")
+                    length = len(embedding) if hasattr(embedding, "__len__") else 0
+                    new_metadata = dict(metadata)
+                    new_metadata["embedding"] = f"<embedding len={length}>"
+                    new_mem = dict(mem)
+                    new_mem["metadata"] = new_metadata
+                    new_memories.append(new_mem)
+                else:
+                    new_memories.append(mem)
+            new_group["memories"] = new_memories
+            new_groups.append(new_group)
+        redacted[partition] = new_groups
+    return redacted
 
 
 if TYPE_CHECKING:
@@ -129,7 +193,10 @@ class SingleCubeView(MemCubeView):
             self.cube_id,
         )
 
-        self.logger.info(f"Search memories result: {memories_result}")
+        if self.logger.isEnabledFor(logging.INFO):
+            self.logger.info(
+                "Search memories result: %s", _redact_embeddings_for_log(memories_result)
+            )
         self.logger.info(f"Search {len(memories_result)} memories.")
         return memories_result
 
