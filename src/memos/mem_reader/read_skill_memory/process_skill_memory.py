@@ -935,6 +935,29 @@ def create_skill_memory_item(
     return TextualMemoryItem(id=item_id, memory=memory_content, metadata=metadata)
 
 
+def _filter_resolvable_skill_updates(
+    skill_memories: list[dict[str, Any]],
+    old_memories_map: dict[str, TextualMemoryItem],
+) -> list[dict[str, Any]]:
+    valid_skill_memories: list[dict[str, Any]] = []
+    for skill_memory in skill_memories:
+        if not skill_memory.get("update", False):
+            valid_skill_memories.append(skill_memory)
+            continue
+
+        old_memory_id = skill_memory.get("old_memory_id")
+        if old_memory_id and old_memory_id in old_memories_map:
+            valid_skill_memories.append(skill_memory)
+            continue
+
+        logger.warning(
+            "[PROCESS_SKILLS] Skip unresolved skill update for '%s': old_memory_id=%s",
+            skill_memory.get("name", ""),
+            old_memory_id,
+        )
+    return valid_skill_memories
+
+
 def _skill_init(skills_repo_backend, oss_config, skills_dir_config):
     if skills_repo_backend == "OSS":
         # Validate required configurations
@@ -1144,6 +1167,7 @@ def process_skill_memory_fine(
     for memories in related_skill_memories_by_task.values():
         all_related_memories.extend(memories)
     old_memories_map = {mem.id: mem for mem in all_related_memories}
+    skill_memories = _filter_resolvable_skill_updates(skill_memories, old_memories_map)
 
     # upload skills to oss and set urls directly to skill_memory
     user_id = info.get("user_id", "unknown")
