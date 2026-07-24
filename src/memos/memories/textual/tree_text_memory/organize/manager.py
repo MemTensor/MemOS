@@ -1,9 +1,11 @@
+import hashlib
+import os
 import re
 import traceback
 import uuid
 
 from concurrent.futures import as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
@@ -18,6 +20,14 @@ from memos.memories.textual.tree_text_memory.organize.reorganizer import (
 
 
 logger = get_logger(__name__)
+
+# ─── Write-path dedup configuration ─────────────────────────────────────────
+# When enabled, incoming memories with identical content (sha1 hash) are
+# skipped if a node with the same hash already exists for the same user
+# within a configurable time window. Fail-open: on query errors the write
+# proceeds so availability is not impacted.
+_DEDUP_ENABLED = os.getenv("MOS_DEDUP_ENABLED", "1") != "0"
+_DEDUP_WINDOW_DAYS = int(os.getenv("MOS_DEDUP_WINDOW_DAYS", "7"))
 
 
 def extract_working_binding_ids(mem_items: list[TextualMemoryItem]) -> set[str]:
@@ -86,6 +96,97 @@ class MemoryManager:
         )
         self._merged_threshold = merged_threshold
 
+    def _dedup_by_content_hash(
+        self, memories: list[TextualMemoryItem], user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
+        """Filter out duplicate memories by content hash.
+
+        Computes ``sha1(memory.memory)`` for each incoming item and skips
+        items whose hash already exists for the same ``user_name`` within
+        the configured time window.  Also deduplicates within the batch
+        itself.  Fail-open: if the dedup check errors, the write proceeds.
+
+        Args:
+            memories: Incoming memory items.
+            user_name: Optional user identifier for scoping the lookup.
+
+        Returns:
+            Filtered list with ``content_hash`` set in metadata.
+        """
+        if not _DEDUP_ENABLED or not memories:
+            return memories
+
+        kept: list[TextualMemoryItem] = []
+        seen_hashes: set[str] = set()
+        skipped = 0
+
+        for m in memories:
+            raw = m.memory or ""
+            h = hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+            # --- batch-level dedup ---
+            if h in seen_hashes:
+                skipped += 1
+                continue
+
+            # --- graph-store-level dedup (fail-open) ---
+            try:
+                existing_ids = self.graph_store.get_by_metadata(
+                    filters=[{"content_hash": h}]
+                )
+                if existing_ids:
+                    # Check whether any match is within the time window.
+                    cutoff = datetime.now() - timedelta(days=_DEDUP_WINDOW_DAYS)
+                    is_duplicate = False
+                    for nid in existing_ids:
+                        node = self.graph_store.get_node(nid)
+                        if node is None:
+                            continue
+                        meta = node.get("metadata", {})
+                        updated = meta.get("updated_at") or meta.get("created_at")
+                        if updated:
+                            try:
+                                ts = datetime.fromisoformat(updated)
+                            except (ValueError, TypeError):
+                                ts = None
+                            if ts and ts >= cutoff:
+                                is_duplicate = True
+                                break
+                        else:
+                            # No timestamp → treat as duplicate (conservative).
+                            is_duplicate = True
+                            break
+                    if is_duplicate:
+                        skipped += 1
+                        continue
+            except Exception:
+                logger.debug(
+                    "Dedup check failed for hash %s, proceeding with write (fail-open)",
+                    h,
+                )
+
+            # Attach content_hash to metadata so it persists to the graph node.
+            try:
+                m.metadata.content_hash = h
+            except (AttributeError, TypeError):
+                # Metadata model may not support direct attribute set.
+                if hasattr(m.metadata, "info") and isinstance(m.metadata.info, dict):
+                    m.metadata.info["content_hash"] = h
+                else:
+                    m.metadata.info = {"content_hash": h}
+
+            seen_hashes.add(h)
+            kept.append(m)
+
+        if skipped:
+            logger.info(
+                "Content-hash dedup: skipped %d/%d memories (window=%d days)",
+                skipped,
+                len(memories),
+                _DEDUP_WINDOW_DAYS,
+            )
+        return kept
+
     def add(
         self,
         memories: list[TextualMemoryItem],
@@ -106,6 +207,10 @@ class MemoryManager:
         Returns:
             List of added memory IDs.
         """
+        memories = self._dedup_by_content_hash(memories, user_name)
+        if not memories:
+            return []
+
         added_ids: list[str] = []
         if use_batch:
             added_ids = self._add_memories_batch(memories, user_name)
