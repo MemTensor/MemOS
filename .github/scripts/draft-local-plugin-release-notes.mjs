@@ -37,13 +37,27 @@ const CURRENT_TAG_PREFIX = "memos-local-plugin-v";
 const TAG_PREFIXES = [CURRENT_TAG_PREFIX, "openclaw-local-plugin-v"];
 const RELEASE_NOTES_MARKER = "doc-agent-release-notes-json";
 const RELEASE_CATEGORY_ORDER = ["Added", "Improved", "Fixed"];
-const MAX_DRAFT_REPAIR_ATTEMPTS = 2;
+const MAX_DRAFT_REPAIR_ATTEMPTS = 3;
 const RELEASE_TO_DOC_CATEGORY = {
   Added: "New Features",
   Improved: "Improvements",
   Fixed: "Bug Fixes",
 };
 const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/;
+export const RELEASE_NOTE_QUALITY_REQUEST = {
+  schema: "memos.plugin.release_notes.quality_request.v1",
+  candidate_count: 3,
+  selection_policy: [
+    "Generate multiple local plugin release-note candidates when supported.",
+    "Score candidates against evidence coverage, source_ref validity, bilingual language separation, product-facing clarity, and docs-preview readability.",
+    "Return only the best candidate in release_items/release_notes_markdown; include candidate scoring metadata only in debug fields when available.",
+  ],
+  repair_policy: {
+    max_repair_attempts: MAX_DRAFT_REPAIR_ATTEMPTS,
+    use_validation_report: true,
+    fail_closed_after_exhaustion: true,
+  },
+};
 
 function fail(message) {
   throw new Error(String(message));
@@ -369,6 +383,7 @@ export function collectEvidence({ targetVersion, currentTag, previousTag, curren
   return {
     product_id: PRODUCT_ID,
     product_title: PRODUCT_TITLE,
+    release_note_quality_request: RELEASE_NOTE_QUALITY_REQUEST,
     release_note_guidance: releaseNoteGuidanceForCommits(commits),
     repo,
     previous_tag: previousTag,
@@ -396,6 +411,7 @@ export function evidenceForInspection(evidence) {
   const guidance = evidence?.release_note_guidance || {};
   const {
     release_note_guidance: _releaseNoteGuidance,
+    release_note_quality_request: _releaseNoteQualityRequest,
     important_diff: _importantDiff,
     ...publicEvidence
   } = evidence || {};
@@ -409,6 +425,7 @@ export function evidenceForInspection(evidence) {
     redactions: {
       important_diff: "omitted from public workflow artifacts; sent only to the configured draft service",
       release_note_prompt_guidance: "omitted from public workflow artifacts",
+      release_note_quality_request: "omitted from public workflow artifacts; sent only to the configured draft service",
     },
   };
 }
@@ -429,6 +446,7 @@ export function draftForInspection(draft) {
       invalid_item_refs: Array.isArray(draft?.coverage?.invalid_item_refs) ? draft.coverage.invalid_item_refs : [],
     },
     warnings: Array.isArray(draft?.warnings) ? draft.warnings : [],
+    docs_categories: draft?.docs_categories || { cn: {}, en: {} },
     language_issues: Array.isArray(draft?.language_issues) ? draft.language_issues : [],
     postprocess: draft?.postprocess || {},
     validation_report: draft?.validation_report || {},
@@ -453,6 +471,14 @@ function appendOutput(name, value) {
 export function ensureSourceHint(notes) {
   const hint = `<!-- doc-agent: source-id=${PRODUCT_ID} -->`;
   return notes.includes("doc-agent: source-id=") ? notes : `${notes.trim()}\n\n${hint}\n`;
+}
+
+function previewDateFromPublishedAt(value) {
+  const text = String(value || "").trim();
+  if (!text) return "<GitHub Release published_at>";
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return "<GitHub Release published_at>";
+  return date.toISOString().slice(0, 10);
 }
 
 function normalizeReleaseCategory(value) {
@@ -751,6 +777,83 @@ function categoriesFromReleaseItems(items) {
     docsCategories.en[docCategory] = categoryItems.map((item) => item.text_en);
   }
   return { releaseCategories, docsCategories };
+}
+
+export function docsPreviewFromDraft(draft, { targetVersion, publishedAt = "" } = {}) {
+  const version = displayVersion(targetVersion || draft?.target_version || "");
+  const date = previewDateFromPublishedAt(publishedAt);
+  const docsCategories = draft?.docs_categories || { cn: {}, en: {} };
+  const buildEntry = (locale) => ({
+    name: version,
+    date,
+    products: {
+      plugin: Object.fromEntries(
+        Object.entries(docsCategories[locale] || {}).map(([category, items]) => [
+          category,
+          [
+            {
+              type: locale === "cn" ? PRODUCT_TITLE.zh : PRODUCT_TITLE.en,
+              changedInfo: items,
+            },
+          ],
+        ]),
+      ),
+    },
+  });
+  return {
+    schema: "memos.plugin.docs_preview.v1",
+    product_id: PRODUCT_ID,
+    repo: "MemTensor/MemOS",
+    version,
+    date,
+    date_source: publishedAt ? "provided published_at" : "GitHub Release published_at at publish time",
+    docs_files: {
+      cn: "content/cn/plugin-changelog.yml",
+      en: "content/en/plugin-changelog.yml",
+    },
+    entries: {
+      cn: buildEntry("cn"),
+      en: buildEntry("en"),
+    },
+  };
+}
+
+export function markdownFromDocsPreview(preview) {
+  const lines = [
+    "# MemOS-Docs Plugin Changelog Preview",
+    "",
+    `- product_id: ${preview.product_id}`,
+    `- version: ${preview.version}`,
+    `- date: ${preview.date}`,
+    `- zh file: ${preview.docs_files.cn}`,
+    `- en file: ${preview.docs_files.en}`,
+  ];
+  for (const [locale, title] of [
+    ["cn", "中文预览"],
+    ["en", "English Preview"],
+  ]) {
+    lines.push("");
+    lines.push(`## ${title}`);
+    const plugin = preview.entries[locale]?.products?.plugin || {};
+    const categories = Object.keys(plugin);
+    if (categories.length === 0) {
+      lines.push("");
+      lines.push("- No plugin changelog items would be rendered.");
+      continue;
+    }
+    for (const category of categories) {
+      lines.push("");
+      lines.push(`### ${category}`);
+      for (const group of plugin[category] || []) {
+        lines.push("");
+        lines.push(`- type: ${group.type}`);
+        for (const item of group.changedInfo || []) {
+          lines.push(`  - ${item}`);
+        }
+      }
+    }
+  }
+  return `${lines.join("\n").trim()}\n`;
 }
 
 function coverageFromReleaseItems(evidence, draft, items, index) {
@@ -1104,23 +1207,18 @@ export function validateManualNotes(notes) {
   if (!/^## Changelog\s*$/m.test(text)) {
     fail("Manual release notes must contain a '## Changelog' heading.");
   }
-  const match = text.match(/<!--\s*doc-agent-release-notes-json\s*\n([\s\S]*?)\n-->/);
-  if (!match) {
-    fail("Manual release notes must include the doc-agent-release-notes-json evidence block.");
-  }
-  let payload;
-  try {
-    payload = JSON.parse(match[1]);
-  } catch {
-    fail("Manual release notes contain invalid doc-agent-release-notes-json.");
-  }
+  const payload = releaseNotesPayloadFromMarkdown(text);
   if (!Array.isArray(payload?.items) || payload.items.length === 0) {
     fail("Manual release notes evidence block must contain non-empty items.");
   }
   if (payload?.coverage?.needs_review !== false) {
     fail("Manual release notes evidence coverage must explicitly set needs_review=false.");
   }
-  for (const item of payload.items) {
+  const normalizedItems = payload.items.map(normalizeReleaseItem);
+  if (normalizedItems.some((item) => !item)) {
+    fail("Every manual release-note item must include category, text_cn, text_en, and valid source_refs.");
+  }
+  for (const item of normalizedItems) {
     if (!item?.text_cn || !item?.text_en || !Array.isArray(item?.source_refs) || item.source_refs.length === 0) {
       fail("Every manual release-note item must include text_cn, text_en, and source_refs.");
     }
@@ -1229,6 +1327,42 @@ export async function reportExternalFailureFromEnv({ fetchImpl = fetch } = {}) {
   });
 }
 
+function releaseNotesPayloadFromMarkdown(text) {
+  const match = text.match(/<!--\s*doc-agent-release-notes-json\s*\n([\s\S]*?)\n-->/);
+  if (!match) {
+    fail("Manual release notes must include the doc-agent-release-notes-json evidence block.");
+  }
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    fail("Manual release notes contain invalid doc-agent-release-notes-json.");
+  }
+}
+
+function draftFromReleaseNotesMarkdown(notes) {
+  const payload = releaseNotesPayloadFromMarkdown(notes);
+  const items = Array.isArray(payload?.items) ? payload.items.map(normalizeReleaseItem).filter(Boolean) : [];
+  const coverage = payload?.coverage || {};
+  const { releaseCategories, docsCategories } = categoriesFromReleaseItems(items);
+  return {
+    ok: items.length > 0 && coverage.needs_review === false,
+    needs_review: coverage.needs_review !== false,
+    confidence: "manual",
+    release_items: items,
+    release_categories: releaseCategories,
+    docs_categories: docsCategories,
+    coverage,
+    warnings: [],
+    language_issues: languageIssuesFromReleaseItems(items),
+    postprocess: {
+      applied: false,
+      source: "manual_release_notes",
+      final_item_count: items.length,
+    },
+    release_notes_markdown: notes,
+  };
+}
+
 export async function requestDraft(
   evidence,
   { fetchImpl = fetch, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {},
@@ -1324,8 +1458,20 @@ export async function main() {
 
   const manualNotes = String(process.env.MANUAL_RELEASE_NOTES || "").trim();
   if (manualNotes) {
-    writeFileSync(notesPath, ensureSourceHint(validateManualNotes(manualNotes)), "utf8");
+    const validManualNotes = ensureSourceHint(validateManualNotes(manualNotes));
+    const manualDraft = draftFromReleaseNotesMarkdown(validManualNotes);
+    const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
+    const docsPreview = docsPreviewFromDraft(manualDraft, { targetVersion });
+    const docsPreviewPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-docs-preview.json`);
+    const docsPreviewMarkdownPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-docs-preview.md`);
+    writeFileSync(notesPath, validManualNotes, "utf8");
+    writeFileSync(draftPath, JSON.stringify(draftForInspection(manualDraft), null, 2), "utf8");
+    writeFileSync(docsPreviewPath, JSON.stringify(docsPreview, null, 2), "utf8");
+    writeFileSync(docsPreviewMarkdownPath, markdownFromDocsPreview(docsPreview), "utf8");
     appendOutput("release_notes_file", notesPath);
+    appendOutput("draft_file", draftPath);
+    appendOutput("docs_preview_file", docsPreviewPath);
+    appendOutput("docs_preview_markdown_file", docsPreviewMarkdownPath);
     appendOutput("draft_used", "false");
     console.log(`Using manually provided release notes: ${notesPath}`);
     return;
@@ -1346,12 +1492,19 @@ export async function main() {
     fail(`Postprocessed release notes require review: ${JSON.stringify(draft.validation_report || draft.coverage || {})}`);
   }
   const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
+  const docsPreview = docsPreviewFromDraft(draft, { targetVersion });
+  const docsPreviewPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-docs-preview.json`);
+  const docsPreviewMarkdownPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-docs-preview.md`);
   writeFileSync(draftPath, JSON.stringify(draftForInspection(draft), null, 2), "utf8");
+  writeFileSync(docsPreviewPath, JSON.stringify(docsPreview, null, 2), "utf8");
+  writeFileSync(docsPreviewMarkdownPath, markdownFromDocsPreview(docsPreview), "utf8");
   writeFileSync(notesPath, ensureSourceHint(draft.release_notes_markdown), "utf8");
 
   appendOutput("release_notes_file", notesPath);
   appendOutput("evidence_file", evidencePath);
   appendOutput("draft_file", draftPath);
+  appendOutput("docs_preview_file", docsPreviewPath);
+  appendOutput("docs_preview_markdown_file", docsPreviewMarkdownPath);
   appendOutput("draft_used", "true");
   appendOutput("previous_tag", previousTag);
   appendOutput("current_tag", currentTag);

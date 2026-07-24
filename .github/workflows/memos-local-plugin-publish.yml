@@ -242,6 +242,8 @@ jobs:
           RELEASE_NOTES_FILE: ${{ steps.release_notes.outputs.release_notes_file }}
           EVIDENCE_FILE: ${{ steps.release_notes.outputs.evidence_file }}
           DRAFT_FILE: ${{ steps.release_notes.outputs.draft_file }}
+          DOCS_PREVIEW_FILE: ${{ steps.release_notes.outputs.docs_preview_file }}
+          DOCS_PREVIEW_MARKDOWN_FILE: ${{ steps.release_notes.outputs.docs_preview_markdown_file }}
           DRAFT_USED: ${{ steps.release_notes.outputs.draft_used }}
           PREVIOUS_TAG: ${{ steps.release_notes.outputs.previous_tag }}
           CURRENT_TAG: ${{ steps.release_notes.outputs.current_tag }}
@@ -271,8 +273,24 @@ jobs:
               exit 1
             fi
             cp "${DRAFT_FILE}" "${inspection_dir}/release-notes-draft.json"
+            if [ -z "${DOCS_PREVIEW_FILE}" ] || [ ! -s "${DOCS_PREVIEW_FILE}" ]; then
+              echo "::error::Docs preview JSON file was not generated."
+              exit 1
+            fi
+            if [ -z "${DOCS_PREVIEW_MARKDOWN_FILE}" ] || [ ! -s "${DOCS_PREVIEW_MARKDOWN_FILE}" ]; then
+              echo "::error::Docs preview Markdown file was not generated."
+              exit 1
+            fi
+            cp "${DOCS_PREVIEW_FILE}" "${inspection_dir}/docs-preview.json"
+            cp "${DOCS_PREVIEW_MARKDOWN_FILE}" "${inspection_dir}/docs-preview.md"
           elif [ -n "${DRAFT_FILE}" ] && [ -s "${DRAFT_FILE}" ]; then
             cp "${DRAFT_FILE}" "${inspection_dir}/release-notes-draft.json"
+            if [ -n "${DOCS_PREVIEW_FILE}" ] && [ -s "${DOCS_PREVIEW_FILE}" ]; then
+              cp "${DOCS_PREVIEW_FILE}" "${inspection_dir}/docs-preview.json"
+            fi
+            if [ -n "${DOCS_PREVIEW_MARKDOWN_FILE}" ] && [ -s "${DOCS_PREVIEW_MARKDOWN_FILE}" ]; then
+              cp "${DOCS_PREVIEW_MARKDOWN_FILE}" "${inspection_dir}/docs-preview.md"
+            fi
           fi
 
           {
@@ -299,6 +317,10 @@ jobs:
             if [ -f "${inspection_dir}/release-notes-draft.json" ]; then
               echo "- release-notes-draft.json"
             fi
+            if [ -f "${inspection_dir}/docs-preview.md" ]; then
+              echo "- docs-preview.md"
+              echo "- docs-preview.json"
+            fi
           } > "${inspection_dir}/README.md"
 
           {
@@ -315,6 +337,12 @@ jobs:
             echo "- repair_attempt_count: \`${REPAIR_ATTEMPT_COUNT:-n/a}\`"
             echo
             echo "Download the workflow artifact \`memos-local-plugin-release-notes-inspection\` to review release-notes.md, release-notes-draft.json, and redacted evidence.json."
+            if [ -f "${inspection_dir}/docs-preview.md" ]; then
+              echo
+              echo "### MemOS-Docs preview"
+              echo
+              sed -n '1,120p' "${inspection_dir}/docs-preview.md"
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload release notes inspection artifact

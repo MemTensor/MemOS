@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,10 +9,14 @@ import {
   cleanVersion,
   categoryHintsForCommits,
   compareSemver,
+  docsPreviewFromDraft,
   draftForInspection,
   evidenceForInspection,
   ensureSourceHint,
   findPreviousTag,
+  markdownFromDocsPreview,
+  main,
+  RELEASE_NOTE_QUALITY_REQUEST,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
   reportExternalFailureFromEnv,
@@ -123,6 +127,16 @@ test("documents release-note category guidance for the draft service", () => {
   );
 });
 
+test("requests multi-candidate draft quality checks from the draft service", () => {
+  assert.equal(RELEASE_NOTE_QUALITY_REQUEST.candidate_count, 3);
+  assert.equal(RELEASE_NOTE_QUALITY_REQUEST.repair_policy.max_repair_attempts, 3);
+  assert.ok(
+    RELEASE_NOTE_QUALITY_REQUEST.selection_policy.some((item) =>
+      item.includes("docs-preview readability"),
+    ),
+  );
+});
+
 test("adds source-ref category hints from commit subjects", () => {
   const hints = categoryHintsForCommits([
     {
@@ -197,6 +211,36 @@ test("redacts server debug fields from inspection draft", () => {
   assert.equal(inspection.debug, undefined);
   assert.deepEqual(inspection.release_items[0].source_refs, ["abc1234"]);
   assert.match(inspection.redactions.model_and_prompt_details, /omitted/);
+});
+
+test("renders a docs plugin changelog preview from normalized release items", () => {
+  const draft = {
+    docs_categories: {
+      cn: {
+        "New Features": [
+          "**轻量记忆配置**：新增轻量记忆配置入口，便于在轻量场景下降低后台处理开销。",
+        ],
+      },
+      en: {
+        "New Features": [
+          "**Lightweight Memory Configuration**: Added a lightweight-memory configuration entry for lower-overhead local runs.",
+        ],
+      },
+    },
+  };
+  const preview = docsPreviewFromDraft(draft, {
+    targetVersion: "2.0.10",
+    publishedAt: "2026-07-20T08:00:00Z",
+  });
+  const markdown = markdownFromDocsPreview(preview);
+
+  assert.equal(preview.version, "v2.0.10");
+  assert.equal(preview.date, "2026-07-20");
+  assert.equal(preview.docs_files.cn, "content/cn/plugin-changelog.yml");
+  assert.equal(preview.entries.cn.products.plugin["New Features"][0].type, "OpenClaw 本地插件");
+  assert.equal(preview.entries.en.products.plugin["New Features"][0].type, "OpenClaw Local Plugin");
+  assert.match(markdown, /中文预览/);
+  assert.match(markdown, /Lightweight Memory Configuration/);
 });
 
 test("postprocesses duplicate source refs into the best evidence category", () => {
@@ -582,7 +626,7 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 - local memory
 
 <!-- doc-agent-release-notes-json
-{"items":[{"text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+{"items":[{"category":"Added","text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
 -->`;
   assert.equal(validateManualNotes(valid), valid);
   assert.match(ensureSourceHint(valid), /source-id=openclaw-local-plugin/);
@@ -595,10 +639,58 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 - local memory
 
 <!-- doc-agent-release-notes-json
-{"items":[{"text_cn":"Local memory","text_en":"本地记忆","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+{"items":[{"text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+-->`),
+    /category, text_cn, text_en, and valid source_refs/,
+  );
+  assert.throws(
+    () =>
+      validateManualNotes(`## Changelog
+
+### Added
+- local memory
+
+<!-- doc-agent-release-notes-json
+{"items":[{"category":"Added","text_cn":"Local memory","text_en":"本地记忆","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
 -->`),
     /text_cn must contain Chinese/,
   );
+});
+
+test("manual release notes also produce docs preview outputs", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-manual-preview-"));
+  const previous = { ...process.env };
+  try {
+    const outputPath = join(directory, "github-output.txt");
+    const notesPath = join(directory, "release-notes.md");
+    Object.assign(process.env, {
+      RELEASE_VERSION: "2.0.10",
+      RELEASE_NOTES_FILE: notesPath,
+      MANUAL_RELEASE_NOTES: `## Changelog
+
+### Added
+- **轻量记忆配置**：新增轻量记忆配置入口。
+
+<!-- doc-agent-release-notes-json
+{"items":[{"category":"Added","text_cn":"**轻量记忆配置**：新增轻量记忆配置入口。","text_en":"**Lightweight Memory Configuration**: Added a lightweight-memory configuration entry.","source_refs":["abc1234"]}],"coverage":{"needs_review":false,"required_count":1,"covered_required_count":1,"missing_required_count":0}}
+-->`,
+      GITHUB_OUTPUT: outputPath,
+    });
+
+    await main();
+
+    const output = readFileSync(outputPath, "utf8");
+    const match = output.match(/docs_preview_markdown_file<<__DOC_AGENT_EOF__\n([\s\S]*?)\n__DOC_AGENT_EOF__/);
+    assert.ok(match, "docs preview markdown output should be written");
+    const preview = readFileSync(match[1], "utf8");
+    assert.match(preview, /MemOS-Docs Plugin Changelog Preview/);
+    assert.match(preview, /OpenClaw 本地插件/);
+    assert.match(preview, /Lightweight Memory Configuration/);
+    assert.match(readFileSync(notesPath, "utf8"), /doc-agent: source-id=openclaw-local-plugin/);
+  } finally {
+    process.env = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("retries transient draft failures and passes prior error context", async () => {
