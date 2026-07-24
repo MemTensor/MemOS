@@ -1017,6 +1017,10 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
   };
   const latestEpisodeBySession = new Map<SessionId, EpisodeBinding>();
   const episodeBindingByTurnKey = new Map<string, EpisodeBinding>();
+  const pendingEpisodeBindingByTurnKey = new Map<
+    string,
+    Promise<EpisodeBinding | undefined>
+  >();
   let episodeBindingSeq = 0;
   // Per-toolCallId start timestamps so `after_tool_call` can compute duration
   // when the host doesn't populate `durationMs`.
@@ -1141,6 +1145,30 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     return latestEpisodeBySession.get(sessionId);
   }
 
+  function findExactEpisodeBinding(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+    userText?: string,
+  ): EpisodeBinding | undefined {
+    for (const key of turnBindingKeys(sessionId, ctx, userText)) {
+      const binding = episodeBindingByTurnKey.get(key);
+      if (binding) return binding;
+    }
+    return undefined;
+  }
+
+  function findPendingEpisodeBinding(
+    sessionId: SessionId,
+    ctx: { runId?: string },
+    userText?: string,
+  ): Promise<EpisodeBinding | undefined> | undefined {
+    for (const key of turnBindingKeys(sessionId, ctx, userText)) {
+      const pending = pendingEpisodeBindingByTurnKey.get(key);
+      if (pending) return pending;
+    }
+    return undefined;
+  }
+
   function forgetEpisodeBinding(binding: EpisodeBinding | undefined): void {
     if (!binding) return;
     for (const key of binding.keys) {
@@ -1241,20 +1269,59 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         },
       };
 
-      const packet = await opts.core.onTurnStart(
-        memorySearchEnabled ? turn : { ...turn, skipRetrieval: true },
+      const pendingKeys = turnBindingKeys(sessionId, ctx, prompt);
+      let resolvePending!: (binding: EpisodeBinding | undefined) => void;
+      const pendingBinding = new Promise<EpisodeBinding | undefined>(
+        (resolve) => {
+          resolvePending = resolve;
+        },
       );
-      // The pipeline orchestrator (V7 §0.1) may have migrated the
-      // session id (new-task → new session) or reopened a closed
-      // episode (revision). We trust the ids returned in the packet,
-      // not our own derivation, so `onTurnEnd` lands on the same row.
-      const routedSessionId = (packet.query.sessionId ?? sessionId) as SessionId;
-      const routedEpisodeId = packet.query.episodeId as EpisodeId | undefined;
-      if (routedEpisodeId) {
-        const seq = ++episodeBindingSeq;
-        rememberEpisodeBinding(routedSessionId, routedEpisodeId, ctx, prompt, seq);
-        if (routedSessionId !== sessionId) {
-          rememberEpisodeBinding(sessionId, routedEpisodeId, ctx, prompt, seq);
+      for (const key of pendingKeys) {
+        pendingEpisodeBindingByTurnKey.set(key, pendingBinding);
+      }
+
+      let packet: Awaited<ReturnType<MemoryCore["onTurnStart"]>>;
+      let routedSessionId: SessionId;
+      let routedEpisodeId: EpisodeId | undefined;
+      try {
+        packet = await opts.core.onTurnStart(
+          memorySearchEnabled ? turn : { ...turn, skipRetrieval: true },
+        );
+        // The pipeline orchestrator (V7 §0.1) may have migrated the
+        // session id (new-task → new session) or reopened a closed
+        // episode (revision). We trust the ids returned in the packet,
+        // not our own derivation, so `onTurnEnd` lands on the same row.
+        routedSessionId = (packet.query.sessionId ?? sessionId) as SessionId;
+        routedEpisodeId = packet.query.episodeId as EpisodeId | undefined;
+        let binding: EpisodeBinding | undefined;
+        if (routedEpisodeId) {
+          const seq = ++episodeBindingSeq;
+          binding = rememberEpisodeBinding(
+            routedSessionId,
+            routedEpisodeId,
+            ctx,
+            prompt,
+            seq,
+          );
+          if (routedSessionId !== sessionId) {
+            rememberEpisodeBinding(
+              sessionId,
+              routedEpisodeId,
+              ctx,
+              prompt,
+              seq,
+            );
+          }
+        }
+        resolvePending(binding);
+      } catch (err) {
+        resolvePending(undefined);
+        throw err;
+      } finally {
+        for (const key of pendingKeys) {
+          if (pendingEpisodeBindingByTurnKey.get(key) === pendingBinding) {
+            pendingEpisodeBindingByTurnKey.delete(key);
+          }
         }
       }
 
@@ -1398,7 +1465,13 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       //      path has a real row to hang traces on.
       //   3. Any failure here falls back to opening a new episode —
       //      better to capture under a fresh id than to drop the turn.
-      let binding = findEpisodeBinding(sessionId, ctx, turn.userText);
+      let binding = findExactEpisodeBinding(sessionId, ctx, turn.userText);
+      if (!binding) {
+        binding = await findPendingEpisodeBinding(sessionId, ctx, turn.userText);
+      }
+      if (!binding) {
+        binding = findEpisodeBinding(sessionId, ctx, turn.userText);
+      }
       let episodeId = binding?.episodeId;
       if (!episodeId) {
         if (isSubagentAnnouncement) {

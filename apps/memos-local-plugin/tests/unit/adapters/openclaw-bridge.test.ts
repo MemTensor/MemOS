@@ -1273,6 +1273,63 @@ describe("createOpenClawBridge", () => {
     expect(new Set(ids).size).toBe(1);
   });
 
+  it("waits for an in-flight turn start before agent_end opens a fallback episode", async () => {
+    const mc = buildCore();
+    await mc.init();
+
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const originalOnTurnStart = mc.onTurnStart.bind(mc);
+    vi.spyOn(mc, "onTurnStart").mockImplementation(async (input) => {
+      await startGate;
+      return originalOnTurnStart(input);
+    });
+    const fallbackOpen = vi.spyOn(mc, "openEpisode");
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    const ctx = hookCtx({
+      sessionKey: "s-slow-start",
+      runId: "run-slow-start",
+    });
+    const beforePrompt = bridge.handleBeforePrompt(
+      { prompt: "solve the slow retrieval task", messages: [] },
+      ctx,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const agentEnd = bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "solve the slow retrieval task" },
+          { role: "assistant", content: "finished after retrieval" },
+        ],
+      },
+      ctx,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    releaseStart();
+    await Promise.all([beforePrompt, agentEnd]);
+    await (pipeline as PipelineHandle).flush();
+
+    expect(fallbackOpen).not.toHaveBeenCalled();
+    const rows = await mc.listEpisodeRows({
+      sessionId: bridgeSessionId("main", "s-slow-start"),
+      limit: 10,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.hasAssistantReply).toBe(true);
+  });
+
   it("does not let a delayed agent_end clear the next turn's episode binding", async () => {
     // OpenClaw hooks can overlap: the next before_prompt_build may route
     // a fresh episode before the previous agent_end finishes. The bridge
