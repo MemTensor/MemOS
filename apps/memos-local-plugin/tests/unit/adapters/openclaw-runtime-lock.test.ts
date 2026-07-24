@@ -8,6 +8,7 @@ import type { ResolvedHome } from "../../../core/config/index.js";
 import {
   acquireOpenClawRuntimeLock,
   DuplicateOpenClawRuntimeError,
+  inspectOpenClawRuntimeLock,
   openClawRuntimeLockDir,
 } from "../../../adapters/openclaw/runtime-lock.js";
 
@@ -73,6 +74,23 @@ describe("OpenClaw runtime lock", () => {
     expect(fs.existsSync(path.join(lock.lockDir, "owner.json"))).toBe(true);
 
     lock.release();
+  });
+
+  it("reports whether the current owner is alive without mutating the lock", () => {
+    const home = tmpHome();
+    const lock = acquire(home);
+
+    expect(inspectOpenClawRuntimeLock(home)).toEqual({
+      owner: lock.owner,
+      alive: true,
+    });
+    expect(fs.existsSync(lock.lockDir)).toBe(true);
+
+    lock.release();
+    expect(inspectOpenClawRuntimeLock(home)).toEqual({
+      owner: null,
+      alive: false,
+    });
   });
 
   it("reclaims a stale owner whose process is gone", () => {

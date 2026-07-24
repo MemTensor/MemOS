@@ -24,6 +24,11 @@ export interface OpenClawRuntimeLockHandle {
   release(): void;
 }
 
+export interface OpenClawRuntimeLockInspection {
+  owner: OpenClawRuntimeLockOwner | null;
+  alive: boolean;
+}
+
 export interface AcquireOpenClawRuntimeLockOptions {
   home: ResolvedHome;
   pluginId: string;
@@ -57,6 +62,17 @@ export class DuplicateOpenClawRuntimeError extends Error {
 
 export function openClawRuntimeLockDir(home: ResolvedHome): string {
   return path.join(home.daemonDir, LOCK_DIRNAME);
+}
+
+/** Read-only owner inspection used by clients waiting for owner handoff. */
+export function inspectOpenClawRuntimeLock(
+  home: ResolvedHome,
+): OpenClawRuntimeLockInspection {
+  const owner = readOwner(path.join(openClawRuntimeLockDir(home), OWNER_FILENAME));
+  return {
+    owner,
+    alive: owner ? pidIsAlive(owner.pid) : false,
+  };
 }
 
 export function acquireOpenClawRuntimeLock(
