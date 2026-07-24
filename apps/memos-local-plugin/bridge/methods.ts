@@ -183,6 +183,21 @@ export function makeDispatcher(
         };
         return await core.submitFeedback(fb);
       }
+      case RPC_METHODS.TOOL_OUTCOME_RECORD: {
+        const p = asRecord(params, method);
+        const outcome: ToolOutcomeDTO = {
+          sessionId: requireString(p, "sessionId", method) as SessionId,
+          episodeId:
+            typeof p.episodeId === "string" ? (p.episodeId as EpisodeId) : undefined,
+          tool: requireString(p, "tool", method),
+          success: p.success !== false,
+          errorCode: typeof p.errorCode === "string" ? p.errorCode : undefined,
+          durationMs: typeof p.durationMs === "number" ? p.durationMs : 0,
+          ts: typeof p.ts === "number" ? p.ts : Date.now(),
+        };
+        core.recordToolOutcome(outcome);
+        return { ok: true };
+      }
 
       // ── memory queries ──
       case RPC_METHODS.MEMORY_SEARCH: {
@@ -342,11 +357,6 @@ export function makeDispatcher(
         };
         return await core.recordSubagentOutcome(input);
       }
-
-      // ── tool-outcome ──
-      // Not registered as a public RPC yet — the core exposes the method
-      // but we route it via a notification on the events stream instead.
-      // Leaving a branch here would be dead code; we intentionally drop.
 
       // ── config / hub ──
       case RPC_METHODS.CONFIG_GET:

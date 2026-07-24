@@ -75,6 +75,7 @@ export const RPC_METHODS = {
   TURN_START: "turn.start",
   TURN_END: "turn.end",
   FEEDBACK_SUBMIT: "feedback.submit",
+  TOOL_OUTCOME_RECORD: "tool_outcome.record",
 
   // ── memory queries ──
   MEMORY_SEARCH: "memory.search",
