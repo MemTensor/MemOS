@@ -25,12 +25,13 @@ cd "$PREFIX"
 
 # ── 1. node_modules ───────────────────────────────────────────────────────────
 if command -v npm >/dev/null 2>&1; then
-  if [[ -d "node_modules" ]]; then
-    log "node_modules already present — skipping install (re-run with CLEAN=1 to wipe)"
-  else
-    log "Installing npm dependencies (this can take a minute)…"
-    npm install --no-audit --no-fund --prefer-offline
-  fi
+  # OpenClaw's plugin installer may unpack dependencies with --ignore-scripts.
+  # Always reconcile production dependencies and explicitly rebuild the native
+  # binding for the Node ABI that will run the gateway.
+  log "Installing production npm dependencies (this can take a minute)…"
+  npm install --omit=dev --no-audit --no-fund --prefer-offline
+  log "Rebuilding better-sqlite3 for the active Node runtime…"
+  npm rebuild better-sqlite3
 else
   warn "npm not found on PATH; skipping dependency install. The plugin will not run until you provide node_modules."
 fi
@@ -46,4 +47,4 @@ fi
 log "OpenClaw adapter install complete."
 log "  Plugin code:   $PREFIX"
 log "  Runtime data:  $HOME_DIR"
-log "  Viewer:        http://127.0.0.1:18910/"
+log "  Viewer:        http://127.0.0.1:18799/"
