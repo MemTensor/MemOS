@@ -344,6 +344,14 @@ function buildPipeline(
     ...baseCfg,
     algorithm: {
       ...baseCfg.algorithm,
+      // This suite asserts the complete L1 → reward → L2 → L3 → Skill
+      // pipeline. The product default may use lightweight capture, so opt in
+      // explicitly instead of inheriting a mode that intentionally creates
+      // one compact memory per turn and skips semantic evolution.
+      lightweightMemory: {
+        ...baseCfg.algorithm.lightweightMemory,
+        enabled: false,
+      },
       reward: {
         ...baseCfg.algorithm.reward,
         feedbackWindowSec: 0,
