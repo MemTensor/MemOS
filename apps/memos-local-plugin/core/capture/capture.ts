@@ -67,10 +67,30 @@ export interface CaptureDeps {
   reflectLlm: LlmClient | null;
   bus: CaptureEventBus;
   cfg: CaptureConfig;
+  /** Run a synchronous persistence unit inside one storage transaction. */
+  transaction?: <T>(operation: () => T) => T;
+  /** Persist the durable turn-enrichment job in the capture transaction. */
+  persistTurnEvolution?: (input: {
+    episodeId: string;
+    turnId: number;
+    traceIds: string[];
+  }) => void;
+  /** Wake the worker only after the capture transaction has committed. */
+  notifyTurnEvolution?: () => void;
   now?: () => number;
 }
 
 export interface CaptureRunner {
+  /**
+   * Fast capture path used by short-lived/concurrent agent clients. It only
+   * extracts, normalizes and commits L1 rows; model summarization and vectors
+   * are deferred to the runtime-owned evolution worker.
+   */
+  runPersistOnly?(input: CaptureInput): Promise<CaptureResult>;
+  /** Enrich rows written by runPersistOnly with summaries and vectors. */
+  runEnrich?(
+    input: CaptureInput & { traceIds?: readonly string[] },
+  ): Promise<CaptureResult>;
   /**
    * Per-turn "lite" capture. Writes the trace row for any newly added
    * step in the episode with `reflection=null` + `alpha=0`. No LLM
@@ -112,6 +132,185 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 
   function emit(evt: CaptureEvent): void {
     deps.bus.emit(evt);
+  }
+
+  async function runPersistOnly(input: CaptureInput): Promise<CaptureResult> {
+    const startedAt = now();
+    const warnings: CaptureResult["warnings"] = [];
+    const llmCalls = newLlmCounters();
+    emit({
+      kind: "capture.started",
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+    });
+
+    const extractStart = now();
+    const rawAll = extractSteps(input.episode);
+    const existingDedupRows = deps.tracesRepo.listDedupRowsForEpisode(input.episode.id);
+    const seenTs = new Set(existingDedupRows.map((row) => row.ts));
+    const seenSignatures = new Set(existingDedupRows.map(traceIdentitySignature));
+    const raw = rawAll.filter((step) => !seenTs.has(step.ts));
+    const extractMs = now() - extractStart;
+
+    const normalizeStart = now();
+    const normalized = normalizeSteps(raw, deps.cfg);
+    const normalizeMs = now() - normalizeStart;
+    if (normalized.length === 0) {
+      return emptyResult(input, startedAt, { extract: extractMs, normalize: normalizeMs }, llmCalls, warnings);
+    }
+
+    const scored: ScoredStep[] = normalized.map((step) => ({
+      ...step,
+      reflection: { text: null, alpha: 0, usable: false, source: "none" },
+    }));
+    const summaries = scored.map(localCaptureSummary);
+    const vecs: VecPair[] = scored.map(() => ({ summary: null, action: null }));
+    const persistStart = now();
+    const rows = buildRows(scored, summaries, vecs, input.episode, {
+      pendingEnrichment: true,
+    });
+    const persistCaptureAndJob = () => {
+      persistRows(
+        rows,
+        input,
+        warnings,
+        {
+          skipVectorRetry: true,
+          requireEpisodeTraceLink: true,
+        },
+        seenSignatures,
+      );
+      if (rows.length > 0) {
+        const rowsByTurn = new Map<number, TraceRow[]>();
+        for (const row of rows) {
+          const turnRows = rowsByTurn.get(row.turnId) ?? [];
+          turnRows.push(row);
+          rowsByTurn.set(row.turnId, turnRows);
+        }
+        for (const [turnId, turnRows] of rowsByTurn) {
+          deps.persistTurnEvolution?.({
+            episodeId: input.episode.id,
+            turnId,
+            traceIds: turnRows.map((row) => row.id),
+          });
+        }
+      }
+    };
+    if (deps.transaction && deps.persistTurnEvolution) {
+      deps.transaction(persistCaptureAndJob);
+    } else {
+      persistCaptureAndJob();
+    }
+    if (rows.length > 0) deps.notifyTurnEvolution?.();
+    const result = finalResult(
+      input,
+      startedAt,
+      rows.map((row) => row.id),
+      buildTraceCandidates(scored, rows),
+      {
+        extract: extractMs,
+        normalize: normalizeMs,
+        reflect: 0,
+        alpha: 0,
+        summarize: 0,
+        embed: 0,
+        persist: now() - persistStart,
+      },
+      llmCalls,
+      warnings,
+    );
+    log.info("capture.persist_only.done", {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traces: result.traceIds.length,
+      totalMs: result.completedAt - startedAt,
+    });
+    emit({ kind: "capture.lite.done", result });
+    return result;
+  }
+
+  async function runEnrich(
+    input: CaptureInput & { traceIds?: readonly string[] },
+  ): Promise<CaptureResult> {
+    const startedAt = now();
+    const warnings: CaptureResult["warnings"] = [];
+    const llmCalls = newLlmCounters();
+    const normalized = normalizeSteps(extractSteps(input.episode), deps.cfg);
+    const existing = input.traceIds
+      ? deps.tracesRepo.getManyByIds(input.traceIds as readonly TraceId[])
+      : deps.tracesRepo.list({ episodeId: input.episode.id });
+    const rowByTs = new Map(existing.map((row) => [row.ts, row]));
+    const pending = normalized.filter((step) =>
+      rowByTs.get(step.ts)?.tags.includes("capture_pending_enrichment"),
+    );
+    if (pending.length === 0) {
+      return emptyResult(
+        input,
+        startedAt,
+        { extract: 0, normalize: 0 },
+        llmCalls,
+        warnings,
+      );
+    }
+
+    const scored: ScoredStep[] = pending.map((step) => ({
+      ...step,
+      reflection: { text: null, alpha: 0, usable: false, source: "none" },
+    }));
+    const summarizeStart = now();
+    const { summaries, summarizeMs } = await runSummarize(
+      scored,
+      summarizeStart,
+      llmCalls,
+      warnings,
+      { episodeId: input.episode.id, phase: "lite" },
+    );
+    const { vecs, embedMs } = await runEmbed(scored, summaries, warnings);
+    const persistStart = now();
+    const enrichedRows: TraceRow[] = [];
+    for (const [index, step] of scored.entries()) {
+      const row = rowByTs.get(step.ts);
+      if (!row) continue;
+      const updated: TraceRow = {
+        ...row,
+        summary: summaries[index] ?? row.summary,
+        tags: row.tags.filter((tag) => tag !== "capture_pending_enrichment"),
+        vecSummary: vecs[index]?.summary ?? row.vecSummary,
+        vecAction: vecs[index]?.action ?? row.vecAction,
+      };
+      deps.tracesRepo.updateBody(updated.id, {
+        summary: updated.summary,
+        tags: updated.tags,
+      });
+      if (updated.vecSummary) deps.tracesRepo.updateVector(updated.id, "vecSummary", updated.vecSummary);
+      if (updated.vecAction) deps.tracesRepo.updateVector(updated.id, "vecAction", updated.vecAction);
+      enqueueMissingTraceVectors([updated], warnings);
+      enrichedRows.push(updated);
+    }
+    const result = finalResult(
+      input,
+      startedAt,
+      enrichedRows.map((row) => row.id),
+      buildTraceCandidates(scored, enrichedRows),
+      {
+        extract: 0,
+        normalize: 0,
+        reflect: 0,
+        alpha: 0,
+        summarize: summarizeMs,
+        embed: embedMs,
+        persist: now() - persistStart,
+      },
+      llmCalls,
+      warnings,
+    );
+    log.info("capture.enrich.done", {
+      episodeId: input.episode.id,
+      sessionId: input.episode.sessionId,
+      traces: result.traceIds.length,
+      totalMs: result.completedAt - startedAt,
+    });
+    return result;
   }
 
   /**
@@ -702,7 +901,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     summaries: string[],
     vecs: VecPair[],
     episode: CaptureInput["episode"],
-    opts: { lightweightMemory?: boolean } = {},
+    opts: { lightweightMemory?: boolean; pendingEnrichment?: boolean } = {},
   ): TraceRow[] {
     const owner = ownerFromEpisode(episode);
     const traces: TraceCandidate[] = scored.map((s, i) => ({
@@ -733,7 +932,10 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
       // so retrieval can find the row immediately; reward backprop
       // overwrites it once the topic is reflected on.
       priority: 0.5,
-      tags: opts.lightweightMemory ? mergeTags(t.tags, ["lightweight_memory"]) : t.tags,
+      tags: mergeTags(t.tags, [
+        ...(opts.lightweightMemory ? ["lightweight_memory"] : []),
+        ...(opts.pendingEnrichment ? ["capture_pending_enrichment"] : []),
+      ]),
       errorSignatures: extractErrorSignatures({
         toolCalls: t.toolCalls,
         agentText: t.agentText,
@@ -791,13 +993,17 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     return row.userText === step.userText && row.agentText === step.agentText;
   }
 
-  async function persistRows(
+  function persistRows(
     rows: TraceRow[],
     input: CaptureInput,
     warnings: CaptureResult["warnings"],
-    opts: { skipActionVectorRetry?: boolean } = {},
+    opts: {
+      skipActionVectorRetry?: boolean;
+      skipVectorRetry?: boolean;
+      requireEpisodeTraceLink?: boolean;
+    } = {},
     existingSignatures?: Set<string>,
-  ): Promise<boolean> {
+  ): boolean {
     // #2076 + #2077 OCR: uncapped, narrow-projection dedup read. The
     // paginated `list` path missed all rows past the 500 cap and let
     // duplicate signatures re-insert every cycle. When the caller has
@@ -833,7 +1039,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
 
     try {
       for (const row of rows) deps.tracesRepo.insert(row);
-      enqueueMissingTraceVectors(rows, warnings, opts);
+      if (!opts.skipVectorRetry) enqueueMissingTraceVectors(rows, warnings, opts);
     } catch (err) {
       const failure = errDetail(err);
       log.error("persist.failed", {
@@ -862,6 +1068,7 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
         reconcileTraceIds([...currentTraceIds, ...rows.map((r) => r.id)], input.episode),
       );
     } catch (err) {
+      if (opts.requireEpisodeTraceLink) throw err;
       warnings.push({
         stage: "persist",
         message: "failed to update episode trace_ids_json",
@@ -1056,7 +1263,12 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     });
   }
 
-  return { runLite, runLightweight, runReflect };
+  return { runPersistOnly, runEnrich, runLite, runLightweight, runReflect };
+}
+
+function localCaptureSummary(step: ScoredStep): string {
+  const text = step.userText.trim() || step.agentText.trim() || step.toolCalls[0]?.name || "Captured turn";
+  return text.split(/\r?\n/u)[0]!.slice(0, 240);
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────

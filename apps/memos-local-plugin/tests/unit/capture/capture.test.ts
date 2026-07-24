@@ -217,6 +217,44 @@ describe("capture/pipeline (end-to-end)", () => {
     });
   }
 
+  it("persists a turn without waiting for LLM or embedding and enriches it later", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "capture.summarize": { summary: "enriched summary" },
+      },
+    });
+    const embedder = fakeEmbedder({ dimensions: 8 });
+    const runner = buildRunner({}, llm, embedder);
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "inspect the build", 1_000),
+        turn("assistant", "the build passed", 1_100),
+      ],
+    });
+
+    const persisted = await runner.runPersistOnly({ episode: ep });
+    const before = tmp.repos.traces.getById(persisted.traceIds[0]!)!;
+
+    expect(persisted.traceIds).toHaveLength(1);
+    expect(llm.stats().requests).toBe(0);
+    expect(embedder.stats().requests).toBe(0);
+    expect(before.summary).toBe("inspect the build");
+    expect(before.tags).toContain("capture_pending_enrichment");
+    expect(before.vecSummary).toBeNull();
+    expect(tmp.repos.embeddingRetryQueue.countByStatus("pending")).toBe(0);
+
+    await runner.runEnrich({ episode: ep });
+    const after = tmp.repos.traces.getById(persisted.traceIds[0]!)!;
+    expect(llm.stats().requests).toBe(1);
+    expect(embedder.stats().requests).toBe(2);
+    expect(after.summary).toBe("enriched summary");
+    expect(after.tags).not.toContain("capture_pending_enrichment");
+    expect(after.vecSummary).toBeInstanceOf(Float32Array);
+    expect(after.vecAction).toBeInstanceOf(Float32Array);
+  });
+
   it("lightweight capture merges one turn into one memory with summary-only embedding", async () => {
     const llm = fakeLlm({
       completeJson: {
