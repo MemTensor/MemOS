@@ -37,6 +37,13 @@ from .task_goal_parser import TaskGoalParser
 logger = get_logger(__name__)
 KEYWORD_EXTRACT_TOP_K = 3
 KEYWORD_ALLOW_POS = ("n", "nr", "nrt", "ns", "nt", "nz", "vn", "v", "t", "eng", "m")
+# Timeout (seconds) applied to every future.result() inside the four search
+# methods that used to open a fresh ContextThreadPoolExecutor per request
+# (#1273). A per-future timeout is a safety net: because the executors are now
+# shared class-level pools, hung sub-tasks cannot make the total thread count
+# grow with QPS, but a hung task can still occupy one worker slot indefinitely.
+# The timeout ensures the calling request does not block forever on such tasks.
+SEARCH_FUTURE_RESULT_TIMEOUT = 30.0
 COT_DICT = {
     "fine": {"en": COT_PROMPT, "zh": COT_PROMPT_ZH},
     "fast": {"en": SIMPLE_COT_PROMPT, "zh": SIMPLE_COT_PROMPT_ZH},
@@ -76,6 +83,52 @@ class Searcher:
         self.manual_close_internet = manual_close_internet
         self.tokenizer = tokenizer
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
+        # Shared, class-level executors for search paths. Previously the
+        # four methods below opened a fresh ContextThreadPoolExecutor on
+        # every request; if any sub-task hung (slow Neo4j, unresponsive
+        # embedding API), `with ... as executor` would block in
+        # shutdown(wait=True) and leak threads, growing container thread
+        # count without bound (#1273). Using class-level pools bounds the
+        # total worker thread count for a Searcher instance to
+        # 5 + 3 + 2 + 10 = 20 regardless of QPS.
+        self._search_paths_executor = ContextThreadPoolExecutor(
+            max_workers=5, thread_name_prefix="search-paths"
+        )
+        self._search_long_term_executor = ContextThreadPoolExecutor(
+            max_workers=3, thread_name_prefix="search-long-term"
+        )
+        self._search_tool_mem_executor = ContextThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="search-tool-mem"
+        )
+        self._search_dedup_executor = ContextThreadPoolExecutor(
+            max_workers=10, thread_name_prefix="search-dedup"
+        )
+
+    def close(self) -> None:
+        """Shut down all shared thread-pool executors owned by this Searcher.
+
+        The five class-level pools created in ``__init__`` (usage tracking +
+        the four search pools introduced for #1273) hold non-daemon worker
+        threads that would otherwise outlive the instance. Callers that
+        create short-lived ``Searcher`` objects should call ``close()`` when
+        done, or use the instance as a context manager
+        (``with Searcher(...) as searcher: ...``). ``shutdown(wait=False)``
+        is used so a hung sub-task cannot block the caller; idempotent.
+        """
+        for executor in (
+            self._usage_executor,
+            self._search_paths_executor,
+            self._search_long_term_executor,
+            self._search_tool_mem_executor,
+            self._search_dedup_executor,
+        ):
+            executor.shutdown(wait=False)
+
+    def __enter__(self) -> "Searcher":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
 
     def _maybe_rerank(
         self,
@@ -380,10 +433,59 @@ class Searcher:
         }
         id_filter = {k: v for k, v in id_filter.items() if v is not None}
 
-        with ContextThreadPoolExecutor(max_workers=5) as executor:
+        # #1273: use the shared class-level executor. Do NOT wrap in `with`
+        # — the executor lives for the lifetime of the Searcher, not the
+        # request.
+        executor = self._search_paths_executor
+        tasks.append(
+            executor.submit(
+                self._retrieve_from_working_memory,
+                query,
+                parsed_goal,
+                query_embedding,
+                top_k,
+                memory_type,
+                search_filter,
+                search_priority,
+                user_name,
+                id_filter,
+                rerank=rerank,
+            )
+        )
+        tasks.append(
+            executor.submit(
+                self._retrieve_from_long_term_and_user,
+                query,
+                parsed_goal,
+                query_embedding,
+                top_k,
+                memory_type,
+                search_filter,
+                search_priority,
+                user_name,
+                id_filter,
+                mode=mode,
+                rerank=rerank,
+            )
+        )
+        tasks.append(
+            executor.submit(
+                self._retrieve_from_internet,
+                query,
+                parsed_goal,
+                query_embedding,
+                top_k,
+                info,
+                mode,
+                memory_type,
+                user_name,
+                rerank=rerank,
+            )
+        )
+        if self.use_fulltext:
             tasks.append(
                 executor.submit(
-                    self._retrieve_from_working_memory,
+                    self._retrieve_from_keyword,
                     query,
                     parsed_goal,
                     query_embedding,
@@ -396,13 +498,14 @@ class Searcher:
                     rerank=rerank,
                 )
             )
+        if search_tool_memory:
             tasks.append(
                 executor.submit(
-                    self._retrieve_from_long_term_and_user,
+                    self._retrieve_from_tool_memory,
                     query,
                     parsed_goal,
                     query_embedding,
-                    top_k,
+                    tool_mem_top_k,
                     memory_type,
                     search_filter,
                     search_priority,
@@ -412,90 +515,50 @@ class Searcher:
                     rerank=rerank,
                 )
             )
+        if include_skill_memory:
             tasks.append(
                 executor.submit(
-                    self._retrieve_from_internet,
+                    self._retrieve_from_skill_memory,
                     query,
                     parsed_goal,
                     query_embedding,
-                    top_k,
-                    info,
-                    mode,
+                    skill_mem_top_k,
                     memory_type,
+                    search_filter,
+                    search_priority,
                     user_name,
+                    id_filter,
+                    mode=mode,
                     rerank=rerank,
                 )
             )
-            if self.use_fulltext:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_keyword,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        top_k,
-                        memory_type,
-                        search_filter,
-                        search_priority,
-                        user_name,
-                        id_filter,
-                        rerank=rerank,
-                    )
+        if include_preference_memory:
+            tasks.append(
+                executor.submit(
+                    self._retrieve_from_preference_memory,
+                    query,
+                    parsed_goal,
+                    query_embedding,
+                    pref_mem_top_k,
+                    memory_type,
+                    search_filter,
+                    search_priority,
+                    user_name,
+                    id_filter,
+                    mode=mode,
+                    rerank=rerank,
                 )
-            if search_tool_memory:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_tool_memory,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        tool_mem_top_k,
-                        memory_type,
-                        search_filter,
-                        search_priority,
-                        user_name,
-                        id_filter,
-                        mode=mode,
-                        rerank=rerank,
-                    )
+            )
+        results = []
+        for t in tasks:
+            try:
+                results.extend(t.result(timeout=SEARCH_FUTURE_RESULT_TIMEOUT))
+            except Exception as e:
+                logger.warning(
+                    "[SEARCH] retrieval sub-task failed or timed out after %.1fs: %s",
+                    SEARCH_FUTURE_RESULT_TIMEOUT,
+                    e,
                 )
-            if include_skill_memory:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_skill_memory,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        skill_mem_top_k,
-                        memory_type,
-                        search_filter,
-                        search_priority,
-                        user_name,
-                        id_filter,
-                        mode=mode,
-                        rerank=rerank,
-                    )
-                )
-            if include_preference_memory:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_preference_memory,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        pref_mem_top_k,
-                        memory_type,
-                        search_filter,
-                        search_priority,
-                        user_name,
-                        id_filter,
-                        mode=mode,
-                        rerank=rerank,
-                    )
-                )
-            results = []
-            for t in tasks:
-                results.extend(t.result())
 
         logger.info(f"[SEARCH] Total raw results: {len(results)}")
         return results
@@ -758,61 +821,69 @@ class Searcher:
         else:
             cot_embeddings = query_embedding
 
-        with ContextThreadPoolExecutor(max_workers=3) as executor:
-            if memory_type in ["All", "AllSummaryMemory", "LongTermMemory"]:
-                tasks.append(
-                    executor.submit(
-                        self.graph_retriever.retrieve,
-                        query=query,
-                        parsed_goal=parsed_goal,
-                        query_embedding=cot_embeddings,
-                        top_k=top_k * 2,
-                        memory_scope="LongTermMemory",
-                        search_filter=search_filter,
-                        search_priority=search_priority,
-                        user_name=user_name,
-                        id_filter=id_filter,
-                        use_fast_graph=self.use_fast_graph,
-                    )
+        # #1273: shared class-level executor; do NOT wrap in `with`.
+        executor = self._search_long_term_executor
+        if memory_type in ["All", "AllSummaryMemory", "LongTermMemory"]:
+            tasks.append(
+                executor.submit(
+                    self.graph_retriever.retrieve,
+                    query=query,
+                    parsed_goal=parsed_goal,
+                    query_embedding=cot_embeddings,
+                    top_k=top_k * 2,
+                    memory_scope="LongTermMemory",
+                    search_filter=search_filter,
+                    search_priority=search_priority,
+                    user_name=user_name,
+                    id_filter=id_filter,
+                    use_fast_graph=self.use_fast_graph,
                 )
-            if memory_type in ["All", "AllSummaryMemory", "UserMemory"]:
-                tasks.append(
-                    executor.submit(
-                        self.graph_retriever.retrieve,
-                        query=query,
-                        parsed_goal=parsed_goal,
-                        query_embedding=cot_embeddings,
-                        top_k=top_k * 2,
-                        memory_scope="UserMemory",
-                        search_filter=search_filter,
-                        search_priority=search_priority,
-                        user_name=user_name,
-                        id_filter=id_filter,
-                        use_fast_graph=self.use_fast_graph,
-                    )
+            )
+        if memory_type in ["All", "AllSummaryMemory", "UserMemory"]:
+            tasks.append(
+                executor.submit(
+                    self.graph_retriever.retrieve,
+                    query=query,
+                    parsed_goal=parsed_goal,
+                    query_embedding=cot_embeddings,
+                    top_k=top_k * 2,
+                    memory_scope="UserMemory",
+                    search_filter=search_filter,
+                    search_priority=search_priority,
+                    user_name=user_name,
+                    id_filter=id_filter,
+                    use_fast_graph=self.use_fast_graph,
                 )
-            if memory_type in ["RawFileMemory"]:
-                tasks.append(
-                    executor.submit(
-                        self.graph_retriever.retrieve,
-                        query=query,
-                        parsed_goal=parsed_goal,
-                        query_embedding=cot_embeddings,
-                        top_k=top_k * 2,
-                        memory_scope="RawFileMemory",
-                        search_filter=search_filter,
-                        search_priority=search_priority,
-                        user_name=user_name,
-                        id_filter=id_filter,
-                        use_fast_graph=self.use_fast_graph,
-                    )
+            )
+        if memory_type in ["RawFileMemory"]:
+            tasks.append(
+                executor.submit(
+                    self.graph_retriever.retrieve,
+                    query=query,
+                    parsed_goal=parsed_goal,
+                    query_embedding=cot_embeddings,
+                    top_k=top_k * 2,
+                    memory_scope="RawFileMemory",
+                    search_filter=search_filter,
+                    search_priority=search_priority,
+                    user_name=user_name,
+                    id_filter=id_filter,
+                    use_fast_graph=self.use_fast_graph,
                 )
+            )
 
-            # Collect results from all tasks
-            for task in tasks:
-                results.extend(task.result())
-            results = self._deduplicate_rawfile_results(results, user_name=user_name)
-            results = self._filter_intermediate_content(results)
+        # Collect results from all tasks
+        for task in tasks:
+            try:
+                results.extend(task.result(timeout=SEARCH_FUTURE_RESULT_TIMEOUT))
+            except Exception as e:
+                logger.warning(
+                    "[SEARCH] long-term/user sub-task failed or timed out after %.1fs: %s",
+                    SEARCH_FUTURE_RESULT_TIMEOUT,
+                    e,
+                )
+        results = self._deduplicate_rawfile_results(results, user_name=user_name)
+        results = self._filter_intermediate_content(results)
 
         return self._maybe_rerank(
             rerank,
@@ -922,47 +993,56 @@ class Searcher:
         else:
             cot_embeddings = query_embedding
 
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
-            if memory_type in ["All", "ToolSchemaMemory"]:
-                tasks.append(
-                    executor.submit(
-                        self.graph_retriever.retrieve,
-                        query=query,
-                        parsed_goal=parsed_goal,
-                        query_embedding=cot_embeddings,
-                        top_k=top_k * 2,
-                        memory_scope="ToolSchemaMemory",
-                        search_filter=search_filter,
-                        search_priority=search_priority,
-                        user_name=user_name,
-                        id_filter=id_filter,
-                        use_fast_graph=self.use_fast_graph,
-                    )
+        # #1273: shared class-level executor; do NOT wrap in `with`.
+        executor = self._search_tool_mem_executor
+        if memory_type in ["All", "ToolSchemaMemory"]:
+            tasks.append(
+                executor.submit(
+                    self.graph_retriever.retrieve,
+                    query=query,
+                    parsed_goal=parsed_goal,
+                    query_embedding=cot_embeddings,
+                    top_k=top_k * 2,
+                    memory_scope="ToolSchemaMemory",
+                    search_filter=search_filter,
+                    search_priority=search_priority,
+                    user_name=user_name,
+                    id_filter=id_filter,
+                    use_fast_graph=self.use_fast_graph,
                 )
-            if memory_type in ["All", "ToolTrajectoryMemory"]:
-                tasks.append(
-                    executor.submit(
-                        self.graph_retriever.retrieve,
-                        query=query,
-                        parsed_goal=parsed_goal,
-                        query_embedding=cot_embeddings,
-                        top_k=top_k * 2,
-                        memory_scope="ToolTrajectoryMemory",
-                        search_filter=search_filter,
-                        search_priority=search_priority,
-                        user_name=user_name,
-                        id_filter=id_filter,
-                        use_fast_graph=self.use_fast_graph,
-                    )
+            )
+        if memory_type in ["All", "ToolTrajectoryMemory"]:
+            tasks.append(
+                executor.submit(
+                    self.graph_retriever.retrieve,
+                    query=query,
+                    parsed_goal=parsed_goal,
+                    query_embedding=cot_embeddings,
+                    top_k=top_k * 2,
+                    memory_scope="ToolTrajectoryMemory",
+                    search_filter=search_filter,
+                    search_priority=search_priority,
+                    user_name=user_name,
+                    id_filter=id_filter,
+                    use_fast_graph=self.use_fast_graph,
                 )
+            )
 
-            # Collect results from all tasks
-            for task in tasks:
-                rsp = task.result()
-                if rsp and rsp[0].metadata.memory_type == "ToolSchemaMemory":
-                    results["ToolSchemaMemory"].extend(rsp)
-                elif rsp and rsp[0].metadata.memory_type == "ToolTrajectoryMemory":
-                    results["ToolTrajectoryMemory"].extend(rsp)
+        # Collect results from all tasks
+        for task in tasks:
+            try:
+                rsp = task.result(timeout=SEARCH_FUTURE_RESULT_TIMEOUT)
+            except Exception as e:
+                logger.warning(
+                    "[SEARCH] tool-memory sub-task failed or timed out after %.1fs: %s",
+                    SEARCH_FUTURE_RESULT_TIMEOUT,
+                    e,
+                )
+                continue
+            if rsp and rsp[0].metadata.memory_type == "ToolSchemaMemory":
+                results["ToolSchemaMemory"].extend(rsp)
+            elif rsp and rsp[0].metadata.memory_type == "ToolTrajectoryMemory":
+                results["ToolTrajectoryMemory"].extend(rsp)
 
         schema_reranked = self._maybe_rerank(
             rerank,
@@ -1292,19 +1372,26 @@ class Searcher:
         if not rawfile_items:
             return results
 
-        with ContextThreadPoolExecutor(max_workers=min(len(rawfile_items), 10)) as executor:
-            futures = [
-                executor.submit(
-                    self.graph_store.get_edges,
-                    rawfile_item.id,
-                    type="SUMMARY",
-                    direction="OUTGOING",
-                    user_name=user_name,
-                )
-                for rawfile_item in rawfile_items
-            ]
-            for future in as_completed(futures):
+        # #1273: shared class-level executor; do NOT wrap in `with`. The
+        # pool is sized once (max_workers=10) instead of `min(len, 10)` per
+        # request to avoid rebuilding the pool.
+        executor = self._search_dedup_executor
+        futures = [
+            executor.submit(
+                self.graph_store.get_edges,
+                rawfile_item.id,
+                type="SUMMARY",
+                direction="OUTGOING",
+                user_name=user_name,
+            )
+            for rawfile_item in rawfile_items
+        ]
+        try:
+            for future in as_completed(futures, timeout=SEARCH_FUTURE_RESULT_TIMEOUT):
                 try:
+                    # No inner timeout: a future yielded by as_completed() is
+                    # already done, so result() returns immediately. Passing a
+                    # second timeout here would be redundant and misleading.
                     edges = future.result()
                     for edge in edges:
                         summary_target_id = edge.get("to")
@@ -1315,6 +1402,15 @@ class Searcher:
                             )
                 except Exception as e:
                     logger.warning(f"[DEDUP] Failed to get summary target ids: {e}")
+        except Exception as e:
+            # as_completed(...) itself timed out — some futures never
+            # finished within SEARCH_FUTURE_RESULT_TIMEOUT. Continue with
+            # whatever ids we already collected.
+            logger.warning(
+                "[DEDUP] Timed out waiting for edge lookups after %.1fs: %s",
+                SEARCH_FUTURE_RESULT_TIMEOUT,
+                e,
+            )
 
         filtered_results = []
         for item in results:
