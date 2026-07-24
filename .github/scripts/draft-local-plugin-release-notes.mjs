@@ -198,16 +198,7 @@ export function resolveCurrentRef(
   return "HEAD";
 }
 
-function listProductTags() {
-  try {
-    const remotes = sh(["remote"]).split("\n").map((item) => item.trim()).filter(Boolean);
-    if (remotes.includes("origin")) {
-      sh(["fetch", "--tags", "--force", "origin"], { stdio: ["ignore", "ignore", "ignore"] });
-    }
-  } catch {
-    warn("Failed to fetch tags from origin; using locally available tags.");
-  }
-
+function localProductTags() {
   const text = sh(["tag", "--list"]);
   return text
     .split("\n")
@@ -215,6 +206,22 @@ function listProductTags() {
     .filter(Boolean)
     .map((tag) => ({ tag, version: versionFromTag(tag) }))
     .filter((item) => item.version && parseSemver(item.version));
+}
+
+function listProductTags() {
+  const existingTags = localProductTags();
+  try {
+    const remotes = sh(["remote"]).split("\n").map((item) => item.trim()).filter(Boolean);
+    if (remotes.includes("origin")) {
+      sh(["fetch", "--tags", "--force", "origin"], { stdio: ["ignore", "ignore", "ignore"] });
+    }
+  } catch {
+    if (existingTags.length === 0) {
+      warn("Failed to fetch tags from origin; using locally available tags.");
+    }
+  }
+
+  return localProductTags();
 }
 
 export function findPreviousTag(targetVersion, currentTag) {
