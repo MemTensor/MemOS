@@ -23,6 +23,12 @@ export function makeKvRepo(db: StorageDb) {
   const list = db.prepare<unknown, { key: string; value_json: string; updated_at: number }>(
     `SELECT key, value_json, updated_at FROM kv ORDER BY key`,
   );
+  const incrementNumber = db.prepare<{ key: string; updated: number }>(
+    `INSERT INTO kv (key, value_json, updated_at) VALUES (@key, '1', @updated)
+     ON CONFLICT(key) DO UPDATE SET
+       value_json=CAST(MAX(0, CAST(kv.value_json AS INTEGER)) + 1 AS TEXT),
+       updated_at=excluded.updated_at`,
+  );
 
   return {
     set<T>(key: string, value: T): void {
@@ -45,6 +51,13 @@ export function makeKvRepo(db: StorageDb) {
         value: fromJsonText<T>(row.value_json, fallback),
         updatedAt: row.updated_at,
       };
+    },
+
+    /** Atomically increment a non-negative integer housekeeping value. */
+    incrementNumber(key: string): number {
+      incrementNumber.run({ key, updated: now() });
+      const row = select.get({ key });
+      return row ? fromJsonText<number>(row.value_json, 0) : 0;
     },
 
     del(key: string): void {

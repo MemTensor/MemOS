@@ -86,6 +86,7 @@ describe("storage/migrator", () => {
         "audit_events",
         "decision_repairs",
         "episodes",
+        "evolution_jobs",
         "feedback",
         "kv",
         "l2_candidate_pool",
@@ -98,6 +99,100 @@ describe("storage/migrator", () => {
       ]) {
         expect(tables).toContain(required);
       }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies evolution jobs after released migration versions 13-16", () => {
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      runMigrations(db);
+      db.exec(`
+        DROP TABLE evolution_jobs;
+        DELETE FROM schema_migrations WHERE version = 17;
+        INSERT OR REPLACE INTO schema_migrations(version, name, applied_at) VALUES
+          (13, 'skill-repair-origin', 0),
+          (14, 'episode-outcome', 0),
+          (15, 'policy-merge-family', 0),
+          (16, 'episode-policy-injections', 0);
+        INSERT INTO feedback (
+          id, ts, channel, polarity, magnitude, rationale, raw_json
+        ) VALUES (
+          'feedback-before-v17', 1234, 'explicit', 'negative', 0.75,
+          'keep me unchanged', '{"source":"old-version"}'
+        );
+      `);
+
+      const result = runMigrations(db);
+
+      expect(result.applied.map((migration) => migration.version)).toEqual([17]);
+      expect(db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM sqlite_master WHERE type='table' AND name='evolution_jobs'`,
+        )
+        .get()?.name).toBe("evolution_jobs");
+      expect(db.prepare<{ id: string }, {
+        ts: number;
+        channel: string;
+        polarity: string;
+        magnitude: number;
+        rationale: string;
+        raw_json: string;
+      }>(
+        `SELECT ts, channel, polarity, magnitude, rationale, raw_json
+           FROM feedback WHERE id=@id`,
+      ).get({ id: "feedback-before-v17" })).toEqual({
+        ts: 1234,
+        channel: "explicit",
+        polarity: "negative",
+        magnitude: 0.75,
+        rationale: "keep me unchanged",
+        raw_json: '{"source":"old-version"}',
+      });
+      expect(db.prepare<unknown, { n: number }>(
+        "SELECT COUNT(*) AS n FROM evolution_jobs",
+      ).get()?.n).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("lets an older migration set reopen a database that already has v17", () => {
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const oldMigrationsDir = fs.mkdtempSync(path.join(os.tmpdir(), "memos-mig-old-"));
+    cleanups.push(() => fs.rmSync(oldMigrationsDir, { recursive: true, force: true }));
+    for (const migration of discoverMigrations(defaultMigrationsDir())) {
+      if (migration.version >= 17) continue;
+      fs.copyFileSync(
+        migration.fullPath,
+        path.join(oldMigrationsDir, path.basename(migration.fullPath)),
+      );
+    }
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      runMigrations(db);
+      db.exec(`
+        INSERT INTO feedback (
+          id, ts, channel, polarity, magnitude, rationale, raw_json
+        ) VALUES (
+          'feedback-survives-downgrade', 2345, 'explicit', 'positive', 1,
+          'still readable', '{}'
+        );
+      `);
+
+      const result = runMigrations(db, oldMigrationsDir);
+
+      expect(result.applied).toHaveLength(0);
+      expect(db.prepare<{ id: string }, { rationale: string }>(
+        "SELECT rationale FROM feedback WHERE id=@id",
+      ).get({ id: "feedback-survives-downgrade" })?.rationale).toBe("still readable");
+      expect(db.prepare<{ version: number }, { n: number }>(
+        "SELECT COUNT(*) AS n FROM schema_migrations WHERE version=@version",
+      ).get({ version: 17 })?.n).toBe(1);
     } finally {
       db.close();
     }
@@ -173,13 +268,18 @@ describe("storage/migrator", () => {
       runMigrations(db);
       // Seed test rows: two with NULL share_scope, two with explicit values.
       db.exec(`
+        INSERT INTO sessions (id, agent, started_at, last_seen_at)
+          VALUES ('session-1', 'openclaw', 1, 1);
+        INSERT INTO episodes (id, session_id, started_at)
+          VALUES ('episode-1', 'session-1', 1);
         INSERT INTO traces (
-          id, session_id, ts, role, value, priority, embedding, share_scope
+          id, episode_id, session_id, ts, user_text, agent_text,
+          value, priority, turn_id, share_scope
         ) VALUES
-          ('t-null-a', 'session-1', 10, 'user', 0.0, 0.0, X'', NULL),
-          ('t-null-b', 'session-1', 20, 'assistant', 0.0, 0.0, X'', NULL),
-          ('t-private', 'session-1', 30, 'user', 0.0, 0.0, X'', 'private'),
-          ('t-public', 'session-1', 40, 'assistant', 0.0, 0.0, X'', 'public')
+          ('t-null-a', 'episode-1', 'session-1', 10, 'a', '', 0.0, 0.0, 10, NULL),
+          ('t-null-b', 'episode-1', 'session-1', 20, '', 'b', 0.0, 0.0, 20, NULL),
+          ('t-private', 'episode-1', 'session-1', 30, 'c', '', 0.0, 0.0, 30, 'private'),
+          ('t-public', 'episode-1', 'session-1', 40, '', 'd', 0.0, 0.0, 40, 'public')
       `);
       const rows = db
         .prepare<unknown, { id: string; share_scope: string | null }>(

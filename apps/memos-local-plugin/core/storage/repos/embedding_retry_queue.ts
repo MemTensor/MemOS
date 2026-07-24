@@ -45,7 +45,10 @@ interface RawEmbeddingRetryJob {
   updated_at: number;
 }
 
-export function makeEmbeddingRetryQueueRepo(db: StorageDb) {
+export function makeEmbeddingRetryQueueRepo(
+  db: StorageDb,
+  onTerminalFailure?: () => void,
+) {
   const columns = `
     id, target_kind, target_id, vector_field, source_text, embed_role, status,
     attempts, max_attempts, next_attempt_at, claimed_by, lease_until, last_error,
@@ -302,50 +305,66 @@ export function makeEmbeddingRetryQueueRepo(db: StorageDb) {
     },
 
     markFailed(id: string, input: { attempts: number; error: string; now: number }): void {
-      db.prepare<{ id: string; attempts: number; last_error: string; now: number }>(
-        `UPDATE embedding_retry_queue
-            SET status='failed',
-                attempts=@attempts,
-                claimed_by=NULL,
-                lease_until=NULL,
-                last_error=@last_error,
-                updated_at=@now
-          WHERE id=@id`,
-      ).run({ id, attempts: input.attempts, last_error: input.error, now: input.now });
+      db.tx(() => {
+        const changed = db.prepare<{
+          id: string;
+          attempts: number;
+          last_error: string;
+          now: number;
+        }>(
+          `UPDATE embedding_retry_queue
+              SET status='failed',
+                  attempts=@attempts,
+                  claimed_by=NULL,
+                  lease_until=NULL,
+                  last_error=@last_error,
+                  updated_at=@now
+            WHERE id=@id AND status<>'failed'`,
+        ).run({
+          id,
+          attempts: input.attempts,
+          last_error: input.error,
+          now: input.now,
+        }).changes;
+        if (changed === 1) onTerminalFailure?.();
+      });
     },
 
     markFailedClaimed(
       id: string,
       input: EmbeddingRetryClaim & { attempts: number; error: string; now: number },
     ): boolean {
-      const res = db.prepare<{
-        id: string;
-        worker_id: string;
-        lease_until: number;
-        attempts: number;
-        last_error: string;
-        now: number;
-      }>(
-        `UPDATE embedding_retry_queue
-            SET status='failed',
-                attempts=@attempts,
-                claimed_by=NULL,
-                lease_until=NULL,
-                last_error=@last_error,
-                updated_at=@now
-          WHERE id=@id
-            AND status='in_progress'
-            AND claimed_by=@worker_id
-            AND lease_until=@lease_until`,
-      ).run({
-        id,
-        worker_id: input.workerId,
-        lease_until: input.leaseUntil,
-        attempts: input.attempts,
-        last_error: input.error,
-        now: input.now,
+      return db.tx(() => {
+        const res = db.prepare<{
+          id: string;
+          worker_id: string;
+          lease_until: number;
+          attempts: number;
+          last_error: string;
+          now: number;
+        }>(
+          `UPDATE embedding_retry_queue
+              SET status='failed',
+                  attempts=@attempts,
+                  claimed_by=NULL,
+                  lease_until=NULL,
+                  last_error=@last_error,
+                  updated_at=@now
+            WHERE id=@id
+              AND status='in_progress'
+              AND claimed_by=@worker_id
+              AND lease_until=@lease_until`,
+        ).run({
+          id,
+          worker_id: input.workerId,
+          lease_until: input.leaseUntil,
+          attempts: input.attempts,
+          last_error: input.error,
+          now: input.now,
+        });
+        if (res.changes === 1) onTerminalFailure?.();
+        return res.changes > 0;
       });
-      return res.changes > 0;
     },
 
     markSucceeded(id: string, now: number): void {

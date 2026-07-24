@@ -128,6 +128,14 @@ describe("embedding retry queue", () => {
       error: "stale failure",
       now: NOW + 300_001,
     })).toBe(false);
+    expect(handle.repos.embeddingRetryQueue.markFailedClaimed(first.id, {
+      workerId: first.claimedBy!,
+      leaseUntil: first.leaseUntil!,
+      attempts: 6,
+      error: "stale terminal failure",
+      now: NOW + 300_001,
+    })).toBe(false);
+    expect(handle.repos.kv.get("runtime.failure_sequence.embedding", 0)).toBe(0);
     expect(row(handle, "er_stale")).toMatchObject({
       status: "in_progress",
       claimed_by: "worker-b",

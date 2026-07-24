@@ -114,6 +114,7 @@ describe("embedding retry worker", () => {
     await worker.flush();
 
     expect(handle.repos.embeddingRetryQueue.countByStatus("failed")).toBe(1);
+    expect(handle.repos.kv.get("runtime.failure_sequence.embedding", 0)).toBe(1);
     expect(handle.repos.apiLogs.list({ toolName: "system_error", limit: 5, offset: 0 })).toHaveLength(1);
     expect(events).toHaveLength(1);
   });

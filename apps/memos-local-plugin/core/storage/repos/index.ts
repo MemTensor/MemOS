@@ -10,6 +10,7 @@ import { makeAuditRepo } from "./audit.js";
 import { makeCandidatePoolRepo } from "./candidate_pool.js";
 import { makeDecisionRepairsRepo } from "./decision_repairs.js";
 import { makeEmbeddingRetryQueueRepo } from "./embedding_retry_queue.js";
+import { makeEvolutionJobsRepo } from "./evolution_jobs.js";
 import { makeEpisodesRepo } from "./episodes.js";
 import { makeFeedbackRepo } from "./feedback.js";
 import { makeHubRepo } from "./hub.js";
@@ -29,6 +30,7 @@ export interface Repos {
   candidatePool: ReturnType<typeof makeCandidatePoolRepo>;
   decisionRepairs: ReturnType<typeof makeDecisionRepairsRepo>;
   embeddingRetryQueue: ReturnType<typeof makeEmbeddingRetryQueueRepo>;
+  evolutionJobs: ReturnType<typeof makeEvolutionJobsRepo>;
   episodes: ReturnType<typeof makeEpisodesRepo>;
   feedback: ReturnType<typeof makeFeedbackRepo>;
   hub: ReturnType<typeof makeHubRepo>;
@@ -50,7 +52,14 @@ export function makeRepos(db: StorageDb): Repos {
     audit: makeAuditRepo(db),
     candidatePool: makeCandidatePoolRepo(db),
     decisionRepairs: makeDecisionRepairsRepo(db),
-    embeddingRetryQueue: makeEmbeddingRetryQueueRepo(db),
+    embeddingRetryQueue: makeEmbeddingRetryQueueRepo(
+      db,
+      () => kv.incrementNumber("runtime.failure_sequence.embedding"),
+    ),
+    evolutionJobs: makeEvolutionJobsRepo(
+      db,
+      () => kv.incrementNumber("runtime.failure_sequence.evolution"),
+    ),
     episodes: makeEpisodesRepo(db),
     feedback: makeFeedbackRepo(db),
     hub: makeHubRepo(db, kv),
@@ -72,6 +81,14 @@ export { makeAuditRepo } from "./audit.js";
 export { makeCandidatePoolRepo } from "./candidate_pool.js";
 export { makeDecisionRepairsRepo } from "./decision_repairs.js";
 export { makeEmbeddingRetryQueueRepo } from "./embedding_retry_queue.js";
+export { makeEvolutionJobsRepo } from "./evolution_jobs.js";
+export type {
+  EvolutionJob,
+  EvolutionJobClaim,
+  EvolutionJobStatus,
+  EvolutionJobType,
+} from "./evolution_jobs.js";
+export { EVOLUTION_JOB_TYPES } from "./evolution_jobs.js";
 export { makeEpisodesRepo } from "./episodes.js";
 export { makeFeedbackRepo } from "./feedback.js";
 export { makeHubRepo } from "./hub.js";
