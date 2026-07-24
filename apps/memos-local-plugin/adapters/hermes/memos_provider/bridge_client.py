@@ -81,6 +81,22 @@ def _bridge_script(plugin_root: Path) -> Path:
     return plugin_root / "bridge.cts"
 
 
+def _bridge_script_for_agent(plugin_root: Path, agent: str) -> Path:
+    """OpenClaw stdio callers must proxy the one shared runtime owner."""
+    if agent != "openclaw":
+        return _bridge_script(plugin_root)
+    candidates = (
+        plugin_root / "dist" / "adapters" / "openclaw" / "runtime-stdio-proxy.js",
+        plugin_root / "adapters" / "openclaw" / "runtime-stdio-proxy.ts",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    # Keep the failure deterministic and explicit. Falling back to bridge.mjs
+    # would create a second MemoryCore against the same OpenClaw database.
+    return candidates[0]
+
+
 class BridgeError(RuntimeError):
     """Raised when the bridge returns a JSON-RPC error object."""
 
@@ -137,7 +153,18 @@ class MemosBridgeClient:
             or shutil.which("node")
             or "node"
         )
-        script_path = Path(bridge_path) if bridge_path else _bridge_script(plugin_root)
+        if agent == "openclaw":
+            expected_proxy = _bridge_script_for_agent(plugin_root, agent)
+            if bridge_path and Path(bridge_path).resolve() != expected_proxy.resolve():
+                raise ValueError(
+                    "OpenClaw bridge clients must use the shared runtime proxy; "
+                    "direct bridge.mjs would create a second MemoryCore"
+                )
+            script_path = expected_proxy
+        else:
+            script_path = (
+                Path(bridge_path) if bridge_path else _bridge_script_for_agent(plugin_root, agent)
+            )
         script = str(script_path)
         env = {**os.environ, **(extra_env or {})}
 
@@ -153,7 +180,7 @@ class MemosBridgeClient:
         bridge_args = [script, f"--agent={agent}"]
         if no_viewer:
             bridge_args.append("--no-viewer")
-        if script_path.suffix in (".mjs", ".cjs"):
+        if script_path.suffix in (".js", ".mjs", ".cjs"):
             cmd = [node, *bridge_args]
         elif tsx_cli.exists():
             cmd = [node, str(tsx_cli), *bridge_args]

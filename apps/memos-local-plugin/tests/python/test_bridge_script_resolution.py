@@ -80,6 +80,23 @@ class BridgeScriptResolutionTests(unittest.TestCase):
             _layout(root, mjs=False, cjs=False, mts=False, cts=False)
             self.assertEqual(self._resolve(root), root / "bridge.cts")
 
+    def test_openclaw_clients_use_shared_runtime_proxy(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _layout(root, mjs=True, cjs=True, mts=True, cts=True)
+            proxy = root / "dist" / "adapters" / "openclaw" / "runtime-stdio-proxy.js"
+            proxy.parent.mkdir(parents=True)
+            proxy.write_text("// proxy\n")
+
+            self.assertEqual(
+                bridge_client_mod._bridge_script_for_agent(root, "openclaw"),
+                proxy,
+            )
+            self.assertEqual(
+                bridge_client_mod._bridge_script_for_agent(root, "hermes"),
+                root / "dist" / "bridge.mjs",
+            )
+
 
 class BridgeCommandLaunchTests(unittest.TestCase):
     """`MemosBridgeClient.__init__` must launch `.mjs` files with plain ``node``.
@@ -89,17 +106,25 @@ class BridgeCommandLaunchTests(unittest.TestCase):
     no ``tsx`` wrapper is inserted for the new ESM entry.
     """
 
-    def _captured_cmd(self, script_path: str) -> list[str]:
+    def _captured_cmd(self, script_path: str, *, agent: str = "hermes") -> list[str]:
         with (
             patch.object(bridge_client_mod.subprocess, "Popen") as popen,
             patch.object(bridge_client_mod.shutil, "which", return_value="/usr/bin/node"),
             patch.object(bridge_client_mod.threading, "Thread"),
+            patch.object(
+                bridge_client_mod,
+                "_bridge_script_for_agent",
+                return_value=Path(script_path),
+            ),
         ):
             popen.return_value.pid = 999
             popen.return_value.stdin = None
             popen.return_value.stdout = None
             popen.return_value.stderr = None
-            bridge_client_mod.MemosBridgeClient(bridge_path=script_path)
+            bridge_client_mod.MemosBridgeClient(
+                bridge_path=script_path if agent != "openclaw" else None,
+                agent=agent,
+            )
             popen.assert_called_once()
             return list(popen.call_args.args[0])
 
@@ -115,6 +140,15 @@ class BridgeCommandLaunchTests(unittest.TestCase):
         cmd = self._captured_cmd("/tmp/dist/bridge.cjs")
         self.assertEqual(cmd[0], "/usr/bin/node")
         self.assertIn("/tmp/dist/bridge.cjs", cmd)
+        self.assertNotIn("tsx", " ".join(cmd))
+
+    def test_compiled_js_proxy_launches_with_node_directly(self) -> None:
+        cmd = self._captured_cmd(
+            "/tmp/dist/adapters/openclaw/runtime-stdio-proxy.js",
+            agent="openclaw",
+        )
+        self.assertEqual(cmd[0], "/usr/bin/node")
+        self.assertIn("runtime-stdio-proxy.js", " ".join(cmd))
         self.assertNotIn("tsx", " ".join(cmd))
 
     def test_mts_source_routes_through_tsx(self) -> None:

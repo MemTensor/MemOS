@@ -340,7 +340,12 @@ class BridgeClientTests(unittest.TestCase):
     def test_module_singleton_independent_for_distinct_agents(self) -> None:
         """A bridge for a different agent must not reap an unrelated bridge."""
         hermes = MemosBridgeClient(bridge_path="/tmp/bridge.cts", agent="hermes")
-        openclaw = MemosBridgeClient(bridge_path="/tmp/bridge.cts", agent="openclaw")
+        with patch.object(
+            bridge_client_mod,
+            "_bridge_script_for_agent",
+            return_value=Path("/tmp/runtime-stdio-proxy.js"),
+        ):
+            openclaw = MemosBridgeClient(agent="openclaw")
         self.assertFalse(hermes._closed)
         self.assertFalse(openclaw._closed)
         hermes.close()
