@@ -33,6 +33,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveBridgeRuntimeMode } from "./bridge/runtime-mode.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -241,12 +243,14 @@ async function main(): Promise<void> {
   const resolvedHome = args.home
     ? resolveHome(args.agent, args.home)
     : undefined;
+  const runtimeMode = resolveBridgeRuntimeMode(args);
 
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     namespace: { agentKind: args.agent, profileId: "default" },
     pkgVersion,
-    hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
+    hostLlmBridge: runtimeMode.hostLlmEnabled ? lazyHostLlmBridge : null,
+    evolutionWorkerEnabled: runtimeMode.evolutionWorkerEnabled,
     home: resolvedHome,
   });
 

@@ -185,6 +185,9 @@ async function main(): Promise<void> {
   const { isHermesChatRunning } = (await importEsm(
     runtimeModule("bridge/hermes-process.ts", "dist/bridge/hermes-process.js")
   )) as typeof import("./bridge/hermes-process.js");
+  const { resolveBridgeRuntimeMode } = (await importEsm(
+    runtimeModule("bridge/runtime-mode.ts", "dist/bridge/runtime-mode.js")
+  )) as typeof import("./bridge/runtime-mode.js");
 
   const rootDir = pluginRoot();
   const pkgVersion = JSON.parse(
@@ -282,11 +285,15 @@ async function main(): Promise<void> {
     return "default";
   };
   const resolvedProfileId = deriveProfileId();
+  const runtimeMode = resolveBridgeRuntimeMode(args);
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     namespace: { agentKind: args.agent, profileId: resolvedProfileId },
     pkgVersion,
-    hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
+    hostLlmBridge: runtimeMode.hostLlmEnabled ? lazyHostLlmBridge : null,
+    // A Hermes viewer daemon has no reverse host-LLM channel. Leave durable
+    // jobs queued for the stdio bridge, which can call host.llm.complete.
+    evolutionWorkerEnabled: runtimeMode.evolutionWorkerEnabled,
     home: resolvedHome,
   });
 
