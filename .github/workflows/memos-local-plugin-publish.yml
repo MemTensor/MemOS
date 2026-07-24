@@ -361,6 +361,7 @@ jobs:
         if: ${{ inputs.dry_run != true }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           PACKAGE_NAME: "@memtensor/memos-local-plugin"
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_TAG: memos-local-plugin-v${{ inputs.version }}
@@ -412,15 +413,54 @@ jobs:
               sleep "$((attempt * 5))"
             done
           }
+          github_release_exists() {
+            local release_tag="$1"
+            local out="${RUNNER_TEMP}/memos-local-plugin-release-view.log"
+            for attempt in 1 2 3; do
+              set +e
+              gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >"${out}" 2>&1
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                return 0
+              fi
+              if grep -Eiq "not found|could not find|HTTP 404" "${out}"; then
+                return 1
+              fi
+              sed -n '1,120p' "${out}"
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::Failed to check GitHub Release ${release_tag} after three attempts."
+                exit "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
 
           if npm_version_exists; then
             release_tag="memos-local-plugin-v${RELEASE_VERSION}"
+            tag_exists=false
+            release_exists=false
             if remote_tag_exists "${release_tag}"; then
-              echo "${PACKAGE_NAME}@${RELEASE_VERSION} and ${release_tag} already exist; treating this as an idempotent rerun."
+              tag_exists=true
+            fi
+            if github_release_exists "${release_tag}"; then
+              release_exists=true
+            fi
+            if [ "${tag_exists}" = "true" ] && [ "${release_exists}" = "true" ]; then
+              echo "${PACKAGE_NAME}@${RELEASE_VERSION}, ${release_tag}, and the GitHub Release already exist; treating this as an idempotent rerun."
             elif [ "${RECOVER_EXISTING_NPM_RELEASE}" = "true" ]; then
-              echo "Recovery mode enabled; npm version exists, so publish is skipped."
+              echo "Recovery mode enabled; npm version exists, so publish is skipped and missing GitHub metadata may be reconstructed."
             else
-              echo "::error::npm version exists but ${release_tag} does not. Refusing to invent release metadata without explicit recovery mode."
+              missing=()
+              if [ "${tag_exists}" != "true" ]; then
+                missing+=("${release_tag}")
+              fi
+              if [ "${release_exists}" != "true" ]; then
+                missing+=("GitHub Release ${release_tag}")
+              fi
+              printf -v missing_text "%s, " "${missing[@]}"
+              missing_text="${missing_text%, }"
+              echo "::error::${PACKAGE_NAME}@${RELEASE_VERSION} already exists on npm, but ${missing_text} is missing. Set recover_existing_npm_release=true only for an intentional metadata backfill."
               exit 1
             fi
           else
