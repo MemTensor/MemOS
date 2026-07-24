@@ -65,6 +65,7 @@ function stubCore(): MemoryCore {
     shareTrace: vi.fn(async (id) => ({ id, share: { scope: "public" } } as any)),
     getPolicy: vi.fn(async (id) => ({ id, title: "p", status: "active" } as any)),
     listPolicies: vi.fn(async () => []),
+    countPolicies: vi.fn(async () => 0),
     setPolicyStatus: vi.fn(async (id, status) => ({ id, status } as any)),
     deletePolicy: vi.fn(async () => ({ deleted: false })),
     sharePolicy: vi.fn(async (id, share) => ({ id, share } as any)),
@@ -72,6 +73,7 @@ function stubCore(): MemoryCore {
     editPolicyGuidance: vi.fn(async (id) => ({ id } as any)),
     getWorldModel: vi.fn(async () => null),
     listWorldModels: vi.fn(async () => []),
+    countWorldModels: vi.fn(async () => 0),
     deleteWorldModel: vi.fn(async () => ({ deleted: false })),
     shareWorldModel: vi.fn(async (id, share) => ({ id, status: "active", share } as any)),
     updateWorldModel: vi.fn(async (id, patch) => ({ id, status: "active", ...patch } as any)),
@@ -470,7 +472,8 @@ describe("HTTP server — REST routes", () => {
     expect(Array.isArray(body.traces)).toBe(true);
     expect(body.traces[0]?.id).toBe("tr-1");
     expect(body.traces[0]?.summary).toBe("greeted");
-    // The route must forward the query string into the core call.
+    // The route must forward the query string into the core call, and
+    // pin the viewer to all-namespace reads (#2131 drift regression).
     expect(core.listTraces).toHaveBeenCalledWith({
       limit: 25,
       offset: 0,
@@ -479,6 +482,7 @@ describe("HTTP server — REST routes", () => {
       groupByTurn: false,
       ownerAgentKind: undefined,
       ownerProfileId: undefined,
+      includeAllNamespaces: true,
     });
   });
 
@@ -518,6 +522,20 @@ describe("HTTP server — REST routes", () => {
     const body = (await r.json()) as { total: number; dailyWrites: unknown[] };
     expect(body.total).toBe(0);
     expect(Array.isArray(body.dailyWrites)).toBe(true);
+  });
+
+  it("GET /api/v1/metrics/tools scopes both data feeds to all namespaces", async () => {
+    const r = await fetch(`${handle.url}/api/v1/metrics/tools?minutes=60`);
+    expect(r.status).toBe(200);
+    // The tool panel folds api_logs entries and trace tool-calls into
+    // one aggregation; both feeds must be pinned to all-namespace reads
+    // or the chart under-reports after a namespace flip (#2131).
+    expect(core.listApiLogs).toHaveBeenCalledWith(
+      expect.objectContaining({ includeAllNamespaces: true }),
+    );
+    expect(core.listTraces).toHaveBeenCalledWith(
+      expect.objectContaining({ includeAllNamespaces: true }),
+    );
   });
 
   it("GET /api/v1/config returns resolved config", async () => {
