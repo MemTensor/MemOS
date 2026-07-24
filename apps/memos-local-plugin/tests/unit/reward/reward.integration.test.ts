@@ -376,4 +376,59 @@ describe("reward/integration", () => {
     expect(res.feedbackCount).toBe(2);
     expect(res.rHuman).toBeGreaterThan(0);
   });
+
+  it("cron episode with 1 exchange is not skipped when sentinel matches", async () => {
+    const sid = "s_cron_1";
+    const eid = "ep_cron_1";
+    seedEpisode(handle, eid, sid, ["tr_cron_1"]);
+    seedTrace(handle, "tr_cron_1", eid, sid, {
+      userText:
+        "[IMPORTANT: You are running as a scheduled cron job. Please review recent activity and write a reflection card.",
+      agentText:
+        "Reviewed the last 48 hours of conversation traces and wrote a reflection card to ~/Faye/memory/reflections/2026-05-31.md. Commit succeeded.",
+    });
+
+    const events: RewardEvent[] = [];
+    const bus = createRewardEventBus();
+    bus.onAny((e) => events.push(e));
+
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm: fakeLlm({
+        completeJson: {
+          "reward.reward.r_human.v3": {
+            goal_achievement: 0.8,
+            process_quality: 0.8,
+            user_satisfaction: 0.8,
+            label: "success",
+            reason: "cron reflection card written and committed",
+          },
+        },
+      }),
+      bus,
+      cfg: {
+        ...cfg(),
+        minExchangesForCompletion: 2,
+        minContentCharsForCompletion: 40,
+        cronSentinels: ["[IMPORTANT: You are running as a scheduled cron job"],
+      },
+      now: () => NOW,
+    });
+
+    const res = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    // Must reach the LLM scorer, not be abandoned as trivial.
+    expect(res.humanScore.source).toBe("llm");
+    expect(res.rHuman).toBeGreaterThan(0);
+    expect(events.some((e) => e.kind === "reward.updated")).toBe(true);
+    // Must NOT be heuristic-skipped (reward.scored with source=heuristic means skipped).
+    const scoredEvent = events.find((e) => e.kind === "reward.scored");
+    expect((scoredEvent as { source?: string } | undefined)?.source).not.toBe("heuristic");
+  });
 });
