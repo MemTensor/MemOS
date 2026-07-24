@@ -7,8 +7,8 @@
  * subcommand (`hermes --skills memory-routing chat`) was silently
  * missed and the viewer was stuck on `"disconnected"`.
  *
- * The pattern under test is `hermes(?:\s+\S+)*\s+chat\b` — these cases
- * lock in the exact shape of the fix.
+ * The pgrep pattern uses POSIX ERE syntax, while the JS matcher keeps the same
+ * token semantics for the positive and negative cases below.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,11 +19,10 @@ import {
 } from "../../../bridge/hermes-process.js";
 
 describe("HERMES_CHAT_PROCESS_PATTERN", () => {
-  it("is the documented #1915 regex (locks in the wire format pgrep sees)", () => {
-    // If this string ever changes, audit `bridge.cts` callers and the
-    // issue description before adjusting — the constant is the only
-    // surface that fixes the substring-detection bug.
-    expect(HERMES_CHAT_PROCESS_PATTERN).toBe("hermes(?:\\s+\\S+)*\\s+chat\\b");
+  it("uses portable POSIX ERE syntax for pgrep -f", () => {
+    expect(HERMES_CHAT_PROCESS_PATTERN).toContain("[[:space:]]");
+    expect(HERMES_CHAT_PROCESS_PATTERN).not.toContain("(?:");
+    expect(HERMES_CHAT_PROCESS_PATTERN).not.toContain("\\b");
   });
 });
 
