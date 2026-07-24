@@ -303,6 +303,14 @@ export interface OpenClawPluginApi {
   name: string;
   version?: string;
   description?: string;
+  /** Why OpenClaw is loading this entrypoint; absent on older hosts. */
+  registrationMode?:
+    | "full"
+    | "discovery"
+    | "tool-discovery"
+    | "setup-only"
+    | "setup-runtime"
+    | "cli-metadata";
   /** Plugin-scoped config (from `config.yaml` if present). */
   pluginConfig?: Record<string, unknown>;
   logger: HostLogger;

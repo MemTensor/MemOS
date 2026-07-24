@@ -30,6 +30,7 @@ import type {
   TurnResultDTO,
 } from "../../agent-contract/dto.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
+import type { OpenClawRuntimeCore } from "./runtime-core.js";
 
 import type {
   AfterToolCallEvent,
@@ -849,7 +850,7 @@ function capContextBlock(block: string): { block: string; truncated: boolean } {
 
 export interface BridgeOptions {
   agent: AgentKind;
-  core: MemoryCore;
+  core: OpenClawRuntimeCore;
   log: HostLogger;
   /** Disable turn-start retrieval / prompt injection when OpenClaw config opts out. */
   memorySearchEnabled?: boolean;

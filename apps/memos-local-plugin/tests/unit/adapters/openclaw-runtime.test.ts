@@ -34,6 +34,8 @@ afterEach(() => {
   vi.doUnmock("../../../server/http.js");
   vi.doUnmock("../../../core/telemetry/index.js");
   vi.doUnmock("../../../adapters/openclaw/bridge.js");
+  vi.doUnmock("../../../adapters/openclaw/runtime-client.js");
+  vi.doUnmock("../../../adapters/openclaw/remote-core.js");
   vi.resetModules();
   vi.restoreAllMocks();
   for (const root of tempRoots.splice(0)) {
@@ -57,7 +59,10 @@ function makeCore() {
   };
 }
 
-function makeApi(pluginConfig?: Record<string, unknown>): MockApi {
+function makeApi(
+  pluginConfig?: Record<string, unknown>,
+  registrationMode?: OpenClawPluginApi["registrationMode"],
+): MockApi {
   const services: ServiceDescriptor[] = [];
   const hooks = new Map<OpenClawHookName, OpenClawHookHandlerMap[OpenClawHookName]>();
   const logger = {
@@ -70,6 +75,7 @@ function makeApi(pluginConfig?: Record<string, unknown>): MockApi {
   return {
     id: "memos-local-plugin",
     name: "MemOS Local",
+    registrationMode,
     logger,
     services,
     hooks,
@@ -89,6 +95,12 @@ async function loadPluginWithMocks(
   bootstrapMemoryCoreFull: ReturnType<typeof vi.fn>,
   startHttpServer: ReturnType<typeof vi.fn>,
   createOpenClawBridge?: ReturnType<typeof vi.fn>,
+  connectSharedOpenClawRuntime: ReturnType<typeof vi.fn> = vi.fn(async () => ({
+    connected: true,
+    request: vi.fn(async () => ({ ok: true })),
+    close: vi.fn(),
+  })),
+  remoteCore = makeCore(),
 ) {
   vi.resetModules();
   vi.doMock("../../../core/pipeline/index.js", () => ({
@@ -96,6 +108,12 @@ async function loadPluginWithMocks(
   }));
   vi.doMock("../../../server/http.js", () => ({
     startHttpServer,
+  }));
+  vi.doMock("../../../adapters/openclaw/runtime-client.js", () => ({
+    connectSharedOpenClawRuntime,
+  }));
+  vi.doMock("../../../adapters/openclaw/remote-core.js", () => ({
+    createRemoteMemoryCore: vi.fn(() => remoteCore),
   }));
   vi.doMock("../../../core/telemetry/index.js", () => ({
     Telemetry: class {
@@ -129,68 +147,97 @@ function deferred<T>() {
 }
 
 describe("OpenClaw adapter runtime lifecycle", () => {
-  it("blocks a duplicate register before the second runtime bootstraps", async () => {
+  it.each([
+    "discovery",
+    "tool-discovery",
+    "setup-only",
+    "setup-runtime",
+    "cli-metadata",
+  ] as const)("keeps %s registration free of runtime side effects", async (registrationMode) => {
     const home = useTempMemosHome();
-    const firstCore = makeCore();
-    const boot = deferred<{ core: ReturnType<typeof makeCore>; config: typeof DEFAULT_CONFIG; home: ResolvedHome }>();
-    const bootstrapMemoryCoreFull = vi.fn(() => boot.promise);
-    const startHttpServer = vi.fn(async () => ({
-      url: "http://127.0.0.1:18799",
-      port: 18799,
-      closed: false,
-      close: vi.fn(async () => {}),
-    }));
+    const bootstrapMemoryCoreFull = vi.fn();
+    const startHttpServer = vi.fn();
     const plugin = await loadPluginWithMocks(bootstrapMemoryCoreFull, startHttpServer);
 
-    const api1 = makeApi();
-    plugin.register(api1);
-    expect(bootstrapMemoryCoreFull).toHaveBeenCalledTimes(1);
+    const api = makeApi(undefined, registrationMode);
+    plugin.register(api);
 
-    const api2 = makeApi();
-    expect(() => plugin.register(api2)).toThrow(/already active/);
-    expect(bootstrapMemoryCoreFull).toHaveBeenCalledTimes(1);
-    expect(api2.registerTool).not.toHaveBeenCalled();
-    expect(api2.on).not.toHaveBeenCalled();
-
-    boot.resolve({ core: firstCore, config: DEFAULT_CONFIG, home });
-    await api1.services[0]!.start?.();
-    await api1.services[0]!.stop?.();
-
+    expect(bootstrapMemoryCoreFull).not.toHaveBeenCalled();
+    expect(api.registerTool).not.toHaveBeenCalled();
+    expect(api.on).not.toHaveBeenCalled();
+    expect(api.registerService).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
   });
 
-  it("treats viewer EADDRINUSE as fatal and releases core plus lock", async () => {
+  it("lets concurrent gateways connect to the same shared runtime boundary", async () => {
     const home = useTempMemosHome();
-    const core = makeCore();
-    const bootstrapMemoryCoreFull = vi.fn(async () => ({
-      core,
-      config: DEFAULT_CONFIG,
-      home,
+    const bootstrapMemoryCoreFull = vi.fn();
+    const startHttpServer = vi.fn();
+    const close = vi.fn();
+    const connectSharedOpenClawRuntime = vi.fn(async () => ({
+      connected: true,
+      request: vi.fn(async () => ({ ok: true })),
+      close,
     }));
-    const inUse = Object.assign(new Error("address already in use"), {
-      code: "EADDRINUSE",
-    });
-    const startHttpServer = vi.fn(async () => {
-      throw inUse;
-    });
-    const plugin = await loadPluginWithMocks(bootstrapMemoryCoreFull, startHttpServer);
+    const plugin = await loadPluginWithMocks(
+      bootstrapMemoryCoreFull,
+      startHttpServer,
+      undefined,
+      connectSharedOpenClawRuntime,
+    );
+
+    const api1 = makeApi();
+    plugin.register(api1);
+    const api2 = makeApi();
+    plugin.register(api2);
+
+    expect(connectSharedOpenClawRuntime).not.toHaveBeenCalled();
+    await Promise.all([
+      api1.services[0]!.start?.(),
+      api2.services[0]!.start?.(),
+    ]);
+    expect(connectSharedOpenClawRuntime).toHaveBeenCalledTimes(2);
+    expect(connectSharedOpenClawRuntime).toHaveBeenNthCalledWith(1, home);
+    expect(connectSharedOpenClawRuntime).toHaveBeenNthCalledWith(2, home);
+    expect(bootstrapMemoryCoreFull).not.toHaveBeenCalled();
+    expect(startHttpServer).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
+
+    await Promise.all([
+      api1.services[0]!.stop?.(),
+      api2.services[0]!.stop?.(),
+    ]);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not connect or own the database until the host service starts", async () => {
+    useTempMemosHome();
+    const bootstrapMemoryCoreFull = vi.fn();
+    const startHttpServer = vi.fn();
+    const close = vi.fn();
+    const connectSharedOpenClawRuntime = vi.fn(async () => ({
+      connected: true,
+      request: vi.fn(async () => ({ ok: true })),
+      close,
+    }));
+    const plugin = await loadPluginWithMocks(
+      bootstrapMemoryCoreFull,
+      startHttpServer,
+      undefined,
+      connectSharedOpenClawRuntime,
+    );
 
     const api = makeApi();
     plugin.register(api);
 
-    await expect(api.services[0]!.start?.()).rejects.toMatchObject({
-      code: "EADDRINUSE",
-    });
+    expect(connectSharedOpenClawRuntime).not.toHaveBeenCalled();
+    expect(bootstrapMemoryCoreFull).not.toHaveBeenCalled();
+    expect(startHttpServer).not.toHaveBeenCalled();
 
-    expect(core.init).toHaveBeenCalledTimes(1);
-    expect(core.shutdown).toHaveBeenCalledTimes(1);
-    expect(api.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("refusing duplicate/headless OpenClaw runtime"),
-    );
-    expect(api.logger.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("running headless"),
-    );
-    expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
+    await api.services[0]!.start?.();
+    expect(connectSharedOpenClawRuntime).toHaveBeenCalledTimes(1);
+    await api.services[0]!.stop?.();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("passes the independent memory switches to the OpenClaw bridge", async () => {
@@ -350,26 +397,22 @@ describe("OpenClaw hook listener contract (issue #1815)", () => {
   });
 
   it("tool_result_persist listener silently no-ops when bootstrap has not finished yet", async () => {
-    const home = useTempMemosHome();
-    const core = makeCore();
-    const bootDeferred = deferred<{
-      core: ReturnType<typeof makeCore>;
-      config: typeof DEFAULT_CONFIG;
-      home: ResolvedHome;
+    useTempMemosHome();
+    const bootstrapMemoryCoreFull = vi.fn();
+    const startHttpServer = vi.fn();
+    const connectionDeferred = deferred<{
+      connected: boolean;
+      request: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
     }>();
-    const bootstrapMemoryCoreFull = vi.fn(() => bootDeferred.promise);
-    const startHttpServer = vi.fn(async () => ({
-      url: "http://127.0.0.1:18799",
-      port: 18799,
-      closed: false,
-      close: vi.fn(async () => {}),
-    }));
+    const connectSharedOpenClawRuntime = vi.fn(() => connectionDeferred.promise);
     const bridge = buildBridgeStub();
     const createOpenClawBridge = vi.fn(() => bridge);
     const plugin = await loadPluginWithMocks(
       bootstrapMemoryCoreFull,
       startHttpServer,
       createOpenClawBridge,
+      connectSharedOpenClawRuntime,
     );
 
     const api = makeApi();
@@ -395,13 +438,17 @@ describe("OpenClaw hook listener contract (issue #1815)", () => {
     expect(result).toBeUndefined();
     expect(bridge.handleToolResultPersist).not.toHaveBeenCalled();
 
-    // Finish bootstrap so afterEach can clean up.
-    bootDeferred.resolve({ core, config: DEFAULT_CONFIG, home });
+    // Finish the shared-runtime connection so afterEach can clean up.
+    connectionDeferred.resolve({
+      connected: true,
+      request: vi.fn(async () => ({ ok: true })),
+      close: vi.fn(),
+    });
     await api.services[0]!.start?.();
     await api.services[0]!.stop?.();
   });
 
-  it("agent_end listener returns synchronously and dispatches the bridge work as fire-and-forget", async () => {
+  it("agent_end listener awaits the durable capture acknowledgement", async () => {
     let releaseAgentEnd: (() => void) | null = null;
     const agentEndStarted = vi.fn();
     const bridge = buildBridgeStub();
@@ -425,32 +472,30 @@ describe("OpenClaw hook listener contract (issue #1815)", () => {
       | undefined;
     expect(handler).toBeDefined();
 
-    const beforeReturn = Date.now();
     const ret = handler!(
       { messages: [], success: true, durationMs: 10 },
       { agentId: "main", sessionKey: "s-1", runId: "run-1" },
     );
-    const afterReturn = Date.now();
-
-    // OpenClaw's contract: the listener must return void / undefined,
-    // NOT a Promise that the runner would await against the 30 s
-    // hard-coded budget.
-    expect(ret).toBeUndefined();
-    expect(afterReturn - beforeReturn).toBeLessThan(50);
-
-    // The bridge work, however, MUST eventually run — fire-and-forget,
-    // not fire-and-drop.
+    expect(ret).toBeInstanceOf(Promise);
     await vi.waitFor(() => {
       expect(bridge.handleAgentEnd).toHaveBeenCalledTimes(1);
     });
     expect(agentEndStarted).toHaveBeenCalledTimes(1);
 
-    // Release the background work so afterEach can shut down cleanly.
+    let settled = false;
+    void Promise.resolve(ret).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
     releaseAgentEnd?.();
+    await ret;
+    expect(settled).toBe(true);
     await api.services[0]!.stop?.();
   });
 
-  it("agent_end listener swallows background errors via opts.log.warn instead of surfacing them to OpenClaw", async () => {
+  it("agent_end listener logs and propagates durable capture failures", async () => {
     const bridge = buildBridgeStub();
     bridge.handleAgentEnd = vi.fn(async () => {
       throw new Error("boom inside onTurnEnd");
@@ -467,12 +512,10 @@ describe("OpenClaw hook listener contract (issue #1815)", () => {
       | OpenClawHookHandlerMap["agent_end"]
       | undefined;
     expect(handler).toBeDefined();
-    expect(() =>
-      handler!(
-        { messages: [], success: true },
-        { agentId: "main", sessionKey: "s-1", runId: "run-1" },
-      ),
-    ).not.toThrow();
+    await expect(handler!(
+      { messages: [], success: true },
+      { agentId: "main", sessionKey: "s-1", runId: "run-1" },
+    )).rejects.toThrow("boom inside onTurnEnd");
 
     await vi.waitFor(() => {
       expect(api.logger.warn).toHaveBeenCalledWith(
@@ -484,7 +527,7 @@ describe("OpenClaw hook listener contract (issue #1815)", () => {
     await api.services[0]!.stop?.();
   });
 
-  it("every void hook listener (agent_end / session_* / *_tool_call / subagent_*) is registered as a non-async function", async () => {
+  it("keeps only agent_end async among the void hook listeners", async () => {
     const bridge = buildBridgeStub();
     const plugin = (await buildPluginWithFakeBridge({ bridge })) as {
       register: (api: OpenClawPluginApi) => void;
@@ -493,10 +536,8 @@ describe("OpenClaw hook listener contract (issue #1815)", () => {
     plugin.register(api);
     await api.services[0]!.start?.();
 
-    // before_prompt_build is value-returning and the only listener
-    // allowed to be async (OpenClaw awaits its prependContext).
-    const voidHooks: OpenClawHookName[] = [
-      "agent_end",
+    expect(api.hooks.get("agent_end")?.constructor.name).toBe("AsyncFunction");
+    const fireAndForgetHooks: OpenClawHookName[] = [
       "before_tool_call",
       "after_tool_call",
       "tool_result_persist",
@@ -505,7 +546,7 @@ describe("OpenClaw hook listener contract (issue #1815)", () => {
       "subagent_spawned",
       "subagent_ended",
     ];
-    for (const name of voidHooks) {
+    for (const name of fireAndForgetHooks) {
       const handler = api.hooks.get(name);
       expect(handler, `${name} listener missing`).toBeDefined();
       expect(

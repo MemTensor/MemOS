@@ -17,7 +17,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 
 import type { AgentKind, RuntimeNamespace, SkillId, TraceId } from "../../agent-contract/dto.js";
-import type { MemoryCore } from "../../agent-contract/memory-core.js";
+import type { OpenClawRuntimeCore } from "./runtime-core.js";
 
 import { bridgeSessionId } from "./bridge.js";
 import type {
@@ -29,8 +29,8 @@ import type {
 
 export interface ToolsOptions {
   agent: AgentKind;
-  core?: MemoryCore;
-  getCore?: () => MemoryCore | null | Promise<MemoryCore | null>;
+  core?: OpenClawRuntimeCore;
+  getCore?: () => OpenClawRuntimeCore | null | Promise<OpenClawRuntimeCore | null>;
   log: HostLogger;
   /** Disable the memory_search tool when OpenClaw config opts out. */
   memorySearchEnabled?: boolean;
@@ -165,7 +165,7 @@ function namespaceFromCtx(ctx: OpenClawPluginToolContext | undefined): RuntimeNa
   };
 }
 
-async function resolveCore(opts: ToolsOptions): Promise<MemoryCore> {
+async function resolveCore(opts: ToolsOptions): Promise<OpenClawRuntimeCore> {
   const core = opts.core ?? (await opts.getCore?.());
   if (!core) {
     throw new Error("MemOS Local runtime is not ready yet");
