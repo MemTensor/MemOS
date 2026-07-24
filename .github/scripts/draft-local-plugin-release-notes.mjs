@@ -200,7 +200,10 @@ export function resolveCurrentRef(
 
 function listProductTags() {
   try {
-    sh(["fetch", "--tags", "--force", "origin"], { stdio: ["ignore", "ignore", "ignore"] });
+    const remotes = sh(["remote"]).split("\n").map((item) => item.trim()).filter(Boolean);
+    if (remotes.includes("origin")) {
+      sh(["fetch", "--tags", "--force", "origin"], { stdio: ["ignore", "ignore", "ignore"] });
+    }
   } catch {
     warn("Failed to fetch tags from origin; using locally available tags.");
   }
