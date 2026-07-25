@@ -3,67 +3,36 @@ from __future__ import annotations
 import importlib.util
 
 from pathlib import Path
+from typing import Any
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "yunxiao_github_sync.py"
 SPEC = importlib.util.spec_from_file_location("yunxiao_github_sync", MODULE_PATH)
-assert SPEC is not None
-assert SPEC.loader is not None
+assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
-def test_build_title_and_key_for_issue() -> None:
-    item = {
-        "number": 42,
-        "title": "Fix scheduler",
-        "created_at": "2026-07-25T01:02:03Z",
-    }
-
+def test_build_title_and_key() -> None:
+    item = {"number": 42, "title": "Fix scheduler", "created_at": "2026-07-25T01:02:03Z"}
     assert MODULE.build_source_key("issue", item) == "[GitHub Issue #42]"
     assert MODULE.build_title("issue", item) == "[GitHub Issue #42] Fix scheduler"
 
 
-def test_build_create_payload_sets_sla_and_only_allowed_fields() -> None:
-    item = {
-        "number": 42,
-        "title": "Fix scheduler",
-        "html_url": "https://github.com/MemTensor/MemOS/issues/42",
-        "created_at": "2026-07-25T01:02:03Z",
-    }
-
-    payload = MODULE.build_create_payload(
-        item_type="issue",
-        item=item,
-        workitem_type_id="req-id",
-        assigned_to="sunqi-id",
-        priority="medium-id",
-        status="pending-id",
-        project_id="project-id",
-    )
-
-    assert payload["assignedTo"] == "sunqi-id"
-    assert payload["priority"] == "medium-id"
-    assert payload["planStartTime"] == "2026-07-25T01:02:03Z"
-    assert payload["planFinishTime"] == "2026-08-01T01:02:03Z"
-    assert payload["subject"] == "[GitHub Issue #42] Fix scheduler"
-    assert payload["description"] == "GitHub: https://github.com/MemTensor/MemOS/issues/42"
-    assert set(payload).isdisjoint({"creator", "comments", "labels"})
+def test_iso_after_days() -> None:
+    assert MODULE.iso_after_days("2026-07-25T01:02:03Z", 7) == "2026-08-01T01:02:03Z"
 
 
-def test_build_status_update_payload_only_contains_status() -> None:
-    assert MODULE.build_status_update_payload("done-id") == {"status": "done-id"}
-
-
-def test_map_pr_closed_status_distinguishes_merged() -> None:
+def test_source_status() -> None:
+    assert MODULE.source_status("issue", {"state": "open"}) == "待处理"
     assert MODULE.source_status("pr", {"state": "closed", "merged": True}) == "已完成"
     assert MODULE.source_status("pr", {"state": "closed", "merged": False}) == "已取消"
+    assert MODULE.source_status("issue", {"state": "closed"}) == "已取消"
 
 
-def test_preflight_handles_documented_raw_response_shapes() -> None:
+def test_preflight_documented_schema() -> None:
     calls: list[tuple[str, str]] = []
     responses = {
-        "GET /oapi/v1/platform/user": {"userId": "sync-user", "userName": "孙起"},
         "GET /oapi/v1/platform/organizations": [
             {"organizationId": "org-id", "name": "MemTensor"},
         ],
@@ -85,48 +54,122 @@ def test_preflight_handles_documented_raw_response_shapes() -> None:
             ],
         },
         "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/fields": [
-            {
-                "id": "priority",
-                "options": [{"id": "medium-id", "displayValue": "中"}],
-            },
+            {"id": "priority", "options": [{"id": "medium-id", "displayValue": "中"}]},
         ],
     }
 
-    def transport(method: str, path: str) -> object:
+    def transport(method: str, path: str, body: object = None) -> object:
         calls.append((method, path))
         return responses[f"{method} {path}"]
 
     result = MODULE.preflight(
+        "",
+        "project-id",
+        "MemOS开源项目管理",
+        "孙起",
+        "中",
         MODULE.YunxiaoClient(transport),
-        project_id="project-id",
-        project_name="MemOS开源项目管理",
-        assignee_name="孙起",
-        priority_name="中",
     )
-
     assert result == {
-        "organization_id": "org-id",
+        "org": "org-id",
         "project_id": "project-id",
-        "workitem_type_id": "req-id",
+        "type_id": "req-id",
         "assignee_id": "sunqi-id",
         "priority_id": "medium-id",
-        "statuses": {
-            "待处理": "pending-id",
-            "已完成": "done-id",
-            "已取消": "cancelled-id",
-        },
+        "statuses": {"待处理": "pending-id", "已完成": "done-id", "已取消": "cancelled-id"},
     }
-    assert {method for method, _ in calls} == {"GET"}
+    assert {m for m, _ in calls} == {"GET"}
 
 
-def test_preflight_workflow_only_runs_read_only_preflight() -> None:
-    workflow = Path(__file__).parents[1] / ".github" / "workflows" / "yunxiao-github-sync.yml"
-    content = workflow.read_text(encoding="utf-8")
+def test_sync_one_create() -> None:
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
 
+    def transport(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+        calls.append((method, path, body))
+        if "search" in path:
+            return {"data": {"workitems": []}}
+        if method == "POST":
+            return {"id": "new-id"}
+        raise AssertionError(f"unexpected {method} {path}")
+
+    cfg = {
+        "org": "org",
+        "project_id": "p",
+        "type_id": "t",
+        "assignee_id": "a",
+        "priority_id": "pr",
+        "statuses": {"待处理": "s1", "已完成": "s2", "已取消": "s3"},
+    }
+    item = {
+        "number": 1,
+        "title": "Test",
+        "html_url": "https://g.com",
+        "created_at": "2026-07-25T01:02:03Z",
+        "state": "open",
+        "labels": [{"name": "bug"}],
+    }
+    r = MODULE.sync_one(
+        "org",
+        cfg,
+        "issue",
+        item,
+        apply=True,
+        label_ids={"bug": "lid1"},
+        client=MODULE.YunxiaoClient(transport),
+    )
+    assert r == "created"
+    assert calls[1][2] is not None
+    assert calls[1][2]["labels"] == ["lid1"]
+
+
+def test_sync_one_close_updates_status() -> None:
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def transport(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+        calls.append((method, path, body))
+        if "search" in path:
+            return {"data": {"workitems": [{"id": "existing"}]}}
+        return {}
+
+    cfg = {
+        "org": "org",
+        "project_id": "p",
+        "type_id": "t",
+        "assignee_id": "a",
+        "priority_id": "pr",
+        "statuses": {"待处理": "s1", "已完成": "s2", "已取消": "s3"},
+    }
+    r = MODULE.sync_one(
+        "org",
+        cfg,
+        "issue",
+        {
+            "number": 1,
+            "title": "T",
+            "html_url": "x",
+            "state": "closed",
+            "created_at": "2026-07-25T01:02:03Z",
+            "labels": [],
+        },
+        apply=True,
+        label_ids={},
+        client=MODULE.YunxiaoClient(transport),
+    )
+    assert r == "updated-status"
+    assert calls[1][2] == {"status": "s3"}
+
+
+def test_workflow_structure() -> None:
+    content = (
+        Path(__file__).parents[1] / ".github" / "workflows" / "yunxiao-github-sync.yml"
+    ).read_text(encoding="utf-8")
+    assert "pull_request_target:" in content
+    assert "issues:" in content
     assert "workflow_dispatch:" in content
     assert "YUNXIAO_TOKEN: ${{ secrets.YUNXIAO_TOKEN }}" in content
-    assert "--mode preflight" in content
-    assert "YUNXIAO_PROJECT_ID: 2eac3f84ef1a3482535bd0e255" in content
-    assert "issues:" not in content
-    assert "pull_request" not in content
-    assert "--apply" not in content
+    assert "--mode event" in content
+    assert "mode:" in content
+    assert "preflight" in content
+    assert "backfill" in content
+    assert "contents: read" in content
+    assert "checkout@v4" in content

@@ -1,32 +1,68 @@
-name: Yunxiao GitHub Sync Preflight
+name: Sync GitHub to Yunxiao
 
 on:
+  issues:
+    types: [opened, closed, reopened]
+  pull_request_target:
+    types: [opened, closed, reopened]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "运行模式"
+        required: true
+        type: choice
+        default: "preflight"
+        options:
+          - preflight
+          - backfill
+      apply:
+        description: "回填时是否实际写入（选 false 则仅 dry-run）"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
-  group: yunxiao-github-sync-preflight-${{ github.repository }}
+  group: yunxiao-github-sync-${{ github.repository }}
   cancel-in-progress: false
 
+env:
+  YUNXIAO_PROJECT_ID: 2eac3f84ef1a3482535bd0e255
+  YUNXIAO_PROJECT_NAME: MemOS开源项目管理
+  YUNXIAO_DEFAULT_ASSIGNEE_NAME: 孙起
+  YUNXIAO_DEFAULT_PRIORITY_NAME: 中
+
 jobs:
-  preflight:
-    name: Validate Yunxiao configuration
+  sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      YUNXIAO_PROJECT_ID: 2eac3f84ef1a3482535bd0e255
-      YUNXIAO_PROJECT_NAME: MemOS开源项目管理
-      YUNXIAO_DEFAULT_ASSIGNEE_NAME: 孙起
-      YUNXIAO_DEFAULT_PRIORITY_NAME: 中
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run read-only preflight
+
+      - name: Run sync
         env:
           YUNXIAO_TOKEN: ${{ secrets.YUNXIAO_TOKEN }}
-        run: python scripts/yunxiao_github_sync.py --mode preflight
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ARGS="--mode ${{ inputs.mode }}"
+            if [ "${{ inputs.mode }}" = "backfill" ] && [ "${{ inputs.apply }}" != "true" ]; then
+              ARGS="$ARGS --dry-run"
+            fi
+          elif [ "${{ github.event_name }}" = "issues" ] || [ "${{ github.event_name }}" = "pull_request_target" ]; then
+            ARGS="--mode event --apply"
+          else
+            ARGS="--mode preflight"
+          fi
+          python scripts/yunxiao_github_sync.py $ARGS
