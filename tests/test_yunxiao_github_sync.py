@@ -24,10 +24,10 @@ def test_iso_after_days() -> None:
 
 
 def test_source_status() -> None:
-    assert MODULE.source_status("issue", {"state": "open"}) == "待响应"
+    assert MODULE.source_status("issue", {"state": "open"}) == "待处理"
     assert MODULE.source_status("pr", {"state": "closed", "merged": True}) == "已完成"
-    assert MODULE.source_status("pr", {"state": "closed", "merged": False}) == "已关闭"
-    assert MODULE.source_status("issue", {"state": "closed"}) == "已关闭"
+    assert MODULE.source_status("pr", {"state": "closed", "merged": False}) == "已取消"
+    assert MODULE.source_status("issue", {"state": "closed"}) == "已取消"
 
 
 def test_preflight_documented_schema() -> None:
@@ -48,12 +48,12 @@ def test_preflight_documented_schema() -> None:
         ],
         "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/workflows": {
             "statuses": [
-                {"statusId": "pending-id", "displayValue": "待响应"},
-                {"statusId": "in-progress-id", "displayValue": "处理中"},
-                {"statusId": "verify-id", "displayValue": "待验证"},
+                {"statusId": "pending-id", "displayValue": "待处理"},
+                {"statusId": "design-id", "displayValue": "设计中"},
+                {"statusId": "dev-id", "displayValue": "开发中"},
                 {"statusId": "done-id", "displayValue": "已完成"},
-                {"statusId": "closed-id", "displayValue": "已关闭"},
-                {"statusId": "wontfix-id", "displayValue": "不予处理"},
+                {"statusId": "cancelled-id", "displayValue": "已取消"},
+                {"statusId": "test-id", "displayValue": "测试中"},
             ],
         },
         "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/fields": [],
@@ -77,12 +77,12 @@ def test_preflight_documented_schema() -> None:
         "assignee_id": "sunqi-id",
         "priority_id": "d82f7f7a06ff9d5b1eef37aca6",
         "statuses": {
-            "待响应": "pending-id",
-            "处理中": "in-progress-id",
-            "待验证": "verify-id",
+            "待处理": "pending-id",
+            "设计中": "design-id",
+            "开发中": "dev-id",
             "已完成": "done-id",
-            "已关闭": "closed-id",
-            "不予处理": "wontfix-id",
+            "已取消": "cancelled-id",
+            "测试中": "test-id",
         },
     }
     assert {m for m, _ in calls} == {"GET"}
@@ -106,12 +106,12 @@ def test_sync_one_create() -> None:
         "assignee_id": "a",
         "priority_id": "pr",
         "statuses": {
-            "待响应": "s1",
-            "处理中": "s2",
-            "待验证": "s3",
+            "待处理": "s1",
+            "设计中": "s2",
+            "开发中": "s3",
             "已完成": "s4",
-            "已关闭": "s5",
-            "不予处理": "s6",
+            "已取消": "s5",
+            "测试中": "s6",
         },
     }
     item = {
@@ -152,12 +152,12 @@ def test_sync_one_close_updates_status() -> None:
         "assignee_id": "a",
         "priority_id": "pr",
         "statuses": {
-            "待响应": "s1",
-            "处理中": "s2",
-            "待验证": "s3",
+            "待处理": "s1",
+            "设计中": "s2",
+            "开发中": "s3",
             "已完成": "s4",
-            "已关闭": "s5",
-            "不予处理": "s6",
+            "已取消": "s5",
+            "测试中": "s6",
         },
     }
     r = MODULE.sync_one(

@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 
 SOURCE_LABELS = {"issue": "Issue", "pr": "PR"}
-STATUS_LABELS = ("待响应", "处理中", "待验证", "已完成", "已关闭", "不予处理")
+STATUS_LABELS = ("待处理", "设计中", "开发中", "已完成", "已取消", "测试中")
 
 # ---------- errors ----------
 
@@ -90,10 +90,10 @@ def iso_after_days(value: str, days: int) -> str:
 
 def source_status(item_type: str, item: dict[str, Any]) -> str:
     if item.get("state") == "open":
-        return "待响应"
+        return "待处理"
     if item_type == "pr" and item.get("merged"):
         return "已完成"
-    return "已关闭"
+    return "已取消"
 
 
 # ---------- preflight helpers ----------
@@ -306,7 +306,7 @@ def sync_one(
             return "skipped-closed"
         if not apply:
             return "dry-run-create"
-        status_id = cfg["statuses"]["待响应"]
+        status_id = cfg["statuses"]["待处理"]
         payload: dict[str, Any] = {
             "spaceId": cfg["project_id"],
             "workitemTypeId": cfg["type_id"],
