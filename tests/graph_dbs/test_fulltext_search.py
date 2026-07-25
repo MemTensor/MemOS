@@ -232,6 +232,18 @@ class TestFulltextSearchFiltering:
         assert "node.tags = $filter_tags" in query
         assert params["filter_tags"] == "important"
 
+    def test_search_filter_rejects_invalid_key(self, shared_neo4j_db):
+        """Invalid filter keys (Cypher injection attempt) are skipped."""
+        session_mock = _mock_session_run(shared_neo4j_db, [{"id": "a", "score": 0.9}])
+
+        shared_neo4j_db.search_by_fulltext(
+            query_words=["test"],
+            search_filter={"x} DETACH DELETE n //": "evil"},
+        )
+
+        query = session_mock.run.call_args[0][0]
+        assert "DETACH DELETE" not in query
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Tests: search_by_fulltext — threshold
@@ -239,36 +251,34 @@ class TestFulltextSearchFiltering:
 
 
 class TestFulltextSearchThreshold:
-    """Threshold post-filtering tests."""
+    """Threshold filtering tests (applied in Cypher, not Python)."""
 
-    def test_threshold_filters_low_scores(self, shared_neo4j_db):
-        """Results below threshold are excluded."""
-        _mock_session_run(shared_neo4j_db, [
-            {"id": "high", "score": 0.90},
-            {"id": "mid", "score": 0.60},
-            {"id": "low", "score": 0.30},
+    def test_threshold_added_to_cypher_query(self, shared_neo4j_db):
+        """When threshold is set, it's pushed into the Cypher WHERE clause."""
+        session_mock = _mock_session_run(shared_neo4j_db, [
+            {"id": "a", "score": 0.90},
         ])
 
-        results = shared_neo4j_db.search_by_fulltext(
+        shared_neo4j_db.search_by_fulltext(
             query_words=["test"],
             threshold=0.50,
         )
 
-        ids = [r["id"] for r in results]
-        assert "high" in ids
-        assert "mid" in ids
-        assert "low" not in ids
+        query = session_mock.run.call_args[0][0]
+        params = session_mock.run.call_args[1]
+        assert "score >= $threshold" in query
+        assert params["threshold"] == 0.50
 
     def test_no_threshold_returns_all(self, shared_neo4j_db):
-        """Without threshold, all results are returned."""
-        _mock_session_run(shared_neo4j_db, [
+        """Without threshold, no score filter in query."""
+        session_mock = _mock_session_run(shared_neo4j_db, [
             {"id": "a", "score": 0.10},
-            {"id": "b", "score": 0.05},
         ])
 
-        results = shared_neo4j_db.search_by_fulltext(query_words=["test"])
+        shared_neo4j_db.search_by_fulltext(query_words=["test"])
 
-        assert len(results) == 2
+        query = session_mock.run.call_args[0][0]
+        assert "score >= $threshold" not in query
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -313,10 +323,15 @@ class TestLuceneEscaping:
         """Empty string is returned as-is."""
         assert self._escape("") == ""
 
-    def test_special_chars_only_wildcard(self):
-        """Wildcard-only string is not escaped (preserves *)."""
+    def test_special_chars_only_wildcard_not_escaped(self):
+        """A lone wildcard '*' is preserved for prefix queries."""
         escaped = self._escape("*")
         assert escaped == "*"
+
+    def test_wildcard_in_mixed_term_is_escaped(self):
+        """Wildcard '*' within a regular term should be escaped."""
+        escaped = self._escape("foo*")
+        assert escaped == "foo\\*"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -368,7 +383,11 @@ class TestFulltextIndexCreation:
 
 
 def _mock_session_run(db, return_rows):
-    """Set up a mocked session.run that returns the given rows."""
+    """Set up a mocked session.run that dispatches by query content.
+
+    Index-related calls (SHOW/CREATE FULLTEXT INDEX) return appropriate
+    stubs so they don't interfere with the search query assertions.
+    """
     session_mock = db.driver.session.return_value
     session_mock.__enter__.return_value = session_mock
 
@@ -378,9 +397,20 @@ def _mock_session_run(db, return_rows):
         mock_record.keys.return_value = row.keys()
         return mock_record
 
-    records = [_make_record(r) for r in return_rows]
-    session_mock.run.return_value = MagicMock(__iter__=lambda _: iter(records))
-    session_mock.run.return_value.single.return_value = None  # for index check
+    search_records = [_make_record(r) for r in return_rows]
+
+    def _run_side_effect(query, **params):
+        mock_result = MagicMock()
+        if "SHOW FULLTEXT" in query:
+            mock_result.single.return_value = None  # index doesn't exist
+        elif "CREATE FULLTEXT" in query:
+            mock_result.single.return_value = None
+        else:
+            # Search query — return the test data
+            mock_result.__iter__.return_value = iter(search_records)
+        return mock_result
+
+    session_mock.run.side_effect = _run_side_effect
     return session_mock
 
 

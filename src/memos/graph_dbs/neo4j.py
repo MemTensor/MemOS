@@ -1,4 +1,5 @@
 import json
+import re
 import time
 
 from datetime import datetime
@@ -11,6 +12,13 @@ from memos.log import get_logger
 
 
 logger = get_logger(__name__)
+
+# Pattern for validating Cypher property names — alphanumeric + underscore,
+# must start with letter or underscore (same as base._VALID_FIELD_NAME_RE)
+_VALID_PROPERTY_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+# Lucene special characters that need escaping in fulltext queries
+_LUCENE_SPECIAL_CHARS = frozenset(r'+-&|!(){}[]^"~*?:\\/')
 
 
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -1097,6 +1105,11 @@ class Neo4jGraphDB(BaseGraphDB):
         # search_filter (property equality filters)
         if search_filter:
             for key in search_filter:
+                if not _VALID_PROPERTY_NAME_RE.match(key):
+                    logger.warning(
+                        "[search_by_fulltext] skipping invalid filter key: %s", key
+                    )
+                    continue
                 param_name = f"filter_{key}"
                 where_clauses.append(f"node.{key} = ${param_name}")
                 params[param_name] = search_filter[key]
@@ -1112,7 +1125,10 @@ class Neo4jGraphDB(BaseGraphDB):
 
         # ---- Assemble Cypher query ----
         where_clause = ""
-        if where_clauses:
+        if where_clauses or threshold is not None:
+            if threshold is not None:
+                where_clauses.append("score >= $threshold")
+                params["threshold"] = threshold
             where_clause = "WHERE " + " AND ".join(where_clauses)
 
         query = f"""
@@ -1136,14 +1152,10 @@ class Neo4jGraphDB(BaseGraphDB):
                 item: dict[str, Any] = {"id": record["id"], "score": record["score"]}
                 records.append(item)
 
-        # Post-filter by threshold
-        if threshold is not None:
-            records = [r for r in records if r["score"] >= threshold]
-
         logger.info(
-            "[search_by_fulltext] returned %d results (threshold=%s)",
+            "[search_by_fulltext] returned %d results%s",
             len(records),
-            threshold,
+            f" (threshold={threshold})" if threshold is not None else "",
         )
         return records
 
@@ -1857,8 +1869,18 @@ class Neo4jGraphDB(BaseGraphDB):
                 result = session.run(query, name=index_name)
                 return result.single() is not None
         except Exception:
-            # Fallback for older Neo4j versions — use SHOW INDEXES
-            return self._index_exists(index_name)
+            # Fallback for older Neo4j versions that don't support
+            # SHOW FULLTEXT INDEXES — use SHOW INDEXES instead.
+            from neo4j.exceptions import ClientError
+
+            try:
+                return self._index_exists(index_name)
+            except ClientError:
+                logger.debug(
+                    "Could not check fulltext index '%s' — falling back to SHOW INDEXES",
+                    index_name,
+                )
+                return self._index_exists(index_name)
 
     def _create_fulltext_index(
         self, index_name: str = "memory_fulltext_index"
@@ -1882,10 +1904,6 @@ class Neo4jGraphDB(BaseGraphDB):
         """
         if not term:
             return term
-        # Lucene special characters that need escaping
-        _LUCENE_SPECIAL_CHARS = set(
-            r'+-&|!(){}[]^"~*?:\\/'
-        )
         # If the term is nothing but wildcards, return as-is
         if all(ch in _LUCENE_SPECIAL_CHARS for ch in term):
             return term
