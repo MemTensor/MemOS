@@ -56,9 +56,7 @@ def test_preflight_documented_schema() -> None:
                 {"statusId": "wontfix-id", "displayValue": "不予处理"},
             ],
         },
-        "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/fields": [
-            {"id": "priority", "options": [{"id": "medium-id", "displayValue": "中"}]},
-        ],
+        "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/fields": [],
     }
 
     def transport(method: str, path: str, body: object = None) -> object:
@@ -70,7 +68,6 @@ def test_preflight_documented_schema() -> None:
         "project-id",
         "MemOS开源项目管理",
         "孙起",
-        "中",
         MODULE.YunxiaoClient(transport),
     )
     assert result == {
@@ -78,7 +75,7 @@ def test_preflight_documented_schema() -> None:
         "project_id": "project-id",
         "type_id": "req-id",
         "assignee_id": "sunqi-id",
-        "priority_id": "medium-id",
+        "priority_id": "d82f7f7a06ff9d5b1eef37aca6",
         "statuses": {
             "待响应": "pending-id",
             "处理中": "in-progress-id",

@@ -141,7 +141,6 @@ def preflight(
     project_id: str,
     project_name: str,
     assignee_name: str,
-    priority_name: str,
     client: YunxiaoClient,
 ) -> dict[str, Any]:
     organizations = _list_or_extract(client.get("/oapi/v1/platform/organizations"), ())
@@ -182,35 +181,12 @@ def preflight(
     )
     statuses = {n: _item_id(_find_by_name(workflow, n, "工作流状态")) for n in STATUS_LABELS}
 
-    fields = _list_or_extract(
-        client.get(
-            f"/oapi/v1/projex/organizations/{org}/projects/{project_id}/workitemTypes/{type_id}/fields"
-        ),
-        ("fields", "fieldConfigs"),
-    )
-    pf = next(
-        (
-            f
-            for f in fields
-            if f.get("id") == "priority"
-            or f.get("identifier") == "priority"
-            or f.get("fieldIdentifier") == "priority"
-        ),
-        None,
-    )
-    if not pf:
-        raise PreflightError("需求工作项缺少优先级字段")
-    opts = _list_or_extract(pf.get("options") or pf.get("values") or {}, ())
-    if not opts:
-        opts = pf.get("options") or pf.get("values") or []
-    priority = _find_by_name(opts, priority_name, "默认优先级")
-
     return {
         "org": org,
         "project_id": project_id,
         "type_id": type_id,
         "assignee_id": _item_id(assignee),
-        "priority_id": _item_id(priority),
+        "priority_id": "d82f7f7a06ff9d5b1eef37aca6",
         "statuses": statuses,
     }
 

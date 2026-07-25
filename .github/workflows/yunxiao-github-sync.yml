@@ -30,12 +30,6 @@ concurrency:
   group: yunxiao-github-sync-${{ github.repository }}
   cancel-in-progress: false
 
-env:
-  YUNXIAO_PROJECT_ID: 2eac3f84ef1a3482535bd0e255
-  YUNXIAO_PROJECT_NAME: MemOS开源项目管理
-  YUNXIAO_DEFAULT_ASSIGNEE_NAME: 孙起
-  YUNXIAO_DEFAULT_PRIORITY_NAME: 中
-
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -53,6 +47,9 @@ jobs:
       - name: Run sync
         env:
           YUNXIAO_TOKEN: ${{ secrets.YUNXIAO_TOKEN }}
+          YUNXIAO_PROJECT_ID: ${{ vars.YUNXIAO_PROJECT_ID }}
+          YUNXIAO_PROJECT_NAME: ${{ vars.YUNXIAO_PROJECT_NAME }}
+          YUNXIAO_DEFAULT_ASSIGNEE_NAME: ${{ vars.YUNXIAO_DEFAULT_ASSIGNEE_NAME }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
