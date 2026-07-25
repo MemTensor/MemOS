@@ -53,7 +53,6 @@ def test_preflight_documented_schema() -> None:
                 {"statusId": "dev-id", "displayValue": "开发中"},
                 {"statusId": "done-id", "displayValue": "已完成"},
                 {"statusId": "cancelled-id", "displayValue": "已取消"},
-                {"statusId": "test-id", "displayValue": "测试中"},
             ],
         },
         "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/fields": [
@@ -84,7 +83,6 @@ def test_preflight_documented_schema() -> None:
             "开发中": "dev-id",
             "已完成": "done-id",
             "已取消": "cancelled-id",
-            "测试中": "test-id",
         },
     }
     assert {m for m, _ in calls} == {"GET"}
@@ -113,7 +111,6 @@ def test_sync_one_create() -> None:
             "开发中": "s3",
             "已完成": "s4",
             "已取消": "s5",
-            "测试中": "s6",
         },
     }
     item = {
@@ -159,7 +156,6 @@ def test_sync_one_close_updates_status() -> None:
             "开发中": "s3",
             "已完成": "s4",
             "已取消": "s5",
-            "测试中": "s6",
         },
     }
     r = MODULE.sync_one(

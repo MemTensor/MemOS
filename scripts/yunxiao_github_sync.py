@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 
 SOURCE_LABELS = {"issue": "Issue", "pr": "PR"}
-STATUS_LABELS = ("待处理", "设计中", "开发中", "已完成", "已取消", "测试中")
+STATUS_LABELS = ("待处理", "设计中", "开发中", "已完成", "已取消")
 DEFAULT_PRIORITY_NAME = "中"
 REQUIRED_ENV = ("YUNXIAO_PROJECT_ID", "YUNXIAO_PROJECT_NAME", "YUNXIAO_DEFAULT_ASSIGNEE_NAME")
 
@@ -254,13 +254,16 @@ def sync_labels(
         "#ff5722",
     ]
     for i, name in enumerate(sorted(wanted - existing_names)):
-        resp = client._transport(
-            "POST",
-            f"/oapi/v1/projex/organizations/{org}/projects/{project_id}/labels",
-            {"name": name, "color": colors[i % len(colors)]},
-        )
-        name_to_id[name] = _item_id(resp)
-        time.sleep(0.1)
+        try:
+            resp = client._transport(
+                "POST",
+                f"/oapi/v1/projex/organizations/{org}/projects/{project_id}/labels",
+                {"name": name, "color": colors[i % len(colors)]},
+            )
+            name_to_id[name] = _item_id(resp)
+            time.sleep(0.1)
+        except YunxiaoApiError:
+            pass
     return name_to_id
 
 
@@ -351,7 +354,7 @@ def sync_one(
             "planFinishTime": iso_after_days(item["created_at"], 7),
         }
         # labels
-        github_labels = [l["name"] for l in item.get("labels", [])]
+        github_labels = [label["name"] for label in item.get("labels", [])]
         lids = [label_ids[n] for n in github_labels if n in label_ids] if label_ids else []
         if lids:
             payload["labels"] = lids
@@ -394,7 +397,7 @@ def handle_event(client: YunxiaoClient) -> int:
         client,
     )
     org = cfg["org"]
-    all_labels = {l["name"] for l in item.get("labels", [])}
+    all_labels = {label["name"] for label in item.get("labels", [])}
     label_ids = sync_labels(org, cfg["project_id"], all_labels, client) if all_labels else {}
     result = sync_one(org, cfg, item_type, item, apply=True, label_ids=label_ids, client=client)
     print(f"{item_type} #{item['number']}: {result}")
@@ -434,7 +437,7 @@ def backfill(client: YunxiaoClient, *, apply: bool) -> int:
 
     all_labels: set[str] = set()
     for item in issues + prs:
-        all_labels.update(l["name"] for l in item.get("labels", []))
+        all_labels.update(label["name"] for label in item.get("labels", []))
     label_ids = sync_labels(org, cfg["project_id"], all_labels, client) if all_labels else {}
 
     summary: dict[str, Any] = {}
