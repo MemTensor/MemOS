@@ -13,7 +13,9 @@ from urllib.request import Request, urlopen
 
 
 SOURCE_LABELS = {"issue": "Issue", "pr": "PR"}
-STATUS_LABELS = ("待响应", "处理中", "待验证", "已完成", "已关闭", "不予处理")
+STATUS_LABELS = ("待处理", "设计中", "开发中", "已完成", "已取消", "测试中")
+DEFAULT_PRIORITY_NAME = "中"
+REQUIRED_ENV = ("YUNXIAO_PROJECT_ID", "YUNXIAO_PROJECT_NAME", "YUNXIAO_DEFAULT_ASSIGNEE_NAME")
 
 # ---------- errors ----------
 
@@ -24,6 +26,13 @@ class PreflightError(ValueError):
 
 class YunxiaoApiError(RuntimeError):
     pass
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise PreflightError(f"缺少必需的环境变量：{name}（请在仓库 Variables 中配置）")
+    return value
 
 
 # ---------- transport ----------
@@ -90,10 +99,10 @@ def iso_after_days(value: str, days: int) -> str:
 
 def source_status(item_type: str, item: dict[str, Any]) -> str:
     if item.get("state") == "open":
-        return "待响应"
+        return "待处理"
     if item_type == "pr" and item.get("merged"):
         return "已完成"
-    return "已关闭"
+    return "已取消"
 
 
 # ---------- preflight helpers ----------
@@ -141,7 +150,6 @@ def preflight(
     project_id: str,
     project_name: str,
     assignee_name: str,
-    priority_name: str,
     client: YunxiaoClient,
 ) -> dict[str, Any]:
     organizations = _list_or_extract(client.get("/oapi/v1/platform/organizations"), ())
@@ -203,7 +211,7 @@ def preflight(
     opts = _list_or_extract(pf.get("options") or pf.get("values") or {}, ())
     if not opts:
         opts = pf.get("options") or pf.get("values") or []
-    priority = _find_by_name(opts, priority_name, "默认优先级")
+    priority = _find_by_name(opts, DEFAULT_PRIORITY_NAME, "默认优先级")
 
     return {
         "org": org,
@@ -330,7 +338,7 @@ def sync_one(
             return "skipped-closed"
         if not apply:
             return "dry-run-create"
-        status_id = cfg["statuses"]["待响应"]
+        status_id = cfg["statuses"]["待处理"]
         payload: dict[str, Any] = {
             "spaceId": cfg["project_id"],
             "workitemTypeId": cfg["type_id"],
@@ -380,10 +388,9 @@ def handle_event(client: YunxiaoClient) -> int:
 
     cfg = preflight(
         "",
-        os.environ.get("YUNXIAO_PROJECT_ID", "2eac3f84ef1a3482535bd0e255"),
-        os.environ.get("YUNXIAO_PROJECT_NAME", "MemOS开源项目管理"),
-        os.environ.get("YUNXIAO_DEFAULT_ASSIGNEE_NAME", "孙起"),
-        os.environ.get("YUNXIAO_DEFAULT_PRIORITY_NAME", "中"),
+        _required_env("YUNXIAO_PROJECT_ID"),
+        _required_env("YUNXIAO_PROJECT_NAME"),
+        _required_env("YUNXIAO_DEFAULT_ASSIGNEE_NAME"),
         client,
     )
     org = cfg["org"]
@@ -418,10 +425,9 @@ def backfill(client: YunxiaoClient, *, apply: bool) -> int:
 
     cfg = preflight(
         "",
-        os.environ.get("YUNXIAO_PROJECT_ID", "2eac3f84ef1a3482535bd0e255"),
-        os.environ.get("YUNXIAO_PROJECT_NAME", "MemOS开源项目管理"),
-        os.environ.get("YUNXIAO_DEFAULT_ASSIGNEE_NAME", "孙起"),
-        os.environ.get("YUNXIAO_DEFAULT_PRIORITY_NAME", "中"),
+        _required_env("YUNXIAO_PROJECT_ID"),
+        _required_env("YUNXIAO_PROJECT_NAME"),
+        _required_env("YUNXIAO_DEFAULT_ASSIGNEE_NAME"),
         client,
     )
     org = cfg["org"]
@@ -491,10 +497,9 @@ def main() -> int:
     try:
         result = preflight(
             "",
-            os.environ.get("YUNXIAO_PROJECT_ID", "2eac3f84ef1a3482535bd0e255"),
-            os.environ.get("YUNXIAO_PROJECT_NAME", "MemOS开源项目管理"),
-            os.environ.get("YUNXIAO_DEFAULT_ASSIGNEE_NAME", "孙起"),
-            os.environ.get("YUNXIAO_DEFAULT_PRIORITY_NAME", "中"),
+            _required_env("YUNXIAO_PROJECT_ID"),
+            _required_env("YUNXIAO_PROJECT_NAME"),
+            _required_env("YUNXIAO_DEFAULT_ASSIGNEE_NAME"),
             client,
         )
     except (PreflightError, YunxiaoApiError) as error:
