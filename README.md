@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/mcp.so%2Fmemos-memory-management%2FMemTensor.svg)](https://mcptoplist.com/server/mcp.so%2Fmemos-memory-management%2FMemTensor)
+
 <div align="center">
   <h1 align="center">
     <a href="https://memos.openmem.net/">
