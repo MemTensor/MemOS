@@ -1,0 +1,32 @@
+name: Yunxiao GitHub Sync Preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yunxiao-github-sync-preflight-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate Yunxiao configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      YUNXIAO_PROJECT_ID: 2eac3f84ef1a3482535bd0e255
+      YUNXIAO_PROJECT_NAME: MemOS开源项目管理
+      YUNXIAO_DEFAULT_ASSIGNEE_NAME: 孙起
+      YUNXIAO_DEFAULT_PRIORITY_NAME: 中
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run read-only preflight
+        env:
+          YUNXIAO_TOKEN: ${{ secrets.YUNXIAO_TOKEN }}
+        run: python scripts/yunxiao_github_sync.py --mode preflight
