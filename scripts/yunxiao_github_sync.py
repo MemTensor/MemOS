@@ -165,7 +165,7 @@ def _project_name(project: Any) -> str | None:
 
 
 def _field_identifier(field: dict[str, Any]) -> str | None:
-    for key in ("identifier", "fieldIdentifier", "propertyKey"):
+    for key in ("id", "identifier", "fieldIdentifier", "propertyKey"):
         value = field.get(key)
         if isinstance(value, str):
             return value

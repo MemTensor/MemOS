@@ -86,8 +86,8 @@ def test_preflight_handles_documented_raw_response_shapes() -> None:
         },
         "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/fields": [
             {
-                "fieldIdentifier": "priority",
-                "values": [{"value": "medium-id", "displayValue": "中"}],
+                "id": "priority",
+                "options": [{"id": "medium-id", "displayValue": "中"}],
             },
         ],
     }
