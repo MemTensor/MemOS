@@ -121,7 +121,7 @@ def test_preflight_handles_documented_raw_response_shapes() -> None:
 
 def test_preflight_workflow_only_runs_read_only_preflight() -> None:
     workflow = Path(__file__).parents[1] / ".github" / "workflows" / "yunxiao-github-sync.yml"
-    content = workflow.read_text()
+    content = workflow.read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" in content
     assert "YUNXIAO_TOKEN: ${{ secrets.YUNXIAO_TOKEN }}" in content

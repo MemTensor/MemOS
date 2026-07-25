@@ -5,7 +5,7 @@ import json
 import os
 import sys
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -82,7 +82,7 @@ def build_title(item_type: str, item: dict[str, Any]) -> str:
 def iso_after_days(value: str, days: int) -> str:
     created_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
     finished_at = created_at + timedelta(days=days)
-    return finished_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return finished_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def build_create_payload(
