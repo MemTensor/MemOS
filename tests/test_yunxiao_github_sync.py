@@ -24,10 +24,10 @@ def test_iso_after_days() -> None:
 
 
 def test_source_status() -> None:
-    assert MODULE.source_status("issue", {"state": "open"}) == "待处理"
+    assert MODULE.source_status("issue", {"state": "open"}) == "待响应"
     assert MODULE.source_status("pr", {"state": "closed", "merged": True}) == "已完成"
-    assert MODULE.source_status("pr", {"state": "closed", "merged": False}) == "已取消"
-    assert MODULE.source_status("issue", {"state": "closed"}) == "已取消"
+    assert MODULE.source_status("pr", {"state": "closed", "merged": False}) == "已关闭"
+    assert MODULE.source_status("issue", {"state": "closed"}) == "已关闭"
 
 
 def test_preflight_documented_schema() -> None:
@@ -48,9 +48,12 @@ def test_preflight_documented_schema() -> None:
         ],
         "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/workflows": {
             "statuses": [
-                {"statusId": "pending-id", "displayValue": "待处理"},
+                {"statusId": "pending-id", "displayValue": "待响应"},
+                {"statusId": "in-progress-id", "displayValue": "处理中"},
+                {"statusId": "verify-id", "displayValue": "待验证"},
                 {"statusId": "done-id", "displayValue": "已完成"},
-                {"statusId": "cancelled-id", "displayValue": "已取消"},
+                {"statusId": "closed-id", "displayValue": "已关闭"},
+                {"statusId": "wontfix-id", "displayValue": "不予处理"},
             ],
         },
         "GET /oapi/v1/projex/organizations/org-id/projects/project-id/workitemTypes/req-id/fields": [
@@ -76,7 +79,14 @@ def test_preflight_documented_schema() -> None:
         "type_id": "req-id",
         "assignee_id": "sunqi-id",
         "priority_id": "medium-id",
-        "statuses": {"待处理": "pending-id", "已完成": "done-id", "已取消": "cancelled-id"},
+        "statuses": {
+            "待响应": "pending-id",
+            "处理中": "in-progress-id",
+            "待验证": "verify-id",
+            "已完成": "done-id",
+            "已关闭": "closed-id",
+            "不予处理": "wontfix-id",
+        },
     }
     assert {m for m, _ in calls} == {"GET"}
 
@@ -98,7 +108,14 @@ def test_sync_one_create() -> None:
         "type_id": "t",
         "assignee_id": "a",
         "priority_id": "pr",
-        "statuses": {"待处理": "s1", "已完成": "s2", "已取消": "s3"},
+        "statuses": {
+            "待响应": "s1",
+            "处理中": "s2",
+            "待验证": "s3",
+            "已完成": "s4",
+            "已关闭": "s5",
+            "不予处理": "s6",
+        },
     }
     item = {
         "number": 1,
@@ -137,7 +154,14 @@ def test_sync_one_close_updates_status() -> None:
         "type_id": "t",
         "assignee_id": "a",
         "priority_id": "pr",
-        "statuses": {"待处理": "s1", "已完成": "s2", "已取消": "s3"},
+        "statuses": {
+            "待响应": "s1",
+            "处理中": "s2",
+            "待验证": "s3",
+            "已完成": "s4",
+            "已关闭": "s5",
+            "不予处理": "s6",
+        },
     }
     r = MODULE.sync_one(
         "org",
@@ -156,7 +180,7 @@ def test_sync_one_close_updates_status() -> None:
         client=MODULE.YunxiaoClient(transport),
     )
     assert r == "updated-status"
-    assert calls[1][2] == {"status": "s3"}
+    assert calls[1][2] == {"status": "s5"}
 
 
 def test_workflow_structure() -> None:
