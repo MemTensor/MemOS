@@ -48,6 +48,8 @@ _LIGHTWEIGHT_VECTOR_RETURN_FIELDS = (
     "dialog_id",
     "original_text",
     "preference",
+    "reasoning",
+    "internet_info",
     "mem_cube_id",
 )
 
