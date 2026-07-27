@@ -88,7 +88,20 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "memos-local-hermes"
-PLUGIN_VERSION = "2.0.0-beta.1"
+
+
+def _read_plugin_version() -> str:
+    """Read the npm package version that owns this Hermes adapter."""
+    package_json = _PLUGIN_DIR.parents[2] / "package.json"
+    try:
+        payload = json.loads(package_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return "dev"
+    version = payload.get("version")
+    return version.strip() if isinstance(version, str) and version.strip() else "dev"
+
+
+PLUGIN_VERSION = _read_plugin_version()
 _TOOL_FAILURE_REPAIR_HINT = (
     "This tool has failed multiple times in a row. You may want to call "
     "`memos_search` for relevant past experience before deciding what to do next."

@@ -68,6 +68,12 @@ class FailingSessionOpenBridge(FakeBridge):
 
 
 class HermesProviderPipelineTests(unittest.TestCase):
+    def test_plugin_version_matches_package_version(self) -> None:
+        package_json = _ADAPTER_ROOT.parent.parent / "package.json"
+        package_version = json.loads(package_json.read_text(encoding="utf-8"))["version"]
+
+        self.assertEqual(memos_provider.PLUGIN_VERSION, package_version)
+
     def test_module_imports_cleanly(self) -> None:
         """Regression guard for #2096: asserts that ``MemosHttpClient`` is
         NOT present in ``memos_provider``, since the class was referenced
