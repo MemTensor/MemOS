@@ -333,6 +333,17 @@ describe("makeDispatcher", () => {
     ).rejects.toSatisfy(
       (err) => err instanceof MemosError && err.code === "invalid_argument",
     );
+    await expect(
+      dispatch("turn.start", {
+        agent: "openclaw",
+        sessionId: "s-1",
+        turnKey: 42,
+        userText: "hi",
+        ts: 123,
+      }),
+    ).rejects.toSatisfy(
+      (err) => err instanceof MemosError && err.code === "invalid_argument",
+    );
   });
 
   it("feedback.submit forwards the DTO shape intact", async () => {

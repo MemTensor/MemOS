@@ -65,8 +65,8 @@ _PLUGIN_DIR = Path(__file__).resolve().parent
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
-from daemon_manager import (  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient
+from daemon_manager import (
     ensure_bridge_running,
     ensure_viewer_daemon,
     kill_zombie_bridges,
@@ -107,6 +107,7 @@ _TOOL_FAILURE_REPAIR_HINT = (
     "`memos_search` for relevant past experience before deciding what to do next."
 )
 _TOOL_FAILURE_HINT_THRESHOLD = 3
+_COMPRESSION_CONTEXT_MAX_CHARS = 6_000
 
 
 def _long_rpc_timeout_default() -> float:
@@ -305,6 +306,12 @@ class MemTensorProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._prefetch_thread: threading.Thread | None = None
+        # Exact memory context injected by the most recent real prefetch.
+        # Compression hooks only read this cache; they must never call the
+        # lifecycle-mutating `turn.start` RPC.
+        self._state_lock = threading.Lock()
+        self._last_injected_context: str = ""
+        self._active_turn_key: str = ""
         # Tool calls accumulated via the Hermes `post_tool_call` plugin
         # hook — flushed alongside user/assistant text in `sync_turn`.
         self._tool_calls: list[dict[str, Any]] = []
@@ -379,6 +386,9 @@ class MemTensorProvider(MemoryProvider):
             self._bridge = None
 
         self._session_id = session_id or self._session_id
+        with self._state_lock:
+            self._last_injected_context = ""
+            self._active_turn_key = ""
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
@@ -940,6 +950,13 @@ class MemTensorProvider(MemoryProvider):
         self._turn_number = int(turn_number or 0)
         self._skip_current_turn = _is_hermes_internal_review_prompt(message)
         self._last_user_text = "" if self._skip_current_turn else (message or "").strip()
+        with self._state_lock:
+            self._last_injected_context = ""
+            self._active_turn_key = (
+                f"{self._session_id}:{self._turn_number}"
+                if self._session_id and self._turn_number > 0
+                else ""
+            )
         # Reset per-turn buffers so reasoning / tool calls captured here
         # belong only to this turn.
         self._turn_thinking = ""
@@ -971,7 +988,11 @@ class MemTensorProvider(MemoryProvider):
             if suppress_injection:
                 # Do not let remembered "do it directly" skills override an
                 # explicit user request to dispatch work to a subagent.
+                with self._state_lock:
+                    self._last_injected_context = ""
                 return ""
+            with self._state_lock:
+                self._last_injected_context = context[:_COMPRESSION_CONTEXT_MAX_CHARS]
             return context
         except Exception as err:
             logger.debug("MemOS: prefetch failed — %s", err)
@@ -1217,19 +1238,19 @@ class MemTensorProvider(MemoryProvider):
             return value
 
     def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:  # type: ignore[override]
-        """Extract a compression-time memory summary.
+        """Return the memory context injected by the current/previous turn.
 
-        Hermes calls this right before discarding old messages; we
-        surface a tight summary of the relevant retrieval packet so
-        the compressor can preserve it alongside its own summary.
+        This hook must stay read-only. Calling ``turn.start`` here used to
+        finalize the active lightweight episode and create a phantom episode
+        on every compression pass. Reusing the exact context previously
+        injected by ``prefetch`` also keeps the summary faithful to what the
+        model actually saw.
         """
-        if not self._bridge or not self._last_user_text:
+        with self._state_lock:
+            context = self._last_injected_context.strip()
+        if not context:
             return ""
-        with contextlib.suppress(Exception):
-            packet = self._turn_start(self._last_user_text, session_id=self._session_id)
-            if packet:
-                return f"MemOS memory snapshot (preserved across compression):\n{packet}"
-        return ""
+        return f"MemOS memory snapshot (preserved across compression):\n{context}"
 
     # ─── Tool surface ─────────────────────────────────────────────────────
 
@@ -1604,6 +1625,9 @@ class MemTensorProvider(MemoryProvider):
     # ─── Session-end ──────────────────────────────────────────────────────
 
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:  # type: ignore[override]
+        with self._state_lock:
+            self._last_injected_context = ""
+            self._active_turn_key = ""
         if not self._bridge:
             return
         # `sync_turn` already flushed completed turn data synchronously.
@@ -1640,6 +1664,9 @@ class MemTensorProvider(MemoryProvider):
                 self.shutdown()
 
     def shutdown(self) -> None:  # type: ignore[override]
+        with self._state_lock:
+            self._last_injected_context = ""
+            self._active_turn_key = ""
         self._bridge_keepalive_stop.set()
         if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
             self._bridge_keepalive_thread.join(
@@ -2032,20 +2059,25 @@ class MemTensorProvider(MemoryProvider):
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None
         host_runtime = self._host_runtime_context()
+        with self._state_lock:
+            turn_key = self._active_turn_key
+        payload: dict[str, Any] = {
+            "agent": "hermes",
+            "namespace": self._runtime_namespace(),
+            "sessionId": session_id or self._session_id,
+            "userText": query,
+            "contextHints": {
+                "agentIdentity": self._agent_identity,
+                "namespace": self._runtime_namespace(),
+                **host_runtime,
+            },
+            "ts": int(time.time() * 1000),
+        }
+        if turn_key:
+            payload["turnKey"] = turn_key
         resp = self._bridge.request(
             "turn.start",
-            {
-                "agent": "hermes",
-                "namespace": self._runtime_namespace(),
-                "sessionId": session_id or self._session_id,
-                "userText": query,
-                "contextHints": {
-                    "agentIdentity": self._agent_identity,
-                    "namespace": self._runtime_namespace(),
-                    **host_runtime,
-                },
-                "ts": int(time.time() * 1000),
-            },
+            payload,
             timeout=_LONG_RPC_TIMEOUT,
         )
         # Stash the real episode id the pipeline auto-created (V7

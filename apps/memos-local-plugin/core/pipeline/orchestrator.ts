@@ -77,6 +77,7 @@ import type {
 } from "../retrieval/types.js";
 import type { CoreEvent, CoreEventType } from "../../agent-contract/events.js";
 import type { LogRecord } from "../../agent-contract/log-record.js";
+import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
 import { createEmbeddingRetryWorker, systemErrorEvent } from "../embedding/index.js";
@@ -300,6 +301,19 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // when the adapter doesn't pass its own.
   const lastUserTextBySession = new Map<SessionId, string>();
 
+  // Keep one idempotent turn-start promise per session. Storing the promise,
+  // rather than only the resolved packet, also collapses concurrent retries
+  // that arrive while the first retrieval is still running. A new turnKey
+  // replaces the prior entry, so this stays bounded to O(active sessions).
+  const turnStartBySession = new Map<
+    SessionId,
+    {
+      turnKey: string;
+      userText: string;
+      packet: Promise<InjectionPacket>;
+    }
+  >();
+
   // When a session is closed (e.g. adapter fires `session_end`), purge
   // every orchestrator-local map entry for that session. Without this,
   // `openEpisodeIfNeeded` would still see the stale `lastEpisodeBySession`
@@ -312,6 +326,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     openEpisodeBySession.delete(sid);
     lastEpisodeBySession.delete(sid);
     lastUserTextBySession.delete(sid);
+    turnStartBySession.delete(sid);
     log.debug("session.maps_cleared", { sessionId: sid, reason: evt.reason });
   });
 
@@ -1117,6 +1132,48 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // ─── Turn lifecycle ─────────────────────────────────────────────────────
 
   async function onTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
+    const turnKey = input.turnKey?.trim();
+    if (!turnKey) {
+      return onTurnStartOnce(input);
+    }
+
+    const existing = turnStartBySession.get(input.sessionId);
+    if (existing?.turnKey === turnKey) {
+      if (existing.userText !== input.userText) {
+        throw new MemosError(
+          ERROR_CODES.CONFLICT,
+          "turn.start: turnKey was reused with different user text",
+          {
+            sessionId: input.sessionId,
+            turnKey,
+          },
+        );
+      }
+      log.debug("turn.start.idempotent_reuse", {
+        sessionId: input.sessionId,
+        turnKey,
+      });
+      return existing.packet;
+    }
+
+    const packet = onTurnStartOnce(input);
+    turnStartBySession.set(input.sessionId, {
+      turnKey,
+      userText: input.userText,
+      packet,
+    });
+    try {
+      return await packet;
+    } catch (err) {
+      const current = turnStartBySession.get(input.sessionId);
+      if (current?.packet === packet) {
+        turnStartBySession.delete(input.sessionId);
+      }
+      throw err;
+    }
+  }
+
+  async function onTurnStartOnce(input: TurnInputDTO): Promise<InjectionPacket> {
     const t0 = now();
     const initialSessionId = await ensureSession(
       input.agent,
