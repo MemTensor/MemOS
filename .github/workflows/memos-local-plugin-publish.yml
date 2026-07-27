@@ -133,6 +133,10 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      - name: Test npm publish helper
+        working-directory: .
+        run: node --test .github/scripts/publish-local-plugin.test.mjs
+
       - name: Download all prebuilds
         uses: actions/download-artifact@v4
         with:
@@ -306,92 +310,7 @@ jobs:
           RECOVER_EXISTING_NPM_RELEASE: ${{ inputs.recover_existing_npm_release }}
           DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
           DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
-        run: |
-          set -euo pipefail
-          npm_view_log="${RUNNER_TEMP}/memos-local-plugin-npm-view.log"
-          npm_version_exists() {
-            for attempt in 1 2 3; do
-              set +e
-              npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version >"${npm_view_log}" 2>&1
-              status=$?
-              set -e
-              if [ "${status}" = 0 ]; then
-                sed -n '1,40p' "${npm_view_log}"
-                return 0
-              fi
-              if grep -Eiq "E404|404 Not Found|No match found|is not in this registry" "${npm_view_log}"; then
-                return 1
-              fi
-              sed -n '1,120p' "${npm_view_log}"
-              if [ "${attempt}" = 3 ]; then
-                echo "::error::npm view failed after three attempts; refusing to guess whether ${PACKAGE_NAME}@${RELEASE_VERSION} exists."
-                exit "${status}"
-              fi
-              sleep "$((attempt * 5))"
-            done
-          }
-          remote_tag_exists() {
-            local release_tag="$1"
-            for attempt in 1 2 3; do
-              set +e
-              git ls-remote --exit-code --tags origin "refs/tags/${release_tag}" >/dev/null 2>&1
-              status=$?
-              set -e
-              if [ "${status}" = 0 ]; then
-                return 0
-              fi
-              if [ "${status}" = 2 ]; then
-                return 1
-              fi
-              if [ "${attempt}" = 3 ]; then
-                echo "::error::Failed to check remote tag ${release_tag} after three attempts."
-                exit "${status}"
-              fi
-              sleep "$((attempt * 5))"
-            done
-          }
-
-          if npm_version_exists; then
-            release_tag="memos-local-plugin-v${RELEASE_VERSION}"
-            if remote_tag_exists "${release_tag}"; then
-              echo "${PACKAGE_NAME}@${RELEASE_VERSION} and ${release_tag} already exist; treating this as an idempotent rerun."
-            elif [ "${RECOVER_EXISTING_NPM_RELEASE}" = "true" ]; then
-              echo "Recovery mode enabled; npm version exists, so publish is skipped."
-            else
-              echo "::error::npm version exists but ${release_tag} does not. Refusing to invent release metadata without explicit recovery mode."
-              exit 1
-            fi
-          else
-            attempt_dir="${RUNNER_TEMP}/memos-local-plugin-npm-publish-attempts"
-            mkdir -p "${attempt_dir}"
-            for attempt in 1 2 3; do
-              set +e
-              npm publish --access public --tag "${NPM_DIST_TAG}" >"${attempt_dir}/${attempt}.log" 2>&1
-              publish_status=$?
-              set -e
-              sed -n '1,160p' "${attempt_dir}/${attempt}.log"
-              if [ "${publish_status}" = 0 ]; then
-                break
-              fi
-              if npm_version_exists; then
-                echo "Publish returned an error, but npm now contains the requested version."
-                break
-              fi
-              if [ "${attempt}" = 3 ]; then
-                RELEASE_FAILURE_PHASE=npm-publish \
-                  RELEASE_FAILURE_ATTEMPT_DIR="${attempt_dir}" \
-                  node ../../.github/scripts/draft-local-plugin-release-notes.mjs \
-                  || echo "::warning::Failed to send the exhausted-retry notification."
-                echo "::error::npm publish failed after three attempts."
-                exit 1
-              fi
-              sleep "$((attempt * 5))"
-            done
-            if ! npm_version_exists; then
-              echo "::error::npm publish appeared to finish, but ${PACKAGE_NAME}@${RELEASE_VERSION} is still not visible."
-              exit 1
-            fi
-          fi
+        run: bash ../../.github/scripts/publish-local-plugin.sh
 
       - name: Create release tag and PR
         if: ${{ inputs.dry_run != true }}

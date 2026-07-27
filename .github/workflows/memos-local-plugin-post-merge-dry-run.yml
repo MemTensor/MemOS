@@ -9,6 +9,8 @@ on:
       - ".github/workflows/memos-local-plugin-post-merge-dry-run.yml"
       - ".github/scripts/draft-local-plugin-release-notes.mjs"
       - ".github/scripts/draft-local-plugin-release-notes.test.mjs"
+      - ".github/scripts/publish-local-plugin.sh"
+      - ".github/scripts/publish-local-plugin.test.mjs"
       - ".github/scripts/retry.sh"
 
 permissions:
