@@ -16,7 +16,7 @@ from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.dream.contextualization import CONTEXT_MEMORY_TYPE
-from memos.log import get_logger
+from memos.log import get_logger, summarize_search_request, summarize_search_results
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     cosine_similarity_matrix,
 )
@@ -32,6 +32,8 @@ logger = get_logger(__name__)
 _ENV_CONTEXT_RECALL = "MEMOS_DREAM_CONTEXT_RECALL"
 _ENV_CONTEXT_RECALL_TOP_K = "MEMOS_DREAM_CONTEXT_RECALL_TOP_K"
 _DEFAULT_CONTEXT_RECALL_TOP_K = 2
+_ENV_MMR_CANDIDATE_PRUNING = "MEMOS_MMR_CANDIDATE_PRUNING_ENABLED"
+_MMR_CANDIDATE_MULTIPLIER = 2
 
 
 def _env_enabled(name: str, default: str = "off") -> bool:
@@ -77,7 +79,10 @@ class SearchHandler(BaseHandler):
         Returns:
             SearchResponse with formatted results
         """
-        self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
+        self.logger.info(
+            "[SearchHandler] Search request summary: %s",
+            summarize_search_request(search_req),
+        )
 
         # Use deepcopy to avoid modifying the original request object
         search_req_local = copy.deepcopy(search_req)
@@ -137,7 +142,8 @@ class SearchHandler(BaseHandler):
             results = hooked_results
 
         self.logger.info(
-            f"[SearchHandler] Final search results: count={len(results)} results={results}"
+            "[SearchHandler] Final search result summary: %s",
+            summarize_search_results(results),
         )
 
         return SearchResponse(
@@ -348,6 +354,12 @@ class SearchHandler(BaseHandler):
         if not text_buckets and not pref_buckets:
             return results
 
+        self._prune_mmr_candidates_by_bucket(
+            results,
+            text_top_k=text_top_k,
+            pref_top_k=pref_top_k,
+        )
+
         # Flatten all memories with their type and scores
         # flat structure: (memory_type, bucket_idx, mem, score)
         flat: list[tuple[str, int, dict[str, Any], float]] = []
@@ -551,6 +563,87 @@ class SearchHandler(BaseHandler):
             bucket["memories"] = [flat[i][2] for i in selected_indices]
 
         return results
+
+    def _prune_mmr_candidates_by_bucket(
+        self,
+        results: dict[str, Any],
+        *,
+        text_top_k: int,
+        pref_top_k: int,
+    ) -> dict[str, Any]:
+        """Keep at most twice the final quota for each memory type in each bucket."""
+        if not _env_enabled(_ENV_MMR_CANDIDATE_PRUNING, "off"):
+            return results
+
+        total_before = 0
+        total_after = 0
+        bucket_counts: list[tuple[int, int]] = []
+
+        for result_key, target_top_k in (
+            ("text_mem", text_top_k),
+            ("pref_mem", pref_top_k),
+        ):
+            buckets = results.get(result_key)
+            if not isinstance(buckets, list):
+                continue
+
+            candidate_limit = max(0, int(target_top_k)) * _MMR_CANDIDATE_MULTIPLIER
+            for bucket in buckets:
+                memories = bucket.get("memories") if isinstance(bucket, dict) else None
+                if not isinstance(memories, list):
+                    continue
+
+                before_count = len(memories)
+                total_before += before_count
+                memories_by_type: dict[str, list[dict[str, Any]]] = {}
+                for memory in memories:
+                    if not isinstance(memory, dict):
+                        continue
+                    metadata = memory.get("metadata")
+                    memory_type = (
+                        metadata.get("memory_type") if isinstance(metadata, dict) else None
+                    )
+                    memories_by_type.setdefault(str(memory_type or result_key), []).append(memory)
+
+                selected: list[dict[str, Any]] = []
+                if candidate_limit > 0:
+                    for typed_memories in memories_by_type.values():
+                        selected.extend(
+                            sorted(
+                                typed_memories,
+                                key=self._mmr_candidate_score,
+                                reverse=True,
+                            )[:candidate_limit]
+                        )
+                    selected.sort(key=self._mmr_candidate_score, reverse=True)
+
+                bucket["memories"] = selected
+                if "total_nodes" in bucket:
+                    bucket["total_nodes"] = len(selected)
+                total_after += len(selected)
+                bucket_counts.append((before_count, len(selected)))
+
+        self.logger.info(
+            "[SearchHandler] MMR candidate pruning: multiplier=%s before=%s after=%s "
+            "dropped=%s bucket_counts=%s",
+            _MMR_CANDIDATE_MULTIPLIER,
+            total_before,
+            total_after,
+            total_before - total_after,
+            bucket_counts,
+        )
+        return results
+
+    @staticmethod
+    def _mmr_candidate_score(memory: dict[str, Any]) -> float:
+        metadata = memory.get("metadata")
+        if not isinstance(metadata, dict):
+            return 0.0
+        score = metadata.get("score", metadata.get("relativity", 0.0))
+        try:
+            return float(score or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def _is_unrelated(

@@ -20,6 +20,7 @@ from memos.api.handlers import (
 from memos.api.handlers.component_init import init_server
 from memos.api.handlers.config_builders import (
     build_embedder_config,
+    build_feedback_llm_config,
     build_graph_db_config,
     build_internet_retriever_config,
     build_llm_config,
@@ -39,6 +40,7 @@ from memos.api.handlers.formatters_handler import (
 __all__ = [
     "add_handler",
     "build_embedder_config",
+    "build_feedback_llm_config",
     "build_graph_db_config",
     "build_internet_retriever_config",
     "build_llm_config",

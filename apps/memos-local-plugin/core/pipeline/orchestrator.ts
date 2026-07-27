@@ -83,6 +83,30 @@ import { createEmbeddingRetryWorker, systemErrorEvent } from "../embedding/index
 import type { EpisodeSnapshot } from "../session/index.js";
 import type { IntentDecision, RelationDecision, TurnRelation } from "../session/types.js";
 
+function classifyWithTimeout(
+  classifyFn: () => Promise<RelationDecision>,
+  timeoutMs: number,
+  log: Logger,
+): Promise<RelationDecision> {
+  return Promise.race([
+    classifyFn(),
+    new Promise<RelationDecision>((_, reject) =>
+      setTimeout(() => reject(new Error("classify_timeout")), timeoutMs),
+    ),
+  ]).catch((err) => {
+    log.warn("relation.classify_timeout", {
+      timeoutMs,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      relation: "new_task" as const,
+      confidence: 0,
+      reason: "classify_timeout",
+      signals: ["classify_timeout"],
+    };
+  });
+}
+
 // ─── Factory ──────────────────────────────────────────────────────────────
 
 export function createPipeline(deps: PipelineDeps): PipelineHandle {
@@ -419,13 +443,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         const gapMs = Math.max(0, (turnTs ?? now()) - lastTurnTs);
 
         const relationStartedAt = Date.now();
-        const decision = await session.relation.classify({
-          prevUserText: ctx.prevUserText,
-          prevAssistantText: ctx.prevAssistantText,
-          newUserText: userText,
-          gapMs,
-          prevEpisodeId: currentEpId,
-        });
+        const decision = await classifyWithTimeout(
+          () => session.relation.classify({
+            prevUserText: ctx.prevUserText,
+            prevAssistantText: ctx.prevAssistantText,
+            newUserText: userText,
+            gapMs,
+            prevEpisodeId: currentEpId,
+          }),
+          algorithm.session.classifyTimeoutMs,
+          log,
+        );
         const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
         log.info("relation.classified", {
@@ -472,7 +500,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           durationMs: relationDurationMs,
         });
 
-        if (keepAppending) {
+        if (keepAppending && open.turns.length < algorithm.session.maxTurnsPerEpisode) {
           // Same topic — just append the new user turn to the open
           // episode. No finalize, no reflect; that's deferred until
           // the user actually changes topic / closes the session.
@@ -489,8 +517,19 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           return { episode: open, sessionId, relation: decision.relation };
         }
 
+        if (keepAppending) {
+          log.info("episode.turn_limit_reached", {
+            sessionId,
+            episodeId: currentEpId,
+            turns: open.turns.length,
+            maxTurnsPerEpisode: algorithm.session.maxTurnsPerEpisode,
+            relation: decision.relation,
+            source: "open_episode",
+          });
+        }
+
         // Topic changed (new_task) OR gap too large OR
-        // episode_per_turn mode — finalize the open episode, which
+        // episode_per_turn mode OR turn limit reached — finalize the open episode, which
         // fires `episode.finalized` → captureSubscriber.runReflect →
         // R_human + V backprop. Fire-and-forget; the chain runs on
         // its own clock (tests can drive it via `flush()`).
@@ -584,13 +623,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           }
         } else {
           const relationStartedAt = Date.now();
-          const decision = await session.relation.classify({
-            prevUserText: ctx.prevUserText,
-            prevAssistantText: ctx.prevAssistantText,
-            newUserText: userText,
-            gapMs,
-            prevEpisodeId: snapshot.id as EpisodeId,
-          });
+          const decision = await classifyWithTimeout(
+            () => session.relation.classify({
+              prevUserText: ctx.prevUserText,
+              prevAssistantText: ctx.prevAssistantText,
+              newUserText: userText,
+              gapMs,
+              prevEpisodeId: snapshot.id as EpisodeId,
+            }),
+            algorithm.session.classifyTimeoutMs,
+            log,
+          );
           const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
           log.info("relation.classified", {
@@ -635,7 +678,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
             durationMs: relationDurationMs,
           });
 
-          if (keepAppending) {
+          if (keepAppending && snapshot.turns.length < algorithm.session.maxTurnsPerEpisode) {
             if (snapshot.status === "closed") {
               session.sessionManager.reopenEpisode(
                 snapshot.id as EpisodeId,
@@ -662,6 +705,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
             };
           }
 
+          if (keepAppending) {
+            log.info("episode.turn_limit_reached", {
+              sessionId,
+              episodeId: snapshot.id,
+              turns: snapshot.turns.length,
+              maxTurnsPerEpisode: algorithm.session.maxTurnsPerEpisode,
+              relation: decision.relation,
+              source: "recovered_open_topic",
+            });
+          }
+
           if (snapshot.status === "open") {
             session.sessionManager.finalizeEpisode(snapshot.id as EpisodeId, {
               patchMeta: {
@@ -686,13 +740,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
     const gapMs = Math.max(0, (turnTs ?? now()) - prev.endedAt);
     const relationStartedAt = Date.now();
-    const decision = await session.relation.classify({
-      prevUserText: prev.userText,
-      prevAssistantText: prev.assistantText,
-      newUserText: userText,
-      gapMs,
-      prevEpisodeId: prev.episodeId,
-    });
+    const decision = await classifyWithTimeout(
+      () => session.relation.classify({
+        prevUserText: prev.userText,
+        prevAssistantText: prev.assistantText,
+        newUserText: userText,
+        gapMs,
+        prevEpisodeId: prev.episodeId,
+      }),
+      algorithm.session.classifyTimeoutMs,
+      log,
+    );
     const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
     log.info("relation.classified", {
@@ -738,22 +796,34 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     });
 
     if (shouldReopen) {
-      const reopenReason =
-        decision.relation === "revision" ? "revision" : "follow_up";
-      const snap = session.sessionManager.reopenEpisode(prev.episodeId, reopenReason);
-      session.sessionManager.addTurn(prev.episodeId, {
-        role: "user",
-        content: userText,
-        ts: turnTs,
-        meta: {
-          source: reopenReason,
-          classifiedRelation: decision.relation,
-          ...meta,
-        },
-      });
-      openEpisodeBySession.set(sessionId, prev.episodeId);
-      lastEpisodeBySession.delete(sessionId);
-      return { episode: snap, sessionId, relation: decision.relation };
+      const prevSnap = session.sessionManager.getEpisode(prev.episodeId);
+      if (prevSnap && prevSnap.turns.length >= algorithm.session.maxTurnsPerEpisode) {
+        log.info("episode.turn_limit_reached", {
+          sessionId,
+          episodeId: prev.episodeId,
+          turns: prevSnap.turns.length,
+          maxTurnsPerEpisode: algorithm.session.maxTurnsPerEpisode,
+          relation: decision.relation,
+          source: "closed_episode",
+        });
+      } else {
+        const reopenReason =
+          decision.relation === "revision" ? "revision" : "follow_up";
+        const snap = session.sessionManager.reopenEpisode(prev.episodeId, reopenReason);
+        session.sessionManager.addTurn(prev.episodeId, {
+          role: "user",
+          content: userText,
+          ts: turnTs,
+          meta: {
+            source: reopenReason,
+            classifiedRelation: decision.relation,
+            ...meta,
+          },
+        });
+        openEpisodeBySession.set(sessionId, prev.episodeId);
+        lastEpisodeBySession.delete(sessionId);
+        return { episode: snap, sessionId, relation: decision.relation };
+      }
     }
 
     if (decision.relation === "new_task") {

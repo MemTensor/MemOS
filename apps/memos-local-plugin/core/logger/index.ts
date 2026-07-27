@@ -62,6 +62,8 @@ interface LoggerCore {
   pid: number;
   host: string;
   seq: number;
+  /** IANA timezone used by display formatters. */
+  tz: string;
   /** Whether file sinks are wired up (false in pre-init / null mode). */
   filesActive: boolean;
 }
@@ -90,6 +92,7 @@ function bootstrapConsoleOnly(): LoggerCore {
     pid: process.pid,
     host: hostname(),
     seq: 0,
+    tz: "UTC",
     filesActive: false,
   };
 }
@@ -199,6 +202,7 @@ export function initLogger(
     pid: process.pid,
     host: hostname(),
     seq: 0,
+    tz: logging.timezone,
     filesActive: filesEnabled,
   };
 
@@ -229,6 +233,7 @@ export function initTestLogger(): void {
     pid: process.pid,
     host: hostname(),
     seq: 0,
+    tz: "UTC",
     filesActive: false,
   };
 }
@@ -360,6 +365,7 @@ function emitToCore(record: LogRecord, skipLevelGate = false): void {
     host: core.host,
     src: "ts",
     seq: ++core.seq,
+    tz: core.tz,
     ...record,
   };
   const safe = core.redactor.redact(enriched);

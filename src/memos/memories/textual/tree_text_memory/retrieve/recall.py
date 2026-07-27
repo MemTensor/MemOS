@@ -1,4 +1,5 @@
 import concurrent.futures
+import os
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
@@ -10,6 +11,49 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs impo
 
 
 logger = get_logger(__name__)
+
+_POLARDB_LIGHTWEIGHT_SEARCH_ENV = "MEMOS_POLARDB_LIGHTWEIGHT_SEARCH_ENABLED"
+_LIGHTWEIGHT_VECTOR_RETURN_FIELDS = (
+    "memory",
+    "memory_type",
+    "user_name",
+    "user_id",
+    "session_id",
+    "status",
+    "is_fast",
+    "evolve_to",
+    "version",
+    "history",
+    "working_binding",
+    "type",
+    "key",
+    "confidence",
+    "source",
+    "tags",
+    "visibility",
+    "updated_at",
+    "info",
+    "internal_info",
+    "message_ids",
+    "covered_history",
+    "sources",
+    "created_at",
+    "usage",
+    "background",
+    "file_ids",
+    "event_time",
+    "event_location",
+    "event_roles",
+    "preference_type",
+    "dialog_id",
+    "original_text",
+    "preference",
+    "mem_cube_id",
+)
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class GraphMemoryRetriever:
@@ -340,7 +384,21 @@ class GraphMemoryRetriever:
         if not query_embedding:
             return []
 
+        use_lightweight_search = (
+            _env_flag_enabled(_POLARDB_LIGHTWEIGHT_SEARCH_ENV)
+            and getattr(self.graph_store, "supports_lightweight_vector_search", False) is True
+        )
+        lightweight_return_fields = list(_LIGHTWEIGHT_VECTOR_RETURN_FIELDS)
+        if self.include_embedding:
+            lightweight_return_fields.append("embedding")
+
         def search_single(vec, search_priority=None, search_filter=None):
+            search_kwargs = {}
+            if use_lightweight_search:
+                search_kwargs = {
+                    "light_weight_mode": True,
+                    "return_fields": lightweight_return_fields,
+                }
             return (
                 self.graph_store.search_by_embedding(
                     vector=vec,
@@ -351,6 +409,7 @@ class GraphMemoryRetriever:
                     search_filter=search_priority,
                     filter=search_filter,
                     user_name=user_name,
+                    **search_kwargs,
                 )
                 or []
             )
@@ -394,17 +453,32 @@ class GraphMemoryRetriever:
             return []
 
         # merge and deduplicate, keeping highest score per ID
-        id_to_score = {}
+        id_to_hit = {}
         for r in all_hits:
             rid = r.get("id")
             if rid:
                 rid = str(rid).strip("\"'")
                 score = r.get("score", 0.0)
-                if rid not in id_to_score or score > id_to_score[rid]:
-                    id_to_score[rid] = score
+                if rid not in id_to_hit or score > id_to_hit[rid].get("score", 0.0):
+                    id_to_hit[rid] = {**r, "id": rid, "score": score}
 
         # Sort IDs by score (descending) to preserve ranking
-        sorted_ids = sorted(id_to_score.keys(), key=lambda x: id_to_score[x], reverse=True)
+        sorted_ids = sorted(
+            id_to_hit.keys(),
+            key=lambda result_id: id_to_hit[result_id].get("score", 0.0),
+            reverse=True,
+        )
+
+        if use_lightweight_search:
+            lightweight_hits = [id_to_hit[result_id] for result_id in sorted_ids]
+            if all(
+                hit.get("memory") is not None and hit.get("memory_type") is not None
+                for hit in lightweight_hits
+            ):
+                return [self._memory_item_from_vector_hit(hit) for hit in lightweight_hits]
+            logger.warning(
+                "Lightweight vector search returned incomplete fields; falling back to get_nodes"
+            )
 
         node_dicts = (
             self.graph_store.get_nodes(
@@ -434,10 +508,26 @@ class GraphMemoryRetriever:
                 # Inject similarity score as relativity
                 if "metadata" not in node:
                     node["metadata"] = {}
-                node["metadata"]["relativity"] = id_to_score.get(rid, 0.0)
+                node["metadata"]["relativity"] = id_to_hit.get(rid, {}).get("score", 0.0)
                 ordered_nodes.append(node)
 
         return [TextualMemoryItem.from_dict(n) for n in ordered_nodes]
+
+    @staticmethod
+    def _memory_item_from_vector_hit(hit: dict) -> TextualMemoryItem:
+        metadata = {
+            key: value
+            for key, value in hit.items()
+            if key not in {"id", "memory", "score"} and value is not None
+        }
+        metadata["relativity"] = hit.get("score", 0.0)
+        return TextualMemoryItem.from_dict(
+            {
+                "id": hit["id"],
+                "memory": hit["memory"],
+                "metadata": metadata,
+            }
+        )
 
     def _bm25_recall(
         self,

@@ -12,7 +12,7 @@ from memos.api.handlers.formatters_handler import (
     format_memory_item,
     post_process_textual_mem,
 )
-from memos.log import get_logger
+from memos.log import get_logger, summarize_search_request, summarize_search_results
 from memos.mem_reader.utils import parse_keep_filter_response
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
@@ -104,7 +104,7 @@ class SingleCubeView(MemCubeView):
             mem_cube_id=self.cube_id,
             session_id=search_req.session_id or "default_session",
         )
-        self.logger.info(f"Search Req is: {search_req}")
+        self.logger.info("Search request summary: %s", summarize_search_request(search_req))
 
         memories_result: MOSSearchResult = {
             "text_mem": [],
@@ -129,8 +129,7 @@ class SingleCubeView(MemCubeView):
             self.cube_id,
         )
 
-        self.logger.info(f"Search memories result: {memories_result}")
-        self.logger.info(f"Search {len(memories_result)} memories.")
+        self.logger.info("Search result summary: %s", summarize_search_results(memories_result))
         return memories_result
 
     @timed

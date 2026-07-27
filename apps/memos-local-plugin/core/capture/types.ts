@@ -194,6 +194,19 @@ export interface CaptureConfig {
   synthReflections: boolean;
   llmConcurrency: number;
   /**
+   * Hard cap for LLM calls made by one topic-end reflect pass. This bounds
+   * startup recovery / dirty-episode replay so a single large episode cannot
+   * generate unbounded paid requests.
+   */
+  maxReflectLlmCalls: number;
+  /**
+   * Startup-recovered episodes are reconstructed from already-persisted
+   * traces. Any "orphan" during that replay is usually a matching drift, not
+   * genuinely missing content. Keep inserts disabled by default to avoid
+   * duplicating historical rows while still allowing operators to opt in.
+   */
+  maxRecoveryOrphanInserts: number;
+  /**
    * V7 §3.2 batched variant. Controls when reflection synthesis + α scoring
    * collapse into ONE LLM call per episode instead of N per-step calls.
    *
