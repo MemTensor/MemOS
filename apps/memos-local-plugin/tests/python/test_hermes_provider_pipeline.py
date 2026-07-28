@@ -68,6 +68,18 @@ class FailingSessionOpenBridge(FakeBridge):
 
 
 class HermesProviderPipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch = patch.dict(
+            "os.environ",
+            {"MEMOS_HERMES_BRIDGE_MODE": "legacy"},
+        )
+        self._mode_patch.start()
+
+    def tearDown(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch.stop()
+
     def test_plugin_version_matches_package_version(self) -> None:
         package_json = _ADAPTER_ROOT.parent.parent / "package.json"
         package_version = json.loads(package_json.read_text(encoding="utf-8"))["version"]

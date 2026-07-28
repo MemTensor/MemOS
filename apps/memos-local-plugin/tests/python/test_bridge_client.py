@@ -29,10 +29,10 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import bridge_client as bridge_client_mod  # noqa: E402
-import daemon_manager as daemon_manager_mod  # noqa: E402
+import bridge_client as bridge_client_mod
+import daemon_manager as daemon_manager_mod
 
-from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient
 
 
 class FakePopen:
@@ -473,8 +473,10 @@ class MemTensorProviderTests(unittest.TestCase):
         import memos_provider
 
         self._provider_mod = memos_provider
+        self._provider_mod.SHARED_BRIDGE_REGISTRY.close_all()
 
         self._patches = [
+            patch.dict("os.environ", {"MEMOS_HERMES_BRIDGE_MODE": "legacy"}),
             patch("memos_provider.ensure_bridge_running", return_value=True),
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
         ]
@@ -482,6 +484,7 @@ class MemTensorProviderTests(unittest.TestCase):
             p.start()
 
     def tearDown(self) -> None:
+        self._provider_mod.SHARED_BRIDGE_REGISTRY.close_all()
         for p in self._patches:
             p.stop()
 
@@ -677,6 +680,7 @@ class MemTensorProviderTests(unittest.TestCase):
 
     def test_on_delegation_is_noop_without_bridge(self) -> None:
         p = self._provider_mod.MemTensorProvider()
+        p._bridge_keepalive_stop.set()
         p.on_delegation("run tests", "all green")  # must not raise
 
     def test_on_pre_compress_without_bridge_returns_empty(self) -> None:
