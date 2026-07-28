@@ -781,8 +781,8 @@ describe("V7 full-chain E2E (Python programming task)", () => {
       algorithm: {
         ...DEFAULT_CONFIG.algorithm,
         session: {
+          ...DEFAULT_CONFIG.algorithm.session,
           followUpMode: "episode_per_turn",
-          mergeMaxGapMs: DEFAULT_CONFIG.algorithm.session.mergeMaxGapMs,
         },
       },
     };
