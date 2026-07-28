@@ -15,6 +15,18 @@ def _memory(memory_id: str, memory: str, memory_type: str = "LongTermMemory") ->
     }
 
 
+def _file_memory(memory_id: str, memory: str, source_content: str) -> dict:
+    return {
+        "id": memory_id,
+        "memory": memory,
+        "metadata": {
+            "memory_type": "LongTermMemory",
+            "relativity": 1.0,
+            "sources": [{"type": "file", "content": source_content}],
+        },
+    }
+
+
 def test_search_request_passes_context_format_through_to_plugins():
     req = APISearchRequest(
         user_id="user",
@@ -76,3 +88,33 @@ def test_rerank_knowledge_mem_can_strip_conversation_sources():
 
     conversation = next(item for item in reranked if item["memory"] == "conversation memory")
     assert conversation["metadata"]["sources"] == []
+
+
+def test_rerank_knowledge_mem_combines_memory_and_source_for_chinese_query():
+    text_mem = [
+        {
+            "cube_id": "cube",
+            "memories": [_file_memory("mem-1", "抽取后的记忆", "文件中的原文")],
+        }
+    ]
+
+    reranked = rerank_knowledge_mem(None, "用户的中文问题", text_mem, top_k=1)[0]["memories"]
+
+    assert reranked[0]["memory"] == "记忆：抽取后的记忆，原文：文件中的原文"
+    assert reranked[0]["metadata"]["sources"] == []
+
+
+def test_rerank_knowledge_mem_combines_memory_and_source_for_english_query():
+    text_mem = [
+        {
+            "cube_id": "cube",
+            "memories": [_file_memory("mem-1", "extracted memory", "original file text")],
+        }
+    ]
+
+    reranked = rerank_knowledge_mem(None, "What does the file say?", text_mem, top_k=1)[0][
+        "memories"
+    ]
+
+    assert reranked[0]["memory"] == ("Memory: extracted memory, Original text: original file text")
+    assert reranked[0]["metadata"]["sources"] == []
