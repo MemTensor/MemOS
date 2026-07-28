@@ -99,7 +99,7 @@ class SharedBridgeRuntimeTests(unittest.TestCase):
     def test_two_leases_share_one_bridge_and_release_does_not_close_it(self) -> None:
         created: list[FakeBridge] = []
 
-        def factory() -> FakeBridge:
+        def factory(*_args: object, **_kwargs: object) -> FakeBridge:
             bridge = FakeBridge()
             created.append(bridge)
             return bridge
@@ -120,7 +120,7 @@ class SharedBridgeRuntimeTests(unittest.TestCase):
     def test_concurrent_reconnect_creates_one_replacement(self) -> None:
         created: list[FakeBridge] = []
 
-        def factory() -> FakeBridge:
+        def factory(*_args: object, **_kwargs: object) -> FakeBridge:
             bridge = FakeBridge()
             created.append(bridge)
             return bridge
@@ -294,7 +294,7 @@ class SharedProviderIntegrationTests(unittest.TestCase):
     def test_two_providers_share_physical_bridge_and_keep_sessions_isolated(self) -> None:
         created: list[FakeBridge] = []
 
-        def factory() -> FakeBridge:
+        def factory(*_args: object, **_kwargs: object) -> FakeBridge:
             bridge = FakeBridge()
             created.append(bridge)
             return bridge
@@ -303,7 +303,7 @@ class SharedProviderIntegrationTests(unittest.TestCase):
             patch("memos_provider.MemosBridgeClient", side_effect=factory),
             patch("memos_provider.ensure_bridge_running", return_value=True),
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
-            patch("memos_provider.kill_zombie_bridges", return_value=0),
+            patch("memos_provider.kill_zombie_bridges", return_value=0) as kill_zombies,
         ):
             first = memos_provider.MemTensorProvider()
             second = memos_provider.MemTensorProvider()
@@ -317,6 +317,7 @@ class SharedProviderIntegrationTests(unittest.TestCase):
             second.prefetch("remember B")
             first.sync_turn("remember A", "stored A")
             second.sync_turn("remember B", "stored B")
+            kill_zombies.assert_not_called()
 
             first.shutdown()
             self.assertFalse(created[0].closed)
@@ -332,10 +333,188 @@ class SharedProviderIntegrationTests(unittest.TestCase):
         self.assertIn("session-a", session_ids)
         self.assertIn("session-b", session_ids)
 
+    def test_lazy_provider_acquire_reuses_healthy_shared_bridge(self) -> None:
+        created: list[FakeBridge] = []
+
+        def factory(*_args: object, **_kwargs: object) -> FakeBridge:
+            bridge = FakeBridge()
+            created.append(bridge)
+            return bridge
+
+        with (
+            patch("memos_provider.MemosBridgeClient", side_effect=factory),
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.kill_zombie_bridges", return_value=0),
+        ):
+            first = memos_provider.MemTensorProvider()
+            first.initialize("session-a")
+            assert first._bridge is not None
+            original_pid = first._bridge.pid
+            original_generation = first._bridge.generation
+
+            second = memos_provider.MemTensorProvider()
+            second._session_id = "session-b"
+            self.assertTrue(second._ensure_bridge("session-b"))
+
+            self.assertEqual(len(created), 1)
+            assert second._bridge is not None
+            self.assertEqual(second._bridge.pid, original_pid)
+            self.assertEqual(second._bridge.generation, original_generation)
+            self.assertEqual(second._bridge.status()["leases"], 2)
+
+            first.shutdown()
+            second.shutdown()
+
+    def test_distinct_data_home_runtime_keeps_its_spawn_environment(self) -> None:
+        created: list[FakeBridge] = []
+        client_kwargs: list[dict[str, object]] = []
+
+        def factory(*_args: object, **kwargs: object) -> FakeBridge:
+            client_kwargs.append(dict(kwargs))
+            bridge = FakeBridge()
+            created.append(bridge)
+            return bridge
+
+        with (
+            patch("memos_provider.MemosBridgeClient", side_effect=factory),
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.kill_zombie_bridges", return_value=0),
+        ):
+            first = memos_provider.MemTensorProvider()
+            second = memos_provider.MemTensorProvider()
+            with patch.dict("os.environ", {"MEMOS_HOME": "/tmp/memos-home-a"}):
+                first.initialize("session-a")
+            with patch.dict("os.environ", {"MEMOS_HOME": "/tmp/memos-home-b"}):
+                second.initialize("session-b")
+
+            self.assertEqual(len(created), 2)
+            home_a = str(Path("/tmp/memos-home-a").resolve())
+            home_b = str(Path("/tmp/memos-home-b").resolve())
+            self.assertEqual(client_kwargs[0]["runtime_home"], home_a)
+            self.assertEqual(client_kwargs[1]["runtime_home"], home_b)
+
+            assert first._bridge is not None
+            with patch.dict("os.environ", {"MEMOS_HOME": "/tmp/memos-home-b"}):
+                first._bridge.reconnect(expected_generation=first._bridge.generation)
+
+            self.assertEqual(len(created), 3)
+            self.assertEqual(client_kwargs[2]["runtime_home"], home_a)
+            self.assertEqual(
+                client_kwargs[2]["extra_env"],
+                {"MEMOS_HOME": home_a},
+            )
+
+            first.shutdown()
+            second.shutdown()
+
+    def test_lazy_acquire_failure_releases_new_lease(self) -> None:
+        class RejectSessionBridge(FakeBridge):
+            def request(
+                self,
+                method: str,
+                params: dict | None = None,
+                **kwargs: object,
+            ) -> dict:
+                if method == "session.open":
+                    raise BridgeError("internal", "session rejected")
+                return super().request(method, params, **kwargs)
+
+        with (
+            patch(
+                "memos_provider.MemosBridgeClient",
+                side_effect=lambda *_args, **_kwargs: RejectSessionBridge(),
+            ),
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.kill_zombie_bridges", return_value=0),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider._session_id = "session-a"
+
+            self.assertFalse(provider._ensure_bridge("session-a"))
+            self.assertIsNone(provider._bridge)
+            statuses = memos_provider.SHARED_BRIDGE_REGISTRY.status()
+            self.assertEqual(len(statuses), 1)
+            self.assertEqual(statuses[0]["leases"], 0)
+
+            provider.shutdown()
+
+    def test_lazy_acquire_reconnects_once_on_transport_closed(self) -> None:
+        created: list[FakeBridge] = []
+
+        class FirstSessionOpenFails(FakeBridge):
+            def request(
+                self,
+                method: str,
+                params: dict | None = None,
+                **kwargs: object,
+            ) -> dict:
+                if method == "session.open":
+                    raise BridgeError("transport_closed", "bridge subprocess exited")
+                return super().request(method, params, **kwargs)
+
+        def factory(*_args: object, **_kwargs: object) -> FakeBridge:
+            bridge: FakeBridge
+            if not created:
+                bridge = FirstSessionOpenFails()
+            else:
+                bridge = FakeBridge()
+            created.append(bridge)
+            return bridge
+
+        with (
+            patch("memos_provider.MemosBridgeClient", side_effect=factory),
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.kill_zombie_bridges", return_value=0),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider._session_id = "session-a"
+
+            self.assertTrue(provider._ensure_bridge("session-a"))
+            self.assertEqual(len(created), 2)
+            self.assertTrue(created[0].closed)
+            assert provider._bridge is not None
+            self.assertEqual(provider._bridge.generation, 2)
+            self.assertEqual(provider._bridge.status()["leases"], 1)
+
+            provider.shutdown()
+
+    def test_existing_lease_is_retained_when_reconnect_fails(self) -> None:
+        attempts = 0
+
+        def factory(*_args: object, **_kwargs: object) -> FakeBridge:
+            nonlocal attempts
+            attempts += 1
+            if attempts > 1:
+                raise RuntimeError("replacement spawn failed")
+            return FakeBridge()
+
+        with (
+            patch("memos_provider.MemosBridgeClient", side_effect=factory),
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.kill_zombie_bridges", return_value=0),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("session-a")
+            original_lease = provider._bridge
+            assert original_lease is not None
+
+            with self.assertRaises(RuntimeError):
+                provider._reconnect_bridge("session-a")
+
+            self.assertIs(provider._bridge, original_lease)
+            self.assertEqual(original_lease.status()["leases"], 1)
+
+            provider.shutdown()
+
     def test_provider_reopens_its_session_after_another_lease_reconnects(self) -> None:
         created: list[FakeBridge] = []
 
-        def factory() -> FakeBridge:
+        def factory(*_args: object, **_kwargs: object) -> FakeBridge:
             bridge = FakeBridge()
             created.append(bridge)
             return bridge

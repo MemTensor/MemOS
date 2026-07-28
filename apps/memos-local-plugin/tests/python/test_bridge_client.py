@@ -44,6 +44,7 @@ class FakePopen:
 
     def __init__(self, *_args, **_kwargs) -> None:
         self.cmd = list(_args[0]) if _args else []
+        self.env = dict(_kwargs.get("env") or {})
         self.pid = 12345
         self.stdin = io.StringIO()
         self._stdin_lines: list[str] = []
@@ -346,6 +347,23 @@ class BridgeClientTests(unittest.TestCase):
         hermes.close()
         openclaw.close()
 
+    def test_module_singleton_isolated_for_distinct_runtime_homes(self) -> None:
+        """Different MemOS data homes must not displace each other's client."""
+        with tempfile.TemporaryDirectory() as root:
+            first = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=str(Path(root) / "home-a"),
+            )
+            second = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=str(Path(root) / "home-b"),
+            )
+
+            self.assertFalse(first._closed)
+            self.assertFalse(second._closed)
+            first.close()
+            second.close()
+
     def test_close_unregisters_active_client_only_when_still_current(self) -> None:
         """A stale close() must not evict the newer registered client."""
         first = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
@@ -353,7 +371,11 @@ class BridgeClientTests(unittest.TestCase):
         # First was already closed by second's __init__. Closing it again is
         # a no-op and must not touch the registry's current entry (second).
         first.close()
-        key = (second._singleton_agent, second._singleton_no_viewer)
+        key = (
+            second._singleton_agent,
+            second._singleton_no_viewer,
+            second._singleton_runtime_home,
+        )
         self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key), second)
         second.close()
         self.assertIsNone(bridge_client_mod._ACTIVE_CLIENTS.get(key))
@@ -364,6 +386,41 @@ class BridgeClientTests(unittest.TestCase):
         cmd = getattr(self._fake, "cmd", [])
         self.assertIn("--no-viewer", cmd)
         client.close()
+
+    def test_stdio_bridge_passes_stable_runtime_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            client = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=root,
+            )
+            assert self._fake is not None
+            scope_args = [
+                arg for arg in getattr(self._fake, "cmd", [])
+                if arg.startswith("--runtime-scope=")
+            ]
+            self.assertEqual(len(scope_args), 1)
+            token = scope_args[0].split("=", 1)[1]
+            self.assertRegex(token, r"^[a-f0-9]{24}$")
+            self.assertEqual(
+                self._fake.env["MEMOS_HOME"],
+                str(Path(root).resolve()),
+            )
+            client.close()
+
+    def test_runtime_home_uses_captured_child_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            runtime_home = str(Path(root) / "captured-home")
+            client = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                extra_env={"MEMOS_HOME": runtime_home},
+            )
+            assert self._fake is not None
+            self.assertEqual(
+                client._singleton_runtime_home,
+                str(Path(runtime_home).resolve()),
+            )
+            self.assertEqual(self._fake.env["MEMOS_HOME"], runtime_home)
+            client.close()
 
     def test_reverse_request_waits_for_late_host_handler_registration(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")

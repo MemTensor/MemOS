@@ -132,20 +132,42 @@ def _resolved_memos_runtime_home() -> Path:
     return (Path.home() / ".hermes" / "memos-plugin").resolve()
 
 
-def _shared_bridge_runtime_key() -> tuple[str, ...]:
-    plugin_root = _PLUGIN_DIR.parents[2].resolve()
-    runtime_home = _resolved_memos_runtime_home()
-    node_binary = os.environ.get("MEMOS_NODE_BINARY", "").strip()
-    return (str(plugin_root), str(runtime_home), node_binary, "hermes", "stdio")
+def _memos_runtime_env_snapshot(runtime_home: Path | None = None) -> dict[str, str]:
+    """Freeze the environment inputs that select a MemOS data home."""
+    memos_home = os.environ.get("MEMOS_HOME", "").strip()
+    if memos_home:
+        resolved_home = runtime_home or Path(memos_home).expanduser().resolve()
+        return {"MEMOS_HOME": str(resolved_home)}
+    config_file = os.environ.get("MEMOS_CONFIG_FILE", "").strip()
+    if config_file:
+        return {
+            "MEMOS_HOME": "",
+            "MEMOS_CONFIG_FILE": str(Path(config_file).expanduser().resolve()),
+        }
+    return {
+        "MEMOS_HOME": "",
+        "MEMOS_CONFIG_FILE": "",
+        "HOME": os.environ.get("HOME", "").strip() or str(Path.home()),
+    }
 
 
-def _prepare_shared_bridge() -> None:
-    """Run process-level bridge/viewer preparation exactly once per spawn."""
+def _shared_bridge_runtime_key(runtime_home: Path | None = None) -> tuple[str, ...]:
+    """Use the data home as the authoritative shared-runtime boundary."""
+    resolved_home = runtime_home or _resolved_memos_runtime_home()
+    return (str(resolved_home), "hermes", "stdio")
+
+
+def _prepare_shared_bridge(*, cleanup_legacy_zombies: bool = False) -> None:
+    """Prepare bridge/viewer state without crossing data-home boundaries."""
     ensure_bridge_running()
-    with contextlib.suppress(Exception):
-        zombies = kill_zombie_bridges()
-        if zombies:
-            logger.info("MemOS: killed %d zombie bridge(s)", zombies)
+    if cleanup_legacy_zombies:
+        # The legacy scanner cannot distinguish data homes. Shared runtimes
+        # instead rely on the Python scoped singleton and the CJS scoped PID
+        # guard so one healthy home is never reaped while another starts.
+        with contextlib.suppress(Exception):
+            zombies = kill_zombie_bridges()
+            if zombies:
+                logger.info("MemOS: killed %d zombie bridge(s)", zombies)
     try:
         ensure_viewer_daemon()
     except Exception as err:
@@ -338,6 +360,8 @@ class MemTensorProvider(MemoryProvider):
         self._bridge_generation = 0
         self._reconnect_lock = threading.Lock()
         self._session_open_lock = threading.Lock()
+        self._runtime_home: Path | None = None
+        self._runtime_env: dict[str, str] = {}
         self._session_id: str = ""
         self._episode_id: str = ""
         self._hermes_home: str = ""
@@ -432,21 +456,33 @@ class MemTensorProvider(MemoryProvider):
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
         self._shared_bridge = _shared_bridge_enabled()
+        self._runtime_home = _resolved_memos_runtime_home()
+        self._runtime_env = _memos_runtime_env_snapshot(self._runtime_home)
 
         new_bridge: MemosBridgeClient | SharedBridgeLease | None = None
         try:
+            runtime_home = self._runtime_home
+            runtime_env = dict(self._runtime_env)
             if self._shared_bridge:
                 new_bridge = SHARED_BRIDGE_REGISTRY.acquire(
-                    _shared_bridge_runtime_key(),
-                    client_factory=lambda: MemosBridgeClient(),
+                    _shared_bridge_runtime_key(runtime_home),
+                    client_factory=lambda home=str(runtime_home), env=runtime_env: (
+                        MemosBridgeClient(
+                            runtime_home=home,
+                            extra_env=env,
+                        )
+                    ),
                     before_spawn=_prepare_shared_bridge,
                     host_handlers={
                         "host.llm.complete": self._handle_host_llm_complete,
                     },
                 )
             else:
-                _prepare_shared_bridge()
-                new_bridge = MemosBridgeClient()
+                _prepare_shared_bridge(cleanup_legacy_zombies=True)
+                new_bridge = MemosBridgeClient(
+                    runtime_home=str(runtime_home),
+                    extra_env=runtime_env,
+                )
                 new_bridge.register_host_handler(
                     "host.llm.complete",
                     self._handle_host_llm_complete,
@@ -2028,10 +2064,21 @@ class MemTensorProvider(MemoryProvider):
 
             if self._shared_bridge:
                 bridge = self._bridge
+                acquired_here = bridge is None
                 if bridge is None:
+                    if self._runtime_home is None:
+                        self._runtime_home = _resolved_memos_runtime_home()
+                        self._runtime_env = _memos_runtime_env_snapshot(self._runtime_home)
+                    runtime_home = self._runtime_home
+                    runtime_env = dict(self._runtime_env)
                     bridge = SHARED_BRIDGE_REGISTRY.acquire(
-                        _shared_bridge_runtime_key(),
-                        client_factory=lambda: MemosBridgeClient(),
+                        _shared_bridge_runtime_key(runtime_home),
+                        client_factory=lambda home=str(runtime_home), env=runtime_env: (
+                            MemosBridgeClient(
+                                runtime_home=home,
+                                extra_env=env,
+                            )
+                        ),
                         before_spawn=_prepare_shared_bridge,
                         host_handlers={
                             "host.llm.complete": self._handle_host_llm_complete,
@@ -2043,9 +2090,31 @@ class MemTensorProvider(MemoryProvider):
                         "internal",
                         "shared bridge mode has a non-shared bridge handle",
                     )
-                expected_generation = self._bridge_generation or bridge.generation
-                bridge.reconnect(expected_generation=expected_generation)
-                self._open_session(session_id, timeout=timeout)
+                try:
+                    if acquired_here:
+                        # acquire() already ensures and health-checks the shared
+                        # client. Open this logical session directly; restarting
+                        # here would disrupt every healthy provider using it.
+                        acquired_generation = bridge.generation
+                        try:
+                            self._open_session(session_id, timeout=timeout)
+                        except Exception as err:
+                            if not self._is_transport_closed(err):
+                                raise
+                            bridge.reconnect(expected_generation=acquired_generation)
+                            self._open_session(session_id, timeout=timeout)
+                    else:
+                        expected_generation = self._bridge_generation or bridge.generation
+                        bridge.reconnect(expected_generation=expected_generation)
+                        self._open_session(session_id, timeout=timeout)
+                except Exception:
+                    if acquired_here:
+                        with contextlib.suppress(Exception):
+                            bridge.close()
+                        if self._bridge is bridge:
+                            self._bridge = None
+                        self._bridge_generation = 0
+                    raise
                 logger.info(
                     "MemOS: shared bridge session recovered runtime=%s generation=%d "
                     "pid=%s session=%s",
@@ -2065,11 +2134,21 @@ class MemTensorProvider(MemoryProvider):
                     old_bridge.close()
                 logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
 
-            _prepare_shared_bridge()
+            _prepare_shared_bridge(cleanup_legacy_zombies=True)
             new_bridge: MemosBridgeClient | None = None
             try:
-                new_bridge = MemosBridgeClient()
-                logger.info("MemOS: new bridge created (pid=%s)", getattr(new_bridge, "pid", "?"))
+                runtime_home = self._runtime_home or _resolved_memos_runtime_home()
+                runtime_env = dict(
+                    self._runtime_env or _memos_runtime_env_snapshot(runtime_home)
+                )
+                new_bridge = MemosBridgeClient(
+                    runtime_home=str(runtime_home),
+                    extra_env=runtime_env,
+                )
+                logger.info(
+                    "MemOS: new bridge created (pid=%s)",
+                    getattr(new_bridge, "pid", "?"),
+                )
 
                 new_bridge.register_host_handler(
                     "host.llm.complete",
@@ -2098,7 +2177,6 @@ class MemTensorProvider(MemoryProvider):
             return True
         except Exception as err:
             logger.warning("MemOS: bridge reconnect failed — %s", err)
-            self._bridge = None
             return False
 
     def _start_bridge_keepalive(self) -> None:

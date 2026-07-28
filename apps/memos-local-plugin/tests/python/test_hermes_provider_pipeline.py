@@ -204,7 +204,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch(
                 "memos_provider.MemosBridgeClient",
-                side_effect=lambda: bridge_attempts.pop(0),
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
             ),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -269,7 +269,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch(
                 "memos_provider.MemosBridgeClient",
-                side_effect=lambda: bridge_attempts.pop(0),
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
             ),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -290,7 +290,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         recovered_bridge = FakeBridge()
         bridge_attempts = [failed_bridge, recovered_bridge]
 
-        def bridge_factory() -> FakeBridge:
+        def bridge_factory(**_kwargs: object) -> FakeBridge:
             return bridge_attempts.pop(0)
 
         with (
@@ -326,7 +326,10 @@ class HermesProviderPipelineTests(unittest.TestCase):
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
-            patch("memos_provider.MemosBridgeClient", side_effect=lambda: bridge_attempts.pop(0)),
+            patch(
+                "memos_provider.MemosBridgeClient",
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
+            ),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("slow-parent-session")
