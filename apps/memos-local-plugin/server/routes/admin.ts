@@ -12,9 +12,8 @@
  *       Agent-aware restart. For OpenClaw the plugin lives inside the
  *       gateway process, which is managed by macOS launchd — calling
  *       `process.exit(0)` causes launchd to respawn it automatically.
- *       For Hermes the HTTP viewer is the long-lived smoke/daemon bridge.
- *       Do NOT restart this process; terminate the active `hermes chat`
- *       process so the user can relaunch it and reconnect to this viewer.
+ *       For Hermes, terminate the active `hermes chat`, spawn a replacement
+ *       viewer daemon, then exit so both processes reload the saved config.
  */
 import { spawn } from "node:child_process";
 import type { ServerDeps, ServerOptions } from "../types.js";
@@ -46,20 +45,7 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     }
     if (agent !== "openclaw") {
       // Hermes: spawn replacement daemon after clearing data
-      const nodePath = await import("node:path");
-      const { fileURLToPath } = await import("node:url");
-      const { spawn } = await import("node:child_process");
-      const thisFile = fileURLToPath(import.meta.url);
-      const pluginRoot = nodePath.resolve(nodePath.dirname(thisFile), "../..");
-      const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
-      const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
-      const cmd = `sleep 3 && "${process.execPath}" "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
-      const child = spawn("bash", ["-c", cmd], {
-        detached: true,
-        stdio: "ignore",
-        cwd: pluginRoot,
-      });
-      child.unref();
+      await spawnReplacementDaemon(agent);
     }
     setTimeout(() => process.exit(0), 200);
     return { ok: true, restarting: true, killedHermes };
@@ -74,11 +60,35 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
 
     if (agent === "hermes") {
       const killed = await terminateHermesChat();
-      return { ok: true, restarting: false, killed };
+      await spawnReplacementDaemon(agent);
+      setTimeout(() => process.exit(0), 200);
+      return { ok: true, restarting: true, killed };
     }
 
     return { ok: false, error: `restart unsupported for agent: ${agent}` };
   });
+}
+
+async function spawnReplacementDaemon(agent: string): Promise<void> {
+  const fs = await import("node:fs");
+  const nodePath = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const thisFile = fileURLToPath(import.meta.url);
+  let pluginRoot = nodePath.resolve(nodePath.dirname(thisFile), "../..");
+  // Source: <root>/server/routes/admin.ts. Built package:
+  // <root>/dist/server/routes/admin.js.
+  if (!fs.existsSync(nodePath.join(pluginRoot, "package.json"))) {
+    pluginRoot = nodePath.resolve(pluginRoot, "..");
+  }
+  const tsxBin = nodePath.join(pluginRoot, "node_modules/.bin/tsx");
+  const bridgeScript = nodePath.join(pluginRoot, "bridge.cts");
+  const cmd = `sleep 3 && "${process.execPath}" "${tsxBin}" "${bridgeScript}" --agent=${agent} --daemon`;
+  const child = spawn("bash", ["-c", cmd], {
+    detached: true,
+    stdio: "ignore",
+    cwd: pluginRoot,
+  });
+  child.unref();
 }
 
 async function terminateHermesChat(): Promise<boolean> {
