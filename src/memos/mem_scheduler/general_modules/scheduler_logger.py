@@ -226,7 +226,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 mem_cube=mem_cube,
                 memcube_log_content=memcube_content,
                 metadata=meta,
-                memory_len=len(memcube_content),
+                memory_len=len(new_memory),
                 memcube_name=self._map_memcube_name(mem_cube_id),
             )
             log_func_callback([ev])
