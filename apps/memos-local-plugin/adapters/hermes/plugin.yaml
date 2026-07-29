@@ -1,5 +1,5 @@
 name: memtensor
-version: 2.0.11
+version: 2.0.12-beta.1
 description: >-
   MemOS Local — Reflect2Evolve V7 memory for hermes-agent.
   Layered L1/L2/L3 traces, reflection-weighted reward backprop,
