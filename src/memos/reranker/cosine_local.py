@@ -25,6 +25,9 @@ logger = get_logger(__name__)
 def _cosine_one_to_many(q: list[float], m: list[list[float]]) -> list[float]:
     """
     Compute cosine similarities between a single vector q and a matrix m (rows are candidates).
+    Returns a list of floats in [-1, 1], with numerical-stability safeguards:
+    zero vectors produce similarity 0 instead of NaN/Inf, and any remaining edge cases
+    (NaN, Inf) are clamped to 0.
     """
     if not _HAS_NUMPY:
 
@@ -38,15 +41,27 @@ def _cosine_one_to_many(q: list[float], m: list[list[float]]) -> list[float]:
         sims = []
         for v in m:
             vn = norm(v) or 1e-10
-            sims.append(dot(q, v) / (qn * vn))
+            score = dot(q, v) / (qn * vn)
+            if score != score or score in (float("inf"), float("-inf")):
+                score = 0.0
+            sims.append(score)
         return sims
 
     qv = _np.asarray(q, dtype=float)  # lowercase
+    if qv.ndim > 1:
+        qv = qv.reshape(-1)
     mv = _np.asarray(m, dtype=float)  # lowercase
-    qn = _np.linalg.norm(qv) or 1e-10
+    if mv.ndim != 2 or mv.shape[1] == 0:
+        return [0.0] * len(m)
+    qn = _np.linalg.norm(qv)
     mn = _np.linalg.norm(mv, axis=1)  # lowercase
+    if qn < 1e-10:
+        return [0.0] * len(m)
+    denom = mn * qn + 1e-10
     dots = mv @ qv
-    return (dots / (mn * qn + 1e-10)).tolist()
+    scores = dots / denom
+    scores = _np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+    return scores.tolist()
 
 
 class CosineLocalReranker(BaseReranker):
