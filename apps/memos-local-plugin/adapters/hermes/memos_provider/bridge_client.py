@@ -51,7 +51,7 @@ def _expanded_path(value: str, env: dict[str, str]) -> Path:
     home = env.get("HOME", "").strip() or str(Path.home())
     if value == "~":
         value = home
-    elif value.startswith("~/") or value.startswith("~\\"):
+    elif value.startswith(("~/", "~\\")):
         value = str(Path(home) / value[2:])
     return Path(value).resolve()
 
@@ -71,7 +71,7 @@ def _resolved_runtime_home(agent: str, env: dict[str, str]) -> Path:
 
 def _runtime_scope_token(agent: str, runtime_home: Path) -> str:
     """Return a stable, path-private token safe for use in a PID filename."""
-    raw = f"{agent}\0{runtime_home}".encode("utf-8")
+    raw = f"{agent}\0{runtime_home}".encode()
     return hashlib.sha256(raw).hexdigest()[:24]
 
 

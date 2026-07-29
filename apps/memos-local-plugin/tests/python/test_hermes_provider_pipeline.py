@@ -22,7 +22,7 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import memos_provider
+import memos_provider  # noqa: E402
 
 
 class FakeBridge:

@@ -29,10 +29,10 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import bridge_client as bridge_client_mod
-import daemon_manager as daemon_manager_mod
+import bridge_client as bridge_client_mod  # noqa: E402
+import daemon_manager as daemon_manager_mod  # noqa: E402
 
-from bridge_client import BridgeError, MemosBridgeClient
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 
 
 class FakePopen:
@@ -395,8 +395,7 @@ class BridgeClientTests(unittest.TestCase):
             )
             assert self._fake is not None
             scope_args = [
-                arg for arg in getattr(self._fake, "cmd", [])
-                if arg.startswith("--runtime-scope=")
+                arg for arg in getattr(self._fake, "cmd", []) if arg.startswith("--runtime-scope=")
             ]
             self.assertEqual(len(scope_args), 1)
             token = scope_args[0].split("=", 1)[1]

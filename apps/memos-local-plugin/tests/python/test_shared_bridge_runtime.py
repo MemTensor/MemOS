@@ -16,10 +16,10 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import memos_provider
+import memos_provider  # noqa: E402
 
-from bridge_client import BridgeError
-from shared_bridge_runtime import (
+from bridge_client import BridgeError  # noqa: E402
+from shared_bridge_runtime import (  # noqa: E402
     HermesHookDispatcher,
     SharedBridgeRuntimeRegistry,
 )
@@ -154,8 +154,12 @@ class SharedBridgeRuntimeTests(unittest.TestCase):
         lease_a = self.registry.acquire(("shared-home",), client_factory=lambda: bridge)
         lease_b = self.registry.acquire(("shared-home",), client_factory=lambda: bridge)
 
-        handler_a = lambda _params: {"content": "a"}
-        handler_b = lambda _params: {"content": "b"}
+        def handler_a(_params: object) -> dict[str, str]:
+            return {"content": "a"}
+
+        def handler_b(_params: object) -> dict[str, str]:
+            return {"content": "b"}
+
         lease_a.register_host_handler("host.llm.complete", handler_a)
         lease_b.register_host_handler("host.llm.complete", handler_b)
 
@@ -179,7 +183,10 @@ class SharedBridgeRuntimeTests(unittest.TestCase):
                 return super().request(method, params, **kwargs)
 
         self_test = self
-        handler = lambda _params: {"content": "ready"}
+
+        def handler(_params: object) -> dict[str, str]:
+            return {"content": "ready"}
+
         bridge = StartupBridge()
         lease = self.registry.acquire(
             ("shared-home",),
@@ -456,11 +463,7 @@ class SharedProviderIntegrationTests(unittest.TestCase):
                 return super().request(method, params, **kwargs)
 
         def factory(*_args: object, **_kwargs: object) -> FakeBridge:
-            bridge: FakeBridge
-            if not created:
-                bridge = FirstSessionOpenFails()
-            else:
-                bridge = FakeBridge()
+            bridge = FirstSessionOpenFails() if not created else FakeBridge()
             created.append(bridge)
             return bridge
 

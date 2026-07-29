@@ -65,13 +65,13 @@ _PLUGIN_DIR = Path(__file__).resolve().parent
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-from bridge_client import BridgeError, MemosBridgeClient
-from daemon_manager import (
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
+from daemon_manager import (  # noqa: E402
     ensure_bridge_running,
     ensure_viewer_daemon,
     kill_zombie_bridges,
 )
-from shared_bridge_runtime import (
+from shared_bridge_runtime import (  # noqa: E402
     HERMES_HOOK_DISPATCHER,
     SHARED_BRIDGE_REGISTRY,
     SharedBridgeLease,
@@ -2138,9 +2138,7 @@ class MemTensorProvider(MemoryProvider):
             new_bridge: MemosBridgeClient | None = None
             try:
                 runtime_home = self._runtime_home or _resolved_memos_runtime_home()
-                runtime_env = dict(
-                    self._runtime_env or _memos_runtime_env_snapshot(runtime_home)
-                )
+                runtime_env = dict(self._runtime_env or _memos_runtime_env_snapshot(runtime_home))
                 new_bridge = MemosBridgeClient(
                     runtime_home=str(runtime_home),
                     extra_env=runtime_env,
