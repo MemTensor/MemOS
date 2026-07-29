@@ -11,7 +11,6 @@ Tests cover:
 - Fulltext index creation (lazy)
 """
 
-import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -346,13 +345,6 @@ class TestFulltextIndexCreation:
         """First fulltext search triggers index creation."""
         session_mock = shared_neo4j_db.driver.session.return_value
         session_mock.__enter__.return_value = session_mock
-
-        # First call to SHOW FULLTEXT INDEXES returns None (index doesn't exist)
-        session_mock.run.return_value.single.side_effect = [
-            None,  # SHOW FULLTEXT INDEXES → index not found
-            MagicMock(),  # CREATE FULLTEXT INDEX
-            MagicMock(),  # db.index.fulltext.queryNodes
-        ]
 
         # Override run return values for the search call
         def run_side_effect(query, **params):

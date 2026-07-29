@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 from typing import Any, Literal
 
+from neo4j.exceptions import ClientError
+
 from memos.configs.graph_db import Neo4jGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
@@ -1143,7 +1145,7 @@ class Neo4jGraphDB(BaseGraphDB):
             LIMIT $top_k
         """
 
-        logger.info("[search_by_fulltext] query=%s params=%s", query, params)
+        logger.info("[search_by_fulltext] query=%s params_keys=%s", query, list(params.keys()))
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, params)
@@ -1153,9 +1155,9 @@ class Neo4jGraphDB(BaseGraphDB):
                 records.append(item)
 
         logger.info(
-            "[search_by_fulltext] returned %d results%s",
+            "[search_by_fulltext] returned %d results (threshold=%s)",
             len(records),
-            f" (threshold={threshold})" if threshold is not None else "",
+            threshold,
         )
         return records
 
@@ -1868,24 +1870,19 @@ class Neo4jGraphDB(BaseGraphDB):
             with self.driver.session(database=self.db_name) as session:
                 result = session.run(query, name=index_name)
                 return result.single() is not None
-        except Exception:
+        except ClientError:
             # Fallback for older Neo4j versions that don't support
             # SHOW FULLTEXT INDEXES — use SHOW INDEXES instead.
-            from neo4j.exceptions import ClientError
-
-            try:
-                return self._index_exists(index_name)
-            except ClientError:
-                logger.debug(
-                    "Could not check fulltext index '%s' — falling back to SHOW INDEXES",
-                    index_name,
-                )
-                return self._index_exists(index_name)
+            return self._index_exists(index_name)
 
     def _create_fulltext_index(
         self, index_name: str = "memory_fulltext_index"
     ) -> None:
         """Create a FULLTEXT INDEX on ``Memory.memory`` for keyword search."""
+        if not _VALID_PROPERTY_NAME_RE.match(index_name):
+            raise ValueError(f"Invalid fulltext index name: {index_name!r}")
+        if not _VALID_PROPERTY_NAME_RE.match(index_name):
+            raise ValueError(f"Invalid fulltext index name: {index_name!r}")
         query = f"""
             CREATE FULLTEXT INDEX {index_name} IF NOT EXISTS
             FOR (n:Memory) ON EACH [n.memory]
@@ -1904,8 +1901,8 @@ class Neo4jGraphDB(BaseGraphDB):
         """
         if not term:
             return term
-        # If the term is nothing but wildcards, return as-is
-        if all(ch in _LUCENE_SPECIAL_CHARS for ch in term):
+        _LUCENE_WILDCARDS = frozenset("*?")
+        if all(ch in _LUCENE_WILDCARDS for ch in term):
             return term
         escaped = []
         for ch in term:
