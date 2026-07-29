@@ -99,6 +99,10 @@ describe("Hermes version synchronization", () => {
       path.resolve(repoRoot, "../../.github/workflows/memos-local-plugin-publish.yml"),
       "utf8",
     );
+    const publishHelper = readFileSync(
+      path.resolve(repoRoot, "../../.github/scripts/publish-local-plugin.sh"),
+      "utf8",
+    );
 
     const bumpPosition = workflow.indexOf('npm version "${RELEASE_VERSION}"');
     const syncPosition = workflow.indexOf("npm run sync:hermes-version");
@@ -115,11 +119,17 @@ describe("Hermes version synchronization", () => {
       "fs.writeFileSync(process.argv[1], `${JSON.stringify(report, null, 2)}\\n`)",
     );
     expect(workflow).not.toContain("npm pack --dry-run");
-    expect(workflow).toContain('npm publish "${RELEASE_TARBALL}"');
+    expect(workflow).toContain(
+      "run: bash ../../.github/scripts/publish-local-plugin.sh",
+    );
     expect(workflow).toContain(
       "tar -xOf \"${release_tarball}\" package/adapters/hermes/plugin.yaml",
     );
-    expect(workflow).toContain("verify_published_package");
+    expect(publishHelper).toContain('npm publish "${RELEASE_TARBALL}"');
+    expect(publishHelper).toContain("verify_published_package");
+    expect(publishHelper).toContain(
+      "tar -xOf \"${verify_tarball}\" package/adapters/hermes/plugin.yaml",
+    );
     expect(workflow).toMatch(
       /git add \\\n\s+apps\/memos-local-plugin\/package\.json \\\n\s+apps\/memos-local-plugin\/package-lock\.json \\\n\s+apps\/memos-local-plugin\/adapters\/hermes\/plugin\.yaml/,
     );

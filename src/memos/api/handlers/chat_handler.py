@@ -1112,7 +1112,7 @@ class ChatHandler(BaseHandler):
         )
 
     def _format_mem_block(
-        self, memories_all: list, max_items: int = 20, max_chars_each: int = 320
+        self, memories_all: list, max_items: int = 10, max_chars_each: int = 1600
     ) -> tuple[str, str]:
         """
         Format memory block for prompt.
