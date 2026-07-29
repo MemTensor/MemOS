@@ -6,6 +6,12 @@ set -euo pipefail
 : "${RELEASE_VERSION:?RELEASE_VERSION is required.}"
 : "${RELEASE_TAG:?RELEASE_TAG is required.}"
 : "${NPM_DIST_TAG:?NPM_DIST_TAG is required.}"
+: "${RELEASE_TARBALL:?RELEASE_TARBALL is required.}"
+
+if [ ! -s "${RELEASE_TARBALL}" ]; then
+  echo "::error::RELEASE_TARBALL does not exist or is empty: ${RELEASE_TARBALL}"
+  exit 2
+fi
 
 npm_visibility_attempts="${NPM_VISIBILITY_ATTEMPTS:-10}"
 npm_ambiguous_visibility_attempts="${NPM_AMBIGUOUS_VISIBILITY_ATTEMPTS:-3}"
@@ -112,7 +118,59 @@ remote_tag_exists() {
   done
 }
 
+verify_published_package() {
+  local verify_directory="${RUNNER_TEMP}/memos-local-plugin-registry-verification"
+  local verify_json="${verify_directory}/npm-pack.json"
+  local verify_filename
+  local verify_tarball
+  local package_version
+  local manifest_version
+
+  mkdir -p "${verify_directory}"
+  bash "${script_directory}/retry.sh" --label "download published npm package" -- \
+    bash -euo pipefail -c 'npm pack "$1" --json --silent --pack-destination "$2" > "$3"' \
+    _ "${PACKAGE_NAME}@${RELEASE_VERSION}" "${verify_directory}" "${verify_json}"
+  verify_filename="$(
+    node -e '
+      const fs = require("node:fs");
+      const raw = fs.readFileSync(process.argv[1], "utf8");
+      const jsonStart = raw.match(/^\[/m);
+      if (!jsonStart || jsonStart.index === undefined) {
+        throw new Error("npm pack output did not contain a JSON report");
+      }
+      const report = JSON.parse(raw.slice(jsonStart.index));
+      if (!Array.isArray(report) || report.length !== 1 || !report[0].filename) {
+        throw new Error("npm pack did not report exactly one registry tarball");
+      }
+      fs.writeFileSync(process.argv[1], `${JSON.stringify(report, null, 2)}\n`);
+      process.stdout.write(report[0].filename);
+    ' "${verify_json}"
+  )"
+  verify_tarball="${verify_directory}/${verify_filename}"
+  package_version="$(
+    tar -xOf "${verify_tarball}" package/package.json \
+      | node -e '
+          const fs = require("node:fs");
+          process.stdout.write(JSON.parse(fs.readFileSync(0, "utf8")).version);
+        '
+  )"
+  manifest_version="$(
+    tar -xOf "${verify_tarball}" package/adapters/hermes/plugin.yaml \
+      | awk '$1 == "version:" { print $2; exit }'
+  )"
+  if [ "${package_version}" != "${RELEASE_VERSION}" ]; then
+    echo "::error::Published package.json version ${package_version} does not match ${RELEASE_VERSION}."
+    exit 1
+  fi
+  if [ "${manifest_version}" != "${RELEASE_VERSION}" ]; then
+    echo "::error::Published Hermes manifest version ${manifest_version} does not match ${RELEASE_VERSION}."
+    exit 1
+  fi
+}
+
+published_version_visible=false
 if npm_version_exists; then
+  published_version_visible=true
   if remote_tag_exists "${RELEASE_TAG}"; then
     echo "${PACKAGE_NAME}@${RELEASE_VERSION} and ${RELEASE_TAG} already exist; treating this as an idempotent rerun."
   elif [ "${RECOVER_EXISTING_NPM_RELEASE:-false}" = "true" ]; then
@@ -128,7 +186,7 @@ else
 
   for attempt in 1 2 3; do
     set +e
-    npm publish --access public --tag "${NPM_DIST_TAG}" >"${attempt_directory}/${attempt}.log" 2>&1
+    npm publish "${RELEASE_TARBALL}" --access public --tag "${NPM_DIST_TAG}" >"${attempt_directory}/${attempt}.log" 2>&1
     publish_status=$?
     set -e
     sed -n '1,160p' "${attempt_directory}/${attempt}.log"
@@ -159,7 +217,9 @@ else
     fi
   done
 
-  if ! wait_for_npm_version "${npm_visibility_attempts}"; then
+  if wait_for_npm_version "${npm_visibility_attempts}"; then
+    published_version_visible=true
+  else
     if [ "${publish_accepted}" = "true" ]; then
       echo "::warning::npm publish succeeded, but ${PACKAGE_NAME}@${RELEASE_VERSION} is not visible after propagation retries; continuing with tag, Release, and PR creation."
     else
@@ -167,4 +227,10 @@ else
       exit 1
     fi
   fi
+fi
+
+if [ "${published_version_visible}" = "true" ]; then
+  verify_published_package
+else
+  echo "::warning::Skipping registry tarball verification until ${PACKAGE_NAME}@${RELEASE_VERSION} becomes visible."
 fi

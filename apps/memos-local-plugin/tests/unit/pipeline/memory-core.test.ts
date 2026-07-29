@@ -1549,7 +1549,7 @@ algorithm:
     expect(meta.reward?.traceIds).toEqual(["tr_dirty"]);
   });
 
-  it("rescoring finalized closed episodes that have traces but no reward metadata", async () => {
+  it("recovers a real SQLite dirty episode when trace ts differs from turnId", async () => {
     home = await makeTmpHome({
       agent: "openclaw",
       configYaml: FULL_MEMORY_CONFIG_YAML,
@@ -1567,6 +1567,7 @@ algorithm:
     const Sqlite = (await import("better-sqlite3")).default;
     const writeDb = new Sqlite(home.home.dbFile);
     const ts = Date.now() - 1_000;
+    const turnId = ts - 250;
     writeDb
       .prepare(
         `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
@@ -1611,7 +1612,7 @@ algorithm:
         0.5,
         "[]",
         "[]",
-        ts,
+        turnId,
         1,
       );
     writeDb.close();
@@ -1824,6 +1825,177 @@ algorithm:
     // The background promise is still in flight (or just finished);
     // either way `waitForStartupRecovery()` must resolve.
     await core.waitForStartupRecovery?.();
+  });
+
+  it("does not run the stale-open manual reward fallback after capture.failed", async () => {
+    const startedAt = 1_000;
+    db!.repos.sessions.upsert({
+      id: "se_capture_failed",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      lastSeenAt: startedAt,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_capture_failed",
+      sessionId: "se_capture_failed",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      endedAt: null,
+      traceIds: ["tr_capture_failed"] as never,
+      rTask: null,
+      status: "open",
+      meta: {},
+    });
+    db!.repos.traces.insert({
+      id: "tr_capture_failed",
+      episodeId: "ep_capture_failed",
+      sessionId: "se_capture_failed",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: startedAt + 100,
+      userText: "recover this stale episode",
+      agentText: "the capture stage will fail in this test",
+      summary: "stale capture failure",
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      share: null,
+      turnId: startedAt,
+      schemaVersion: 1,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    let captureCalls = 0;
+    let rewardCalls = 0;
+    pipeline.captureRunner.runReflect = async (input) => {
+      captureCalls++;
+      pipeline!.buses.capture.emit({
+        kind: "capture.failed",
+        episodeId: input.episode.id,
+        sessionId: input.episode.sessionId,
+        stage: "match",
+        error: { code: "conflict", message: "injected full replay mismatch" },
+      });
+      throw new Error("injected full replay mismatch");
+    };
+    const originalRewardRun = pipeline.rewardRunner.run.bind(pipeline.rewardRunner);
+    pipeline.rewardRunner.run = async (input) => {
+      rewardCalls++;
+      return originalRewardRun(input);
+    };
+
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "capture-failure-recovery",
+    );
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    expect(captureCalls).toBe(1);
+    expect(rewardCalls).toBe(0);
+    expect(db!.repos.episodes.getById("ep_capture_failed" as never)?.rTask).toBeNull();
+  });
+
+  it("cleans a legacy dirty marker when reward was intentionally skipped", async () => {
+    const startedAt = 1_000;
+    db!.repos.sessions.upsert({
+      id: "se_skipped_dirty",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      lastSeenAt: startedAt,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_skipped_dirty",
+      sessionId: "se_skipped_dirty",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      endedAt: startedAt + 100,
+      traceIds: ["tr_skipped_dirty"] as never,
+      rTask: null,
+      status: "closed",
+      meta: {
+        closeReason: "finalized",
+        reward: {
+          source: "heuristic",
+          reason: "对话内容过短",
+          scoredAt: startedAt + 100,
+          trigger: "implicit_fallback",
+          skipped: true,
+        },
+        rewardDirty: {
+          failedAttempts: 7,
+          lastFailureAt: startedAt + 100,
+        },
+      },
+    });
+    db!.repos.traces.insert({
+      id: "tr_skipped_dirty",
+      episodeId: "ep_skipped_dirty",
+      sessionId: "se_skipped_dirty",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: startedAt + 100,
+      userText: "我喜欢玩的游戏呢",
+      agentText: "你喜欢马里奥。",
+      summary: null,
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      share: null,
+      turnId: startedAt,
+      schemaVersion: 1,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    let captureCalls = 0;
+    pipeline.captureRunner.runReflect = async (input) => {
+      captureCalls++;
+      throw new Error(`unexpected recovery for ${input.episode.id}`);
+    };
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "skipped-dirty-cleanup",
+    );
+
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    expect(captureCalls).toBe(0);
+    const episode = db!.repos.episodes.getById("ep_skipped_dirty" as never);
+    expect(episode?.meta?.reward).toMatchObject({ skipped: true });
+    expect(episode?.meta?.rewardDirty).toBeUndefined();
   });
 
   it("dirty closed episodes hit a failure-count backoff so init() does not retry them every restart (issue #1808)", async () => {

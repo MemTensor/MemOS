@@ -185,12 +185,67 @@ jobs:
             exit 1
           fi
           bash ../../.github/scripts/retry.sh --label "bump package version" -- npm version "${RELEASE_VERSION}" --no-git-tag-version --allow-same-version
+          npm run sync:hermes-version
+          npm run check:hermes-version
 
       - name: Validate and build package
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          set -euo pipefail
           bash ../../.github/scripts/retry.sh --attempts 2 --label "npm run lint" -- npm run lint
           bash ../../.github/scripts/retry.sh --attempts 2 --label "npm test" -- npm test
-          bash ../../.github/scripts/retry.sh --label "npm pack dry-run" -- bash -euo pipefail -c 'npm pack --dry-run --json > "${RUNNER_TEMP}/memos-local-plugin-pack.json"'
+          release_dir="${RUNNER_TEMP}/memos-local-plugin-release"
+          pack_json="${RUNNER_TEMP}/memos-local-plugin-pack.json"
+          mkdir -p "${release_dir}"
+          bash ../../.github/scripts/retry.sh --label "npm pack" -- \
+            bash -euo pipefail -c 'npm pack --json --silent --pack-destination "$1" > "$2"' \
+            _ "${release_dir}" "${pack_json}"
+
+          pack_filename="$(
+            node -e '
+              const fs = require("node:fs");
+              const raw = fs.readFileSync(process.argv[1], "utf8");
+              const jsonStart = raw.match(/^\[/m);
+              if (!jsonStart || jsonStart.index === undefined) {
+                throw new Error("npm pack output did not contain a JSON report");
+              }
+              const report = JSON.parse(raw.slice(jsonStart.index));
+              if (!Array.isArray(report) || report.length !== 1 || !report[0].filename) {
+                throw new Error("npm pack did not report exactly one tarball");
+              }
+              fs.writeFileSync(process.argv[1], `${JSON.stringify(report, null, 2)}\n`);
+              process.stdout.write(report[0].filename);
+            ' "${pack_json}"
+          )"
+          release_tarball="${release_dir}/${pack_filename}"
+          test -s "${release_tarball}"
+
+          package_version="$(
+            tar -xOf "${release_tarball}" package/package.json \
+              | node -e '
+                  const fs = require("node:fs");
+                  process.stdout.write(JSON.parse(fs.readFileSync(0, "utf8")).version);
+                '
+          )"
+          manifest_version="$(
+            tar -xOf "${release_tarball}" package/adapters/hermes/plugin.yaml \
+              | awk '$1 == "version:" { print $2; exit }'
+          )"
+          if [ "${package_version}" != "${RELEASE_VERSION}" ]; then
+            echo "::error::Tarball package.json version ${package_version} does not match ${RELEASE_VERSION}."
+            exit 1
+          fi
+          if [ "${manifest_version}" != "${RELEASE_VERSION}" ]; then
+            echo "::error::Tarball Hermes manifest version ${manifest_version} does not match ${RELEASE_VERSION}."
+            exit 1
+          fi
+
+          sha256sum "${release_tarball}" > "${release_tarball}.sha256"
+          {
+            echo "RELEASE_TARBALL=${release_tarball}"
+            echo "RELEASE_TARBALL_SHA256=${release_tarball}.sha256"
+          } >> "${GITHUB_ENV}"
 
       - name: Draft GitHub Release notes
         id: release_notes
@@ -232,6 +287,8 @@ jobs:
 
           cp "${RELEASE_NOTES_FILE}" "${inspection_dir}/release-notes.md"
           cp "${RUNNER_TEMP}/memos-local-plugin-pack.json" "${inspection_dir}/npm-pack.json"
+          cp "${RELEASE_TARBALL}" "${inspection_dir}/"
+          cp "${RELEASE_TARBALL_SHA256}" "${inspection_dir}/"
           if [ -n "${EVIDENCE_FILE}" ] && [ -s "${EVIDENCE_FILE}" ]; then
             cp "${EVIDENCE_FILE}" "${inspection_dir}/evidence.json"
           fi
@@ -420,7 +477,7 @@ jobs:
                 --base "${DEFAULT_BRANCH}" \
                 --head "${release_branch}" \
                 --title "${release_title}" \
-                --body "Bumps apps/memos-local-plugin/package.json for the published npm release ${RELEASE_VERSION}."
+                --body "Synchronizes package and Hermes metadata for the published npm release ${RELEASE_VERSION}."
               status=$?
               set -e
               if [ "${status}" = 0 ]; then
@@ -438,7 +495,10 @@ jobs:
             done
           }
 
-          git add apps/memos-local-plugin/package.json apps/memos-local-plugin/package-lock.json
+          git add \
+            apps/memos-local-plugin/package.json \
+            apps/memos-local-plugin/package-lock.json \
+            apps/memos-local-plugin/adapters/hermes/plugin.yaml
           created_release_commit=false
           if ! git diff --staged --quiet; then
             git commit -m "${release_title}"

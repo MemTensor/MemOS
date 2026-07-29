@@ -232,6 +232,62 @@ describe("pipeline/orchestrator", () => {
     expect(stats?.scenarioId).toBe("CHITCHAT");
   });
 
+  it("makes repeated turn.start calls idempotent by turnKey in lightweight mode", async () => {
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      config: configWithLightweightMemory(true),
+    });
+    const input: TurnInputDTO = {
+      agent: "hermes",
+      sessionId: "s-idempotent",
+      turnKey: "s-idempotent:4",
+      userText: "continue the same real task",
+      ts: 1_700_000_000_000,
+    };
+
+    const [first, concurrent] = await Promise.all([
+      pipeline.onTurnStart(input),
+      pipeline.onTurnStart({
+        ...input,
+        ts: input.ts + 1,
+      }),
+    ]);
+    const repeated = await pipeline.onTurnStart({
+      ...input,
+      ts: input.ts + 2,
+    });
+
+    expect(concurrent.episodeId).toBe(first.episodeId);
+    expect(repeated.episodeId).toBe(first.episodeId);
+    expect(dbHandle!.repos.episodes.list({ sessionId: input.sessionId })).toHaveLength(1);
+    expect(pipeline.sessionManager.getEpisode(first.episodeId)?.turns).toHaveLength(1);
+  });
+
+  it("rejects a reused turnKey carrying different user text", async () => {
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      config: configWithLightweightMemory(true),
+    });
+    const input: TurnInputDTO = {
+      agent: "hermes",
+      sessionId: "s-turn-key-conflict",
+      turnKey: "s-turn-key-conflict:2",
+      userText: "first task text",
+      ts: 1_700_000_000_000,
+    };
+
+    await pipeline.onTurnStart(input);
+
+    await expect(
+      pipeline.onTurnStart({
+        ...input,
+        userText: "different task text",
+        ts: input.ts + 1,
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    expect(dbHandle!.repos.episodes.list({ sessionId: input.sessionId })).toHaveLength(1);
+  });
+
   it("records tool success + failure through the feedback subscriber", async () => {
     pipeline = createPipeline(buildDeps(dbHandle!));
     await pipeline.onTurnStart({

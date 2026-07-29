@@ -89,6 +89,12 @@ export interface TurnInputDTO {
   agent: AgentKind;
   sessionId: SessionId;
   namespace?: RuntimeNamespace;
+  /**
+   * Optional host-stable idempotency key for this logical turn.
+   * Retries with the same sessionId + turnKey must reuse the original
+   * episode instead of opening another one.
+   */
+  turnKey?: string;
   /** Optional pre-existing episodeId (for continued tasks). */
   episodeId?: EpisodeId;
   /** Free-form text the user said this turn. */

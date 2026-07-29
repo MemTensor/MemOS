@@ -383,6 +383,12 @@ function validateTurnInput(p: Record<string, unknown>): void {
   requireKey(p, "sessionId", "string", "turn.start");
   requireKey(p, "userText", "string", "turn.start");
   requireKey(p, "ts", "number", "turn.start");
+  if (p.turnKey !== undefined && typeof p.turnKey !== "string") {
+    throw new MemosError(
+      "invalid_argument",
+      "turn.start: optional 'turnKey' must be a string",
+    );
+  }
 }
 
 function validateTurnResult(p: Record<string, unknown>): void {

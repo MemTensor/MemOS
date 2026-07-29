@@ -138,6 +138,12 @@ type DedicatedLlmConfig = {
 export interface BootstrapOptions {
   agent: AgentKind;
   namespace?: RuntimeNamespace;
+  /**
+   * Run automatic startup/periodic episode recovery. Defaults to true.
+   * Hermes disables this for its read-oriented Viewer daemon so only the
+   * stdio bridge owns recovery writes for a given data home.
+   */
+  autoRecovery?: boolean;
   /** Optional pre-resolved home. If omitted, derived from `resolveHome`. */
   home?: ResolvedHome;
   /** Optional pre-resolved config. If omitted, we load from disk. */
@@ -526,6 +532,7 @@ export async function bootstrapMemoryCoreFull(
   const handle = createPipeline(deps);
 
   const core = createMemoryCore(handle, home, options.pkgVersion ?? "dev", {
+    autoRecovery: options.autoRecovery ?? true,
     telemetry: options.telemetry ?? null,
     onShutdown: () => {
       try {
@@ -544,6 +551,11 @@ export async function bootstrapMemoryCoreFull(
 // ─── Facade factory ──────────────────────────────────────────────────────────
 
 export interface CreateMemoryCoreOptions {
+  /**
+   * Run automatic startup/periodic episode recovery. Defaults to true.
+   * This does not disable normal turn capture or explicit repair operations.
+   */
+  autoRecovery?: boolean;
   /** Called after the pipeline has shut down. */
   onShutdown?: () => void | Promise<void>;
   /** Optional telemetry instance for ARMS RUM reporting. */
@@ -566,6 +578,7 @@ export function createMemoryCore(
 ): MemoryCore {
   const bootAt = Date.now();
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
+  const autoRecoveryEnabled = options.autoRecovery ?? true;
   let telemetry = options.telemetry ?? null;
   let initialized = false;
   let shutDown = false;
@@ -675,6 +688,7 @@ export function createMemoryCore(
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
+    if (!autoRecoveryEnabled) return;
     const nowMs = Date.now();
     if (nowMs - lastStaleScan < 30_000) return;
     lastStaleScan = nowMs;
@@ -735,6 +749,7 @@ export function createMemoryCore(
   }
 
   async function autoRescoreDirtyClosedEpisodes(): Promise<void> {
+    if (!autoRecoveryEnabled) return;
     const nowMs = Date.now();
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
@@ -1037,7 +1052,8 @@ export function createMemoryCore(
     // call `core.waitForStartupRecovery()` after `init()`.
     let staleForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
     let dirtyClosedForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
-    try {
+    if (autoRecoveryEnabled) {
+      try {
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
         const nowMs = Date.now();
@@ -1141,16 +1157,20 @@ export function createMemoryCore(
         }
         dirtyClosedForBackground = dirtyClosed;
       }
-    } catch (err) {
-      log.debug("init.orphan_scan.failed", {
-        err: err instanceof Error ? err.message : String(err),
-      });
+      } catch (err) {
+        log.debug("init.orphan_scan.failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // Kick the slow recovery chain off the main thread. `init()` returns
     // as soon as the synchronous classification above finishes, so the
     // Gateway can start accepting WebSocket upgrades immediately.
-    if (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0) {
+    if (
+      autoRecoveryEnabled &&
+      (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0)
+    ) {
       const stale = staleForBackground;
       const dirtyClosed = dirtyClosedForBackground;
       log.info("init.background_recovery_started", {
@@ -1184,15 +1204,17 @@ export function createMemoryCore(
     // Periodic rescore timer for episodes that miss the startup scan or
     // retry of failed reward runs. 10-minute interval is safe because
     // autoRescoreDirtyClosedEpisodes has its own 30-second dedup guard.
-    const rescoreInterval = setInterval(() => {
-      void autoRescoreDirtyClosedEpisodes().catch((err) => {
-        log.debug("periodic_rescore.error", {
-          err: err instanceof Error ? err.message : String(err),
+    if (autoRecoveryEnabled) {
+      const rescoreInterval = setInterval(() => {
+        void autoRescoreDirtyClosedEpisodes().catch((err) => {
+          log.debug("periodic_rescore.error", {
+            err: err instanceof Error ? err.message : String(err),
+          });
         });
-      });
-    }, 10 * 60 * 1000);
-    // Mark as unref so the timer doesn't block shutdown
-    (rescoreInterval as unknown as { unref?: () => void }).unref?.();
+      }, 10 * 60 * 1000);
+      // Mark as unref so the timer doesn't block shutdown
+      (rescoreInterval as unknown as { unref?: () => void }).unref?.();
+    }
 
     // Wire `memory_add` into the api_logs table on EVERY turn so the
     // Logs viewer shows per-turn capture activity. `capture.lite.done`
@@ -1416,92 +1438,119 @@ export function createMemoryCore(
     });
 
     const needsRewardFallback: EpisodeId[] = [];
-    for (const ep of orphans) {
-      if (isLightweightEpisode(ep)) continue;
-      try {
-        const episodeId = ep.id as EpisodeId;
-        const traceIds = (ep.traceIds ?? []) as TraceId[];
-        handle.repos.episodes.close(episodeId, endedAt, ep.rTask ?? undefined);
-        handle.repos.episodes.updateMeta(episodeId, {
-          closeReason: "finalized",
-          abandonReason: undefined,
-          recoveredAtStartup: endedAt,
-          recoveryReason: "missed_session_end",
-        });
-
-        if (ep.rTask != null && !episodeRewardIsDirty(ep)) {
-          log.info("init.orphan.repaired_finalized", {
-            episodeId,
-            sessionId: ep.sessionId,
-            rTask: ep.rTask,
-          });
-          debugStartupRecovery("H2", "startup_recovery_already_scored", {
-            episodeId,
-            sessionId: ep.sessionId,
-            rTask: ep.rTask,
-          });
-          continue;
-        }
-
-        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt);
-        debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
-          episodeId,
-          sessionId: ep.sessionId,
-          traceCount: traceIds.length,
-          recoveredTurnCount: snapshot.turnCount,
-        });
-        handle.buses.session.emit({
-          kind: "episode.finalized",
-          episode: snapshot,
-          closedBy: "finalized",
-        });
-        needsRewardFallback.push(episodeId);
-      } catch (err) {
-        log.debug("init.orphan_recovery.skipped", {
-          episodeId: ep.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
-        debugStartupRecovery("H4", "startup_recovery_error", {
-          episodeId: ep.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
+    // Scope capture failures to this startup-recovery batch. Normal live
+    // captures and explicit/manual reward runs must retain their existing
+    // behaviour.
+    const captureFailedInBatch = new Set<EpisodeId>();
+    const recoveryEpisodeIds = new Set(
+      orphans.map((ep) => ep.id as EpisodeId),
+    );
+    const unsubscribeCaptureFailed = handle.buses.capture.on("capture.failed", (evt) => {
+      if (
+        evt.kind === "capture.failed" &&
+        recoveryEpisodeIds.has(evt.episodeId)
+      ) {
+        captureFailedInBatch.add(evt.episodeId);
       }
-    }
-
+    });
     try {
-      await handle.flush();
-      for (const episodeId of needsRewardFallback) {
-        const row = handle.repos.episodes.getById(episodeId);
-        if (row?.rTask == null) {
-          await handle.rewardRunner.run({
+      for (const ep of orphans) {
+        if (isLightweightEpisode(ep)) continue;
+        try {
+          const episodeId = ep.id as EpisodeId;
+          const traceIds = (ep.traceIds ?? []) as TraceId[];
+          handle.repos.episodes.close(episodeId, endedAt, ep.rTask ?? undefined);
+          handle.repos.episodes.updateMeta(episodeId, {
+            closeReason: "finalized",
+            abandonReason: undefined,
+            recoveredAtStartup: endedAt,
+            recoveryReason: "missed_session_end",
+          });
+
+          if (ep.rTask != null && !episodeRewardIsDirty(ep)) {
+            log.info("init.orphan.repaired_finalized", {
+              episodeId,
+              sessionId: ep.sessionId,
+              rTask: ep.rTask,
+            });
+            debugStartupRecovery("H2", "startup_recovery_already_scored", {
+              episodeId,
+              sessionId: ep.sessionId,
+              rTask: ep.rTask,
+            });
+            continue;
+          }
+
+          const snapshot = snapshotFromRecoveredEpisode(ep, endedAt);
+          debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
             episodeId,
-            feedback: [],
-            trigger: "manual",
+            sessionId: ep.sessionId,
+            traceCount: traceIds.length,
+            recoveredTurnCount: snapshot.turnCount,
+          });
+          handle.buses.session.emit({
+            kind: "episode.finalized",
+            episode: snapshot,
+            closedBy: "finalized",
+          });
+          needsRewardFallback.push(episodeId);
+        } catch (err) {
+          log.debug("init.orphan_recovery.skipped", {
+            episodeId: ep.id,
+            err: err instanceof Error ? err.message : String(err),
+          });
+          debugStartupRecovery("H4", "startup_recovery_error", {
+            episodeId: ep.id,
+            err: err instanceof Error ? err.message : String(err),
           });
         }
       }
-      await handle.flush();
-      debugStartupRecovery("H5", "startup_recovery_flush_done", {
-        recoveredCount: orphans.length,
-        rewardedEpisodes: needsRewardFallback.map((episodeId) => {
+
+      try {
+        await handle.flush();
+        for (const episodeId of needsRewardFallback) {
+          if (captureFailedInBatch.has(episodeId)) {
+            log.warn("init.orphan_recovery.reward_fallback_skipped", {
+              episodeId,
+              reason: "capture_failed",
+            });
+            continue;
+          }
           const row = handle.repos.episodes.getById(episodeId);
-          return {
-            episodeId,
-            rTask: row?.rTask ?? null,
-            closeReason: (row?.meta as { closeReason?: unknown } | undefined)?.closeReason,
-            abandonReason: (row?.meta as { abandonReason?: unknown } | undefined)?.abandonReason,
-          };
-        }),
-      });
-    } catch (err) {
-      log.warn("init.orphan_recovery.flush_failed", {
-        count: orphans.length,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      debugStartupRecovery("H5", "startup_recovery_flush_failed", {
-        count: orphans.length,
-        err: err instanceof Error ? err.message : String(err),
-      });
+          if (row?.rTask == null) {
+            await handle.rewardRunner.run({
+              episodeId,
+              feedback: [],
+              trigger: "manual",
+            });
+          }
+        }
+        await handle.flush();
+        debugStartupRecovery("H5", "startup_recovery_flush_done", {
+          recoveredCount: orphans.length,
+          rewardedEpisodes: needsRewardFallback.map((episodeId) => {
+            const row = handle.repos.episodes.getById(episodeId);
+            return {
+              episodeId,
+              rTask: row?.rTask ?? null,
+              captureFailed: captureFailedInBatch.has(episodeId),
+              closeReason: (row?.meta as { closeReason?: unknown } | undefined)?.closeReason,
+              abandonReason: (row?.meta as { abandonReason?: unknown } | undefined)?.abandonReason,
+            };
+          }),
+        });
+      } catch (err) {
+        log.warn("init.orphan_recovery.flush_failed", {
+          count: orphans.length,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        debugStartupRecovery("H5", "startup_recovery_flush_failed", {
+          count: orphans.length,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } finally {
+      unsubscribeCaptureFailed();
     }
   }
 
@@ -1590,6 +1639,27 @@ export function createMemoryCore(
         id: last.id,
       });
     }
+    // Older builds could leave both `reward.skipped=true` and a stale
+    // `rewardDirty` marker on short/trivial episodes. The skip is terminal;
+    // clean the contradictory marker while this bounded page is already in
+    // memory so upgraded installations stop retrying those rows immediately.
+    for (const ep of page) {
+      if (!rewardWasSkipped(ep) || !hasRewardDirtyMarker(ep)) continue;
+      try {
+        handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+          rewardDirty: undefined,
+        });
+        ep.meta = { ...(ep.meta ?? {}), rewardDirty: undefined };
+      } catch (err) {
+        // A cleanup write must not prevent the rest of this page from being
+        // classified and recovered. The terminal skip still keeps this row
+        // out of the retry queue, and a later bounded scan can clean it again.
+        log.debug("dirty_closed_reward.skip_marker_cleanup_error", {
+          episodeId: ep.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     return page;
   }
 
@@ -1605,12 +1675,12 @@ export function createMemoryCore(
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
     if (meta.lightweightMemory === true) return false;
-    if (meta.rewardDirty && typeof meta.rewardDirty === "object") return true;
+    // An intentional triviality skip is terminal and must take precedence
+    // over a stale retry marker written by an older recovery attempt.
+    if (rewardWasSkipped(ep)) return false;
+    if (hasRewardDirtyMarker(ep)) return true;
 
     const reward = meta.reward;
-    if (reward && typeof reward === "object" && (reward as { skipped?: unknown }).skipped === true) {
-      return false;
-    }
     if (
       ep.rTask == null &&
       (ep.traceIds?.length ?? 0) > 0 &&
@@ -1702,10 +1772,14 @@ export function createMemoryCore(
         : [];
     const turns: EpisodeTurn[] = [];
     for (const tr of traces) {
+      const turnId =
+        typeof tr.turnId === "number" && Number.isFinite(tr.turnId)
+          ? (tr.turnId as EpochMs)
+          : tr.ts;
       if (tr.userText) {
         turns.push({
           id: `${tr.id}:user`,
-          ts: tr.ts,
+          ts: turnId,
           role: "user",
           content: tr.userText,
         });
@@ -4534,6 +4608,26 @@ export function createMemoryCore(
     }
 
     return true;
+  }
+
+  function rewardWasSkipped(
+    ep: EpisodeRow & { meta?: Record<string, unknown> },
+  ): boolean {
+    const reward = ep.meta?.reward;
+    return Boolean(
+      reward &&
+      typeof reward === "object" &&
+      (reward as { skipped?: unknown }).skipped === true,
+    );
+  }
+
+  function hasRewardDirtyMarker(
+    ep: EpisodeRow & { meta?: Record<string, unknown> },
+  ): boolean {
+    return Boolean(
+      ep.meta?.rewardDirty &&
+      typeof ep.meta.rewardDirty === "object",
+    );
   }
 
   function collectEmbeddingSlots(): EmbeddingSlot[] {

@@ -52,6 +52,7 @@ interface BridgeArgs {
   tcpPort?: number;
   agent: "openclaw" | "hermes";
   home?: string;
+  runtimeScope?: string;
 }
 
 type BridgeStatus = "connected" | "reconnecting" | "disconnected" | "unknown";
@@ -72,6 +73,10 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
     else if (raw === "--agent=hermes") args.agent = "hermes";
     else if (raw === "--agent=openclaw") args.agent = "openclaw";
     else if (raw.startsWith("--home=")) args.home = raw.slice(7);
+    else if (raw.startsWith("--runtime-scope=")) {
+      const candidate = raw.slice(16).toLowerCase();
+      if (/^[a-f0-9]{16,64}$/.test(candidate)) args.runtimeScope = candidate;
+    }
   }
   return args;
 }
@@ -158,7 +163,10 @@ async function main(): Promise<void> {
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
   const pidPath = pidFilePath(args.agent);
-  const stdioPidPath = pidFilePath(args.agent, STDIO_PID_FILENAME);
+  const stdioPidFilename = args.runtimeScope
+    ? `bridge-stdio-${args.runtimeScope}.pid`
+    : STDIO_PID_FILENAME;
+  const stdioPidPath = pidFilePath(args.agent, stdioPidFilename);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
@@ -294,6 +302,7 @@ async function main(): Promise<void> {
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     namespace: { agentKind: args.agent, profileId: resolvedProfileId },
+    autoRecovery: args.agent !== "hermes" || !args.daemon,
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
     home: resolvedHome,
@@ -486,8 +495,15 @@ async function main(): Promise<void> {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
       removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
-      await withShutdownTimeout(core.shutdown());
-      process.exit(0);
+      try {
+        await withShutdownTimeout(core.shutdown());
+      } catch {
+        // clear-data already shuts the core down before removing SQLite.
+        // The signal still has to terminate the daemon so the supervisor
+        // can replace it.
+      } finally {
+        process.exit(0);
+      }
     };
     process.on("SIGINT", () => void shutdownDaemon("SIGINT"));
     process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));

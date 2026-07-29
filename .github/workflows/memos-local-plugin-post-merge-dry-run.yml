@@ -12,17 +12,51 @@ on:
       - ".github/scripts/publish-local-plugin.sh"
       - ".github/scripts/publish-local-plugin.test.mjs"
       - ".github/scripts/retry.sh"
+      - "apps/memos-local-plugin/package.json"
+      - "apps/memos-local-plugin/package-lock.json"
+      - "apps/memos-local-plugin/adapters/hermes/plugin.yaml"
+      - "apps/memos-local-plugin/scripts/sync-hermes-version.cjs"
+      - "apps/memos-local-plugin/tests/unit/install/hermes-version-sync.test.ts"
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  prepare-version:
+    if: ${{ github.repository == 'MemTensor/MemOS' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate dry-run prerelease version
+        id: version
+        working-directory: apps/memos-local-plugin
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          version="$(
+            node -e '
+              const current = require("./package.json").version;
+              const match = current.match(/^(\d+)\.(\d+)\.(\d+)/);
+              if (!match) {
+                throw new Error(`Unsupported package version: ${current}`);
+              }
+              process.stdout.write(
+                `${match[1]}.${match[2]}.${Number(match[3]) + 1}-ci.${process.env.RUN_NUMBER}`,
+              );
+            '
+          )"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
   dry-run:
     if: ${{ github.repository == 'MemTensor/MemOS' }}
+    needs: prepare-version
     uses: ./.github/workflows/memos-local-plugin-publish.yml
     with:
-      version: "2.0.10"
+      version: ${{ needs.prepare-version.outputs.version }}
       tag: "latest"
       git_ref: ""
       release_notes: ""
