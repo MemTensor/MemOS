@@ -410,6 +410,40 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const recoveredReplay = isRecoveredReplay(input.episode);
     const matcher = createTraceMatcher(existing, { allowRelaxedToolTiming: recoveredReplay });
     const matchedRows = normalized.map((s) => matcher.take(s));
+    // A recovered snapshot is reconstructed from the trace rows that we are
+    // about to patch. If it produces steps but none of those steps match any
+    // source row, continuing into orphan handling / reflection would replay
+    // an invalid snapshot, spend LLM calls, and finally emit capture.done
+    // with no usable trace ids. Fail before any of those side effects.
+    //
+    // Partial matches remain recoverable: their matching rows are patched
+    // and the unmatched tail follows the existing bounded-orphan policy.
+    if (
+      recoveredReplay &&
+      normalized.length > 0 &&
+      matchedRows.every((row) => row === null)
+    ) {
+      const error = new MemosError(
+        ERROR_CODES.CONFLICT,
+        "recovered replay did not match any persisted trace rows",
+        {
+          episodeId: input.episode.id,
+          normalizedSteps: normalized.length,
+          persistedTraces: existing.length,
+        },
+      );
+      emit({
+        kind: "capture.failed",
+        episodeId: input.episode.id,
+        sessionId: input.episode.sessionId,
+        stage: "match",
+        error: {
+          code: ERROR_CODES.CONFLICT,
+          message: error.message,
+        },
+      });
+      throw error;
+    }
     const orphanEntries = normalized
       .map((step, index) => ({ step, index }))
       .filter(({ index }) => matchedRows[index] === null);

@@ -12,8 +12,9 @@
  *       Agent-aware restart. For OpenClaw the plugin lives inside the
  *       gateway process, which is managed by macOS launchd — calling
  *       `process.exit(0)` causes launchd to respawn it automatically.
- *       For Hermes, terminate the active `hermes chat`, spawn a replacement
- *       viewer daemon, then exit so both processes reload the saved config.
+ *       For Hermes, terminate the active `hermes chat`, then ask the bridge
+ *       to shut down gracefully. launchd/systemd owns replacement when the
+ *       viewer is supervised; portable viewers retain the detached fallback.
  */
 import { spawn } from "node:child_process";
 import type { ServerDeps, ServerOptions } from "../types.js";
@@ -43,11 +44,15 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     if (agent === "hermes" && deps.home?.root) {
       try { await fs.unlink(`${deps.home.root}/bridge-status.json`); } catch { /* may not exist */ }
     }
-    if (agent !== "openclaw") {
-      // Hermes: spawn replacement daemon after clearing data
+    if (agent !== "openclaw" && !isSupervisorManaged(options)) {
+      // Portable Hermes: there is no supervisor to replace this process.
       await spawnReplacementDaemon(agent);
     }
-    setTimeout(() => process.exit(0), 200);
+    if (agent === "hermes") {
+      scheduleHermesShutdown(options, 200);
+    } else {
+      setTimeout(() => process.exit(0), 200);
+    }
     return { ok: true, restarting: true, killedHermes };
   });
 
@@ -60,13 +65,48 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
 
     if (agent === "hermes") {
       const killed = await terminateHermesChat();
-      await spawnReplacementDaemon(agent);
-      setTimeout(() => process.exit(0), 200);
+      if (!isSupervisorManaged(options)) {
+        await spawnReplacementDaemon(agent);
+      }
+      scheduleHermesShutdown(options, 200);
       return { ok: true, restarting: true, killed };
     }
 
     return { ok: false, error: `restart unsupported for agent: ${agent}` };
   });
+}
+
+/**
+ * Detect the supervisors used by supported desktop/server installs.
+ *
+ * The MemOS launchd job exports its stable label through XPC_SERVICE_NAME.
+ * Do not treat arbitrary GUI-app XPC labels as supervision: a portable
+ * daemon launched from such an app would exit with nobody to replace it.
+ * systemd services expose INVOCATION_ID for the invocation.
+ */
+export function isSupervisorManagedProcess(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const xpcService = env.XPC_SERVICE_NAME?.trim();
+  if (xpcService?.startsWith("ai.memtensor.memos-local-hermes")) return true;
+  return Boolean(env.INVOCATION_ID?.trim());
+}
+
+function isSupervisorManaged(options: ServerOptions): boolean {
+  return options.lifecycle?.supervised ?? isSupervisorManagedProcess();
+}
+
+function scheduleHermesShutdown(options: ServerOptions, delayMs: number): void {
+  setTimeout(() => {
+    if (options.lifecycle?.requestShutdown) {
+      options.lifecycle.requestShutdown();
+      return;
+    }
+    // The bridge entry owns SIGINT/SIGTERM and drains the HTTP server,
+    // MemoryCore, telemetry and SQLite before exiting. Do not call
+    // process.exit() here: that bypasses the bridge's graceful path.
+    process.kill(process.pid, "SIGTERM");
+  }, delayMs);
 }
 
 async function spawnReplacementDaemon(agent: string): Promise<void> {

@@ -411,7 +411,7 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-// ─── Process-exit hooks (only register once) ──────────────────────────────
+// ─── Process-exit hook (only register once) ───────────────────────────────
 
 let exitHooked = false;
 function hookProcessExit(): void {
@@ -419,8 +419,11 @@ function hookProcessExit(): void {
   exitHooked = true;
   const onExit = () => { void shutdownLogger(); };
   process.once("beforeExit", onExit);
-  process.once("SIGINT", () => { onExit(); process.exit(130); });
-  process.once("SIGTERM", () => { onExit(); process.exit(143); });
+  // Deliberately do not own SIGINT/SIGTERM here. The dedicated bridge
+  // entries drain their HTTP/stdin handles and MemoryCore before exiting;
+  // a library-level process.exit() used to pre-empt those handlers and
+  // leave episodes/SQLite work half-finished. Embedded hosts likewise own
+  // their process lifecycle.
 }
 
 // ─── Public root logger ────────────────────────────────────────────────────
