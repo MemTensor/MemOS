@@ -95,6 +95,8 @@ def test_vector_recall_uses_lightweight_hits_without_get_nodes(
             "user_name": "cube-a",
             "key": "topic",
             "tags": ["tag-a"],
+            "reasoning": "User explicitly chose this option.",
+            "internet_info": {"title": "reference", "url": "https://example.com"},
         }
     ]
 
@@ -105,6 +107,11 @@ def test_vector_recall_uses_lightweight_hits_without_get_nodes(
     assert results[0].memory == "remembered content"
     assert results[0].metadata.memory_type == "LongTermMemory"
     assert results[0].metadata.user_name == "cube-a"
+    assert results[0].metadata.reasoning == "User explicitly chose this option."
+    assert results[0].metadata.internet_info == {
+        "title": "reference",
+        "url": "https://example.com",
+    }
     assert results[0].metadata.relativity == pytest.approx(0.91)
     mock_graph_store.get_nodes.assert_not_called()
     search_kwargs = mock_graph_store.search_by_embedding.call_args.kwargs
@@ -112,6 +119,8 @@ def test_vector_recall_uses_lightweight_hits_without_get_nodes(
     assert "memory" in search_kwargs["return_fields"]
     assert "memory_type" in search_kwargs["return_fields"]
     assert "user_name" in search_kwargs["return_fields"]
+    assert "reasoning" in search_kwargs["return_fields"]
+    assert "internet_info" in search_kwargs["return_fields"]
     assert "embedding" not in search_kwargs["return_fields"]
 
 
