@@ -61,15 +61,7 @@ class OpenAILLM(BaseLLM):
             return reasoning_content + (response_content or "")
         return response_content or ""
 
-    @timed_with_status(
-        log_prefix="OpenAI LLM",
-        log_extra_args=lambda self, messages, **kwargs: {
-            "model_name_or_path": kwargs.get("model_name_or_path", self.config.model_name_or_path),
-            "messages": messages,
-        },
-    )
-    def generate(self, messages: MessageList, **kwargs) -> str:
-        """Generate a response from OpenAI LLM, optionally overriding generation params."""
+    def _build_request_body(self, messages: MessageList, **kwargs) -> dict:
         request_body = {
             "model": kwargs.get("model_name_or_path", self.config.model_name_or_path),
             "messages": messages,
@@ -79,6 +71,21 @@ class OpenAILLM(BaseLLM):
             "extra_body": kwargs.get("extra_body", self.config.extra_body),
             "tools": kwargs.get("tools", NOT_GIVEN),
         }
+        enable_thinking = kwargs.get("enable_thinking", self.config.enable_thinking)
+        if enable_thinking is not None:
+            request_body["enable_thinking"] = enable_thinking
+        return request_body
+
+    @timed_with_status(
+        log_prefix="OpenAI LLM",
+        log_extra_args=lambda self, messages, **kwargs: {
+            "model_name_or_path": kwargs.get("model_name_or_path", self.config.model_name_or_path),
+            "messages": messages,
+        },
+    )
+    def generate(self, messages: MessageList, **kwargs) -> str:
+        """Generate a response from OpenAI LLM, optionally overriding generation params."""
+        request_body = self._build_request_body(messages, **kwargs)
         start_time = time.perf_counter()
         logger.info(f"OpenAI LLM Request body: {request_body}")
 
@@ -132,6 +139,10 @@ class OpenAILLM(BaseLLM):
             "tools": kwargs.get("tools", NOT_GIVEN),
         }
 
+        enable_thinking = kwargs.get("enable_thinking", self.config.enable_thinking)
+        if enable_thinking is not None:
+            request_body["enable_thinking"] = enable_thinking
+
         logger.info(f"OpenAI LLM Stream Request body: {request_body}")
         response = self.client.chat.completions.create(**request_body)
 
@@ -184,15 +195,19 @@ class AzureLLM(BaseLLM):
 
     def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from Azure OpenAI LLM."""
-        response = self.client.chat.completions.create(
-            model=self.config.model_name_or_path,
-            messages=messages,
-            temperature=kwargs.get("temperature", self.config.temperature),
-            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-            top_p=kwargs.get("top_p", self.config.top_p),
-            tools=kwargs.get("tools", NOT_GIVEN),
-            extra_body=kwargs.get("extra_body", self.config.extra_body),
-        )
+        request_body = {
+            "model": self.config.model_name_or_path,
+            "messages": messages,
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+            "top_p": kwargs.get("top_p", self.config.top_p),
+            "tools": kwargs.get("tools", NOT_GIVEN),
+            "extra_body": kwargs.get("extra_body", self.config.extra_body),
+        }
+        enable_thinking = kwargs.get("enable_thinking", getattr(self.config, "enable_thinking", None))
+        if enable_thinking is not None:
+            request_body["enable_thinking"] = enable_thinking
+        response = self.client.chat.completions.create(**request_body)
         logger.info(f"Response from Azure OpenAI: {response.model_dump_json()}")
         if not response.choices:
             logger.warning("Azure OpenAI response has no choices")
@@ -212,15 +227,19 @@ class AzureLLM(BaseLLM):
             logger.info("stream api not support tools")
             return
 
-        response = self.client.chat.completions.create(
-            model=self.config.model_name_or_path,
-            messages=messages,
-            stream=True,
-            temperature=kwargs.get("temperature", self.config.temperature),
-            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-            top_p=kwargs.get("top_p", self.config.top_p),
-            extra_body=kwargs.get("extra_body", self.config.extra_body),
-        )
+        request_body = {
+            "model": self.config.model_name_or_path,
+            "messages": messages,
+            "stream": True,
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+            "top_p": kwargs.get("top_p", self.config.top_p),
+            "extra_body": kwargs.get("extra_body", self.config.extra_body),
+        }
+        enable_thinking = kwargs.get("enable_thinking", getattr(self.config, "enable_thinking", None))
+        if enable_thinking is not None:
+            request_body["enable_thinking"] = enable_thinking
+        response = self.client.chat.completions.create(**request_body)
 
         reasoning_started = False
 
