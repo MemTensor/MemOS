@@ -16,6 +16,7 @@ import type {
   EmbeddingProviderName,
   ProviderCallCtx,
 } from "../types.js";
+import { yieldIfForegroundPending } from "../priority-gate.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Extractor = (text: string, options?: Record<string, unknown>) => Promise<any>;
@@ -74,6 +75,9 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
     const out: number[][] = [];
     for (let i = 0; i < texts.length; i++) {
       if (ctx.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      // Cooperative yield: when a foreground retrieval is waiting, give it a
+      // chance to proceed between individual inference calls (#2186).
+      if (i > 0) await yieldIfForegroundPending();
       const result = await ext(texts[i]!, { pooling: "mean", normalize: true });
       const arr = (result as { data?: Float32Array }).data;
       if (!arr) {

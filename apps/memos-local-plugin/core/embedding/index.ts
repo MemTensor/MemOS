@@ -36,3 +36,8 @@ export { GeminiEmbeddingProvider } from "./providers/gemini.js";
 export { CohereEmbeddingProvider } from "./providers/cohere.js";
 export { VoyageEmbeddingProvider } from "./providers/voyage.js";
 export { MistralEmbeddingProvider } from "./providers/mistral.js";
+export {
+  enterForeground,
+  isForegroundPending,
+  yieldIfForegroundPending,
+} from "./priority-gate.js";
