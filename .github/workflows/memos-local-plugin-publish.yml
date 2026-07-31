@@ -1,4 +1,4 @@
-name: MemOS Local Plugin (V2) — Build & Publish
+name: MemOS Local Plugin (V2) — Legacy Standalone Publisher
 
 on:
   workflow_dispatch:
@@ -28,6 +28,11 @@ on:
         required: true
         type: boolean
         default: false
+      legacy_publish_confirmation:
+        description: "Required only when dry_run=false. Must exactly equal: LEGACY PUBLISH memos-local-plugin-v<version>"
+        required: false
+        type: string
+        default: ""
   workflow_call:
     inputs:
       version:
@@ -59,6 +64,11 @@ on:
         required: false
         type: boolean
         default: false
+      legacy_publish_confirmation:
+        description: "Required only when dry_run=false. Must exactly equal: LEGACY PUBLISH memos-local-plugin-v<version>"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: memos-local-plugin-publish
@@ -73,7 +83,33 @@ permissions:
   pull-requests: write
 
 jobs:
+  guard-legacy-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate legacy standalone publish confirmation
+        shell: bash
+        working-directory: .
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          LEGACY_PUBLISH_CONFIRMATION: ${{ inputs.legacy_publish_confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "dry_run=true; legacy standalone publish confirmation is not required."
+            exit 0
+          fi
+
+          expected="LEGACY PUBLISH memos-local-plugin-v${RELEASE_VERSION}"
+          if [ "${LEGACY_PUBLISH_CONFIRMATION}" != "${expected}" ]; then
+            echo "::error::This workflow is the legacy standalone local-plugin publisher. The current official path is MemOS Release — Publish with v* tags and apps/memos-local-plugin/** extraction."
+            echo "::error::To intentionally run this legacy publisher, set legacy_publish_confirmation exactly to: ${expected}"
+            exit 1
+          fi
+
   build-prebuilds:
+    needs: guard-legacy-publish
     strategy:
       matrix:
         include:
@@ -446,7 +482,7 @@ jobs:
               gh release create "${release_tag}" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --target "$(git rev-parse HEAD)" \
-                --title "OpenClaw Local Plugin v${RELEASE_VERSION}" \
+                --title "MemOS Local Plugin v${RELEASE_VERSION}" \
                 --notes-file "${RELEASE_NOTES_FILE}" \
                 "${release_flags[@]}"
               status=$?

@@ -8,8 +8,8 @@ import { pathToFileURL } from "node:url";
 const PRODUCT_PATH = "apps/memos-local-plugin";
 const PRODUCT_ID = "openclaw-local-plugin";
 const PRODUCT_TITLE = {
-  zh: "OpenClaw 本地插件",
-  en: "OpenClaw Local Plugin",
+  zh: "MemOS 本地插件",
+  en: "MemOS Local Plugin",
 };
 export const RELEASE_NOTE_GUIDANCE = {
   category_policy: {
