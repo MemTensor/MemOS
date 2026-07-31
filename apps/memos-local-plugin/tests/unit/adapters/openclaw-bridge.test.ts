@@ -26,6 +26,7 @@ import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 
 import {
   bridgeSessionId,
+  createOpenClawInboundTextStore,
   createOpenClawBridge,
   extractTurn,
   flattenMessages,
@@ -785,6 +786,138 @@ describe("bridgeSessionId", () => {
     expect(bridgeSessionId("main", "s1")).toBe("openclaw::main::s1");
     expect(bridgeSessionId("main", "s1")).toBe(bridgeSessionId("main", "s1"));
     expect(bridgeSessionId("main", "s2")).not.toBe(bridgeSessionId("main", "s1"));
+  });
+});
+
+describe("OpenClaw official inbound user text", () => {
+  it("keeps concurrent runs isolated and expires stale entries", () => {
+    let timestamp = 1_000;
+    const store = createOpenClawInboundTextStore({
+      now: () => timestamp,
+      ttlMs: 100,
+      maxEntries: 2,
+    });
+
+    store.remember(
+      { from: "ou_a", content: "第一个正文", timestamp, runId: "run-a" },
+      { channelId: "feishu", runId: "run-a" },
+    );
+    store.remember(
+      { from: "ou_b", content: "第二个正文", timestamp, runId: "run-b" },
+      { channelId: "feishu", runId: "run-b" },
+    );
+
+    expect(store.get("run-a")).toBe("第一个正文");
+    expect(store.get("run-b")).toBe("第二个正文");
+
+    store.remember(
+      { from: "ou_c", content: "第三个正文", timestamp, runId: "run-c" },
+      { channelId: "feishu", runId: "run-c" },
+    );
+    expect(store.get("run-a")).toBeUndefined();
+    expect(store.get("run-b")).toBe("第二个正文");
+    expect(store.get("run-c")).toBe("第三个正文");
+
+    timestamp += 101;
+    expect(store.get("run-b")).toBeUndefined();
+    expect(store.size()).toBe(0);
+  });
+
+  it("uses message_received content for retrieval without sanitizing user-authored text", async () => {
+    const mc = buildCore();
+    await mc.init();
+    const onTurnStart = vi.spyOn(mc, "onTurnStart");
+    const inboundUserText = createOpenClawInboundTextStore();
+    const ctx = hookCtx({ sessionKey: "s-official-search", runId: "run-official-search" });
+    const cleanText = "[message_id: abc-def] 这是用户主动输入的正文";
+    inboundUserText.remember(
+      {
+        from: "ou_14ad16b11b12b0322be96b71c26713b1",
+        content: cleanText,
+        timestamp: Date.now(),
+        runId: ctx.runId,
+      },
+      { channelId: "feishu", runId: ctx.runId, sessionKey: ctx.sessionKey },
+    );
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      inboundUserText,
+    });
+    await bridge.handleBeforePrompt(
+      {
+        prompt:
+          "An async command completion event was triggered, but user delivery is disabled.\n" +
+          "[message_id: om_x100b69f11b8858acde918bb5c01ea62]\n" +
+          "ou_14ad16b11b12b0322be96b71c26713b1: 被包装的模型输入",
+        messages: [],
+      },
+      ctx,
+    );
+
+    expect(onTurnStart).toHaveBeenCalledWith(
+      expect.objectContaining({ userText: cleanText }),
+    );
+  });
+
+  it("uses message_received content when agent_end persists a cache-only turn", async () => {
+    const mc = buildCore();
+    await mc.init();
+    const inboundUserText = createOpenClawInboundTextStore();
+    const ctx = hookCtx({ sessionKey: "s-official-add", runId: "run-official-add" });
+    const cleanText = "你还记得我喜欢什么歌吗";
+    inboundUserText.remember(
+      {
+        from: "ou_14ad16b11b12b0322be96b71c26713b1",
+        content: cleanText,
+        timestamp: Date.now(),
+        runId: ctx.runId,
+      },
+      { channelId: "feishu", runId: ctx.runId, sessionKey: ctx.sessionKey },
+    );
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+      inboundUserText,
+    });
+
+    await bridge.handleAgentEnd(
+      {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "[message_id: om_x100b69f11b8858acde918bb5c01ea62]\n" +
+              "ou_14ad16b11b12b0322be96b71c26713b1: 被包装的模型输入",
+          },
+          { role: "assistant", content: "当然记得。" },
+        ],
+      },
+      ctx,
+    );
+    await (pipeline as PipelineHandle).flush();
+
+    const traces = await mc.listTraces({ groupByTurn: true });
+    expect(traces).toHaveLength(1);
+    expect(traces[0]!.userText).toBe(cleanText);
+    expect(inboundUserText.get(ctx.runId!)).toBeUndefined();
+  });
+
+  it("falls back to conservative Feishu envelope cleanup on a cache miss", () => {
+    const flat = flattenMessages([
+      {
+        role: "user",
+        content:
+          "[message_id: om_x100b69f11b8858acde918bb5c01ea62]\n" +
+          "ou_14ad16b11b12b0322be96b71c26713b1: 你还记得我喜欢什么歌吗",
+      },
+    ]);
+
+    expect(extractTurn(flat, 0)?.userText).toBe("你还记得我喜欢什么歌吗");
   });
 });
 

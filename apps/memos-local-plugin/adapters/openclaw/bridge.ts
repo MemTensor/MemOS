@@ -38,7 +38,9 @@ import type {
   BeforePromptBuildResult,
   BeforeToolCallEvent,
   HostLogger,
+  MessageReceivedEvent,
   PluginHookAgentContext,
+  PluginHookMessageContext,
   PluginHookSessionContext,
   PluginHookSubagentContext,
   PluginHookToolContext,
@@ -512,8 +514,21 @@ function stripOpenClawUserEnvelope(raw: string): string {
   // 4. Leading timestamp like "[Thu 2026-03-05 15:23 GMT+8] "
   text = text.replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+[^\]]+\]\s*/, "");
 
-  // 5. Inline envelope tags OpenClaw leaves behind.
-  text = text.replace(/\[message_id:\s*[a-f0-9-]+\]/gi, "");
+  // 5. Legacy channel decoration. Modern OpenClaw paths use the clean
+  // `message_received.content` value instead (see
+  // `OpenClawInboundTextStore` below). These conservative rules exist
+  // only for old hosts, internal runs, and cache misses:
+  //   [message_id: om_x...]
+  //   ou_x...: actual Feishu message
+  //
+  // Match at the beginning only. A user may legitimately discuss a
+  // string such as `[message_id: example]` in their message; stripping
+  // arbitrary occurrences would alter real input.
+  text = text.replace(
+    /^(?:\s*\[message_id:\s*[^\]\r\n]+\]\s*(?:\r?\n)?)+/i,
+    "",
+  );
+  text = text.replace(/^\s*ou_[a-z0-9_-]+:\s*/i, "");
   text = text.replace(/\[\[reply_to_current\]\]/gi, "");
 
   // 6. Line-level OpenClaw side-channel injections. OpenClaw appends
@@ -847,10 +862,96 @@ function capContextBlock(block: string): { block: string; truncated: boolean } {
 
 // ─── Bridge factory ────────────────────────────────────────────────────────
 
+const DEFAULT_INBOUND_TEXT_TTL_MS = 2 * 60 * 60 * 1_000;
+const DEFAULT_INBOUND_TEXT_MAX_ENTRIES = 1_024;
+
+interface InboundTextEntry {
+  content: string;
+  rememberedAt: number;
+}
+
+/**
+ * Short-lived correlation store between OpenClaw's `message_received`
+ * hook and its later agent hooks.
+ *
+ * `runId` is deliberately the only key. OpenClaw documents it as stable
+ * across one inbound turn and distinct between concurrent turns. Falling
+ * back to sessionKey/messageId here would risk pairing the wrong user text
+ * when two messages overlap; older hosts without runId instead use the
+ * conservative envelope sanitizer.
+ */
+export interface OpenClawInboundTextStore {
+  remember: (
+    event: MessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ) => void;
+  get: (runId: string | undefined) => string | undefined;
+  delete: (runId: string | undefined) => void;
+  size: () => number;
+}
+
+export interface OpenClawInboundTextStoreOptions {
+  now?: () => number;
+  ttlMs?: number;
+  maxEntries?: number;
+}
+
+export function createOpenClawInboundTextStore(
+  options: OpenClawInboundTextStoreOptions = {},
+): OpenClawInboundTextStore {
+  const now = options.now ?? (() => Date.now());
+  const ttlMs = Math.max(1, options.ttlMs ?? DEFAULT_INBOUND_TEXT_TTL_MS);
+  const maxEntries = Math.max(
+    1,
+    Math.floor(options.maxEntries ?? DEFAULT_INBOUND_TEXT_MAX_ENTRIES),
+  );
+  const entries = new Map<string, InboundTextEntry>();
+
+  function prune(timestamp: number): void {
+    for (const [runId, entry] of entries) {
+      if (timestamp - entry.rememberedAt > ttlMs) entries.delete(runId);
+    }
+  }
+
+  return {
+    remember(event, ctx) {
+      const runId = firstString(event.runId, ctx.runId);
+      const content = typeof event.content === "string" ? event.content.trim() : "";
+      if (!runId || !content) return;
+
+      const timestamp = now();
+      prune(timestamp);
+      // Refresh insertion order so capacity eviction removes the oldest
+      // turn, not a recently retried message_received delivery.
+      entries.delete(runId);
+      entries.set(runId, { content, rememberedAt: timestamp });
+      while (entries.size > maxEntries) {
+        const oldest = entries.keys().next().value as string | undefined;
+        if (!oldest) break;
+        entries.delete(oldest);
+      }
+    },
+    get(runId) {
+      prune(now());
+      if (!runId) return undefined;
+      return entries.get(runId)?.content;
+    },
+    delete(runId) {
+      if (runId) entries.delete(runId);
+    },
+    size() {
+      prune(now());
+      return entries.size;
+    },
+  };
+}
+
 export interface BridgeOptions {
   agent: AgentKind;
   core: MemoryCore;
   log: HostLogger;
+  /** Clean inbound text captured from OpenClaw's `message_received`. */
+  inboundUserText?: OpenClawInboundTextStore;
   /** Override the wall-clock source (tests). */
   now?: () => number;
 }
@@ -1165,32 +1266,31 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         });
         return;
       }
-      // Strip OpenClaw's envelope before the text leaks anywhere
-      // downstream (retrieval query, stored episode.initialTurn, capture
-      // userText). Without this, every captured memory would carry the
-      // "[Thu … GMT+8]" prefix and the "Sender (untrusted metadata)"
-      // block — exactly the bug the user hit.
       const rawPrompt = (event.prompt ?? "").trim();
-      // V7 parity with legacy adapter: don't create episodes for
-      // OpenClaw boot checks / bootstrap preludes / sentinel replies.
-      // They're not user input, and retrieving against them wastes a
-      // tier-2 query and pollutes the viewer.
-      if (isOpenClawBootstrapMessage(rawPrompt)) {
+      // Primary path: use OpenClaw's channel-normalized official body.
+      // Only old hosts, internal runs, or a missed runId correlation
+      // inspect the model-facing prompt and its channel wrappers.
+      const prompt =
+        opts.inboundUserText?.get(ctx.runId) ??
+        stripOpenClawUserEnvelope(rawPrompt);
+      if (!prompt) return;
+      // Apply runtime-message filters to the selected user text, not the
+      // wrapped prompt. A model-facing prompt can contain stale internal
+      // event lines ahead of a perfectly valid official inbound body.
+      if (isOpenClawBootstrapMessage(prompt)) {
         opts.log.debug("memos.onTurnStart.skipped_bootstrap", {
           sessionKey: ctx.sessionKey,
-          head: rawPrompt.slice(0, 60),
+          head: prompt.slice(0, 60),
         });
         return;
       }
-      if (isOpenClawSubagentAnnouncementPrompt(rawPrompt)) {
+      if (isOpenClawSubagentAnnouncementPrompt(prompt)) {
         opts.log.debug("memos.onTurnStart.skipped_subagent_announcement", {
           sessionKey: ctx.sessionKey,
           agentId: ctx.agentId,
         });
         return;
       }
-      const prompt = stripOpenClawUserEnvelope(rawPrompt);
-      if (!prompt) return;
 
       const namespace = namespaceFromAgentCtx(ctx);
       const sessionId = await ensureSession(ctx.agentId, ctx.sessionKey, namespace);
@@ -1278,6 +1378,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
     if (isEphemeralSessionKey(ctx.sessionKey)) {
       // Mirror `handleBeforePrompt` — slug-generator & co. don't get a
       // trace / episode, so there's nothing to persist here either.
+      opts.inboundUserText?.delete(ctx.runId);
       return;
     }
     const namespace = namespaceFromAgentCtx(ctx);
@@ -1320,7 +1421,23 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
       messageCursor.set(sessionId, allMessages.length);
 
       const flat = flattenMessages(novel);
-      const turn = extractTurn(flat, now());
+      const officialUserText = opts.inboundUserText?.get(ctx.runId);
+      let turn = extractTurn(flat, now());
+      if (officialUserText) {
+        if (turn) {
+          // Do not sanitize official content. It is already the
+          // channel-normalized BodyForCommands/RawBody value and may
+          // legitimately contain text resembling an envelope marker.
+          turn.userText = officialUserText;
+        } else {
+          // Defensive compatibility for hosts that omit the user entry
+          // from agent_end.messages but still publish message_received.
+          turn = extractTurn(
+            [{ role: "user", content: officialUserText }, ...flat],
+            now(),
+          );
+        }
+      }
       if (!turn || !turn.userText) {
         // Elevated to WARN so unexpected skips show up in the gateway
         // log. `flat.length` / `novel.length` help diagnose whether the
@@ -1429,6 +1546,10 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
         err: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
       });
+    } finally {
+      // before_prompt_build may retry within one run, so the entry is
+      // only consumed after the terminal agent_end path.
+      opts.inboundUserText?.delete(ctx.runId);
     }
   }
 
