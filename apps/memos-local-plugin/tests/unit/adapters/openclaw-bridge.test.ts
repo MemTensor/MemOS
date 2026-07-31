@@ -30,6 +30,7 @@ import {
   createOpenClawBridge,
   extractTurn,
   flattenMessages,
+  isOpenClawBootstrapMessage,
   renderContextBlock,
 } from "../../../adapters/openclaw/bridge.js";
 import { registerOpenClawTools } from "../../../adapters/openclaw/tools.js";
@@ -635,6 +636,22 @@ describe("extractTurn", () => {
  * If you change one, change the other in lockstep.
  */
 describe("OpenClaw side-channel user injections", () => {
+  const currentAsyncCompletionPrompts = [
+    "An async command completion event was triggered, but no command output was found. " +
+      "Reply HEARTBEAT_OK only. Do not mention, summarize, or reuse output from any earlier run.",
+    "An async command completion event was triggered, but user delivery is disabled for this run. " +
+      "Handle the result internally and reply HEARTBEAT_OK only. " +
+      "Do not mention, summarize, or reuse command output.\n" +
+      "Reference UTC: 2026-07-31 08:05 UTC",
+  ];
+
+  it("recognizes current OpenClaw async-completion prompts as bootstrap", () => {
+    for (const prompt of currentAsyncCompletionPrompts) {
+      expect(isOpenClawBootstrapMessage(prompt)).toBe(true);
+    }
+    expect(isOpenClawBootstrapMessage("[OpenClaw heartbeat poll]")).toBe(true);
+  });
+
   it("drops the async-exec-completion wakeup prompt as bootstrap (no captured turn)", () => {
     const flat = flattenMessages([
       {
@@ -734,6 +751,49 @@ describe("OpenClaw side-channel user injections", () => {
     // Line-level stripper drops the whole line. handleAgentEnd's
     // `if (!turn.userText) return;` then short-circuits.
     expect(turn?.userText).toBe("");
+  });
+
+  it("does not search, route an episode, or capture current async-completion prompts", async () => {
+    const mc = buildCore();
+    await mc.init();
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+
+    for (const [index, prompt] of currentAsyncCompletionPrompts.entries()) {
+      const ctx = hookCtx({
+        sessionKey: `agent:main:heartbeat:${index}`,
+        runId: `heartbeat-run-${index}`,
+      });
+      const retrieval = await bridge.handleBeforePrompt(
+        { prompt, messages: [] },
+        ctx,
+      );
+      expect(retrieval).toBeUndefined();
+
+      await bridge.handleAgentEnd(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: prompt },
+            { role: "assistant", content: "HEARTBEAT_OK" },
+          ],
+        },
+        ctx,
+      );
+    }
+    await (pipeline as PipelineHandle).flush();
+
+    const searchLogs = await mc.listApiLogs({
+      toolName: "memos_search",
+      limit: 10,
+    });
+    expect(searchLogs.logs).toHaveLength(0);
+    expect(searchLogs.total).toBe(0);
+    expect(await mc.listEpisodeRows({ limit: 10 })).toHaveLength(0);
+    expect(await mc.listTraces({ limit: 10 })).toHaveLength(0);
   });
 });
 

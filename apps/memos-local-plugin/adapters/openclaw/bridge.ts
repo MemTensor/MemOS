@@ -382,6 +382,12 @@ const OPENCLAW_BOOT_SIGNATURES: readonly string[] = [
   // Source signatures live in OpenClaw `infra/heartbeat-events-filter.ts`
   // and `auto-reply/reply/session-reset-prompt.ts`.
   "An async command you ran earlier has completed",
+  // OpenClaw 2026.7+ uses this shared prefix for both "no command
+  // output" and "user delivery is disabled" heartbeat wakeups.
+  "An async command completion event was triggered",
+  // Session persistence may retain this compact marker even when
+  // before_prompt_build receives the expanded prompt above.
+  "[OpenClaw heartbeat poll]",
   "A scheduled reminder has been triggered",
   "A scheduled cron event was triggered",
   "Run the following periodic tasks",
