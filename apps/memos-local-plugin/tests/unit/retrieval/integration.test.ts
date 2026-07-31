@@ -245,6 +245,69 @@ describe("retrieval/integration", () => {
     expect(refKinds).toContain("world-model");
     expect(refKinds).not.toContain("trace");
     expect(refKinds).not.toContain("episode");
+    expect(res.stats.droppedByKeywordConfirmationCount).toBeGreaterThan(0);
+  });
+
+  it("recalls the exact identifier trace and rejects a generic pattern impostor", async () => {
+    const identifier = "project_id_2026_alpha_001";
+    const insertIdentifierTrace = (input: {
+      id: string;
+      userText: string;
+    }) => {
+      handle.repos.traces.insert({
+        id: input.id as TraceId,
+        episodeId: "ep1" as EpisodeId,
+        sessionId: "s1" as SessionId,
+        ts: NOW as never,
+        userText: input.userText,
+        agentText: "状态已确认",
+        toolCalls: [],
+        reflection: null,
+        value: 0.8 as never,
+        alpha: 0.5 as never,
+        rHuman: null,
+        priority: 0.8 as never,
+        tags: [],
+        vecSummary: vec([1, 0, 0]),
+        vecAction: null,
+        turnId: 0 as never,
+        schemaVersion: 1,
+      });
+    };
+    insertIdentifierTrace({
+      id: "trace_exact_identifier",
+      userText: `项目 ${identifier} 已完成`,
+    });
+    insertIdentifierTrace({
+      id: "trace_generic_pattern",
+      userText: "请查询之前的普通项目记录",
+    });
+
+    const base = makeDeps(handle);
+    const res = await toolDrivenRetrieve(
+      {
+        ...base,
+        config: {
+          ...base.config,
+          lightweightMemory: true,
+        },
+      },
+      {
+        reason: "tool_driven",
+        agent: "openclaw",
+        sessionId: "s1" as SessionId,
+        tool: "memos_search",
+        args: { query: `请查询 ${identifier} 的记录` },
+        ts: NOW as never,
+      },
+    );
+
+    const ids = res.packet.snippets.map((snippet) => String(snippet.refId));
+    expect(ids).toContain("trace_exact_identifier");
+    expect(ids).not.toContain("trace_generic_pattern");
+    expect(res.stats.exactIdentifierCount).toBe(1);
+    expect(res.stats.channelHits?.exact_identifier).toBeGreaterThan(0);
+    expect(res.stats.droppedByKeywordConfirmationCount).toBeGreaterThan(0);
   });
 
   it("recalls feedback experiences through keyword channels when embeddings degrade", async () => {
@@ -335,6 +398,10 @@ describe("retrieval/integration", () => {
     expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
     expect(res.stats.emptyPacket).toBe(false);
     expect(filterCalls).toBe(1);
+    expect(res.packet.droppedByLlm?.length).toBeGreaterThan(0);
+    expect(res.packet.droppedByLlm?.every((snippet) => typeof snippet.score === "number")).toBe(
+      true,
+    );
   });
 
   it("can defer the local LLM pass for one final merged filter", async () => {
@@ -402,14 +469,7 @@ describe("retrieval/integration", () => {
     expect(res.stats.emptyPacket).toBe(false);
   });
 
-  it("turn_start rescues injection when LLM filter empties the kept set (#1913)", async () => {
-    // Repro for issue #1913: when the LLM relevance filter returns
-    // `selected: []` for a non-empty ranked list (the case where the
-    // top hits are all near-duplicate question traces), the packet
-    // used to collapse to an empty injection. The rescue path keeps
-    // the top-K best-scoring candidates so the agent still gets a
-    // packet, and surfaces `llm_filtered_refilled` so the Logs viewer
-    // can show the safety net fired.
+  it("turn_start honours an empty LLM selection instead of injecting unrelated candidates", async () => {
     const llm: any = {
       completeJson: async () => ({
         value: { selected: [], sufficient: false },
@@ -435,10 +495,85 @@ describe("retrieval/integration", () => {
       },
     );
 
-    expect(res.packet.snippets.length).toBeGreaterThan(0);
-    expect(res.packet.rendered.length).toBeGreaterThan(0);
-    expect(res.stats.llmFilterOutcome).toBe("llm_filtered_refilled");
-    expect(res.stats.emptyPacket).toBe(false);
+    expect(res.packet.snippets).toEqual([]);
+    expect(res.packet.rendered).toBe("");
+    expect(res.stats.llmFilterOutcome).toBe("llm_filtered_empty");
+    expect(res.stats.emptyPacket).toBe(true);
+  });
+
+  it("widens a personal-fact query to the action channel only after an empty LLM pass", async () => {
+    handle.repos.traces.insert({
+      id: "t_personal_action" as TraceId,
+      episodeId: "ep1" as EpisodeId,
+      sessionId: "s1" as SessionId,
+      ts: NOW as never,
+      userText: "我最偏爱的歌手是陈奕迅",
+      agentText: "已记录这条个人偏好。",
+      toolCalls: [],
+      summary: null,
+      reflection: null,
+      value: 0.7 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.7 as never,
+      tags: [],
+      vecSummary: vec([0, 1, 0]),
+      vecAction: vec([1, 0, 0]),
+      turnId: 0 as never,
+      schemaVersion: 1,
+    });
+    let filterCalls = 0;
+    const llm: any = {
+      completeJson: async (messages: Array<{ role: string; content: string }>) => {
+        filterCalls += 1;
+        if (filterCalls === 1) {
+          return {
+            value: { selected: [], sufficient: false },
+            servedBy: "fake",
+          };
+        }
+        const candidateText = messages[1]!.content;
+        const match = candidateText.match(/^(\d+)\..*陈奕迅.*$/m);
+        return {
+          value: { selected: [Number(match?.[1] ?? 0)], sufficient: true },
+          servedBy: "fake",
+        };
+      },
+    };
+
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_current" as SessionId,
+        userText: "你还记得关于我的偏好吗？",
+        ts: NOW as never,
+      },
+      {
+        plan: {
+          profile: "personal_fact",
+          wantTier1: false,
+          wantTier2: true,
+          wantTier3: false,
+        },
+      },
+    );
+
+    expect(filterCalls).toBe(2);
+    expect(res.stats.retrievalPasses).toBe(2);
+    expect(res.packet.snippets.map((snippet) => snippet.body).join("\n")).toContain(
+      "陈奕迅",
+    );
+    expect(res.packet.snippets[0]?.scoreDetails?.channels).toContain("vec_action");
   });
 
   it("skill_invoke is tier1-heavy", async () => {

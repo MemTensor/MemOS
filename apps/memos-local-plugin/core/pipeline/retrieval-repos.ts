@@ -35,6 +35,7 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
           procedureJson: row.procedureJson,
           decisionGuidance: normaliseSkillDecisionGuidance(row.procedureJson),
           eta: row.eta,
+          vec: row.vec,
           sourcePolicyIds: row.sourcePolicyIds,
           updatedAt: row.updatedAt,
         };
@@ -104,6 +105,7 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
           title: row.title,
           body: row.body,
           policyIds: row.policyIds,
+          vec: row.vec,
         };
       },
     },

@@ -99,6 +99,10 @@ import type { ReasoningConfig } from "../llm/types.js";
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
+import {
+  buildLocalRetrievalLogStages,
+  type RetrievalLogCandidate,
+} from "./retrieval-log.js";
 import type { PipelineDeps, PipelineHandle } from "./types.js";
 import {
   namespaceFromHints,
@@ -975,12 +979,9 @@ export function createMemoryCore(
     return text.split(/\n+/).map((line) => line.trim()).find(Boolean)?.slice(0, 240) ?? "";
   }
 
-  function logCandidatesFromHits(hits: readonly RetrievalHitDTO[]): Array<{
-    tier: number;
-    refKind: string;
-    refId: string;
-    score: number;
-    snippet: string;
+  function logCandidatesFromHits(
+    hits: readonly RetrievalHitDTO[],
+  ): Array<RetrievalLogCandidate & {
     sourceTraceId?: string;
   }> {
     return hits.map((h) => ({
@@ -2176,25 +2177,13 @@ export function createMemoryCore(
       // each real agent turn. Without this, `memos_search` rows
       // only showed up when the viewer's search box was used.
       try {
-        const snippets = packet?.snippets ?? [];
-        const candidates = snippets.map((s) => ({
-          tier: inferTier(s.refKind),
-          refKind: s.refKind,
-          refId: s.refId,
-          score: s.score ?? 0,
-          snippet: s.body,
-        }));
-        const droppedIds = new Set(
-          (packet?.droppedByLlm ?? []).map((s) => s.refId as string),
-        );
-        const localFiltered = candidates.filter((c) => !droppedIds.has(c.refId));
+        const localStages = buildLocalRetrievalLogStages(packet);
         const filtered = hubCandidates.length > 0
           ? finalFilteredCandidates
-          : localFiltered;
-        const localDropped = candidates.filter((c) => droppedIds.has(c.refId));
+          : localStages.filtered;
         const dropped = hubCandidates.length > 0
-          ? [...localDropped, ...finalDroppedCandidates]
-          : localDropped;
+          ? [...localStages.dropped, ...finalDroppedCandidates]
+          : localStages.dropped;
         const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
         handle.repos.apiLogs.insert({
           toolName: "memos_search",
@@ -2207,7 +2196,7 @@ export function createMemoryCore(
           },
           output: ok
             ? {
-                candidates,
+                candidates: localStages.candidates,
                 hubCandidates,
                 filtered,
                 droppedByLlm: dropped,
@@ -2787,13 +2776,7 @@ export function createMemoryCore(
     const ts = Date.now();
     const startedAt = Date.now();
     let ok = true;
-    let candidates: Array<{
-      tier: number;
-      refKind: string;
-      refId: string;
-      score: number;
-      snippet: string;
-    }> = [];
+    let candidates: RetrievalLogCandidate[] = [];
     let filtered: typeof candidates = [];
     let droppedByFinalFilter: typeof candidates = [];
     let hubCandidates: typeof candidates = [];
@@ -2812,6 +2795,8 @@ export function createMemoryCore(
         args: { ...(query.filters ?? {}), query: query.query },
         ts,
       }, { skipLlmFilter: hubHits.length > 0 });
+      const localLogStages = buildLocalRetrievalLogStages(result.packet);
+      candidates = localLogStages.candidates;
       let hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
         tier: inferTier(snip.refKind),
         refId: snip.refId,
@@ -2869,15 +2854,11 @@ export function createMemoryCore(
       // everything tiered/retrieved; `filtered` is what the injector
       // kept (≤ `maxSnippets`), matching the legacy "LLM filtered"
       // semantics the user complained about.
-      candidates = hits.map((h) => ({
-        tier: h.tier,
-        refKind: h.refKind,
-        refId: h.refId,
-        score: h.score,
-        snippet: h.snippet,
-      }));
       filtered = logCandidatesFromHits(returnedHits); // final list returned to the adapter.
-      droppedByFinalFilter = logCandidatesFromHits(final.dropped);
+      droppedByFinalFilter = [
+        ...localLogStages.dropped,
+        ...logCandidatesFromHits(final.dropped),
+      ];
 
       // Three-stage observability — surfaced verbatim so the viewer's
       // Logs page can render "raw → threshold → ranked → LLM filter"
@@ -5726,6 +5707,9 @@ type RetrievalStatsLogPayload = {
   raw?: number;
   ranked?: number;
   droppedByThreshold?: number;
+  dedupedBeforeMmr?: number;
+  dedupedAfterThreshold?: number;
+  droppedByKeywordConfirmation?: number;
   thresholdFloor?: number;
   topRelevance?: number;
   llmFilter?: {
@@ -5737,6 +5721,7 @@ type RetrievalStatsLogPayload = {
   channelHits?: Record<string, number>;
   queryTokens?: number;
   queryTags?: string[];
+  exactIdentifierCount?: number;
   embedding?: import("../retrieval/types.js").RetrievalStats["embedding"];
   localReturned?: number;
   hubReturned?: number;
@@ -5758,6 +5743,9 @@ function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats
     raw: s.rawCandidateCount,
     ranked: s.rankedCount,
     droppedByThreshold: s.droppedByThresholdCount,
+    dedupedBeforeMmr: s.dedupedBeforeMmrCount,
+    dedupedAfterThreshold: s.dedupedAfterThresholdCount,
+    droppedByKeywordConfirmation: s.droppedByKeywordConfirmationCount,
     thresholdFloor: s.thresholdFloor,
     topRelevance: s.topRelevance,
     llmFilter: {
@@ -5769,6 +5757,7 @@ function retrievalStatsPayload(s: import("../retrieval/types.js").RetrievalStats
     channelHits: s.channelHits as Record<string, number> | undefined,
     queryTokens: s.queryTokens,
     queryTags: s.queryTags,
+    exactIdentifierCount: s.exactIdentifierCount,
     embedding: s.embedding,
   };
 }
