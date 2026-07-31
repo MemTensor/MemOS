@@ -5,6 +5,8 @@
  * Providers stay internal to `core/llm/`.
  */
 
+import type { ReasoningConfig as ConfigReasoningConfig } from "../config/schema.js";
+
 // ─── Providers & config ──────────────────────────────────────────────────────
 
 export type LlmProviderName =
@@ -14,6 +16,8 @@ export type LlmProviderName =
   | "gemini"
   | "bedrock"
   | "host";
+
+export type ReasoningConfig = ConfigReasoningConfig;
 
 /**
  * Resolved LLM config, post-defaults. Subset of `ResolvedConfig.llm` so
@@ -28,6 +32,14 @@ export interface LlmConfig {
   apiKey?: string;
   timeoutMs: number;
   maxRetries: number;
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore?: string[];
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder?: string[];
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: boolean;
+  /** OpenRouter-compatible reasoning controls. Omit for model defaults. */
+  reasoning?: ReasoningConfig;
   /** Optional per-call default. Default: 1024. */
   maxTokens?: number;
   /** Extra HTTP headers for outgoing requests. */

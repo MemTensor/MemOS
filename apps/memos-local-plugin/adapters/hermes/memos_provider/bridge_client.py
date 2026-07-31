@@ -13,6 +13,7 @@ should wrap requests in a thread pool.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -33,16 +34,45 @@ logger = logging.getLogger(__name__)
 HOST_HANDLER_WAIT_SECONDS = 5.0
 
 # ─── Module-level singleton tracker ─────────────────────────────────────
-# Each entry maps a ``(agent, no_viewer)`` key to the most-recent active
-# ``MemosBridgeClient`` for that slot. When a new client is constructed
-# for an existing key, the previous client is closed synchronously so the
-# Node-side ``bridge.cjs`` subprocess does not leak.
+# Each entry maps an ``(agent, no_viewer, runtime_home)`` key to the
+# most-recent active ``MemosBridgeClient`` for that slot. When a new client
+# is constructed for an existing key, the previous client is closed
+# synchronously so the Node-side ``bridge.cjs`` subprocess does not leak.
 #
 # This is the Python-side guard against issue #1910 (bridge process leak:
 # every turn spawns new bridge.cjs). Defence in depth on the Node side
 # lives in ``bridge.cts`` via ``bridge-stdio.pid``.
-_ACTIVE_CLIENTS: dict[tuple[str, bool], MemosBridgeClient] = {}
+_ACTIVE_CLIENTS: dict[tuple[str, bool, str], MemosBridgeClient] = {}
 _ACTIVE_CLIENTS_LOCK = threading.Lock()
+
+
+def _expanded_path(value: str, env: dict[str, str]) -> Path:
+    """Resolve a path using the child process' HOME rather than global state."""
+    home = env.get("HOME", "").strip() or str(Path.home())
+    if value == "~":
+        value = home
+    elif value.startswith(("~/", "~\\")):
+        value = str(Path(home) / value[2:])
+    return Path(value).resolve()
+
+
+def _resolved_runtime_home(agent: str, env: dict[str, str]) -> Path:
+    """Mirror the Node home resolver for singleton/process ownership."""
+    memos_home = env.get("MEMOS_HOME", "").strip()
+    if memos_home:
+        return _expanded_path(memos_home, env)
+    config_file = env.get("MEMOS_CONFIG_FILE", "").strip()
+    if config_file:
+        return _expanded_path(config_file, env).parent
+    agent_home = ".hermes" if agent == "hermes" else f".{agent}"
+    default_home = Path(env.get("HOME", "") or Path.home()) / agent_home / "memos-plugin"
+    return _expanded_path(str(default_home), env)
+
+
+def _runtime_scope_token(agent: str, runtime_home: Path) -> str:
+    """Return a stable, path-private token safe for use in a PID filename."""
+    raw = f"{agent}\0{runtime_home}".encode()
+    return hashlib.sha256(raw).hexdigest()[:24]
 
 
 def _installed_node_binary(plugin_root: Path) -> str | None:
@@ -112,6 +142,7 @@ class MemosBridgeClient:
         agent: str = "hermes",
         no_viewer: bool = True,
         extra_env: dict[str, str] | None = None,
+        runtime_home: str | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._next_id = 1
@@ -140,6 +171,21 @@ class MemosBridgeClient:
         script_path = Path(bridge_path) if bridge_path else _bridge_script(plugin_root)
         script = str(script_path)
         env = {**os.environ, **(extra_env or {})}
+        resolved_runtime_home = (
+            _expanded_path(runtime_home, env)
+            if runtime_home
+            else _resolved_runtime_home(agent, env)
+        )
+        if runtime_home and not {
+            "MEMOS_HOME",
+            "MEMOS_CONFIG_FILE",
+        }.intersection(extra_env or {}):
+            # An explicit home is both an ownership scope and the child
+            # runtime location. Callers that deliberately snapshot either
+            # selector in extra_env retain that more specific configuration.
+            env["MEMOS_HOME"] = str(resolved_runtime_home)
+            env.pop("MEMOS_CONFIG_FILE", None)
+        runtime_scope = _runtime_scope_token(agent, resolved_runtime_home)
 
         # Prefer the compiled JavaScript bridge — the new pure ESM
         # ``dist/bridge.mjs`` (issue #1736) or the legacy ``dist/bridge.cjs``
@@ -150,7 +196,11 @@ class MemosBridgeClient:
         # so use tsx's real JS entrypoint whenever we have to launch the
         # source entry through a specific Node.
         tsx_cli = plugin_root / "node_modules" / "tsx" / "dist" / "cli.mjs"
-        bridge_args = [script, f"--agent={agent}"]
+        bridge_args = [
+            script,
+            f"--agent={agent}",
+            f"--runtime-scope={runtime_scope}",
+        ]
         if no_viewer:
             bridge_args.append("--no-viewer")
         if script_path.suffix in (".mjs", ".cjs"):
@@ -190,13 +240,14 @@ class MemosBridgeClient:
         self._stderr_reader.start()
 
         # Singleton tracking (issue #1910). Register ourselves as the
-        # active client for ``(agent, no_viewer)`` and reap any previous
-        # holder synchronously so its subprocess does not leak. The reap
-        # happens AFTER our reader threads are running, so the previous
-        # client's ``close()`` (which closes stdin and waits for exit)
-        # cannot interfere with our own startup.
+        # active client for ``(agent, no_viewer, runtime_home)`` and reap
+        # any previous holder synchronously so its subprocess does not leak.
+        # The reap happens AFTER our reader threads are running, so the
+        # previous client's ``close()`` (which closes stdin and waits for
+        # exit) cannot interfere with our own startup.
         self._singleton_agent = agent
         self._singleton_no_viewer = bool(no_viewer)
+        self._singleton_runtime_home = str(resolved_runtime_home)
         previous = self._register_active()
         if previous is not None and previous is not self:
             prev_pid = getattr(previous, "pid", "?")
@@ -210,7 +261,11 @@ class MemosBridgeClient:
 
     def _register_active(self) -> MemosBridgeClient | None:
         """Register self as the active singleton; return the displaced client."""
-        key = (self._singleton_agent, self._singleton_no_viewer)
+        key = (
+            self._singleton_agent,
+            self._singleton_no_viewer,
+            self._singleton_runtime_home,
+        )
         with _ACTIVE_CLIENTS_LOCK:
             previous = _ACTIVE_CLIENTS.get(key)
             _ACTIVE_CLIENTS[key] = self
@@ -218,7 +273,11 @@ class MemosBridgeClient:
 
     def _unregister_active(self) -> None:
         """Remove self from the active registry if we are still the current entry."""
-        key = (self._singleton_agent, self._singleton_no_viewer)
+        key = (
+            self._singleton_agent,
+            self._singleton_no_viewer,
+            self._singleton_runtime_home,
+        )
         with _ACTIVE_CLIENTS_LOCK:
             if _ACTIVE_CLIENTS.get(key) is self:
                 _ACTIVE_CLIENTS.pop(key, None)

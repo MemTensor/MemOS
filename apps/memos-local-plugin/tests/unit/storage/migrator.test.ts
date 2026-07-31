@@ -171,15 +171,21 @@ describe("storage/migrator", () => {
     const db = openDb({ filepath: dbPath, agent: "openclaw" });
     try {
       runMigrations(db);
+      db.exec(`
+        INSERT INTO sessions (id, agent, started_at, last_seen_at)
+        VALUES ('session-1', 'openclaw', 1, 1);
+        INSERT INTO episodes (id, session_id, started_at)
+        VALUES ('episode-1', 'session-1', 1);
+      `);
       // Seed test rows: two with NULL share_scope, two with explicit values.
       db.exec(`
         INSERT INTO traces (
-          id, session_id, ts, role, value, priority, embedding, share_scope
+          id, episode_id, session_id, ts, user_text, agent_text, turn_id, share_scope
         ) VALUES
-          ('t-null-a', 'session-1', 10, 'user', 0.0, 0.0, X'', NULL),
-          ('t-null-b', 'session-1', 20, 'assistant', 0.0, 0.0, X'', NULL),
-          ('t-private', 'session-1', 30, 'user', 0.0, 0.0, X'', 'private'),
-          ('t-public', 'session-1', 40, 'assistant', 0.0, 0.0, X'', 'public')
+          ('t-null-a', 'episode-1', 'session-1', 10, 'user a', 'agent a', 10, NULL),
+          ('t-null-b', 'episode-1', 'session-1', 20, 'user b', 'agent b', 20, NULL),
+          ('t-private', 'episode-1', 'session-1', 30, 'user c', 'agent c', 30, 'private'),
+          ('t-public', 'episode-1', 'session-1', 40, 'user d', 'agent d', 40, 'public')
       `);
       const rows = db
         .prepare<unknown, { id: string; share_scope: string | null }>(

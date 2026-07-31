@@ -260,6 +260,21 @@ export function createLlmClientWithProvider(
     return [{ role: "system", content: systemInsert }, ...messages];
   }
 
+  function ensureJsonWordInUserMessage(messages: LlmMessage[]): LlmMessage[] {
+    const lastUserIdx = messages.map((m) => m.role).lastIndexOf("user");
+    if (lastUserIdx < 0) return [...messages, { role: "user", content: "Return valid json only." }];
+
+    const msg = messages[lastUserIdx];
+    if (/\bjson\b/i.test(msg.content)) return messages;
+
+    const out = messages.slice();
+    out[lastUserIdx] = {
+      ...msg,
+      content: `${msg.content}\n\nReturn valid json only.`,
+    };
+    return out;
+  }
+
   function buildCallInput(opts: LlmCallOptions | undefined, jsonMode: boolean): ProviderCallInput {
     return {
       temperature: opts?.temperature ?? config.temperature,
@@ -463,7 +478,7 @@ export function createLlmClientWithProvider(
   ): Promise<LlmCompletion> {
     const messages = normalizeMessages(input);
     const msgsWithJsonHint = opts?.jsonMode
-      ? inject(messages, buildJsonSystemHint())
+      ? ensureJsonWordInUserMessage(inject(messages, buildJsonSystemHint()))
       : messages;
     const call = buildCallInput(opts, opts?.jsonMode === true);
     const { completion } = await callWithFallback(msgsWithJsonHint, call, opts, opts?.op ?? "complete");
@@ -476,7 +491,7 @@ export function createLlmClientWithProvider(
   ): Promise<LlmJsonCompletion<T>> {
     const messages = normalizeMessages(input);
     const systemHint = buildJsonSystemHint(opts.schemaHint);
-    const msgs = inject(messages, systemHint);
+    const msgs = ensureJsonWordInUserMessage(inject(messages, systemHint));
     const call = buildCallInput(opts, true);
     const op = opts.op ?? "complete.json";
     const maxMalformedRetries = Math.max(0, opts.malformedRetries ?? 1);

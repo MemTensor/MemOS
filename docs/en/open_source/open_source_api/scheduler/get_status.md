@@ -66,34 +66,48 @@ When you send a status request, **SchedulerHandler** performs the following oper
 
 ## 4. Quick Start
 
-Poll task status with the SDK until completion:
+These endpoints are served directly by the open-source Server (`server_api`, router prefix `/product`) and can be called with plain HTTP requests. The example below polls task status until completion:
 
 ```python
-from memos.api.client import MemOSClient
 import time
 
-client = MemOSClient(api_key="...", base_url="...")
+import requests
+
+# Address of your self-hosted MemOS Server (add an Authorization header if auth is enabled)
+base_url = "http://localhost:8000"
 
 # 1. System overview: inspect overall MemOS health.
-global_res = client.get_all_scheduler_status()
-if global_res:
-    print(f"System summary: {global_res.data['scheduler_summary']}")
+resp = requests.get(f"{base_url}/product/scheduler/allstatus", timeout=10)
+resp.raise_for_status()
+global_res = resp.json()
+print(f"System summary: {global_res['data']['scheduler_summary']}")
 
 # 2. Queue metrics: inspect backlog for a specific user.
-queue_res = client.get_task_queue_status(user_id="dev_user_01")
-if queue_res:
-    print(f"Remaining tasks: {queue_res.data['remaining_tasks_count']}")
-    print(f"Pending tasks: {queue_res.data['pending_tasks_count']}")
+resp = requests.get(
+    f"{base_url}/product/scheduler/task_queue_status",
+    params={"user_id": "dev_user_01"},
+    timeout=10,
+)
+resp.raise_for_status()
+queue_res = resp.json()
+print(f"Remaining tasks: {queue_res['data']['remaining_tasks_count']}")
+print(f"Pending tasks: {queue_res['data']['pending_tasks_count']}")
 
 # 3. Task progress: poll a specific task until it finishes.
 task_id = "task_888999"
+active_states = {"waiting", "pending", "in_progress"}
 while True:
-    res = client.get_task_status(user_id="dev_user_01", task_id=task_id)
-    if res and res.code == 200:
-        current_status = res.data[0]['status']  # data is a status list
-        print(f"Task {task_id} status: {current_status}")
+    resp = requests.get(
+        f"{base_url}/product/scheduler/status",
+        params={"user_id": "dev_user_01", "task_id": task_id},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    items = resp.json().get("data", [])  # data is a status list: [{"task_id": ..., "status": ...}]
+    statuses = {item["status"] for item in items}
+    print(f"Task {task_id} status: {statuses or 'empty'}")
 
-        if current_status in ['completed', 'failed', 'cancelled']:
-            break
+    if not statuses or statuses.isdisjoint(active_states):
+        break
     time.sleep(2)
 ```

@@ -75,7 +75,7 @@ import type {
 import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import { loadConfig, resolveHome, SECRET_FIELD_PATHS } from "../config/index.js";
 import { feedbackText, runFeedbackExperience } from "../experience/feedback-builder.js";
-import { rootLogger } from "../logger/index.js";
+import { initLogger, rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { openDb } from "../storage/connection.js";
 import { runMigrations } from "../storage/migrator.js";
@@ -86,6 +86,7 @@ import {
   FLOAT32_BYTES,
 } from "../storage/repos/index.js";
 import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
+import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -93,6 +94,7 @@ import {
   registerHostLlmBridge,
   type HostLlmBridge,
 } from "../llm/host-bridge.js";
+import type { ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";
@@ -119,9 +121,29 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
+
+type DedicatedLlmConfig = {
+  provider?: string;
+  model?: string;
+  endpoint?: string;
+  apiKey?: string;
+  temperature?: number;
+  timeoutMs?: number;
+  providerIgnore?: string[];
+  providerOrder?: string[];
+  openRouter?: boolean;
+  reasoning?: ReasoningConfig;
+};
+
 export interface BootstrapOptions {
   agent: AgentKind;
   namespace?: RuntimeNamespace;
+  /**
+   * Run automatic startup/periodic episode recovery. Defaults to true.
+   * Hermes disables this for its read-oriented Viewer daemon so only the
+   * stdio bridge owns recovery writes for a given data home.
+   */
+  autoRecovery?: boolean;
   /** Optional pre-resolved home. If omitted, derived from `resolveHome`. */
   home?: ResolvedHome;
   /** Optional pre-resolved config. If omitted, we load from disk. */
@@ -149,6 +171,13 @@ export interface BootstrapOptions {
   hostLlmBridge?: HostLlmBridge | null;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /**
+   * When true, initialize the global logger from `config.logging` (timezone,
+   * level, channels, file/audit/llm/perf/events sinks). The standalone daemon
+   * (`bridge.cts`) owns its stdio and must set this; embedded plugin hosts
+   * leave it false so the host keeps control of logging.
+   */
+  initLogging?: boolean;
 }
 
 export interface BootstrapResult {
@@ -187,6 +216,13 @@ export async function bootstrapMemoryCoreFull(
     ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
     : await loadConfig(home);
   const config = configResult.config;
+
+  // Standalone daemon: wire the global logger from config (timezone, level,
+  // channels, file sinks) before anything logs. Embedded hosts skip this and
+  // keep their own logger. Idempotent — re-init swaps the active root in place.
+  if (options.initLogging) {
+    initLogger(config, home);
+  }
 
   const log = rootLogger.child({
     channel: "core.pipeline.bootstrap",
@@ -382,7 +418,7 @@ export async function bootstrapMemoryCoreFull(
   // back to the main `llm` when skillEvolver.model is blank.
   let reflectLlm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const evolver = (config as { skillEvolver?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).skillEvolver;
+    const evolver = (config as { skillEvolver?: DedicatedLlmConfig }).skillEvolver;
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
@@ -393,6 +429,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: evolver?.apiKey ?? "",
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
+        providerIgnore: evolver?.providerIgnore,
+        providerOrder: evolver?.providerOrder,
+        openRouter: evolver?.openRouter ?? false,
+        reasoning: evolver?.reasoning,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -440,7 +480,7 @@ export async function bootstrapMemoryCoreFull(
   // impact on companion latency. Blank → falls back to the main `llm`.
   let l3Llm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const l3c = (config as { l3Llm?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).l3Llm;
+    const l3c = (config as { l3Llm?: DedicatedLlmConfig }).l3Llm;
     const l3Model = (l3c?.model ?? "").trim();
     const l3Provider = (l3c?.provider ?? "").trim();
     if (l3Model && l3Provider) {
@@ -451,6 +491,10 @@ export async function bootstrapMemoryCoreFull(
         apiKey: l3c?.apiKey ?? "",
         temperature: l3c?.temperature ?? 0,
         timeoutMs: l3c?.timeoutMs ?? 60_000,
+        providerIgnore: l3c?.providerIgnore,
+        providerOrder: l3c?.providerOrder,
+        openRouter: l3c?.openRouter ?? false,
+        reasoning: l3c?.reasoning,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
@@ -488,6 +532,7 @@ export async function bootstrapMemoryCoreFull(
   const handle = createPipeline(deps);
 
   const core = createMemoryCore(handle, home, options.pkgVersion ?? "dev", {
+    autoRecovery: options.autoRecovery ?? true,
     telemetry: options.telemetry ?? null,
     onShutdown: () => {
       try {
@@ -506,6 +551,11 @@ export async function bootstrapMemoryCoreFull(
 // ─── Facade factory ──────────────────────────────────────────────────────────
 
 export interface CreateMemoryCoreOptions {
+  /**
+   * Run automatic startup/periodic episode recovery. Defaults to true.
+   * This does not disable normal turn capture or explicit repair operations.
+   */
+  autoRecovery?: boolean;
   /** Called after the pipeline has shut down. */
   onShutdown?: () => void | Promise<void>;
   /** Optional telemetry instance for ARMS RUM reporting. */
@@ -528,6 +578,7 @@ export function createMemoryCore(
 ): MemoryCore {
   const bootAt = Date.now();
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
+  const autoRecoveryEnabled = options.autoRecovery ?? true;
   let telemetry = options.telemetry ?? null;
   let initialized = false;
   let shutDown = false;
@@ -621,6 +672,8 @@ export function createMemoryCore(
   const MAX_DIRTY_REWARD_ATTEMPTS = 3;
   const DIRTY_REWARD_BACKOFF_BASE_MS = 60 * 60 * 1000; // 1h
   const DIRTY_REWARD_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000; // 24h
+  const DIRTY_CLOSED_SCAN_PAGE_SIZE = 500;
+  const DIRTY_CLOSED_SCAN_CURSOR_KEY = "pipeline.dirty_closed_scan_cursor.v1";
 
   // ─── Startup recovery background promise (issue #1776 + #1808) ──
   // `init()` used to `await` the entire reflect → reward → L2 chain for
@@ -635,6 +688,7 @@ export function createMemoryCore(
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
+    if (!autoRecoveryEnabled) return;
     const nowMs = Date.now();
     if (nowMs - lastStaleScan < 30_000) return;
     lastStaleScan = nowMs;
@@ -695,6 +749,7 @@ export function createMemoryCore(
   }
 
   async function autoRescoreDirtyClosedEpisodes(): Promise<void> {
+    if (!autoRecoveryEnabled) return;
     const nowMs = Date.now();
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
@@ -704,8 +759,7 @@ export function createMemoryCore(
     // must be a no-op.
     if (handle.algorithm.lightweightMemory.enabled) return;
     try {
-      const allDirty = handle.repos.episodes
-        .list({ status: "closed", limit: 500 })
+      const allDirty = collectDirtyClosedEpisodes()
         .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
       // Apply the same backoff filter as init() so the 10-min periodic
       // scan does not hammer episodes whose LLM call keeps failing.
@@ -998,7 +1052,8 @@ export function createMemoryCore(
     // call `core.waitForStartupRecovery()` after `init()`.
     let staleForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
     let dirtyClosedForBackground: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
-    try {
+    if (autoRecoveryEnabled) {
+      try {
       const orphans = handle.repos.episodes.list({ status: "open", limit: 500 });
       if (orphans.length > 0) {
         const nowMs = Date.now();
@@ -1083,8 +1138,7 @@ export function createMemoryCore(
         dirtyClosedForBackground = [];
       } else {
         const nowForDirty = Date.now();
-        const allDirty = handle.repos.episodes
-          .list({ status: "closed", limit: 500 })
+        const allDirty = collectDirtyClosedEpisodes()
           .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
         const dirtyClosed: typeof allDirty = [];
         for (const ep of allDirty) {
@@ -1103,16 +1157,20 @@ export function createMemoryCore(
         }
         dirtyClosedForBackground = dirtyClosed;
       }
-    } catch (err) {
-      log.debug("init.orphan_scan.failed", {
-        err: err instanceof Error ? err.message : String(err),
-      });
+      } catch (err) {
+        log.debug("init.orphan_scan.failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // Kick the slow recovery chain off the main thread. `init()` returns
     // as soon as the synchronous classification above finishes, so the
     // Gateway can start accepting WebSocket upgrades immediately.
-    if (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0) {
+    if (
+      autoRecoveryEnabled &&
+      (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0)
+    ) {
       const stale = staleForBackground;
       const dirtyClosed = dirtyClosedForBackground;
       log.info("init.background_recovery_started", {
@@ -1146,15 +1204,17 @@ export function createMemoryCore(
     // Periodic rescore timer for episodes that miss the startup scan or
     // retry of failed reward runs. 10-minute interval is safe because
     // autoRescoreDirtyClosedEpisodes has its own 30-second dedup guard.
-    const rescoreInterval = setInterval(() => {
-      void autoRescoreDirtyClosedEpisodes().catch((err) => {
-        log.debug("periodic_rescore.error", {
-          err: err instanceof Error ? err.message : String(err),
+    if (autoRecoveryEnabled) {
+      const rescoreInterval = setInterval(() => {
+        void autoRescoreDirtyClosedEpisodes().catch((err) => {
+          log.debug("periodic_rescore.error", {
+            err: err instanceof Error ? err.message : String(err),
+          });
         });
-      });
-    }, 10 * 60 * 1000);
-    // Mark as unref so the timer doesn't block shutdown
-    (rescoreInterval as unknown as { unref?: () => void }).unref?.();
+      }, 10 * 60 * 1000);
+      // Mark as unref so the timer doesn't block shutdown
+      (rescoreInterval as unknown as { unref?: () => void }).unref?.();
+    }
 
     // Wire `memory_add` into the api_logs table on EVERY turn so the
     // Logs viewer shows per-turn capture activity. `capture.lite.done`
@@ -1378,92 +1438,119 @@ export function createMemoryCore(
     });
 
     const needsRewardFallback: EpisodeId[] = [];
-    for (const ep of orphans) {
-      if (isLightweightEpisode(ep)) continue;
-      try {
-        const episodeId = ep.id as EpisodeId;
-        const traceIds = (ep.traceIds ?? []) as TraceId[];
-        handle.repos.episodes.close(episodeId, endedAt, ep.rTask ?? undefined);
-        handle.repos.episodes.updateMeta(episodeId, {
-          closeReason: "finalized",
-          abandonReason: undefined,
-          recoveredAtStartup: endedAt,
-          recoveryReason: "missed_session_end",
-        });
-
-        if (ep.rTask != null && !episodeRewardIsDirty(ep)) {
-          log.info("init.orphan.repaired_finalized", {
-            episodeId,
-            sessionId: ep.sessionId,
-            rTask: ep.rTask,
-          });
-          debugStartupRecovery("H2", "startup_recovery_already_scored", {
-            episodeId,
-            sessionId: ep.sessionId,
-            rTask: ep.rTask,
-          });
-          continue;
-        }
-
-        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt);
-        debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
-          episodeId,
-          sessionId: ep.sessionId,
-          traceCount: traceIds.length,
-          recoveredTurnCount: snapshot.turnCount,
-        });
-        handle.buses.session.emit({
-          kind: "episode.finalized",
-          episode: snapshot,
-          closedBy: "finalized",
-        });
-        needsRewardFallback.push(episodeId);
-      } catch (err) {
-        log.debug("init.orphan_recovery.skipped", {
-          episodeId: ep.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
-        debugStartupRecovery("H4", "startup_recovery_error", {
-          episodeId: ep.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
+    // Scope capture failures to this startup-recovery batch. Normal live
+    // captures and explicit/manual reward runs must retain their existing
+    // behaviour.
+    const captureFailedInBatch = new Set<EpisodeId>();
+    const recoveryEpisodeIds = new Set(
+      orphans.map((ep) => ep.id as EpisodeId),
+    );
+    const unsubscribeCaptureFailed = handle.buses.capture.on("capture.failed", (evt) => {
+      if (
+        evt.kind === "capture.failed" &&
+        recoveryEpisodeIds.has(evt.episodeId)
+      ) {
+        captureFailedInBatch.add(evt.episodeId);
       }
-    }
-
+    });
     try {
-      await handle.flush();
-      for (const episodeId of needsRewardFallback) {
-        const row = handle.repos.episodes.getById(episodeId);
-        if (row?.rTask == null) {
-          await handle.rewardRunner.run({
+      for (const ep of orphans) {
+        if (isLightweightEpisode(ep)) continue;
+        try {
+          const episodeId = ep.id as EpisodeId;
+          const traceIds = (ep.traceIds ?? []) as TraceId[];
+          handle.repos.episodes.close(episodeId, endedAt, ep.rTask ?? undefined);
+          handle.repos.episodes.updateMeta(episodeId, {
+            closeReason: "finalized",
+            abandonReason: undefined,
+            recoveredAtStartup: endedAt,
+            recoveryReason: "missed_session_end",
+          });
+
+          if (ep.rTask != null && !episodeRewardIsDirty(ep)) {
+            log.info("init.orphan.repaired_finalized", {
+              episodeId,
+              sessionId: ep.sessionId,
+              rTask: ep.rTask,
+            });
+            debugStartupRecovery("H2", "startup_recovery_already_scored", {
+              episodeId,
+              sessionId: ep.sessionId,
+              rTask: ep.rTask,
+            });
+            continue;
+          }
+
+          const snapshot = snapshotFromRecoveredEpisode(ep, endedAt);
+          debugStartupRecovery("H3", "startup_recovery_emit_finalized", {
             episodeId,
-            feedback: [],
-            trigger: "manual",
+            sessionId: ep.sessionId,
+            traceCount: traceIds.length,
+            recoveredTurnCount: snapshot.turnCount,
+          });
+          handle.buses.session.emit({
+            kind: "episode.finalized",
+            episode: snapshot,
+            closedBy: "finalized",
+          });
+          needsRewardFallback.push(episodeId);
+        } catch (err) {
+          log.debug("init.orphan_recovery.skipped", {
+            episodeId: ep.id,
+            err: err instanceof Error ? err.message : String(err),
+          });
+          debugStartupRecovery("H4", "startup_recovery_error", {
+            episodeId: ep.id,
+            err: err instanceof Error ? err.message : String(err),
           });
         }
       }
-      await handle.flush();
-      debugStartupRecovery("H5", "startup_recovery_flush_done", {
-        recoveredCount: orphans.length,
-        rewardedEpisodes: needsRewardFallback.map((episodeId) => {
+
+      try {
+        await handle.flush();
+        for (const episodeId of needsRewardFallback) {
+          if (captureFailedInBatch.has(episodeId)) {
+            log.warn("init.orphan_recovery.reward_fallback_skipped", {
+              episodeId,
+              reason: "capture_failed",
+            });
+            continue;
+          }
           const row = handle.repos.episodes.getById(episodeId);
-          return {
-            episodeId,
-            rTask: row?.rTask ?? null,
-            closeReason: (row?.meta as { closeReason?: unknown } | undefined)?.closeReason,
-            abandonReason: (row?.meta as { abandonReason?: unknown } | undefined)?.abandonReason,
-          };
-        }),
-      });
-    } catch (err) {
-      log.warn("init.orphan_recovery.flush_failed", {
-        count: orphans.length,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      debugStartupRecovery("H5", "startup_recovery_flush_failed", {
-        count: orphans.length,
-        err: err instanceof Error ? err.message : String(err),
-      });
+          if (row?.rTask == null) {
+            await handle.rewardRunner.run({
+              episodeId,
+              feedback: [],
+              trigger: "manual",
+            });
+          }
+        }
+        await handle.flush();
+        debugStartupRecovery("H5", "startup_recovery_flush_done", {
+          recoveredCount: orphans.length,
+          rewardedEpisodes: needsRewardFallback.map((episodeId) => {
+            const row = handle.repos.episodes.getById(episodeId);
+            return {
+              episodeId,
+              rTask: row?.rTask ?? null,
+              captureFailed: captureFailedInBatch.has(episodeId),
+              closeReason: (row?.meta as { closeReason?: unknown } | undefined)?.closeReason,
+              abandonReason: (row?.meta as { abandonReason?: unknown } | undefined)?.abandonReason,
+            };
+          }),
+        });
+      } catch (err) {
+        log.warn("init.orphan_recovery.flush_failed", {
+          count: orphans.length,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        debugStartupRecovery("H5", "startup_recovery_flush_failed", {
+          count: orphans.length,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } finally {
+      unsubscribeCaptureFailed();
     }
   }
 
@@ -1528,15 +1615,72 @@ export function createMemoryCore(
     }
   }
 
+  function collectDirtyClosedEpisodes(): Array<EpisodeRow & { meta?: Record<string, unknown> }> {
+    const storedCursor = handle.repos.kv.get<unknown>(DIRTY_CLOSED_SCAN_CURSOR_KEY, null);
+    const cursor = isDirtyClosedScanCursor(storedCursor) ? storedCursor : null;
+    if (storedCursor !== null && !cursor) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    }
+    const page = handle.repos.episodes.listClosedPage({
+      limit: DIRTY_CLOSED_SCAN_PAGE_SIZE,
+      before: cursor,
+    });
+    if (page.length === 0) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+      return [];
+    }
+
+    const last = page[page.length - 1]!;
+    if (page.length < DIRTY_CLOSED_SCAN_PAGE_SIZE) {
+      handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
+    } else {
+      handle.repos.kv.set(DIRTY_CLOSED_SCAN_CURSOR_KEY, {
+        startedAt: last.startedAt,
+        id: last.id,
+      });
+    }
+    // Older builds could leave both `reward.skipped=true` and a stale
+    // `rewardDirty` marker on short/trivial episodes. The skip is terminal;
+    // clean the contradictory marker while this bounded page is already in
+    // memory so upgraded installations stop retrying those rows immediately.
+    for (const ep of page) {
+      if (!rewardWasSkipped(ep) || !hasRewardDirtyMarker(ep)) continue;
+      try {
+        handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
+          rewardDirty: undefined,
+        });
+        ep.meta = { ...(ep.meta ?? {}), rewardDirty: undefined };
+      } catch (err) {
+        // A cleanup write must not prevent the rest of this page from being
+        // classified and recovered. The terminal skip still keeps this row
+        // out of the retry queue, and a later bounded scan can clean it again.
+        log.debug("dirty_closed_reward.skip_marker_cleanup_error", {
+          episodeId: ep.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return page;
+  }
+
+  function isDirtyClosedScanCursor(value: unknown): value is ClosedEpisodeCursor {
+    return Boolean(
+      value &&
+      typeof value === "object" &&
+      typeof (value as { startedAt?: unknown }).startedAt === "number" &&
+      typeof (value as { id?: unknown }).id === "string",
+    );
+  }
+
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
     if (meta.lightweightMemory === true) return false;
-    if (meta.rewardDirty && typeof meta.rewardDirty === "object") return true;
+    // An intentional triviality skip is terminal and must take precedence
+    // over a stale retry marker written by an older recovery attempt.
+    if (rewardWasSkipped(ep)) return false;
+    if (hasRewardDirtyMarker(ep)) return true;
 
     const reward = meta.reward;
-    if (reward && typeof reward === "object" && (reward as { skipped?: unknown }).skipped === true) {
-      return false;
-    }
     if (
       ep.rTask == null &&
       (ep.traceIds?.length ?? 0) > 0 &&
@@ -1628,10 +1772,14 @@ export function createMemoryCore(
         : [];
     const turns: EpisodeTurn[] = [];
     for (const tr of traces) {
+      const turnId =
+        typeof tr.turnId === "number" && Number.isFinite(tr.turnId)
+          ? (tr.turnId as EpochMs)
+          : tr.ts;
       if (tr.userText) {
         turns.push({
           id: `${tr.id}:user`,
-          ts: tr.ts,
+          ts: turnId,
           role: "user",
           content: tr.userText,
         });
@@ -3188,15 +3336,30 @@ export function createMemoryCore(
     sessionId?: SessionId;
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<EpisodeId[]> {
     ensureLive();
-    const rows = handle.repos.episodes.list({
-      sessionId: input.sessionId,
-      limit: input.limit ?? 50,
-      offset: input.offset ?? 0,
-    });
-    return rows
+    const limit = input.limit ?? 50;
+    const offset = input.offset ?? 0;
+    if (input.includeAllNamespaces) {
+      // Every row passes the visibility filter, so repo-level paging
+      // is both correct and cheap.
+      return handle.repos.episodes
+        .list({ sessionId: input.sessionId, limit, offset })
+        .map((r: EpisodeRow) => r.id as EpisodeId);
+    }
+    // Namespace-scoped path: paging at the repo level would apply
+    // `limit` before the visibility filter runs, silently under-filling
+    // pages (callers can't tell a short page from end-of-data). Fetch
+    // the widest window the repo allows, filter, then page in memory —
+    // same idiom as `listEpisodeRows` / `countEpisodes`. The repo
+    // clamps the fetch window to 500 rows (`clampLimit`), so scoped
+    // paging is exact within the newest 500 episodes; beyond that the
+    // same shared limitation applies to the sibling list/count methods.
+    return handle.repos.episodes
+      .list({ sessionId: input.sessionId, limit: 100_000 })
       .filter((r: EpisodeRow) => visibleToCurrent(r))
+      .slice(offset, offset + limit)
       .map((r: EpisodeRow) => r.id as EpisodeId);
   }
 
@@ -3399,8 +3562,16 @@ export function createMemoryCore(
     toolNames?: readonly string[];
     limit?: number;
     offset?: number;
+    includeAllNamespaces?: boolean;
   }): Promise<{ logs: ApiLogDTO[]; total: number }> {
     ensureLive();
+    // `includeAllNamespaces` is accepted for contract symmetry with the
+    // other viewer list* methods (#2131). The `api_logs` write path does
+    // not currently stamp per-namespace owner columns, so every row is
+    // effectively cross-namespace regardless of this flag. Callers that
+    // fan into viewer aggregations still pass `true` so their intent is
+    // explicit if a per-namespace write path is added later.
+    void input?.includeAllNamespaces;
     const limit = Math.max(1, Math.min(500, input?.limit ?? 50));
     const offset = Math.max(0, input?.offset ?? 0);
     const rows = handle.repos.apiLogs.list({
@@ -3667,7 +3838,7 @@ export function createMemoryCore(
     includeAllNamespaces?: boolean;
   }): Promise<number> {
     ensureLive();
-    return handle.repos.skills.list({ status: input?.status, limit: 5_000 }).filter((r) =>
+    return handle.repos.skills.list({ status: input?.status, limit: 100_000 }).filter((r) =>
       (input?.includeAllNamespaces || visibleToCurrent(r)) && matchesNamespaceFilter(r, input)
     ).length;
   }
@@ -3763,7 +3934,7 @@ export function createMemoryCore(
     });
   }
 
-  async function metrics(input?: { days?: number }): Promise<{
+  async function metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;
@@ -3801,6 +3972,14 @@ export function createMemoryCore(
     const oneDayMs = 86_400_000;
     const sinceMs = now - days * oneDayMs;
 
+    // NOTE: `traces` is fetched unfiltered (all namespaces) below so
+    // that `sessions` / `writesToday` / `embeddings` / `dailyWrites`
+    // populate the viewer chart even after a turn from a different
+    // profile flips the active namespace (#2131). Only `total`
+    // (totalTurns) respects `includeAllNamespaces`. If a per-namespace
+    // scoping is ever needed for these derived fields (e.g. per-agent
+    // views), thread `visibilityWhere(activeNamespace)` through the
+    // repo query the same way `countTurns` does.
     const traces = handle.repos.traces.list({ limit: 10_000 });
     const sessions = new Set<string>();
     let writesToday = 0;
@@ -3908,9 +4087,12 @@ export function createMemoryCore(
     // shows: 1 user turn = 1 memory (regardless of how many tool calls
     // / sub-steps were captured for that turn).
     // Apply namespace visibility so the count matches the filtered list.
+    // Viewer callers pass `includeAllNamespaces` — `activeNamespace` is
+    // rewritten by every turn/session, so binding this count to it made
+    // the dashboard total collapse whenever another profile's turn ran.
     const totalTurns = handle.repos.traces.countTurns(
       {},
-      visibilityWhere(activeNamespace),
+      input?.includeAllNamespaces ? undefined : visibilityWhere(activeNamespace),
     );
 
     return {
@@ -4426,6 +4608,26 @@ export function createMemoryCore(
     }
 
     return true;
+  }
+
+  function rewardWasSkipped(
+    ep: EpisodeRow & { meta?: Record<string, unknown> },
+  ): boolean {
+    const reward = ep.meta?.reward;
+    return Boolean(
+      reward &&
+      typeof reward === "object" &&
+      (reward as { skipped?: unknown }).skipped === true,
+    );
+  }
+
+  function hasRewardDirtyMarker(
+    ep: EpisodeRow & { meta?: Record<string, unknown> },
+  ): boolean {
+    return Boolean(
+      ep.meta?.rewardDirty &&
+      typeof ep.meta.rewardDirty === "object",
+    );
   }
 
   function collectEmbeddingSlots(): EmbeddingSlot[] {

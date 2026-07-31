@@ -10,6 +10,7 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
+import { applyOpenRouterProviderRouting } from "../../openrouter.js";
 import { httpPostJson } from "../fetcher.js";
 import type {
   EmbedRole,
@@ -40,9 +41,11 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
         : "https://api.openai.com/v1/embeddings",
     );
     const model = config.model && config.model.length > 0 ? config.model : "text-embedding-3-small";
+    const body: Record<string, unknown> = { input: texts, model };
+    applyOpenRouterProviderRouting(config, body);
     const resp = await httpPostJson<OpenAiResp>({
       url,
-      body: { input: texts, model },
+      body,
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         ...config.headers,

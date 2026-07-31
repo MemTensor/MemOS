@@ -17,7 +17,7 @@ class ParserConfigFactory(BaseConfig):
     """Factory class for creating Parser configurations."""
 
     backend: str = Field(..., description="Backend for parser")
-    config: dict[str, Any] = Field(..., description="Configuration for the parser backend")
+    config: BaseParserConfig = Field(..., description="Configuration for the parser backend")
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "markitdown": MarkItDownParserConfig,
@@ -31,8 +31,23 @@ class ParserConfigFactory(BaseConfig):
             raise ValueError(f"Invalid backend: {backend}")
         return backend
 
-    @model_validator(mode="after")
-    def create_config(self) -> "ParserConfigFactory":
-        config_class = self.backend_to_class[self.backend]
-        self.config = config_class(**self.config)
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def create_config(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        if "backend" not in data or "config" not in data:
+            return data
+
+        config_class = cls.backend_to_class.get(data["backend"])
+        if config_class is None:
+            return data
+
+        config = data.get("config")
+        if isinstance(config, config_class):
+            return data
+
+        data = data.copy()
+        data["config"] = config_class.model_validate(config)
+        return data

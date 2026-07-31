@@ -27,20 +27,20 @@ Lifecycle mapping (V7 §0.2)
 
 | Hermes hook          | Our action                                    |
 | -------------------- | --------------------------------------------- |
-| ``initialize``       | spawn bridge; open session + episode          |
+| ``initialize``       | acquire shared bridge; open logical session   |
 | ``on_turn_start``    | record turn count; stash message              |
 | ``prefetch``         | ``turn.start`` RPC → Tier 1+2+3 retrieval     |
-| ``queue_prefetch``   | background thread: prefetch + flush pending   |
-| ``sync_turn``        | queue a deferred ``turn.end`` RPC             |
-| ``on_session_end``   | flush pending + close episode + close session |
+| ``queue_prefetch``   | no-op; real prefetch runs before the turn     |
+| ``sync_turn``        | persist a synchronous ``turn.end`` RPC        |
+| ``on_session_end``   | close this logical session                    |
 | ``on_pre_compress``  | extract a short memory summary               |
 | ``on_delegation``    | record a subagent outcome as a trace         |
 | ``get_tool_schemas`` | expose memory, skill, and environment tools   |
 | ``handle_tool_call`` | dispatch to MemOS JSON-RPC tool methods       |
-| ``shutdown``         | close bridge                                  |
+| ``shutdown``         | release provider lease                        |
 
-Threading: all JSON-RPC calls are synchronous. ``queue_prefetch`` runs on
-a daemon thread the provider owns.
+Threading: all JSON-RPC calls are synchronous. One process-scoped runtime
+owns bridge keepalive and reconnect; providers retain per-session state.
 """
 
 from __future__ import annotations
@@ -65,13 +65,16 @@ _PLUGIN_DIR = Path(__file__).resolve().parent
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-from bridge_client import BridgeError, MemosBridgeClient, MemosHttpClient  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 from daemon_manager import (  # noqa: E402
     ensure_bridge_running,
     ensure_viewer_daemon,
     kill_zombie_bridges,
-    probe_viewer_status,
-    startup_lock_active,
+)
+from shared_bridge_runtime import (  # noqa: E402
+    HERMES_HOOK_DISPATCHER,
+    SHARED_BRIDGE_REGISTRY,
+    SharedBridgeLease,
 )
 
 
@@ -90,12 +93,85 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "memos-local-hermes"
-PLUGIN_VERSION = "2.0.0-beta.1"
+
+
+def _read_plugin_version() -> str:
+    """Read the npm package version that owns this Hermes adapter."""
+    package_json = _PLUGIN_DIR.parents[2] / "package.json"
+    try:
+        payload = json.loads(package_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return "dev"
+    version = payload.get("version")
+    return version.strip() if isinstance(version, str) and version.strip() else "dev"
+
+
+PLUGIN_VERSION = _read_plugin_version()
 _TOOL_FAILURE_REPAIR_HINT = (
     "This tool has failed multiple times in a row. You may want to call "
     "`memos_search` for relevant past experience before deciding what to do next."
 )
 _TOOL_FAILURE_HINT_THRESHOLD = 3
+_COMPRESSION_CONTEXT_MAX_CHARS = 6_000
+
+
+def _shared_bridge_enabled() -> bool:
+    """Use the safe process-scoped bridge unless an operator opts out."""
+    mode = os.environ.get("MEMOS_HERMES_BRIDGE_MODE", "shared").strip().lower()
+    return mode not in {"legacy", "per_provider", "disabled", "false", "0"}
+
+
+def _resolved_memos_runtime_home() -> Path:
+    """Mirror the Node resolver closely enough to isolate distinct databases."""
+    memos_home = os.environ.get("MEMOS_HOME", "").strip()
+    if memos_home:
+        return Path(memos_home).expanduser().resolve()
+    config_file = os.environ.get("MEMOS_CONFIG_FILE", "").strip()
+    if config_file:
+        return Path(config_file).expanduser().resolve().parent
+    return (Path.home() / ".hermes" / "memos-plugin").resolve()
+
+
+def _memos_runtime_env_snapshot(runtime_home: Path | None = None) -> dict[str, str]:
+    """Freeze the environment inputs that select a MemOS data home."""
+    memos_home = os.environ.get("MEMOS_HOME", "").strip()
+    if memos_home:
+        resolved_home = runtime_home or Path(memos_home).expanduser().resolve()
+        return {"MEMOS_HOME": str(resolved_home)}
+    config_file = os.environ.get("MEMOS_CONFIG_FILE", "").strip()
+    if config_file:
+        return {
+            "MEMOS_HOME": "",
+            "MEMOS_CONFIG_FILE": str(Path(config_file).expanduser().resolve()),
+        }
+    return {
+        "MEMOS_HOME": "",
+        "MEMOS_CONFIG_FILE": "",
+        "HOME": os.environ.get("HOME", "").strip() or str(Path.home()),
+    }
+
+
+def _shared_bridge_runtime_key(runtime_home: Path | None = None) -> tuple[str, ...]:
+    """Use the data home as the authoritative shared-runtime boundary."""
+    resolved_home = runtime_home or _resolved_memos_runtime_home()
+    return (str(resolved_home), "hermes", "stdio")
+
+
+def _prepare_shared_bridge(*, cleanup_legacy_zombies: bool = False) -> None:
+    """Prepare bridge/viewer state without crossing data-home boundaries."""
+    ensure_bridge_running()
+    if cleanup_legacy_zombies:
+        # The legacy scanner cannot distinguish data homes. Shared runtimes
+        # instead rely on the Python scoped singleton and the CJS scoped PID
+        # guard so one healthy home is never reaped while another starts.
+        with contextlib.suppress(Exception):
+            zombies = kill_zombie_bridges()
+            if zombies:
+                logger.info("MemOS: killed %d zombie bridge(s)", zombies)
+    try:
+        ensure_viewer_daemon()
+    except Exception as err:
+        logger.warning("MemOS: viewer daemon check failed — %s", err)
 
 
 def _long_rpc_timeout_default() -> float:
@@ -279,8 +355,13 @@ class MemTensorProvider(MemoryProvider):
     """
 
     def __init__(self) -> None:
-        self._bridge: MemosBridgeClient | MemosHttpClient | None = None
+        self._bridge: MemosBridgeClient | SharedBridgeLease | None = None
+        self._shared_bridge = _shared_bridge_enabled()
+        self._bridge_generation = 0
         self._reconnect_lock = threading.Lock()
+        self._session_open_lock = threading.Lock()
+        self._runtime_home: Path | None = None
+        self._runtime_env: dict[str, str] = {}
         self._session_id: str = ""
         self._episode_id: str = ""
         self._hermes_home: str = ""
@@ -294,6 +375,12 @@ class MemTensorProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._prefetch_thread: threading.Thread | None = None
+        # Exact memory context injected by the most recent real prefetch.
+        # Compression hooks only read this cache; they must never call the
+        # lifecycle-mutating `turn.start` RPC.
+        self._state_lock = threading.Lock()
+        self._last_injected_context: str = ""
+        self._active_turn_key: str = ""
         # Tool calls accumulated via the Hermes `post_tool_call` plugin
         # hook — flushed alongside user/assistant text in `sync_turn`.
         self._tool_calls: list[dict[str, Any]] = []
@@ -307,6 +394,8 @@ class MemTensorProvider(MemoryProvider):
         self._hook_registered = False
         self._bridge_keepalive_stop = threading.Event()
         self._bridge_keepalive_thread: threading.Thread | None = None
+        self._session_close_thread: threading.Thread | None = None
+        self._session_close_requested_for = ""
         # Hermes runs background memory/skill reviewers by forking an agent and
         # appending a synthetic user turn. That turn is instruction plumbing,
         # not a human utterance, so it must not become a MemOS trace.
@@ -329,23 +418,6 @@ class MemTensorProvider(MemoryProvider):
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
-    def _connect_http_bridge(self, session_id: str, *, timeout: float = 60.0) -> bool:
-        """Try to connect via HTTP bridge. Sets self._bridge on success."""
-        http_bridge: MemosHttpClient | None = None
-        try:
-            http_bridge = MemosHttpClient()
-            http_bridge.register_host_handler("host.llm.complete", self._handle_host_llm_complete)
-            self._bridge = http_bridge
-            self._open_session(session_id, timeout=timeout)
-            return True
-        except Exception as err:
-            logger.warning("MemOS: HTTP bridge failed, falling back to stdio — %s", err)
-            if http_bridge is not None:
-                with contextlib.suppress(Exception):
-                    http_bridge.close()
-            self._bridge = None
-            return False
-
     def initialize(self, session_id: str, **kwargs: Any) -> None:  # type: ignore[override]
         """Called once at agent startup.
 
@@ -353,123 +425,89 @@ class MemTensorProvider(MemoryProvider):
         them so the bridge can resolve the right `~/.hermes/memos-plugin/`
         and log the originating channel.
 
-        We open the session here but NOT the episode — episode creation
-        is deferred to ``_ensure_episode()`` (called from the first
-        ``on_turn_start``), so the actual user message can be passed as
-        the episode's initial text instead of a generic placeholder.
-
-        Idempotency (issue #1910): the host occasionally re-enters
-        ``initialize()`` on the same provider instance (plugin reload,
-        session restart). Without the close-before-spawn guard below the
-        previous ``MemosBridgeClient`` would be replaced by reference
-        only, orphaning the previous Node subprocess and accumulating
-        a fresh ``bridge.cjs`` per turn.
+        Shared mode (the default) acquires a lightweight lease on one
+        process-scoped Node bridge. Each provider still owns its logical
+        session/episode state. ``MEMOS_HERMES_BRIDGE_MODE=legacy`` retains
+        the old per-provider bridge as a one-release rollback path.
         """
-        # Hermes can call `initialize()` multiple times across a single
-        # parent process (e.g. on reconnect or a new session). Each call
-        # spawns a fresh `MemosBridgeClient` (and therefore a new
-        # `--no-viewer` Node subprocess); if we simply overwrite
-        # `self._bridge` we leak the old subprocess — its parent stays
-        # alive so `_reap_stale_headless_bridges_locked` never collects
-        # it. Close the previous bridge first, mirroring the safe pattern
-        # already used by `_reconnect_bridge()`. See #1927.
         previous_bridge = self._bridge
         if previous_bridge is not None:
             old_pid = getattr(previous_bridge, "pid", "?")
             logger.info(
-                "MemOS: closing previous bridge (pid=%s) before re-init",
+                "MemOS: releasing previous bridge handle (pid=%s) before re-init",
                 old_pid,
             )
+            self.on_session_end([])
+            close_thread = self._session_close_thread
+            if close_thread is not None and close_thread.is_alive():
+                close_thread.join(timeout=5.5)
             with contextlib.suppress(Exception):
                 previous_bridge.close()
             self._bridge = None
+            self._bridge_generation = 0
 
         self._session_id = session_id or self._session_id
+        self._session_close_requested_for = ""
+        self._bridge_keepalive_stop.clear()
+        with self._state_lock:
+            self._last_injected_context = ""
+            self._active_turn_key = ""
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
-        if self._bridge is not None:
-            prev_pid = getattr(self._bridge, "pid", "?")
-            logger.info(
-                "MemOS: initialize() invoked while bridge already exists; "
-                "closing previous bridge (pid=%s) before respawn",
-                prev_pid,
-            )
-            old_bridge = self._bridge
-            self._bridge = None
-            with contextlib.suppress(Exception):
-                old_bridge.close()
-        try:
-            ensure_bridge_running()
-        except Exception as err:
-            logger.warning("MemOS: failed to start bridge — %s", err)
-            return
+        self._shared_bridge = _shared_bridge_enabled()
+        self._runtime_home = _resolved_memos_runtime_home()
+        self._runtime_env = _memos_runtime_env_snapshot(self._runtime_home)
 
-        # Kill zombie bridges from previous sessions before deciding
-        # how to connect.
+        new_bridge: MemosBridgeClient | SharedBridgeLease | None = None
         try:
-            zombies = kill_zombie_bridges()
-            if zombies:
-                logger.info("MemOS: killed %d zombie bridge(s)", zombies)
-        except Exception:
-            pass
-
-        # If the daemon is already running on the viewer port, connect
-        # to it over HTTP instead of spawning a new stdio bridge. This
-        # eliminates zombie bridge accumulation.
-        viewer_status = probe_viewer_status()
-        if viewer_status == "running_memos":
-            if self._connect_http_bridge(session_id):
-                logger.info(
-                    "MemOS: bridge ready (HTTP) session=%s platform=%s (episode deferred)",
-                    self._session_id,
-                    self._platform,
+            runtime_home = self._runtime_home
+            runtime_env = dict(self._runtime_env)
+            if self._shared_bridge:
+                new_bridge = SHARED_BRIDGE_REGISTRY.acquire(
+                    _shared_bridge_runtime_key(runtime_home),
+                    client_factory=lambda home=str(runtime_home), env=runtime_env: (
+                        MemosBridgeClient(
+                            runtime_home=home,
+                            extra_env=env,
+                        )
+                    ),
+                    before_spawn=_prepare_shared_bridge,
+                    host_handlers={
+                        "host.llm.complete": self._handle_host_llm_complete,
+                    },
                 )
             else:
-                viewer_status = "free"  # force stdio fallback below
-        elif viewer_status == "free":
-            # Re-probe after a short wait only when another process may be
-            # mid-startup (startup lock is held). On a cold first-launch the
-            # lock doesn't exist, so we skip the delay entirely.
-            if startup_lock_active():
-                time.sleep(1.0)
-                viewer_status = probe_viewer_status()
-            if viewer_status == "running_memos" and self._connect_http_bridge(session_id):
-                logger.info(
-                    "MemOS: bridge ready (HTTP, late probe) session=%s platform=%s (episode deferred)",
-                    self._session_id,
-                    self._platform,
+                _prepare_shared_bridge(cleanup_legacy_zombies=True)
+                new_bridge = MemosBridgeClient(
+                    runtime_home=str(runtime_home),
+                    extra_env=runtime_env,
                 )
-
-        if self._bridge is None:
-            try:
-                ensure_viewer_daemon()
-            except Exception as err:
-                logger.warning("MemOS: viewer daemon check failed — %s", err)
-            new_bridge: MemosBridgeClient | None = None
-            try:
-                new_bridge = MemosBridgeClient()
-                # Register the fallback LLM handler BEFORE we open the
-                # session so it is available the very first time the
-                # plugin's facade asks for help (e.g. on the first
-                # `turn.start` retrieval call).
                 new_bridge.register_host_handler(
                     "host.llm.complete",
                     self._handle_host_llm_complete,
                 )
-                self._bridge = new_bridge
-                self._open_session(session_id, timeout=60.0)
-                logger.info(
-                    "MemOS: bridge ready (stdio) session=%s platform=%s (episode deferred)",
-                    self._session_id,
-                    self._platform,
-                )
-            except Exception as err:
-                logger.warning("MemOS: bridge init failed — %s", err)
-                if new_bridge is not None:
-                    with contextlib.suppress(Exception):
-                        new_bridge.close()
-                self._bridge = None
+            self._bridge = new_bridge
+            self._open_session(session_id, timeout=60.0)
+            mode = "shared" if self._shared_bridge else "legacy"
+            runtime_id = getattr(new_bridge, "runtime_id", "per-provider")
+            logger.info(
+                "MemOS: bridge ready mode=%s runtime=%s generation=%d pid=%s "
+                "session=%s platform=%s (episode deferred)",
+                mode,
+                runtime_id,
+                self._bridge_generation,
+                getattr(new_bridge, "pid", "?"),
+                self._session_id,
+                self._platform,
+            )
+        except Exception as err:
+            logger.warning("MemOS: bridge init failed — %s", err)
+            if new_bridge is not None:
+                with contextlib.suppress(Exception):
+                    new_bridge.close()
+            self._bridge = None
+            self._bridge_generation = 0
         # Register a Hermes plugin hook to capture tool calls as they
         # happen. The `post_tool_call` hook fires after every tool
         # dispatch (write_file, terminal, search_files, etc.) with the
@@ -549,23 +587,15 @@ class MemTensorProvider(MemoryProvider):
         return ns
 
     def _register_tool_call_hook(self) -> None:
-        if self._hook_registered:
-            return
         try:
             from hermes_cli.plugins import (
                 get_plugin_manager,  # pyright: ignore[reportMissingImports]
             )
 
             mgr = get_plugin_manager()
-            mgr._hooks.setdefault("post_tool_call", []).append(self._on_post_tool_call)
-            mgr._hooks.setdefault("post_llm_call", []).append(self._on_post_llm_call)
-            mgr._hooks.setdefault("transform_tool_result", []).append(
-                self._on_transform_tool_result
-            )
+            HERMES_HOOK_DISPATCHER.bind(mgr, self)
             self._hook_registered = True
-            logger.debug(
-                "MemOS: registered post_tool_call + post_llm_call + transform_tool_result hooks"
-            )
+            logger.debug("MemOS: bound provider session=%s to shared hooks", self._session_id)
         except Exception as err:
             logger.debug("MemOS: could not register tool hook — %s", err)
 
@@ -965,6 +995,13 @@ class MemTensorProvider(MemoryProvider):
         self._turn_number = int(turn_number or 0)
         self._skip_current_turn = _is_hermes_internal_review_prompt(message)
         self._last_user_text = "" if self._skip_current_turn else (message or "").strip()
+        with self._state_lock:
+            self._last_injected_context = ""
+            self._active_turn_key = (
+                f"{self._session_id}:{self._turn_number}"
+                if self._session_id and self._turn_number > 0
+                else ""
+            )
         # Reset per-turn buffers so reasoning / tool calls captured here
         # belong only to this turn.
         self._turn_thinking = ""
@@ -996,7 +1033,11 @@ class MemTensorProvider(MemoryProvider):
             if suppress_injection:
                 # Do not let remembered "do it directly" skills override an
                 # explicit user request to dispatch work to a subagent.
+                with self._state_lock:
+                    self._last_injected_context = ""
                 return ""
+            with self._state_lock:
+                self._last_injected_context = context[:_COMPRESSION_CONTEXT_MAX_CHARS]
             return context
         except Exception as err:
             logger.debug("MemOS: prefetch failed — %s", err)
@@ -1140,7 +1181,7 @@ class MemTensorProvider(MemoryProvider):
                 "hookKwargs": kwargs,
                 "namespace": namespace,
             }
-            self._bridge.request(
+            self._bridge_request(
                 "subagent.record",
                 {
                     "agent": "hermes",
@@ -1242,19 +1283,19 @@ class MemTensorProvider(MemoryProvider):
             return value
 
     def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:  # type: ignore[override]
-        """Extract a compression-time memory summary.
+        """Return the memory context injected by the current/previous turn.
 
-        Hermes calls this right before discarding old messages; we
-        surface a tight summary of the relevant retrieval packet so
-        the compressor can preserve it alongside its own summary.
+        This hook must stay read-only. Calling ``turn.start`` here used to
+        finalize the active lightweight episode and create a phantom episode
+        on every compression pass. Reusing the exact context previously
+        injected by ``prefetch`` also keeps the summary faithful to what the
+        model actually saw.
         """
-        if not self._bridge or not self._last_user_text:
+        with self._state_lock:
+            context = self._last_injected_context.strip()
+        if not context:
             return ""
-        with contextlib.suppress(Exception):
-            packet = self._turn_start(self._last_user_text, session_id=self._session_id)
-            if packet:
-                return f"MemOS memory snapshot (preserved across compression):\n{packet}"
-        return ""
+        return f"MemOS memory snapshot (preserved across compression):\n{context}"
 
     # ─── Tool surface ─────────────────────────────────────────────────────
 
@@ -1629,6 +1670,9 @@ class MemTensorProvider(MemoryProvider):
     # ─── Session-end ──────────────────────────────────────────────────────
 
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:  # type: ignore[override]
+        with self._state_lock:
+            self._last_injected_context = ""
+            self._active_turn_key = ""
         if not self._bridge:
             return
         # `sync_turn` already flushed completed turn data synchronously.
@@ -1636,8 +1680,35 @@ class MemTensorProvider(MemoryProvider):
         # the core will pause or finalize the open episode according to
         # topic-boundary rules so interrupted Hermes sessions can resume
         # into the same task later.
-        with contextlib.suppress(Exception):
-            self._bridge.request("session.close", {"sessionId": self._session_id})
+        #
+        # Fire session.close in a daemon thread — the response is unused, so
+        # this is semantically fire-and-forget. Calling urlopen() inline blocks
+        # the asyncio event loop (gateway/run.py calls us synchronously from
+        # _handle_reset_command) and causes Discord heartbeat timeouts when the
+        # bridge is unresponsive. 5 s timeout keeps it bounded.
+        _sid = self._session_id
+        if not _sid or self._session_close_requested_for == _sid:
+            return
+        self._session_close_requested_for = _sid
+
+        def _close() -> None:
+            try:
+                self._bridge_request(
+                    "session.close",
+                    {"sessionId": _sid},
+                    timeout=5.0,
+                )
+            except Exception as err:
+                if self._session_close_requested_for == _sid:
+                    self._session_close_requested_for = ""
+                logger.debug("MemOS: session.close failed session=%s — %s", _sid, err)
+
+        self._session_close_thread = threading.Thread(
+            target=_close,
+            daemon=True,
+            name="memos-session-close",
+        )
+        self._session_close_thread.start()
 
     def __del__(self) -> None:
         # Safety net — if shutdown() was never called (e.g. caller forgot,
@@ -1653,6 +1724,11 @@ class MemTensorProvider(MemoryProvider):
                 self.shutdown()
 
     def shutdown(self) -> None:  # type: ignore[override]
+        with self._state_lock:
+            self._last_injected_context = ""
+            self._active_turn_key = ""
+        HERMES_HOOK_DISPATCHER.unbind(self)
+        self._hook_registered = False
         self._bridge_keepalive_stop.set()
         if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
             self._bridge_keepalive_thread.join(
@@ -1661,12 +1737,20 @@ class MemTensorProvider(MemoryProvider):
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=5.0)
         if self._bridge:
+            self.on_session_end([])
+            close_thread = self._session_close_thread
+            if close_thread is not None and close_thread.is_alive():
+                close_thread.join(timeout=5.5)
             pid = getattr(self._bridge, "pid", "?")
-            logger.info("MemOS: shutting down bridge (pid=%s)", pid)
+            action = (
+                "releasing shared bridge lease" if self._shared_bridge else "shutting down bridge"
+            )
+            logger.info("MemOS: %s (pid=%s session=%s)", action, pid, self._session_id)
             with contextlib.suppress(Exception):
                 self._bridge.close()
             self._bridge = None
-            logger.info("MemOS: bridge shutdown complete (pid=%s)", pid)
+            self._bridge_generation = 0
+            logger.info("MemOS: provider bridge shutdown complete (pid=%s)", pid)
 
     # ─── Host LLM bridge (fallback for plugin-side model failures) ────────
 
@@ -1838,11 +1922,41 @@ class MemTensorProvider(MemoryProvider):
             self._last_host_runtime = dict(out)
         return out
 
+    def _bridge_request(
+        self,
+        method: str,
+        params: Any = None,
+        *,
+        timeout: float | None = None,
+        ensure_session: bool = True,
+    ) -> dict[str, Any]:
+        bridge = self._bridge
+        if bridge is None:
+            raise BridgeError("transport_closed", "bridge is not connected")
+        if ensure_session and isinstance(bridge, SharedBridgeLease):
+            generation = bridge.generation
+            if generation != self._bridge_generation:
+                with self._session_open_lock:
+                    if bridge.generation != self._bridge_generation:
+                        logger.info(
+                            "MemOS: reopening logical session after shared bridge generation "
+                            "change runtime=%s old_generation=%d new_generation=%d session=%s",
+                            bridge.runtime_id,
+                            self._bridge_generation,
+                            bridge.generation,
+                            self._session_id,
+                        )
+                        self._open_session(self._session_id, timeout=30.0)
+        if timeout is None:
+            return bridge.request(method, params)
+        return bridge.request(method, params, timeout=timeout)
+
     def _open_session(self, session_id: str = "", *, timeout: float = 30.0) -> None:
-        assert self._bridge is not None
+        bridge = self._bridge
+        assert bridge is not None
         requested_session = session_id or self._session_id or ""
         host_runtime = self._host_runtime_context()
-        resp = self._bridge.request(
+        resp = bridge.request(
             "session.open",
             {
                 "agent": "hermes",
@@ -1860,6 +1974,10 @@ class MemTensorProvider(MemoryProvider):
             timeout=timeout,
         )
         self._session_id = resp.get("sessionId") or requested_session
+        if isinstance(bridge, SharedBridgeLease):
+            self._bridge_generation = bridge.generation
+        else:
+            self._bridge_generation += 1
 
     def _bridge_request_with_retry(
         self,
@@ -1882,9 +2000,7 @@ class MemTensorProvider(MemoryProvider):
         """
         assert self._bridge is not None
         try:
-            if timeout is None:
-                return self._bridge.request(method, params)
-            return self._bridge.request(method, params, timeout=timeout)
+            return self._bridge_request(method, params, timeout=timeout)
         except BridgeError as err:
             if not self._is_transport_closed(err):
                 raise
@@ -1895,9 +2011,7 @@ class MemTensorProvider(MemoryProvider):
             )
             self._reconnect_bridge(self._session_id, timeout=30.0)
             assert self._bridge is not None
-            if timeout is None:
-                return self._bridge.request(method, params)
-            return self._bridge.request(method, params, timeout=timeout)
+            return self._bridge_request(method, params, timeout=timeout)
 
     def _is_transport_closed(self, err: Exception) -> bool:
         if isinstance(err, BridgeError) and err.code == "transport_closed":
@@ -1948,6 +2062,69 @@ class MemTensorProvider(MemoryProvider):
                 logger.debug("MemOS: skipping reconnect during shutdown (after lock)")
                 return
 
+            if self._shared_bridge:
+                bridge = self._bridge
+                acquired_here = bridge is None
+                if bridge is None:
+                    if self._runtime_home is None:
+                        self._runtime_home = _resolved_memos_runtime_home()
+                        self._runtime_env = _memos_runtime_env_snapshot(self._runtime_home)
+                    runtime_home = self._runtime_home
+                    runtime_env = dict(self._runtime_env)
+                    bridge = SHARED_BRIDGE_REGISTRY.acquire(
+                        _shared_bridge_runtime_key(runtime_home),
+                        client_factory=lambda home=str(runtime_home), env=runtime_env: (
+                            MemosBridgeClient(
+                                runtime_home=home,
+                                extra_env=env,
+                            )
+                        ),
+                        before_spawn=_prepare_shared_bridge,
+                        host_handlers={
+                            "host.llm.complete": self._handle_host_llm_complete,
+                        },
+                    )
+                    self._bridge = bridge
+                if not isinstance(bridge, SharedBridgeLease):
+                    raise BridgeError(
+                        "internal",
+                        "shared bridge mode has a non-shared bridge handle",
+                    )
+                try:
+                    if acquired_here:
+                        # acquire() already ensures and health-checks the shared
+                        # client. Open this logical session directly; restarting
+                        # here would disrupt every healthy provider using it.
+                        acquired_generation = bridge.generation
+                        try:
+                            self._open_session(session_id, timeout=timeout)
+                        except Exception as err:
+                            if not self._is_transport_closed(err):
+                                raise
+                            bridge.reconnect(expected_generation=acquired_generation)
+                            self._open_session(session_id, timeout=timeout)
+                    else:
+                        expected_generation = self._bridge_generation or bridge.generation
+                        bridge.reconnect(expected_generation=expected_generation)
+                        self._open_session(session_id, timeout=timeout)
+                except Exception:
+                    if acquired_here:
+                        with contextlib.suppress(Exception):
+                            bridge.close()
+                        if self._bridge is bridge:
+                            self._bridge = None
+                        self._bridge_generation = 0
+                    raise
+                logger.info(
+                    "MemOS: shared bridge session recovered runtime=%s generation=%d "
+                    "pid=%s session=%s",
+                    bridge.runtime_id,
+                    bridge.generation,
+                    bridge.pid,
+                    self._session_id,
+                )
+                return
+
             old_bridge = self._bridge
             old_pid = getattr(old_bridge, "pid", None) if old_bridge else None
 
@@ -1957,23 +2134,19 @@ class MemTensorProvider(MemoryProvider):
                     old_bridge.close()
                 logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
 
-            ensure_bridge_running()
-            # Try HTTP first if daemon is running
-            viewer_status = probe_viewer_status()
-            if viewer_status == "running_memos" and self._connect_http_bridge(
-                session_id, timeout=timeout
-            ):
-                logger.info("MemOS: reconnected via HTTP")
-                return
-
-            try:
-                ensure_viewer_daemon()
-            except Exception as err:
-                logger.warning("MemOS: viewer daemon check failed during reconnect — %s", err)
+            _prepare_shared_bridge(cleanup_legacy_zombies=True)
             new_bridge: MemosBridgeClient | None = None
             try:
-                new_bridge = MemosBridgeClient()
-                logger.info("MemOS: new bridge created (pid=%s)", getattr(new_bridge, "pid", "?"))
+                runtime_home = self._runtime_home or _resolved_memos_runtime_home()
+                runtime_env = dict(self._runtime_env or _memos_runtime_env_snapshot(runtime_home))
+                new_bridge = MemosBridgeClient(
+                    runtime_home=str(runtime_home),
+                    extra_env=runtime_env,
+                )
+                logger.info(
+                    "MemOS: new bridge created (pid=%s)",
+                    getattr(new_bridge, "pid", "?"),
+                )
 
                 new_bridge.register_host_handler(
                     "host.llm.complete",
@@ -2002,10 +2175,12 @@ class MemTensorProvider(MemoryProvider):
             return True
         except Exception as err:
             logger.warning("MemOS: bridge reconnect failed — %s", err)
-            self._bridge = None
             return False
 
     def _start_bridge_keepalive(self) -> None:
+        if self._shared_bridge:
+            # SharedBridgeRuntime owns the only keepalive/reconnect loop.
+            return
         if self._bridge_keepalive_thread and self._bridge_keepalive_thread.is_alive():
             return
         self._bridge_keepalive_stop.clear()
@@ -2049,27 +2224,41 @@ class MemTensorProvider(MemoryProvider):
     def _turn_start(self, query: str, *, session_id: str = "") -> str:
         assert self._bridge is not None
         host_runtime = self._host_runtime_context()
-        resp = self._bridge.request(
-            "turn.start",
-            {
-                "agent": "hermes",
+        with self._state_lock:
+            turn_key = self._active_turn_key
+        payload: dict[str, Any] = {
+            "agent": "hermes",
+            "namespace": self._runtime_namespace(),
+            "sessionId": session_id or self._session_id,
+            "userText": query,
+            "contextHints": {
+                "agentIdentity": self._agent_identity,
                 "namespace": self._runtime_namespace(),
-                "sessionId": session_id or self._session_id,
-                "userText": query,
-                "contextHints": {
-                    "agentIdentity": self._agent_identity,
-                    "namespace": self._runtime_namespace(),
-                    **host_runtime,
-                },
-                "ts": int(time.time() * 1000),
+                **host_runtime,
             },
+            "ts": int(time.time() * 1000),
+        }
+        if turn_key:
+            payload["turnKey"] = turn_key
+        resp = self._bridge_request_with_retry(
+            "turn.start",
+            payload,
             timeout=_LONG_RPC_TIMEOUT,
         )
+        response_query = (resp or {}).get("query") or {}
+        response_session = str(response_query.get("sessionId") or "")
+        requested_session = str(payload["sessionId"])
+        if response_session and response_session != requested_session:
+            raise BridgeError(
+                "session_mismatch",
+                "turn.start returned a different session "
+                f"(requested={requested_session}, returned={response_session})",
+            )
         # Stash the real episode id the pipeline auto-created (V7
         # §0.1 may have boundary-cut the previous episode and started
         # a new one). `on_session_end` uses it to close the right
         # episode — see the "Episode tracking" comment block above.
-        new_eid = ((resp or {}).get("query") or {}).get("episodeId") or ""
+        new_eid = response_query.get("episodeId") or ""
         if new_eid and new_eid != self._episode_id:
             self._episode_id = new_eid
             logger.debug("MemOS: stashed episode %s from turn.start", new_eid)
@@ -2110,7 +2299,7 @@ class MemTensorProvider(MemoryProvider):
         }
         if agent_thinking:
             payload["agentThinking"] = agent_thinking
-        result = self._bridge.request("turn.end", payload, timeout=_LONG_RPC_TIMEOUT)
+        result = self._bridge_request("turn.end", payload, timeout=_LONG_RPC_TIMEOUT)
         # Capture the trace ID for feedback submission
         if result and isinstance(result, dict):
             trace_ids = result.get("traceIds", [])
@@ -2172,7 +2361,7 @@ class MemTensorProvider(MemoryProvider):
         }
         if trace_id:
             payload["traceId"] = trace_id
-        self._bridge.request("feedback.submit", payload, timeout=75.0)
+        self._bridge_request("feedback.submit", payload, timeout=75.0)
         return True
 
 

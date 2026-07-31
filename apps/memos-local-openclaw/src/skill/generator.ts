@@ -28,6 +28,13 @@ This Skill is special: it comes from real execution experience — every step wa
 - The frontmatter description (~100 words) is ALWAYS in the agent's context — it must be self-sufficient for deciding whether to use this skill.
 - The SKILL.md body loads when triggered — keep it under 400 lines, focused, no fluff.
 - If the task involved large configs/scripts, mention them but DON'T inline everything — just reference that scripts/ or references/ may contain them.
+- For multi-variant skills, keep only the shared workflow and variant-selection guidance in SKILL.md; move framework-, provider-, or domain-specific details into separate references/ files.
+- Do not create README.md, CHANGELOG.md, INSTALLATION_GUIDE.md, or other standalone documentation. A skill consists of SKILL.md plus only the scripts/, references/, or assets/ companions it genuinely needs.
+
+### Frontmatter rules
+- name: Use 2-4 words in English kebab-case so the identifier stays concise.
+- description: Include both what the skill does and when to use it, with concrete scenarios, keywords, and alternative phrasings because this is the primary trigger.
+- Include ONLY \`name\` and \`description\` in frontmatter; do not add metadata or other fields.
 
 ### Description as trigger mechanism
 The description field decides whether the agent activates this skill. Write it "proactively":
@@ -45,6 +52,7 @@ The description field decides whether the agent activates this skill. Write it "
 - Abstract the mistake, not just the fix: capture the diagnostic method that found the problem, not only the specific error message or patch from this task
 - Do not make a specific project name, product version, branch, or one-off rollback decision a required part of the skill unless the future task truly depends on it
 - Keep real commands/code/config from the task record — these are verified to work
+- Only include information the agent does not already know; omit generic explanations that add tokens without improving execution.
 
 ### Language matching (CRITICAL)
 You MUST write the ENTIRE skill in the SAME language as the user's messages in the task record.
@@ -63,15 +71,11 @@ Output ONLY the complete SKILL.md content. No extra text before or after.
 ---
 name: "{NAME}"
 description: "{A natural, proactive description. 60-120 words. Cover what it does + multiple phrasings/scenarios that should trigger it. Be pushy about triggering — list keywords, alternative descriptions, edge-case phrasings.}"
-metadata: {{ "openclaw": {{ "emoji": "{emoji}" }} }}
 ---
 
 # {Title — clear, action-oriented}
 
 {One sentence: what this skill helps you do and why it's valuable}
-
-## When to use this skill
-{2-4 bullet points describing the scenarios. Focus on the user's INTENT, not just keywords. Example: "When you need to get a Node app running reliably in a container and want to avoid common pitfalls like bloated images or missing health checks."}
 
 ## Steps
 {Numbered or sectioned steps extracted from the task. EVERY step actually performed must be included — do NOT skip or generalize away concrete steps like "configure security groups", "set environment variables", etc. For each step:

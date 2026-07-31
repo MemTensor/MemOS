@@ -77,11 +77,36 @@ import type {
 } from "../retrieval/types.js";
 import type { CoreEvent, CoreEventType } from "../../agent-contract/events.js";
 import type { LogRecord } from "../../agent-contract/log-record.js";
+import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
 import { createEmbeddingRetryWorker, systemErrorEvent } from "../embedding/index.js";
 import type { EpisodeSnapshot } from "../session/index.js";
 import type { IntentDecision, RelationDecision, TurnRelation } from "../session/types.js";
+
+function classifyWithTimeout(
+  classifyFn: () => Promise<RelationDecision>,
+  timeoutMs: number,
+  log: Logger,
+): Promise<RelationDecision> {
+  return Promise.race([
+    classifyFn(),
+    new Promise<RelationDecision>((_, reject) =>
+      setTimeout(() => reject(new Error("classify_timeout")), timeoutMs),
+    ),
+  ]).catch((err) => {
+    log.warn("relation.classify_timeout", {
+      timeoutMs,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      relation: "new_task" as const,
+      confidence: 0,
+      reason: "classify_timeout",
+      signals: ["classify_timeout"],
+    };
+  });
+}
 
 // ─── Factory ──────────────────────────────────────────────────────────────
 
@@ -276,6 +301,19 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // when the adapter doesn't pass its own.
   const lastUserTextBySession = new Map<SessionId, string>();
 
+  // Keep one idempotent turn-start promise per session. Storing the promise,
+  // rather than only the resolved packet, also collapses concurrent retries
+  // that arrive while the first retrieval is still running. A new turnKey
+  // replaces the prior entry, so this stays bounded to O(active sessions).
+  const turnStartBySession = new Map<
+    SessionId,
+    {
+      turnKey: string;
+      userText: string;
+      packet: Promise<InjectionPacket>;
+    }
+  >();
+
   // When a session is closed (e.g. adapter fires `session_end`), purge
   // every orchestrator-local map entry for that session. Without this,
   // `openEpisodeIfNeeded` would still see the stale `lastEpisodeBySession`
@@ -288,6 +326,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     openEpisodeBySession.delete(sid);
     lastEpisodeBySession.delete(sid);
     lastUserTextBySession.delete(sid);
+    turnStartBySession.delete(sid);
     log.debug("session.maps_cleared", { sessionId: sid, reason: evt.reason });
   });
 
@@ -419,13 +458,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         const gapMs = Math.max(0, (turnTs ?? now()) - lastTurnTs);
 
         const relationStartedAt = Date.now();
-        const decision = await session.relation.classify({
-          prevUserText: ctx.prevUserText,
-          prevAssistantText: ctx.prevAssistantText,
-          newUserText: userText,
-          gapMs,
-          prevEpisodeId: currentEpId,
-        });
+        const decision = await classifyWithTimeout(
+          () => session.relation.classify({
+            prevUserText: ctx.prevUserText,
+            prevAssistantText: ctx.prevAssistantText,
+            newUserText: userText,
+            gapMs,
+            prevEpisodeId: currentEpId,
+          }),
+          algorithm.session.classifyTimeoutMs,
+          log,
+        );
         const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
         log.info("relation.classified", {
@@ -472,7 +515,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           durationMs: relationDurationMs,
         });
 
-        if (keepAppending) {
+        if (keepAppending && open.turns.length < algorithm.session.maxTurnsPerEpisode) {
           // Same topic — just append the new user turn to the open
           // episode. No finalize, no reflect; that's deferred until
           // the user actually changes topic / closes the session.
@@ -489,8 +532,19 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           return { episode: open, sessionId, relation: decision.relation };
         }
 
+        if (keepAppending) {
+          log.info("episode.turn_limit_reached", {
+            sessionId,
+            episodeId: currentEpId,
+            turns: open.turns.length,
+            maxTurnsPerEpisode: algorithm.session.maxTurnsPerEpisode,
+            relation: decision.relation,
+            source: "open_episode",
+          });
+        }
+
         // Topic changed (new_task) OR gap too large OR
-        // episode_per_turn mode — finalize the open episode, which
+        // episode_per_turn mode OR turn limit reached — finalize the open episode, which
         // fires `episode.finalized` → captureSubscriber.runReflect →
         // R_human + V backprop. Fire-and-forget; the chain runs on
         // its own clock (tests can drive it via `flush()`).
@@ -584,13 +638,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           }
         } else {
           const relationStartedAt = Date.now();
-          const decision = await session.relation.classify({
-            prevUserText: ctx.prevUserText,
-            prevAssistantText: ctx.prevAssistantText,
-            newUserText: userText,
-            gapMs,
-            prevEpisodeId: snapshot.id as EpisodeId,
-          });
+          const decision = await classifyWithTimeout(
+            () => session.relation.classify({
+              prevUserText: ctx.prevUserText,
+              prevAssistantText: ctx.prevAssistantText,
+              newUserText: userText,
+              gapMs,
+              prevEpisodeId: snapshot.id as EpisodeId,
+            }),
+            algorithm.session.classifyTimeoutMs,
+            log,
+          );
           const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
           log.info("relation.classified", {
@@ -635,7 +693,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
             durationMs: relationDurationMs,
           });
 
-          if (keepAppending) {
+          if (keepAppending && snapshot.turns.length < algorithm.session.maxTurnsPerEpisode) {
             if (snapshot.status === "closed") {
               session.sessionManager.reopenEpisode(
                 snapshot.id as EpisodeId,
@@ -662,6 +720,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
             };
           }
 
+          if (keepAppending) {
+            log.info("episode.turn_limit_reached", {
+              sessionId,
+              episodeId: snapshot.id,
+              turns: snapshot.turns.length,
+              maxTurnsPerEpisode: algorithm.session.maxTurnsPerEpisode,
+              relation: decision.relation,
+              source: "recovered_open_topic",
+            });
+          }
+
           if (snapshot.status === "open") {
             session.sessionManager.finalizeEpisode(snapshot.id as EpisodeId, {
               patchMeta: {
@@ -686,13 +755,17 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
 
     const gapMs = Math.max(0, (turnTs ?? now()) - prev.endedAt);
     const relationStartedAt = Date.now();
-    const decision = await session.relation.classify({
-      prevUserText: prev.userText,
-      prevAssistantText: prev.assistantText,
-      newUserText: userText,
-      gapMs,
-      prevEpisodeId: prev.episodeId,
-    });
+    const decision = await classifyWithTimeout(
+      () => session.relation.classify({
+        prevUserText: prev.userText,
+        prevAssistantText: prev.assistantText,
+        newUserText: userText,
+        gapMs,
+        prevEpisodeId: prev.episodeId,
+      }),
+      algorithm.session.classifyTimeoutMs,
+      log,
+    );
     const relationDurationMs = Math.max(0, Date.now() - relationStartedAt);
 
     log.info("relation.classified", {
@@ -738,22 +811,34 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     });
 
     if (shouldReopen) {
-      const reopenReason =
-        decision.relation === "revision" ? "revision" : "follow_up";
-      const snap = session.sessionManager.reopenEpisode(prev.episodeId, reopenReason);
-      session.sessionManager.addTurn(prev.episodeId, {
-        role: "user",
-        content: userText,
-        ts: turnTs,
-        meta: {
-          source: reopenReason,
-          classifiedRelation: decision.relation,
-          ...meta,
-        },
-      });
-      openEpisodeBySession.set(sessionId, prev.episodeId);
-      lastEpisodeBySession.delete(sessionId);
-      return { episode: snap, sessionId, relation: decision.relation };
+      const prevSnap = session.sessionManager.getEpisode(prev.episodeId);
+      if (prevSnap && prevSnap.turns.length >= algorithm.session.maxTurnsPerEpisode) {
+        log.info("episode.turn_limit_reached", {
+          sessionId,
+          episodeId: prev.episodeId,
+          turns: prevSnap.turns.length,
+          maxTurnsPerEpisode: algorithm.session.maxTurnsPerEpisode,
+          relation: decision.relation,
+          source: "closed_episode",
+        });
+      } else {
+        const reopenReason =
+          decision.relation === "revision" ? "revision" : "follow_up";
+        const snap = session.sessionManager.reopenEpisode(prev.episodeId, reopenReason);
+        session.sessionManager.addTurn(prev.episodeId, {
+          role: "user",
+          content: userText,
+          ts: turnTs,
+          meta: {
+            source: reopenReason,
+            classifiedRelation: decision.relation,
+            ...meta,
+          },
+        });
+        openEpisodeBySession.set(sessionId, prev.episodeId);
+        lastEpisodeBySession.delete(sessionId);
+        return { episode: snap, sessionId, relation: decision.relation };
+      }
     }
 
     if (decision.relation === "new_task") {
@@ -1047,6 +1132,48 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   // ─── Turn lifecycle ─────────────────────────────────────────────────────
 
   async function onTurnStart(input: TurnInputDTO): Promise<InjectionPacket> {
+    const turnKey = input.turnKey?.trim();
+    if (!turnKey) {
+      return onTurnStartOnce(input);
+    }
+
+    const existing = turnStartBySession.get(input.sessionId);
+    if (existing?.turnKey === turnKey) {
+      if (existing.userText !== input.userText) {
+        throw new MemosError(
+          ERROR_CODES.CONFLICT,
+          "turn.start: turnKey was reused with different user text",
+          {
+            sessionId: input.sessionId,
+            turnKey,
+          },
+        );
+      }
+      log.debug("turn.start.idempotent_reuse", {
+        sessionId: input.sessionId,
+        turnKey,
+      });
+      return existing.packet;
+    }
+
+    const packet = onTurnStartOnce(input);
+    turnStartBySession.set(input.sessionId, {
+      turnKey,
+      userText: input.userText,
+      packet,
+    });
+    try {
+      return await packet;
+    } catch (err) {
+      const current = turnStartBySession.get(input.sessionId);
+      if (current?.packet === packet) {
+        turnStartBySession.delete(input.sessionId);
+      }
+      throw err;
+    }
+  }
+
+  async function onTurnStartOnce(input: TurnInputDTO): Promise<InjectionPacket> {
     const t0 = now();
     const initialSessionId = await ensureSession(
       input.agent,

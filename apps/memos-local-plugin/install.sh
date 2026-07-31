@@ -734,6 +734,13 @@ except Exception:
   step "Linking memtensor provider"
   local user_plugin_dir="${HOME}/.hermes/plugins/memory"
   mkdir -p "${user_plugin_dir}"
+  local version_sync="${prefix}/scripts/sync-hermes-version.cjs"
+  if [[ -f "${version_sync}" ]]; then
+    node "${version_sync}" "${prefix}" >/dev/null \
+      || die "Failed to synchronize Hermes plugin version metadata."
+  else
+    warn "Hermes version sync helper missing; using packaged plugin.yaml as-is."
+  fi
   # Ensure the provider directory is fully populated before symlinking so
   # the second symlink (user-level) already points at a complete tree.
   cp "${adapter_dir}/plugin.yaml" "${adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null || true
