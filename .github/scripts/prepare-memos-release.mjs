@@ -483,7 +483,7 @@ export function validateLocalPluginVersionPlan(evidence, expectedVersionInput = 
   const expectedVersionRaw = String(expectedVersionInput || "").trim();
   const previousReleasedVersion = cleanLocalPluginVersion(
     evidence.local_plugin_previous_version_raw || evidence.local_plugin_package_previous_version_raw,
-    "previous released OpenClaw local plugin version",
+    "previous released MemOS local plugin version",
   );
   const previousPackageVersion = cleanLocalPluginVersion(
     evidence.local_plugin_package_previous_version_raw || evidence.local_plugin_previous_version_raw,
@@ -497,7 +497,7 @@ export function validateLocalPluginVersionPlan(evidence, expectedVersionInput = 
   const packageVsReleasedOrder = compareSemver(currentPackageVersion, previousReleasedVersion);
   if (packageOrder < 0) {
     fail(
-      `OpenClaw local plugin package version moved backwards: ${displayVersion(previousPackageVersion)} -> ${displayVersion(currentPackageVersion)}.`,
+      `MemOS local plugin package version moved backwards: ${displayVersion(previousPackageVersion)} -> ${displayVersion(currentPackageVersion)}.`,
     );
   }
 
@@ -530,7 +530,7 @@ export function validateLocalPluginVersionPlan(evidence, expectedVersionInput = 
 
   if (expectedVersion && expectedVersion !== resolvedVersion) {
     fail(
-      `local_plugin_version input ${displayVersion(expectedVersion)} does not match the resolved OpenClaw local plugin docs version ${displayVersion(resolvedVersion)}.`,
+      `local_plugin_version input ${displayVersion(expectedVersion)} does not match the resolved MemOS local plugin docs version ${displayVersion(resolvedVersion)}.`,
     );
   }
   return {
@@ -681,7 +681,7 @@ export function collectLocalPluginEvidence({ previousTag, currentTag, currentRef
         "Each bullet should explain the user-facing impact in one sentence.",
         "Avoid generic restatements such as '新增了 X 功能', '优化了 X 性能', or '修复了 X 问题'.",
         "Avoid raw commit subject wording such as 'fix(plugin): ... (#123)'; rewrite it into product-facing copy.",
-        "A good bullet names the capability and says why it matters for OpenClaw local plugin users.",
+        "A good bullet names the capability and says why it matters for MemOS local plugin users.",
       ],
       curation_policy: [
         "Use Conventional Commit type/scope as a hint, not as final copy.",
@@ -1135,7 +1135,7 @@ export async function requestDocAgentDraft(evidence) {
       ok: true,
       needs_review: false,
       confidence: "high",
-      warnings: [evidence.skip_reason || "No user-facing OpenClaw local plugin changes in this MemOS release range."],
+      warnings: [evidence.skip_reason || "No user-facing MemOS local plugin changes in this MemOS release range."],
       release_items: [],
       coverage: { required_count: 0, covered_required_count: 0, missing_required_count: 0 },
       validation_attempt_count: 1,
@@ -1288,7 +1288,7 @@ export function docsPreviewMarkdown(preview, draft, evidence) {
     "",
   ];
   if (!draft.release_items.length) {
-    lines.push(evidence.skip_reason || "No OpenClaw local plugin docs entries were generated for this MemOS release range.", "");
+    lines.push(evidence.skip_reason || "No MemOS local plugin docs entries were generated for this MemOS release range.", "");
     return lines.join("\n");
   }
   for (const [language, label, field] of [
@@ -1570,8 +1570,8 @@ export async function run() {
   console.log(`Prepared MemOS release inspection in ${outputRoot}`);
   console.log(`Release notes source: ${releaseNotes.source}`);
   console.log(`Range: ${previousTag}..${target.sha}`);
-  console.log(`OpenClaw local plugin version: ${evidence.local_plugin_previous_version} -> ${evidence.local_plugin_version}`);
-  console.log(`OpenClaw local plugin changed files: ${evidence.changed_files.length}`);
+  console.log(`MemOS local plugin version: ${evidence.local_plugin_previous_version} -> ${evidence.local_plugin_version}`);
+  console.log(`MemOS local plugin changed files: ${evidence.changed_files.length}`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

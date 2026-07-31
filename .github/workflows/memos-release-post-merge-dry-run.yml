@@ -12,6 +12,10 @@ on:
       - ".github/scripts/prepare-memos-release.test.mjs"
       - ".github/scripts/retry.sh"
 
+concurrency:
+  group: memos-release-post-merge-dry-run-main
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -19,6 +23,7 @@ jobs:
   dry-run:
     if: ${{ github.repository == 'MemTensor/MemOS' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,6 +72,7 @@ jobs:
           TARGET_REF: origin/main
           DRY_RUN: true
           GITHUB_TOKEN: ${{ github.token }}
+          # Post-merge smoke check fallback. Manual publish still requires GitHub/Doc Agent validation.
           ALLOW_OFFLINE_DOCS_PREVIEW: true
         run: |
           bash .github/scripts/retry.sh --attempts 2 --label "prepare offline MemOS release inspection" -- \
@@ -130,6 +136,8 @@ jobs:
             echo "- publish_blocked: ${PUBLISH_BLOCKED}"
             echo "- publish_block_reason: ${PUBLISH_BLOCK_REASON:-n/a}"
             echo "- release_notes_source: ${RELEASE_NOTES_SOURCE}"
+            echo "- offline_docs_preview: true"
+            echo "- doc_agent_validation: skipped in post-merge smoke fallback; production publish does not set ALLOW_OFFLINE_DOCS_PREVIEW"
             echo "- local_plugin_changed: ${HAS_PRODUCT_CHANGES}"
             echo "- local_plugin_user_facing_changed: ${HAS_USER_FACING_PRODUCT_CHANGES}"
             echo "- docs_action: ${DOCS_ACTION}"

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   PRODUCT_ID,
@@ -26,6 +27,11 @@ import {
   validatePublishConfirmation,
   validateReleaseTarget,
 } from "./prepare-memos-release.mjs";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const scriptsDir = __dirname;
+const workflowsDir = join(__dirname, "../workflows");
 
 const evidence = {
   repo: "MemTensor/MemOS",
@@ -403,25 +409,45 @@ test("requires an exact publish confirmation for non-dry-run releases", () => {
 });
 
 test("publish workflow defaults real releases to draft before release.published", () => {
-  const workflow = readFileSync(".github/workflows/memos-release-publish.yml", "utf8");
+  const workflow = readFileSync(join(workflowsDir, "memos-release-publish.yml"), "utf8");
   assert.match(workflow, /create_draft_release:/);
   assert.match(workflow, /default:\s+true/);
   assert.match(workflow, /CREATE_DRAFT_RELEASE/);
+  assert.match(workflow, /timeout-minutes:\s+30/);
+  assert.match(workflow, /Validate publish confirmation/);
+  assert.match(workflow, /publish_confirmation must exactly equal/);
   assert.match(workflow, /flags\+=\(--draft\)/);
   assert.match(workflow, /Publish manually to trigger release\.published/);
 });
 
 test("legacy standalone local-plugin publisher requires an extra non-dry-run confirmation", () => {
-  const workflow = readFileSync(".github/workflows/memos-local-plugin-publish.yml", "utf8");
+  const workflow = readFileSync(join(workflowsDir, "memos-local-plugin-publish.yml"), "utf8");
   assert.match(workflow, /legacy_publish_confirmation:/);
+  assert.match(workflow, /legacy_publish_confirmation:\n\s+description:.*\n\s+required: false\n\s+type: string/s);
   assert.match(workflow, /guard-legacy-publish:/);
+  assert.match(workflow, /guard-legacy-publish:\n\s+runs-on: ubuntu-latest\n\s+timeout-minutes: 5/);
   assert.match(workflow, /expected="LEGACY PUBLISH memos-local-plugin-v\$\{RELEASE_VERSION\}"/);
   assert.match(workflow, /current official path is MemOS Release — Publish/);
   assert.match(workflow, /needs: guard-legacy-publish/);
 });
 
+test("read-only dry-run workflows declare bounded fallback behavior", () => {
+  const workflows = [
+    readFileSync(join(workflowsDir, "memos-release-pre-merge-dry-run.yml"), "utf8"),
+    readFileSync(join(workflowsDir, "memos-release-post-merge-dry-run.yml"), "utf8"),
+  ];
+  for (const workflow of workflows) {
+    assert.match(workflow, /concurrency:/);
+    assert.match(workflow, /permissions:\n\s+contents: read/);
+    assert.match(workflow, /timeout-minutes:\s+15/);
+    assert.match(workflow, /ALLOW_OFFLINE_DOCS_PREVIEW: true/);
+    assert.match(workflow, /offline_docs_preview: true/);
+    assert.match(workflow, /production publish does not set ALLOW_OFFLINE_DOCS_PREVIEW/);
+  }
+});
+
 test("inspection artifact contract includes generic aliases and side-effect proof", () => {
-  const script = readFileSync(".github/scripts/prepare-memos-release.mjs", "utf8");
+  const script = readFileSync(join(scriptsDir, "prepare-memos-release.mjs"), "utf8");
   assert.match(script, /"release-notes\.md"/);
   assert.match(script, /"evidence\.json"/);
   assert.match(script, /"docs-preview\.md"/);
@@ -684,10 +710,9 @@ test("keeps a reapplied local-plugin change after an earlier commit was reverted
     commitAll("feat: chunk batch reflection scoring");
     const featureSha = git(["rev-parse", "HEAD"]).trim();
 
-    git(["revert", "--no-edit", featureSha]);
+    git(["revert", "--no-commit", featureSha]);
     git([
       "commit",
-      "--amend",
       "-q",
       "-m",
       "Revert \"feat: chunk batch reflection scoring\" (#12)",
@@ -724,18 +749,39 @@ test("fallback topic rewrites V7 session default fixes into user-facing docs cop
 });
 
 test("GitHub release notes fallback stays whole-repo when API access is unavailable", async () => {
-  const result = await generateGitHubReleaseNotes({
-    repo: "MemTensor/MemOS",
-    currentTag: "v0.0.0-test",
-    targetSha: "HEAD",
-    previousTag: "HEAD",
-    token: "",
-  });
-  assert.equal(result.source, "local-fallback-after-github-error");
-  assert.match(result.body, /## What's Changed/);
-  assert.match(result.body, /Full Changelog/);
-  assert.doesNotMatch(result.body, /source_refs/);
-  assert.doesNotMatch(result.body, /doc-agent-release-notes-json/);
+  const originalCwd = process.cwd();
+  const root = mkdtempSync(join(tmpdir(), "memos-release-notes-fallback-"));
+  try {
+    process.chdir(root);
+    git(["init", "-q"]);
+    git(["config", "user.email", "release-test@example.invalid"]);
+    git(["config", "user.name", "Release Test"]);
+    writeRepoFile("README.md", "baseline\n");
+    commitAll("chore: baseline release");
+    git(["tag", "v0.0.0"]);
+    writeRepoFile("README.md", "baseline\nwhole repo feature\n");
+    commitAll("feat: add fallback release note source (#123)");
+    writeRepoFile("apps/memos-local-plugin/src/index.js", "export const fallback = true;\n");
+    commitAll("fix(plugin): preserve fallback plugin change (#124)");
+    const targetSha = git(["rev-parse", "HEAD"]).trim();
+
+    const result = await generateGitHubReleaseNotes({
+      repo: "MemTensor/MemOS",
+      currentTag: "v0.0.1",
+      targetSha,
+      previousTag: "v0.0.0",
+      token: "",
+    });
+    assert.equal(result.source, "local-fallback-after-github-error");
+    assert.match(result.body, /## What's Changed/);
+    assert.match(result.body, /feat: add fallback release note source/);
+    assert.match(result.body, /fix\(plugin\): preserve fallback plugin change/);
+    assert.match(result.body, /Full Changelog/);
+    assert.doesNotMatch(result.body, /source_refs/);
+    assert.doesNotMatch(result.body, /doc-agent-release-notes-json/);
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 test("rejects English text that still contains Chinese", () => {
@@ -933,6 +979,50 @@ test("allows the draft service one initial response plus three repair attempts",
     assert.equal(draft.validation_attempt_count, 4);
     assert.equal(draft.repair_attempt_count, 3);
     assert.equal(draft.validation_report.ok, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalUrl === undefined) delete process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL;
+    else process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL = originalUrl;
+    if (originalToken === undefined) delete process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN;
+    else process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN = originalToken;
+    if (originalOffline === undefined) delete process.env.ALLOW_OFFLINE_DOCS_PREVIEW;
+    else process.env.ALLOW_OFFLINE_DOCS_PREVIEW = originalOffline;
+  }
+});
+
+test("fails closed when the draft service exhausts all repair attempts", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalUrl = process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL;
+  const originalToken = process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN;
+  const originalOffline = process.env.ALLOW_OFFLINE_DOCS_PREVIEW;
+  const invalidDraft = {
+    ...validDraft,
+    release_items: [validDraft.release_items[0]],
+  };
+  const userFacingEvidence = {
+    ...evidence,
+    has_user_facing_product_changes: true,
+  };
+
+  let callCount = 0;
+  try {
+    process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL = "https://example.invalid/internal/release-notes/draft";
+    process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN = "test-token";
+    delete process.env.ALLOW_OFFLINE_DOCS_PREVIEW;
+    globalThis.fetch = async () => {
+      callCount += 1;
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(invalidDraft),
+      };
+    };
+
+    await assert.rejects(
+      () => requestDocAgentDraft(userFacingEvidence),
+      /Doc Agent draft failed validation after 3 repair attempts/,
+    );
+    assert.equal(callCount, 4);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalUrl === undefined) delete process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL;

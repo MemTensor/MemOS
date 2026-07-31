@@ -6,13 +6,16 @@ on:
       version:
         description: "MemOS version to release, without leading v (for example 2.0.25)"
         required: true
+        type: string
       target_ref:
         description: "Git ref to release from. Use main for normal releases."
         required: false
+        type: string
         default: "main"
       local_plugin_version:
-        description: "Optional guard: expected resolved OpenClaw local plugin docs version, without leading v. Leave blank to auto-increment when needed."
+        description: "Optional guard: expected resolved MemOS local plugin docs version, without leading v. Leave blank to auto-increment when needed."
         required: false
+        type: string
         default: ""
       dry_run:
         description: "Preview only. Skip tag creation, GitHub Release, docs PR, and deployment."
@@ -27,6 +30,7 @@ on:
       publish_confirmation:
         description: "Required only when dry_run=false. Must exactly equal: PUBLISH v<version>"
         required: false
+        type: string
         default: ""
 
 concurrency:
@@ -40,6 +44,7 @@ jobs:
   release:
     if: ${{ github.repository == 'MemTensor/MemOS' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,6 +65,20 @@ jobs:
       - name: Run release workflow tests
         shell: bash
         run: node --test .github/scripts/prepare-memos-release.test.mjs
+
+      - name: Validate publish confirmation
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          PUBLISH_CONFIRMATION: ${{ inputs.publish_confirmation }}
+        run: |
+          set -euo pipefail
+          expected="PUBLISH v${RELEASE_VERSION}"
+          if [ "${PUBLISH_CONFIRMATION}" != "${expected}" ]; then
+            echo "::error::publish_confirmation must exactly equal: ${expected}"
+            exit 1
+          fi
 
       - name: Prepare MemOS release inspection
         id: prepare
@@ -148,10 +167,10 @@ jobs:
             echo "- validation_attempt_count: ${VALIDATION_ATTEMPT_COUNT}"
             echo "- repair_attempt_count: ${REPAIR_ATTEMPT_COUNT}"
             echo ""
-            echo "The uploaded artifact contains the public MemOS release notes preview and the OpenClaw local plugin docs preview."
+            echo "The uploaded artifact contains the public MemOS release notes preview and the MemOS local plugin docs preview."
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Stop after dry run
+      - name: Report dry-run completion
         if: ${{ inputs.dry_run }}
         shell: bash
         run: |
