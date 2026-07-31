@@ -255,9 +255,7 @@ class InternetKeenableRetriever:
         )
 
         if mode == "fast":
-            memory_text = (
-                f"[Outer internet view] Title: {title}\nNewsTime: {publish_time}\nSummary: {summary}\n"
-            )
+            memory_text = f"[Outer internet view] Title: {title}\nNewsTime: {publish_time}\nSummary: {summary}\n"
         else:
             memory_text = (
                 f"[Outer internet view] Title: {title}\nNewsTime: {publish_time}\nSummary:"
