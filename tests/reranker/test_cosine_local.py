@@ -1,9 +1,8 @@
 """Tests for CosineLocalReranker numerical stability."""
 
-from types import SimpleNamespace
-from unittest.mock import patch
+import math
 
-import pytest
+from types import SimpleNamespace
 
 from memos.reranker.cosine_local import CosineLocalReranker, _cosine_one_to_many
 
@@ -17,7 +16,10 @@ class MemoryStub:
 
 def _make_items(embeddings, backgrounds=None):
     backgrounds = backgrounds or ["fact"] * len(embeddings)
-    return [MemoryStub(i, emb, bg) for i, (emb, bg) in enumerate(zip(embeddings, backgrounds, strict=False))]
+    return [
+        MemoryStub(i, emb, bg)
+        for i, (emb, bg) in enumerate(zip(embeddings, backgrounds, strict=False))
+    ]
 
 
 class TestCosineOneToManyNumerical:
@@ -74,7 +76,7 @@ class TestCosineOneToManyNumerical:
         q = [1.0]
         m = [[0.0]]
         result = _cosine_one_to_many(q, m)
-        assert not any(r != r for r in result)
+        assert not any(math.isnan(r) for r in result)
         assert result[0] == 0.0
 
     def test_multiple_equal_length_vectors(self):
