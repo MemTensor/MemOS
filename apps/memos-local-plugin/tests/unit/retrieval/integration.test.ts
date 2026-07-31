@@ -231,6 +231,58 @@ describe("retrieval/integration", () => {
     expect(skillIds).not.toContain("sk_weak");
   });
 
+  it("turn_start recalls same-session traces only from before the visible window", async () => {
+    handle.repos.traces.insert({
+      id: "t_before_compaction" as TraceId,
+      episodeId: "ep1" as EpisodeId,
+      sessionId: "s1" as SessionId,
+      ts: (NOW - 10_000) as never,
+      userText: "run docker compose before compaction",
+      agentText: "agent text before compaction",
+      toolCalls: [],
+      reflection: "old relevant trace",
+      value: 0.9 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.9 as never,
+      tags: ["docker"],
+      vecSummary: vec([1, 0, 0]),
+      vecAction: null,
+      turnId: 1 as never,
+      schemaVersion: 1,
+    });
+
+    const res = await turnStartRetrieve(
+      makeDeps(handle),
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s1" as SessionId,
+        userText: "run docker compose",
+        contextHints: {
+          visibleContextKnown: true,
+          visibleContextStartTs: NOW - 5_000,
+          visibleContextUserTexts: ["user text t_hi"],
+        },
+        ts: NOW as never,
+      },
+      {
+        plan: {
+          wantTier1: false,
+          wantTier2: true,
+          wantTier3: false,
+        },
+      },
+    );
+
+    const traceIds = res.packet.snippets
+      .filter((snippet) => snippet.refKind === "trace")
+      .map((snippet) => String(snippet.refId));
+    expect(traceIds).toContain("t_before_compaction");
+    expect(traceIds).not.toContain("t_hi");
+    expect(traceIds).not.toContain("t_med");
+  });
+
   it("keeps abstract memories when long unique identifier queries require keywords", async () => {
     const res = await turnStartRetrieve(makeDeps(handle), {
       reason: "turn_start",

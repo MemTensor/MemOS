@@ -250,6 +250,37 @@ export function flattenMessages(input: unknown[] | undefined): FlatMessage[] {
   return out;
 }
 
+const MAX_VISIBLE_CONTEXT_USER_TEXTS = 128;
+
+/**
+ * Describe the conversation history OpenClaw will actually send to the
+ * model for this run. These hints are routing/filter metadata only; the
+ * retrieval query builder never includes them in semantic search text.
+ */
+function visibleContextHints(messages: unknown[] | undefined): Record<string, unknown> {
+  const flat = flattenMessages(messages);
+  const timestamps = flat
+    .filter((message) => message.role !== "system")
+    .map((message) => message.ts)
+    .filter((ts): ts is number => typeof ts === "number" && Number.isFinite(ts));
+  const userTexts = Array.from(
+    new Set(
+      flat
+        .filter((message) => message.role === "user")
+        .map((message) => message.content.trim())
+        .filter(Boolean),
+    ),
+  ).slice(-MAX_VISIBLE_CONTEXT_USER_TEXTS);
+
+  return {
+    visibleContextKnown: true,
+    ...(timestamps.length > 0
+      ? { visibleContextStartTs: Math.min(...timestamps) }
+      : {}),
+    ...(userTexts.length > 0 ? { visibleContextUserTexts: userTexts } : {}),
+  };
+}
+
 function isToolCallBlockType(type: string): boolean {
   const normalized = type.trim().toLowerCase();
   return (
@@ -333,8 +364,14 @@ function extractTextContent(content: unknown): string {
 function pickTimestamp(m: Record<string, unknown>): number | undefined {
   const candidates = [m.ts, m.timestamp, m.time, m.createdAt];
   for (const c of candidates) {
-    if (typeof c === "number" && Number.isFinite(c)) return c;
+    if (typeof c === "number" && Number.isFinite(c)) {
+      return c > 0 && c < 10_000_000_000 ? c * 1000 : c;
+    }
     if (typeof c === "string") {
+      const numeric = Number(c);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+      }
       const parsed = Date.parse(c);
       if (!Number.isNaN(parsed)) return parsed;
     }
@@ -1320,6 +1357,7 @@ export function createOpenClawBridge(opts: BridgeOptions): BridgeHandle {
           sessionId: ctx.sessionId,
           runId: ctx.runId,
           workspaceDir: ctx.workspaceDir,
+          ...visibleContextHints(event.messages),
         },
       };
 

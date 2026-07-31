@@ -1152,6 +1152,42 @@ describe("createOpenClawBridge", () => {
     }
   });
 
+  it("passes the model-visible conversation window as retrieval-only context hints", async () => {
+    const mc = buildCore();
+    await mc.init();
+    const onTurnStart = vi.spyOn(mc, "onTurnStart");
+
+    const bridge = createOpenClawBridge({
+      agent: "openclaw",
+      core: mc,
+      log: silentLogger(),
+    });
+    await bridge.handleBeforePrompt(
+      {
+        prompt: "你还记得我喜欢什么吗",
+        messages: [
+          {
+            role: "user",
+            content: "[message_id: old]\nou_sender: 我喜欢苹果",
+            timestamp: 1_700_000_100_000,
+          },
+          {
+            role: "assistant",
+            content: "记住了",
+            timestamp: 1_700_000_101_000,
+          },
+        ],
+      },
+      hookCtx({ sessionKey: "feishu:single-session" }),
+    );
+
+    expect(onTurnStart).toHaveBeenCalledOnce();
+    expect(onTurnStart.mock.calls[0]![0].contextHints).toMatchObject({
+      visibleContextStartTs: 1_700_000_100_000,
+      visibleContextUserTexts: ["我喜欢苹果"],
+    });
+  });
+
   it("handleAgentEnd feeds onTurnEnd and produces trace + episode.closed events", async () => {
     const mc = buildCore();
     await mc.init();

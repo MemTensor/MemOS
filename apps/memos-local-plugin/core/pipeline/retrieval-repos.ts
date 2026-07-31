@@ -10,7 +10,7 @@
 import type { RetrievalRepos } from "../retrieval/types.js";
 import type { Repos } from "../storage/repos/index.js";
 import type { RuntimeNamespace, TraceId } from "../../agent-contract/dto.js";
-import { isVisibleTo } from "../runtime/namespace.js";
+import { isVisibleTo, visibilityWhere } from "../runtime/namespace.js";
 
 export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): RetrievalRepos {
   return {
@@ -44,13 +44,25 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
 
     traces: {
       searchByVector(query, k, opts) {
-        return repos.traces.searchByVector(query, k, opts ?? {});
+        return repos.traces.searchByVector(
+          query,
+          k,
+          mergeVisibility(opts, namespace),
+        );
       },
       searchByText(ftsMatch, k, opts) {
-        return repos.traces.searchByText(ftsMatch, k, opts ?? {});
+        return repos.traces.searchByText(
+          ftsMatch,
+          k,
+          mergeVisibility(opts, namespace, "t"),
+        );
       },
       searchByPattern(terms, k, opts) {
-        return repos.traces.searchByPattern(terms, k, opts ?? {});
+        return repos.traces.searchByPattern(
+          terms,
+          k,
+          mergeVisibility(opts, namespace),
+        );
       },
       getManyByIds(ids) {
         const rows = repos.traces.getManyByIds(ids as readonly TraceId[]);
@@ -70,7 +82,11 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
         }));
       },
       searchByErrorSignature(fragments, limit, opts) {
-        const rows = repos.traces.searchByErrorSignature(fragments, limit, opts);
+        const rows = repos.traces.searchByErrorSignature(
+          fragments,
+          limit,
+          mergeVisibility(opts, namespace),
+        );
         return rows.filter((r) => isVisibleTo(r, namespace)).map((r) => ({
           id: r.id,
           episodeId: r.episodeId,
@@ -172,6 +188,27 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
       },
     },
   };
+}
+
+function mergeVisibility<T extends {
+  where?: string;
+  params?: Record<string, unknown>;
+}>(
+  opts: T | undefined,
+  namespace: RuntimeNamespace,
+  alias = "",
+): T {
+  const visible = visibilityWhere(namespace, alias);
+  return {
+    ...(opts ?? {}),
+    where: opts?.where
+      ? `(${opts.where}) AND (${visible.sql})`
+      : visible.sql,
+    params: {
+      ...(opts?.params ?? {}),
+      ...visible.params,
+    },
+  } as T;
 }
 
 function normaliseSkillDecisionGuidance(

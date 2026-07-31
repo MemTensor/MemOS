@@ -69,8 +69,22 @@ export interface Tier2Input {
   /** Whether `decision_repair` forced `includeLowValue`. */
   includeLowValue?: boolean;
   /**
-   * When set, trace search excludes rows from this session (cross-session
-   * turn-start retrieval should not repeat the current chat window).
+   * The portion of the current durable session that the host model can
+   * still see. Rows inside this window are filtered before channel Top-K;
+   * rows older than `startTs` remain eligible after host compaction.
+   *
+   * `userTexts` is a bounded exact-text fallback for hosts whose visible
+   * messages do not carry timestamps. It is intentionally not semantic:
+   * embedding similarity belongs to MMR, not context-window dedupe.
+   */
+  visibleContext?: {
+    sessionId: SessionId;
+    startTs?: number;
+    userTexts?: readonly string[];
+  };
+  /**
+   * Legacy fallback for hosts that cannot report their visible context.
+   * New adapters should send `visibleContext` instead.
    */
   excludeSessionId?: SessionId;
   /** Query-specific policy; personal facts use summary vectors first. */
@@ -332,7 +346,36 @@ function buildTraceSearchFilters(
   const params: Record<string, unknown> = {};
   const includeLow = input.includeLowValue ?? deps.config.includeLowValue;
   if (!includeLow) parts.push("priority > 0");
-  if (input.excludeSessionId) {
+  const visible = input.visibleContext;
+  if (
+    visible &&
+    typeof visible.startTs === "number" &&
+    Number.isFinite(visible.startTs)
+  ) {
+    parts.push(
+      "(session_id != @visible_context_session_id OR ts < @visible_context_start_ts)",
+    );
+    params.visible_context_session_id = visible.sessionId;
+    params.visible_context_start_ts = visible.startTs;
+  } else if (visible) {
+    const texts = Array.from(
+      new Set(
+        (visible.userTexts ?? [])
+          .map((text) => String(text).trim())
+          .filter(Boolean),
+      ),
+    ).slice(-128);
+    if (texts.length > 0) {
+      const placeholders = texts.map((_, index) => `@visible_user_text_${index}`);
+      texts.forEach((text, index) => {
+        params[`visible_user_text_${index}`] = text;
+      });
+      parts.push(
+        `(session_id != @visible_context_session_id OR user_text NOT IN (${placeholders.join(", ")}))`,
+      );
+      params.visible_context_session_id = visible.sessionId;
+    }
+  } else if (input.excludeSessionId) {
     parts.push("session_id != @exclude_session_id");
     params.exclude_session_id = input.excludeSessionId;
   }

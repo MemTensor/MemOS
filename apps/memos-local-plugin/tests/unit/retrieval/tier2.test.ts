@@ -303,7 +303,7 @@ describe("retrieval/tier2 (with real sqlite)", () => {
     expect(ids).toContain("zeroV");
   });
 
-  it("excludeSessionId omits traces from that session", async () => {
+  it("excludes only the visible window of the current session", async () => {
     handle.repos.sessions.upsert({
       id: "s2" as SessionId,
       agent: "openclaw",
@@ -321,11 +321,11 @@ describe("retrieval/tier2 (with real sqlite)", () => {
       status: "open",
     });
     handle.repos.traces.insert({
-      id: "otherSess" as TraceId,
+      id: "compactedSameSession" as TraceId,
       episodeId: "ep2" as EpisodeId,
       sessionId: "s2" as SessionId,
-      ts: NOW as never,
-      userText: "other session docker query",
+      ts: (NOW - 10_000) as never,
+      userText: "compacted same session docker query",
       agentText: "reply",
       toolCalls: [],
       reflection: "ref",
@@ -339,22 +339,64 @@ describe("retrieval/tier2 (with real sqlite)", () => {
       turnId: 0 as never,
       schemaVersion: 1,
     });
+    handle.repos.traces.insert({
+      id: "visibleSameSession" as TraceId,
+      episodeId: "ep2" as EpisodeId,
+      sessionId: "s2" as SessionId,
+      ts: NOW as never,
+      userText: "visible same session docker query",
+      agentText: "reply",
+      toolCalls: [],
+      reflection: "ref",
+      value: 0.95 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.95 as never,
+      tags: ["docker"],
+      vecSummary: vec([1, 0, 0]),
+      vecAction: null,
+      turnId: 1 as never,
+      schemaVersion: 1,
+    });
 
-    const withoutExclude = await runTier2(
+    const withoutWindow = await runTier2(
       { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
       { queryVec: vec([1, 0, 0]), tags: ["docker"] },
     );
-    expect(withoutExclude.traces.map((t) => String(t.refId))).toContain("otherSess");
+    expect(withoutWindow.traces.map((t) => String(t.refId))).toEqual(
+      expect.arrayContaining(["compactedSameSession", "visibleSameSession"]),
+    );
 
-    const withExclude = await runTier2(
+    const withWindow = await runTier2(
       { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
       {
         queryVec: vec([1, 0, 0]),
         tags: ["docker"],
-        excludeSessionId: "s2" as SessionId,
+        visibleContext: {
+          sessionId: "s2" as SessionId,
+          startTs: NOW - 5_000,
+          userTexts: ["visible same session docker query"],
+        },
       },
     );
-    expect(withExclude.traces.map((t) => String(t.refId))).not.toContain("otherSess");
+    const ids = withWindow.traces.map((t) => String(t.refId));
+    expect(ids).toContain("compactedSameSession");
+    expect(ids).not.toContain("visibleSameSession");
+  });
+
+  it("falls back to exact visible-user-text filtering when timestamps are unavailable", async () => {
+    const out = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      {
+        queryVec: vec([1, 0, 0]),
+        tags: ["docker"],
+        visibleContext: {
+          sessionId: "s1" as SessionId,
+          userTexts: ["hiV query about docker"],
+        },
+      },
+    );
+    expect(out.traces.map((t) => String(t.refId))).not.toContain("hiV");
   });
 
   it("rolls up episodes when ≥2 traces share episode_id", async () => {

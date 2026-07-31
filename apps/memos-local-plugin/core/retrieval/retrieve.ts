@@ -37,7 +37,7 @@ import { llmFilterCandidates } from "./llm-filter.js";
 import { rank } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
-import { runTier2 } from "./tier2-trace.js";
+import { runTier2, type Tier2Input } from "./tier2-trace.js";
 import { runTier3 } from "./tier3-world.js";
 import type {
   EpisodeCandidate,
@@ -312,6 +312,7 @@ async function runAll(
         : Promise.resolve([]);
 
     const tier2Start = Date.now();
+    const currentVisibleContext = resolveVisibleContext(ctx, sessionId, deps.config);
     const tier2Promise: Promise<{ traces: TraceCandidate[]; episodes: EpisodeCandidate[] }> =
       wantTier2 && !noUsableChannel
         ? runTier2(
@@ -325,10 +326,7 @@ async function runAll(
               exactIdentifiers: compiled.exactIdentifiers,
               profile,
               includeLowValue: plan.includeLowValue,
-              excludeSessionId:
-                ctx.reason === "turn_start" && sessionId && !deps.config.lightweightMemory
-                  ? sessionId
-                  : undefined,
+              ...currentVisibleContext,
             },
           )
         : Promise.resolve({ traces: [], episodes: [] });
@@ -443,6 +441,7 @@ async function runAll(
           profile,
           includeActionVector: true,
           includeLowValue: plan.includeLowValue,
+          ...currentVisibleContext,
         },
       );
       tier2LatencyMs += Date.now() - wideningStartedAt;
@@ -712,6 +711,49 @@ function emptyResult(
 function approxTokens(s: string): number {
   if (!s) return 0;
   return Math.ceil(s.length / 4);
+}
+
+function resolveVisibleContext(
+  ctx: RetrievalCtx,
+  sessionId: SessionId | undefined,
+  config: RetrievalDeps["config"],
+): Pick<Tier2Input, "visibleContext" | "excludeSessionId"> {
+  if (
+    ctx.reason !== "turn_start" ||
+    !sessionId ||
+    config.lightweightMemory
+  ) {
+    return {};
+  }
+
+  const hints = ctx.contextHints;
+  if (hints?.visibleContextKnown !== true) {
+    // Backward compatibility for adapters that cannot yet report the
+    // model-visible window. This preserves the old no-repeat behaviour
+    // instead of guessing that the session has been compacted.
+    return { excludeSessionId: sessionId };
+  }
+
+  const rawStartTs = hints.visibleContextStartTs;
+  const startTs =
+    typeof rawStartTs === "number" && Number.isFinite(rawStartTs)
+      ? rawStartTs
+      : undefined;
+  const userTexts = Array.isArray(hints.visibleContextUserTexts)
+    ? hints.visibleContextUserTexts
+        .filter((text): text is string => typeof text === "string")
+        .map((text) => text.trim())
+        .filter(Boolean)
+        .slice(-128)
+    : [];
+
+  return {
+    visibleContext: {
+      sessionId,
+      ...(startTs !== undefined ? { startTs } : {}),
+      ...(userTexts.length > 0 ? { userTexts } : {}),
+    },
+  };
 }
 
 function round(n: number, d: number): number {
