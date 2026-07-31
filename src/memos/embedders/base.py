@@ -13,6 +13,8 @@ from memos.log import get_logger, text_hash
 logger = get_logger(__name__)
 EmbeddingCallable = TypeVar("EmbeddingCallable", bound=Callable[..., Any])
 
+_SAFE_EMBEDDING_MAX_TOKENS: int = 3072
+
 
 def log_embedding_call(func: EmbeddingCallable) -> EmbeddingCallable:
     """Log embedding request dimensions and timing without text or vectors."""
@@ -136,25 +138,57 @@ class BaseEmbedder(ABC):
 
     def _truncate_texts(self, texts: list[str], approx_char_per_token=1.0) -> (list)[str]:
         """
-        Truncate texts to fit within max_tokens limit if configured.
+        Truncate texts to fit within a per-text token limit.
+
+        When the configuration does not specify an explicit limit, the
+        per-provider default supplied by :meth:`_effective_max_tokens` is
+        used.  This avoids hard-coded 8192 limits that exceed the actual
+        token budget (e.g. text-embedding-3's 3072-token input limit).
+
+        Truncation is token-aware: each text is measured with
+        :func:`_count_tokens_for_embedding` and, if necessary, truncated via
+        :func:`_truncate_text_to_tokens` (binary search over prefix length).
 
         Args:
             texts: List of texts to truncate.
+            approx_char_per_token: Ignored; retained for backwards
+                compatibility with older call sites.
 
         Returns:
             List of truncated texts.
         """
-        if not hasattr(self, "config") or self.config.max_tokens is None:
+        if not hasattr(self, "config"):
             return texts
-        max_tokens = self.config.max_tokens
+        max_tokens = self._effective_max_tokens()
+        if max_tokens is None or max_tokens <= 0:
+            return texts
 
-        truncated = []
+        truncated: list[str] = []
         for t in texts:
-            if len(t) < max_tokens * approx_char_per_token:
+            # Cheap fast-path: if the text is obviously too short to exceed
+            # the token budget, skip the (potentially expensive) token count.
+            # ~1 char/token for CJK text is the worst case.
+            if len(t) <= max_tokens:
                 truncated.append(t)
-            else:
-                truncated.append(t[:max_tokens])
+                continue
+            truncated.append(_truncate_text_to_tokens(t, max_tokens))
         return truncated
+
+    def _effective_max_tokens(self) -> int | None:
+        """Return the per-text token limit used for truncation.
+
+        Callers can override ``self.config.max_tokens`` explicitly. When it
+        is not set (``None`` or ``0`` after coercion through the config)
+        this falls back to a safe provider-aware default so that APIs like
+        text-embedding-3 (3072 input tokens) are never sent inputs that
+        would otherwise trigger an out-of-budget error.
+        """
+        config = getattr(self, "config", None)
+        if config is not None:
+            configured = getattr(config, "max_tokens", None)
+            if configured is not None and configured > 0:
+                return configured
+        return _SAFE_EMBEDDING_MAX_TOKENS
 
     @abstractmethod
     def embed(self, texts: list[str]) -> list[list[float]]:

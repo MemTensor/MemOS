@@ -13,8 +13,8 @@ class BaseEmbedderConfig(BaseConfig):
         default=None, description="Number of dimensions for the embedding"
     )
     max_tokens: int | None = Field(
-        default=8192,
-        description="Maximum number of tokens per text. Texts exceeding this limit will be automatically truncated. Set to None to disable truncation.",
+        default=None,
+        description="Maximum number of tokens per text. When None (default) the embedder falls back to a provider-aware safe limit (currently 3072 tokens, matching text-embedding-3). Set to 0 or a concrete positive integer to explicitly disable or override truncation.",
     )
     headers_extra: dict[str, Any] | None = Field(
         default=None,
