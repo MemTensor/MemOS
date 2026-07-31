@@ -1,12 +1,7 @@
 """Tests for enable_thinking parameter in OpenAILLM."""
 
-from types import SimpleNamespace
-from unittest.mock import patch
-
-import pytest
-
 from memos.configs.llm import OpenAILLMConfig
-from memos.llms.openai import AzureLLM, OpenAILLM
+from memos.llms.openai import OpenAILLM
 
 
 def _make_config(**overrides):
