@@ -1,12 +1,18 @@
 """Tests for UniversalAPIEmbedder."""
 
+import asyncio
+
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from memos.configs.embedder import UniversalAPIEmbedderConfig
 from memos.embedders.universal_api import UniversalAPIEmbedder
+
+
+class _DimensionsUnsupportedError(Exception):
+    """Raised by the mock backend when dimensions are rejected."""
 
 
 def _make_config(**overrides):
@@ -44,32 +50,50 @@ class TestUniversalAPIEmbedderDimensions:
         )
         assert kwargs["dimensions"] == 0
 
-    @patch.object(UniversalAPIEmbedder, "_call_embeddings_api")
-    def test_embed_passes_embedding_dims_to_api(self, mock_call):
-        mock_call.return_value = [[0.1, 0.2] for _ in ["hello"]]
+    @patch("memos.embedders.universal_api.OpenAIClient")
+    def test_embed_passes_embedding_dims_to_api(self, mock_openai_client):
+        mock_response = MagicMock()
+        mock_response.data = [MagicMock(embedding=[0.1, 0.2])]
+        mock_openai_client.return_value.embeddings.create.return_value = mock_response
+
         config = _make_config(embedding_dims=256)
         embedder = UniversalAPIEmbedder(config)
         embedder.embed(["hello"])
-        mock_call.assert_called_once()
-        call_kwargs = mock_call.call_args[0]
-        assert call_kwargs[2] == ["hello"]
-        assert call_kwargs[1] == "text-embedding-3-large"
 
-    @patch.object(UniversalAPIEmbedder, "_call_embeddings_api")
-    def test_embed_without_dims_does_not_pass_dimensions(self, mock_call):
-        mock_call.return_value = [[0.1, 0.2] for _ in ["hello"]]
+        _, kwargs = mock_openai_client.return_value.embeddings.create.call_args
+        assert kwargs.get("dimensions") == 256
+
+    @patch("memos.embedders.universal_api.OpenAIClient")
+    def test_embed_without_dims_does_not_pass_dimensions(self, mock_openai_client):
+        mock_response = MagicMock()
+        mock_response.data = [MagicMock(embedding=[0.1, 0.2])]
+        mock_openai_client.return_value.embeddings.create.return_value = mock_response
+
         config = _make_config(embedding_dims=None)
         embedder = UniversalAPIEmbedder(config)
         embedder.embed(["hello"])
-        mock_call.assert_called_once()
 
-    @patch.object(UniversalAPIEmbedder, "_call_embeddings_api")
-    def test_embed_with_backup_client(self, mock_call):
-        mock_call.side_effect = [
-            ValueError("primary failed"),
-            [[0.1, 0.2] for _ in ["hello"]],
-        ]
+        _, kwargs = mock_openai_client.return_value.embeddings.create.call_args
+        assert "dimensions" not in kwargs
+
+    @patch("memos.embedders.universal_api.OpenAIClient")
+    def test_embed_with_backup_client(self, mock_openai_client):
+        primary_client = MagicMock()
+        primary_client.embeddings.create.side_effect = ValueError("down")
+        backup_response = MagicMock()
+        backup_response.data = [MagicMock(embedding=[0.1, 0.2])]
+        backup_client = MagicMock()
+        backup_client.embeddings.create.return_value = backup_response
+
+        def client_factory(api_key, **kwargs):
+            if api_key == "primary":
+                return primary_client
+            return backup_client
+
+        mock_openai_client.side_effect = client_factory
+
         config = _make_config(
+            api_key="primary",
             embedding_dims=256,
             backup_client=True,
             backup_api_key="backup-key",
@@ -79,11 +103,11 @@ class TestUniversalAPIEmbedderDimensions:
         embedder = UniversalAPIEmbedder(config)
         result = embedder.embed(["hello"])
         assert result == [[0.1, 0.2]]
-        assert mock_call.call_count == 2
+        assert backup_client.embeddings.create.call_count == 1
 
-    @patch.object(UniversalAPIEmbedder, "_call_embeddings_api")
-    def test_embed_raises_when_no_backup(self, mock_call):
-        mock_call.side_effect = ValueError("primary failed")
+    @patch("memos.embedders.universal_api.OpenAIClient")
+    def test_embed_raises_when_no_backup(self, mock_openai_client):
+        mock_openai_client.return_value.embeddings.create.side_effect = ValueError("primary failed")
         config = _make_config(embedding_dims=256)
         embedder = UniversalAPIEmbedder(config)
         with pytest.raises(ValueError, match="Embeddings request ended with error"):
@@ -101,13 +125,12 @@ class TestUniversalAPIEmbedderFallback:
         def mock_create(**kwargs):
             call_count[0] += 1
             if kwargs.get("dimensions") is not None:
-                raise Exception("dimensions not supported")
+                raise _DimensionsUnsupportedError("dimensions not supported")
             return SimpleNamespace(data=[SimpleNamespace(embedding=[0.1, 0.2])])
 
         mock_client.embeddings = SimpleNamespace(create=mock_create)
 
-        with patch("memos.embedders.universal_api.asyncio.run") as mock_run:
-            mock_run.side_effect = lambda x: x  # pass-through
+        with patch.object(asyncio, "wait_for", side_effect=lambda coro, timeout: coro):
             result = embedder._call_embeddings_api(
                 mock_client, "text-embedding-3-large", ["hello"], 5
             )
@@ -128,8 +151,7 @@ class TestUniversalAPIEmbedderFallback:
 
         mock_client.embeddings = SimpleNamespace(create=mock_create)
 
-        with patch("memos.embedders.universal_api.asyncio.run") as mock_run:
-            mock_run.side_effect = lambda x: x
+        with patch.object(asyncio, "wait_for", side_effect=lambda coro, timeout: coro):
             result = embedder._call_embeddings_api(
                 mock_client, "text-embedding-3-large", ["hello"], 5
             )
