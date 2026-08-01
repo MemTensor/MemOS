@@ -7,6 +7,7 @@ from typing import Any
 import requests
 
 from memos.context.context import ContextThreadPoolExecutor
+from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.read_multi_modal import detect_lang
@@ -30,6 +31,11 @@ class InternetKeenableRetriever:
     (rate-limited); a key switches to the authenticated endpoint and lifts the cap.
     """
 
+    @require_python_package(
+        import_name="jieba",
+        install_command="pip install jieba",
+        install_link="https://github.com/fxsjy/jieba",
+    )
     def __init__(
         self,
         api_key: str | None,
@@ -49,9 +55,9 @@ class InternetKeenableRetriever:
         self.max_results = max_results
         self.timeout = 15
 
-        import jieba.analyse
+        from jieba.analyse import TextRank
 
-        self.zh_fast_keywords_extractor = jieba.analyse.TextRank()
+        self.zh_fast_keywords_extractor = TextRank()
 
     def _extract_tags(self, title: str, content: str, summary: str, parsed_goal=None) -> list[str]:
         """Extract tags from title, content and summary."""
@@ -65,7 +71,7 @@ class InternetKeenableRetriever:
         keywords = {
             "economy": [
                 "economy",
-                "GDP",
+                "gdp",
                 "growth",
                 "production",
                 "industry",
@@ -91,7 +97,7 @@ class InternetKeenableRetriever:
                 "innovation",
                 "digital",
                 "internet",
-                "AI",
+                "ai",
                 "artificial intelligence",
                 "software",
                 "hardware",
@@ -176,6 +182,10 @@ class InternetKeenableRetriever:
         try:
             resp = requests.post(
                 f"{KEENABLE_BASE_URL}{path}",
+                # `mode` here is the API's search mode, unrelated to the `mode`
+                # argument above (which only picks how much of the result is kept
+                # in memory_text). The search endpoint rejects "fast" with a 400,
+                # so it stays "pro".
                 json={"query": query, "mode": "pro"},
                 headers=headers,
                 timeout=self.timeout,
@@ -280,7 +290,7 @@ class InternetKeenableRetriever:
                     usage=[],
                     tags=tags,
                     key=title,
-                    embedding=self.embedder.embed([content])[0],
+                    embedding=self.embedder.embed([content])[0] if content else [],
                     internet_info={
                         "title": title,
                         "url": url,
