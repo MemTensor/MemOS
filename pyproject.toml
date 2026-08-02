@@ -70,6 +70,15 @@ dream = "memos.dream:CommunityDreamPlugin"
 # Developers install: `poetry install --extras <feature>`. e.g., `poetry install --extras general-mem`
 # Users install: `pip install MemoryOS[<feature>]`. e.g., `pip install MemoryOS[general-mem]`
 
+# OpenTelemetry instrumentation (memory-semconv v0.1.0)
+otel = [
+    "opentelemetry-api (>=1.27.0)",
+    "opentelemetry-sdk (>=1.27.0)",
+    "opentelemetry-exporter-otlp-proto-grpc (>=1.27.0)",
+    "opentelemetry-exporter-otlp-proto-http (>=1.27.0)",
+    "opentelemetry-semantic-conventions (>=0.48b0)",
+]
+
 # TreeTextualMemory
 tree-mem = [
     "neo4j (>=5.28.1,<6.0.0)",  # Graph database

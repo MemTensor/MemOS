@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 
@@ -8,6 +9,22 @@ from threading import Lock
 from typing import Any, Literal
 
 from memos.configs.mem_os import MOSConfig
+from memos.telemetry import (
+    MEMORY_CUBE_ID,
+    MEMORY_ITEM_COUNT,
+    MEMORY_RESULT_COUNT,
+    MEMORY_SESSION_ID,
+    MEMORY_TOP_K,
+    MEMORY_USER_ID,
+    TIER_ACTIVATION,
+    TIER_PARAMETRIC,
+    TIER_PREFERENCE,
+    TIER_TEXTUAL,
+    emit_op_log,
+    instrument_op,
+    memory_span,
+    record_result_count,
+)
 from memos.context.context import ContextThreadPoolExecutor
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
@@ -571,116 +588,147 @@ class MOSCore:
         target_session_id = session_id if session_id is not None else self.session_id
         target_user_id = user_id if user_id is not None else self.user_id
 
-        self._validate_user_exists(target_user_id)
-        # Get all cubes accessible by the target user
-        accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
-        user_cube_ids = [cube.cube_id for cube in accessible_cubes]
-
-        logger.info(
-            f"User {target_user_id} has access to {len(user_cube_ids)} cubes: {user_cube_ids}"
-        )
-        if target_user_id not in self.chat_history_manager:
-            self._register_chat_history(target_user_id)
-        chat_history = self.chat_history_manager[target_user_id]
-
-        # Create search filter if session_id is provided
-        search_filter = None
-        if session_id is not None:
-            search_filter = {"session_id": session_id}
-
-        result: MOSSearchResult = {
-            "text_mem": [],
-            "act_mem": [],
-            "para_mem": [],
-            "pref_mem": [],
+        _span_attrs = {
+            MEMORY_USER_ID: str(target_user_id or ""),
+            MEMORY_SESSION_ID: str(target_session_id or ""),
+            MEMORY_TOP_K: top_k if top_k is not None else self.config.top_k,
+            # Truncate query at 256 chars to respect cardinality / PII guidance
+            "memory.query.text": (query or "")[:256],
         }
-        if install_cube_ids is None:
-            install_cube_ids = user_cube_ids
-        # create exist dict in mem_cubes and avoid  one search slow
-        tmp_mem_cubes = {}
-        time_start_cube_get = time.time()
-        for mem_cube_id in install_cube_ids:
-            if mem_cube_id in self.mem_cubes:
-                tmp_mem_cubes[mem_cube_id] = self.mem_cubes.get(mem_cube_id)
-        logger.info(
-            f"time search: transform cube time user_id: {target_user_id} time is: {time.time() - time_start_cube_get}"
-        )
 
-        for mem_cube_id, mem_cube in tmp_mem_cubes.items():
-            # Define internal functions for parallel search execution
-            def search_textual_memory(cube_id, cube):
-                if (
-                    (cube_id in install_cube_ids)
-                    and (cube.text_mem is not None)
-                    and self.config.enable_textual_memory
-                ):
-                    time_start = time.time()
-                    memories = cube.text_mem.search(
-                        query,
-                        top_k=top_k if top_k else self.config.top_k,
-                        mode=mode,
-                        manual_close_internet=not internet_search,
-                        info={
-                            "user_id": target_user_id,
-                            "session_id": target_session_id,
-                            "chat_history": chat_history.chat_history,
-                        },
-                        moscube=moscube,
-                        search_filter=search_filter,
-                    )
-                    search_time_end = time.time()
-                    logger.info(
-                        f"🧠 [Memory] Searched memories from {cube_id}:\n{self._str_memories(memories)}\n"
-                    )
-                    logger.info(
-                        f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
-                    )
-                    return {"cube_id": cube_id, "memories": memories}
-                return None
+        with memory_span("search", TIER_TEXTUAL, _span_attrs) as span:
+            self._validate_user_exists(target_user_id)
+            # Get all cubes accessible by the target user
+            accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
+            user_cube_ids = [cube.cube_id for cube in accessible_cubes]
 
-            def search_preference_memory(cube_id, cube):
-                if (
-                    (cube_id in install_cube_ids)
-                    and (cube.pref_mem is not None)
-                    and self.config.enable_preference_memory
-                ):
-                    time_start = time.time()
-                    memories = cube.pref_mem.search(
-                        query,
-                        top_k=top_k if top_k else self.config.top_k,
-                        info={
-                            "user_id": target_user_id,
-                            "session_id": self.session_id,
-                            "chat_history": chat_history.chat_history,
-                        },
-                    )
-                    search_time_end = time.time()
-                    logger.info(
-                        f"🧠 [Memory] Searched preferences from {cube_id}:\n{self._str_memories(memories)}\n"
-                    )
-                    logger.info(
-                        f"time search pref: search pref time user_id: {target_user_id} time is: {search_time_end - time_start}"
-                    )
-                    return {"cube_id": cube_id, "memories": memories}
-                return None
+            logger.info(
+                f"User {target_user_id} has access to {len(user_cube_ids)} cubes: {user_cube_ids}"
+            )
+            if target_user_id not in self.chat_history_manager:
+                self._register_chat_history(target_user_id)
+            chat_history = self.chat_history_manager[target_user_id]
 
-            # Execute both search functions in parallel
-            with ContextThreadPoolExecutor(max_workers=2) as executor:
-                text_future = executor.submit(search_textual_memory, mem_cube_id, mem_cube)
-                pref_future = executor.submit(search_preference_memory, mem_cube_id, mem_cube)
+            # Create search filter if session_id is provided
+            search_filter = None
+            if session_id is not None:
+                search_filter = {"session_id": session_id}
 
-                # Wait for both tasks to complete and collect results
-                text_result = text_future.result()
-                pref_result = pref_future.result()
+            result: MOSSearchResult = {
+                "text_mem": [],
+                "act_mem": [],
+                "para_mem": [],
+                "pref_mem": [],
+            }
+            if install_cube_ids is None:
+                install_cube_ids = user_cube_ids
+            # create exist dict in mem_cubes and avoid  one search slow
+            tmp_mem_cubes = {}
+            time_start_cube_get = time.time()
+            for mem_cube_id in install_cube_ids:
+                if mem_cube_id in self.mem_cubes:
+                    tmp_mem_cubes[mem_cube_id] = self.mem_cubes.get(mem_cube_id)
+            logger.info(
+                f"time search: transform cube time user_id: {target_user_id} time is: {time.time() - time_start_cube_get}"
+            )
 
-                # Add results to the main result dictionary
-                if text_result is not None:
-                    result["text_mem"].append(text_result)
-                if pref_result is not None:
-                    result["pref_mem"].append(pref_result)
+            for mem_cube_id, mem_cube in tmp_mem_cubes.items():
+                # Define internal functions for parallel search execution
+                def search_textual_memory(cube_id, cube):
+                    if (
+                        (cube_id in install_cube_ids)
+                        and (cube.text_mem is not None)
+                        and self.config.enable_textual_memory
+                    ):
+                        time_start = time.time()
+                        memories = cube.text_mem.search(
+                            query,
+                            top_k=top_k if top_k else self.config.top_k,
+                            mode=mode,
+                            manual_close_internet=not internet_search,
+                            info={
+                                "user_id": target_user_id,
+                                "session_id": target_session_id,
+                                "chat_history": chat_history.chat_history,
+                            },
+                            moscube=moscube,
+                            search_filter=search_filter,
+                        )
+                        search_time_end = time.time()
+                        logger.info(
+                            f"🧠 [Memory] Searched memories from {cube_id}:\n{self._str_memories(memories)}\n"
+                        )
+                        logger.info(
+                            f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
+                        )
+                        return {"cube_id": cube_id, "memories": memories}
+                    return None
 
-        return result
+                def search_preference_memory(cube_id, cube):
+                    if (
+                        (cube_id in install_cube_ids)
+                        and (cube.pref_mem is not None)
+                        and self.config.enable_preference_memory
+                    ):
+                        time_start = time.time()
+                        memories = cube.pref_mem.search(
+                            query,
+                            top_k=top_k if top_k else self.config.top_k,
+                            info={
+                                "user_id": target_user_id,
+                                "session_id": self.session_id,
+                                "chat_history": chat_history.chat_history,
+                            },
+                        )
+                        search_time_end = time.time()
+                        logger.info(
+                            f"🧠 [Memory] Searched preferences from {cube_id}:\n{self._str_memories(memories)}\n"
+                        )
+                        logger.info(
+                            f"time search pref: search pref time user_id: {target_user_id} time is: {search_time_end - time_start}"
+                        )
+                        return {"cube_id": cube_id, "memories": memories}
+                    return None
 
+                # Execute both search functions in parallel
+                with ContextThreadPoolExecutor(max_workers=2) as executor:
+                    text_future = executor.submit(search_textual_memory, mem_cube_id, mem_cube)
+                    pref_future = executor.submit(search_preference_memory, mem_cube_id, mem_cube)
+
+                    # Wait for both tasks to complete and collect results
+                    text_result = text_future.result()
+                    pref_result = pref_future.result()
+
+                    # Add results to the main result dictionary
+                    if text_result is not None:
+                        result["text_mem"].append(text_result)
+                    if pref_result is not None:
+                        result["pref_mem"].append(pref_result)
+
+            # Record aggregate result metrics
+            total_text = sum(len(r.get("memories", [])) for r in result["text_mem"])
+            total_pref = sum(len(r.get("memories", [])) for r in result["pref_mem"])
+            total_results = total_text + total_pref
+            span.set_attribute(MEMORY_RESULT_COUNT, total_results)
+            span.set_attribute("memory.result.text_count", total_text)
+            span.set_attribute("memory.result.pref_count", total_pref)
+            record_result_count(total_text, TIER_TEXTUAL)
+            record_result_count(total_pref, TIER_PREFERENCE)
+            emit_op_log(
+                logging.INFO,
+                "search",
+                TIER_TEXTUAL,
+                "memory.search completed",
+                {
+                    MEMORY_USER_ID: str(target_user_id or ""),
+                    MEMORY_RESULT_COUNT: total_results,
+                    "memory.cubes_searched": len(tmp_mem_cubes),
+                },
+            )
+
+            return result
+
+    @instrument_op("add", TIER_TEXTUAL)
     def add(
         self,
         messages: MessageList | None = None,
@@ -714,6 +762,7 @@ class MOSCore:
 
         target_session_id = session_id if session_id else self.session_id
         target_user_id = user_id if user_id is not None else self.user_id
+
         if mem_cube_id is None:
             # Try to find a default cube for the user
             accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
@@ -994,6 +1043,7 @@ class MOSCore:
             )
         return result
 
+    @instrument_op("update", TIER_TEXTUAL)
     def update(
         self,
         mem_cube_id: str,
@@ -1033,6 +1083,7 @@ class MOSCore:
                 f" {self.mem_cubes[mem_cube_id].config.text_mem.backend} does not support update memory"
             )
 
+    @instrument_op("delete", TIER_TEXTUAL)
     def delete(self, mem_cube_id: str, memory_id: str, user_id: str | None = None) -> None:
         """
         Delete a textual memory from a MemCube by memory_id.
