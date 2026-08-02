@@ -18,22 +18,25 @@
  * therefore misses any invocation with a global flag (`--skills`,
  * `-m`, `--provider`, …) between them.
  *
- * The current pattern is `hermes(?:\s+\S+)*\s+chat\b`:
+ * The current pattern is `hermes(\s+\S+)*\s+chat\b`:
  *
  *   • `hermes`           — the binary basename.
- *   • `(?:\s+\S+)*`      — any complete argv-style tokens between the
+ *   • `(\s+\S+)*`       — any complete argv-style tokens between the
  *     binary and the subcommand.
  *   • `\s+chat\b`        — a standalone `chat` token, so it does *not*
  *     match `chatter`, `chat-server`, `--chat-log`, or a flag value
  *     like `--profile=chat`.
  *
  * `pgrep -f` on Linux uses glibc's ERE engine, which supports
- * `\s`/`\b` as GNU extensions. JavaScript's `RegExp` supports the same
- * tokens natively, so this module also exports
- * `matchesHermesChatCommandLine()` for unit tests — exercising the
- * pattern as a JS regex is a faithful proxy for the pgrep-side
- * behaviour without requiring a real Hermes binary or a fork of the
- * pgrep process in CI.
+ * `\s`/`\b` as GNU extensions. ⚠️ The pattern MUST stay within POSIX
+ * ERE — in particular it must NOT use `(?:…)` non-capturing groups,
+ * which are PCRE-only: glibc ERE rejects the whole pattern with
+ * "Invalid preceding regular expression", `pgrep` exits 2, and
+ * `isHermesChatRunning()` silently reports `false`, leaving the
+ * viewer stuck on `"disconnected"`. A plain capturing group `(…)`
+ * is valid in both ERE and JavaScript's `RegExp`, so
+ * `matchesHermesChatCommandLine()` can still proxy the pattern for
+ * unit tests without a real Hermes binary or a fork of pgrep in CI.
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import * as childProcess from "node:child_process";
@@ -45,7 +48,7 @@ import * as childProcess from "node:child_process";
  * string we hand to `pgrep` and confirm we have not silently regressed
  * back to a literal substring match.
  */
-export const HERMES_CHAT_PROCESS_PATTERN = "hermes(?:\\s+\\S+)*\\s+chat\\b";
+export const HERMES_CHAT_PROCESS_PATTERN = "hermes(\\s+\\S+)*\\s+chat\\b";
 
 /**
  * JS-side equivalent of `pgrep -f HERMES_CHAT_PROCESS_PATTERN`.
