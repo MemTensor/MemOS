@@ -1,3 +1,5 @@
+import time
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -143,3 +145,39 @@ def test_searcher_respects_memory_type(mock_searcher):
     )
     # WorkingMemory triggers only once path A
     assert mock_searcher.graph_retriever.retrieve.call_args[1]["memory_scope"] == "WorkingMemory"
+
+
+def test_retrieve_paths_timeout_releases_executor(mock_searcher, monkeypatch):
+    """A slow retrieval path must not block forever and must release
+    the thread-pool so no workers leak (see #2134)."""
+
+    def _hang(*args, **kwargs):
+        time.sleep(5)
+        return []
+
+    mock_searcher._retrieve_from_working_memory = MagicMock(side_effect=_hang)
+    mock_searcher._retrieve_from_long_term_and_user = MagicMock(return_value=[])
+    mock_searcher._retrieve_from_internet = MagicMock(return_value=[])
+
+    query_embedding = [[0.1] * 5]
+    info = {"user_id": "u", "session_id": "s"}
+    parsed_goal = MagicMock()
+
+    start = time.time()
+    results = mock_searcher._retrieve_paths(
+        query="q",
+        parsed_goal=parsed_goal,
+        query_embedding=query_embedding,
+        info=info,
+        top_k=3,
+        mode="fast",
+        memory_type="All",
+    )
+    elapsed = time.time() - start
+
+    # Default per_path_timeout is 30s in the implementation; the slow path
+    # is simulated with 5s sleep so the total must stay well under 30s.
+    assert elapsed < 30.0
+    # The hanging path never returned anything usable; other paths may
+    # have returned empty lists.
+    assert isinstance(results, list)

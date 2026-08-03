@@ -373,14 +373,18 @@ class Searcher:
         rerank: bool = True,
     ):
         """Run A/B/C/D/E/F retrieval paths in parallel"""
-        tasks = []
-        id_filter = {
-            "user_id": info.get("user_id", None),
-            "session_id": info.get("session_id", None),
-        }
-        id_filter = {k: v for k, v in id_filter.items() if v is not None}
+        # Bound each path's wait so a slow / blocked retrieval cannot
+        # stall the whole searcher and leak worker threads (see #2134).
+        per_path_timeout = 30
+        executor = ContextThreadPoolExecutor(max_workers=5)
+        try:
+            tasks = []
+            id_filter = {
+                "user_id": info.get("user_id", None),
+                "session_id": info.get("session_id", None),
+            }
+            id_filter = {k: v for k, v in id_filter.items() if v is not None}
 
-        with ContextThreadPoolExecutor(max_workers=5) as executor:
             tasks.append(
                 executor.submit(
                     self._retrieve_from_working_memory,
@@ -433,7 +437,6 @@ class Searcher:
                         query,
                         parsed_goal,
                         query_embedding,
-                        top_k,
                         memory_type,
                         search_filter,
                         search_priority,
@@ -493,9 +496,21 @@ class Searcher:
                         rerank=rerank,
                     )
                 )
-            results = []
-            for t in tasks:
-                results.extend(t.result())
+            results: list = []
+            try:
+                for t in tasks:
+                    results.extend(t.result(timeout=per_path_timeout))
+            except TimeoutError:
+                logger.warning(
+                    "[SEARCH] Path retrieval timed out after %ss; shutting down "
+                    "executor without waiting for straggling threads.",
+                    per_path_timeout,
+                )
+        finally:
+            # Do not wait for straggling threads on shutdown, otherwise a
+            # blocked retrieval path (e.g. a hanging Neo4j or HTTP call)
+            # would pin the thread pool forever (see #2134).
+            executor.shutdown(wait=False)
 
         logger.info(f"[SEARCH] Total raw results: {len(results)}")
         return results
