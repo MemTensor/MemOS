@@ -19,6 +19,9 @@ def test_base_embedder_class():
 
 
 class _ConcreteEmbedder(BaseEmbedder):
+    def __init__(self, config):
+        super().__init__(config)
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [[0.0] for _ in texts]
 
