@@ -10,12 +10,17 @@ import {
   draftForInspection,
   evidenceForInspection,
   ensureSourceHint,
+  isLegacyPackageOnlyRelease,
+  legacyPackageDraftFromEvidence,
+  parseSemver,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
   reportExternalFailureFromEnv,
   requestDraft,
   requestValidatedDraft,
   resolveCurrentRef,
+  selectPreviousTag,
+  validateLegacyPackageNotes,
   validateManualNotes,
   versionFromTag,
 } from "./draft-local-plugin-release-notes.mjs";
@@ -44,6 +49,70 @@ test("normalizes only real local-plugin tag families", () => {
   assert.equal(versionFromTag("memos-local-plugin-v2.0.10"), "2.0.10");
   assert.equal(versionFromTag("openclaw-local-plugin-v2.0.9"), "2.0.9");
   assert.equal(versionFromTag("v2.0.10"), "");
+});
+
+test("detects legacy package-only prereleases", () => {
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1", npmDistTag: "beta" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1", npmDistTag: "latest" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "beta" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "next" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest" }), false);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "" }), false);
+});
+
+test("treats SemVer build metadata as stable metadata, not a prerelease channel", () => {
+  assert.equal(parseSemver("2.0.13+build.7").prerelease, "");
+  assert.equal(parseSemver("2.0.13-beta.1+build.7").prerelease, "beta.1");
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13+build.7", npmDistTag: "latest" }), false);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1+build.7", npmDistTag: "latest" }), true);
+});
+
+test("uses the previous stable tag for docs-generating latest releases", () => {
+  const tags = [
+    { tag: "memos-local-plugin-v2.0.12", version: "2.0.12" },
+    { tag: "memos-local-plugin-v2.0.13-beta.1", version: "2.0.13-beta.1" },
+    { tag: "memos-local-plugin-v2.0.13", version: "2.0.13" },
+  ];
+
+  assert.equal(
+    selectPreviousTag(tags, "2.0.13", "memos-local-plugin-v2.0.13", { includePrerelease: false }),
+    "memos-local-plugin-v2.0.12",
+  );
+  assert.equal(
+    selectPreviousTag(tags, "2.0.13", "memos-local-plugin-v2.0.13", { includePrerelease: true }),
+    "memos-local-plugin-v2.0.13-beta.1",
+  );
+});
+
+test("generates package-only prerelease notes without docs payloads", () => {
+  const draft = legacyPackageDraftFromEvidence(
+    {
+      current_tag: "memos-local-plugin-v2.0.13-beta.1",
+      previous_tag: "memos-local-plugin-v2.0.12",
+      target_version: "v2.0.13-beta.1",
+      git_ref: "abc1234",
+      changed_files: [{ status: "M", path: "apps/memos-local-plugin/package.json" }],
+      commits: [
+        {
+          sha: "abc1234000000000000000000000000000000000",
+          short_sha: "abc1234",
+          subject: "test: prepare local plugin beta package",
+        },
+      ],
+      package_changes: [{ field: "version", before: "2.0.12", after: "2.0.13-beta.1" }],
+    },
+    { npmDistTag: "beta" },
+  );
+
+  assert.equal(draft.ok, true);
+  assert.equal(draft.needs_review, false);
+  assert.equal(draft.confidence, "legacy-package-only");
+  assert.equal(draft.coverage.missing_required_count, 0);
+  assert.match(draft.release_notes_markdown, /## Changelog/);
+  assert.match(draft.release_notes_markdown, /npm `beta` dist-tag/);
+  assert.match(draft.release_notes_markdown, /package-only/);
+  assert.doesNotMatch(draft.release_notes_markdown, /doc-agent: source-id=/);
+  assert.doesNotMatch(draft.release_notes_markdown, /doc-agent-release-notes-json/);
 });
 
 test("uses an existing release tag as the evidence endpoint", () => {
@@ -458,6 +527,69 @@ test("repairs postprocessed language validation issues with exact context", asyn
   assert.match(result.release_notes_markdown, /doc-agent-release-notes-json/);
 });
 
+test("standalone latest draft validation allows one initial response plus three repairs by default", async () => {
+  const repairEvidence = {
+    commits: [
+      {
+        sha: "abc12340000000000000000000000000000000",
+        short_sha: "abc1234",
+        subject: "feat: add plugin health dashboard (#3001)",
+      },
+    ],
+    release_note_guidance: {
+      source_ref_category_hints: [
+        {
+          category: "Added",
+          source_refs: ["abc1234", "#3001"],
+          subject: "feat: add plugin health dashboard (#3001)",
+        },
+      ],
+    },
+  };
+  const badDraft = {
+    ok: true,
+    needs_review: false,
+    release_items: [
+      {
+        category: "Added",
+        text_cn: "Plugin health dashboard",
+        text_en: "插件健康看板",
+        source_refs: ["abc1234", "#3001"],
+      },
+    ],
+    coverage: { required_count: 1, covered_required_count: 1, missing_required_count: 0 },
+    warnings: [],
+  };
+  const goodDraft = {
+    ok: true,
+    needs_review: false,
+    release_items: [
+      {
+        category: "Added",
+        text_cn: "**插件健康看板**：新增本地插件健康状态展示。",
+        text_en: "**Plugin Health Dashboard**: Added local plugin health status visibility.",
+        source_refs: ["abc1234", "#3001"],
+      },
+    ],
+    coverage: { required_count: 1, covered_required_count: 1, missing_required_count: 0 },
+    warnings: [],
+  };
+  let calls = 0;
+  const requestImpl = async () => {
+    calls += 1;
+    return calls < 4 ? badDraft : goodDraft;
+  };
+
+  const result = await requestValidatedDraft(repairEvidence, { requestImpl });
+
+  assert.equal(calls, 4);
+  assert.equal(result.ok, true);
+  assert.equal(result.needs_review, false);
+  assert.equal(result.validation_attempt_count, 4);
+  assert.equal(result.repair_attempt_count, 3);
+  assert.match(result.release_notes_markdown, /插件健康看板/);
+});
+
 test("stops release-note repair after two validation repair attempts", async () => {
   const repairEvidence = {
     commits: [
@@ -558,6 +690,23 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 -->`),
     /text_cn must contain Chinese/,
   );
+});
+
+test("legacy package manual notes reject docs payloads", () => {
+  const valid = `## Changelog
+
+### Prerelease
+- Published MemOS Local Plugin v2.0.13-beta.1 as a beta package.`;
+  assert.equal(validateLegacyPackageNotes(valid), `${valid}\n`);
+  assert.throws(
+    () => validateLegacyPackageNotes(`${valid}\n\n<!-- doc-agent: source-id=openclaw-local-plugin -->`),
+    /must not include Doc Agent source hints/,
+  );
+  assert.throws(
+    () => validateLegacyPackageNotes(`${valid}\n\n<!-- doc-agent-release-notes-json\n{}\n-->`),
+    /must not include Doc Agent source hints/,
+  );
+  assert.throws(() => validateLegacyPackageNotes("### Prerelease\n- missing changelog"), /Changelog/);
 });
 
 test("retries transient draft failures and passes prior error context", async () => {
