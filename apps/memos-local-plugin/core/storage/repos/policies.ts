@@ -257,13 +257,16 @@ export function makePoliciesRepo(db: StorageDb) {
         k: Math.max(1, Math.min(200, Math.floor(k))),
       };
       const ors: string[] = [];
-      dedup.slice(0, 16).forEach((t, i) => {
+      const matchScores: string[] = [];
+      const limitedTerms = dedup.slice(0, 16);
+      limitedTerms.forEach((t, i) => {
         const key = `pat_${i}`;
         const escaped = t.replace(/[\\%_]/g, (m) => `\\${m}`);
         params[key] = `%${escaped}%`;
-        ors.push(
-          `(title LIKE @${key} ESCAPE '\\' OR trigger LIKE @${key} ESCAPE '\\' OR procedure LIKE @${key} ESCAPE '\\' OR verification LIKE @${key} ESCAPE '\\' OR boundary LIKE @${key} ESCAPE '\\' OR decision_guidance_json LIKE @${key} ESCAPE '\\')`,
-        );
+        const match =
+          `(title LIKE @${key} ESCAPE '\\' OR trigger LIKE @${key} ESCAPE '\\' OR procedure LIKE @${key} ESCAPE '\\' OR verification LIKE @${key} ESCAPE '\\' OR boundary LIKE @${key} ESCAPE '\\' OR decision_guidance_json LIKE @${key} ESCAPE '\\')`;
+        ors.push(match);
+        matchScores.push(`CASE WHEN ${match} THEN 1 ELSE 0 END`);
       });
       const whereParts: string[] = [`(${ors.join(" OR ")})`];
       if (opts.statusIn && opts.statusIn.length > 0) {
@@ -285,17 +288,18 @@ export function makePoliciesRepo(db: StorageDb) {
                confidence,
                owner_agent_kind,
                owner_profile_id,
-               owner_workspace_id
+               owner_workspace_id,
+               (${matchScores.join(" + ")}) AS pattern_matches
           FROM policies
          WHERE ${whereParts.join(" AND ")}
-         ORDER BY updated_at DESC
+         ORDER BY pattern_matches DESC, updated_at DESC
          LIMIT @k`;
       const rows = db
-        .prepare<typeof params, RawPolicySearchRow>(sql)
+        .prepare<typeof params, RawPolicySearchRow & { pattern_matches: number }>(sql)
         .all(params);
-      return rows.map((r, idx) => ({
+      return rows.map((r) => ({
         id: r.id,
-        score: 1 / (idx + 1),
+        score: r.pattern_matches / limitedTerms.length,
         meta: policySearchMeta(r),
       }));
     },

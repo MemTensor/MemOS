@@ -442,6 +442,29 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(snapshot, "")
         self.assertFalse(any(method == "turn.start" for method, _ in bridge.calls))
 
+    def test_compression_boundary_is_forwarded_to_next_turn_retrieval(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider.time.time", return_value=1_700_000_123.456),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("compress-session")
+            provider.on_pre_compress([{"role": "user", "content": "old visible turn"}])
+            provider.on_turn_start(3, "what did we discuss before compression?")
+            provider.prefetch("what did we discuss before compression?")
+
+        turn_start = next(
+            payload for method, payload in reversed(bridge.calls) if method == "turn.start"
+        )
+        self.assertEqual(
+            turn_start["contextHints"]["visibleContextStartTs"],
+            1_700_000_123_456,
+        )
+        self.assertTrue(turn_start["contextHints"]["visibleContextKnown"])
+
     def test_prefetch_passes_stable_turn_key_to_bridge(self) -> None:
         bridge = FakeBridge()
         with (
