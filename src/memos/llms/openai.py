@@ -204,7 +204,9 @@ class AzureLLM(BaseLLM):
             "tools": kwargs.get("tools", NOT_GIVEN),
             "extra_body": kwargs.get("extra_body", self.config.extra_body),
         }
-        enable_thinking = kwargs.get("enable_thinking", getattr(self.config, "enable_thinking", None))
+        enable_thinking = kwargs.get(
+            "enable_thinking", getattr(self.config, "enable_thinking", None)
+        )
         if enable_thinking is not None:
             request_body["enable_thinking"] = enable_thinking
         response = self.client.chat.completions.create(**request_body)
@@ -236,7 +238,9 @@ class AzureLLM(BaseLLM):
             "top_p": kwargs.get("top_p", self.config.top_p),
             "extra_body": kwargs.get("extra_body", self.config.extra_body),
         }
-        enable_thinking = kwargs.get("enable_thinking", getattr(self.config, "enable_thinking", None))
+        enable_thinking = kwargs.get(
+            "enable_thinking", getattr(self.config, "enable_thinking", None)
+        )
         if enable_thinking is not None:
             request_body["enable_thinking"] = enable_thinking
         response = self.client.chat.completions.create(**request_body)
