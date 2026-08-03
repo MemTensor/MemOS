@@ -466,6 +466,7 @@ test("publish workflow defaults real releases to draft before release.published"
 test("legacy standalone local-plugin publisher requires an extra non-dry-run confirmation", () => {
   const workflow = readFileSync(join(workflowsDir, "memos-local-plugin-publish.yml"), "utf8");
   assert.match(workflow, /legacy_publish_confirmation:/);
+  assert.doesNotMatch(workflow, /workflow_call:/);
   assert.match(workflow, /legacy_publish_confirmation:\n\s+description:.*\n\s+required: false\n\s+type: string/s);
   assert.match(workflow, /guard-legacy-publish:/);
   assert.match(workflow, /guard-legacy-publish:\n\s+runs-on: ubuntu-latest\n\s+timeout-minutes: 5/);
@@ -477,10 +478,25 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /release automation always uses this workflow revision/);
   assert.equal((workflow.match(/Checkout trusted release automation scripts/g) || []).length, 2);
   assert.equal((workflow.match(/Use trusted release automation scripts/g) || []).length, 2);
-  assert.match(workflow, /ref:\s+\$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /ref:\s+\$\{\{ github\.workflow_sha \}\}/);
+  assert.match(workflow, /package_source_sha:/);
+  assert.match(workflow, /needs\.guard-legacy-publish\.outputs\.package_source_sha/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /Formal publish source .* is not in .* history/);
   assert.match(workflow, /cp -R \.release-workflow\/\.github\/scripts \.github\/scripts/);
   assert.match(workflow, /Package source ref: \$\(git rev-parse --short HEAD\)/);
-  assert.match(workflow, /Release automation ref: \$\{GITHUB_SHA\}/);
+  assert.match(workflow, /Release automation ref: \$\{\{ github\.workflow_sha \}\}/);
+  assert.match(workflow, /Inspect existing tag and GitHub Release state/);
+  assert.match(workflow, /inspect-local-plugin-release-state\.mjs/);
+  assert.match(workflow, /EXPECTED_PACKAGE_SOURCE_SHA/);
+  assert.match(workflow, /RELEASE_METADATA_STATE/);
+  assert.match(workflow, /audit-local-plugin-package\.mjs/);
+  assert.match(workflow, /inputs\.tag == 'latest' && !contains\(inputs\.version, '-'\)/);
+  assert.doesNotMatch(workflow, /cp "\$\{RELEASE_TARBALL\}" "\$\{inspection_dir\}\/"/);
+  assert.match(workflow, /actions\/checkout@[0-9a-f]{40} # v7\.0\.1/);
+  assert.match(workflow, /actions\/setup-node@[0-9a-f]{40} # v6\.4\.0/);
+  assert.match(workflow, /actions\/upload-artifact@[0-9a-f]{40} # v7\.0\.1/);
+  assert.match(workflow, /actions\/download-artifact@[0-9a-f]{40} # v8\.0\.1/);
 });
 
 test("legacy standalone local-plugin post-merge dry run is not push-triggered", () => {

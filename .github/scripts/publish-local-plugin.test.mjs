@@ -26,8 +26,13 @@ increment_counter() {
 
 case "\${1:-}" in
   view)
+    if [ "\${3:-}" = "dist-tags" ]; then
+      increment_counter dist_tag >/dev/null
+      printf '{"%s":"%s"}\n' "\${NPM_DIST_TAG}" "\${NPM_MOCK_DIST_TAG_VERSION:-\${RELEASE_VERSION}}"
+      exit 0
+    fi
     view_count="$(increment_counter view)"
-    if [ "\${NPM_MOCK_SCENARIO}" = "eventually-visible" ] && [ "\${view_count}" -ge 4 ]; then
+    if [ "\${NPM_MOCK_SCENARIO}" = "already-visible" ] || { { [ "\${NPM_MOCK_SCENARIO}" = "eventually-visible" ] || [ "\${NPM_MOCK_SCENARIO}" = "publish-error-eventually-visible" ]; } && [ "\${view_count}" -ge 4 ]; }; then
       printf '%s\\n' "\${RELEASE_VERSION}"
       exit 0
     fi
@@ -38,7 +43,8 @@ case "\${1:-}" in
   publish)
     increment_counter publish >/dev/null
     printf '%s' "\${2:-}" > "\${NPM_MOCK_STATE_DIR}/published-argument"
-    if [ "\${NPM_MOCK_SCENARIO}" = "publish-fails" ]; then
+    printf '%s' "$*" > "\${NPM_MOCK_STATE_DIR}/publish-arguments"
+    if [ "\${NPM_MOCK_SCENARIO}" = "publish-fails" ] || [ "\${NPM_MOCK_SCENARIO}" = "publish-error-eventually-visible" ]; then
       echo "npm error code E500" >&2
       exit 1
     fi
@@ -70,6 +76,9 @@ case "\${1:-}" in
     printf 'version: %s\\n' \
       "\${NPM_MOCK_MANIFEST_VERSION:-\${RELEASE_VERSION}}" \
       > "\${pack_root}/package/adapters/hermes/plugin.yaml"
+    if [ -n "\${NPM_MOCK_EXTRA_CONTENT:-}" ]; then
+      printf '%s\\n' "\${NPM_MOCK_EXTRA_CONTENT}" > "\${pack_root}/package/registry-only.txt"
+    fi
     tar -czf "\${destination}/\${filename}" -C "\${pack_root}" package
     printf '[{"filename":"%s"}]\\n' "\${filename}"
     exit 0
@@ -79,6 +88,15 @@ case "\${1:-}" in
     exit 2
     ;;
 esac
+`;
+
+const mockGit = `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "ls-remote" ]; then
+  exit 2
+fi
+echo "Unexpected git command: $*" >&2
+exit 2
 `;
 
 function readCounter(stateDirectory, name) {
@@ -97,10 +115,27 @@ function runScenario(scenario, overrides = {}) {
   mkdirSync(stateDirectory);
 
   const npmPath = join(binDirectory, "npm");
+  const gitPath = join(binDirectory, "git");
   const releaseTarball = join(fixtureDirectory, "release.tgz");
   writeFileSync(npmPath, mockNpm, "utf8");
   chmodSync(npmPath, 0o755);
-  writeFileSync(releaseTarball, "release fixture", "utf8");
+  writeFileSync(gitPath, mockGit, "utf8");
+  chmodSync(gitPath, 0o755);
+  const localPackRoot = join(fixtureDirectory, "local-pack-root");
+  mkdirSync(join(localPackRoot, "package", "adapters", "hermes"), { recursive: true });
+  writeFileSync(
+    join(localPackRoot, "package", "package.json"),
+    '{"name":"@memtensor/memos-local-plugin","version":"2.0.12"}\n',
+    "utf8",
+  );
+  writeFileSync(
+    join(localPackRoot, "package", "adapters", "hermes", "plugin.yaml"),
+    "version: 2.0.12\n",
+    "utf8",
+  );
+  spawnSync("tar", ["-czf", releaseTarball, "-C", localPackRoot, "package"], {
+    encoding: "utf8",
+  });
 
   const result = spawnSync("bash", [publishScript], {
     cwd: fixtureDirectory,
@@ -120,7 +155,7 @@ function runScenario(scenario, overrides = {}) {
       NPM_MOCK_SCENARIO: scenario,
       NPM_MOCK_STATE_DIR: stateDirectory,
       NPM_VISIBILITY_ATTEMPTS: "3",
-      NPM_AMBIGUOUS_VISIBILITY_ATTEMPTS: "2",
+      NPM_AMBIGUOUS_VISIBILITY_ATTEMPTS: "3",
       NPM_VISIBILITY_DELAY_SECONDS: "0",
       ...overrides,
     },
@@ -138,6 +173,13 @@ function runScenario(scenario, overrides = {}) {
         return "";
       }
     })(),
+    publishArguments: (() => {
+      try {
+        return readFileSync(join(stateDirectory, "publish-arguments"), "utf8");
+      } catch {
+        return "";
+      }
+    })(),
   };
   rmSync(fixtureDirectory, { recursive: true, force: true });
   return outcome;
@@ -151,26 +193,45 @@ test("waits through two post-publish 404 responses before the version becomes vi
   assert.equal(result.viewCount, 4);
   assert.equal(result.packCount, 1);
   assert.match(result.publishedArgument, /release\.tgz$/);
+  assert.match(result.publishArguments, /--fetch-retries=0/);
   assert.match(result.stdout, /became visible on attempt 3/);
 });
 
-test("continues release metadata creation when publish succeeds but visibility remains delayed", () => {
+test("stops before release metadata when publish succeeds but visibility remains delayed", () => {
   const result = runScenario("always-missing");
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.notEqual(result.status, 0);
   assert.equal(result.publishCount, 1);
   assert.equal(result.viewCount, 4);
   assert.equal(result.packCount, 0);
-  assert.match(result.stdout, /npm publish succeeded.*continuing with tag, Release, and PR creation/s);
-  assert.match(result.stdout, /Skipping registry tarball verification/);
+  assert.match(result.stdout + result.stderr, /Stop before tag\/Release creation/);
 });
 
 test("fails when publish fails and the requested version remains absent", () => {
   const result = runScenario("publish-fails");
 
   assert.notEqual(result.status, 0);
-  assert.equal(result.publishCount, 3);
-  assert.match(result.stdout + result.stderr, /npm publish failed after three attempts/);
+  assert.equal(result.publishCount, 1);
+  assert.match(result.stdout + result.stderr, /Refusing an automatic second publish request/);
+});
+
+test("does not issue a second publish when an error becomes visible after propagation", () => {
+  const result = runScenario("publish-error-eventually-visible");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.publishCount, 1);
+  assert.equal(result.packCount, 1);
+  assert.match(result.stdout, /No second publish request was sent/);
+});
+
+test("fails when the requested npm dist-tag points to another version", () => {
+  const result = runScenario("eventually-visible", {
+    NPM_MOCK_DIST_TAG_VERSION: "2.0.11",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.publishCount, 1);
+  assert.match(result.stdout + result.stderr, /did not point to 2\.0\.12/);
 });
 
 test("fails when the published Hermes manifest version differs", () => {
@@ -184,4 +245,30 @@ test("fails when the published Hermes manifest version differs", () => {
     result.stdout + result.stderr,
     /Published Hermes manifest version 2\.0\.11 does not match 2\.0\.12/,
   );
+});
+
+test("fails recovery when registry package content differs from the validated tarball", () => {
+  const result = runScenario("eventually-visible", {
+    NPM_MOCK_EXTRA_CONTENT: "different package content",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.packCount, 1);
+  assert.match(
+    result.stdout + result.stderr,
+    /registry tarball content does not match the locally validated release tarball/,
+  );
+});
+
+test("does not require a mutable dist-tag to point to an older preexisting version", () => {
+  const result = runScenario("already-visible", {
+    RECOVER_EXISTING_NPM_RELEASE: "true",
+    RELEASE_METADATA_STATE: "fresh",
+    NPM_MOCK_DIST_TAG_VERSION: "2.0.13",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.publishCount, 0);
+  assert.equal(result.packCount, 1);
+  assert.match(result.stdout, /mutable dist-tag latest now points elsewhere/);
 });
