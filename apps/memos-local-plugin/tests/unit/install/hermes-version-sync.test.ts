@@ -135,7 +135,7 @@ describe("Hermes version synchronization", () => {
     );
   });
 
-  it("uses a generated version for the post-merge release dry run", () => {
+  it("keeps the legacy post-merge dry run manual-only", () => {
     const workflow = readFileSync(
       path.resolve(
         repoRoot,
@@ -144,11 +144,11 @@ describe("Hermes version synchronization", () => {
       "utf8",
     );
 
-    expect(workflow).not.toContain('version: "2.0.10"');
-    expect(workflow).toContain("needs.prepare-version.outputs.version");
-    expect(workflow).toContain(
-      "apps/memos-local-plugin/scripts/sync-hermes-version.cjs",
-    );
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).not.toContain("push:");
+    expect(workflow).not.toContain("memos-local-plugin-publish.yml");
+    expect(workflow).toContain("This workflow no longer runs on push to main.");
+    expect(workflow).toContain("Use MemOS Release — Post-Merge Dry Run");
   });
 
   it("runs synchronization in every Hermes installer", () => {

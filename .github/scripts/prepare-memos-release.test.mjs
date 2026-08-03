@@ -417,6 +417,14 @@ test("publish workflow defaults real releases to draft before release.published"
   assert.match(workflow, /Validate publish confirmation/);
   assert.match(workflow, /publish_confirmation must exactly equal/);
   assert.match(workflow, /flags\+=\(--draft\)/);
+  assert.match(workflow, /wait_for_remote_tag\(\)/);
+  assert.match(workflow, /wait_for_release_visibility\(\)/);
+  assert.match(workflow, /create_release_if_missing\(\)/);
+  assert.match(workflow, /--json isDraft,tagName,targetCommitish,url/);
+  assert.match(workflow, /target_commitish/);
+  assert.match(workflow, /GitHub Release \$\{CURRENT_TAG\} targets \$\{target_commitish\}, expected \$\{TARGET_SHA\}/);
+  assert.match(workflow, /exists after a failed create response; treating it as success/);
+  assert.match(workflow, /did not become visible in time/);
   assert.match(workflow, /Publish manually to trigger release\.published/);
 });
 
@@ -429,6 +437,15 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /expected="LEGACY PUBLISH memos-local-plugin-v\$\{RELEASE_VERSION\}"/);
   assert.match(workflow, /current official path is MemOS Release — Publish/);
   assert.match(workflow, /needs: guard-legacy-publish/);
+});
+
+test("legacy standalone local-plugin post-merge dry run is not push-triggered", () => {
+  const workflow = readFileSync(join(workflowsDir, "memos-local-plugin-post-merge-dry-run.yml"), "utf8");
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /\npush:/);
+  assert.doesNotMatch(workflow, /uses:\s+\.\/\.github\/workflows\/memos-local-plugin-publish\.yml/);
+  assert.match(workflow, /This workflow no longer runs on push to main/);
+  assert.match(workflow, /Use MemOS Release — Post-Merge Dry Run/);
 });
 
 test("read-only dry-run workflows declare bounded fallback behavior", () => {
