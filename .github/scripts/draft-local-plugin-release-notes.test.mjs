@@ -12,6 +12,7 @@ import {
   ensureSourceHint,
   isLegacyPackageOnlyRelease,
   legacyPackageDraftFromEvidence,
+  parseSemver,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
   reportExternalFailureFromEnv,
@@ -57,6 +58,13 @@ test("detects legacy package-only prereleases", () => {
   assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "next" }), true);
   assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest" }), false);
   assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "" }), false);
+});
+
+test("treats SemVer build metadata as stable metadata, not a prerelease channel", () => {
+  assert.equal(parseSemver("2.0.13+build.7").prerelease, "");
+  assert.equal(parseSemver("2.0.13-beta.1+build.7").prerelease, "beta.1");
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13+build.7", npmDistTag: "latest" }), false);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1+build.7", npmDistTag: "latest" }), true);
 });
 
 test("uses the previous stable tag for docs-generating latest releases", () => {
@@ -517,6 +525,69 @@ test("repairs postprocessed language validation issues with exact context", asyn
   assert.equal(requests[1].release_notes_repair_context.previous_release_items[0].source_refs[0], "abc1234");
   assert.match(result.release_notes_markdown, /插件健康看板/);
   assert.match(result.release_notes_markdown, /doc-agent-release-notes-json/);
+});
+
+test("standalone latest draft validation allows one initial response plus three repairs by default", async () => {
+  const repairEvidence = {
+    commits: [
+      {
+        sha: "abc12340000000000000000000000000000000",
+        short_sha: "abc1234",
+        subject: "feat: add plugin health dashboard (#3001)",
+      },
+    ],
+    release_note_guidance: {
+      source_ref_category_hints: [
+        {
+          category: "Added",
+          source_refs: ["abc1234", "#3001"],
+          subject: "feat: add plugin health dashboard (#3001)",
+        },
+      ],
+    },
+  };
+  const badDraft = {
+    ok: true,
+    needs_review: false,
+    release_items: [
+      {
+        category: "Added",
+        text_cn: "Plugin health dashboard",
+        text_en: "插件健康看板",
+        source_refs: ["abc1234", "#3001"],
+      },
+    ],
+    coverage: { required_count: 1, covered_required_count: 1, missing_required_count: 0 },
+    warnings: [],
+  };
+  const goodDraft = {
+    ok: true,
+    needs_review: false,
+    release_items: [
+      {
+        category: "Added",
+        text_cn: "**插件健康看板**：新增本地插件健康状态展示。",
+        text_en: "**Plugin Health Dashboard**: Added local plugin health status visibility.",
+        source_refs: ["abc1234", "#3001"],
+      },
+    ],
+    coverage: { required_count: 1, covered_required_count: 1, missing_required_count: 0 },
+    warnings: [],
+  };
+  let calls = 0;
+  const requestImpl = async () => {
+    calls += 1;
+    return calls < 4 ? badDraft : goodDraft;
+  };
+
+  const result = await requestValidatedDraft(repairEvidence, { requestImpl });
+
+  assert.equal(calls, 4);
+  assert.equal(result.ok, true);
+  assert.equal(result.needs_review, false);
+  assert.equal(result.validation_attempt_count, 4);
+  assert.equal(result.repair_attempt_count, 3);
+  assert.match(result.release_notes_markdown, /插件健康看板/);
 });
 
 test("stops release-note repair after two validation repair attempts", async () => {

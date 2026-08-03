@@ -37,7 +37,7 @@ const CURRENT_TAG_PREFIX = "memos-local-plugin-v";
 const TAG_PREFIXES = [CURRENT_TAG_PREFIX, "openclaw-local-plugin-v"];
 const RELEASE_NOTES_MARKER = "doc-agent-release-notes-json";
 const RELEASE_CATEGORY_ORDER = ["Added", "Improved", "Fixed"];
-const MAX_DRAFT_REPAIR_ATTEMPTS = 2;
+const MAX_DRAFT_REPAIR_ATTEMPTS = 3;
 const RELEASE_TO_DOC_CATEGORY = {
   Added: "New Features",
   Improved: "Improvements",
@@ -89,7 +89,7 @@ export function versionFromTag(tag) {
 
 export function parseSemver(version) {
   const cleaned = cleanVersion(version);
-  const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:[-+]([0-9A-Za-z.-]+))?$/);
+  const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);
   if (!match) return null;
   return {
     major: Number(match[1]),
