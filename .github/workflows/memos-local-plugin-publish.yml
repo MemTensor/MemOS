@@ -11,7 +11,7 @@ on:
         required: true
         default: "latest"
       git_ref:
-        description: "Git ref to build from (branch, tag, or SHA). Leave blank to use the branch selected above."
+        description: "Git ref to build package code from. Leave blank for normal releases; release automation always uses this workflow revision."
         required: false
         default: ""
       release_notes:
@@ -45,7 +45,7 @@ on:
         type: string
         default: "latest"
       git_ref:
-        description: "Git ref to build from. Leave blank to use the caller ref."
+        description: "Git ref to build package code from. Leave blank to use the caller ref; release automation always uses this workflow revision."
         required: false
         type: string
         default: ""
@@ -129,6 +129,27 @@ jobs:
           ref: ${{ inputs.git_ref || github.ref }}
           fetch-depth: 0
 
+      - name: Checkout trusted release automation scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Use trusted release automation scripts
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          rm -rf .github/scripts
+          mkdir -p .github
+          cp -R .release-workflow/.github/scripts .github/scripts
+          rm -rf .release-workflow
+          echo "Package source ref: $(git rev-parse --short HEAD)"
+          echo "Release automation ref: ${GITHUB_SHA}"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -164,6 +185,27 @@ jobs:
         with:
           ref: ${{ inputs.git_ref || github.ref }}
           fetch-depth: 0
+
+      - name: Checkout trusted release automation scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Use trusted release automation scripts
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          rm -rf .github/scripts
+          mkdir -p .github
+          cp -R .release-workflow/.github/scripts .github/scripts
+          rm -rf .release-workflow
+          echo "Package source ref: $(git rev-parse --short HEAD)"
+          echo "Release automation ref: ${GITHUB_SHA}"
 
       - uses: actions/setup-node@v4
         with:

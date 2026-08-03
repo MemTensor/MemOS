@@ -473,6 +473,14 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /standalone local-plugin npm publisher for beta or latest package releases/);
   assert.match(workflow, /MemOS Release — Publish remains the weekly whole-repo release path/);
   assert.match(workflow, /needs: guard-legacy-publish/);
+  assert.match(workflow, /Git ref to build package code from/);
+  assert.match(workflow, /release automation always uses this workflow revision/);
+  assert.equal((workflow.match(/Checkout trusted release automation scripts/g) || []).length, 2);
+  assert.equal((workflow.match(/Use trusted release automation scripts/g) || []).length, 2);
+  assert.match(workflow, /ref:\s+\$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /cp -R \.release-workflow\/\.github\/scripts \.github\/scripts/);
+  assert.match(workflow, /Package source ref: \$\(git rev-parse --short HEAD\)/);
+  assert.match(workflow, /Release automation ref: \$\{GITHUB_SHA\}/);
 });
 
 test("legacy standalone local-plugin post-merge dry run is not push-triggered", () => {
