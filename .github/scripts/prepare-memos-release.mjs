@@ -327,7 +327,11 @@ function isImportantCommit(commit, { revertedKeys = new Set() } = {}) {
 function isMaintenanceOnlyCommit(commit) {
   const subject = String(commit?.subject || "");
   if (/^release:\s*merge\b/i.test(subject)) return false;
-  if (/^release:\s+(?:@memtensor\/memos-local-plugin|memos-local-plugin\b|openclaw local plugin\b)/i.test(subject)) {
+  if (
+    /^release\s*[/:]\s*(?:@memtensor\/memos-local-plugin|memos[-/\s]+local[-/\s]+plugin\b|openclaw\s+local\s+plugin\b)/i.test(
+      subject,
+    )
+  ) {
     return true;
   }
   if (/^(?:chore|build|ci)(\([^)]+\))?:\s*(?:release|bump|update)\b.*(?:@memtensor\/memos-local-plugin|memos-local-plugin)/i.test(subject)) {
@@ -493,6 +497,7 @@ export function validateLocalPluginVersionPlan(evidence, expectedVersionInput = 
     evidence.local_plugin_package_version_raw || evidence.local_plugin_version_raw,
     "local plugin package.json version",
   );
+  const currentPackageIsPrerelease = (parseSemver(currentPackageVersion)?.prerelease || []).length > 0;
   const packageOrder = compareSemver(currentPackageVersion, previousPackageVersion);
   const packageVsReleasedOrder = compareSemver(currentPackageVersion, previousReleasedVersion);
   if (packageOrder < 0) {
@@ -516,7 +521,11 @@ export function validateLocalPluginVersionPlan(evidence, expectedVersionInput = 
       : "";
     resolvedVersion = currentPackageVersion;
     versionSource = `${PRODUCT_PATH}/package.json`;
-    if (packageVsReleasedOrder <= 0) {
+    if (currentPackageIsPrerelease) {
+      resolvedVersion = incrementPatchVersion(previousReleasedVersion);
+      versionSource = "auto_patch_from_previous_released_version_prerelease_package_ignored";
+      autoIncremented = true;
+    } else if (packageVsReleasedOrder <= 0) {
       resolvedVersion = incrementPatchVersion(previousReleasedVersion);
       versionSource = "auto_patch_from_previous_released_version";
       autoIncremented = true;
@@ -863,17 +872,34 @@ const FALLBACK_TOPIC_RULES = [
     text_cn: "**模型配置与提供商兼容性**：优化 LLM、embedding 与 provider 配置处理，提升不同模型服务的接入稳定性。",
     text_en: "**Model configuration and provider compatibility**: Improved LLM, embedding, and provider configuration handling.",
   },
+  {
+    pattern: /recall|retrieval|host input|inject|rank|dedupe|keyword|relevance/i,
+    category: "Improved",
+    text_cn: "**召回相关性与宿主输入处理**：优化本地检索、去重、排序和宿主输入注入流程，提升上下文召回质量。",
+    text_en: "**Recall relevance and host input handling**: Improved local retrieval, dedupe, ranking, and host-input injection for better context recall.",
+  },
 ];
+
+function fallbackSubjectText(text) {
+  return String(text || "")
+    .replace(/^revert\s+"([^"]+)".*$/i, "$1")
+    .replace(/^(feat|fix|perf|refactor|chore|docs|test|ci|build|style|revert)(\([^)]+\))?!?:\s*/i, "")
+    .replace(/\s+by\s+@\S+.*$/i, "")
+    .replace(/\s+\(#\d+\)\s*$/g, "")
+    .replace(/\s+#\d+\s*$/g, "")
+    .trim();
+}
 
 export function fallbackTopicForText(text, { allowGeneric = false } = {}) {
   const source = String(text || "");
   const rule = FALLBACK_TOPIC_RULES.find((item) => item.pattern.test(source));
   if (rule) return rule;
   if (!allowGeneric) return null;
+  const cleaned = fallbackSubjectText(source);
   return {
     category: /^feat/i.test(source) ? "Added" : /^fix|^revert/i.test(source) ? "Fixed" : "Improved",
-    text_cn: `**${PRODUCT_TITLE.zh}更新**：${source.replace(CJK_GLOBAL_RE, "").trim() || "本地插件能力完成更新。"}`,
-    text_en: `**${PRODUCT_TITLE.en} update**: ${source.replace(CJK_GLOBAL_RE, "").trim() || "Release evidence updated."}`,
+    text_cn: `**${PRODUCT_TITLE.zh}更新**：${cleaned.replace(CJK_GLOBAL_RE, "").trim() || "本地插件能力完成更新。"}`,
+    text_en: `**${PRODUCT_TITLE.en} update**: ${cleaned.replace(CJK_GLOBAL_RE, "").trim() || "Release evidence updated."}`,
   };
 }
 
