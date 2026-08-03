@@ -1,0 +1,240 @@
+name: MemOS Release — Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "MemOS version to release, without leading v (for example 2.0.25)"
+        required: true
+        type: string
+      target_ref:
+        description: "Git ref to release from. Use main for normal releases."
+        required: false
+        type: string
+        default: "main"
+      local_plugin_version:
+        description: "Optional guard: expected resolved MemOS local plugin docs version, without leading v. Leave blank to auto-increment when needed."
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Preview only. Skip tag creation, GitHub Release, docs PR, and deployment."
+        required: true
+        type: boolean
+        default: true
+      create_draft_release:
+        description: "When dry_run=false, create a Draft GitHub Release first. Publish manually to trigger release.published."
+        required: true
+        type: boolean
+        default: true
+      publish_confirmation:
+        description: "Required only when dry_run=false. Must exactly equal: PUBLISH v<version>"
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: memos-release-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: ${{ github.repository == 'MemTensor/MemOS' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch release refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Run release workflow tests
+        shell: bash
+        run: node --test .github/scripts/prepare-memos-release.test.mjs
+
+      - name: Validate publish confirmation
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          PUBLISH_CONFIRMATION: ${{ inputs.publish_confirmation }}
+        run: |
+          set -euo pipefail
+          expected="PUBLISH v${RELEASE_VERSION}"
+          if [ "${PUBLISH_CONFIRMATION}" != "${expected}" ]; then
+            echo "::error::publish_confirmation must exactly equal: ${expected}"
+            exit 1
+          fi
+
+      - name: Prepare MemOS release inspection
+        id: prepare
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          TARGET_REF: ${{ inputs.target_ref || 'main' }}
+          LOCAL_PLUGIN_VERSION: ${{ inputs.local_plugin_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          PUBLISH_CONFIRMATION: ${{ inputs.publish_confirmation }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
+        run: |
+          bash .github/scripts/retry.sh --attempts 2 --label "prepare MemOS release inspection" -- \
+            node .github/scripts/prepare-memos-release.mjs
+
+      - name: Upload release inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: memos-release-inspection
+          path: ${{ steps.prepare.outputs.inspection_dir }}
+          if-no-files-found: error
+
+      - name: Summarize dry-run inspection
+        shell: bash
+        env:
+          CURRENT_TAG: ${{ steps.prepare.outputs.current_tag }}
+          PREVIOUS_TAG: ${{ steps.prepare.outputs.previous_tag }}
+          LOCAL_PLUGIN_VERSION: ${{ steps.prepare.outputs.local_plugin_version }}
+          LOCAL_PLUGIN_PREVIOUS_VERSION: ${{ steps.prepare.outputs.local_plugin_previous_version }}
+          LOCAL_PLUGIN_VERSION_CHANGED: ${{ steps.prepare.outputs.local_plugin_version_changed }}
+          LOCAL_PLUGIN_VERSION_REQUIRED: ${{ steps.prepare.outputs.local_plugin_version_required }}
+          LOCAL_PLUGIN_VERSION_SOURCE: ${{ steps.prepare.outputs.local_plugin_version_source }}
+          LOCAL_PLUGIN_VERSION_AUTO_INCREMENTED: ${{ steps.prepare.outputs.local_plugin_version_auto_incremented }}
+          LOCAL_PLUGIN_VERSION_INPUT_IGNORED: ${{ steps.prepare.outputs.local_plugin_version_input_ignored }}
+          LOCAL_PLUGIN_VERSION_INPUT_IGNORED_REASON: ${{ steps.prepare.outputs.local_plugin_version_input_ignored_reason }}
+          LOCAL_PLUGIN_EXPECTED_VERSION: ${{ steps.prepare.outputs.local_plugin_expected_version }}
+          LOCAL_PLUGIN_PACKAGE_VERSION: ${{ steps.prepare.outputs.local_plugin_package_version }}
+          LOCAL_PLUGIN_PACKAGE_PREVIOUS_VERSION: ${{ steps.prepare.outputs.local_plugin_package_previous_version }}
+          LOCAL_PLUGIN_PACKAGE_VERSION_CHANGED: ${{ steps.prepare.outputs.local_plugin_package_version_changed }}
+          EXISTING_TAG_STATUS: ${{ steps.prepare.outputs.existing_tag_status }}
+          EXISTING_TAG_SHA: ${{ steps.prepare.outputs.existing_tag_sha }}
+          PUBLISH_BLOCKED: ${{ steps.prepare.outputs.publish_blocked }}
+          PUBLISH_BLOCK_REASON: ${{ steps.prepare.outputs.publish_block_reason }}
+          SOURCE_ID: ${{ steps.prepare.outputs.source_id }}
+          TARGET_REF: ${{ steps.prepare.outputs.target_ref }}
+          TARGET_SHA: ${{ steps.prepare.outputs.target_sha }}
+          HAS_PRODUCT_CHANGES: ${{ steps.prepare.outputs.has_product_changes }}
+          HAS_USER_FACING_PRODUCT_CHANGES: ${{ steps.prepare.outputs.has_user_facing_product_changes }}
+          DOCS_ACTION: ${{ steps.prepare.outputs.docs_action }}
+          SKIP_REASON: ${{ steps.prepare.outputs.skip_reason }}
+          RELEASE_NOTES_SOURCE: ${{ steps.prepare.outputs.release_notes_source }}
+          VALIDATION_ATTEMPT_COUNT: ${{ steps.prepare.outputs.validation_attempt_count }}
+          REPAIR_ATTEMPT_COUNT: ${{ steps.prepare.outputs.repair_attempt_count }}
+        run: |
+          {
+            echo "## MemOS release inspection"
+            echo ""
+            echo "- source_id: ${SOURCE_ID}"
+            echo "- current_tag: ${CURRENT_TAG}"
+            echo "- previous_tag: ${PREVIOUS_TAG}"
+            echo "- local_plugin_version: ${LOCAL_PLUGIN_VERSION}"
+            echo "- local_plugin_previous_version: ${LOCAL_PLUGIN_PREVIOUS_VERSION}"
+            echo "- local_plugin_version_changed: ${LOCAL_PLUGIN_VERSION_CHANGED}"
+            echo "- local_plugin_version_required: ${LOCAL_PLUGIN_VERSION_REQUIRED}"
+            echo "- local_plugin_version_source: ${LOCAL_PLUGIN_VERSION_SOURCE}"
+            echo "- local_plugin_version_auto_incremented: ${LOCAL_PLUGIN_VERSION_AUTO_INCREMENTED}"
+            echo "- local_plugin_version_input_ignored: ${LOCAL_PLUGIN_VERSION_INPUT_IGNORED}"
+            echo "- local_plugin_version_input_ignored_reason: ${LOCAL_PLUGIN_VERSION_INPUT_IGNORED_REASON:-n/a}"
+            echo "- local_plugin_expected_version: ${LOCAL_PLUGIN_EXPECTED_VERSION:-n/a}"
+            echo "- local_plugin_package_version: ${LOCAL_PLUGIN_PACKAGE_VERSION}"
+            echo "- local_plugin_package_previous_version: ${LOCAL_PLUGIN_PACKAGE_PREVIOUS_VERSION}"
+            echo "- local_plugin_package_version_changed: ${LOCAL_PLUGIN_PACKAGE_VERSION_CHANGED}"
+            echo "- existing_tag_status: ${EXISTING_TAG_STATUS}"
+            echo "- existing_tag_sha: ${EXISTING_TAG_SHA:-n/a}"
+            echo "- publish_blocked: ${PUBLISH_BLOCKED}"
+            echo "- publish_block_reason: ${PUBLISH_BLOCK_REASON:-n/a}"
+            echo "- target_ref: ${TARGET_REF}"
+            echo "- target_sha: ${TARGET_SHA}"
+            echo "- release_notes_source: ${RELEASE_NOTES_SOURCE}"
+            echo "- local_plugin_changed: ${HAS_PRODUCT_CHANGES}"
+            echo "- local_plugin_user_facing_changed: ${HAS_USER_FACING_PRODUCT_CHANGES}"
+            echo "- docs_action: ${DOCS_ACTION}"
+            echo "- skip_reason: ${SKIP_REASON:-n/a}"
+            echo "- validation_attempt_count: ${VALIDATION_ATTEMPT_COUNT}"
+            echo "- repair_attempt_count: ${REPAIR_ATTEMPT_COUNT}"
+            echo ""
+            echo "The uploaded artifact contains the public MemOS release notes preview and the MemOS local plugin docs preview."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Report dry-run completion
+        if: ${{ inputs.dry_run }}
+        shell: bash
+        run: |
+          echo "::notice::dry_run=true; skipped tag creation and GitHub Release."
+
+      - name: Create tag and GitHub Release
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_TAG: ${{ steps.prepare.outputs.current_tag }}
+          TARGET_SHA: ${{ steps.prepare.outputs.target_sha }}
+          RELEASE_NOTES_FILE: ${{ steps.prepare.outputs.release_notes_file }}
+          CREATE_DRAFT_RELEASE: ${{ inputs.create_draft_release }}
+          PUBLISH_BLOCKED: ${{ steps.prepare.outputs.publish_blocked }}
+          PUBLISH_BLOCK_REASON: ${{ steps.prepare.outputs.publish_block_reason }}
+        run: |
+          set -euo pipefail
+          if [ "${PUBLISH_BLOCKED}" = "true" ]; then
+            echo "::error::${PUBLISH_BLOCK_REASON}"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          remote_tag_sha="$(
+            git ls-remote --tags origin "refs/tags/${CURRENT_TAG}" "refs/tags/${CURRENT_TAG}^{}" |
+              awk '$2 ~ /\^\{\}$/ {sha=$1} $2 !~ /\^\{\}$/ && sha=="" {sha=$1} END {print sha}'
+          )"
+
+          if [ -n "${remote_tag_sha}" ]; then
+            if [ "${remote_tag_sha}" != "${TARGET_SHA}" ]; then
+              echo "::error::Remote tag ${CURRENT_TAG} already exists at ${remote_tag_sha}, expected ${TARGET_SHA}. This workflow will not move an existing release tag automatically; delete or recreate the manual tag after release-owner review, then rerun."
+              exit 1
+            fi
+            echo "::notice::Remote tag ${CURRENT_TAG} already exists at ${TARGET_SHA}; leaving it unchanged."
+          else
+            git tag "${CURRENT_TAG}" "${TARGET_SHA}"
+            git push origin "refs/tags/${CURRENT_TAG}"
+          fi
+
+          if gh release view "${CURRENT_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            release_info="$(
+              gh release view "${CURRENT_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --json isDraft,url \
+                --jq '[.isDraft, .url] | @tsv'
+            )"
+            IFS=$'\t' read -r is_draft release_url <<< "${release_info}"
+            if [ "${is_draft}" = "true" ] && [ "${CREATE_DRAFT_RELEASE}" != "true" ]; then
+              echo "::error::GitHub Release ${CURRENT_TAG} already exists as draft (${release_url}); publish or delete it manually before rerunning."
+              exit 1
+            fi
+            echo "::notice::GitHub Release ${CURRENT_TAG} already exists (${release_url}); leaving it unchanged."
+          else
+            flags=()
+            if [ "${CREATE_DRAFT_RELEASE}" = "true" ]; then
+              flags+=(--draft)
+            fi
+            gh release create "${CURRENT_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${TARGET_SHA}" \
+              --title "Release ${CURRENT_TAG}" \
+              --notes-file "${RELEASE_NOTES_FILE}" \
+              "${flags[@]}"
+          fi
