@@ -10,12 +10,16 @@ import {
   draftForInspection,
   evidenceForInspection,
   ensureSourceHint,
+  isLegacyPackageOnlyRelease,
+  legacyPackageDraftFromEvidence,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
   reportExternalFailureFromEnv,
   requestDraft,
   requestValidatedDraft,
   resolveCurrentRef,
+  selectPreviousTag,
+  validateLegacyPackageNotes,
   validateManualNotes,
   versionFromTag,
 } from "./draft-local-plugin-release-notes.mjs";
@@ -44,6 +48,63 @@ test("normalizes only real local-plugin tag families", () => {
   assert.equal(versionFromTag("memos-local-plugin-v2.0.10"), "2.0.10");
   assert.equal(versionFromTag("openclaw-local-plugin-v2.0.9"), "2.0.9");
   assert.equal(versionFromTag("v2.0.10"), "");
+});
+
+test("detects legacy package-only prereleases", () => {
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1", npmDistTag: "beta" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1", npmDistTag: "latest" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "beta" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "next" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest" }), false);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "" }), false);
+});
+
+test("uses the previous stable tag for docs-generating latest releases", () => {
+  const tags = [
+    { tag: "memos-local-plugin-v2.0.12", version: "2.0.12" },
+    { tag: "memos-local-plugin-v2.0.13-beta.1", version: "2.0.13-beta.1" },
+    { tag: "memos-local-plugin-v2.0.13", version: "2.0.13" },
+  ];
+
+  assert.equal(
+    selectPreviousTag(tags, "2.0.13", "memos-local-plugin-v2.0.13", { includePrerelease: false }),
+    "memos-local-plugin-v2.0.12",
+  );
+  assert.equal(
+    selectPreviousTag(tags, "2.0.13", "memos-local-plugin-v2.0.13", { includePrerelease: true }),
+    "memos-local-plugin-v2.0.13-beta.1",
+  );
+});
+
+test("generates package-only prerelease notes without docs payloads", () => {
+  const draft = legacyPackageDraftFromEvidence(
+    {
+      current_tag: "memos-local-plugin-v2.0.13-beta.1",
+      previous_tag: "memos-local-plugin-v2.0.12",
+      target_version: "v2.0.13-beta.1",
+      git_ref: "abc1234",
+      changed_files: [{ status: "M", path: "apps/memos-local-plugin/package.json" }],
+      commits: [
+        {
+          sha: "abc1234000000000000000000000000000000000",
+          short_sha: "abc1234",
+          subject: "test: prepare local plugin beta package",
+        },
+      ],
+      package_changes: [{ field: "version", before: "2.0.12", after: "2.0.13-beta.1" }],
+    },
+    { npmDistTag: "beta" },
+  );
+
+  assert.equal(draft.ok, true);
+  assert.equal(draft.needs_review, false);
+  assert.equal(draft.confidence, "legacy-package-only");
+  assert.equal(draft.coverage.missing_required_count, 0);
+  assert.match(draft.release_notes_markdown, /## Changelog/);
+  assert.match(draft.release_notes_markdown, /npm `beta` dist-tag/);
+  assert.match(draft.release_notes_markdown, /package-only/);
+  assert.doesNotMatch(draft.release_notes_markdown, /doc-agent: source-id=/);
+  assert.doesNotMatch(draft.release_notes_markdown, /doc-agent-release-notes-json/);
 });
 
 test("uses an existing release tag as the evidence endpoint", () => {
@@ -558,6 +619,23 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 -->`),
     /text_cn must contain Chinese/,
   );
+});
+
+test("legacy package manual notes reject docs payloads", () => {
+  const valid = `## Changelog
+
+### Prerelease
+- Published MemOS Local Plugin v2.0.13-beta.1 as a beta package.`;
+  assert.equal(validateLegacyPackageNotes(valid), `${valid}\n`);
+  assert.throws(
+    () => validateLegacyPackageNotes(`${valid}\n\n<!-- doc-agent: source-id=openclaw-local-plugin -->`),
+    /must not include Doc Agent source hints/,
+  );
+  assert.throws(
+    () => validateLegacyPackageNotes(`${valid}\n\n<!-- doc-agent-release-notes-json\n{}\n-->`),
+    /must not include Doc Agent source hints/,
+  );
+  assert.throws(() => validateLegacyPackageNotes("### Prerelease\n- missing changelog"), /Changelog/);
 });
 
 test("retries transient draft failures and passes prior error context", async () => {

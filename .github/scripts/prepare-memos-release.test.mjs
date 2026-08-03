@@ -435,7 +435,8 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /guard-legacy-publish:/);
   assert.match(workflow, /guard-legacy-publish:\n\s+runs-on: ubuntu-latest\n\s+timeout-minutes: 5/);
   assert.match(workflow, /expected="LEGACY PUBLISH memos-local-plugin-v\$\{RELEASE_VERSION\}"/);
-  assert.match(workflow, /current official path is MemOS Release — Publish/);
+  assert.match(workflow, /standalone local-plugin npm publisher for beta or latest package releases/);
+  assert.match(workflow, /MemOS Release — Publish remains the weekly whole-repo release path/);
   assert.match(workflow, /needs: guard-legacy-publish/);
 });
 

@@ -72,6 +72,12 @@ export function displayVersion(raw) {
   return value ? `v${value}` : "";
 }
 
+export function isLegacyPackageOnlyRelease({ targetVersion, npmDistTag = "" } = {}) {
+  const parsed = parseSemver(targetVersion);
+  const distTag = String(npmDistTag || "").trim();
+  return Boolean(parsed?.prerelease) || Boolean(distTag && distTag !== "latest");
+}
+
 export function versionFromTag(tag) {
   for (const prefix of TAG_PREFIXES) {
     if (tag.startsWith(prefix)) {
@@ -173,10 +179,16 @@ function listProductTags() {
     .filter((item) => item.version && parseSemver(item.version));
 }
 
-export function findPreviousTag(targetVersion, currentTag) {
-  const candidates = listProductTags()
+export function selectPreviousTag(
+  tags,
+  targetVersion,
+  currentTag,
+  { includePrerelease = true } = {},
+) {
+  const candidates = tags
     .filter((item) => item.tag !== currentTag)
     .filter((item) => compareSemver(item.version, targetVersion) < 0)
+    .filter((item) => includePrerelease || !parseSemver(item.version)?.prerelease)
     .sort((a, b) => {
       const versionOrder = compareSemver(b.version, a.version);
       if (versionOrder !== 0) return versionOrder;
@@ -185,6 +197,10 @@ export function findPreviousTag(targetVersion, currentTag) {
       return bPreferred - aPreferred;
     });
   return candidates[0]?.tag || "";
+}
+
+export function findPreviousTag(targetVersion, currentTag, options = {}) {
+  return selectPreviousTag(listProductTags(), targetVersion, currentTag, options);
 }
 
 function parseCommits(previousTag, currentRef) {
@@ -426,6 +442,17 @@ function appendOutput(name, value) {
 export function ensureSourceHint(notes) {
   const hint = `<!-- doc-agent: source-id=${PRODUCT_ID} -->`;
   return notes.includes("doc-agent: source-id=") ? notes : `${notes.trim()}\n\n${hint}\n`;
+}
+
+export function validateLegacyPackageNotes(notes) {
+  const text = String(notes || "").trim();
+  if (!/^## Changelog\s*$/m.test(text)) {
+    fail("Legacy package release notes must contain a '## Changelog' heading.");
+  }
+  if (/doc-agent:\s*source-id=|doc-agent-release-notes-json/.test(text)) {
+    fail("Legacy package release notes must not include Doc Agent source hints or docs payloads.");
+  }
+  return `${text}\n`;
 }
 
 function normalizeReleaseCategory(value) {
@@ -1007,6 +1034,54 @@ function markdownFromReleaseItems(items, coverage) {
   return `${lines.join("\n").trim()}\n`;
 }
 
+export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {}) {
+  const version = evidence?.target_version || "";
+  const targetPackageVersion = cleanVersion(version);
+  const gitRef = evidence?.git_ref || "";
+  const previousTag = evidence?.previous_tag || "";
+  const currentTag = evidence?.current_tag || "";
+  const distTag = String(npmDistTag || "").trim() || "beta";
+  const changedFileCount = Array.isArray(evidence?.changed_files) ? evidence.changed_files.length : 0;
+  const commitCount = Array.isArray(evidence?.commits) ? evidence.commits.length : 0;
+  const packageChanges = Array.isArray(evidence?.package_changes) ? evidence.package_changes : [];
+  const versionChange = packageChanges.find((item) => item.field === "version");
+  const lines = [
+    "## Changelog",
+    "",
+    "### Prerelease",
+    `- Published ${PRODUCT_TITLE.en} ${version} as a package prerelease for validation through the npm \`${distTag}\` dist-tag.`,
+    "",
+    "### Release Evidence",
+    `- Package tag: ${currentTag}`,
+    `- Previous package tag: ${previousTag}`,
+    `- Source commit: ${gitRef}`,
+    `- Local plugin commits: ${commitCount}`,
+    `- Local plugin changed files: ${changedFileCount}`,
+  ];
+  const previousPackageVersion = versionChange?.before || "unknown";
+  lines.push(`- Package version: ${previousPackageVersion} -> ${targetPackageVersion}`);
+  lines.push("");
+  lines.push("This legacy prerelease is package-only and does not update the MemOS-Docs Plugin tab.");
+  return {
+    ok: true,
+    needs_review: false,
+    confidence: "legacy-package-only",
+    release_items: [],
+    coverage: {
+      needs_review: false,
+      required_count: 0,
+      covered_required_count: 0,
+      missing_required_count: 0,
+      covered_refs: [],
+      missing_required: [],
+      invalid_item_refs: [],
+      policy: "legacy local-plugin prereleases are package-only and do not create docs payloads",
+    },
+    warnings: ["legacy package-only prerelease skipped Doc Agent draft and docs payload generation"],
+    release_notes_markdown: `${lines.join("\n").trim()}\n`,
+  };
+}
+
 export function postprocessDraftFromEvidence(draft, evidence) {
   const inputItems = Array.isArray(draft?.release_items)
     ? draft.release_items.map(normalizeReleaseItem).filter(Boolean)
@@ -1290,6 +1365,8 @@ export async function main() {
   if (!targetVersion) fail("RELEASE_VERSION is required.");
 
   const currentTag = process.env.RELEASE_TAG || `${CURRENT_TAG_PREFIX}${targetVersion}`;
+  const npmDistTag = String(process.env.NPM_DIST_TAG || "").trim();
+  const legacyPackageOnly = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag });
   const notesPath =
     process.env.RELEASE_NOTES_FILE ||
     join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes.md`);
@@ -1297,14 +1374,19 @@ export async function main() {
 
   const manualNotes = String(process.env.MANUAL_RELEASE_NOTES || "").trim();
   if (manualNotes) {
-    writeFileSync(notesPath, ensureSourceHint(validateManualNotes(manualNotes)), "utf8");
+    const notes = legacyPackageOnly
+      ? validateLegacyPackageNotes(manualNotes)
+      : ensureSourceHint(validateManualNotes(manualNotes));
+    writeFileSync(notesPath, notes, "utf8");
     appendOutput("release_notes_file", notesPath);
     appendOutput("draft_used", "false");
     console.log(`Using manually provided release notes: ${notesPath}`);
     return;
   }
 
-  const previousTag = findPreviousTag(targetVersion, currentTag);
+  const previousTag = findPreviousTag(targetVersion, currentTag, {
+    includePrerelease: legacyPackageOnly,
+  });
   if (!previousTag) {
     fail(`Cannot find a previous local plugin tag before ${currentTag}.`);
   }
@@ -1313,6 +1395,31 @@ export async function main() {
   const evidence = collectEvidence({ targetVersion, currentTag, previousTag, currentRef });
   const evidencePath = join(tmpdir(), `memos-local-plugin-${targetVersion}-evidence.json`);
   writeFileSync(evidencePath, JSON.stringify(evidenceForInspection(evidence), null, 2), "utf8");
+
+  if (legacyPackageOnly) {
+    const draft = legacyPackageDraftFromEvidence(evidence, { npmDistTag });
+    const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
+    writeFileSync(draftPath, JSON.stringify(draftForInspection(draft), null, 2), "utf8");
+    writeFileSync(notesPath, draft.release_notes_markdown, "utf8");
+
+    appendOutput("release_notes_file", notesPath);
+    appendOutput("evidence_file", evidencePath);
+    appendOutput("draft_file", draftPath);
+    appendOutput("draft_used", "false");
+    appendOutput("previous_tag", previousTag);
+    appendOutput("current_tag", currentTag);
+    appendOutput("current_ref", currentRef);
+    appendOutput("draft_confidence", draft.confidence);
+    appendOutput("missing_required_count", "0");
+    appendOutput("validation_attempt_count", "0");
+    appendOutput("repair_attempt_count", "0");
+
+    console.log(`Generated package-only prerelease notes without Doc Agent: ${notesPath}`);
+    console.log(`Previous tag: ${previousTag}`);
+    console.log(`Current tag: ${currentTag}`);
+    console.log(`Current evidence ref: ${currentRef}`);
+    return;
+  }
 
   const draft = await requestValidatedDraft(evidence);
   if (!draft.ok || draft.needs_review) {
