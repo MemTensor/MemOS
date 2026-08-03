@@ -457,9 +457,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             provider.prefetch("what did we discuss before compression?")
 
         turn_start = next(
-            payload
-            for method, payload in reversed(bridge.calls)
-            if method == "turn.start"
+            payload for method, payload in reversed(bridge.calls) if method == "turn.start"
         )
         self.assertEqual(
             turn_start["contextHints"]["visibleContextStartTs"],
