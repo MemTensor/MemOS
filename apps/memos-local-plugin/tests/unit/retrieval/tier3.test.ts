@@ -70,14 +70,17 @@ describe("retrieval/tier3 (with real sqlite)", () => {
   afterEach(() => handle.cleanup());
 
   it("returns the closest world-model by cosine", async () => {
+    const queryVec = vec([0.8, 0.6, 0]);
     const out = await runTier3(
       { repos: { worldModel: handle.repos.worldModel }, config: cfg },
-      { queryVec: vec([1, 0, 0]) },
+      { queryVec },
     );
     expect(out.length).toBeGreaterThanOrEqual(1);
     expect(String(out[0]!.refId)).toBe("wm_docker");
     expect(out[0]!.title).toBe("docker-compose");
     expect(out[0]!.body).toContain("containers");
+    expect(Array.from(out[0]!.vec!)).toEqual([1, 0, 0]);
+    expect(out[0]!.vec).not.toBe(queryVec);
   });
 
   it("returns a candidate pool sized by tier3TopK · candidatePoolFactor", async () => {

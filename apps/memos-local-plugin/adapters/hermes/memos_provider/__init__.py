@@ -381,6 +381,12 @@ class MemTensorProvider(MemoryProvider):
         self._state_lock = threading.Lock()
         self._last_injected_context: str = ""
         self._active_turn_key: str = ""
+        # Hermes does not pass the live conversation history to `prefetch`.
+        # Once `on_pre_compress` fires, this timestamp separates history
+        # that has fallen out of the raw model window from newer turns that
+        # are still visible. Before the first compression it stays unset so
+        # the core preserves the legacy whole-session no-repeat behaviour.
+        self._visible_context_start_ts: int | None = None
         # Tool calls accumulated via the Hermes `post_tool_call` plugin
         # hook — flushed alongside user/assistant text in `sync_turn`.
         self._tool_calls: list[dict[str, Any]] = []
@@ -452,6 +458,7 @@ class MemTensorProvider(MemoryProvider):
         with self._state_lock:
             self._last_injected_context = ""
             self._active_turn_key = ""
+            self._visible_context_start_ts = None
         self._hermes_home = str(kwargs.get("hermes_home") or "")
         self._platform = str(kwargs.get("platform") or "cli")
         self._agent_identity = str(kwargs.get("agent_identity") or "hermes")
@@ -1292,6 +1299,10 @@ class MemTensorProvider(MemoryProvider):
         model actually saw.
         """
         with self._state_lock:
+            # Everything captured before this boundary is about to leave the
+            # raw conversation window. The shared retrieval core interprets
+            # this as "same-session traces older than this are eligible".
+            self._visible_context_start_ts = int(time.time() * 1000)
             context = self._last_injected_context.strip()
         if not context:
             return ""
@@ -1673,6 +1684,7 @@ class MemTensorProvider(MemoryProvider):
         with self._state_lock:
             self._last_injected_context = ""
             self._active_turn_key = ""
+            self._visible_context_start_ts = None
         if not self._bridge:
             return
         # `sync_turn` already flushed completed turn data synchronously.
@@ -2226,16 +2238,25 @@ class MemTensorProvider(MemoryProvider):
         host_runtime = self._host_runtime_context()
         with self._state_lock:
             turn_key = self._active_turn_key
+            visible_context_start_ts = self._visible_context_start_ts
+        context_hints: dict[str, Any] = {
+            "agentIdentity": self._agent_identity,
+            "namespace": self._runtime_namespace(),
+            **host_runtime,
+        }
+        if visible_context_start_ts is not None:
+            context_hints.update(
+                {
+                    "visibleContextKnown": True,
+                    "visibleContextStartTs": visible_context_start_ts,
+                }
+            )
         payload: dict[str, Any] = {
             "agent": "hermes",
             "namespace": self._runtime_namespace(),
             "sessionId": session_id or self._session_id,
             "userText": query,
-            "contextHints": {
-                "agentIdentity": self._agent_identity,
-                "namespace": self._runtime_namespace(),
-                **host_runtime,
-            },
+            "contextHints": context_hints,
             "ts": int(time.time() * 1000),
         }
         if turn_key:

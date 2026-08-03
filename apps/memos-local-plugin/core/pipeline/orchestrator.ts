@@ -1076,6 +1076,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         plan: plan
           ? {
               scenarioId: plan.scenarioId,
+              profile: plan.profile,
               wantTier1: plan.wantTier1,
               wantTier2: plan.wantTier2,
               wantTier3: plan.wantTier3,
