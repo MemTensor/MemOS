@@ -56,6 +56,29 @@ def test_simple_text_splitter_long_text_preserves_url():
             assert url in c, f"chunk contains a partial URL: {c!r}"
 
 
+def test_simple_text_splitter_does_not_cut_placeholder_at_chunk_boundary():
+    """A raw chunk boundary inside a placeholder must be moved to a safe edge."""
+    url = "https://example.com/path"
+    text = "A" * 95 + url + " " + "B" * 120
+    splitter = SimpleTextSplitter(chunk_size=100, chunk_overlap=20)
+
+    chunks = splitter.chunk(text)
+
+    assert any(url in chunk for chunk in chunks)
+    assert all(URLProtectionMixin._URL_PLACEHOLDER_PREFIX not in chunk for chunk in chunks)
+    assert all("https://" not in chunk or url in chunk for chunk in chunks)
+    assert len(chunks) < 10, "splitter made insufficient progress around the URL boundary"
+
+
+def test_simple_text_splitter_stops_after_emitting_final_chunk():
+    """The final overlap must not be emitted repeatedly as shrinking suffixes."""
+    splitter = SimpleTextSplitter(chunk_size=100, chunk_overlap=20)
+
+    chunks = splitter.chunk("X" * 150)
+
+    assert chunks == ["X" * 100, "X" * 70]
+
+
 def test_simple_text_splitter_empty_input_returns_empty_list():
     splitter = SimpleTextSplitter(chunk_size=100, chunk_overlap=20)
     assert splitter.chunk("") == []

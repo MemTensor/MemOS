@@ -20,6 +20,45 @@ class SimpleTextSplitter(URLProtectionMixin):
     def chunk(self, text: str, **kwargs) -> list[str]:
         return self._simple_split_text(text, self.chunk_size, self.chunk_overlap)
 
+    @staticmethod
+    def _placeholder_spans(protected_text: str, url_map: dict[str, str]) -> list[tuple[int, int]]:
+        """Return the protected-text ranges occupied by URL placeholders."""
+        spans = []
+        for placeholder in url_map:
+            placeholder_start = protected_text.find(placeholder)
+            if placeholder_start >= 0:
+                spans.append((placeholder_start, placeholder_start + len(placeholder)))
+        return sorted(spans)
+
+    @staticmethod
+    def _align_end_to_placeholder(
+        end: int,
+        start: int,
+        chunk_overlap: int,
+        placeholder_spans: list[tuple[int, int]],
+    ) -> int:
+        """Move a chunk end away from the middle of a URL placeholder."""
+        for placeholder_start, placeholder_end in placeholder_spans:
+            if placeholder_start < end < placeholder_end:
+                if placeholder_start - start > chunk_overlap:
+                    return placeholder_start
+                return placeholder_end
+        return end
+
+    @staticmethod
+    def _align_start_to_placeholder(
+        next_start: int,
+        previous_start: int,
+        placeholder_spans: list[tuple[int, int]],
+    ) -> int:
+        """Keep overlap starts from landing in the middle of a URL placeholder."""
+        for placeholder_start, placeholder_end in placeholder_spans:
+            if placeholder_start < next_start < placeholder_end:
+                if placeholder_start > previous_start:
+                    return placeholder_start
+                return placeholder_end
+        return next_start
+
     def _simple_split_text(self, text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
         """
         Simple text splitter as fallback when langchain is not available.
@@ -41,6 +80,7 @@ class SimpleTextSplitter(URLProtectionMixin):
         chunks = []
         start = 0
         text_len = len(protected_text)
+        placeholder_spans = self._placeholder_spans(protected_text, url_map)
 
         while start < text_len:
             # Calculate end position
@@ -51,15 +91,24 @@ class SimpleTextSplitter(URLProtectionMixin):
                 # Try to break at newline, sentence end, or space
                 for separator in ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " "]:
                     last_sep = protected_text.rfind(separator, start, end)
-                    if last_sep != -1:
-                        end = last_sep + len(separator)
+                    if last_sep == -1:
+                        continue
+                    split_end = last_sep + len(separator)
+                    if split_end - start > chunk_overlap:
+                        end = split_end
                         break
+
+                end = self._align_end_to_placeholder(end, start, chunk_overlap, placeholder_spans)
 
             chunk = protected_text[start:end].strip()
             if chunk:
                 chunks.append(chunk)
 
+            if end >= text_len:
+                break
+
             # Move start position with overlap
-            start = max(start + 1, end - chunk_overlap)
+            next_start = max(start + 1, end - chunk_overlap)
+            start = self._align_start_to_placeholder(next_start, start, placeholder_spans)
 
         return [self.restore_urls(chunk, url_map) for chunk in chunks]
