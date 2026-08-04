@@ -448,6 +448,132 @@ class BridgeClientTests(unittest.TestCase):
         self.assertNotIn("error", response)
         client.close()
 
+    def test_slow_reverse_handler_does_not_block_regular_rpc_responses(self) -> None:
+        """A host LLM callback must not stall the stdout response demux.
+
+        ``host.llm.complete`` can legitimately spend several seconds in the
+        Hermes model client.  The bridge reader still has to resolve an
+        unrelated foreground ``turn.start`` response during that
+        window; otherwise one background callback head-of-line blocks every
+        provider lease sharing the process.
+        """
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        handler_started = threading.Event()
+        release_handler = threading.Event()
+
+        def _slow_handler(_params: dict) -> dict:
+            handler_started.set()
+            release_handler.wait(timeout=2.0)
+            return {"text": "host:done", "model": "host-test"}
+
+        client.register_host_handler("host.llm.complete", _slow_handler)
+        self._fake.stdout._enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": "srv-slow",
+                "method": "host.llm.complete",
+                "params": {"messages": [{"role": "user", "content": "slow"}]},
+            }
+        )
+        self.assertTrue(handler_started.wait(timeout=0.5))
+
+        try:
+            response = client.request(
+                "turn.start",
+                {
+                    "sessionId": "hermes:session:1",
+                    "userText": "foreground recall",
+                },
+                timeout=0.5,
+            )
+            self.assertIn("foreground recall", response["injectedContext"])
+        finally:
+            release_handler.set()
+
+        reverse_response = self._wait_for_client_write(
+            lambda msg: msg.get("id") == "srv-slow"
+        )
+        self.assertEqual(reverse_response["result"]["text"], "host:done")
+        client.close()
+
+    def test_reverse_handler_queue_rejects_overload_without_blocking_reader(self) -> None:
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        handler_started = threading.Event()
+        release_handler = threading.Event()
+
+        def _slow_handler(_params: dict) -> dict:
+            handler_started.set()
+            release_handler.wait(timeout=2.0)
+            return {"text": "done"}
+
+        client.register_host_handler("host.llm.complete", _slow_handler)
+        self._fake.stdout._enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": "srv-running",
+                "method": "host.llm.complete",
+                "params": {},
+            }
+        )
+        self.assertTrue(handler_started.wait(timeout=0.5))
+
+        overflow_id = "srv-overflow"
+        for index in range(bridge_client_mod.HOST_HANDLER_QUEUE_CAPACITY + 1):
+            rpc_id = (
+                overflow_id
+                if index == bridge_client_mod.HOST_HANDLER_QUEUE_CAPACITY
+                else f"srv-{index}"
+            )
+            self._fake.stdout._enqueue(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "method": "host.llm.complete",
+                    "params": {},
+                }
+            )
+
+        try:
+            response = self._wait_for_client_write(
+                lambda msg: msg.get("id") == overflow_id
+            )
+            self.assertEqual(response["error"]["data"]["code"], "host_handler_busy")
+        finally:
+            client.close()
+            release_handler.set()
+
+    def test_close_does_not_wait_for_a_running_reverse_handler(self) -> None:
+        """An uncooperative host callback must not extend bridge shutdown."""
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        handler_started = threading.Event()
+        release_handler = threading.Event()
+
+        def _slow_handler(_params: dict) -> dict:
+            handler_started.set()
+            release_handler.wait(timeout=2.0)
+            return {"text": "late", "model": "host-test"}
+
+        client.register_host_handler("host.llm.complete", _slow_handler)
+        self._fake.stdout._enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": "srv-close",
+                "method": "host.llm.complete",
+                "params": {},
+            }
+        )
+        self.assertTrue(handler_started.wait(timeout=0.5))
+
+        started = time.monotonic()
+        try:
+            client.close()
+        finally:
+            release_handler.set()
+        self.assertLess(time.monotonic() - started, 0.5)
+
     def test_reader_exit_marks_pending_as_transport_closed(self) -> None:
         """R1 (#2028): reader thread EOF must wake pending waiters
         with transport_closed instead of leaving them parked on their

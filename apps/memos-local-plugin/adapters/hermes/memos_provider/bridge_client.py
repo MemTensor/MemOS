@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import queue
 import shutil
 import subprocess
 import threading
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 HOST_HANDLER_WAIT_SECONDS = 5.0
+HOST_HANDLER_QUEUE_CAPACITY = 16
 
 # ─── Module-level singleton tracker ─────────────────────────────────────
 # Each entry maps an ``(agent, no_viewer, runtime_home)`` key to the
@@ -152,12 +154,16 @@ class MemosBridgeClient:
         # Reverse-direction handlers: the bridge can send us a
         # JSON-RPC request via `serverRequest(...)` (e.g.
         # `host.llm.complete` for fallback LLM calls). Registered
-        # methods run on the dedicated reader thread; long-running
-        # work should spawn its own worker if it needs to. Each
-        # handler returns a JSON-serialisable value or raises to
-        # surface a JSON-RPC error back to the bridge.
+        # methods run on one bounded, daemon worker. Keeping execution
+        # serial preserves the adapter's previous concurrency contract while
+        # preventing a slow host LLM call from blocking stdout response
+        # demultiplexing for every shared provider lease.
         self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
         self._host_handlers_cv = threading.Condition()
+        self._host_handler_queue: queue.Queue[
+            tuple[Any, str, dict[str, Any]] | None
+        ] = queue.Queue(maxsize=HOST_HANDLER_QUEUE_CAPACITY)
+        self._host_handler_stop = threading.Event()
         self._closed = False
 
         plugin_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -226,6 +232,12 @@ class MemosBridgeClient:
             env=env,
             cwd=str(plugin_root),
         )
+        self._host_handler_worker = threading.Thread(
+            target=self._host_handler_loop,
+            daemon=True,
+            name="memos-bridge-host-handler",
+        )
+        self._host_handler_worker.start()
         self._reader = threading.Thread(
             target=self._read_loop,
             daemon=True,
@@ -348,7 +360,7 @@ class MemosBridgeClient:
             try:
                 self._proc.stdin.write(payload + "\n")
                 self._proc.stdin.flush()
-            except (BrokenPipeError, OSError):
+            except (BrokenPipeError, OSError, ValueError):
                 pass
 
     def on_event(self, cb: Callable[[dict[str, Any]], None]) -> None:
@@ -365,11 +377,9 @@ class MemosBridgeClient:
         """Register a handler for bridge → adapter (reverse) requests.
 
         The Node-side bridge calls these via ``stdio.serverRequest``.
-        Most-recent registration wins. The handler runs on the reader
-        thread; if it blocks for a long time it stalls every other
-        bridge → adapter notification, so handlers that need to do
-        heavy work (e.g. an LLM call) are still expected to return
-        within the bridge-side timeout (default 60 s).
+        Most-recent registration wins. Handlers run serially on a bounded
+        daemon worker so a long-running host LLM call cannot stall the reader
+        thread that resolves unrelated foreground JSON-RPC responses.
         """
         with self._host_handlers_cv:
             self._host_handlers[method] = handler
@@ -381,6 +391,7 @@ class MemosBridgeClient:
         with self._host_handlers_cv:
             self._closed = True
             self._host_handlers_cv.notify_all()
+        self._stop_host_handler_worker()
 
         # Drop self from the module-level singleton tracker (issue #1910)
         # BEFORE the potentially-slow stdin/SIGTERM/SIGKILL dance. We
@@ -435,6 +446,7 @@ class MemosBridgeClient:
         with self._host_handlers_cv:
             self._closed = True
             self._host_handlers_cv.notify_all()
+        self._stop_host_handler_worker()
         with self._lock:
             for entry in list(self._pending.values()):
                 entry["error"] = {
@@ -477,7 +489,9 @@ class MemosBridgeClient:
                 # Reverse-direction request: the bridge is asking the
                 # adapter to do something (e.g. run a fallback LLM call
                 # via `host.llm.complete`). Dispatch to the registered
-                # handler and write the response back synchronously.
+                # handler on the bounded worker. The reader must return to
+                # stdout immediately so a slow host LLM callback cannot
+                # head-of-line block normal JSON-RPC responses.
                 method = msg.get("method")
                 rpc_id = msg.get("id")
                 if (
@@ -486,33 +500,10 @@ class MemosBridgeClient:
                     and "result" not in msg
                     and "error" not in msg
                 ):
-                    handler = self._host_handler_for(method)
-                    if handler is None:
-                        self._send_response(
-                            rpc_id,
-                            error={
-                                "code": -32601,
-                                "message": f"method not found: {method}",
-                                "data": {"code": "unknown_method"},
-                            },
-                        )
-                        continue
                     params = msg.get("params") or {}
                     if not isinstance(params, dict):
                         params = {}
-                    try:
-                        result = handler(params)
-                        self._send_response(rpc_id, result=result)
-                    except Exception as err:
-                        logger.warning("host handler %s failed: %s", method, err)
-                        self._send_response(
-                            rpc_id,
-                            error={
-                                "code": -32000,
-                                "message": str(err) or err.__class__.__name__,
-                                "data": {"code": "host_handler_failed"},
-                            },
-                        )
+                    self._dispatch_host_request(rpc_id, method, params)
                     continue
         except Exception:
             # Any unexpected exception in the reader loop still needs
@@ -526,6 +517,80 @@ class MemosBridgeClient:
             # immediately so callers get `transport_closed` in < 1 s
             # instead of waiting for each 30 s per-request timeout.
             self._abort_pending("bridge subprocess exited")
+
+    def _dispatch_host_request(
+        self,
+        rpc_id: Any,
+        method: str,
+        params: dict[str, Any],
+    ) -> None:
+        """Queue reverse RPC work without ever blocking the reader thread."""
+        if self._closed:
+            return
+        try:
+            self._host_handler_queue.put_nowait((rpc_id, method, params))
+        except queue.Full:
+            logger.warning("host handler queue full; rejecting %s", method)
+            self._send_response(
+                rpc_id,
+                error={
+                    "code": -32000,
+                    "message": "host handler queue is full",
+                    "data": {"code": "host_handler_busy"},
+                },
+            )
+
+    def _host_handler_loop(self) -> None:
+        """Run reverse RPC handlers serially away from stdout demultiplexing."""
+        while True:
+            request = self._host_handler_queue.get()
+            try:
+                if request is None:
+                    return
+                rpc_id, method, params = request
+                if self._closed:
+                    continue
+                handler = self._host_handler_for(method)
+                if handler is None:
+                    self._send_response(
+                        rpc_id,
+                        error={
+                            "code": -32601,
+                            "message": f"method not found: {method}",
+                            "data": {"code": "unknown_method"},
+                        },
+                    )
+                    continue
+                try:
+                    result = handler(params)
+                    self._send_response(rpc_id, result=result)
+                except Exception as err:
+                    logger.warning("host handler %s failed: %s", method, err)
+                    self._send_response(
+                        rpc_id,
+                        error={
+                            "code": -32000,
+                            "message": str(err) or err.__class__.__name__,
+                            "data": {"code": "host_handler_failed"},
+                        },
+                    )
+            finally:
+                self._host_handler_queue.task_done()
+
+    def _stop_host_handler_worker(self) -> None:
+        """Discard queued callbacks and ask the daemon worker to exit."""
+        if self._host_handler_stop.is_set():
+            return
+        self._host_handler_stop.set()
+        while True:
+            try:
+                self._host_handler_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                self._host_handler_queue.task_done()
+        with contextlib.suppress(queue.Full):
+            self._host_handler_queue.put_nowait(None)
 
     def _host_handler_for(
         self,
@@ -568,7 +633,7 @@ class MemosBridgeClient:
             try:
                 self._proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
                 self._proc.stdin.flush()
-            except (BrokenPipeError, OSError):
+            except (BrokenPipeError, OSError, ValueError):
                 pass
 
     def _stderr_loop(self) -> None:
