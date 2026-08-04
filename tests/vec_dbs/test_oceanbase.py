@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from pydantic import ValidationError
+
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.vec_dbs.factory import VecDBFactory
 from memos.vec_dbs.item import VecDBItem
@@ -60,6 +62,21 @@ def vec_db(config, fake_pyseekdb, collection):
 def test_backend_registered():
     for backend in ("oceanbase", "seekdb"):
         assert backend in VecDBFactory.backend_to_class
+
+
+@pytest.mark.parametrize("bad_dimension", [None, 0, -1])
+def test_vector_dimension_rejected_at_config_construction(bad_dimension):
+    """A missing or non-positive dimension must fail before the HNSW index is built."""
+    raw_config = {
+        "collection_name": "test_collection",
+        "host": "127.0.0.1",
+        "database": "memos",
+    }
+    if bad_dimension is not None:
+        raw_config["vector_dimension"] = bad_dimension
+
+    with pytest.raises(ValidationError):
+        VectorDBConfigFactory.model_validate({"backend": "oceanbase", "config": raw_config})
 
 
 def test_create_collection(vec_db, collection):

@@ -38,6 +38,17 @@ def _executed_sql(cursor):
     return [str(call.args[0]) for call in cursor.execute.call_args_list]
 
 
+def _last_select(cursor):
+    """Return the (sql, params) of the last executed SELECT statement."""
+    calls = [
+        (str(call.args[0]), call.args[1] if len(call.args) > 1 else ())
+        for call in cursor.execute.call_args_list
+        if "SELECT" in str(call.args[0]).upper()
+    ]
+    assert calls, "no SELECT statement was executed"
+    return calls[-1]
+
+
 def test_backend_registered():
     for backend in ("oceanbase", "seekdb"):
         assert backend in GraphStoreFactory.backend_to_class
@@ -101,6 +112,161 @@ def test_search_by_embedding_threshold(graph_db, cursor):
     cursor.fetchall.return_value = [("n1", 0.9), ("n3", 0.5), ("n2", 0.4)]
     results = graph_db.search_by_embedding([0.1, 0.2, 0.3], top_k=5, threshold=0.5)
     assert results == [{"id": "n1", "score": 0.9}, {"id": "n3", "score": 0.5}]
+
+
+def test_search_by_embedding_returns_requested_fields(graph_db, cursor):
+    # Columns after (id, score) are memory, properties, created_at, updated_at, user_name.
+    cursor.fetchall.return_value = [
+        (
+            "n1",
+            0.9,
+            "hello",
+            '{"key": "k1", "status": "activated"}',
+            "2024-01-01 00:00:00",
+            "2024-01-02 00:00:00",
+            "alice",
+        )
+    ]
+    results = graph_db.search_by_embedding(
+        [0.1, 0.2, 0.3], top_k=5, return_fields=["memory", "key", "user_name", "updated_at"]
+    )
+    assert results == [
+        {
+            "id": "n1",
+            "score": 0.9,
+            "memory": "hello",
+            "key": "k1",
+            "user_name": "alice",
+            "updated_at": "2024-01-02 00:00:00",
+        }
+    ]
+
+
+def test_search_by_embedding_return_fields_include_embedding(graph_db, cursor):
+    cursor.fetchall.return_value = [
+        ("n1", 0.9, "hello", "{}", None, None, "alice", "[0.1,0.2,0.3]")
+    ]
+    results = graph_db.search_by_embedding([0.1, 0.2, 0.3], return_fields=["memory", "embedding"])
+    assert results == [{"id": "n1", "score": 0.9, "memory": "hello", "embedding": [0.1, 0.2, 0.3]}]
+
+
+def test_search_by_embedding_return_fields_cannot_shadow_id_or_score(graph_db, cursor):
+    """`id`/`score` come from the query; a same-named property must not win."""
+    cursor.fetchall.return_value = [
+        (
+            "n1",
+            0.9,
+            "hello",
+            '{"id": "forged", "score": 0.1}',
+            None,
+            None,
+            "alice",
+        )
+    ]
+    results = graph_db.search_by_embedding([0.1, 0.2, 0.3], return_fields=["id", "score", "memory"])
+    assert results == [{"id": "n1", "score": 0.9, "memory": "hello"}]
+
+
+def test_search_by_embedding_user_name_comes_from_column(graph_db, cursor):
+    """The tenant column is authoritative; a stale JSON copy must not win."""
+    cursor.fetchall.return_value = [
+        ("n1", 0.9, "hello", '{"user_name": "stale"}', None, None, "alice")
+    ]
+    results = graph_db.search_by_embedding([0.1, 0.2, 0.3], return_fields=["user_name"])
+    assert results == [{"id": "n1", "score": 0.9, "user_name": "alice"}]
+
+
+def test_search_by_embedding_null_user_name_does_not_fall_back_to_json(graph_db, cursor):
+    """A NULL tenant column stays NULL; use_multi_db makes this reachable."""
+    cursor.fetchall.return_value = [
+        ("n1", 0.9, "hello", '{"user_name": "stale"}', None, None, None)
+    ]
+    results = graph_db.search_by_embedding([0.1, 0.2, 0.3], return_fields=["user_name"])
+    assert results == [{"id": "n1", "score": 0.9, "user_name": None}]
+
+
+def test_search_by_embedding_ignores_unsafe_return_fields(graph_db, cursor):
+    cursor.fetchall.return_value = [("n1", 0.9)]
+    results = graph_db.search_by_embedding([0.1, 0.2, 0.3], return_fields=["memory; DROP TABLE"])
+    assert results == [{"id": "n1", "score": 0.9}]
+    sql, _ = _last_select(cursor)
+    assert "DROP TABLE" not in sql.upper()
+
+
+def test_search_by_embedding_applies_structured_filter(graph_db, cursor):
+    cursor.fetchall.return_value = []
+    graph_db.search_by_embedding(
+        [0.1, 0.2, 0.3], filter={"and": [{"session_id": "s1"}, {"tags": ["urgent"]}]}
+    )
+    sql, params = _last_select(cursor)
+    assert "$.session_id" in sql
+    assert "JSON_CONTAINS" in sql
+    assert "s1" in params
+
+
+def test_search_by_embedding_scopes_to_knowledgebase_ids(graph_db, cursor):
+    cursor.fetchall.return_value = []
+    graph_db.search_by_embedding([0.1, 0.2, 0.3], knowledgebase_ids=["bob", "carol"])
+    sql, params = _last_select(cursor)
+    assert "user_name IN (%s, %s, %s)" in sql
+    assert {"alice", "bob", "carol"}.issubset(set(params))
+
+
+def test_search_by_embedding_placeholders_match_params(graph_db, cursor):
+    """Every %s must have exactly one bound value, whatever mix of clauses is used."""
+    cursor.fetchall.return_value = []
+    graph_db.search_by_embedding(
+        [0.1, 0.2, 0.3],
+        top_k=3,
+        scope="LongTermMemory",
+        status="activated",
+        search_filter={"source": "chat"},
+        filter={"or": [{"session_id": "s1"}, {"tags": ["urgent"]}]},
+        knowledgebase_ids=["bob", "carol"],
+    )
+    sql, params = _last_select(cursor)
+    assert sql.count("%s") == len(params)
+
+
+def test_get_by_metadata_applies_filter_and_knowledgebase_ids(graph_db, cursor):
+    cursor.fetchall.return_value = [("n1",)]
+    graph_db.get_by_metadata([], filter={"session_id": "s1"}, knowledgebase_ids=["bob"])
+    sql, params = _last_select(cursor)
+    assert "user_name IN (%s, %s)" in sql
+    assert "$.session_id" in sql
+    assert "s1" in params
+
+
+def test_get_all_memory_items_applies_filter(graph_db, cursor):
+    # recall.py passes `filter` unconditionally when loading WorkingMemory.
+    cursor.fetchall.return_value = []
+    graph_db.get_all_memory_items(
+        scope="WorkingMemory", status="activated", filter={"session_id": "s1"}
+    )
+    sql, params = _last_select(cursor)
+    assert "$.session_id" in sql
+    assert "s1" in params
+
+
+def test_delete_by_file_ids_requires_writable_cube_ids(graph_db):
+    with pytest.raises(ValueError, match="writable_cube_ids"):
+        graph_db.delete_node_by_prams(file_ids=["f1"])
+
+
+def test_delete_by_filter_falls_back_to_configured_user(graph_db, cursor):
+    cursor.fetchall.return_value = [("n1",)]
+    graph_db.delete_node_by_prams(filter={"session_id": "s1"})
+    sql, params = _last_select(cursor)
+    assert "user_name = %s" in sql
+    assert "alice" in params
+
+
+def test_delete_is_scoped_to_writable_cube_ids(graph_db, cursor):
+    cursor.fetchall.return_value = [("n1",)]
+    graph_db.delete_node_by_prams(writable_cube_ids=["bob", "carol"], memory_ids=["n1"])
+    sql, params = _last_select(cursor)
+    assert "user_name IN (%s, %s)" in sql
+    assert "alice" not in params
 
 
 def test_get_path_cte(graph_db, cursor):

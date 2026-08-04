@@ -57,19 +57,14 @@ class MilvusVecDBConfig(BaseVecDBConfig):
 class OceanBaseVecDBConfig(BaseVecDBConfig):
     """Configuration for OceanBase / seekdb vector database (via pyseekdb)."""
 
+    vector_dimension: int = Field(
+        ..., gt=0, description="Dimension of the vectors; required to build the HNSW index"
+    )
     host: str = Field(..., description="Host for the seekdb / OceanBase server")
     port: int = Field(default=2881, description="Port for the seekdb / OceanBase server")
     user: str = Field(default="root", description="Username for the connection")
     password: str = Field(default="", description="Password for the connection")
     database: str = Field(default="memos", description="Database name")
-
-    @field_validator("vector_dimension")
-    @classmethod
-    def validate_vector_dimension(cls, value: int | None) -> int:
-        """OceanBase requires a concrete vector dimension to build the HNSW index."""
-        if value is None or isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise ValueError("`vector_dimension` must be a positive integer for OceanBase")
-        return value
 
 
 class VectorDBConfigFactory(BaseConfig):

@@ -34,6 +34,10 @@ logger = get_logger(__name__)
 
 _SAFE_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# Payload columns selected when a caller asks for `return_fields`. Drives both the
+# SELECT list and the row unpacking, so the two can never drift apart.
+_PAYLOAD_COLUMNS = ("memory", "properties", "created_at", "updated_at", "user_name")
+
 
 class _PyMySQLConnectionPool:
     """Minimal thread-safe PyMySQL connection pool.
@@ -517,6 +521,40 @@ class OceanBaseGraphDB(BaseGraphDB):
             result["metadata"]["embedding"] = self._parse_embedding(row[5])
         return result
 
+    def _extract_return_fields(
+        self,
+        payload_row: tuple,
+        payload_columns: list[str],
+        return_fields: list[str],
+    ) -> dict[str, Any]:
+        """Project the requested fields out of a row's payload columns.
+
+        ``payload_row`` must hold exactly the columns named by ``payload_columns``,
+        in order, which is what the caller put into the SELECT list.
+        """
+        columns = dict(zip(payload_columns, payload_row, strict=True))
+
+        raw_props = columns.get("properties")
+        props = raw_props if isinstance(raw_props, dict) else json.loads(raw_props or "{}")
+
+        # Columns win over the JSON copy: they are the values writes go through.
+        direct: dict[str, Any] = {
+            "memory": columns.get("memory") or "",
+            "created_at": self._iso(columns.get("created_at")),
+            "updated_at": self._iso(columns.get("updated_at")),
+            "user_name": columns.get("user_name"),
+        }
+        if "embedding" in columns:
+            direct["embedding"] = self._parse_embedding(columns["embedding"])
+
+        result: dict[str, Any] = {}
+        for field in return_fields:
+            if field in direct:
+                result[field] = direct[field]
+            elif field in props:
+                result[field] = props[field]
+        return result
+
     @staticmethod
     def _iso(value: Any) -> str | None:
         if value is None:
@@ -544,6 +582,31 @@ class OceanBaseGraphDB(BaseGraphDB):
     @staticmethod
     def _is_safe_field_name(field: str) -> bool:
         return bool(_SAFE_FIELD_RE.match(field))
+
+    def _build_tenant_condition(
+        self,
+        user_name: str | None,
+        knowledgebase_ids: list[str] | None,
+    ) -> tuple[str, list[Any]]:
+        """Build the ``user_name`` scope condition together with its bind values.
+
+        ``knowledgebase_ids`` widens the scope to sibling cubes, so it is ORed
+        with ``user_name`` (expressed as an ``IN`` list) rather than ANDed.
+        Returns an empty fragment when no scope is known, which callers must treat
+        as an unscoped query and reject where cross-tenant access matters.
+        """
+        values: list[str] = []
+        if user_name:
+            values.append(user_name)
+        if knowledgebase_ids:
+            values.extend(kb_id for kb_id in knowledgebase_ids if isinstance(kb_id, str) and kb_id)
+
+        unique_values = list(dict.fromkeys(values))
+        if not unique_values:
+            return "", []
+        if len(unique_values) == 1:
+            return "user_name = %s", unique_values
+        return f"user_name IN ({self._placeholders(unique_values)})", unique_values
 
     def _field_expr(self, key: str) -> tuple[str, str]:
         """Build (text_expr, json_expr) SQL fragments for a filter key."""
@@ -634,10 +697,16 @@ class OceanBaseGraphDB(BaseGraphDB):
             return None
         return " AND ".join(parts)
 
-    def _build_filter_where_clause(self, filter_dict: dict[str, Any], params: list[Any]) -> str:
-        """Build a SQL WHERE fragment from a filter dict."""
+    def _build_filter_where_clause(self, filter_dict: dict[str, Any]) -> tuple[str, list[Any]]:
+        """Build a SQL WHERE fragment from a filter dict, with its bind values.
+
+        The private recursion below still threads a shared ``params`` accumulator;
+        it is scoped to this call so callers only ever see the fragment and its
+        own values as one inseparable pair.
+        """
+        params: list[Any] = []
         if not filter_dict:
-            return ""
+            return "", params
 
         if "and" in filter_dict:
             and_conditions = filter_dict.get("and")
@@ -649,7 +718,7 @@ class OceanBaseGraphDB(BaseGraphDB):
                     cond_sql = self._build_single_filter_condition(cond, params)
                     if cond_sql:
                         parts.append(f"({cond_sql})")
-            return " AND ".join(parts)
+            return " AND ".join(parts), params
 
         if "or" in filter_dict:
             or_conditions = filter_dict.get("or")
@@ -661,10 +730,10 @@ class OceanBaseGraphDB(BaseGraphDB):
                     cond_sql = self._build_single_filter_condition(cond, params)
                     if cond_sql:
                         parts.append(f"({cond_sql})")
-            return f"({' OR '.join(parts)})" if parts else ""
+            return (f"({' OR '.join(parts)})" if parts else ""), params
 
         cond_sql = self._build_single_filter_condition(filter_dict, params)
-        return cond_sql or ""
+        return cond_sql or "", params
 
     def delete_node_by_prams(
         self,
@@ -673,7 +742,29 @@ class OceanBaseGraphDB(BaseGraphDB):
         file_ids: list[str] | None = None,
         filter: dict | None = None,
     ) -> int:
-        """Delete nodes by memory_ids, file_ids, or filter (and clean up edges)."""
+        """Delete nodes by memory_ids, file_ids, or filter (and clean up edges).
+
+        All modes are scoped to a tenant: nodes of every user share one table, so
+        an unscoped WHERE would delete across tenants. ``file_ids`` deletes require
+        an explicit ``writable_cube_ids`` (matching the Neo4j community backend);
+        the other modes fall back to the configured ``user_name``.
+        """
+        scope_ids = [cube_id for cube_id in (writable_cube_ids or []) if cube_id]
+        if file_ids and not scope_ids:
+            raise ValueError("writable_cube_ids is required when deleting by file_ids")
+        if not scope_ids:
+            if not self.user_name:
+                raise ValueError(
+                    "delete_node_by_prams requires writable_cube_ids "
+                    "or a configured user_name to scope the deletion"
+                )
+            logger.warning(
+                "[delete_node_by_prams] No writable_cube_ids given; "
+                "scoping deletion to configured user_name %s",
+                self.user_name,
+            )
+            scope_ids = [self.user_name]
+
         where_conditions: list[str] = []
         params: list[Any] = []
 
@@ -691,18 +782,18 @@ class OceanBaseGraphDB(BaseGraphDB):
                 where_conditions.append(f"({' OR '.join(file_conditions)})")
 
         if filter:
-            filter_where = self._build_filter_where_clause(filter, params)
+            filter_where, filter_values = self._build_filter_where_clause(filter)
             if filter_where:
                 where_conditions.append(f"({filter_where})")
+                params.extend(filter_values)
 
         if not where_conditions:
             logger.warning("[delete_node_by_prams] No memory_ids, file_ids, or filter provided")
             return 0
 
-        if writable_cube_ids:
-            ph = self._placeholders(writable_cube_ids)
-            where_conditions.append(f"user_name IN ({ph})")
-            params.extend(writable_cube_ids)
+        tenant_condition, tenant_values = self._build_tenant_condition(None, scope_ids)
+        where_conditions.append(tenant_condition)
+        params.extend(tenant_values)
 
         where_clause = " AND ".join(where_conditions)
 
@@ -898,6 +989,7 @@ class OceanBaseGraphDB(BaseGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
+        return_fields: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
         """Search nodes by vector similarity, applying tenant filters before ranking."""
@@ -906,9 +998,10 @@ class OceanBaseGraphDB(BaseGraphDB):
         conditions = ["embedding IS NOT NULL"]
         params: list[Any] = []
 
-        if user_name:
-            conditions.append("user_name = %s")
-            params.append(user_name)
+        tenant_condition, tenant_values = self._build_tenant_condition(user_name, knowledgebase_ids)
+        if tenant_condition:
+            conditions.append(tenant_condition)
+            params.extend(tenant_values)
 
         if scope:
             conditions.append("JSON_UNQUOTE(JSON_EXTRACT(properties, '$.memory_type')) = %s")
@@ -930,12 +1023,33 @@ class OceanBaseGraphDB(BaseGraphDB):
                 conditions.append(f"JSON_UNQUOTE(JSON_EXTRACT(properties, '$.{k}')) = %s")
                 params.append(str(v))
 
+        if filter:
+            filter_where, filter_values = self._build_filter_where_clause(filter)
+            if filter_where:
+                conditions.append(f"({filter_where})")
+                params.extend(filter_values)
+
+        validated_return_fields = [
+            field
+            for field in self._validate_return_fields(return_fields)
+            if field not in ("id", "score")
+        ]
+        payload_columns: list[str] = []
+        if validated_return_fields:
+            payload_columns = list(_PAYLOAD_COLUMNS)
+            if "embedding" in validated_return_fields:
+                payload_columns.append("embedding")
+
+        columns = "id, 1 - cosine_distance(embedding, %s) AS score"
+        if payload_columns:
+            columns += ", " + ", ".join(payload_columns)
+
         where_clause = " AND ".join(conditions)
         vec = self._vec_literal(vector)
 
         rows = self._query(
             f"""
-            SELECT id, 1 - cosine_distance(embedding, %s) AS score
+            SELECT {columns}
             FROM {self.nodes_table}
             WHERE {where_clause}
             ORDER BY cosine_distance(embedding, %s)
@@ -947,8 +1061,14 @@ class OceanBaseGraphDB(BaseGraphDB):
         results = []
         for row in rows:
             score = float(row[1])
-            if threshold is None or score >= threshold:
-                results.append({"id": row[0], "score": score})
+            if threshold is not None and score < threshold:
+                continue
+            item = {"id": row[0], "score": score}
+            if payload_columns:
+                item.update(
+                    self._extract_return_fields(row[2:], payload_columns, validated_return_fields)
+                )
+            results.append(item)
         return results
 
     def get_by_metadata(
@@ -966,9 +1086,13 @@ class OceanBaseGraphDB(BaseGraphDB):
         conditions: list[str] = []
         params: list[Any] = []
 
-        if user_name_flag and user_name:
-            conditions.append("user_name = %s")
-            params.append(user_name)
+        if user_name_flag:
+            tenant_condition, tenant_values = self._build_tenant_condition(
+                user_name, knowledgebase_ids
+            )
+            if tenant_condition:
+                conditions.append(tenant_condition)
+                params.extend(tenant_values)
 
         if status:
             conditions.append("JSON_UNQUOTE(JSON_EXTRACT(properties, '$.status')) = %s")
@@ -997,6 +1121,12 @@ class OceanBaseGraphDB(BaseGraphDB):
                 conditions.append(f"JSON_CONTAINS({json_expr}, %s)")
                 params.append(json.dumps([value]))
 
+        if filter:
+            filter_where, filter_values = self._build_filter_where_clause(filter)
+            if filter_where:
+                conditions.append(f"({filter_where})")
+                params.extend(filter_values)
+
         where_clause = " AND ".join(conditions) if conditions else "TRUE"
 
         rows = self._query(f"SELECT id FROM {self.nodes_table} WHERE {where_clause}", params)
@@ -1014,15 +1144,23 @@ class OceanBaseGraphDB(BaseGraphDB):
         """Get all memory items of a specific memory_type."""
         user_name = kwargs.get("user_name") or self.user_name
 
-        conditions = [
-            "JSON_UNQUOTE(JSON_EXTRACT(properties, '$.memory_type')) = %s",
-            "user_name = %s",
-        ]
-        params: list[Any] = [scope, user_name]
+        conditions = ["JSON_UNQUOTE(JSON_EXTRACT(properties, '$.memory_type')) = %s"]
+        params: list[Any] = [scope]
+
+        tenant_condition, tenant_values = self._build_tenant_condition(user_name, knowledgebase_ids)
+        if tenant_condition:
+            conditions.append(tenant_condition)
+            params.extend(tenant_values)
 
         if status:
             conditions.append("JSON_UNQUOTE(JSON_EXTRACT(properties, '$.status')) = %s")
             params.append(status)
+
+        if filter:
+            filter_where, filter_values = self._build_filter_where_clause(filter)
+            if filter_where:
+                conditions.append(f"({filter_where})")
+                params.extend(filter_values)
 
         where_clause = " AND ".join(conditions)
         cols = "id, memory, properties, created_at, updated_at"
