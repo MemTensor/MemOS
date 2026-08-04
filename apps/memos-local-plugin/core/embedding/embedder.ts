@@ -32,6 +32,7 @@ import { MistralEmbeddingProvider } from "./providers/mistral.js";
 import { OpenAiEmbeddingProvider } from "./providers/openai.js";
 import { VoyageEmbeddingProvider } from "./providers/voyage.js";
 import type {
+  EmbedCallOptions,
   EmbedInput,
   EmbedRole,
   EmbedStats,
@@ -96,13 +97,17 @@ export function createEmbedderWithProvider(
     }
   }
 
-  async function embedOne(input: string | EmbedInput): Promise<EmbeddingVector> {
-    const vecs = await embedMany([input]);
+  async function embedOne(
+    input: string | EmbedInput,
+    options?: EmbedCallOptions,
+  ): Promise<EmbeddingVector> {
+    const vecs = await embedMany([input], options);
     return vecs[0]!;
   }
 
   async function embedMany(
     inputs: Array<string | EmbedInput>,
+    options?: EmbedCallOptions,
   ): Promise<EmbeddingVector[]> {
     requests += inputs.length;
     if (inputs.length === 0) return [];
@@ -179,6 +184,7 @@ export function createEmbedderWithProvider(
           const ctx: ProviderCallCtx = {
             config,
             log: providerCtxLog,
+            signal: options?.signal,
           };
           raw = await provider.embed(texts, role, ctx);
           // Record success but DO NOT clear `lastError` — the viewer

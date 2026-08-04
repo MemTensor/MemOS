@@ -50,6 +50,7 @@ export interface FilterDeps {
   llm: LlmClient | null;
   log: Logger;
   timeoutMs?: number;
+  signal?: AbortSignal;
   config: Pick<
     RetrievalConfig,
     | "llmFilterEnabled"
@@ -117,6 +118,10 @@ export async function llmFilterCandidates(
   if (!deps.llm) {
     return passthrough(ranked, "no_llm");
   }
+  if (deps.signal?.aborted) {
+    deps.log.debug("llm_filter.deadline_exceeded", { candidateCount: ranked.length });
+    return safeCutoff(ranked, deps);
+  }
 
   const bodyChars =
     deps.config.llmFilterCandidateBodyChars ?? DEFAULT_CANDIDATE_BODY_CHARS;
@@ -148,6 +153,7 @@ ${list}`,
         episodeId: input.episodeId,
         temperature: 0,
         timeoutMs: deps.timeoutMs,
+        signal: deps.signal,
         // Output is only ordered indices + one bool, but the list can
         // legitimately be as long as the ranked candidates.
         maxTokens: filterOutputTokenBudget(ranked.length),

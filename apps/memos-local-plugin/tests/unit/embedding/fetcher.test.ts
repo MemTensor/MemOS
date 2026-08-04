@@ -21,6 +21,7 @@ describe("embedding/fetcher", () => {
     vi.useRealTimers(); // retry backoff uses real setTimeout; keep it real but short
   });
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -79,6 +80,32 @@ describe("embedding/fetcher", () => {
       maxRetries: 1,
     });
     expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors Retry-After HTTP-date before retrying a 429", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-04T00:00:00.000Z"));
+    const f = mockFetch([
+      new Response("rate limited", {
+        status: 429,
+        headers: { "Retry-After": "Tue, 04 Aug 2026 00:00:03 GMT" },
+      }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+
+    const pending = httpPostJson<{ ok: number }>({
+      url: "https://x",
+      body: {},
+      provider: "cohere",
+      log: nullLogger(),
+      maxRetries: 1,
+    });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual({ ok: 1 });
+    expect(f).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
   it("does not retry on 400", async () => {

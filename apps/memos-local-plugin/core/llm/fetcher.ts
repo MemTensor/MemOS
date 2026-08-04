@@ -11,6 +11,7 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
+import { parseRetryAfterMs, retryDelayMs, waitForRetry } from "../util/retry-after.js";
 import type { LlmProviderLogger, LlmProviderName } from "./types.js";
 
 export interface HttpPostOpts<TBody> {
@@ -56,16 +57,20 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       if (!resp.ok) {
         const text = await safeText(resp);
         const transient = resp.status >= 500 || resp.status === 429;
+        const retryAfterMs = resp.status === 429 || resp.status === 503
+          ? parseRetryAfterMs(resp.headers.get("Retry-After"))
+          : null;
         opts.log.warn("http.non_ok", {
           status: resp.status,
           attempt,
           transient,
           durationMs: ms,
+          retryAfterMs,
           body: truncateLogBody(text),
         });
         if (transient && attempt <= opts.maxRetries) {
           opts.onRetry?.(attempt);
-          await backoff(attempt);
+          await backoff(attempt, retryAfterMs, opts.signal);
           continue;
         }
         throw new MemosError(
@@ -85,8 +90,15 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
     } catch (err) {
       lastErr = err;
       if (err instanceof MemosError) throw err;
+      if (opts.signal?.aborted) {
+        throw new MemosError(
+          ERROR_CODES.LLM_TIMEOUT,
+          `${opts.provider} request was cancelled`,
+          { provider: opts.provider, url: opts.url, cancelled: true },
+        );
+      }
       const transient = isTransientError(err);
-      const timedOut = isTimeout(err);
+      const timedOut = isTimeout(err) || opts.signal?.aborted === true;
       opts.log.warn("http.exception", {
         attempt,
         transient,
@@ -95,7 +107,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       });
       if ((transient || timedOut) && attempt <= opts.maxRetries) {
         opts.onRetry?.(attempt);
-        await backoff(attempt);
+        await backoff(attempt, null, opts.signal);
         continue;
       }
       if (timedOut) {
@@ -245,11 +257,15 @@ function isTimeout(err: unknown): boolean {
   return false;
 }
 
-async function backoff(attempt: number): Promise<void> {
-  const base = 250;
-  const jitter = Math.floor(Math.random() * 120);
-  const ms = base * 2 ** (attempt - 1) + jitter;
-  await new Promise((r) => setTimeout(r, ms));
+async function backoff(
+  attempt: number,
+  retryAfterMs: number | null,
+  signal?: AbortSignal,
+): Promise<void> {
+  await waitForRetry(
+    retryDelayMs({ attempt, baseMs: 250, jitterMaxMs: 120, retryAfterMs }),
+    signal,
+  );
 }
 
 function mergeSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {

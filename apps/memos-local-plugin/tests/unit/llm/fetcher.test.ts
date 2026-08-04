@@ -29,7 +29,78 @@ function mockFetch(replies: Array<Response | Error>) {
 
 describe("llm/fetcher", () => {
   beforeAll(() => initTestLogger());
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("honors Retry-After delay-seconds before retrying a 429", async () => {
+    vi.useFakeTimers();
+    const f = mockFetch([
+      new Response("slow down", { status: 429, headers: { "Retry-After": "2" } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+
+    const pending = httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 5_000,
+      maxRetries: 1,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({ json: { ok: 1 } });
+    expect(f).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("aborts while waiting for Retry-After", async () => {
+    vi.useFakeTimers();
+    const ctrl = new AbortController();
+    const f = mockFetch([
+      new Response("slow down", { status: 429, headers: { "Retry-After": "120" } }),
+    ]);
+
+    const pending = httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 5_000,
+      maxRetries: 1,
+      signal: ctrl.signal,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    ctrl.abort();
+    await expect(pending).rejects.toBeInstanceOf(MemosError);
+    expect(f).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("caps a long Retry-After from a 503 response", async () => {
+    vi.useFakeTimers();
+    const f = mockFetch([
+      new Response("maintenance", { status: 503, headers: { "Retry-After": "120" } }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+
+    const pending = httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 120_000,
+      maxRetries: 1,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({ json: { ok: 1 } });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
 
   it("returns parsed JSON on 200", async () => {
     mockFetch([new Response(JSON.stringify({ a: 1 }), { status: 200 })]);

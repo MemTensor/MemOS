@@ -166,19 +166,26 @@ export interface Embedder {
   /** Model identifier as configured by the operator (e.g. "bge-m3"). */
   readonly model: string;
 
-  embedOne(input: string | EmbedInput): Promise<EmbeddingVector>;
+  embedOne(input: string | EmbedInput, options?: EmbedCallOptions): Promise<EmbeddingVector>;
 
   /**
    * Batch-embed many texts. Results keep input order. Duplicates are deduped
    * internally so a text repeated N times causes 1 cache miss max.
    */
-  embedMany(inputs: Array<string | EmbedInput>): Promise<EmbeddingVector[]>;
+  embedMany(
+    inputs: Array<string | EmbedInput>,
+    options?: EmbedCallOptions,
+  ): Promise<EmbeddingVector[]>;
 
   stats(): EmbedStats;
 
   resetCache(): void;
 
   close(): Promise<void>;
+}
+
+export interface EmbedCallOptions {
+  signal?: AbortSignal;
 }
 
 // ─── Errors ──────────────────────────────────────────────────────────────────

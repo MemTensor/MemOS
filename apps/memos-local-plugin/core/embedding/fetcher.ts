@@ -8,6 +8,7 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
+import { parseRetryAfterMs, retryDelayMs, waitForRetry } from "../util/retry-after.js";
 import type { EmbeddingProviderName, ProviderLogger } from "./types.js";
 
 export interface HttpPostOpts<TBody> {
@@ -46,15 +47,19 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       if (!resp.ok) {
         const text = await safeText(resp);
         const transient = resp.status >= 500 || resp.status === 429;
+        const retryAfterMs = resp.status === 429 || resp.status === 503
+          ? parseRetryAfterMs(resp.headers.get("Retry-After"))
+          : null;
         opts.log.warn("http.non_ok", {
           url: opts.url,
           status: resp.status,
           attempt,
           transient,
+          retryAfterMs,
           durationMs: Date.now() - start,
         });
         if (transient && attempt <= maxRetries) {
-          await backoff(attempt);
+          await backoff(attempt, retryAfterMs, opts.signal);
           continue;
         }
         throw new MemosError(
@@ -83,7 +88,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
         durationMs: Date.now() - start,
       });
       if (transient && attempt <= maxRetries) {
-        await backoff(attempt);
+        await backoff(attempt, null, opts.signal);
         continue;
       }
       throw new MemosError(
@@ -123,11 +128,15 @@ function isTransientError(err: unknown): boolean {
   return false;
 }
 
-async function backoff(attempt: number): Promise<void> {
-  const base = 200;
-  const jitter = Math.floor(Math.random() * 100);
-  const ms = base * 2 ** (attempt - 1) + jitter;
-  await new Promise((r) => setTimeout(r, ms));
+async function backoff(
+  attempt: number,
+  retryAfterMs: number | null,
+  signal?: AbortSignal,
+): Promise<void> {
+  await waitForRetry(
+    retryDelayMs({ attempt, baseMs: 200, jitterMaxMs: 100, retryAfterMs }),
+    signal,
+  );
 }
 
 function mergeSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {

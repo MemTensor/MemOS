@@ -103,6 +103,11 @@ export interface TurnInputDTO {
   contextHints?: Record<string, unknown>;
   /** Wall-clock when the turn began. */
   ts: EpochMs;
+  /**
+   * Absolute adapter deadline for foreground work. Every pipeline stage
+   * shares this budget; it is not reset after relation or intent handling.
+   */
+  deadlineAt?: EpochMs;
 }
 
 export interface TurnResultDTO {

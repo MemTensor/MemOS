@@ -35,6 +35,7 @@ export function createEmbeddingRetryWorker(
   const workerId = `embedding-retry-${ids.span()}`;
   let timer: ReturnType<typeof setInterval> | null = null;
   let running: Promise<void> | null = null;
+  let stopped = false;
 
   async function runOnce(): Promise<void> {
     if (!deps.embedder) return;
@@ -182,7 +183,7 @@ export function createEmbeddingRetryWorker(
   }
 
   function tick(): void {
-    if (running) return;
+    if (stopped || running) return;
     running = runOnce().finally(() => {
       running = null;
     });
@@ -190,16 +191,17 @@ export function createEmbeddingRetryWorker(
 
   return {
     start(): void {
-      if (timer || !deps.embedder) return;
+      if (stopped || timer || !deps.embedder) return;
       tick();
       timer = setInterval(tick, deps.intervalMs ?? DEFAULT_INTERVAL_MS);
     },
     stop(): void {
+      stopped = true;
       if (timer) clearInterval(timer);
       timer = null;
     },
     async flush(): Promise<void> {
-      tick();
+      if (!stopped) tick();
       if (running) await running;
     },
   };

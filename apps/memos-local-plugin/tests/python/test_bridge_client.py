@@ -1111,7 +1111,7 @@ class MemTensorProviderTests(unittest.TestCase):
             "sessions (issue #2028).",
         )
 
-    def test_prefetch_uses_long_rpc_timeout_for_turn_start(self) -> None:
+    def test_prefetch_uses_dedicated_foreground_timeout_for_turn_start(self) -> None:
         p = self._provider_mod.MemTensorProvider()
         bridge = RecordingBridge()
         p._bridge = bridge
@@ -1122,12 +1122,45 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertIn("turn.start", methods)
         start_index = methods.index("turn.start")
         start_kwargs = bridge.call_kwargs[start_index]
-        self.assertGreaterEqual(
+        self.assertGreater(start_kwargs.get("timeout", 0.0), 0.0)
+        self.assertLessEqual(
             start_kwargs.get("timeout", 0.0),
-            self._EXPECTED_LONG_TIMEOUT,
-            "turn.start suffers the same long-tail latency as turn.end and "
-            "must share the long RPC timeout (issue #2028).",
+            self._provider_mod._PREFETCH_RPC_TIMEOUT,
+            "foreground turn.start must finish before the Hermes host deadline; "
+            "long capture work keeps the separate issue #2028 timeout.",
         )
+        start_payload = bridge.calls[start_index][1]
+        self.assertIn("deadlineAt", start_payload)
+        self.assertGreater(start_payload["deadlineAt"], start_payload["ts"])
+
+    def test_foreground_reconnect_and_retry_share_one_deadline(self) -> None:
+        class ClosedBridge:
+            def request(self, *_args, **_kwargs) -> dict:
+                raise BridgeError("transport_closed", "bridge closed")
+
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = ClosedBridge()
+        recovered = RecordingBridge()
+        monotonic_now = [100.0]
+
+        def reconnect(_session_id: str, *, timeout: float) -> None:
+            self.assertLessEqual(timeout, 6.0)
+            monotonic_now[0] += 4.0
+            p._bridge = recovered
+
+        with (
+            patch("memos_provider.time.monotonic", side_effect=lambda: monotonic_now[0]),
+            patch.object(p, "_reconnect_bridge", side_effect=reconnect),
+        ):
+            p._bridge_request_with_retry(
+                "turn.start",
+                {"sessionId": "s-1"},
+                timeout=6.0,
+                deadline_monotonic=106.0,
+            )
+
+        self.assertEqual(recovered.calls[0][0], "turn.start")
+        self.assertLessEqual(recovered.call_kwargs[0]["timeout"], 2.0)
 
 
 class ViewerDaemonTests(unittest.TestCase):

@@ -201,6 +201,46 @@ def _long_rpc_timeout_default() -> float:
 
 _LONG_RPC_TIMEOUT = _long_rpc_timeout_default()
 
+
+def _prefetch_rpc_timeout_default() -> float:
+    """Resolve the latency budget for Hermes' foreground memory lookup.
+
+    Hermes places its own short deadline around ``prefetch``. Reusing the
+    long capture timeout here lets the bridge continue work after the host
+    has already moved on. Keep a separate, configurable ceiling below the
+    host's default and forward the corresponding absolute deadline to core.
+    """
+    raw = os.environ.get("MEMOS_HERMES_PREFETCH_RPC_TIMEOUT", "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 6.0
+    if not value > 0:
+        return 6.0
+    # Hermes currently abandons external providers after 8 seconds. Keep at
+    # least one second for Python thread scheduling and response assembly even
+    # when an operator overrides the default.
+    return min(value, 7.0)
+
+
+_PREFETCH_RPC_TIMEOUT = _prefetch_rpc_timeout_default()
+_PREFETCH_RESPONSE_RESERVE_SECONDS = 0.25
+
+
+def _remaining_rpc_timeout(
+    deadline_monotonic: float | None,
+    requested_timeout: float | None,
+) -> float | None:
+    """Bound one blocking bridge step by a shared end-to-end deadline."""
+    if deadline_monotonic is None:
+        return requested_timeout
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        raise BridgeError("timeout", "foreground prefetch deadline exceeded")
+    if requested_timeout is None:
+        return remaining
+    return min(requested_timeout, remaining)
+
 _HERMES_INTERNAL_REVIEW_PREFIXES = (
     "review the conversation above and consider saving to memory if appropriate.",
     "review the conversation above and update the skill library.",
@@ -1022,8 +1062,19 @@ class MemTensorProvider(MemoryProvider):
         cached result immediately. Otherwise synchronously run
         ``turn.start`` against the bridge (small overhead).
         """
+        deadline_monotonic = time.monotonic() + _PREFETCH_RPC_TIMEOUT
+        started_at_ms = int(time.time() * 1000)
+        core_budget_seconds = max(
+            0.05,
+            _PREFETCH_RPC_TIMEOUT - _PREFETCH_RESPONSE_RESERVE_SECONDS,
+        )
+        deadline_at_ms = started_at_ms + int(core_budget_seconds * 1000)
         if self._prefetch_thread and self._prefetch_thread.is_alive():
-            self._prefetch_thread.join(timeout=5.0)
+            try:
+                join_timeout = _remaining_rpc_timeout(deadline_monotonic, 5.0)
+            except BridgeError:
+                return ""
+            self._prefetch_thread.join(timeout=join_timeout)
         with self._prefetch_lock:
             cached = self._prefetch_result
             self._prefetch_result = ""
@@ -1033,10 +1084,25 @@ class MemTensorProvider(MemoryProvider):
         suppress_injection = _is_explicit_delegation_request(query)
         if cached:
             return "" if suppress_injection else cached
-        if not self._ensure_bridge(session_id or self._session_id, timeout=10.0):
+        try:
+            ensure_timeout = _remaining_rpc_timeout(
+                deadline_monotonic,
+                _PREFETCH_RPC_TIMEOUT,
+            )
+        except BridgeError:
+            return ""
+        if not self._ensure_bridge(
+            session_id or self._session_id,
+            timeout=min(10.0, ensure_timeout or _PREFETCH_RPC_TIMEOUT),
+        ):
             return ""
         try:
-            context = self._turn_start(query, session_id=session_id)
+            context = self._turn_start(
+                query,
+                session_id=session_id,
+                deadline_monotonic=deadline_monotonic,
+                deadline_at_ms=deadline_at_ms,
+            )
             if suppress_injection:
                 # Do not let remembered "do it directly" skills override an
                 # explicit user request to dispatch work to a subagent.
@@ -1941,6 +2007,7 @@ class MemTensorProvider(MemoryProvider):
         *,
         timeout: float | None = None,
         ensure_session: bool = True,
+        deadline_monotonic: float | None = None,
     ) -> dict[str, Any]:
         bridge = self._bridge
         if bridge is None:
@@ -1958,10 +2025,23 @@ class MemTensorProvider(MemoryProvider):
                             bridge.generation,
                             self._session_id,
                         )
-                        self._open_session(self._session_id, timeout=30.0)
-        if timeout is None:
+                        session_ceiling = (
+                            timeout
+                            if deadline_monotonic is not None and timeout is not None
+                            else 30.0
+                        )
+                        session_timeout = _remaining_rpc_timeout(
+                            deadline_monotonic,
+                            session_ceiling,
+                        )
+                        self._open_session(
+                            self._session_id,
+                            timeout=session_timeout or 30.0,
+                        )
+        request_timeout = _remaining_rpc_timeout(deadline_monotonic, timeout)
+        if request_timeout is None:
             return bridge.request(method, params)
-        return bridge.request(method, params, timeout=timeout)
+        return bridge.request(method, params, timeout=request_timeout)
 
     def _open_session(self, session_id: str = "", *, timeout: float = 30.0) -> None:
         bridge = self._bridge
@@ -1997,6 +2077,7 @@ class MemTensorProvider(MemoryProvider):
         params: Any,
         *,
         timeout: float | None = None,
+        deadline_monotonic: float | None = None,
     ) -> dict[str, Any]:
         """Read-path helper: reconnect + retry once on ``transport_closed``.
 
@@ -2012,7 +2093,12 @@ class MemTensorProvider(MemoryProvider):
         """
         assert self._bridge is not None
         try:
-            return self._bridge_request(method, params, timeout=timeout)
+            return self._bridge_request(
+                method,
+                params,
+                timeout=timeout,
+                deadline_monotonic=deadline_monotonic,
+            )
         except BridgeError as err:
             if not self._is_transport_closed(err):
                 raise
@@ -2021,9 +2107,26 @@ class MemTensorProvider(MemoryProvider):
                 method,
                 err,
             )
-            self._reconnect_bridge(self._session_id, timeout=30.0)
+            reconnect_ceiling = (
+                timeout
+                if deadline_monotonic is not None and timeout is not None
+                else 30.0
+            )
+            reconnect_timeout = _remaining_rpc_timeout(
+                deadline_monotonic,
+                reconnect_ceiling,
+            )
+            self._reconnect_bridge(
+                self._session_id,
+                timeout=reconnect_timeout or 30.0,
+            )
             assert self._bridge is not None
-            return self._bridge_request(method, params, timeout=timeout)
+            return self._bridge_request(
+                method,
+                params,
+                timeout=timeout,
+                deadline_monotonic=deadline_monotonic,
+            )
 
     def _is_transport_closed(self, err: Exception) -> bool:
         if isinstance(err, BridgeError) and err.code == "transport_closed":
@@ -2233,7 +2336,14 @@ class MemTensorProvider(MemoryProvider):
         )
         self._bridge_keepalive_thread.start()
 
-    def _turn_start(self, query: str, *, session_id: str = "") -> str:
+    def _turn_start(
+        self,
+        query: str,
+        *,
+        session_id: str = "",
+        deadline_monotonic: float | None = None,
+        deadline_at_ms: int | None = None,
+    ) -> str:
         assert self._bridge is not None
         host_runtime = self._host_runtime_context()
         with self._state_lock:
@@ -2251,20 +2361,34 @@ class MemTensorProvider(MemoryProvider):
                     "visibleContextStartTs": visible_context_start_ts,
                 }
             )
+        now_ms = int(time.time() * 1000)
+        if deadline_monotonic is None:
+            deadline_monotonic = time.monotonic() + _PREFETCH_RPC_TIMEOUT
+        if deadline_at_ms is None:
+            core_budget_seconds = max(
+                0.05,
+                _PREFETCH_RPC_TIMEOUT - _PREFETCH_RESPONSE_RESERVE_SECONDS,
+            )
+            deadline_at_ms = now_ms + int(core_budget_seconds * 1000)
         payload: dict[str, Any] = {
             "agent": "hermes",
             "namespace": self._runtime_namespace(),
             "sessionId": session_id or self._session_id,
             "userText": query,
             "contextHints": context_hints,
-            "ts": int(time.time() * 1000),
+            "ts": now_ms,
+            "deadlineAt": deadline_at_ms,
         }
         if turn_key:
             payload["turnKey"] = turn_key
         resp = self._bridge_request_with_retry(
             "turn.start",
             payload,
-            timeout=_LONG_RPC_TIMEOUT,
+            timeout=_remaining_rpc_timeout(
+                deadline_monotonic,
+                _PREFETCH_RPC_TIMEOUT,
+            ),
+            deadline_monotonic=deadline_monotonic,
         )
         response_query = (resp or {}).get("query") or {}
         response_session = str(response_query.get("sessionId") or "")

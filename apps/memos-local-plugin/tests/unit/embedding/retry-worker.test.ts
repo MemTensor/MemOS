@@ -201,4 +201,30 @@ describe("embedding retry worker", () => {
       last_error: "embedding retry target not found: trace:tr_missing",
     });
   });
+
+  it("does not claim new retry jobs after stop during shutdown", async () => {
+    handle.repos.embeddingRetryQueue.enqueue({
+      id: "er_shutdown",
+      targetKind: "trace",
+      targetId: "tr_retry",
+      vectorField: "vec_summary",
+      sourceText: "do not start during shutdown",
+      now: NOW,
+    });
+    const worker = createEmbeddingRetryWorker({
+      repos: handle.repos,
+      embedder: fakeEmbedder({ dimensions: 8 }),
+      log: rootLogger.child({ channel: "test.embedding.retry" }),
+      now: () => NOW,
+    });
+
+    worker.stop();
+    await worker.flush();
+
+    expect(queueRow(handle, "er_shutdown")).toMatchObject({
+      status: "pending",
+      attempts: 0,
+      claimed_by: null,
+    });
+  });
 });

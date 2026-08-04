@@ -75,6 +75,23 @@ describe("embedder facade", () => {
     expect(Array.from(v)).toEqual([3, 97, 0]); // a=97
   });
 
+  it("forwards the caller abort signal to the provider", async () => {
+    const seen: Array<AbortSignal | undefined> = [];
+    const p: EmbeddingProvider = {
+      name: "openai_compatible",
+      async embed(texts, _role, ctx) {
+        seen.push(ctx.signal);
+        return texts.map(() => [1, 2, 3]);
+      },
+    };
+    const e = createEmbedderWithProvider(cfg(), p);
+    const controller = new AbortController();
+
+    await e.embedOne("signal", { signal: controller.signal });
+
+    expect(seen).toEqual([controller.signal]);
+  });
+
   it("dedups identical inputs into one provider call", async () => {
     const p = new FakeProvider();
     const e = createEmbedderWithProvider(cfg(), p);
