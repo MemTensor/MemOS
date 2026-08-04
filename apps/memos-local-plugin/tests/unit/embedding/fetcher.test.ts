@@ -4,6 +4,7 @@ import { MemosError } from "../../../agent-contract/errors.js";
 import { initTestLogger } from "../../../core/logger/index.js";
 import { httpPostJson } from "../../../core/embedding/fetcher.js";
 import type { ProviderLogger } from "../../../core/embedding/types.js";
+import { clearRetryCooldowns } from "../../../core/util/retry-after.js";
 
 function nullLogger(): ProviderLogger {
   return {
@@ -21,6 +22,7 @@ describe("embedding/fetcher", () => {
     vi.useRealTimers(); // retry backoff uses real setTimeout; keep it real but short
   });
   afterEach(() => {
+    clearRetryCooldowns();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -106,6 +108,59 @@ describe("embedding/fetcher", () => {
     await expect(pending).resolves.toEqual({ ok: 1 });
     expect(f).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  it("defers a long Retry-After and short-circuits the provider cooldown", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-04T00:00:00.000Z"));
+    const f = mockFetch([
+      new Response("maintenance", { status: 503, headers: { "Retry-After": "120" } }),
+    ]);
+    const opts = {
+      url: "https://embedding-x",
+      body: {},
+      provider: "cohere" as const,
+      log: nullLogger(),
+      maxRetries: 1,
+    };
+
+    await expect(httpPostJson(opts)).rejects.toMatchObject({
+      code: "embedding_unavailable",
+      details: {
+        retryAfterMs: 120_000,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      },
+    });
+    await expect(httpPostJson(opts)).rejects.toMatchObject({
+      code: "embedding_unavailable",
+      details: { retryReason: "cooldown_active" },
+    });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns structured diagnostics when network backoff cannot fit the deadline", async () => {
+    vi.useFakeTimers();
+    const now = Date.parse("2026-08-04T00:00:00.000Z");
+    vi.setSystemTime(now);
+    const f = mockFetch([new Error("ECONNRESET")]);
+
+    await expect(httpPostJson({
+      url: "https://embedding-deadline",
+      body: {},
+      provider: "mistral",
+      log: nullLogger(),
+      maxRetries: 1,
+      deadlineAt: now + 100,
+    })).rejects.toMatchObject({
+      name: "MemosError",
+      code: "embedding_unavailable",
+      details: {
+        retryDecision: "defer",
+        retryReason: "deadline_insufficient",
+      },
+    });
+    expect(f).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry on 400", async () => {

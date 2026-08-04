@@ -6,6 +6,7 @@
  */
 
 import type { EmbeddingVector } from "../types.js";
+import type { RetryDiagnosticDetails } from "../util/retry-after.js";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ export interface EmbeddingConfig {
   onStatus?: (detail: EmbeddingStatusDetail) => void;
 }
 
-export interface EmbeddingErrorDetail {
+export interface EmbeddingErrorDetail extends RetryDiagnosticDetails {
   kind: "embedding";
   provider: EmbeddingProviderName | string;
   model: string;
@@ -73,7 +74,7 @@ export interface EmbeddingErrorDetail {
   at?: number;
 }
 
-export interface EmbeddingStatusDetail {
+export interface EmbeddingStatusDetail extends RetryDiagnosticDetails {
   kind: "embedding";
   status: "ok" | "error";
   provider: EmbeddingProviderName | string;
@@ -128,6 +129,8 @@ export interface ProviderCallCtx {
   log: ProviderLogger;
   /** AbortSignal honored across HTTP + native calls. */
   signal?: AbortSignal;
+  /** Absolute end-to-end deadline shared across provider retry attempts. */
+  deadlineAt?: number;
 }
 
 export interface ProviderLogger {
@@ -186,6 +189,8 @@ export interface Embedder {
 
 export interface EmbedCallOptions {
   signal?: AbortSignal;
+  /** Absolute end-to-end deadline shared across provider retry attempts. */
+  deadlineAt?: number;
 }
 
 // ─── Errors ──────────────────────────────────────────────────────────────────

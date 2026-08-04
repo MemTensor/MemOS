@@ -104,6 +104,11 @@ export function createEmbeddingRetryWorker(
       const message = err instanceof Error ? err.message : String(err);
       const at = now();
       const terminal = attemptNo >= job.maxAttempts;
+      const providerRetryAt = retryAtFromError(err, at);
+      const nextAttemptAt = Math.max(
+        at + backoffMs(attemptNo),
+        providerRetryAt ?? 0,
+      );
       const recorded = terminal
         ? deps.repos.embeddingRetryQueue.markFailedClaimed(job.id, {
           ...claim,
@@ -114,7 +119,7 @@ export function createEmbeddingRetryWorker(
         : deps.repos.embeddingRetryQueue.markRetryClaimed(job.id, {
           ...claim,
           attempts: attemptNo,
-          nextAttemptAt: at + backoffMs(attemptNo),
+          nextAttemptAt,
           error: message,
           now: at,
         });
@@ -122,7 +127,10 @@ export function createEmbeddingRetryWorker(
         deps.log.debug("embedding_retry.stale_failure_ignored", { jobId: job.id, terminal });
         return;
       }
-      emitFailure(job, attemptNo, message, terminal, at);
+      emitFailure(job, attemptNo, message, terminal, at, {
+        providerRetryAt,
+        nextAttemptAt: terminal ? null : nextAttemptAt,
+      });
     }
   }
 
@@ -154,6 +162,7 @@ export function createEmbeddingRetryWorker(
     message: string,
     terminal: boolean,
     at: number,
+    retry: { providerRetryAt: number | null; nextAttemptAt: number | null },
   ): void {
     const payload = {
       kind: "embedding.retry_failed",
@@ -165,6 +174,8 @@ export function createEmbeddingRetryWorker(
       maxAttempts: job.maxAttempts,
       terminal,
       message,
+      providerRetryAt: retry.providerRetryAt,
+      nextAttemptAt: retry.nextAttemptAt,
     };
     deps.log.warn("embedding_retry.failed", payload);
     try {
@@ -205,6 +216,14 @@ export function createEmbeddingRetryWorker(
       if (running) await running;
     },
   };
+}
+
+function retryAtFromError(err: unknown, nowMs: number): number | null {
+  if (!err || typeof err !== "object") return null;
+  const details = (err as { details?: unknown }).details;
+  if (!details || typeof details !== "object") return null;
+  const retryAt = Number((details as { retryAt?: unknown }).retryAt);
+  return Number.isSafeInteger(retryAt) && retryAt > nowMs ? retryAt : null;
 }
 
 function backoffMs(attemptNo: number): number {

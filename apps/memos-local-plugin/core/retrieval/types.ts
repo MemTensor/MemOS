@@ -682,7 +682,7 @@ export interface RetrievalEmbedder {
   embed: (
     text: string,
     role?: "query" | "document",
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; deadlineAt?: number },
   ) => Promise<EmbeddingVector>;
 }
 

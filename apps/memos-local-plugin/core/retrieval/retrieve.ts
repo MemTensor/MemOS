@@ -263,7 +263,10 @@ async function runAll(
     };
     const queryVec = compiled.text
       ? await deps.embedder
-          .embed(compiled.text, "query", { signal: opts.signal })
+          .embed(compiled.text, "query", {
+            signal: opts.signal,
+            deadlineAt: opts.deadlineAt,
+          })
           .then((vec) => {
             embeddingStats.ok = true;
             return vec;
@@ -423,6 +426,7 @@ async function runAll(
             log,
             config: deps.config,
             signal: opts.signal,
+            deadlineAt: opts.deadlineAt,
             timeoutMs: filterTimeoutMs(opts.deadlineAt),
           },
         );
@@ -482,6 +486,7 @@ async function runAll(
           log,
           config: deps.config,
           signal: opts.signal,
+          deadlineAt: opts.deadlineAt,
           timeoutMs: filterTimeoutMs(opts.deadlineAt),
         },
       );

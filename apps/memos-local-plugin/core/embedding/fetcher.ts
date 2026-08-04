@@ -8,7 +8,15 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
-import { parseRetryAfterMs, retryDelayMs, waitForRetry } from "../util/retry-after.js";
+import {
+  getRetryCooldown,
+  parseRetryAfterMs,
+  planRetry,
+  recordRetryCooldown,
+  retryCooldownKey,
+  type RetryPlan,
+  waitForRetry,
+} from "../util/retry-after.js";
 import type { EmbeddingProviderName, ProviderLogger } from "./types.js";
 
 export interface HttpPostOpts<TBody> {
@@ -18,6 +26,10 @@ export interface HttpPostOpts<TBody> {
   timeoutMs?: number;
   maxRetries?: number;
   signal?: AbortSignal;
+  /** Absolute end-to-end deadline. Unlike timeoutMs, this is not renewed per attempt. */
+  deadlineAt?: number;
+  /** Model/deployment scope; prevents one model cooldown from blocking another. */
+  cooldownScope?: string;
   provider: EmbeddingProviderName;
   log: ProviderLogger;
 }
@@ -27,11 +39,33 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
   const maxRetries = opts.maxRetries ?? 2;
   let attempt = 0;
   let lastErr: unknown = null;
+  const cooldownKey = retryCooldownKey("embedding", opts.provider, opts.url, opts.cooldownScope);
 
   while (attempt <= maxRetries) {
     attempt++;
     const start = Date.now();
     try {
+      const cooldown = getRetryCooldown(cooldownKey, start);
+      if (cooldown) {
+        const details = {
+          provider: opts.provider,
+          url: opts.url,
+          status: cooldown.status,
+          attempt,
+          maxRetries,
+          retryAfterMs: cooldown.retryAfterMs,
+          retryAt: cooldown.retryAt,
+          retryDecision: "defer",
+          retryReason: "cooldown_active",
+          remainingDeadlineMs: remainingDeadlineMs(opts.deadlineAt, start),
+        };
+        opts.log.warn("http.retry_cooldown", details);
+        throw new MemosError(
+          ERROR_CODES.EMBEDDING_UNAVAILABLE,
+          `${opts.provider} is cooling down until ${new Date(cooldown.retryAt).toISOString()}`,
+          details,
+        );
+      }
       const signal = mergeSignals(opts.signal, AbortSignal.timeout(timeoutMs));
       const resp = await fetch(opts.url, {
         method: "POST",
@@ -50,6 +84,13 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
         const retryAfterMs = resp.status === 429 || resp.status === 503
           ? parseRetryAfterMs(resp.headers.get("Retry-After"))
           : null;
+        if (retryAfterMs !== null) {
+          recordRetryCooldown(cooldownKey, {
+            retryAfterMs,
+            retryAt: Date.now() + retryAfterMs,
+            status: resp.status,
+          });
+        }
         opts.log.warn("http.non_ok", {
           url: opts.url,
           status: resp.status,
@@ -59,13 +100,43 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
           durationMs: Date.now() - start,
         });
         if (transient && attempt <= maxRetries) {
-          await backoff(attempt, retryAfterMs, opts.signal);
+          const plan = planRetry({
+            attempt,
+            baseMs: 200,
+            jitterMaxMs: 100,
+            retryAfterMs,
+            deadlineAt: opts.deadlineAt,
+          });
+          const retryDetails = retryPlanDetails(plan, opts, maxRetries, resp.status, attempt);
+          if (plan.action === "defer") {
+            opts.log.warn("http.retry_deferred", retryDetails);
+            throw new MemosError(
+              ERROR_CODES.EMBEDDING_UNAVAILABLE,
+              `HTTP ${resp.status} from ${opts.provider}; retry deferred until ${new Date(plan.retryAt).toISOString()}`,
+              retryDetails,
+            );
+          }
+          opts.log.warn("http.retry_scheduled", retryDetails);
+          await waitForRetry(plan.delayMs, opts.signal);
           continue;
         }
         throw new MemosError(
           ERROR_CODES.EMBEDDING_UNAVAILABLE,
           `HTTP ${resp.status} from ${opts.provider}`,
-          { provider: opts.provider, url: opts.url, status: resp.status, body: text },
+          {
+            provider: opts.provider,
+            url: opts.url,
+            status: resp.status,
+            body: text,
+            ...(retryAfterMs === null
+              ? {}
+              : {
+                  retryAfterMs,
+                  retryAt: Date.now() + retryAfterMs,
+                  retryDecision: "stop",
+                  retryReason: "retries_exhausted",
+                }),
+          },
         );
       }
 
@@ -88,7 +159,23 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
         durationMs: Date.now() - start,
       });
       if (transient && attempt <= maxRetries) {
-        await backoff(attempt, null, opts.signal);
+        const plan = planRetry({
+          attempt,
+          baseMs: 200,
+          jitterMaxMs: 100,
+          deadlineAt: opts.deadlineAt,
+        });
+        const retryDetails = retryPlanDetails(plan, opts, maxRetries, null, attempt);
+        if (plan.action === "defer") {
+          opts.log.warn("http.retry_deferred", retryDetails);
+          throw new MemosError(
+            ERROR_CODES.EMBEDDING_UNAVAILABLE,
+            `${opts.provider} retry cannot fit the request deadline`,
+            retryDetails,
+          );
+        }
+        opts.log.warn("http.retry_scheduled", retryDetails);
+        await waitForRetry(plan.delayMs, opts.signal);
         continue;
       }
       throw new MemosError(
@@ -128,15 +215,32 @@ function isTransientError(err: unknown): boolean {
   return false;
 }
 
-async function backoff(
+function retryPlanDetails(
+  plan: RetryPlan,
+  opts: HttpPostOpts<unknown>,
+  maxRetries: number,
+  status: number | null,
   attempt: number,
-  retryAfterMs: number | null,
-  signal?: AbortSignal,
-): Promise<void> {
-  await waitForRetry(
-    retryDelayMs({ attempt, baseMs: 200, jitterMaxMs: 100, retryAfterMs }),
-    signal,
-  );
+): Record<string, unknown> {
+  return {
+    provider: opts.provider,
+    url: opts.url,
+    status,
+    attempt,
+    maxRetries,
+    backoffMs: plan.backoffMs,
+    plannedDelayMs: plan.delayMs,
+    retryAfterMs: plan.retryAfterMs,
+    retryAt: plan.retryAt,
+    retrySource: plan.source,
+    retryDecision: plan.action,
+    ...(plan.action === "defer" ? { retryReason: plan.reason } : {}),
+    remainingDeadlineMs: remainingDeadlineMs(opts.deadlineAt),
+  };
+}
+
+function remainingDeadlineMs(deadlineAt?: number, nowMs: number = Date.now()): number | null {
+  return deadlineAt === undefined ? null : Math.max(0, deadlineAt - nowMs);
 }
 
 function mergeSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {

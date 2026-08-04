@@ -50,6 +50,7 @@ export interface FilterDeps {
   llm: LlmClient | null;
   log: Logger;
   timeoutMs?: number;
+  deadlineAt?: number;
   signal?: AbortSignal;
   config: Pick<
     RetrievalConfig,
@@ -153,6 +154,7 @@ ${list}`,
         episodeId: input.episodeId,
         temperature: 0,
         timeoutMs: deps.timeoutMs,
+        deadlineAt: deps.deadlineAt,
         signal: deps.signal,
         // Output is only ordered indices + one bool, but the list can
         // legitimately be as long as the ranked candidates.
