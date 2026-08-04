@@ -11,49 +11,38 @@ from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import KVCacheItem
+from memos.memories.activation.safe_unpickler import (
+    _BASE_ALLOWED_CLASSES,
+    _BaseSafeUnpickler,
+)
 from memos.memories.textual.item import TextualMemoryItem
 
 
 logger = get_logger(__name__)
 
 
-# Allowlist of (module, name) pairs that _SafeUnpickler will resolve.
-# Everything else raises pickle.UnpicklingError before the class is
-# imported, so a hostile __reduce__ cannot execute.
-# This narrowly covers what KVCacheMemory.dump() produces:
-#   * dict wrapping "kv_cache_memories"
+# Extra classes KVCacheMemory.dump() produces on top of the shared base
+# allowlist:
 #   * KVCacheItem instances
-#   * DynamicCache with tensor state (torch rebuild helpers)
-#   * common stdlib containers embedded in metadata
-_KV_ALLOWED_CLASSES: frozenset[tuple[str, str]] = frozenset(
+#   * DynamicCache (transformers) with tensor state (torch rebuild helpers)
+#
+# ``torch.storage._load_from_bytes`` is *deliberately* NOT in this list —
+# it is a known pickle-allowlist bypass vector: it internally calls
+# ``pickle.loads`` on its bytes argument with the standard (unrestricted)
+# unpickler, which would defeat the ``find_class`` guard for any nested
+# payload. See the discussion on PR #2204.
+_KV_ALLOWED_CLASSES: frozenset[tuple[str, str]] = _BASE_ALLOWED_CLASSES | frozenset(
     {
         ("transformers.cache_utils", "DynamicCache"),
         ("transformers.cache_utils", "DynamicLayer"),
         ("memos.memories.activation.item", "KVCacheItem"),
         ("memos.memories.activation.item", "KVCacheRecords"),
-        ("builtins", "dict"),
-        ("builtins", "list"),
-        ("builtins", "tuple"),
-        ("builtins", "set"),
-        ("builtins", "frozenset"),
-        ("builtins", "str"),
-        ("builtins", "int"),
-        ("builtins", "float"),
-        ("builtins", "bool"),
-        ("builtins", "bytes"),
-        ("collections", "OrderedDict"),
-        ("datetime", "datetime"),
-        ("datetime", "date"),
-        ("datetime", "time"),
-        ("datetime", "timedelta"),
-        ("datetime", "timezone"),
         # torch tensor rebuilders — required to re-materialize DynamicCache
         ("torch._utils", "_rebuild_tensor_v2"),
         ("torch._utils", "_rebuild_tensor"),
         ("torch._utils", "_rebuild_parameter"),
         ("torch._utils", "_rebuild_qtensor"),
         ("torch._utils", "_rebuild_meta_tensor_no_storage"),
-        ("torch.storage", "_load_from_bytes"),
         ("torch", "Tensor"),
         ("torch", "device"),
         ("torch", "dtype"),
@@ -62,20 +51,10 @@ _KV_ALLOWED_CLASSES: frozenset[tuple[str, str]] = frozenset(
 )
 
 
-class _SafeUnpickler(pickle.Unpickler):
-    """Restricted pickle.Unpickler for the activation cache.
+class _SafeUnpickler(_BaseSafeUnpickler):
+    """Restricted pickle.Unpickler for the KV activation cache."""
 
-    Rejects any class not in :data:`_KV_ALLOWED_CLASSES` at ``find_class``
-    time — before the class is imported and before any reduce callable is
-    invoked. This blocks the CWE-502 sink documented in issue #2203.
-    """
-
-    def find_class(self, module: str, name: str):  # type: ignore[override]
-        if (module, name) not in _KV_ALLOWED_CLASSES:
-            raise pickle.UnpicklingError(
-                f"Refusing to load class {module}.{name} from activation cache"
-            )
-        return super().find_class(module, name)
+    _allowed_classes = _KV_ALLOWED_CLASSES
 
 
 class KVCacheMemory(BaseActMemory):
@@ -252,8 +231,16 @@ class KVCacheMemory(BaseActMemory):
                 e,
             )
             self.kv_cache_memories = {}
-        except (EOFError, Exception):
-            # If loading fails, start with empty memories
+        except (EOFError, OSError, ValueError) as e:
+            # Truncated file, I/O failure, or malformed pickle stream —
+            # log so operators can investigate silent data-loss cases,
+            # then reset. Do NOT catch bare Exception here: unexpected
+            # errors (MemoryError, AttributeError, etc.) should surface.
+            logger.warning(
+                "[KVCacheMemory] Failed to load activation cache (%s: %s); resetting.",
+                type(e).__name__,
+                e,
+            )
             self.kv_cache_memories = {}
 
     def dump(self, dir: str) -> None:

@@ -9,52 +9,31 @@ from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import VLLMKVCacheItem
+from memos.memories.activation.safe_unpickler import (
+    _BASE_ALLOWED_CLASSES,
+    _BaseSafeUnpickler,
+)
 from memos.memories.textual.item import TextualMemoryItem
 
 
 logger = get_logger(__name__)
 
 
-# Allowlist of (module, name) pairs that _SafeUnpickler will resolve.
-# VLLMKVCacheItem.memory is a plain str (the preloaded prompt), so no
-# torch tensor rebuilders are needed here.
-_VLLM_ALLOWED_CLASSES: frozenset[tuple[str, str]] = frozenset(
+# Extra classes VLLMKVCacheMemory.dump() produces on top of the shared
+# base allowlist. VLLMKVCacheItem.memory is a plain str (the preloaded
+# prompt), so no torch tensor rebuilders are needed here.
+_VLLM_ALLOWED_CLASSES: frozenset[tuple[str, str]] = _BASE_ALLOWED_CLASSES | frozenset(
     {
         ("memos.memories.activation.item", "VLLMKVCacheItem"),
         ("memos.memories.activation.item", "KVCacheRecords"),
-        ("builtins", "dict"),
-        ("builtins", "list"),
-        ("builtins", "tuple"),
-        ("builtins", "set"),
-        ("builtins", "frozenset"),
-        ("builtins", "str"),
-        ("builtins", "int"),
-        ("builtins", "float"),
-        ("builtins", "bool"),
-        ("builtins", "bytes"),
-        ("collections", "OrderedDict"),
-        ("datetime", "datetime"),
-        ("datetime", "date"),
-        ("datetime", "time"),
-        ("datetime", "timedelta"),
-        ("datetime", "timezone"),
     }
 )
 
 
-class _SafeUnpickler(pickle.Unpickler):
-    """Restricted pickle.Unpickler for the vLLM activation cache.
+class _SafeUnpickler(_BaseSafeUnpickler):
+    """Restricted pickle.Unpickler for the vLLM activation cache."""
 
-    Blocks the CWE-502 sink documented in issue #2203 by rejecting any
-    class not in :data:`_VLLM_ALLOWED_CLASSES` at ``find_class`` time.
-    """
-
-    def find_class(self, module: str, name: str):  # type: ignore[override]
-        if (module, name) not in _VLLM_ALLOWED_CLASSES:
-            raise pickle.UnpicklingError(
-                f"Refusing to load class {module}.{name} from activation cache"
-            )
-        return super().find_class(module, name)
+    _allowed_classes = _VLLM_ALLOWED_CLASSES
 
 
 class VLLMKVCacheMemory(BaseActMemory):
@@ -201,10 +180,9 @@ class VLLMKVCacheMemory(BaseActMemory):
             return
 
         try:
-            # Allow loading VLLMKVCacheItem types
-            import torch
-
-            torch.serialization.add_safe_globals([VLLMKVCacheItem])
+            # torch.serialization.add_safe_globals is not needed here:
+            # _SafeUnpickler enforces _VLLM_ALLOWED_CLASSES directly and
+            # does not delegate to torch's safe-globals registry.
 
             with open(file_path, "rb") as f:
                 # Restricted unpickler — rejects any class outside the
@@ -237,8 +215,16 @@ class VLLMKVCacheMemory(BaseActMemory):
                 e,
             )
             self.kv_cache_memories = {}
-        except (EOFError, Exception):
-            # If loading fails, start with empty memories
+        except (EOFError, OSError, ValueError) as e:
+            # Truncated file, I/O failure, or malformed pickle stream —
+            # log so operators can investigate silent data-loss cases.
+            # Do NOT catch bare Exception here: unexpected errors
+            # (MemoryError, AttributeError, etc.) should surface.
+            logger.warning(
+                "[VLLMKVCacheMemory] Failed to load activation cache (%s: %s); resetting.",
+                type(e).__name__,
+                e,
+            )
             self.kv_cache_memories = {}
 
     def dump(self, dir: str) -> None:

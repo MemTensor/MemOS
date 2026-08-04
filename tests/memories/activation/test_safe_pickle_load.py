@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import shlex
 
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
@@ -36,7 +37,12 @@ class _OsSystemPayload:
         self.canary_path = canary_path
 
     def __reduce__(self):  # type: ignore[override]
-        return (os.system, (f"touch {self.canary_path}",))
+        # Shell-quote the path: pytest's ``tmp_path`` can contain spaces
+        # on CI configurations (e.g. ``/tmp/pytest-of-user name/...``),
+        # which would silently split into multiple ``touch`` arguments
+        # and fail — making the security assertion below indistinguishable
+        # from a genuine SafeUnpickler regression.
+        return (os.system, (f"touch {shlex.quote(self.canary_path)}",))
 
 
 def _write_hostile_pickle(target: Path, canary_path: str) -> None:
@@ -81,8 +87,6 @@ def test_kv_load_refuses_arbitrary_class(tmp_path: Path, kv_memory) -> None:
     """A pickle referencing a random not-allowlisted class must be rejected."""
     import io
 
-    from memos.memories.activation.kv import _SafeUnpickler  # noqa: F401
-
     # Pickle referencing `subprocess.Popen` via a bare name; we don't
     # actually instantiate — the find_class hook must reject at load time.
     raw = pickle.dumps({"kv_cache_memories": []}, protocol=pickle.HIGHEST_PROTOCOL)
@@ -93,8 +97,11 @@ def test_kv_load_refuses_arbitrary_class(tmp_path: Path, kv_memory) -> None:
     assert isinstance(obj, dict)
     assert obj["kv_cache_memories"] == []
 
-    # now craft one that names subprocess.Popen — must raise
-    stream = pickle.dumps(_OsSystemPayload("/tmp/should_not_run"), protocol=pickle.HIGHEST_PROTOCOL)
+    # now craft one that names os.system — must raise
+    stream = pickle.dumps(
+        _OsSystemPayload(str(tmp_path / "should_not_run")),
+        protocol=pickle.HIGHEST_PROTOCOL,
+    )
     with pytest.raises(pickle.UnpicklingError):
         SafeUnpickler(io.BytesIO(stream)).load()
 

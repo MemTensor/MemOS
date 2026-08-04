@@ -4,7 +4,7 @@ import shutil
 import tempfile
 import zipfile
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -125,8 +125,19 @@ def _safe_extract_zip(zf: zipfile.ZipFile, extract_dir: Path) -> None:
         if unix_mode == _SYMLINK_MODE:
             raise ValueError(f"Refusing to extract symlink entry from skill zip: {name!r}")
 
-        # Absolute-path entry — reject.
-        if not name or os.path.isabs(name) or name.startswith(("/", "\\")):
+        # Absolute-path entry — reject. os.path.isabs on POSIX only
+        # recognises leading "/", so we also cross-check with pure-path
+        # variants for both POSIX ("/foo") and NT ("C:\\foo", "\\\\srv\\s")
+        # styles regardless of the host OS. The downstream ``base not in
+        # candidate.parents`` guard would catch drive-relative paths, but
+        # a fully platform-independent pre-filter here means the guard
+        # cannot be silently defeated if future code paths relax it.
+        if (
+            not name
+            or os.path.isabs(name)
+            or PurePosixPath(name).is_absolute()
+            or PureWindowsPath(name).is_absolute()
+        ):
             raise ValueError(f"Refusing to extract absolute-path entry from skill zip: {name!r}")
 
         # Compute the would-be destination and check containment.

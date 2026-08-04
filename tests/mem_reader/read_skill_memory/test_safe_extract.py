@@ -9,7 +9,6 @@ that the safe-extract helper rejects them with ``ValueError``.
 
 from __future__ import annotations
 
-import os
 import zipfile
 
 from typing import TYPE_CHECKING
@@ -206,8 +205,3 @@ def test_safe_extract_permits_dotdot_inside_name(tmp_path: Path) -> None:
     with zipfile.ZipFile(zip_path, "r") as zf:
         _safe_extract_zip(zf, extract_dir)
     assert (extract_dir / "file..name.txt").read_bytes() == b"ok"
-
-
-# Silence unused import warnings on platforms where os is only touched in
-# assertions above.
-_ = os
