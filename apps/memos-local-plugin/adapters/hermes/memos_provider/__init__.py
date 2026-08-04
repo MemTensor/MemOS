@@ -241,6 +241,7 @@ def _remaining_rpc_timeout(
         return remaining
     return min(requested_timeout, remaining)
 
+
 _HERMES_INTERNAL_REVIEW_PREFIXES = (
     "review the conversation above and consider saving to memory if appropriate.",
     "review the conversation above and update the skill library.",
@@ -2108,9 +2109,7 @@ class MemTensorProvider(MemoryProvider):
                 err,
             )
             reconnect_ceiling = (
-                timeout
-                if deadline_monotonic is not None and timeout is not None
-                else 30.0
+                timeout if deadline_monotonic is not None and timeout is not None else 30.0
             )
             reconnect_timeout = _remaining_rpc_timeout(
                 deadline_monotonic,

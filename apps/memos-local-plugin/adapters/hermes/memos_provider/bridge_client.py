@@ -160,9 +160,9 @@ class MemosBridgeClient:
         # demultiplexing for every shared provider lease.
         self._host_handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
         self._host_handlers_cv = threading.Condition()
-        self._host_handler_queue: queue.Queue[
-            tuple[Any, str, dict[str, Any]] | None
-        ] = queue.Queue(maxsize=HOST_HANDLER_QUEUE_CAPACITY)
+        self._host_handler_queue: queue.Queue[tuple[Any, str, dict[str, Any]] | None] = queue.Queue(
+            maxsize=HOST_HANDLER_QUEUE_CAPACITY
+        )
         self._host_handler_stop = threading.Event()
         self._closed = False
 

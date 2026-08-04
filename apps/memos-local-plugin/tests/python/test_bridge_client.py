@@ -491,9 +491,7 @@ class BridgeClientTests(unittest.TestCase):
         finally:
             release_handler.set()
 
-        reverse_response = self._wait_for_client_write(
-            lambda msg: msg.get("id") == "srv-slow"
-        )
+        reverse_response = self._wait_for_client_write(lambda msg: msg.get("id") == "srv-slow")
         self.assertEqual(reverse_response["result"]["text"], "host:done")
         client.close()
 
@@ -536,9 +534,7 @@ class BridgeClientTests(unittest.TestCase):
             )
 
         try:
-            response = self._wait_for_client_write(
-                lambda msg: msg.get("id") == overflow_id
-            )
+            response = self._wait_for_client_write(lambda msg: msg.get("id") == overflow_id)
             self.assertEqual(response["error"]["data"]["code"], "host_handler_busy")
         finally:
             client.close()
