@@ -8,9 +8,74 @@ from transformers import DynamicCache
 from memos.configs.memory import KVCacheMemoryConfig
 from memos.dependency import require_python_package
 from memos.llms.factory import LLMFactory
+from memos.log import get_logger
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import KVCacheItem
 from memos.memories.textual.item import TextualMemoryItem
+
+
+logger = get_logger(__name__)
+
+
+# Allowlist of (module, name) pairs that _SafeUnpickler will resolve.
+# Everything else raises pickle.UnpicklingError before the class is
+# imported, so a hostile __reduce__ cannot execute.
+# This narrowly covers what KVCacheMemory.dump() produces:
+#   * dict wrapping "kv_cache_memories"
+#   * KVCacheItem instances
+#   * DynamicCache with tensor state (torch rebuild helpers)
+#   * common stdlib containers embedded in metadata
+_KV_ALLOWED_CLASSES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("transformers.cache_utils", "DynamicCache"),
+        ("transformers.cache_utils", "DynamicLayer"),
+        ("memos.memories.activation.item", "KVCacheItem"),
+        ("memos.memories.activation.item", "KVCacheRecords"),
+        ("builtins", "dict"),
+        ("builtins", "list"),
+        ("builtins", "tuple"),
+        ("builtins", "set"),
+        ("builtins", "frozenset"),
+        ("builtins", "str"),
+        ("builtins", "int"),
+        ("builtins", "float"),
+        ("builtins", "bool"),
+        ("builtins", "bytes"),
+        ("collections", "OrderedDict"),
+        ("datetime", "datetime"),
+        ("datetime", "date"),
+        ("datetime", "time"),
+        ("datetime", "timedelta"),
+        ("datetime", "timezone"),
+        # torch tensor rebuilders — required to re-materialize DynamicCache
+        ("torch._utils", "_rebuild_tensor_v2"),
+        ("torch._utils", "_rebuild_tensor"),
+        ("torch._utils", "_rebuild_parameter"),
+        ("torch._utils", "_rebuild_qtensor"),
+        ("torch._utils", "_rebuild_meta_tensor_no_storage"),
+        ("torch.storage", "_load_from_bytes"),
+        ("torch", "Tensor"),
+        ("torch", "device"),
+        ("torch", "dtype"),
+        ("torch", "Size"),
+    }
+)
+
+
+class _SafeUnpickler(pickle.Unpickler):
+    """Restricted pickle.Unpickler for the activation cache.
+
+    Rejects any class not in :data:`_KV_ALLOWED_CLASSES` at ``find_class``
+    time — before the class is imported and before any reduce callable is
+    invoked. This blocks the CWE-502 sink documented in issue #2203.
+    """
+
+    def find_class(self, module: str, name: str):  # type: ignore[override]
+        if (module, name) not in _KV_ALLOWED_CLASSES:
+            raise pickle.UnpicklingError(
+                f"Refusing to load class {module}.{name} from activation cache"
+            )
+        return super().find_class(module, name)
 
 
 class KVCacheMemory(BaseActMemory):
@@ -155,7 +220,10 @@ class KVCacheMemory(BaseActMemory):
             torch.serialization.add_safe_globals([DynamicCache, KVCacheItem])
 
             with open(file_path, "rb") as f:
-                data = pickle.load(f)
+                # Restricted unpickler — rejects any class outside the
+                # KVCache allowlist before invoking any reduce callable.
+                # See _KV_ALLOWED_CLASSES / _SafeUnpickler above.
+                data = _SafeUnpickler(f).load()
 
             if isinstance(data, dict):
                 # Load memories, handle both old and new formats
@@ -176,7 +244,15 @@ class KVCacheMemory(BaseActMemory):
                 # Reset to empty if data format is unexpected
                 self.kv_cache_memories = {}
 
-        except (EOFError, pickle.UnpicklingError, Exception):
+        except pickle.UnpicklingError as e:
+            # The safe unpickler refused a class — likely a hostile cache
+            # file. Log at WARN level so operators see it, then reset.
+            logger.warning(
+                "[KVCacheMemory] Refused to load activation cache (%s); resetting.",
+                e,
+            )
+            self.kv_cache_memories = {}
+        except (EOFError, Exception):
             # If loading fails, start with empty memories
             self.kv_cache_memories = {}
 
