@@ -12,6 +12,7 @@ import {
   ensureSourceHint,
   isLegacyPackageOnlyRelease,
   legacyPackageDraftFromEvidence,
+  manualDraftFromNotes,
   parseSemver,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
@@ -58,6 +59,27 @@ test("detects legacy package-only prereleases", () => {
   assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "next" }), true);
   assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest" }), false);
   assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "" }), false);
+});
+
+test("can force a stable standalone publish to remain package-only", () => {
+  assert.equal(
+    isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest", forcePackageOnly: true }),
+    true,
+  );
+  assert.equal(
+    isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest", forcePackageOnly: false }),
+    false,
+  );
+});
+
+test("weekly package-only notes explain that docs wait for the MemOS Release", () => {
+  const result = legacyPackageDraftFromEvidence(evidence, {
+    npmDistTag: "latest",
+    docsSyncMode: "defer_to_memos_release",
+  });
+  assert.match(result.release_notes_markdown, /MemOS whole-repository release/);
+  assert.match(result.release_notes_markdown, /release\.published event/);
+  assert.doesNotMatch(result.release_notes_markdown, /does not .* update the MemOS-Docs Plugin tab/);
 });
 
 test("treats SemVer build metadata as stable metadata, not a prerelease channel", () => {
@@ -673,7 +695,7 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 - local memory
 
 <!-- doc-agent-release-notes-json
-{"items":[{"text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+  {"items":[{"category":"Added","text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
 -->`;
   assert.equal(validateManualNotes(valid), valid);
   assert.match(ensureSourceHint(valid), /source-id=openclaw-local-plugin/);
@@ -686,9 +708,44 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 - local memory
 
 <!-- doc-agent-release-notes-json
-{"items":[{"text_cn":"Local memory","text_en":"本地记忆","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+  {"items":[{"category":"Added","text_cn":"Local memory","text_en":"本地记忆","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
 -->`),
     /text_cn must contain Chinese/,
+  );
+});
+
+test("manual stable notes are revalidated against collected evidence", () => {
+  const notes = `## Changelog
+
+### Fixed
+- 修复 Hermes 桥接状态恢复。
+
+<!-- doc-agent-release-notes-json
+{"items":[{"category":"Fixed","text_cn":"修复 Hermes 桥接状态恢复。","text_en":"Restores Hermes bridge state.","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+-->`;
+  const evidence = {
+    commits: [{
+      sha: "abc1234567890abc1234567890abc1234567890",
+      short_sha: "abc1234",
+      subject: "fix: restore Hermes bridge state",
+    }],
+    important_commits: [{
+      sha: "abc1234567890abc1234567890abc1234567890",
+      short_sha: "abc1234",
+      subject: "fix: restore Hermes bridge state",
+    }],
+    release_note_guidance: {
+      source_ref_category_hints: [{ source_refs: ["abc1234"], category: "Fixed" }],
+    },
+  };
+  const draft = manualDraftFromNotes(notes, evidence);
+  assert.equal(draft.ok, true);
+  assert.equal(draft.release_items[0].category, "Fixed");
+  assert.match(draft.release_notes_markdown, /source-id=openclaw-local-plugin/);
+
+  assert.throws(
+    () => manualDraftFromNotes(notes.replaceAll("abc1234", "deadbee"), evidence),
+    /failed evidence validation/,
   );
 });
 

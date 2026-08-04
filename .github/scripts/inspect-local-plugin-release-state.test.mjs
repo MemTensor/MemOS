@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   classifyReleaseState,
-  validateExistingRelease,
   validateExistingTagSource,
   validateExistingTagVersions,
   validateVersionChannel,
@@ -33,58 +32,9 @@ test("rejects malformed versions and mismatched npm channels", () => {
   assert.throws(() => validateVersionChannel("2.0.13-rc.1", "beta"), /must use npm dist-tag next/);
 });
 
-test("requires recovery only for a tag without a GitHub Release", () => {
-  assert.equal(
-    classifyReleaseState({ tagExists: false, releaseExists: false, recoveryEnabled: false }),
-    "fresh",
-  );
-  assert.equal(
-    classifyReleaseState({ tagExists: true, releaseExists: true, recoveryEnabled: false }),
-    "complete",
-  );
-  assert.throws(
-    () => classifyReleaseState({ tagExists: true, releaseExists: false, recoveryEnabled: false }),
-    /enable recover_existing_npm_release/,
-  );
-  assert.equal(
-    classifyReleaseState({ tagExists: true, releaseExists: false, recoveryEnabled: true }),
-    "tag_only",
-  );
-  assert.throws(
-    () => classifyReleaseState({ tagExists: false, releaseExists: true, recoveryEnabled: true }),
-    /without its release tag/,
-  );
-});
-
-test("validates existing GitHub Release state for package-only beta", () => {
-  const release = {
-    tag_name: "memos-local-plugin-v2.0.13-beta.1",
-    draft: false,
-    prerelease: true,
-    body: "Package-only beta release.",
-  };
-  assert.doesNotThrow(() =>
-    validateExistingRelease(release, {
-      releaseTag: release.tag_name,
-      shouldBePrerelease: true,
-    }),
-  );
-  assert.throws(
-    () =>
-      validateExistingRelease(
-        { ...release, prerelease: false },
-        { releaseTag: release.tag_name, shouldBePrerelease: true },
-      ),
-    /prerelease=false/,
-  );
-  assert.throws(
-    () =>
-      validateExistingRelease(
-        { ...release, body: "<!-- doc-agent-release-notes-json {} -->" },
-        { releaseTag: release.tag_name, shouldBePrerelease: true },
-      ),
-    /Doc Agent payload/,
-  );
+test("classifies standalone package metadata only by tag presence", () => {
+  assert.equal(classifyReleaseState({ tagExists: false }), "fresh");
+  assert.equal(classifyReleaseState({ tagExists: true }), "complete");
 });
 
 test("rejects an existing tag whose package or Hermes version differs", () => {

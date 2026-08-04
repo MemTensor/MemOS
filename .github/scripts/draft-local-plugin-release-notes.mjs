@@ -72,10 +72,10 @@ export function displayVersion(raw) {
   return value ? `v${value}` : "";
 }
 
-export function isLegacyPackageOnlyRelease({ targetVersion, npmDistTag = "" } = {}) {
+export function isLegacyPackageOnlyRelease({ targetVersion, npmDistTag = "", forcePackageOnly = false } = {}) {
   const parsed = parseSemver(targetVersion);
   const distTag = String(npmDistTag || "").trim();
-  return Boolean(parsed?.prerelease) || Boolean(distTag && distTag !== "latest");
+  return Boolean(forcePackageOnly) || Boolean(parsed?.prerelease) || Boolean(distTag && distTag !== "latest");
 }
 
 export function versionFromTag(tag) {
@@ -1034,7 +1034,7 @@ function markdownFromReleaseItems(items, coverage) {
   return `${lines.join("\n").trim()}\n`;
 }
 
-export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {}) {
+export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "", docsSyncMode = "" } = {}) {
   const version = evidence?.target_version || "";
   const targetPackageVersion = cleanVersion(version);
   const gitRef = evidence?.git_ref || "";
@@ -1045,11 +1045,15 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
   const commitCount = Array.isArray(evidence?.commits) ? evidence.commits.length : 0;
   const packageChanges = Array.isArray(evidence?.package_changes) ? evidence.package_changes : [];
   const versionChange = packageChanges.find((item) => item.field === "version");
+  const prerelease = Boolean(parseSemver(targetPackageVersion)?.prerelease) || distTag !== "latest";
+  const deferredToMemosRelease = docsSyncMode === "defer_to_memos_release";
   const lines = [
     "## Changelog",
     "",
-    "### Prerelease",
-    `- Published ${PRODUCT_TITLE.en} ${version} as a package prerelease for validation through the npm \`${distTag}\` dist-tag.`,
+    prerelease ? "### Prerelease" : "### Package Release",
+    prerelease
+      ? `- Published ${PRODUCT_TITLE.en} ${version} as a package prerelease for validation through the npm \`${distTag}\` dist-tag.`
+      : `- Published ${PRODUCT_TITLE.en} ${version} through the npm \`${distTag}\` dist-tag.`,
     "",
     "### Release Evidence",
     `- Package tag: ${currentTag}`,
@@ -1061,11 +1065,15 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
   const previousPackageVersion = versionChange?.before || "unknown";
   lines.push(`- Package version: ${previousPackageVersion} -> ${targetPackageVersion}`);
   lines.push("");
-  lines.push("This legacy prerelease is package-only and does not update the MemOS-Docs Plugin tab.");
+  lines.push(
+    deferredToMemosRelease
+      ? "This package build is part of the MemOS whole-repository release. It does not create an independent local-plugin GitHub Release; docs sync is deferred to the MemOS release.published event."
+      : "This standalone package-only publish does not create a GitHub Release or update the MemOS-Docs Plugin tab.",
+  );
   return {
     ok: true,
     needs_review: false,
-    confidence: "legacy-package-only",
+    confidence: deferredToMemosRelease ? "memos-release-deferred" : "legacy-package-only",
     release_items: [],
     coverage: {
       needs_review: false,
@@ -1075,9 +1083,15 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
       covered_refs: [],
       missing_required: [],
       invalid_item_refs: [],
-      policy: "legacy local-plugin prereleases are package-only and do not create docs payloads",
+      policy: deferredToMemosRelease
+        ? "weekly local-plugin package publication defers docs to the MemOS whole-repository release.published event"
+        : "standalone local-plugin publishes are package-only and do not create GitHub Releases or docs payloads",
     },
-    warnings: ["legacy package-only prerelease skipped Doc Agent draft and docs payload generation"],
+    warnings: [
+      deferredToMemosRelease
+        ? "local-plugin docs sync is deferred to the MemOS whole-repository release.published event"
+        : "standalone package publish skipped GitHub Release, Doc Agent draft, and docs payload generation",
+    ],
     release_notes_markdown: `${lines.join("\n").trim()}\n`,
   };
 }
@@ -1169,8 +1183,14 @@ export function validateManualNotes(notes) {
     fail("Manual release notes evidence coverage must explicitly set needs_review=false.");
   }
   for (const item of payload.items) {
-    if (!item?.text_cn || !item?.text_en || !Array.isArray(item?.source_refs) || item.source_refs.length === 0) {
-      fail("Every manual release-note item must include text_cn, text_en, and source_refs.");
+    if (
+      !RELEASE_CATEGORY_ORDER.includes(String(item?.category || "")) ||
+      !item?.text_cn ||
+      !item?.text_en ||
+      !Array.isArray(item?.source_refs) ||
+      item.source_refs.length === 0
+    ) {
+      fail("Every manual release-note item must include a valid category, text_cn, text_en, and source_refs.");
     }
     if (!CJK_RE.test(String(item.text_cn || ""))) {
       fail("Every manual release-note item text_cn must contain Chinese text.");
@@ -1180,6 +1200,35 @@ export function validateManualNotes(notes) {
     }
   }
   return text;
+}
+
+export function manualDraftFromNotes(notes, evidence) {
+  const text = validateManualNotes(notes);
+  const match = text.match(/<!--\s*doc-agent-release-notes-json\s*\n([\s\S]*?)\n-->/);
+  const payload = JSON.parse(match[1]);
+  const draft = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      confidence: "manual-evidence-bound",
+      release_items: payload.items,
+      coverage: payload.coverage,
+      warnings: [],
+    },
+    evidence,
+  );
+  const validationReport = validationReportFromPostprocessedDraft(draft);
+  if (!validationReport.ok) {
+    fail(`Manual release notes failed evidence validation: ${JSON.stringify(validationReport)}`);
+  }
+  return {
+    ...draft,
+    confidence: "manual-evidence-bound",
+    validation_report: validationReport,
+    validation_attempt_count: 1,
+    repair_attempt_count: 0,
+    release_notes_markdown: ensureSourceHint(text),
+  };
 }
 
 function isRetryableStatus(status) {
@@ -1366,26 +1415,17 @@ export async function main() {
 
   const currentTag = process.env.RELEASE_TAG || `${CURRENT_TAG_PREFIX}${targetVersion}`;
   const npmDistTag = String(process.env.NPM_DIST_TAG || "").trim();
-  const legacyPackageOnly = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag });
+  const docsSyncMode = String(process.env.DOCS_SYNC_MODE || "").trim();
+  const forcePackageOnly = String(process.env.FORCE_PACKAGE_ONLY_RELEASE || "").trim() === "true";
+  const legacyPackageOnly = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag, forcePackageOnly });
+  const includePrereleaseBaseline = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag });
   const notesPath =
     process.env.RELEASE_NOTES_FILE ||
     join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes.md`);
   mkdirSync(dirname(notesPath), { recursive: true });
 
-  const manualNotes = String(process.env.MANUAL_RELEASE_NOTES || "").trim();
-  if (manualNotes) {
-    const notes = legacyPackageOnly
-      ? validateLegacyPackageNotes(manualNotes)
-      : ensureSourceHint(validateManualNotes(manualNotes));
-    writeFileSync(notesPath, notes, "utf8");
-    appendOutput("release_notes_file", notesPath);
-    appendOutput("draft_used", "false");
-    console.log(`Using manually provided release notes: ${notesPath}`);
-    return;
-  }
-
   const previousTag = findPreviousTag(targetVersion, currentTag, {
-    includePrerelease: legacyPackageOnly,
+    includePrerelease: includePrereleaseBaseline,
   });
   if (!previousTag) {
     fail(`Cannot find a previous local plugin tag before ${currentTag}.`);
@@ -1396,8 +1436,34 @@ export async function main() {
   const evidencePath = join(tmpdir(), `memos-local-plugin-${targetVersion}-evidence.json`);
   writeFileSync(evidencePath, JSON.stringify(evidenceForInspection(evidence), null, 2), "utf8");
 
+  const manualNotes = String(process.env.MANUAL_RELEASE_NOTES || "").trim();
+  if (manualNotes) {
+    const draft = legacyPackageOnly
+      ? legacyPackageDraftFromEvidence(evidence, { npmDistTag, docsSyncMode })
+      : manualDraftFromNotes(manualNotes, evidence);
+    const notes = legacyPackageOnly
+      ? validateLegacyPackageNotes(manualNotes)
+      : draft.release_notes_markdown;
+    const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
+    writeFileSync(draftPath, JSON.stringify(draftForInspection(draft), null, 2), "utf8");
+    writeFileSync(notesPath, notes, "utf8");
+    appendOutput("release_notes_file", notesPath);
+    appendOutput("evidence_file", evidencePath);
+    appendOutput("draft_file", draftPath);
+    appendOutput("draft_used", legacyPackageOnly ? "false" : "true");
+    appendOutput("previous_tag", previousTag);
+    appendOutput("current_tag", currentTag);
+    appendOutput("current_ref", currentRef);
+    appendOutput("draft_confidence", draft.confidence);
+    appendOutput("missing_required_count", String(draft.coverage?.missing_required_count ?? ""));
+    appendOutput("validation_attempt_count", String(draft.validation_attempt_count ?? 0));
+    appendOutput("repair_attempt_count", String(draft.repair_attempt_count ?? 0));
+    console.log(`Using manually provided evidence-bound release notes: ${notesPath}`);
+    return;
+  }
+
   if (legacyPackageOnly) {
-    const draft = legacyPackageDraftFromEvidence(evidence, { npmDistTag });
+    const draft = legacyPackageDraftFromEvidence(evidence, { npmDistTag, docsSyncMode });
     const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
     writeFileSync(draftPath, JSON.stringify(draftForInspection(draft), null, 2), "utf8");
     writeFileSync(notesPath, draft.release_notes_markdown, "utf8");
@@ -1414,7 +1480,7 @@ export async function main() {
     appendOutput("validation_attempt_count", "0");
     appendOutput("repair_attempt_count", "0");
 
-    console.log(`Generated package-only prerelease notes without Doc Agent: ${notesPath}`);
+    console.log(`Generated standalone package inspection notes without Doc Agent: ${notesPath}`);
     console.log(`Previous tag: ${previousTag}`);
     console.log(`Current tag: ${currentTag}`);
     console.log(`Current evidence ref: ${currentRef}`);

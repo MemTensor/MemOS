@@ -41,9 +41,9 @@ validate_positive_integer "NPM_AMBIGUOUS_VISIBILITY_ATTEMPTS" "${npm_ambiguous_v
 validate_non_negative_integer "NPM_VISIBILITY_DELAY_SECONDS" "${npm_visibility_delay_seconds}"
 
 case "${release_metadata_state}" in
-  fresh|tag_only|complete) ;;
+  fresh|complete) ;;
   *)
-    echo "::error::RELEASE_METADATA_STATE must be fresh, tag_only, or complete; received ${release_metadata_state}."
+    echo "::error::RELEASE_METADATA_STATE must be fresh or complete; received ${release_metadata_state}."
     exit 2
     ;;
 esac
@@ -234,7 +234,7 @@ verify_published_package() {
   local_content_fingerprint="$(archive_content_fingerprint "${RELEASE_TARBALL}")"
   registry_content_fingerprint="$(archive_content_fingerprint "${verify_tarball}")"
   if [ "${local_content_fingerprint}" != "${registry_content_fingerprint}" ]; then
-    echo "::error::The npm registry tarball content does not match the locally validated release tarball. Refusing to create or recover tag/Release metadata for different source content."
+    echo "::error::The npm registry tarball content does not match the locally validated release tarball. Refusing to create or recover a tag for different source content."
     exit 1
   fi
 }
@@ -244,17 +244,18 @@ published_version_preexisting=false
 if npm_version_exists; then
   published_version_visible=true
   published_version_preexisting=true
-  if remote_tag_exists "${RELEASE_TAG}"; then
-    echo "${PACKAGE_NAME}@${RELEASE_VERSION} and ${RELEASE_TAG} already exist; treating this as an idempotent rerun."
-  elif [ "${RECOVER_EXISTING_NPM_RELEASE:-false}" = "true" ]; then
-    echo "Recovery mode enabled; npm version exists, so publish is skipped."
-  else
-    echo "::error::npm version exists but ${RELEASE_TAG} does not. Refusing to invent release metadata without explicit recovery mode."
+  if [ "${RECOVER_EXISTING_NPM_RELEASE:-false}" != "true" ]; then
+    echo "::error::${PACKAGE_NAME}@${RELEASE_VERSION} already exists. Normal releases require an unused version; enable recovery only after release-owner verification of a partial failure."
     exit 1
+  fi
+  if remote_tag_exists "${RELEASE_TAG}"; then
+    echo "Recovery mode enabled; the existing npm version and tag will be verified and reused."
+  else
+    echo "Recovery mode enabled; npm version exists and the missing tag may be reconstructed after package verification."
   fi
 else
   if [ "${release_metadata_state}" != "fresh" ]; then
-    echo "::error::Release metadata state is ${release_metadata_state}, but ${PACKAGE_NAME}@${RELEASE_VERSION} is absent from npm. Refusing to publish after tag/Release metadata already exists."
+    echo "::error::Tag state is ${release_metadata_state}, but ${PACKAGE_NAME}@${RELEASE_VERSION} is absent from npm. Refusing to publish after tag metadata already exists."
     exit 1
   fi
 
@@ -286,7 +287,7 @@ else
   if wait_for_npm_version "${npm_visibility_attempts}"; then
     published_version_visible=true
   else
-    echo "::error::npm accepted the publish request, but ${PACKAGE_NAME}@${RELEASE_VERSION} is not visible after propagation retries. Stop before tag/Release creation and use recovery mode only after npm becomes visible."
+    echo "::error::npm accepted the publish request, but ${PACKAGE_NAME}@${RELEASE_VERSION} is not visible after propagation retries. Stop before tag creation and use recovery mode only after npm becomes visible."
     exit 1
   fi
 fi

@@ -197,14 +197,14 @@ test("waits through two post-publish 404 responses before the version becomes vi
   assert.match(result.stdout, /became visible on attempt 3/);
 });
 
-test("stops before release metadata when publish succeeds but visibility remains delayed", () => {
+test("stops before tag creation when publish succeeds but visibility remains delayed", () => {
   const result = runScenario("always-missing");
 
   assert.notEqual(result.status, 0);
   assert.equal(result.publishCount, 1);
   assert.equal(result.viewCount, 4);
   assert.equal(result.packCount, 0);
-  assert.match(result.stdout + result.stderr, /Stop before tag\/Release creation/);
+  assert.match(result.stdout + result.stderr, /Stop before tag creation/);
 });
 
 test("fails when publish fails and the requested version remains absent", () => {
@@ -271,4 +271,16 @@ test("does not require a mutable dist-tag to point to an older preexisting versi
   assert.equal(result.publishCount, 0);
   assert.equal(result.packCount, 1);
   assert.match(result.stdout, /mutable dist-tag latest now points elsewhere/);
+});
+
+test("rejects an already-used npm version outside explicit recovery", () => {
+  const result = runScenario("already-visible", {
+    RECOVER_EXISTING_NPM_RELEASE: "false",
+    RELEASE_METADATA_STATE: "fresh",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.publishCount, 0);
+  assert.equal(result.packCount, 0);
+  assert.match(result.stdout + result.stderr, /Normal releases require an unused version/);
 });

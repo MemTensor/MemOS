@@ -46,39 +46,8 @@ export function validateVersionChannel(version, distTag) {
   return { prerelease: Boolean(prerelease), prereleaseChannel };
 }
 
-export function classifyReleaseState({ tagExists, releaseExists, recoveryEnabled }) {
-  if (!tagExists && releaseExists) {
-    throw new Error("GitHub Release exists without its release tag; refusing automatic repair");
-  }
-  if (!tagExists && !releaseExists) {
-    return "fresh";
-  }
-  if (tagExists && !releaseExists) {
-    if (!recoveryEnabled) {
-      throw new Error(
-        "release tag exists but GitHub Release is missing; enable recover_existing_npm_release after reviewing the existing tag",
-      );
-    }
-    return "tag_only";
-  }
-  return "complete";
-}
-
-export function validateExistingRelease(release, { releaseTag, shouldBePrerelease }) {
-  if (release.tag_name !== releaseTag) {
-    throw new Error(`GitHub Release tag ${release.tag_name} does not match ${releaseTag}`);
-  }
-  if (release.draft) {
-    throw new Error(`GitHub Release ${releaseTag} is still a draft; review it manually before retrying`);
-  }
-  if (Boolean(release.prerelease) !== shouldBePrerelease) {
-    throw new Error(
-      `GitHub Release ${releaseTag} prerelease=${Boolean(release.prerelease)} does not match expected ${shouldBePrerelease}`,
-    );
-  }
-  if (shouldBePrerelease && String(release.body || "").includes("doc-agent-release-notes-json")) {
-    throw new Error(`package-only prerelease ${releaseTag} contains a Doc Agent payload`);
-  }
+export function classifyReleaseState({ tagExists }) {
+  return tagExists ? "complete" : "fresh";
 }
 
 export function validateExistingTagVersions(
@@ -225,55 +194,26 @@ function inspectRemoteTag(releaseTag, version, expectedSourceSha) {
   return { exists: true, commit: fetchedCommit };
 }
 
-function inspectGitHubRelease(repository, releaseTag) {
-  const result = runWithRetry(
-    "gh",
-    ["api", `repos/${repository}/releases/tags/${encodeURIComponent(releaseTag)}`],
-    {
-      missingPattern: /HTTP 404|Not Found/i,
-      label: `GitHub Release lookup for ${releaseTag}`,
-    },
-  );
-  if (!result.exists) {
-    return { exists: false, release: null };
-  }
-  return { exists: true, release: JSON.parse(result.stdout) };
-}
-
 export function main() {
   const version = process.env.RELEASE_VERSION || "";
   const releaseTag = process.env.RELEASE_TAG || "";
   const distTag = process.env.NPM_DIST_TAG || "";
-  const repository = process.env.GITHUB_REPOSITORY || "";
   const expectedSourceSha = process.env.EXPECTED_PACKAGE_SOURCE_SHA || "";
-  const recoveryEnabled = process.env.RECOVER_EXISTING_NPM_RELEASE === "true";
   const outputFile = process.env.GITHUB_OUTPUT || "";
 
-  if (!version || !releaseTag || !distTag || !repository || !expectedSourceSha) {
+  if (!version || !releaseTag || !distTag || !expectedSourceSha) {
     throw new Error(
-      "RELEASE_VERSION, RELEASE_TAG, NPM_DIST_TAG, GITHUB_REPOSITORY, and EXPECTED_PACKAGE_SOURCE_SHA are required",
+      "RELEASE_VERSION, RELEASE_TAG, NPM_DIST_TAG, and EXPECTED_PACKAGE_SOURCE_SHA are required",
     );
   }
   if (releaseTag !== `memos-local-plugin-v${version}`) {
     throw new Error(`release tag ${releaseTag} does not match version ${version}`);
   }
-  const { prerelease } = validateVersionChannel(version, distTag);
+  validateVersionChannel(version, distTag);
 
   const tag = inspectRemoteTag(releaseTag, version, expectedSourceSha);
-  const githubRelease = inspectGitHubRelease(repository, releaseTag);
-  if (githubRelease.exists) {
-    validateExistingRelease(githubRelease.release, {
-      releaseTag,
-      shouldBePrerelease: prerelease || distTag !== "latest",
-    });
-  }
-
-  const state = classifyReleaseState({
-    tagExists: tag.exists,
-    releaseExists: githubRelease.exists,
-    recoveryEnabled,
-  });
-  console.log(`Release metadata state: ${state}`);
+  const state = classifyReleaseState({ tagExists: tag.exists });
+  console.log(`Standalone package tag state: ${state}`);
   if (tag.commit) {
     console.log(`Existing release tag commit: ${tag.commit}`);
   }

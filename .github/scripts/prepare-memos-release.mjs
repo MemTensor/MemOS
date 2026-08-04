@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
 
 export const PRODUCT_ID = "openclaw-local-plugin";
 export const PRODUCT_PATH = "apps/memos-local-plugin";
@@ -112,6 +113,7 @@ export function cleanLocalPluginVersion(raw, label = "local_plugin_version") {
   if (!value) fail(`${label} is required.`);
   if (value.startsWith("v")) fail(`${label} must not include a leading v.`);
   if (!parseSemver(value)) fail(`${label} must be a valid semver version, for example 2.0.12.`);
+  if (value.includes("+")) fail(`${label} must not contain SemVer build metadata.`);
   return value;
 }
 
@@ -168,12 +170,38 @@ export function incrementPatchVersion(raw) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
 }
 
-export function validatePublishConfirmation({ dryRun, version, confirmation }) {
+export function validatePublishConfirmation({ dryRun, version, localPluginVersion = "", confirmation }) {
   if (String(dryRun) === "true") return;
-  const expected = `PUBLISH v${cleanVersion(version)}`;
+  const requestedLocalPluginVersion = String(localPluginVersion || "").trim();
+  const expected = requestedLocalPluginVersion
+    ? `PUBLISH v${cleanVersion(version)} WITH LOCAL PLUGIN v${cleanLocalPluginVersion(requestedLocalPluginVersion)}`
+    : `PUBLISH v${cleanVersion(version)}`;
   if (String(confirmation || "").trim() !== expected) {
     fail(`dry_run=false requires publish_confirmation to exactly equal: ${expected}`);
   }
+}
+
+export function localPluginTagForVersion(raw) {
+  return `memos-local-plugin-v${cleanLocalPluginVersion(raw)}`;
+}
+
+export function stableLocalPluginTags(tags, { excludeVersion = "" } = {}) {
+  const excluded = String(excludeVersion || "").trim().replace(/^v/, "");
+  return tags
+    .map((tag) => String(tag || "").trim())
+    .map((tag) => {
+      const match = /^memos-local-plugin-v(.+)$/.exec(tag);
+      if (!match) return null;
+      const parsed = parseSemver(match[1]);
+      if (!parsed || parsed.prerelease.length || match[1] === excluded) return null;
+      return { tag, version: match[1], parsed };
+    })
+    .filter(Boolean)
+    .sort((a, b) => compareSemver(b.version, a.version));
+}
+
+export function findPreviousStableLocalPluginTag(tags, { requestedVersion = "" } = {}) {
+  return stableLocalPluginTags(tags, { excludeVersion: requestedVersion })[0] || null;
 }
 
 export function validateReleaseTarget({ dryRun, targetRef }) {
@@ -200,11 +228,45 @@ export function findPreviousMemOSTag(targetVersion, currentTag, tags) {
     .sort((a, b) => compareSemver(b.version, a.version))[0]?.tag || "";
 }
 
-function listTags() {
-  return tryGit(["tag", "--list", "v*"])
+function listTags(pattern = "*") {
+  return tryGit(["tag", "--list", pattern])
     .split("\n")
     .map((tag) => tag.trim())
     .filter(Boolean);
+}
+
+export function npmVersionLookupResult({ status, output }) {
+  const text = String(output || "");
+  if (status === 0) return true;
+  if (/E404|404 Not Found|No match found|is not in this registry/i.test(text)) return false;
+  throw new Error(`npm version lookup was inconclusive: ${redact(text).slice(0, 600)}`);
+}
+
+function npmVersionExists(version) {
+  const override = String(process.env.LOCAL_PLUGIN_NPM_VERSION_EXISTS_OVERRIDE || "").trim();
+  if (override === "true") return true;
+  if (override === "false") return false;
+
+  let last;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const result = spawnSync(
+      "npm",
+      ["view", `@memtensor/memos-local-plugin@${version}`, "version", "--prefer-online"],
+      { encoding: "utf8", env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    last = result;
+    try {
+      return npmVersionLookupResult({
+        status: result.status,
+        output: `${result.stdout || ""}\n${result.stderr || ""}`,
+      });
+    } catch (error) {
+      if (attempt === 3) throw error;
+      warn(`npm version lookup attempt ${attempt}/3 was inconclusive; retrying without guessing release state.`);
+      execFileSync("sleep", [String(attempt * 5)]);
+    }
+  }
+  fail(`npm version lookup failed: ${redact(last?.stderr || last?.stdout || "unknown error")}`);
 }
 
 function resolveRef(ref) {
@@ -483,7 +545,11 @@ function localPluginPackageVersions(previousTag, currentRef) {
   };
 }
 
-export function validateLocalPluginVersionPlan(evidence, expectedVersionInput = "") {
+export function validateLocalPluginVersionPlan(
+  evidence,
+  expectedVersionInput = "",
+  { requestedTagExists = false, npmVersionExists = false, recoveryEnabled = false } = {},
+) {
   const expectedVersionRaw = String(expectedVersionInput || "").trim();
   const previousReleasedVersion = cleanLocalPluginVersion(
     evidence.local_plugin_previous_version_raw || evidence.local_plugin_package_previous_version_raw,
@@ -497,63 +563,68 @@ export function validateLocalPluginVersionPlan(evidence, expectedVersionInput = 
     evidence.local_plugin_package_version_raw || evidence.local_plugin_version_raw,
     "local plugin package.json version",
   );
-  const currentPackageIsPrerelease = (parseSemver(currentPackageVersion)?.prerelease || []).length > 0;
-  const packageOrder = compareSemver(currentPackageVersion, previousPackageVersion);
-  const packageVsReleasedOrder = compareSemver(currentPackageVersion, previousReleasedVersion);
-  if (packageOrder < 0) {
-    fail(
-      `MemOS local plugin package version moved backwards: ${displayVersion(previousPackageVersion)} -> ${displayVersion(currentPackageVersion)}.`,
-    );
-  }
-
   const hasProductChanges = Boolean(evidence.has_product_changes);
   const hasUserFacingChanges = Boolean(evidence.has_user_facing_product_changes);
-  let expectedVersion = "";
-  let resolvedVersion = previousReleasedVersion;
-  let versionSource = hasProductChanges ? "no_user_facing_product_changes" : "no_product_path_changes";
-  let autoIncremented = false;
-  let inputIgnored = false;
-  let inputIgnoredReason = "";
+  const nextPatchVersion = incrementPatchVersion(previousReleasedVersion);
+  const releaseRequested = Boolean(expectedVersionRaw);
+  const expectedVersion = releaseRequested
+    ? cleanLocalPluginVersion(expectedVersionRaw, "local_plugin_version input")
+    : "";
 
-  if (hasUserFacingChanges) {
-    expectedVersion = expectedVersionRaw
-      ? cleanLocalPluginVersion(expectedVersionRaw, "local_plugin_version input")
-      : "";
-    resolvedVersion = currentPackageVersion;
-    versionSource = `${PRODUCT_PATH}/package.json`;
-    if (currentPackageIsPrerelease) {
-      resolvedVersion = incrementPatchVersion(previousReleasedVersion);
-      versionSource = "auto_patch_from_previous_released_version_prerelease_package_ignored";
-      autoIncremented = true;
-    } else if (packageVsReleasedOrder <= 0) {
-      resolvedVersion = incrementPatchVersion(previousReleasedVersion);
-      versionSource = "auto_patch_from_previous_released_version";
-      autoIncremented = true;
-    }
-  } else if (expectedVersionRaw) {
-    inputIgnored = true;
-    inputIgnoredReason = hasProductChanges
-      ? "local plugin path changed, but no user-facing feature/fix/performance evidence was found"
-      : "no local plugin path changes in apps/memos-local-plugin/**";
+  if (expectedVersion && parseSemver(expectedVersion)?.prerelease.length) {
+    fail("MemOS weekly local_plugin_version must be a stable SemVer. Use the standalone publisher for prereleases.");
   }
-
-  if (expectedVersion && expectedVersion !== resolvedVersion) {
+  if (releaseRequested && !hasUserFacingChanges) {
     fail(
-      `local_plugin_version input ${displayVersion(expectedVersion)} does not match the resolved MemOS local plugin docs version ${displayVersion(resolvedVersion)}.`,
+      hasProductChanges
+        ? "local_plugin_version was provided, but no unpublished user-facing feature/fix/performance evidence was found"
+        : "local_plugin_version was provided, but no unpublished apps/memos-local-plugin/** changes were found",
     );
   }
+  if (releaseRequested && expectedVersion !== nextPatchVersion) {
+    fail(
+      `MemOS weekly local_plugin_version must be the next stable patch after ${displayVersion(previousReleasedVersion)}: expected ${displayVersion(nextPatchVersion)}, received ${displayVersion(expectedVersion)}. Use the standalone publisher for an intentional major/minor release.`,
+    );
+  }
+  if (releaseRequested && (requestedTagExists || npmVersionExists) && !recoveryEnabled) {
+    const usedBy = [requestedTagExists ? "git tag" : "", npmVersionExists ? "npm" : ""].filter(Boolean).join(" and ");
+    fail(
+      `${displayVersion(expectedVersion)} is already used by ${usedBy}. Normal weekly releases require a new version; enable explicit recovery only for a verified partial failure from this same source.`,
+    );
+  }
+  if (releaseRequested && recoveryEnabled && requestedTagExists !== npmVersionExists) {
+    fail(
+      `Recovery requires both npm and ${localPluginTagForVersion(expectedVersion)} to exist. Refusing an incomplete or ambiguous recovery state.`,
+    );
+  }
+
+  const resolvedVersion = releaseRequested ? expectedVersion : previousReleasedVersion;
+  const inputIgnoredReason = !releaseRequested && hasUserFacingChanges
+    ? "unpublished user-facing local plugin changes were detected, but local_plugin_version was left blank"
+    : !releaseRequested && hasProductChanges
+      ? "local plugin path changes were detected, but no user-facing evidence requires a release"
+      : !releaseRequested
+        ? "no unpublished local plugin path changes were detected"
+        : "";
   return {
     ok: true,
     expected_version: expectedVersion ? displayVersion(expectedVersion) : "",
     previous_version: displayVersion(previousReleasedVersion),
     version: displayVersion(resolvedVersion),
-    version_changed: resolvedVersion !== previousReleasedVersion,
-    version_required: Boolean(evidence.has_user_facing_product_changes),
-    version_source: versionSource,
-    auto_incremented: autoIncremented,
-    input_ignored: inputIgnored,
+    version_changed: releaseRequested,
+    version_required: releaseRequested,
+    release_requested: releaseRequested,
+    pending_local_plugin_changes: !releaseRequested && hasUserFacingChanges,
+    version_source: releaseRequested ? "manual_weekly_release_opt_in" : "latest_stable_local_plugin_tag",
+    auto_incremented: false,
+    input_ignored: false,
     input_ignored_reason: inputIgnoredReason,
     input_raw: expectedVersionRaw,
+    next_patch_version: displayVersion(nextPatchVersion),
+    local_plugin_tag: releaseRequested ? localPluginTagForVersion(expectedVersion) : "",
+    requested_tag_exists: Boolean(requestedTagExists),
+    npm_version_exists: Boolean(npmVersionExists),
+    recovery_enabled: Boolean(recoveryEnabled),
     package_previous_version: displayVersion(previousPackageVersion),
     package_version: displayVersion(currentPackageVersion),
     package_version_changed: previousPackageVersion !== currentPackageVersion,
@@ -578,8 +649,17 @@ function collectPatchSnippets(range, changedFiles) {
   return snippets;
 }
 
-export function collectLocalPluginEvidence({ previousTag, currentTag, currentRef, targetVersion, repo }) {
-  const range = `${previousTag}..${currentRef}`;
+export function collectLocalPluginEvidence({
+  previousTag,
+  previousLocalPluginTag,
+  previousLocalPluginVersion,
+  currentTag,
+  currentRef,
+  targetVersion,
+  repo,
+}) {
+  const evidenceBaseline = previousLocalPluginTag || previousTag;
+  const range = `${evidenceBaseline}..${currentRef}`;
   const commitText = tryGit([
     "log",
     "--format=%H%x09%h%x09%an%x09%ad%x09%s",
@@ -623,18 +703,21 @@ export function collectLocalPluginEvidence({ previousTag, currentTag, currentRef
   const evidenceCommits = evidenceCommitsForRelease(commits, aggregateItems, { revertedKeys });
   const importantCommits = evidenceCommits.filter((commit) => isImportantCommit(commit, { revertedKeys }));
   const skipReason = localPluginSkipReason({ changedFiles, importantCommits });
-  const localPluginVersion = localPluginPackageVersions(previousTag, currentRef);
+  const localPluginVersion = localPluginPackageVersions(evidenceBaseline, currentRef);
   return {
     product_id: PRODUCT_ID,
     product_title: PRODUCT_TITLE,
     repo,
     release_repo: repo,
-    previous_tag: previousTag,
+    previous_tag: evidenceBaseline,
     current_tag: currentTag,
+    memos_previous_tag: previousTag,
+    memos_current_tag: currentTag,
+    local_plugin_previous_tag: previousLocalPluginTag || "",
     target_version: displayVersion(targetVersion),
     memos_release_version: displayVersion(targetVersion),
-    local_plugin_previous_version: localPluginVersion.previous_version,
-    local_plugin_previous_version_raw: localPluginVersion.previous_version_raw,
+    local_plugin_previous_version: displayVersion(previousLocalPluginVersion || localPluginVersion.previous_version_raw),
+    local_plugin_previous_version_raw: previousLocalPluginVersion || localPluginVersion.previous_version_raw,
     local_plugin_version: localPluginVersion.version,
     local_plugin_version_raw: localPluginVersion.version_raw,
     local_plugin_version_changed: localPluginVersion.version_changed,
@@ -669,7 +752,7 @@ export function collectLocalPluginEvidence({ previousTag, currentTag, currentRef
     important_diff: {
       [PRODUCT_PATHS[0]]: collectPatchSnippets(range, changedFiles),
     },
-    package_changes: packageChanges(previousTag, currentRef),
+    package_changes: packageChanges(evidenceBaseline, currentRef),
     test_changes: changedFiles.filter((item) => /(^|\/)(test|tests|__tests__)\//.test(item.path) || /\.test\./.test(item.path)),
     docs_changes: changedFiles.filter((item) => /\.(md|mdx|rst)$/i.test(item.path)),
     release_note_quality_request: {
@@ -1037,6 +1120,34 @@ function duplicateKeyForItem(item) {
 }
 
 export function validateDraft(draft, evidence) {
+  const operatorSkippedRelease =
+    evidence.local_plugin_release_requested === false &&
+    evidence.dry_run === false;
+  if (operatorSkippedRelease) {
+    const issues = [];
+    if (!draft.ok) issues.push({ kind: "draft_not_ok", message: "draft ok=false" });
+    if (draft.needs_review) issues.push({ kind: "needs_review", message: "draft needs review" });
+    if (draft.release_items.length) {
+      issues.push({
+        kind: "unexpected_release_items",
+        message: "release_items must be empty when the operator skipped local-plugin publishing",
+      });
+    }
+    return {
+      ok: issues.length === 0,
+      needs_review: issues.length > 0,
+      issue_count: issues.length,
+      issues,
+      skipped_by_operator: true,
+      coverage: {
+        required_count: 0,
+        covered_required_count: 0,
+        missing_required_count: 0,
+        missing_required_refs: [],
+      },
+    };
+  }
+
   const issues = [];
   const validRefs = new Set();
   for (const commit of evidence.commits || []) {
@@ -1156,12 +1267,17 @@ export function validateDraft(draft, evidence) {
 }
 
 export async function requestDocAgentDraft(evidence) {
-  if (!evidence.has_user_facing_product_changes) {
+  const dryRunPreview = evidence.dry_run === true || String(evidence.dry_run) === "true";
+  const operatorSkippedRelease = !evidence.local_plugin_release_requested && !dryRunPreview;
+  if (!evidence.has_user_facing_product_changes || operatorSkippedRelease) {
+    const warning = operatorSkippedRelease
+      ? "MemOS release operator left local_plugin_version blank; skipped the Doc Agent draft request for this real release."
+      : evidence.skip_reason || "No user-facing MemOS local plugin changes in this MemOS release range.";
     return {
       ok: true,
       needs_review: false,
       confidence: "high",
-      warnings: [evidence.skip_reason || "No user-facing MemOS local plugin changes in this MemOS release range."],
+      warnings: [warning],
       release_items: [],
       coverage: { required_count: 0, covered_required_count: 0, missing_required_count: 0 },
       validation_attempt_count: 1,
@@ -1288,7 +1404,13 @@ export function buildDocsPreview(draft, evidence) {
     has_product_changes: evidence.has_product_changes,
     has_user_facing_product_changes: evidence.has_user_facing_product_changes,
     skip_reason: evidence.skip_reason,
-    docs_action: draft.release_items.length ? "preview_plugin_tab_entry" : "skip_plugin_tab_entry",
+    docs_action: evidence.local_plugin_release_requested
+      ? draft.release_items.length
+        ? "preview_plugin_tab_entry"
+        : "skip_plugin_tab_entry"
+      : evidence.pending_local_plugin_changes
+        ? "skip_pending_manual_local_plugin_version"
+        : "skip_plugin_tab_entry",
     would_create_docs_pr: false,
     files: ["content/cn/plugin-changelog.yml", "content/en/plugin-changelog.yml"],
     cn: makeSide("zh"),
@@ -1301,7 +1423,8 @@ export function docsPreviewMarkdown(preview, draft, evidence) {
     `# ${PRODUCT_TITLE.zh}-${evidence.local_plugin_version || evidence.current_tag}`,
     "",
     `- source: ${evidence.repo}`,
-    `- memos_release_range: ${evidence.previous_tag}...${evidence.current_tag}`,
+    `- memos_release_range: ${evidence.memos_previous_tag}...${evidence.memos_current_tag}`,
+    `- local_plugin_evidence_range: ${evidence.local_plugin_previous_tag}...${evidence.git_ref}`,
     `- local_plugin_version: ${evidence.local_plugin_version || "n/a"}`,
     `- local_plugin_previous_version: ${evidence.local_plugin_previous_version || "n/a"}`,
     `- local_plugin_version_source: ${evidence.local_plugin_version_source || `${PRODUCT_PATH}/package.json`}`,
@@ -1352,15 +1475,40 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+export function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function sha256Json(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
 export async function run() {
   const version = cleanVersion(process.env.RELEASE_VERSION);
   if (!version) fail("RELEASE_VERSION is required.");
-  if (!parseSemver(version)) fail(`Invalid semver version: ${version}`);
+  const parsedReleaseVersion = parseSemver(version);
+  if (!parsedReleaseVersion) fail(`Invalid semver version: ${version}`);
+  if (parsedReleaseVersion.prerelease.length || version.includes("+")) {
+    fail(`MemOS Release — Publish only accepts a stable X.Y.Z version; received ${version}.`);
+  }
 
   const dryRun = String(process.env.DRY_RUN ?? "true");
+  const localPluginVersionInput = String(process.env.LOCAL_PLUGIN_VERSION || "").trim();
+  const localPluginRecoveryEnabled = String(process.env.RECOVER_EXISTING_LOCAL_PLUGIN_PUBLISH || "") === "true";
+  if (localPluginRecoveryEnabled && !localPluginVersionInput) {
+    fail("recover_existing_local_plugin_publish=true requires local_plugin_version.");
+  }
   validatePublishConfirmation({
     dryRun,
     version,
+    localPluginVersion: localPluginVersionInput,
     confirmation: process.env.PUBLISH_CONFIRMATION || "",
   });
 
@@ -1369,8 +1517,27 @@ export async function run() {
   const targetRefInput = process.env.TARGET_REF || "main";
   validateReleaseTarget({ dryRun, targetRef: targetRefInput });
   const target = resolveRef(targetRefInput);
-  const previousTag = process.env.PREVIOUS_TAG || findPreviousMemOSTag(version, currentTag, listTags());
+  const allTags = listTags();
+  const previousTag = process.env.PREVIOUS_TAG || findPreviousMemOSTag(version, currentTag, allTags);
   if (!previousTag) fail(`Cannot find previous MemOS v* tag before ${currentTag}.`);
+  const requestedLocalPluginVersion = localPluginVersionInput
+    ? cleanLocalPluginVersion(localPluginVersionInput, "local_plugin_version input")
+    : "";
+  const previousLocalPlugin = findPreviousStableLocalPluginTag(allTags, {
+    requestedVersion: requestedLocalPluginVersion,
+  });
+  if (!previousLocalPlugin) {
+    fail("Cannot find a previous stable memos-local-plugin-v* tag for local plugin evidence and version validation.");
+  }
+  const requestedLocalPluginTag = requestedLocalPluginVersion
+    ? localPluginTagForVersion(requestedLocalPluginVersion)
+    : "";
+  const requestedLocalPluginTagExists = Boolean(
+    requestedLocalPluginTag && tryGit(["rev-parse", "--verify", `refs/tags/${requestedLocalPluginTag}^{commit}`]),
+  );
+  const requestedNpmVersionExists = requestedLocalPluginVersion
+    ? npmVersionExists(requestedLocalPluginVersion)
+    : false;
   const existingTag = existingReleaseTagState(currentTag, target.sha);
   if (existingTag.publish_blocked && dryRun !== "true") {
     fail(existingTag.message);
@@ -1389,12 +1556,18 @@ export async function run() {
   });
   const evidence = collectLocalPluginEvidence({
     previousTag,
+    previousLocalPluginTag: previousLocalPlugin.tag,
+    previousLocalPluginVersion: previousLocalPlugin.version,
     currentTag,
     currentRef: target.sha,
     targetVersion: version,
     repo,
   });
-  const localPluginVersionPlan = validateLocalPluginVersionPlan(evidence, process.env.LOCAL_PLUGIN_VERSION || "");
+  const localPluginVersionPlan = validateLocalPluginVersionPlan(evidence, localPluginVersionInput, {
+    requestedTagExists: requestedLocalPluginTagExists,
+    npmVersionExists: requestedNpmVersionExists,
+    recoveryEnabled: localPluginRecoveryEnabled,
+  });
   evidence.local_plugin_version_plan = localPluginVersionPlan;
   evidence.local_plugin_previous_version = localPluginVersionPlan.previous_version;
   evidence.local_plugin_previous_version_raw = localPluginVersionPlan.previous_version.replace(/^v/, "");
@@ -1406,6 +1579,14 @@ export async function run() {
   evidence.local_plugin_version_input_ignored = localPluginVersionPlan.input_ignored;
   evidence.local_plugin_version_input_ignored_reason = localPluginVersionPlan.input_ignored_reason;
   evidence.local_plugin_version_input_raw = localPluginVersionPlan.input_raw;
+  evidence.local_plugin_release_requested = localPluginVersionPlan.release_requested;
+  evidence.pending_local_plugin_changes = localPluginVersionPlan.pending_local_plugin_changes;
+  evidence.local_plugin_tag = localPluginVersionPlan.local_plugin_tag;
+  evidence.local_plugin_tag_exists = localPluginVersionPlan.requested_tag_exists;
+  evidence.local_plugin_npm_version_exists = localPluginVersionPlan.npm_version_exists;
+  evidence.local_plugin_recovery_enabled = localPluginVersionPlan.recovery_enabled;
+  evidence.local_plugin_next_patch_version = localPluginVersionPlan.next_patch_version;
+  evidence.dry_run = dryRun === "true";
   evidence.local_plugin_package_previous_version = localPluginVersionPlan.package_previous_version;
   evidence.local_plugin_package_previous_version_raw = localPluginVersionPlan.package_previous_version.replace(/^v/, "");
   evidence.local_plugin_package_version = localPluginVersionPlan.package_version;
@@ -1438,13 +1619,28 @@ export async function run() {
   const docsPreviewMarkdownFile = join(outputRoot, "local-plugin-docs-preview.md");
   const docsPreviewMarkdownAliasFile = join(outputRoot, "docs-preview.md");
   const qualityReportFile = join(outputRoot, "quality-report.json");
+  const releaseIntentPreviewFile = join(outputRoot, "local-plugin-release-intent.json");
   const readmeFile = join(outputRoot, "README.md");
 
   writeFileSync(releaseNotesFile, `${releaseNotes.body.trim()}\n`, "utf8");
   writeFileSync(releaseNotesAliasFile, `${releaseNotes.body.trim()}\n`, "utf8");
   const redactedEvidence = JSON.parse(redact(JSON.stringify(evidence, null, 2)));
+  const evidenceDigest = sha256Json(redactedEvidence);
   writeJson(evidenceFile, redactedEvidence);
   writeJson(evidenceAliasFile, redactedEvidence);
+  writeJson(releaseIntentPreviewFile, {
+    schema: "memos.local-plugin.release-intent.v1",
+    enabled: Boolean(localPluginVersionPlan.release_requested),
+    version: localPluginVersionPlan.expected_version,
+    tag: localPluginVersionPlan.local_plugin_tag,
+    source_sha: localPluginVersionPlan.release_requested ? target.sha : "",
+    evidence_digest: evidenceDigest,
+    status: localPluginVersionPlan.release_requested
+      ? "preview_pending_package_publish"
+      : localPluginVersionPlan.pending_local_plugin_changes
+        ? "skipped_by_release_operator"
+        : "no_release_requested",
+  });
   writeJson(draftFile, draft);
   writeJson(docsPreviewFile, preview);
   writeJson(docsPreviewAliasFile, preview);
@@ -1470,6 +1666,15 @@ export async function run() {
     local_plugin_version_input_ignored: evidence.local_plugin_version_input_ignored,
     local_plugin_version_input_ignored_reason: evidence.local_plugin_version_input_ignored_reason,
     local_plugin_expected_version: localPluginVersionPlan.expected_version,
+    local_plugin_release_requested: localPluginVersionPlan.release_requested,
+    pending_local_plugin_changes: localPluginVersionPlan.pending_local_plugin_changes,
+    local_plugin_tag: localPluginVersionPlan.local_plugin_tag,
+    local_plugin_previous_tag: evidence.local_plugin_previous_tag,
+    local_plugin_next_patch_version: localPluginVersionPlan.next_patch_version,
+    local_plugin_tag_exists: localPluginVersionPlan.requested_tag_exists,
+    local_plugin_npm_version_exists: localPluginVersionPlan.npm_version_exists,
+    local_plugin_recovery_enabled: localPluginVersionPlan.recovery_enabled,
+    evidence_digest: evidenceDigest,
     local_plugin_package_version: evidence.local_plugin_package_version,
     local_plugin_package_previous_version: evidence.local_plugin_package_previous_version,
     local_plugin_package_version_changed: evidence.local_plugin_package_version_changed,
@@ -1522,6 +1727,15 @@ export async function run() {
       `- local_plugin_version_input_ignored: ${evidence.local_plugin_version_input_ignored}`,
       `- local_plugin_version_input_ignored_reason: ${evidence.local_plugin_version_input_ignored_reason || "n/a"}`,
       `- local_plugin_expected_version: ${localPluginVersionPlan.expected_version || "n/a"}`,
+      `- local_plugin_release_requested: ${localPluginVersionPlan.release_requested}`,
+      `- pending_local_plugin_changes: ${localPluginVersionPlan.pending_local_plugin_changes}`,
+      `- local_plugin_tag: ${localPluginVersionPlan.local_plugin_tag || "n/a"}`,
+      `- local_plugin_previous_tag: ${evidence.local_plugin_previous_tag}`,
+      `- local_plugin_next_patch_version: ${localPluginVersionPlan.next_patch_version}`,
+      `- local_plugin_tag_exists: ${localPluginVersionPlan.requested_tag_exists}`,
+      `- local_plugin_npm_version_exists: ${localPluginVersionPlan.npm_version_exists}`,
+      `- local_plugin_recovery_enabled: ${localPluginVersionPlan.recovery_enabled}`,
+      `- evidence_digest: ${evidenceDigest}`,
       `- local_plugin_package_version: ${evidence.local_plugin_package_version}`,
       `- local_plugin_package_previous_version: ${evidence.local_plugin_package_previous_version}`,
       `- local_plugin_package_version_changed: ${evidence.local_plugin_package_version_changed}`,
@@ -1552,6 +1766,7 @@ export async function run() {
       "- docs-preview.md",
       "- docs-preview.json",
       "- quality-report.json",
+      "- local-plugin-release-intent.json",
       "",
     ].join("\n"),
     "utf8",
@@ -1564,6 +1779,8 @@ export async function run() {
   appendOutput("docs_preview_file", docsPreviewFile);
   appendOutput("docs_preview_markdown_file", docsPreviewMarkdownFile);
   appendOutput("quality_report_file", qualityReportFile);
+  appendOutput("release_intent_preview_file", releaseIntentPreviewFile);
+  appendOutput("evidence_digest", evidenceDigest);
   appendOutput("source_id", PRODUCT_ID);
   appendOutput("previous_tag", previousTag);
   appendOutput("current_tag", currentTag);
@@ -1576,6 +1793,14 @@ export async function run() {
   appendOutput("local_plugin_version_input_ignored", String(evidence.local_plugin_version_input_ignored));
   appendOutput("local_plugin_version_input_ignored_reason", evidence.local_plugin_version_input_ignored_reason || "");
   appendOutput("local_plugin_expected_version", localPluginVersionPlan.expected_version || "");
+  appendOutput("local_plugin_release_requested", String(localPluginVersionPlan.release_requested));
+  appendOutput("pending_local_plugin_changes", String(localPluginVersionPlan.pending_local_plugin_changes));
+  appendOutput("local_plugin_tag", localPluginVersionPlan.local_plugin_tag || "");
+  appendOutput("local_plugin_previous_tag", evidence.local_plugin_previous_tag || "");
+  appendOutput("local_plugin_next_patch_version", localPluginVersionPlan.next_patch_version || "");
+  appendOutput("local_plugin_tag_exists", String(localPluginVersionPlan.requested_tag_exists));
+  appendOutput("local_plugin_npm_version_exists", String(localPluginVersionPlan.npm_version_exists));
+  appendOutput("local_plugin_recovery_enabled", String(localPluginVersionPlan.recovery_enabled));
   appendOutput("local_plugin_package_version", evidence.local_plugin_package_version);
   appendOutput("local_plugin_package_previous_version", evidence.local_plugin_package_previous_version);
   appendOutput("local_plugin_package_version_changed", String(evidence.local_plugin_package_version_changed));
