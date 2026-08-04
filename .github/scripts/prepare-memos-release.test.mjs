@@ -438,6 +438,10 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /git commit -m "\$\{release_commit_message\}"/);
   assert.match(workflow, /git push origin "refs\/tags\/\$\{release_tag\}"/);
   assert.match(workflow, /DOC_AGENT_RELEASE_NOTES_DRAFT_URL/);
+  assert.match(workflow, /Upload failed release notes diagnostics/);
+  assert.match(workflow, /memos-local-plugin-release-notes-failure/);
+  assert.match(workflow, /if-no-files-found: ignore/);
+  assert.doesNotMatch(workflow, /prepare package inspection notes" -- node/);
   assert.doesNotMatch(workflow, /DOC_AGENT_RELEASE_SYNC_URL/);
   assert.doesNotMatch(workflow, /prepare-local-plugin-formal-sync\.mjs/);
   assert.doesNotMatch(workflow, /send-product-release-sync\.mjs/);
@@ -459,6 +463,14 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /actions\/setup-node@[0-9a-f]{40} # v6\.4\.0/);
   assert.match(workflow, /actions\/upload-artifact@[0-9a-f]{40} # v7\.0\.1/);
   assert.match(workflow, /actions\/download-artifact@[0-9a-f]{40} # v8\.0\.1/);
+
+  const releaseNotesScript = readFileSync(
+    join(scriptsDir, "draft-local-plugin-release-notes.mjs"),
+    "utf8",
+  );
+  assert.match(releaseNotesScript, /candidate_count: 3/);
+  assert.match(releaseNotesScript, /quality_issues/);
+  assert.match(releaseNotesScript, /writeDraftFailureInspection/);
 });
 
 test("legacy standalone local-plugin post-merge dry run is not push-triggered", () => {

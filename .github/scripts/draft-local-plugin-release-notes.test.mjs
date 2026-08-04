@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,6 +24,7 @@ import {
   validateLegacyPackageNotes,
   validateManualNotes,
   versionFromTag,
+  writeDraftFailureInspection,
 } from "./draft-local-plugin-release-notes.mjs";
 
 const evidence = {
@@ -238,6 +239,23 @@ test("redacts server debug fields from inspection draft", () => {
   assert.equal(inspection.debug, undefined);
   assert.deepEqual(inspection.release_items[0].source_refs, ["abc1234"]);
   assert.match(inspection.redactions.model_and_prompt_details, /omitted/);
+});
+
+test("keeps release-note quality issues in the inspection draft", () => {
+  const inspection = draftForInspection({
+    ok: false,
+    needs_review: true,
+    coverage: {
+      needs_review: true,
+      required_count: 16,
+      covered_required_count: 16,
+      quality_issues: ["too many release items: 16 > 12"],
+      items_missing_source_refs: [],
+    },
+  });
+
+  assert.deepEqual(inspection.coverage.quality_issues, ["too many release items: 16 > 12"]);
+  assert.deepEqual(inspection.coverage.items_missing_source_refs, []);
 });
 
 test("postprocesses duplicate source refs into the best evidence category", () => {
@@ -779,6 +797,82 @@ test("retries transient draft failures and passes prior error context", async ()
     assert.equal(requests[2].workflow_retry_context.previous_errors.length, 2);
   } finally {
     process.env = previous;
+  }
+});
+
+test("reports compact quality details and preserves the rejected draft for diagnostics", async () => {
+  const previous = { ...process.env };
+  try {
+    process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL = "https://example.invalid/draft";
+    process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN = "test-token";
+    const payload = {
+      ok: false,
+      needs_review: true,
+      release_items: Array.from({ length: 16 }, (_, index) => ({
+        category: "Fixed",
+        text_cn: `修复条目 ${index + 1}`,
+        text_en: `Fix item ${index + 1}`,
+        source_refs: [`abc${String(index).padStart(4, "0")}`],
+      })),
+      coverage: {
+        needs_review: true,
+        required_count: 16,
+        covered_required_count: 16,
+        missing_required_count: 0,
+        invalid_item_refs: [],
+        items_missing_source_refs: [],
+        quality_issues: ["too many release items: 16 > 12"],
+      },
+      warnings: ["too many release items: 16 > 12"],
+      attempts: [],
+    };
+
+    await assert.rejects(
+      requestDraft(evidence, {
+        fetchImpl: async () => response(200, payload),
+        sleep: async () => {},
+      }),
+      (error) => {
+        assert.match(error.message, /too many release items: 16 > 12/);
+        assert.deepEqual(error.draftPayload, payload);
+        return true;
+      },
+    );
+  } finally {
+    process.env = previous;
+  }
+});
+
+test("writes a redacted failure artifact without endpoint or token details", () => {
+  const previous = { ...process.env };
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-draft-failure-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    writeDraftFailureInspection({
+      evidence: {
+        ...evidence,
+        important_diff: { "apps/memos-local-plugin/**": "private diff" },
+      },
+      payload: {
+        ok: false,
+        needs_review: true,
+        coverage: {
+          required_count: 16,
+          covered_required_count: 16,
+          quality_issues: ["too many release items: 16 > 12"],
+        },
+      },
+      error: new Error("failed at https://private.example/draft with Bearer secret-token"),
+    });
+
+    const report = readFileSync(join(directory, "quality-report.json"), "utf8");
+    const redactedEvidence = readFileSync(join(directory, "evidence.json"), "utf8");
+    assert.match(report, /too many release items: 16 > 12/);
+    assert.doesNotMatch(report, /private\.example|secret-token/);
+    assert.doesNotMatch(redactedEvidence, /private diff/);
+  } finally {
+    process.env = previous;
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

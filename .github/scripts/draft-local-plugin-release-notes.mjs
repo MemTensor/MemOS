@@ -359,6 +359,14 @@ export function collectEvidence({ targetVersion, currentTag, previousTag, curren
     product_id: PRODUCT_ID,
     product_title: PRODUCT_TITLE,
     release_note_guidance: releaseNoteGuidanceForCommits(commits),
+    release_note_quality_request: {
+      candidate_count: 3,
+      max_repair_attempts: MAX_DRAFT_REPAIR_ATTEMPTS,
+      selection_policy: [
+        "Preserve complete evidence coverage and valid source_refs before optimizing readability.",
+        "Prefer 6-10 concise product-facing bullets and never exceed 12 bullets.",
+      ],
+    },
     repo,
     previous_tag: previousTag,
     current_tag: currentTag,
@@ -389,7 +397,7 @@ export function evidenceForInspection(evidence) {
     ...publicEvidence
   } = evidence || {};
   return {
-    ...publicEvidence,
+    ...sanitizeInspectionValue(publicEvidence),
     release_note_guidance: {
       source_ref_category_hints: Array.isArray(guidance.source_ref_category_hints)
         ? guidance.source_ref_category_hints
@@ -403,7 +411,7 @@ export function evidenceForInspection(evidence) {
 }
 
 export function draftForInspection(draft) {
-  return {
+  return sanitizeInspectionValue({
     ok: Boolean(draft?.ok),
     needs_review: Boolean(draft?.needs_review),
     confidence: draft?.confidence || "",
@@ -416,6 +424,13 @@ export function draftForInspection(draft) {
       covered_refs: Array.isArray(draft?.coverage?.covered_refs) ? draft.coverage.covered_refs : [],
       missing_required: Array.isArray(draft?.coverage?.missing_required) ? draft.coverage.missing_required : [],
       invalid_item_refs: Array.isArray(draft?.coverage?.invalid_item_refs) ? draft.coverage.invalid_item_refs : [],
+      items_missing_source_refs: Array.isArray(draft?.coverage?.items_missing_source_refs)
+        ? draft.coverage.items_missing_source_refs
+        : [],
+      quality_issues: Array.isArray(draft?.coverage?.quality_issues)
+        ? draft.coverage.quality_issues
+        : [],
+      candidate_generation_incomplete: draft?.coverage?.candidate_generation_incomplete || null,
     },
     warnings: Array.isArray(draft?.warnings) ? draft.warnings : [],
     language_issues: Array.isArray(draft?.language_issues) ? draft.language_issues : [],
@@ -428,7 +443,7 @@ export function draftForInspection(draft) {
       server_debug_fields: "omitted from public workflow artifacts",
       model_and_prompt_details: "omitted from public workflow artifacts",
     },
-  };
+  });
 }
 
 function appendOutput(name, value) {
@@ -1233,11 +1248,84 @@ function isRetryableStatus(status) {
 function cleanError(value) {
   return String(value || "")
     .replace(/Bearer\s+\S+/gi, "Bearer ***")
+    .replace(/(?:github_pat_|gh[pousr]_|npm_|xox[baprs]-)[A-Za-z0-9_-]+/gi, "[REDACTED_TOKEN]")
     .replace(/sk-[A-Za-z0-9_-]+/g, "sk-***")
     .replace(/https?:\/\/[^\s"'<>]+/gi, "https://***")
     .replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, "***")
     .replace(/\s+/g, " ")
-    .slice(0, 600);
+    .slice(0, 1200);
+}
+
+function sanitizeInspectionValue(value) {
+  if (typeof value === "string") return cleanError(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizeInspectionValue(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, sanitizeInspectionValue(item)]),
+    );
+  }
+  return value;
+}
+
+function draftReviewSummary(payload) {
+  const coverage = payload?.coverage || {};
+  return {
+    needs_review: Boolean(payload?.needs_review || coverage.needs_review),
+    required_count: Number(coverage.required_count || 0),
+    covered_required_count: Number(coverage.covered_required_count || 0),
+    missing_required_count: Number(coverage.missing_required_count || 0),
+    invalid_item_ref_count: Array.isArray(coverage.invalid_item_refs)
+      ? coverage.invalid_item_refs.length
+      : 0,
+    items_missing_source_refs_count: Array.isArray(coverage.items_missing_source_refs)
+      ? coverage.items_missing_source_refs.length
+      : 0,
+    item_count: Array.isArray(payload?.release_items) ? payload.release_items.length : 0,
+    quality_issues: Array.isArray(coverage.quality_issues)
+      ? coverage.quality_issues.map((item) => cleanError(item))
+      : [],
+    warnings: Array.isArray(payload?.warnings)
+      ? payload.warnings.map((item) => cleanError(item))
+      : [],
+  };
+}
+
+export function writeDraftFailureInspection({ evidence, payload, error }) {
+  const directory =
+    String(process.env.RELEASE_NOTES_FAILURE_DIR || "").trim() ||
+    join(tmpdir(), "memos-local-plugin-release-notes-failure");
+  mkdirSync(directory, { recursive: true });
+  const safeDraft = draftForInspection(payload || {});
+  const summary = draftReviewSummary(payload || {});
+  const failure = {
+    schema: "memos.local-plugin.release-notes-failure.v1",
+    ok: false,
+    phase: "release-notes",
+    error: cleanError(error?.message || error),
+    ...summary,
+  };
+  writeFileSync(join(directory, "evidence.json"), JSON.stringify(evidenceForInspection(evidence), null, 2), "utf8");
+  writeFileSync(join(directory, "release-notes-draft.json"), JSON.stringify(safeDraft, null, 2), "utf8");
+  writeFileSync(join(directory, "quality-report.json"), JSON.stringify(failure, null, 2), "utf8");
+  writeFileSync(
+    join(directory, "README.md"),
+    [
+      "# MemOS local plugin release-notes failure",
+      "",
+      "Publishing stopped before npm, tag, and GitHub Release side effects.",
+      "",
+      `- required sources: ${summary.covered_required_count}/${summary.required_count}`,
+      `- generated items: ${summary.item_count}`,
+      `- missing source refs: ${summary.items_missing_source_refs_count}`,
+      `- invalid source refs: ${summary.invalid_item_ref_count}`,
+      `- quality issues: ${summary.quality_issues.length}`,
+      "",
+      "Inspect quality-report.json, release-notes-draft.json, and the redacted evidence.json.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return directory;
 }
 
 function requiredUrlFromEnv(name) {
@@ -1363,9 +1451,7 @@ export async function requestDraft(
       }
       if (!payload.ok || payload.needs_review) {
         const serverAttempts = Array.isArray(payload.attempts) ? payload.attempts : [];
-        const coverage = payload.coverage ? JSON.stringify(payload.coverage) : "";
-        const warnings = Array.isArray(payload.warnings) ? payload.warnings.join("; ") : "";
-        const message = `Release notes draft needs review. ${coverage} ${warnings}`.trim();
+        const message = `Release notes draft needs review: ${JSON.stringify(draftReviewSummary(payload))}`;
         if (serverAttempts.length >= 3) {
           await reportFailure({
             evidence,
@@ -1378,7 +1464,11 @@ export async function requestDraft(
             fetchImpl,
           });
         }
-        fail(message);
+        throw Object.assign(new Error(message), {
+          retryable: false,
+          errorCode: "DRAFT_VALIDATION",
+          draftPayload: payload,
+        });
       }
       if (!String(payload.release_notes_markdown || "").trim()) {
         fail("Release-notes draft service returned an empty release_notes_markdown.");
@@ -1395,7 +1485,10 @@ export async function requestDraft(
         if (attempts.length === 3) {
           await reportFailure({ evidence, attempts, finalError: entry.message, fetchImpl });
         }
-        fail(`Release-notes draft request failed on attempt ${attempt}: ${entry.message}`);
+        throw Object.assign(
+          new Error(`Release-notes draft request failed on attempt ${attempt}: ${entry.message}`),
+          { draftPayload: error?.draftPayload },
+        );
       }
       warn(`Release-notes draft attempt ${attempt} failed; retrying: ${entry.message}`);
       await sleep(250 * 2 ** (attempt - 1));
@@ -1481,7 +1574,17 @@ export async function main() {
     return;
   }
 
-  const draft = await requestValidatedDraft(evidence);
+  let draft;
+  try {
+    draft = await requestValidatedDraft(evidence);
+  } catch (error) {
+    writeDraftFailureInspection({
+      evidence,
+      payload: error?.draftPayload || {},
+      error,
+    });
+    throw error;
+  }
   if (!draft.ok || draft.needs_review) {
     fail(`Postprocessed release notes require review: ${JSON.stringify(draft.validation_report || draft.coverage || {})}`);
   }
