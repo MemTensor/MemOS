@@ -72,16 +72,6 @@ test("can force a stable standalone publish to remain package-only", () => {
   );
 });
 
-test("weekly package-only notes explain that docs wait for the MemOS Release", () => {
-  const result = legacyPackageDraftFromEvidence(evidence, {
-    npmDistTag: "latest",
-    docsSyncMode: "defer_to_memos_release",
-  });
-  assert.match(result.release_notes_markdown, /MemOS whole-repository release/);
-  assert.match(result.release_notes_markdown, /release\.published event/);
-  assert.doesNotMatch(result.release_notes_markdown, /does not .* update the MemOS-Docs Plugin tab/);
-});
-
 test("treats SemVer build metadata as stable metadata, not a prerelease channel", () => {
   assert.equal(parseSemver("2.0.13+build.7").prerelease, "");
   assert.equal(parseSemver("2.0.13-beta.1+build.7").prerelease, "beta.1");
@@ -106,7 +96,7 @@ test("uses the previous stable tag for docs-generating latest releases", () => {
   );
 });
 
-test("generates package-only prerelease notes without docs payloads", () => {
+test("generates independent prerelease notes without docs payloads", () => {
   const draft = legacyPackageDraftFromEvidence(
     {
       current_tag: "memos-local-plugin-v2.0.13-beta.1",
@@ -128,11 +118,12 @@ test("generates package-only prerelease notes without docs payloads", () => {
 
   assert.equal(draft.ok, true);
   assert.equal(draft.needs_review, false);
-  assert.equal(draft.confidence, "legacy-package-only");
+  assert.equal(draft.confidence, "standalone-prerelease-no-docs");
   assert.equal(draft.coverage.missing_required_count, 0);
   assert.match(draft.release_notes_markdown, /## Changelog/);
   assert.match(draft.release_notes_markdown, /npm `beta` dist-tag/);
-  assert.match(draft.release_notes_markdown, /package-only/);
+  assert.match(draft.release_notes_markdown, /independent local-plugin GitHub Prerelease/);
+  assert.match(draft.release_notes_markdown, /does not update the MemOS-Docs Plugin tab/);
   assert.doesNotMatch(draft.release_notes_markdown, /doc-agent: source-id=/);
   assert.doesNotMatch(draft.release_notes_markdown, /doc-agent-release-notes-json/);
 });

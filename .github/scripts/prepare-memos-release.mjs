@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { buildLocalPluginReleaseIntent } from "./append-local-plugin-release-intent.mjs";
 
 export const PRODUCT_ID = "openclaw-local-plugin";
 export const PRODUCT_PATH = "apps/memos-local-plugin";
@@ -592,9 +593,13 @@ export function validateLocalPluginVersionPlan(
       `${displayVersion(expectedVersion)} is already used by ${usedBy}. Normal weekly releases require a new version; enable explicit recovery only for a verified partial failure from this same source.`,
     );
   }
-  if (releaseRequested && recoveryEnabled && requestedTagExists !== npmVersionExists) {
+  if (releaseRequested && recoveryEnabled && !npmVersionExists) {
+    const detail = requestedTagExists
+      ? `, while ${localPluginTagForVersion(expectedVersion)} already exists`
+      : "";
     fail(
-      `Recovery requires both npm and ${localPluginTagForVersion(expectedVersion)} to exist. Refusing an incomplete or ambiguous recovery state.`,
+      `Recovery requires the existing npm version ${displayVersion(expectedVersion)} to be visible${detail}. ` +
+        "Wait for registry propagation or resolve the abnormal tag-before-npm state before retrying.",
     );
   }
 
@@ -1628,19 +1633,20 @@ export async function run() {
   const evidenceDigest = sha256Json(redactedEvidence);
   writeJson(evidenceFile, redactedEvidence);
   writeJson(evidenceAliasFile, redactedEvidence);
-  writeJson(releaseIntentPreviewFile, {
-    schema: "memos.local-plugin.release-intent.v1",
-    enabled: Boolean(localPluginVersionPlan.release_requested),
-    version: localPluginVersionPlan.expected_version,
-    tag: localPluginVersionPlan.local_plugin_tag,
-    source_sha: localPluginVersionPlan.release_requested ? target.sha : "",
-    evidence_digest: evidenceDigest,
-    status: localPluginVersionPlan.release_requested
-      ? "preview_pending_package_publish"
-      : localPluginVersionPlan.pending_local_plugin_changes
-        ? "skipped_by_release_operator"
-        : "no_release_requested",
-  });
+  writeJson(
+    releaseIntentPreviewFile,
+    buildLocalPluginReleaseIntent({
+      enabled: Boolean(localPluginVersionPlan.release_requested),
+      version: localPluginVersionPlan.expected_version,
+      tag: localPluginVersionPlan.local_plugin_tag,
+      sourceSha: localPluginVersionPlan.release_requested ? target.sha : "",
+      evidenceDigest,
+      memosReleaseTag: currentTag,
+      pluginReleaseUrl: localPluginVersionPlan.release_requested
+        ? `https://github.com/MemTensor/MemOS/releases/tag/${localPluginVersionPlan.local_plugin_tag}`
+        : "",
+    }),
+  );
   writeJson(draftFile, draft);
   writeJson(docsPreviewFile, preview);
   writeJson(docsPreviewAliasFile, preview);
@@ -1666,6 +1672,7 @@ export async function run() {
     local_plugin_version_input_ignored: evidence.local_plugin_version_input_ignored,
     local_plugin_version_input_ignored_reason: evidence.local_plugin_version_input_ignored_reason,
     local_plugin_expected_version: localPluginVersionPlan.expected_version,
+    local_plugin_publish_version: localPluginVersionPlan.input_raw,
     local_plugin_release_requested: localPluginVersionPlan.release_requested,
     pending_local_plugin_changes: localPluginVersionPlan.pending_local_plugin_changes,
     local_plugin_tag: localPluginVersionPlan.local_plugin_tag,
@@ -1727,6 +1734,7 @@ export async function run() {
       `- local_plugin_version_input_ignored: ${evidence.local_plugin_version_input_ignored}`,
       `- local_plugin_version_input_ignored_reason: ${evidence.local_plugin_version_input_ignored_reason || "n/a"}`,
       `- local_plugin_expected_version: ${localPluginVersionPlan.expected_version || "n/a"}`,
+      `- local_plugin_publish_version: ${localPluginVersionPlan.input_raw || "n/a"}`,
       `- local_plugin_release_requested: ${localPluginVersionPlan.release_requested}`,
       `- pending_local_plugin_changes: ${localPluginVersionPlan.pending_local_plugin_changes}`,
       `- local_plugin_tag: ${localPluginVersionPlan.local_plugin_tag || "n/a"}`,
@@ -1793,6 +1801,7 @@ export async function run() {
   appendOutput("local_plugin_version_input_ignored", String(evidence.local_plugin_version_input_ignored));
   appendOutput("local_plugin_version_input_ignored_reason", evidence.local_plugin_version_input_ignored_reason || "");
   appendOutput("local_plugin_expected_version", localPluginVersionPlan.expected_version || "");
+  appendOutput("local_plugin_publish_version", localPluginVersionPlan.input_raw || "");
   appendOutput("local_plugin_release_requested", String(localPluginVersionPlan.release_requested));
   appendOutput("pending_local_plugin_changes", String(localPluginVersionPlan.pending_local_plugin_changes));
   appendOutput("local_plugin_tag", localPluginVersionPlan.local_plugin_tag || "");

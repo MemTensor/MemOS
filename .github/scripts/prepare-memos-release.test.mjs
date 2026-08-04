@@ -205,6 +205,8 @@ test("leaves local-plugin publishing disabled when local_plugin_version is blank
 test("accepts only the next unused stable patch for a weekly local-plugin release", () => {
   const plan = validateLocalPluginVersionPlan(evidence, "2.0.11");
   assert.equal(plan.release_requested, true);
+  assert.equal(plan.input_raw, "2.0.11");
+  assert.equal(plan.expected_version, "v2.0.11");
   assert.equal(plan.pending_local_plugin_changes, false);
   assert.equal(plan.version, "v2.0.11");
   assert.equal(plan.version_source, "manual_weekly_release_opt_in");
@@ -232,7 +234,7 @@ test("fails when a weekly local-plugin version is supplied without publishable e
   assert.equal(skipped.pending_local_plugin_changes, false);
 });
 
-test("used npm/tag versions fail closed unless complete recovery is explicit", () => {
+test("used npm/tag versions fail closed unless npm-backed recovery is explicit", () => {
   assert.throws(
     () => validateLocalPluginVersionPlan(evidence, "2.0.11", { requestedTagExists: true }),
     /already used by git tag/,
@@ -247,8 +249,24 @@ test("used npm/tag versions fail closed unless complete recovery is explicit", (
       npmVersionExists: false,
       recoveryEnabled: true,
     }),
-    /Recovery requires both npm/,
+    /requires the existing npm version/,
   );
+  assert.throws(
+    () => validateLocalPluginVersionPlan(evidence, "2.0.11", {
+      requestedTagExists: false,
+      npmVersionExists: false,
+      recoveryEnabled: true,
+    }),
+    /requires the existing npm version/,
+  );
+  const recoveredAfterNpmOnlyFailure = validateLocalPluginVersionPlan(evidence, "2.0.11", {
+    requestedTagExists: false,
+    npmVersionExists: true,
+    recoveryEnabled: true,
+  });
+  assert.equal(recoveredAfterNpmOnlyFailure.recovery_enabled, true);
+  assert.equal(recoveredAfterNpmOnlyFailure.requested_tag_exists, false);
+  assert.equal(recoveredAfterNpmOnlyFailure.npm_version_exists, true);
   const recovered = validateLocalPluginVersionPlan(evidence, "2.0.11", {
     requestedTagExists: true,
     npmVersionExists: true,
@@ -321,18 +339,58 @@ test("publish workflow defaults real releases to draft before release.published"
   assert.match(workflow, /GitHub Release \$\{CURRENT_TAG\} targets \$\{target_commitish\}, expected \$\{TARGET_SHA\}/);
   assert.match(workflow, /exists after a failed create response; treating it as success/);
   assert.match(workflow, /did not become visible in time/);
-  assert.match(workflow, /Publish manually to trigger release\.published/);
+  assert.match(workflow, /local-plugin Release is always staged as a Draft/);
   assert.match(workflow, /local_plugin_version:/);
   assert.match(workflow, /Leave blank to skip local-plugin npm\/tag\/docs/);
   assert.match(workflow, /uses: \.\/\.github\/workflows\/memos-local-plugin-publish\.yml/);
-  assert.match(workflow, /docs_sync_mode: defer_to_memos_release/);
+  assert.match(workflow, /docs_sync_mode: paired_with_memos_release/);
+  assert.match(workflow, /memos_release_tag: v\$\{\{ inputs\.version \}\}/);
+  assert.match(workflow, /create_draft_release: true/);
+  assert.doesNotMatch(workflow, /create_draft_release: \$\{\{ inputs\.create_draft_release \}\}/);
   assert.match(workflow, /needs\.prepare\.outputs\.local_plugin_release_requested == 'true'/);
   assert.match(workflow, /permissions:\n\s+contents: write\n\s+uses: \.\/\.github\/workflows\/memos-local-plugin-publish\.yml/);
-  assert.match(workflow, /version: \$\{\{ needs\.prepare\.outputs\.local_plugin_version \}\}/);
+  assert.match(
+    workflow,
+    /local_plugin_expected_version: \$\{\{ steps\.prepare\.outputs\.local_plugin_expected_version \}\}/,
+  );
+  assert.match(
+    workflow,
+    /local_plugin_publish_version: \$\{\{ steps\.prepare\.outputs\.local_plugin_publish_version \}\}/,
+  );
+  assert.match(workflow, /version: \$\{\{ needs\.prepare\.outputs\.local_plugin_publish_version \}\}/);
+  assert.match(
+    workflow,
+    /LOCAL_PLUGIN_VERSION: \$\{\{ needs\.prepare\.outputs\.local_plugin_publish_version \}\}/,
+  );
+  assert.doesNotMatch(workflow, /version: \$\{\{ needs\.prepare\.outputs\.local_plugin_version \}\}/);
+  assert.doesNotMatch(workflow, /version: \$\{\{ needs\.prepare\.outputs\.local_plugin_expected_version \}\}/);
   assert.match(workflow, /needs\.publish-local-plugin\.result == 'success'/);
   assert.match(workflow, /needs\.publish-local-plugin\.result == 'skipped'/);
   assert.match(workflow, /append-local-plugin-release-intent\.mjs/);
+  assert.match(workflow, /LOCAL_PLUGIN_RELEASE_URL/);
+  assert.match(workflow, /local_plugin_evidence_digest/);
   assert.match(workflow, /WITH LOCAL PLUGIN v\$\{LOCAL_PLUGIN_VERSION\}/);
+  assert.match(workflow, /Publish paired local-plugin Release after immediate MemOS publish/);
+  assert.match(workflow, /id: memos_release/);
+  assert.match(workflow, /release_is_draft=\$\{is_draft\}/);
+  assert.match(workflow, /steps\.memos_release\.outputs\.release_is_draft == 'false'/);
+  assert.match(workflow, /MEMOS_RELEASE_TAG_OVERRIDE: \$\{\{ needs\.prepare\.outputs\.current_tag \}\}/);
+  assert.match(workflow, /run: node \.github\/scripts\/publish-paired-local-plugin-release\.mjs/);
+});
+
+test("paired local-plugin publisher is release-triggered, idempotent, and has explicit recovery", () => {
+  const workflow = readFileSync(
+    join(workflowsDir, "memos-release-publish-paired-local-plugin.yml"),
+    "utf8",
+  );
+  assert.match(workflow, /release:\n\s+types: \[published\]/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /PUBLISH PAIRED LOCAL PLUGIN FOR/);
+  assert.match(workflow, /github\.repository == 'MemTensor\/MemOS'/);
+  assert.match(workflow, /startsWith\(github\.event\.release\.tag_name, 'v'\)/);
+  assert.match(workflow, /permissions:\n\s+contents: write/);
+  assert.match(workflow, /publish-paired-local-plugin-release\.mjs/);
+  assert.doesNotMatch(workflow, /NPM_TOKEN|DOC_AGENT_RELEASE_SYNC|pull-requests:\s*write/);
 });
 
 test("legacy standalone local-plugin publisher requires an extra non-dry-run confirmation", () => {
@@ -366,27 +424,26 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /EXPECTED_PACKAGE_SOURCE_SHA/);
   assert.match(workflow, /RELEASE_METADATA_STATE/);
   assert.match(workflow, /audit-local-plugin-package\.mjs/);
-  assert.match(workflow, /FORCE_PACKAGE_ONLY_RELEASE: \$\{\{ inputs\.docs_sync_mode == 'defer_to_memos_release' \}\}/);
+  assert.match(workflow, /FORCE_PACKAGE_ONLY_RELEASE: \$\{\{ inputs\.tag != 'latest' \|\| contains\(inputs\.version, '-'\) \}\}/);
   assert.match(workflow, /if \[ -n "\$\{DOCS_SYNC_MODE\}" \]; then/);
   assert.doesNotMatch(workflow, /EVENT_NAME: \$\{\{ github\.event_name \}\}/);
-  assert.equal(
-    (workflow.match(/inputs\.docs_sync_mode != 'defer_to_memos_release' && inputs\.tag == 'latest'/g) || []).length,
-    5,
-  );
+  assert.match(workflow, /paired_with_memos_release/);
   assert.match(workflow, /Create standalone package tag/);
   assert.match(workflow, /git commit -m "\$\{release_commit_message\}"/);
   assert.match(workflow, /git push origin "refs\/tags\/\$\{release_tag\}"/);
   assert.match(workflow, /DOC_AGENT_RELEASE_NOTES_DRAFT_URL/);
-  assert.match(workflow, /DOC_AGENT_RELEASE_SYNC_URL/);
-  assert.match(workflow, /prepare-local-plugin-formal-sync\.mjs/);
-  assert.match(workflow, /send-product-release-sync\.mjs/);
+  assert.doesNotMatch(workflow, /DOC_AGENT_RELEASE_SYNC_URL/);
+  assert.doesNotMatch(workflow, /prepare-local-plugin-formal-sync\.mjs/);
+  assert.doesNotMatch(workflow, /send-product-release-sync\.mjs/);
   assert.match(workflow, /inputs\.tag == 'latest' && !contains\(inputs\.version, '-'\)/);
+  assert.match(workflow, /create-local-plugin-github-release\.mjs/);
+  assert.match(workflow, /Create and verify independent local-plugin GitHub Release/);
   assert.match(workflow, /docs-preview\.md/);
   assert.match(workflow, /docs-preview\.json/);
   assert.match(workflow, /quality-report\.json/);
   assert.match(workflow, /skip_prerelease_docs/);
-  assert.match(workflow, /defer_to_memos_release_published/);
-  assert.doesNotMatch(workflow, /gh release (?:create|view)/);
+  assert.match(workflow, /independent GitHub Prerelease/);
+  assert.match(workflow, /publish_paired_local_plugin_release/);
   assert.doesNotMatch(workflow, /pull-requests:\s*write/);
   assert.doesNotMatch(workflow, /gh pr (?:create|view)/);
   assert.doesNotMatch(workflow, /release_branch/);

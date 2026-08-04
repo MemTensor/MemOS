@@ -25,7 +25,7 @@ on:
         required: false
         default: ""
       dry_run:
-        description: "Prepare package notes and build artifacts only. Skip npm publish and tag creation."
+        description: "Prepare package notes and build artifacts only. Skip npm publish, tag creation, and the independent local-plugin GitHub Release."
         required: true
         type: boolean
         default: true
@@ -71,6 +71,14 @@ on:
         required: false
         type: string
         default: ""
+      create_draft_release:
+        required: false
+        type: boolean
+        default: true
+      memos_release_tag:
+        required: false
+        type: string
+        default: ""
     outputs:
       local_plugin_tag:
         value: ${{ jobs.publish.outputs.local_plugin_tag }}
@@ -78,6 +86,12 @@ on:
         value: ${{ jobs.publish.outputs.local_plugin_tag_sha }}
       package_source_sha:
         value: ${{ jobs.publish.outputs.package_source_sha }}
+      local_plugin_release_url:
+        value: ${{ jobs.publish.outputs.local_plugin_release_url }}
+      local_plugin_release_is_draft:
+        value: ${{ jobs.publish.outputs.local_plugin_release_is_draft }}
+      local_plugin_evidence_digest:
+        value: ${{ jobs.publish.outputs.local_plugin_evidence_digest }}
 concurrency:
   group: memos-local-plugin-publish
   cancel-in-progress: false
@@ -107,6 +121,7 @@ jobs:
           DOCS_SYNC_MODE: ${{ inputs.docs_sync_mode }}
           MEMOS_RELEASE_VERSION: ${{ inputs.memos_release_version }}
           CALLER_PUBLISH_CONFIRMATION: ${{ inputs.caller_publish_confirmation }}
+          MEMOS_RELEASE_TAG: ${{ inputs.memos_release_tag }}
         run: |
           set -euo pipefail
           node -e '
@@ -134,12 +149,16 @@ jobs:
           ' "${RELEASE_VERSION}" "${NPM_DIST_TAG}"
 
           if [ -n "${DOCS_SYNC_MODE}" ]; then
-            if [ "${DOCS_SYNC_MODE}" != "defer_to_memos_release" ]; then
-              echo "::error::Reusable local-plugin publishing only accepts docs_sync_mode=defer_to_memos_release."
+            if [ "${DOCS_SYNC_MODE}" != "paired_with_memos_release" ]; then
+              echo "::error::Reusable local-plugin publishing only accepts docs_sync_mode=paired_with_memos_release."
               exit 1
             fi
             if ! [[ "${MEMOS_RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
               echo "::error::memos_release_version is invalid: ${MEMOS_RELEASE_VERSION:-<empty>}"
+              exit 1
+            fi
+            if [ "${MEMOS_RELEASE_TAG}" != "v${MEMOS_RELEASE_VERSION}" ]; then
+              echo "::error::memos_release_tag must exactly equal v${MEMOS_RELEASE_VERSION}."
               exit 1
             fi
             if [ "${DRY_RUN}" != "true" ]; then
@@ -149,7 +168,7 @@ jobs:
                 exit 1
               fi
             fi
-            echo "Validated MemOS weekly-release caller; docs sync is deferred to the MemOS release.published event."
+            echo "Validated MemOS weekly-release caller; the local-plugin Release will be paired with ${MEMOS_RELEASE_TAG}."
           elif [ -n "${DOCS_SYNC_MODE}" ] || [ -n "${MEMOS_RELEASE_VERSION}" ] || [ -n "${CALLER_PUBLISH_CONFIRMATION}" ]; then
             echo "::error::Internal reusable-workflow inputs are not accepted from workflow_dispatch."
             exit 1
@@ -289,6 +308,9 @@ jobs:
       local_plugin_tag: ${{ steps.release_tag.outputs.tag }}
       local_plugin_tag_sha: ${{ steps.release_tag.outputs.tag_sha }}
       package_source_sha: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
+      local_plugin_release_url: ${{ steps.plugin_release.outputs.release_url }}
+      local_plugin_release_is_draft: ${{ steps.plugin_release.outputs.release_is_draft }}
+      local_plugin_evidence_digest: ${{ steps.plugin_release.outputs.evidence_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -330,7 +352,10 @@ jobs:
           node --test \
             .github/scripts/publish-local-plugin.test.mjs \
             .github/scripts/inspect-local-plugin-release-state.test.mjs \
-            .github/scripts/audit-local-plugin-package.test.mjs
+            .github/scripts/audit-local-plugin-package.test.mjs \
+            .github/scripts/draft-local-plugin-release-notes.test.mjs \
+            .github/scripts/local-plugin-release-contract.test.mjs \
+            .github/scripts/create-local-plugin-github-release.test.mjs
 
       - name: Download all prebuilds
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -457,11 +482,11 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.tag }}
           RELEASE_EVIDENCE_REF: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
           MANUAL_RELEASE_NOTES: ${{ inputs.release_notes }}
-          FORCE_PACKAGE_ONLY_RELEASE: ${{ inputs.docs_sync_mode == 'defer_to_memos_release' }}
+          FORCE_PACKAGE_ONLY_RELEASE: ${{ inputs.tag != 'latest' || contains(inputs.version, '-') }}
           DOCS_SYNC_MODE: ${{ inputs.docs_sync_mode }}
-          DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ (inputs.docs_sync_mode != 'defer_to_memos_release' && inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL || '' }}
-          DOC_AGENT_RELEASE_FAILURE_URL: ${{ (inputs.docs_sync_mode != 'defer_to_memos_release' && inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_FAILURE_URL || '' }}
-          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ (inputs.docs_sync_mode != 'defer_to_memos_release' && inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN || '' }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ (inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL || '' }}
+          DOC_AGENT_RELEASE_FAILURE_URL: ${{ (inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_FAILURE_URL || '' }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ (inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN || '' }}
         run: bash .github/scripts/retry.sh --attempts 2 --label "prepare package inspection notes" -- node .github/scripts/draft-local-plugin-release-notes.mjs
 
       - name: Prepare release notes inspection artifact
@@ -507,15 +532,15 @@ jobs:
           cp "${EVIDENCE_FILE}" "${inspection_dir}/evidence.json"
           cp "${DRAFT_FILE}" "${inspection_dir}/release-notes-draft.json"
 
-          if [ "${DOCS_SYNC_MODE}" = "defer_to_memos_release" ]; then
-            docs_action="defer_to_memos_release_published"
-            docs_summary="Docs sync is deferred to the MemOS whole-repository Release and its explicit local-plugin intent."
+          if [ "${DOCS_SYNC_MODE}" = "paired_with_memos_release" ]; then
+            docs_action="publish_paired_local_plugin_release"
+            docs_summary="The weekly workflow creates a paired local-plugin Release. Its release.published event is the only Plugin tab and pre/gray trigger."
           elif [ "${NPM_DIST_TAG}" = "latest" ] && [[ "${RELEASE_VERSION}" != *-* ]]; then
-            docs_action="formal_sync_after_verified_package_publish"
-            docs_summary="After npm and tag verification, the authenticated 106 formal-sync route updates the Plugin tab and deployment chain."
+            docs_action="publish_standalone_local_plugin_release"
+            docs_summary="After npm and tag verification, the stable local-plugin GitHub Release triggers 106, the Plugin tab, and pre/gray."
           else
             docs_action="skip_prerelease_docs"
-            docs_summary="Prerelease packages stop after npm, tag, and inspection artifacts; they do not update the Plugin tab or deployment chain."
+            docs_summary="Prerelease packages create npm, tag, inspection artifacts, and an independent GitHub Prerelease; they do not update the Plugin tab or deployment chain."
           fi
 
           jq \
@@ -546,7 +571,7 @@ jobs:
               schema: $schema,
               version: $version,
               docs_action: $docs_action,
-              would_create_independent_plugin_release: false,
+              would_create_independent_plugin_release: true,
               summary: $summary,
               release_items: (.release_items // [])
             }' "${DRAFT_FILE}" > "${inspection_dir}/docs-preview.json"
@@ -556,7 +581,7 @@ jobs:
             echo
             echo "- version: v${RELEASE_VERSION}"
             echo "- action: ${docs_action}"
-            echo "- independent local-plugin GitHub Release: false"
+            echo "- independent local-plugin GitHub Release: true"
             echo
             echo "${docs_summary}"
             if [ "${docs_action}" != "skip_prerelease_docs" ]; then
@@ -619,7 +644,7 @@ jobs:
       - name: Stop before publish in dry run
         if: ${{ inputs.dry_run == true }}
         run: |
-          echo "::notice::dry_run=true; skipped npm publish and tag creation."
+          echo "::notice::dry_run=true; skipped npm publish, tag creation, and independent local-plugin GitHub Release creation."
 
       - name: Inspect existing standalone package tag state
         id: release_state
@@ -710,28 +735,19 @@ jobs:
           echo "tag=${release_tag}" >> "${GITHUB_OUTPUT}"
           echo "tag_sha=${tag_sha}" >> "${GITHUB_OUTPUT}"
 
-      - name: Prepare stable standalone docs sync request
-        if: ${{ inputs.dry_run != true && inputs.docs_sync_mode != 'defer_to_memos_release' && inputs.tag == 'latest' && !contains(inputs.version, '-') }}
+      - name: Create and verify independent local-plugin GitHub Release
+        id: plugin_release
+        if: ${{ inputs.dry_run != true }}
         working-directory: .
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
           RELEASE_TAG_SHA: ${{ steps.release_tag.outputs.tag_sha }}
+          RELEASE_NOTES_FILE: ${{ steps.release_notes.outputs.release_notes_file }}
           EVIDENCE_FILE: ${{ steps.release_notes.outputs.evidence_file }}
-          DRAFT_FILE: ${{ steps.release_notes.outputs.draft_file }}
-          FORMAL_SYNC_REQUEST_FILE: ${{ runner.temp }}/memos-local-plugin-formal-sync-request.json
-        run: |
-          set -euo pipefail
-          RELEASE_PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            node .github/scripts/prepare-local-plugin-formal-sync.mjs
-
-      - name: Sync stable standalone release to MemOS Docs
-        if: ${{ inputs.dry_run != true && inputs.docs_sync_mode != 'defer_to_memos_release' && inputs.tag == 'latest' && !contains(inputs.version, '-') }}
-        working-directory: .
-        env:
-          DOC_AGENT_RELEASE_SYNC_URL: ${{ secrets.DOC_AGENT_RELEASE_SYNC_URL }}
-          DOC_AGENT_RELEASE_SYNC_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_SYNC_TOKEN }}
-          FORMAL_SYNC_REQUEST_FILE: ${{ runner.temp }}/memos-local-plugin-formal-sync-request.json
-        run: |
-          bash .github/scripts/retry.sh --attempts 3 --label "sync stable local plugin release to 106" -- \
-            node .github/scripts/send-product-release-sync.mjs
+          RELEASE_ORIGIN_MODE: ${{ inputs.docs_sync_mode == 'paired_with_memos_release' && 'memos_weekly' || 'standalone' }}
+          MEMOS_RELEASE_TAG: ${{ inputs.docs_sync_mode == 'paired_with_memos_release' && inputs.memos_release_tag || '' }}
+          CREATE_DRAFT_RELEASE: ${{ inputs.docs_sync_mode == 'paired_with_memos_release' && inputs.create_draft_release || false }}
+          OUTPUT_RELEASE_BODY_FILE: ${{ runner.temp }}/memos-local-plugin-release-body.md
+        run: node .github/scripts/create-local-plugin-github-release.mjs

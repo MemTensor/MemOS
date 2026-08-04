@@ -23,7 +23,7 @@ on:
         type: boolean
         default: true
       create_draft_release:
-        description: "When dry_run=false, create a Draft GitHub Release first. Publish manually to trigger release.published."
+        description: "When dry_run=false, save the MemOS Release as a Draft. A requested local-plugin Release is always staged as a Draft and publishes only after the MemOS Release is published."
         required: true
         type: boolean
         default: true
@@ -33,7 +33,7 @@ on:
         type: string
         default: ""
       recover_existing_local_plugin_publish:
-        description: "Recovery only: reuse matching npm + local-plugin tag after a verified partial weekly-release failure. Keep false normally."
+        description: "Recovery only: verify and reuse an existing npm version, reconstructing its missing matching tag when needed. Keep false normally."
         required: true
         type: boolean
         default: false
@@ -55,6 +55,8 @@ jobs:
       target_sha: ${{ steps.prepare.outputs.target_sha }}
       local_plugin_release_requested: ${{ steps.prepare.outputs.local_plugin_release_requested }}
       local_plugin_version: ${{ steps.prepare.outputs.local_plugin_version }}
+      local_plugin_expected_version: ${{ steps.prepare.outputs.local_plugin_expected_version }}
+      local_plugin_publish_version: ${{ steps.prepare.outputs.local_plugin_publish_version }}
       local_plugin_tag: ${{ steps.prepare.outputs.local_plugin_tag }}
       evidence_digest: ${{ steps.prepare.outputs.evidence_digest }}
       publish_blocked: ${{ steps.prepare.outputs.publish_blocked }}
@@ -82,8 +84,9 @@ jobs:
           node --test \
             .github/scripts/prepare-memos-release.test.mjs \
             .github/scripts/append-local-plugin-release-intent.test.mjs \
-            .github/scripts/prepare-local-plugin-formal-sync.test.mjs \
-            .github/scripts/send-product-release-sync.test.mjs
+            .github/scripts/local-plugin-release-contract.test.mjs \
+            .github/scripts/create-local-plugin-github-release.test.mjs \
+            .github/scripts/publish-paired-local-plugin-release.test.mjs
 
       - name: Validate publish confirmation
         if: ${{ !inputs.dry_run }}
@@ -208,14 +211,19 @@ jobs:
       contents: write
     uses: ./.github/workflows/memos-local-plugin-publish.yml
     with:
-      version: ${{ needs.prepare.outputs.local_plugin_version }}
+      version: ${{ needs.prepare.outputs.local_plugin_publish_version }}
       tag: latest
       git_ref: ${{ needs.prepare.outputs.target_sha }}
       release_notes: ""
       dry_run: ${{ inputs.dry_run }}
       recover_existing_npm_release: ${{ inputs.recover_existing_local_plugin_publish }}
-      docs_sync_mode: defer_to_memos_release
+      docs_sync_mode: paired_with_memos_release
       memos_release_version: ${{ inputs.version }}
+      memos_release_tag: v${{ inputs.version }}
+      # Always stage the paired plugin Release. This prevents its release.published
+      # webhook from reaching 106 before the MemOS Release exists, including when
+      # the caller asks to publish the MemOS Release immediately.
+      create_draft_release: true
       caller_publish_confirmation: ${{ inputs.publish_confirmation }}
     secrets: inherit
 
@@ -259,13 +267,16 @@ jobs:
           RELEASE_NOTES_FILE: ${{ runner.temp }}/memos-release-inspection/release-notes.md
           OUTPUT_RELEASE_NOTES_FILE: ${{ runner.temp }}/memos-release-notes-with-intent.md
           LOCAL_PLUGIN_RELEASE_ENABLED: ${{ needs.prepare.outputs.local_plugin_release_requested }}
-          LOCAL_PLUGIN_VERSION: ${{ inputs.local_plugin_version }}
+          MEMOS_RELEASE_TAG: ${{ needs.prepare.outputs.current_tag }}
+          LOCAL_PLUGIN_VERSION: ${{ needs.prepare.outputs.local_plugin_publish_version }}
           LOCAL_PLUGIN_TAG: ${{ needs.publish-local-plugin.outputs.local_plugin_tag }}
           LOCAL_PLUGIN_TAG_SHA: ${{ needs.publish-local-plugin.outputs.local_plugin_tag_sha }}
-          LOCAL_PLUGIN_EVIDENCE_DIGEST: ${{ needs.prepare.outputs.evidence_digest }}
+          LOCAL_PLUGIN_EVIDENCE_DIGEST: ${{ needs.prepare.outputs.local_plugin_release_requested == 'true' && needs.publish-local-plugin.outputs.local_plugin_evidence_digest || needs.prepare.outputs.evidence_digest }}
+          LOCAL_PLUGIN_RELEASE_URL: ${{ needs.publish-local-plugin.outputs.local_plugin_release_url }}
         run: node .github/scripts/append-local-plugin-release-intent.mjs
 
       - name: Create tag and GitHub Release
+        id: memos_release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -391,6 +402,10 @@ jobs:
               echo "::error::GitHub Release ${CURRENT_TAG} already exists as draft (${release_url}); publish or delete it manually before rerunning."
               exit 1
             fi
+            {
+              echo "release_is_draft=${is_draft}"
+              echo "release_url=${release_url}"
+            } >> "${GITHUB_OUTPUT}"
             echo "::notice::GitHub Release ${CURRENT_TAG} already exists (${release_url}); leaving it unchanged."
           }
 
@@ -473,3 +488,15 @@ jobs:
           fi
 
           create_release_if_missing
+
+      - name: Publish paired local-plugin Release after immediate MemOS publish
+        if: >-
+          ${{
+            steps.memos_release.outputs.release_is_draft == 'false' &&
+            needs.prepare.outputs.local_plugin_release_requested == 'true'
+          }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MEMOS_RELEASE_TAG_OVERRIDE: ${{ needs.prepare.outputs.current_tag }}
+        run: node .github/scripts/publish-paired-local-plugin-release.mjs

@@ -1034,7 +1034,7 @@ function markdownFromReleaseItems(items, coverage) {
   return `${lines.join("\n").trim()}\n`;
 }
 
-export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "", docsSyncMode = "" } = {}) {
+export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {}) {
   const version = evidence?.target_version || "";
   const targetPackageVersion = cleanVersion(version);
   const gitRef = evidence?.git_ref || "";
@@ -1046,7 +1046,6 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "", docs
   const packageChanges = Array.isArray(evidence?.package_changes) ? evidence.package_changes : [];
   const versionChange = packageChanges.find((item) => item.field === "version");
   const prerelease = Boolean(parseSemver(targetPackageVersion)?.prerelease) || distTag !== "latest";
-  const deferredToMemosRelease = docsSyncMode === "defer_to_memos_release";
   const lines = [
     "## Changelog",
     "",
@@ -1066,14 +1065,13 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "", docs
   lines.push(`- Package version: ${previousPackageVersion} -> ${targetPackageVersion}`);
   lines.push("");
   lines.push(
-    deferredToMemosRelease
-      ? "This package build is part of the MemOS whole-repository release. It does not create an independent local-plugin GitHub Release; docs sync is deferred to the MemOS release.published event."
-      : "This standalone package-only publish does not create a GitHub Release or update the MemOS-Docs Plugin tab.",
+    "This prerelease creates an independent local-plugin GitHub Prerelease for traceability. " +
+      "Its release.published event is intentionally ignored by Doc Agent, so it does not update the MemOS-Docs Plugin tab or trigger pre/gray deployment.",
   );
   return {
     ok: true,
     needs_review: false,
-    confidence: deferredToMemosRelease ? "memos-release-deferred" : "legacy-package-only",
+    confidence: "standalone-prerelease-no-docs",
     release_items: [],
     coverage: {
       needs_review: false,
@@ -1083,14 +1081,11 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "", docs
       covered_refs: [],
       missing_required: [],
       invalid_item_refs: [],
-      policy: deferredToMemosRelease
-        ? "weekly local-plugin package publication defers docs to the MemOS whole-repository release.published event"
-        : "standalone local-plugin publishes are package-only and do not create GitHub Releases or docs payloads",
+      policy:
+        "standalone local-plugin prereleases create npm/tag/GitHub Prerelease metadata but never create docs payloads",
     },
     warnings: [
-      deferredToMemosRelease
-        ? "local-plugin docs sync is deferred to the MemOS whole-repository release.published event"
-        : "standalone package publish skipped GitHub Release, Doc Agent draft, and docs payload generation",
+      "standalone prerelease skipped Doc Agent drafting and docs payload generation",
     ],
     release_notes_markdown: `${lines.join("\n").trim()}\n`,
   };
@@ -1415,7 +1410,6 @@ export async function main() {
 
   const currentTag = process.env.RELEASE_TAG || `${CURRENT_TAG_PREFIX}${targetVersion}`;
   const npmDistTag = String(process.env.NPM_DIST_TAG || "").trim();
-  const docsSyncMode = String(process.env.DOCS_SYNC_MODE || "").trim();
   const forcePackageOnly = String(process.env.FORCE_PACKAGE_ONLY_RELEASE || "").trim() === "true";
   const legacyPackageOnly = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag, forcePackageOnly });
   const includePrereleaseBaseline = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag });
@@ -1439,7 +1433,7 @@ export async function main() {
   const manualNotes = String(process.env.MANUAL_RELEASE_NOTES || "").trim();
   if (manualNotes) {
     const draft = legacyPackageOnly
-      ? legacyPackageDraftFromEvidence(evidence, { npmDistTag, docsSyncMode })
+      ? legacyPackageDraftFromEvidence(evidence, { npmDistTag })
       : manualDraftFromNotes(manualNotes, evidence);
     const notes = legacyPackageOnly
       ? validateLegacyPackageNotes(manualNotes)
@@ -1463,7 +1457,7 @@ export async function main() {
   }
 
   if (legacyPackageOnly) {
-    const draft = legacyPackageDraftFromEvidence(evidence, { npmDistTag, docsSyncMode });
+    const draft = legacyPackageDraftFromEvidence(evidence, { npmDistTag });
     const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
     writeFileSync(draftPath, JSON.stringify(draftForInspection(draft), null, 2), "utf8");
     writeFileSync(notesPath, draft.release_notes_markdown, "utf8");
