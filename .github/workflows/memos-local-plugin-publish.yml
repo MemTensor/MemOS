@@ -15,7 +15,7 @@ on:
         required: false
         default: ""
       release_notes:
-        description: "Optional Markdown release notes. Leave blank to let the configured draft service use real git evidence before publish."
+        description: "Optional Markdown release notes. latest uses Doc Agent evidence; beta/non-latest can use package-only notes."
         required: false
         default: ""
       dry_run:
@@ -50,7 +50,7 @@ on:
         type: string
         default: ""
       release_notes:
-        description: "Optional Markdown release notes. Leave blank to let the configured draft service use evidence."
+        description: "Optional Markdown release notes. latest uses Doc Agent evidence; beta/non-latest can use package-only notes."
         required: false
         type: string
         default: ""
@@ -103,7 +103,8 @@ jobs:
 
           expected="LEGACY PUBLISH memos-local-plugin-v${RELEASE_VERSION}"
           if [ "${LEGACY_PUBLISH_CONFIRMATION}" != "${expected}" ]; then
-            echo "::error::This workflow is the legacy standalone local-plugin publisher. The current official path is MemOS Release — Publish with v* tags and apps/memos-local-plugin/** extraction."
+            echo "::error::This workflow is the standalone local-plugin npm publisher for beta or latest package releases."
+            echo "::error::MemOS Release — Publish remains the weekly whole-repo release path and can also update the Plugin tab from apps/memos-local-plugin/** changes."
             echo "::error::To intentionally run this legacy publisher, set legacy_publish_confirmation exactly to: ${expected}"
             exit 1
           fi
@@ -289,6 +290,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_TAG: memos-local-plugin-v${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
           MANUAL_RELEASE_NOTES: ${{ inputs.release_notes }}
           DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL }}
           DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
