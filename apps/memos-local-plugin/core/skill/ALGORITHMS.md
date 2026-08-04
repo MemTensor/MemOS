@@ -246,6 +246,10 @@ conditions hold:
 now - (lastUsedAt ?? createdAt) >= idleArchiveMs
 ```
 
+Configuration validation enforces a one-hour minimum for `idleArchiveMs` to
+prevent an accidental zero value from archiving every low-η active Skill on
+the next lifecycle tick.
+
 `lastUsedAt` is updated by the existing recorded-use path. A never-used
 skill falls back to `createdAt`; unrelated metadata updates therefore do
 not reset its idle clock. The scan runs through the orchestrator's normal

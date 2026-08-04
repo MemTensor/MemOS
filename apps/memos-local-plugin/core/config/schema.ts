@@ -346,10 +346,10 @@ const AlgorithmSchema = Type.Object({
     archiveEta: NumberInRange(0.1, 0, 1),
     /** Hide Tier-1 skills whose η is below this. Mirrors retrieval.minSkillEta. */
     minEtaForRetrieval: NumberInRange(0.1, 0, 1),
-    /** Archive low-η active skills after this much retrieval inactivity. */
+    /** Archive low-η active skills after this much retrieval inactivity (minimum 1 hour). */
     idleArchiveMs: NumberInRange(
       30 * 24 * 60 * 60 * 1000,
-      0,
+      60 * 60 * 1000,
       365 * 24 * 60 * 60 * 1000,
     ),
   }, { default: {} }),

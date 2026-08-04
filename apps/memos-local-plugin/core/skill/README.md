@@ -208,7 +208,7 @@ See `algorithm.skill` in
 | `etaDelta`                  | `0.1`   | η step per `user.positive`/`user.negative`.           |
 | `retireEta`                 | `0.25`  | η floor; crossing retires.                            |
 | `minEtaForRetrieval`        | `0.5`   | η gate for Tier-1 retrieval + auto-promotion.         |
-| `idleArchiveMs`             | `2592000000` | Archive low-η active skills after 30 days without use. |
+| `idleArchiveMs`             | `2592000000` | Archive low-η active skills after 30 days without use (minimum 1 hour). |
 
 ## Logging
 

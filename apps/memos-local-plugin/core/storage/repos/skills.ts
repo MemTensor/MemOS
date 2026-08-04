@@ -14,6 +14,8 @@ import {
   toJsonText,
 } from "./_helpers.js";
 
+export const IDLE_ARCHIVE_BATCH_LIMIT = 500;
+
 const COLUMNS = [
   "id",
   "owner_agent_kind",
@@ -153,7 +155,13 @@ export function makeSkillsRepo(db: StorageDb) {
       const params = {
         min_eta: input.minEtaForRetrieval,
         cutoff: input.cutoff,
-        limit: Math.max(1, Math.min(500, Math.floor(input.limit ?? 500))),
+        limit: Math.max(
+          1,
+          Math.min(
+            IDLE_ARCHIVE_BATCH_LIMIT,
+            Math.floor(input.limit ?? IDLE_ARCHIVE_BATCH_LIMIT),
+          ),
+        ),
       };
       const sql = `
         SELECT ${COLUMNS.join(", ")}

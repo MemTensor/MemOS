@@ -30,16 +30,24 @@ describe("config/loadConfig", () => {
 
   it("defaults skill idle archival to 30 days and accepts an override", () => {
     const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const sixHoursMs = 6 * 60 * 60 * 1000;
     expect(resolveConfig({}).algorithm.skill.idleArchiveMs).toBe(thirtyDaysMs);
     expect(resolveConfig({
-      algorithm: { skill: { idleArchiveMs: 1_000 } },
-    }).algorithm.skill.idleArchiveMs).toBe(1_000);
+      algorithm: { skill: { idleArchiveMs: sixHoursMs } },
+    }).algorithm.skill.idleArchiveMs).toBe(sixHoursMs);
   });
 
-  it("rejects skill idle archival outside the supported 0-to-365-day range", () => {
+  it("rejects skill idle archival outside the supported one-hour-to-365-day range", () => {
+    const oneHourMs = 60 * 60 * 1000;
     const overOneYearMs = 365 * 24 * 60 * 60 * 1000 + 1;
+    expect(resolveConfig({
+      algorithm: { skill: { idleArchiveMs: oneHourMs } },
+    }).algorithm.skill.idleArchiveMs).toBe(oneHourMs);
     expect(() => resolveConfig({
-      algorithm: { skill: { idleArchiveMs: -1 } },
+      algorithm: { skill: { idleArchiveMs: 0 } },
+    })).toThrow(/schema validation/);
+    expect(() => resolveConfig({
+      algorithm: { skill: { idleArchiveMs: oneHourMs - 1 } },
     })).toThrow(/schema validation/);
     expect(() => resolveConfig({
       algorithm: { skill: { idleArchiveMs: overOneYearMs } },

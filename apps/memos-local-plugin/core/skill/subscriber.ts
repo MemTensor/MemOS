@@ -35,6 +35,7 @@ import type {
 } from "./types.js";
 import type { SkillId } from "../types.js";
 import { now as nowMs } from "../time.js";
+import { IDLE_ARCHIVE_BATCH_LIMIT } from "../storage/repos/skills.js";
 
 export interface SkillSubscriberDeps
   extends Omit<RunSkillDeps, "log" | "bus"> {
@@ -228,16 +229,15 @@ export function attachSkillSubscriber(
       });
     }
 
-    const archiveBatchSize = 500;
     const cutoff = at - deps.config.idleArchiveMs;
     while (true) {
-      const candidates = deps.repos.skills.listIdleArchiveCandidates({
+      const archiveCandidates = deps.repos.skills.listIdleArchiveCandidates({
         minEtaForRetrieval: deps.config.minEtaForRetrieval,
         cutoff,
-        limit: archiveBatchSize,
+        limit: IDLE_ARCHIVE_BATCH_LIMIT,
       });
       let archivedThisBatch = 0;
-      for (const s of candidates) {
+      for (const s of archiveCandidates) {
         if (!shouldArchiveIdle(s, deps.config.idleArchiveMs, deps.config, at)) continue;
         deps.repos.skills.setStatus(s.id, "archived", at);
         archivedThisBatch += 1;
@@ -257,15 +257,15 @@ export function attachSkillSubscriber(
           transition: "archived",
         });
       }
-      if (candidates.length < archiveBatchSize) break;
-      if (archivedThisBatch === 0) {
+      if (archiveCandidates.length > 0 && archivedThisBatch === 0) {
         log.warn("skill.idle_archive_stalled", {
-          candidateCount: candidates.length,
+          candidateCount: archiveCandidates.length,
           cutoff,
           minEtaForRetrieval: deps.config.minEtaForRetrieval,
         });
         break;
       }
+      if (archiveCandidates.length < IDLE_ARCHIVE_BATCH_LIMIT) break;
     }
   }
 

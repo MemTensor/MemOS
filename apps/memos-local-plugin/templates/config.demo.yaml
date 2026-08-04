@@ -62,4 +62,4 @@ algorithm:
     minGain: 0.0
     candidateTrials: 1
     cooldownMs: 0
-    idleArchiveMs: 2592000000  # 30 days
+    idleArchiveMs: 2592000000  # 30 days; minimum 1 hour
