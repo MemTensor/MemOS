@@ -131,15 +131,11 @@ def configure(
 
     # Install W3C TraceContext propagator so traceparent/tracestate headers are
     # extracted from incoming requests and injected into outgoing calls.
-    propagate.set_global_textmap(
-        CompositeHTTPPropagator([TraceContextTextMapPropagator()])
-    )
+    propagate.set_global_textmap(CompositeHTTPPropagator([TraceContextTextMapPropagator()]))
 
     # --- Traces ---
     tracer_provider = TracerProvider(resource=resource)
-    tracer_provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint))
-    )
+    tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint)))
     trace.set_tracer_provider(tracer_provider)
     _tracer = trace.get_tracer(INSTRUMENT_NAME)
 
@@ -287,6 +283,7 @@ def get_current_span():
 # Low-level span helpers
 # ---------------------------------------------------------------------------
 
+
 class _NoopSpan:
     """Span stand-in yielded by ``memory_span`` when OpenTelemetry is absent."""
 
@@ -366,9 +363,7 @@ def _record_op_metrics(
 def record_result_count(count: int, tier: str, operation: str = "search") -> None:
     """Record the number of items returned by a search."""
     if _result_count_histogram is not None:
-        _result_count_histogram.record(
-            count, {MEMORY_TIER: tier, MEMORY_OPERATION: operation}
-        )
+        _result_count_histogram.record(count, {MEMORY_TIER: tier, MEMORY_OPERATION: operation})
 
 
 def instrument_op(operation: str, tier: str) -> Callable:
@@ -379,6 +374,7 @@ def instrument_op(operation: str, tier: str) -> Callable:
     arguments when present.  Does NOT capture query text (use ``memory_span``
     directly in ``search`` for that).
     """
+
     def decorator(fn: Callable) -> Callable:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
@@ -399,12 +395,17 @@ def instrument_op(operation: str, tier: str) -> Callable:
                         operation,
                         tier,
                         f"memory.{operation} completed",
-                        {MEMORY_CUBE_ID: str(kwargs.get("mem_cube_id") or ""), MEMORY_ITEM_COUNT: count},
+                        {
+                            MEMORY_CUBE_ID: str(kwargs.get("mem_cube_id") or ""),
+                            MEMORY_ITEM_COUNT: count,
+                        },
                     )
                 else:
                     emit_op_log(logging.INFO, operation, tier, f"memory.{operation} completed")
                 return result
+
         return wrapper
+
     return decorator
 
 

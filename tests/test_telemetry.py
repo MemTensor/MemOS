@@ -3,6 +3,7 @@ Validate MemOS OTel instrumentation (memory-semconv v0.1.0).
 
 Uses in-memory exporters — no external collector required.
 """
+
 import importlib.util
 import pathlib
 
@@ -119,7 +120,9 @@ def test_instrument_op_decorator_emits_span(in_memory_providers):
             return "done"
 
     obj = FakeMemOS()
-    result = obj.add(messages=[{"role": "user", "content": "hi"}], user_id="u1", mem_cube_id="cube1")
+    result = obj.add(
+        messages=[{"role": "user", "content": "hi"}], user_id="u1", mem_cube_id="cube1"
+    )
     assert result == "done"
 
     spans = span_exporter.get_finished_spans()
@@ -149,7 +152,7 @@ def test_context_propagation_traceparent(in_memory_providers):
 
     # Simulate an agent sending a W3C traceparent header
     agent_trace_id = "0af7651916cd43dd8448eb211c80319c"
-    agent_span_id  = "b7ad6b7169203331"
+    agent_span_id = "b7ad6b7169203331"
     carrier = {"traceparent": f"00-{agent_trace_id}-{agent_span_id}-01"}
     parent_ctx = extract(carrier)
 
@@ -164,10 +167,10 @@ def test_context_propagation_traceparent(in_memory_providers):
     assert len(spans) == 1
     span = spans[0]
     # Parent trace ID must match the agent's traceparent
-    assert format(span.context.trace_id, '032x') == agent_trace_id
+    assert format(span.context.trace_id, "032x") == agent_trace_id
     # The span must have a parent (the agent's span)
     assert span.parent is not None
-    assert format(span.parent.span_id, '016x') == agent_span_id
+    assert format(span.parent.span_id, "016x") == agent_span_id
 
 
 def test_instrument_op_product_api_positional_arg(in_memory_providers):

@@ -9,12 +9,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from starlette.staticfiles import StaticFiles
 
-from memos.api.exceptions import APIExceptionHandler
-from memos.api.lifecycle import shutdown_components
-from memos.api.middleware.request_context import RequestContextMiddleware
-from memos.api.routers import server_router as server_router_module
-from memos.plugins.manager import plugin_manager
-
 # OTel: bootstrap the SDK (TracerProvider + OTLP exporters) from the environment,
 # then instrument FastAPI so agent HTTP calls produce end-to-end traces.
 #
@@ -24,9 +18,16 @@ from memos.plugins.manager import plugin_manager
 # runs without a collector stay silent.  In the memory-benchmark cluster we set
 # OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability:4317.
 from memos import telemetry as _telemetry
+from memos.api.exceptions import APIExceptionHandler
+from memos.api.lifecycle import shutdown_components
+from memos.api.middleware.request_context import RequestContextMiddleware
+from memos.api.routers import server_router as server_router_module
+from memos.plugins.manager import plugin_manager
+
 
 try:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor as _FastAPIInstrumentor
+
     _OTEL_FASTAPI_AVAILABLE = True
 except ImportError:
     _OTEL_FASTAPI_AVAILABLE = False

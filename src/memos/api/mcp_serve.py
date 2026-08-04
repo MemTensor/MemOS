@@ -52,7 +52,9 @@ def _bootstrap_telemetry() -> None:
             from opentelemetry.instrumentation.mcp import MCPInstrumentor
 
             MCPInstrumentor().instrument()
-            logger.info("[MCP_SERVE] MCP instrumentation active — trace context propagates over MCP")
+            logger.info(
+                "[MCP_SERVE] MCP instrumentation active — trace context propagates over MCP"
+            )
         except ImportError:
             logger.warning(
                 "[MCP_SERVE] opentelemetry-instrumentation-mcp NOT installed: memos spans "

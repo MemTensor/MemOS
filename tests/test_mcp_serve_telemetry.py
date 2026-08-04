@@ -15,6 +15,7 @@ These tests pin two contracts:
 The MCP server is loaded with lightweight stubs for fastmcp / MOS so the test
 needs neither a collector nor the heavy model stack.
 """
+
 import importlib.util
 import pathlib
 import sys
@@ -162,9 +163,7 @@ def test_memory_span_service_name_is_memos():
     from opentelemetry.semconv.resource import ResourceAttributes
 
     exporter = InMemorySpanExporter()
-    provider = TracerProvider(
-        resource=Resource.create({ResourceAttributes.SERVICE_NAME: "memos"})
-    )
+    provider = TracerProvider(resource=Resource.create({ResourceAttributes.SERVICE_NAME: "memos"}))
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     tel._tracer = provider.get_tracer(tel.INSTRUMENT_NAME)
