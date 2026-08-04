@@ -5,16 +5,21 @@ Uses in-memory exporters — no external collector required.
 """
 import importlib.util
 import pathlib
-import sys
-import types
+
 import pytest
 
+
+# OpenTelemetry is an optional (``otel``) extra — skip this module cleanly when a
+# default install doesn't have it, rather than failing at import time.
+pytest.importorskip("opentelemetry")
+
+from opentelemetry import metrics, trace
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry import trace, metrics
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
 
 # Load telemetry directly to avoid memos heavy __init__ chain
 _tel_path = pathlib.Path(__file__).parent.parent / "src" / "memos" / "telemetry.py"
@@ -82,9 +87,8 @@ def test_memory_span_records_error_on_exception(in_memory_providers):
 
     span_exporter, _ = in_memory_providers
 
-    with pytest.raises(ValueError):
-        with tel.memory_span("add", tel.TIER_TEXTUAL):
-            raise ValueError("boom")
+    with pytest.raises(ValueError), tel.memory_span("add", tel.TIER_TEXTUAL):
+        raise ValueError("boom")
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1

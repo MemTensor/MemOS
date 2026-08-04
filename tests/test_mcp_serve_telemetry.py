@@ -22,6 +22,10 @@ import types
 
 import pytest
 
+
+# OpenTelemetry is an optional (``otel``) extra — skip cleanly if it's absent.
+pytest.importorskip("opentelemetry")
+
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor

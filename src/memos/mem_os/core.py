@@ -9,22 +9,6 @@ from threading import Lock
 from typing import Any, Literal
 
 from memos.configs.mem_os import MOSConfig
-from memos.telemetry import (
-    MEMORY_CUBE_ID,
-    MEMORY_ITEM_COUNT,
-    MEMORY_RESULT_COUNT,
-    MEMORY_SESSION_ID,
-    MEMORY_TOP_K,
-    MEMORY_USER_ID,
-    TIER_ACTIVATION,
-    TIER_PARAMETRIC,
-    TIER_PREFERENCE,
-    TIER_TEXTUAL,
-    emit_op_log,
-    instrument_op,
-    memory_span,
-    record_result_count,
-)
 from memos.context.context import ContextThreadPoolExecutor
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
@@ -45,6 +29,18 @@ from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
 from memos.memos_tools.thread_safe_dict_segment import OptimizedThreadSafeDict
+from memos.telemetry import (
+    MEMORY_RESULT_COUNT,
+    MEMORY_SESSION_ID,
+    MEMORY_TOP_K,
+    MEMORY_USER_ID,
+    TIER_PREFERENCE,
+    TIER_TEXTUAL,
+    emit_op_log,
+    instrument_op,
+    memory_span,
+    record_result_count,
+)
 from memos.templates.mos_prompts import QUERY_REWRITING_PROMPT
 from memos.types import ChatHistory, MessageList, MOSSearchResult
 

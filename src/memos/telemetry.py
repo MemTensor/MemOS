@@ -21,24 +21,39 @@ import os
 import time
 
 from contextlib import contextmanager
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
-from opentelemetry import metrics, propagate, trace
-from opentelemetry._logs import get_logger_provider, set_logger_provider
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.propagators.composite import CompositeHTTPPropagator
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.semconv.resource import ResourceAttributes
-from opentelemetry.trace import Status, StatusCode
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+# OpenTelemetry is an optional dependency (the ``otel`` extra). Import it lazily so
+# that ``import memos.telemetry`` — and therefore ``import memos.mem_os.core`` — keeps
+# working on a default install *without* the extra; the instrumentation then quietly
+# degrades to a no-op. configure()/get_tracer()/memory_span() all guard on
+# ``_OTEL_AVAILABLE`` so nothing here references the SDK when it is absent.
+try:
+    from opentelemetry import metrics, propagate, trace
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.propagators.composite import CompositeHTTPPropagator
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.semconv.resource import ResourceAttributes
+    from opentelemetry.trace import Status, StatusCode
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    _OTEL_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised only without the [otel] extra
+    _OTEL_AVAILABLE = False
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +117,9 @@ def configure(
     global _op_counter, _latency_histogram, _result_count_histogram
 
     if _initialized:
+        return
+    if not _OTEL_AVAILABLE:
+        # OpenTelemetry not installed (no [otel] extra) — stay a pure no-op.
         return
 
     resource = Resource.create(
@@ -169,16 +187,13 @@ def _resolve_service_version(explicit: str | None = None) -> str:
     """Best-effort service.version: explicit env value, else installed pkg, else 0.0.0."""
     if explicit:
         return explicit
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    from importlib.metadata import PackageNotFoundError, version
 
-        for dist in ("MemoryOS", "memoryos", "memos"):
-            try:
-                return version(dist)
-            except PackageNotFoundError:
-                continue
-    except Exception:  # pragma: no cover - importlib.metadata always present on 3.11
-        pass
+    for dist in ("MemoryOS", "memoryos", "memos"):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            continue
     return "0.0.0"
 
 
@@ -204,6 +219,9 @@ def configure_from_env() -> bool:
 
     Returns True when telemetry was configured, False when it was skipped.
     """
+    if not _OTEL_AVAILABLE:
+        return False
+
     enabled_flag = os.getenv("MEMOS_OTEL_ENABLED")
     if enabled_flag is not None and enabled_flag.strip().lower() in {
         "0",
@@ -233,15 +251,19 @@ def configure_from_env() -> bool:
     return _initialized
 
 
-def get_tracer() -> trace.Tracer:
-    """Return the global tracer (no-op if OTel is not configured)."""
+def get_tracer():
+    """Return the global tracer (None if OpenTelemetry is not installed)."""
+    if not _OTEL_AVAILABLE:
+        return None
     if _tracer is not None:
         return _tracer
     return trace.get_tracer(INSTRUMENT_NAME)
 
 
-def get_meter() -> metrics.Meter:
-    """Return the global meter (no-op if OTel is not configured)."""
+def get_meter():
+    """Return the global meter (None if OpenTelemetry is not installed)."""
+    if not _OTEL_AVAILABLE:
+        return None
     if _meter is not None:
         return _meter
     return metrics.get_meter(INSTRUMENT_NAME)
@@ -250,6 +272,19 @@ def get_meter() -> metrics.Meter:
 # ---------------------------------------------------------------------------
 # Low-level span helpers
 # ---------------------------------------------------------------------------
+
+class _NoopSpan:
+    """Span stand-in yielded by ``memory_span`` when OpenTelemetry is absent."""
+
+    def set_attribute(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def set_status(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def record_exception(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
 
 @contextmanager
 def memory_span(
@@ -267,6 +302,12 @@ def memory_span(
 
     Yields the span so callers can add result attributes after the operation.
     """
+    if not _OTEL_AVAILABLE:
+        # No SDK installed — yield an inert span so instrumented call sites are
+        # unaffected on a default install.
+        yield _NoopSpan()
+        return
+
     tracer = get_tracer()
     span_attrs: dict[str, Any] = {
         MEMORY_OPERATION: operation,
