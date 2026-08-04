@@ -208,6 +208,7 @@ See `algorithm.skill` in
 | `etaDelta`                  | `0.1`   | η step per `user.positive`/`user.negative`.           |
 | `retireEta`                 | `0.25`  | η floor; crossing retires.                            |
 | `minEtaForRetrieval`        | `0.5`   | η gate for Tier-1 retrieval + auto-promotion.         |
+| `idleArchiveMs`             | `2592000000` | Archive low-η active skills after 30 days without use. |
 
 ## Logging
 
@@ -232,7 +233,7 @@ log (`logs/audit.jsonl`, never deleted) via the `skill` channel.
 * `tests/unit/skill/crystallize.test.ts` — LLM draft normalization + failures.
 * `tests/unit/skill/verifier.test.ts` — coverage + resonance checks.
 * `tests/unit/skill/packager.test.ts` — row shape, invocation guide, embedder failure.
-* `tests/unit/skill/lifecycle.test.ts` — trial counter, thumbs, retire on drift.
+* `tests/unit/skill/lifecycle.test.ts` — trial counter, thumbs, reward drift, and idle archive decisions.
 * `tests/unit/skill/events.test.ts` — bus contract.
 * `tests/unit/skill/skill.integration.test.ts` — end-to-end against real SQLite.
 * `tests/unit/skill/subscriber.test.ts` — event-driven trigger + runOnce + flush.

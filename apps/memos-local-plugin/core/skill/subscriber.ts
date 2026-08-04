@@ -25,7 +25,7 @@ import {
   runSkill,
   type RunSkillDeps,
 } from "./skill.js";
-import { shouldPromoteCandidate } from "./lifecycle.js";
+import { shouldArchiveIdle, shouldPromoteCandidate } from "./lifecycle.js";
 import type {
   RunSkillInput,
   RunSkillResult,
@@ -210,12 +210,12 @@ export function attachSkillSubscriber(
     }
   }
 
-  /** Periodic lifecycle pass: promote eligible candidate skills to active. */
+  /** Promote eligible candidates and archive stale low-η active skills. */
   async function lifecycleTick(): Promise<void> {
+    const at = nowMs();
     const candidates = deps.repos.skills.list({ status: "candidate", limit: 500 });
     for (const s of candidates) {
       if (!shouldPromoteCandidate(s, deps.config)) continue;
-      const at = nowMs();
       deps.repos.skills.setStatus(s.id, "active", at);
       log.info("skill.auto_promoted", { skillId: s.id, name: s.name, eta: s.eta });
       deps.bus.emit({
@@ -226,6 +226,46 @@ export function attachSkillSubscriber(
         next: "active",
         transition: "promoted",
       });
+    }
+
+    const archiveBatchSize = 500;
+    const cutoff = at - deps.config.idleArchiveMs;
+    while (true) {
+      const candidates = deps.repos.skills.listIdleArchiveCandidates({
+        minEtaForRetrieval: deps.config.minEtaForRetrieval,
+        cutoff,
+        limit: archiveBatchSize,
+      });
+      let archivedThisBatch = 0;
+      for (const s of candidates) {
+        if (!shouldArchiveIdle(s, deps.config.idleArchiveMs, deps.config, at)) continue;
+        deps.repos.skills.setStatus(s.id, "archived", at);
+        archivedThisBatch += 1;
+        log.info("skill.idle_archived", {
+          skillId: s.id,
+          name: s.name,
+          eta: s.eta,
+          lastUsedAt: s.lastUsedAt ?? null,
+          idleArchiveMs: deps.config.idleArchiveMs,
+        });
+        deps.bus.emit({
+          kind: "skill.status.changed",
+          at,
+          skillId: s.id,
+          previous: "active",
+          next: "archived",
+          transition: "archived",
+        });
+      }
+      if (candidates.length < archiveBatchSize) break;
+      if (archivedThisBatch === 0) {
+        log.warn("skill.idle_archive_stalled", {
+          candidateCount: candidates.length,
+          cutoff,
+          minEtaForRetrieval: deps.config.minEtaForRetrieval,
+        });
+        break;
+      }
     }
   }
 

@@ -236,6 +236,21 @@ can't take down a well-trialled skill. If the blend drives η under
 `retireEta` we still retire; the skill can rehab later via positive
 signals.
 
+### Idle archive scan
+
+The existing lifecycle tick also archives an active skill when both
+conditions hold:
+
+```
+η < minEtaForRetrieval
+now - (lastUsedAt ?? createdAt) >= idleArchiveMs
+```
+
+`lastUsedAt` is updated by the existing recorded-use path. A never-used
+skill falls back to `createdAt`; unrelated metadata updates therefore do
+not reset its idle clock. The scan runs through the orchestrator's normal
+flush lifecycle and does not introduce a separate timer.
+
 ---
 
 ## 7. Retrieval surface

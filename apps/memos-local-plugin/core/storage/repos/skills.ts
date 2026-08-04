@@ -140,6 +140,32 @@ export function makeSkillsRepo(db: StorageDb) {
       return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
     },
 
+    /**
+     * Return one oldest-first batch of active skills that already satisfy
+     * the idle-archive predicate. Filtering in SQLite prevents unrelated
+     * recently-updated skills from starving older candidates.
+     */
+    listIdleArchiveCandidates(input: {
+      minEtaForRetrieval: number;
+      cutoff: number;
+      limit?: number;
+    }): SkillRow[] {
+      const params = {
+        min_eta: input.minEtaForRetrieval,
+        cutoff: input.cutoff,
+        limit: Math.max(1, Math.min(500, Math.floor(input.limit ?? 500))),
+      };
+      const sql = `
+        SELECT ${COLUMNS.join(", ")}
+          FROM skills
+         WHERE status = 'active'
+           AND eta < @min_eta
+           AND COALESCE(last_used_at, created_at) <= @cutoff
+         ORDER BY COALESCE(last_used_at, created_at) ASC
+         LIMIT @limit`;
+      return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
+    },
+
     count(filter: Omit<SkillListFilter, "limit" | "offset"> = {}): number {
       const fragments: string[] = [];
       const params: Record<string, unknown> = {};

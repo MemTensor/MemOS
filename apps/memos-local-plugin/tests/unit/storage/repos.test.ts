@@ -314,6 +314,67 @@ describe("storage/repos — happy paths", () => {
     }
   });
 
+  it("skills: selects idle archive candidates and excludes a skill after recorded use", () => {
+    const { repos, cleanup } = makeTmpDb();
+    try {
+      const insertSkill = (
+        id: string,
+        status: "active" | "archived",
+        eta: number,
+        createdAt: number,
+        lastUsedAt: number | null,
+      ) => {
+        repos.skills.insert({
+          id,
+          name: id,
+          status,
+          invocationGuide: "fixture",
+          procedureJson: null,
+          eta,
+          support: 1,
+          gain: 0,
+          trialsAttempted: 0,
+          trialsPassed: 0,
+          sourcePolicyIds: [],
+          sourceWorldModelIds: [],
+          evidenceAnchors: [],
+          vec: null,
+          createdAt,
+          updatedAt: 10_000,
+          lastUsedAt,
+          version: 1,
+        });
+      };
+      insertSkill("never_used", "active", 0.05, 50, null);
+      insertSkill("old_used", "active", 0.05, 1, 100);
+      insertSkill("recent", "active", 0.05, 1, 9_500);
+      insertSkill("retrievable", "active", 0.1, 1, 100);
+      insertSkill("already_archived", "archived", 0.05, 1, 100);
+
+      const candidates = repos.skills.listIdleArchiveCandidates({
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        limit: 500,
+      });
+      expect(candidates.map((skill) => skill.id)).toEqual(["never_used", "old_used"]);
+      expect(repos.skills.listIdleArchiveCandidates({
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        limit: 1,
+      }).map((skill) => skill.id)).toEqual(["never_used"]);
+
+      expect(repos.skills.recordUse("old_used", 9_500)).toBe(true);
+      expect(repos.skills.getById("old_used")?.lastUsedAt).toBe(9_500);
+      expect(repos.skills.listIdleArchiveCandidates({
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        limit: 500,
+      }).map((skill) => skill.id)).toEqual(["never_used"]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("feedback: insert, scoped list, polarity filter", () => {
     const { repos, cleanup } = makeTmpDb();
     try {
