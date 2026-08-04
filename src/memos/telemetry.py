@@ -269,6 +269,20 @@ def get_meter():
     return metrics.get_meter(INSTRUMENT_NAME)
 
 
+def get_current_span():
+    """
+    Return the active span so callers can enrich it with attributes.
+
+    Yields a no-op stand-in when OpenTelemetry is not installed, so call sites
+    can unconditionally ``span.set_attribute(...)`` without importing the SDK
+    directly (keeps ``opentelemetry`` out of module-level imports for the
+    optional-dependency check).
+    """
+    if not _OTEL_AVAILABLE:
+        return _NoopSpan()
+    return trace.get_current_span()
+
+
 # ---------------------------------------------------------------------------
 # Low-level span helpers
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ from memos.telemetry import (
     MEMORY_SESSION_ID,
     MEMORY_USER_ID,
     TIER_TEXTUAL,
+    get_current_span,
     instrument_op,
     record_result_count,
 )
@@ -41,7 +42,6 @@ from memos.types.general_types import (
     UserContext,
 )
 from memos.utils import timed, timed_stage
-from opentelemetry.trace import get_current_span
 
 
 logger = get_logger(__name__)
