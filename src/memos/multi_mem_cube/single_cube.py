@@ -23,6 +23,15 @@ from memos.mem_scheduler.schemas.task_schemas import (
 from memos.memories.textual.item import TextualMemoryItem
 from memos.multi_mem_cube.views import MemCubeView
 from memos.search import resolve_filter_for_cube, search_text_memories
+from memos.telemetry import (
+    MEMORY_CUBE_ID,
+    MEMORY_QUERY_TEXT,
+    MEMORY_SESSION_ID,
+    MEMORY_USER_ID,
+    TIER_TEXTUAL,
+    instrument_op,
+    record_result_count,
+)
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
     FINE_STRATEGY,
@@ -32,6 +41,7 @@ from memos.types.general_types import (
     UserContext,
 )
 from memos.utils import timed, timed_stage
+from opentelemetry.trace import get_current_span
 
 
 logger = get_logger(__name__)
@@ -55,6 +65,7 @@ class SingleCubeView(MemCubeView):
     feedback_server: Any | None = None
     deepsearch_agent: Any | None = None
 
+    @instrument_op("add", TIER_TEXTUAL)
     @timed
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
@@ -73,6 +84,13 @@ class SingleCubeView(MemCubeView):
             project_id=add_req.project_id,
         )
 
+        # Enrich the instrument_op span with real resource attributes (the
+        # decorator only sees the positional add_req, so it defaults to "").
+        span = get_current_span()
+        span.set_attribute(MEMORY_USER_ID, str(add_req.user_id or ""))
+        span.set_attribute(MEMORY_CUBE_ID, str(self.cube_id or ""))
+        span.set_attribute(MEMORY_SESSION_ID, str(add_req.session_id or "default_session"))
+
         target_session_id = add_req.session_id or "default_session"
         self.logger.info(
             f"[SingleCubeView] cube={self.cube_id} "
@@ -85,6 +103,7 @@ class SingleCubeView(MemCubeView):
 
         return all_memories
 
+    @instrument_op("search", TIER_TEXTUAL)
     @timed
     def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
         """
@@ -104,6 +123,14 @@ class SingleCubeView(MemCubeView):
             mem_cube_id=self.cube_id,
             session_id=search_req.session_id or "default_session",
         )
+
+        # Enrich the instrument_op span with real resource attributes + query.
+        span = get_current_span()
+        span.set_attribute(MEMORY_USER_ID, str(search_req.user_id or ""))
+        span.set_attribute(MEMORY_CUBE_ID, str(self.cube_id or ""))
+        span.set_attribute(MEMORY_SESSION_ID, str(search_req.session_id or "default_session"))
+        span.set_attribute(MEMORY_QUERY_TEXT, str(search_req.query or ""))
+
         self.logger.info("Search request summary: %s", summarize_search_request(search_req))
 
         memories_result: MOSSearchResult = {
@@ -128,6 +155,12 @@ class SingleCubeView(MemCubeView):
             all_formatted_memories,
             self.cube_id,
         )
+
+        # Emit memory-semconv result-count metric (flattened textual items).
+        result_count = sum(
+            entry.get("total_nodes", 0) for entry in memories_result.get("text_mem", [])
+        )
+        record_result_count(result_count, TIER_TEXTUAL, "search")
 
         self.logger.info("Search result summary: %s", summarize_search_results(memories_result))
         return memories_result

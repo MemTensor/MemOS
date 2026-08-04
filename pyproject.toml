@@ -77,6 +77,7 @@ otel = [
     "opentelemetry-exporter-otlp-proto-grpc (>=1.27.0)",
     "opentelemetry-exporter-otlp-proto-http (>=1.27.0)",
     "opentelemetry-semantic-conventions (>=0.48b0)",
+    "opentelemetry-instrumentation-fastapi (>=0.48b0)",
 ]
 
 # TreeTextualMemory

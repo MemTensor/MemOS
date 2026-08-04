@@ -136,6 +136,84 @@ def test_tier_constants_match_semconv():
     assert tel.TIER_PREFERENCE == "preference"
 
 
+def test_context_propagation_traceparent(in_memory_providers):
+    """Memory spans become children of a parent context from a traceparent header."""
+    from opentelemetry import context as otel_context
+    from opentelemetry.propagate import extract
+
+    span_exporter, _ = in_memory_providers
+
+    # Simulate an agent sending a W3C traceparent header
+    agent_trace_id = "0af7651916cd43dd8448eb211c80319c"
+    agent_span_id  = "b7ad6b7169203331"
+    carrier = {"traceparent": f"00-{agent_trace_id}-{agent_span_id}-01"}
+    parent_ctx = extract(carrier)
+
+    token = otel_context.attach(parent_ctx)
+    try:
+        with tel.memory_span("search", tel.TIER_TEXTUAL, {"memory.query.text": "agent query"}):
+            pass
+    finally:
+        otel_context.detach(token)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    # Parent trace ID must match the agent's traceparent
+    assert format(span.context.trace_id, '032x') == agent_trace_id
+    # The span must have a parent (the agent's span)
+    assert span.parent is not None
+    assert format(span.parent.span_id, '016x') == agent_span_id
+
+
+def test_instrument_op_product_api_positional_arg(in_memory_providers):
+    """
+    ISI-2031: the product-API entry layer (SingleCubeView.add_memories /
+    search_memories) takes a single positional ``*_req`` argument, so the
+    decorator's kwargs-based user_id/cube_id/session_id extraction falls back
+    to empty strings. The span + counter must still fire (resource-level
+    memory.sut.name=memos is the DoD requirement), and record_result_count
+    must emit the result-count histogram.
+    """
+    span_exporter, metric_reader = in_memory_providers
+
+    class FakeReq:
+        user_id = "u1"
+        session_id = "sess1"
+
+    class FakeProductView:
+        @tel.instrument_op("search", tel.TIER_TEXTUAL)
+        def search_memories(self, search_req):  # positional, like SingleCubeView
+            # Mirror the result-count call added in single_cube.search_memories
+            tel.record_result_count(3, tel.TIER_TEXTUAL, "search")
+            return {"text_mem": [{"total_nodes": 3}]}
+
+    view = FakeProductView()
+    result = view.search_memories(FakeReq())
+    assert result["text_mem"][0]["total_nodes"] == 3
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "memory.search"
+    assert span.attributes[tel.MEMORY_OPERATION] == "search"
+    assert span.attributes[tel.MEMORY_TIER] == tel.TIER_TEXTUAL
+    # Positional-arg fallback: attrs default to empty strings (documented).
+    assert span.attributes[tel.MEMORY_USER_ID] == ""
+    assert span.attributes[tel.MEMORY_CUBE_ID] == ""
+
+    # Counter + result-count histogram must be present.
+    data = metric_reader.get_metrics_data()
+    names = {
+        metric.name
+        for rm in data.resource_metrics
+        for sm in rm.scope_metrics
+        for metric in sm.metrics
+    }
+    assert "memory.operations" in names
+    assert "memory.result.count" in names
+
+
 def test_memory_span_all_operations(in_memory_providers):
     span_exporter, _ = in_memory_providers
 
