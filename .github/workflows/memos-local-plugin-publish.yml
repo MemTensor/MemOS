@@ -224,6 +224,42 @@ jobs:
             exit 1
           fi
 
+      - name: Configure npm authentication preflight
+        if: ${{ inputs.dry_run != true }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Validate npm authentication before platform builds
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        working-directory: .
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is missing; stopping before platform builds."
+            exit 1
+          fi
+          auth_log="${RUNNER_TEMP}/memos-local-plugin-npm-auth-preflight.log"
+          set +e
+          npm whoami \
+            --registry=https://registry.npmjs.org \
+            --fetch-retries=0 \
+            --fetch-timeout=8000 \
+            >"${auth_log}" 2>&1
+          auth_status=$?
+          set -e
+          if [ "${auth_status}" != 0 ]; then
+            sed -n '1,80p' "${auth_log}"
+            echo "::error::NPM_TOKEN authentication failed; stopping before platform builds."
+            exit 1
+          fi
+          echo "npm authentication preflight passed for $(tr -d '[:space:]' <"${auth_log}")."
+
   build-prebuilds:
     needs: guard-legacy-publish
     timeout-minutes: 25
@@ -351,6 +387,7 @@ jobs:
         run: |
           node --test \
             .github/scripts/publish-local-plugin.test.mjs \
+            .github/scripts/wait-for-local-plugin-npm-release.test.mjs \
             .github/scripts/inspect-local-plugin-release-state.test.mjs \
             .github/scripts/audit-local-plugin-package.test.mjs \
             .github/scripts/draft-local-plugin-release-notes.test.mjs \
@@ -667,6 +704,9 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.tag }}
           RECOVER_EXISTING_NPM_RELEASE: ${{ inputs.recover_existing_npm_release }}
           RELEASE_METADATA_STATE: ${{ steps.release_state.outputs.state }}
+          NPM_VISIBILITY_TIMEOUT_SECONDS: "150"
+          NPM_VISIBILITY_INTERVAL_SECONDS: "10"
+          NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS: "8"
         run: bash ../../.github/scripts/publish-local-plugin.sh
 
       - name: Create standalone package tag

@@ -13,9 +13,10 @@ if [ ! -s "${RELEASE_TARBALL}" ]; then
   exit 2
 fi
 
-npm_visibility_attempts="${NPM_VISIBILITY_ATTEMPTS:-10}"
-npm_ambiguous_visibility_attempts="${NPM_AMBIGUOUS_VISIBILITY_ATTEMPTS:-10}"
-npm_visibility_delay_seconds="${NPM_VISIBILITY_DELAY_SECONDS:-5}"
+npm_visibility_timeout_seconds="${NPM_VISIBILITY_TIMEOUT_SECONDS:-150}"
+npm_visibility_interval_seconds="${NPM_VISIBILITY_INTERVAL_SECONDS:-10}"
+npm_visibility_request_timeout_seconds="${NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS:-8}"
+npm_registry_url="https://registry.npmjs.org"
 release_metadata_state="${RELEASE_METADATA_STATE:-fresh}"
 
 validate_positive_integer() {
@@ -27,18 +28,9 @@ validate_positive_integer() {
   fi
 }
 
-validate_non_negative_integer() {
-  local name="$1"
-  local value="$2"
-  if ! [[ "${value}" =~ ^[0-9]+$ ]]; then
-    echo "::error::${name} must be a non-negative integer; received ${value}."
-    exit 2
-  fi
-}
-
-validate_positive_integer "NPM_VISIBILITY_ATTEMPTS" "${npm_visibility_attempts}"
-validate_positive_integer "NPM_AMBIGUOUS_VISIBILITY_ATTEMPTS" "${npm_ambiguous_visibility_attempts}"
-validate_non_negative_integer "NPM_VISIBILITY_DELAY_SECONDS" "${npm_visibility_delay_seconds}"
+validate_positive_integer "NPM_VISIBILITY_TIMEOUT_SECONDS" "${npm_visibility_timeout_seconds}"
+validate_positive_integer "NPM_VISIBILITY_INTERVAL_SECONDS" "${npm_visibility_interval_seconds}"
+validate_positive_integer "NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS" "${npm_visibility_request_timeout_seconds}"
 
 case "${release_metadata_state}" in
   fresh|complete) ;;
@@ -57,7 +49,12 @@ npm_version_exists() {
 
   for attempt in 1 2 3; do
     set +e
-    npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version --prefer-online >"${npm_view_log}" 2>&1
+    npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version \
+      --prefer-online \
+      --fetch-retries=0 \
+      --fetch-timeout=8000 \
+      --registry="${npm_registry_url}" \
+      >"${npm_view_log}" 2>&1
     status=$?
     set -e
     if [ "${status}" = 0 ]; then
@@ -76,38 +73,29 @@ npm_version_exists() {
   done
 }
 
-wait_for_npm_version() {
-  local attempts="$1"
-  local attempt
-  local delay
-
-  for attempt in $(seq 1 "${attempts}"); do
-    if npm_version_exists; then
-      echo "${PACKAGE_NAME}@${RELEASE_VERSION} became visible on attempt ${attempt}/${attempts}."
-      return 0
-    fi
-    if [ "${attempt}" = "${attempts}" ]; then
-      return 1
-    fi
-
-    delay=$((npm_visibility_delay_seconds * attempt))
-    if [ "${delay}" -gt 30 ]; then
-      delay=30
-    fi
-    echo "::notice::${PACKAGE_NAME}@${RELEASE_VERSION} is not visible yet; retrying in ${delay}s."
-    if [ "${delay}" -gt 0 ]; then
-      sleep "${delay}"
-    fi
-  done
-
-  return 1
+wait_for_fresh_npm_release_metadata() {
+  NPM_PACKAGE_NAME="${PACKAGE_NAME}" \
+    NPM_RELEASE_VERSION="${RELEASE_VERSION}" \
+    NPM_DIST_TAG="${NPM_DIST_TAG}" \
+    NPM_RELEASE_TARBALL="${RELEASE_TARBALL}" \
+    NPM_VISIBILITY_TIMEOUT_SECONDS="${npm_visibility_timeout_seconds}" \
+    NPM_VISIBILITY_INTERVAL_SECONDS="${npm_visibility_interval_seconds}" \
+    NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS="${npm_visibility_request_timeout_seconds}" \
+    NPM_CONFIG_REGISTRY="${npm_registry_url}" \
+    node "${script_directory}/wait-for-local-plugin-npm-release.mjs"
 }
 
 npm_dist_tag_matches() {
   local output_file="${RUNNER_TEMP}/memos-local-plugin-npm-dist-tags.json"
   local status
   set +e
-  npm view "${PACKAGE_NAME}" dist-tags --json --prefer-online >"${output_file}" 2>&1
+  npm view "${PACKAGE_NAME}" dist-tags \
+    --json \
+    --prefer-online \
+    --fetch-retries=0 \
+    --fetch-timeout=8000 \
+    --registry="${npm_registry_url}" \
+    >"${output_file}" 2>&1
   status=$?
   set -e
   if [ "${status}" != 0 ]; then
@@ -119,29 +107,6 @@ npm_dist_tag_matches() {
     const tags = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     if (tags[process.argv[2]] !== process.argv[3]) process.exit(1);
   ' "${output_file}" "${NPM_DIST_TAG}" "${RELEASE_VERSION}"
-}
-
-wait_for_npm_dist_tag() {
-  local attempt
-  local delay
-  for attempt in $(seq 1 "${npm_visibility_attempts}"); do
-    if npm_dist_tag_matches; then
-      echo "npm dist-tag ${NPM_DIST_TAG} points to ${RELEASE_VERSION}."
-      return 0
-    fi
-    if [ "${attempt}" = "${npm_visibility_attempts}" ]; then
-      echo "::error::npm dist-tag ${NPM_DIST_TAG} did not point to ${RELEASE_VERSION} after ${npm_visibility_attempts} attempts."
-      return 1
-    fi
-    delay=$((npm_visibility_delay_seconds * attempt))
-    if [ "${delay}" -gt 30 ]; then
-      delay=30
-    fi
-    echo "::notice::npm dist-tag ${NPM_DIST_TAG} is not updated yet; retrying in ${delay}s."
-    if [ "${delay}" -gt 0 ]; then
-      sleep "${delay}"
-    fi
-  done
 }
 
 remote_tag_exists() {
@@ -180,8 +145,8 @@ verify_published_package() {
 
   mkdir -p "${verify_directory}"
   bash "${script_directory}/retry.sh" --label "download published npm package" -- \
-    bash -euo pipefail -c 'npm pack "$1" --json --silent --pack-destination "$2" > "$3"' \
-    _ "${PACKAGE_NAME}@${RELEASE_VERSION}" "${verify_directory}" "${verify_json}"
+    bash -euo pipefail -c 'npm pack "$1" --json --silent --pack-destination "$2" --prefer-online --fetch-retries=0 --fetch-timeout=8000 --registry="$4" > "$3"' \
+    _ "${PACKAGE_NAME}@${RELEASE_VERSION}" "${verify_directory}" "${verify_json}" "${npm_registry_url}"
   verify_filename="$(
     node -e '
       const fs = require("node:fs");
@@ -259,46 +224,73 @@ else
     exit 1
   fi
 
+  if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+    echo "::error::NPM_TOKEN is missing; refusing a real npm publish."
+    exit 1
+  fi
+  auth_log="${RUNNER_TEMP}/memos-local-plugin-npm-whoami.log"
+  set +e
+  npm whoami \
+    --registry="${npm_registry_url}" \
+    --fetch-retries=0 \
+    --fetch-timeout=8000 \
+    >"${auth_log}" 2>&1
+  auth_status=$?
+  set -e
+  if [ "${auth_status}" != 0 ]; then
+    sed -n '1,80p' "${auth_log}"
+    echo "::error::NPM_TOKEN authentication failed before publish; no package request was sent."
+    exit 1
+  fi
+  echo "Authenticated to the public npm registry as $(tr -d '[:space:]' <"${auth_log}")."
+
   attempt_directory="${RUNNER_TEMP}/memos-local-plugin-npm-publish-attempts"
   mkdir -p "${attempt_directory}"
   set +e
   npm publish "${RELEASE_TARBALL}" \
     --access public \
     --tag "${NPM_DIST_TAG}" \
+    --registry="${npm_registry_url}" \
     --fetch-retries=0 \
+    --fetch-timeout=120000 \
     >"${attempt_directory}/1.log" 2>&1
   publish_status=$?
   set -e
   sed -n '1,160p' "${attempt_directory}/1.log"
 
-  if [ "${publish_status}" != 0 ]; then
-    if wait_for_npm_version "${npm_ambiguous_visibility_attempts}"; then
-      echo "Publish returned an error, but npm now contains the requested version. No second publish request was sent."
-    else
-      RELEASE_FAILURE_PHASE=npm-publish \
-        RELEASE_FAILURE_ATTEMPT_DIR="${attempt_directory}" \
-        node "${script_directory}/draft-local-plugin-release-notes.mjs" \
-        || echo "::warning::Failed to send the exhausted-retry notification."
-      echo "::error::npm publish returned an error and the version remained unavailable. Refusing an automatic second publish request; inspect npm before retrying."
-      exit 1
-    fi
-  fi
-
-  if wait_for_npm_version "${npm_visibility_attempts}"; then
+  metadata_log="${attempt_directory}/registry-verification.log"
+  set +e
+  wait_for_fresh_npm_release_metadata 2>&1 | tee "${metadata_log}"
+  metadata_status="${PIPESTATUS[0]}"
+  set -e
+  if [ "${metadata_status}" = 0 ]; then
     published_version_visible=true
+    if [ "${publish_status}" = 0 ]; then
+      echo "npm publish and the bounded registry visibility check both succeeded."
+    else
+      echo "Publish returned an error, but npm now contains the fully verified release. No second publish request was sent."
+    fi
   else
-    echo "::error::npm accepted the publish request, but ${PACKAGE_NAME}@${RELEASE_VERSION} is not visible after propagation retries. Stop before tag creation and use recovery mode only after npm becomes visible."
+    RELEASE_FAILURE_PHASE=npm-publish-verification \
+      RELEASE_FAILURE_ATTEMPT_DIR="${attempt_directory}" \
+      node "${script_directory}/draft-local-plugin-release-notes.mjs" \
+      || echo "::warning::Failed to send the exhausted-retry notification."
+    if [ "${metadata_status}" = 2 ]; then
+      echo "::error::npm exposed immutable integrity metadata that does not match the validated tarball. Refusing tag and Release creation."
+    elif [ "${publish_status}" = 0 ]; then
+      echo "::error::npm publish returned success, but version, integrity, and dist-tag were not all visible within ${npm_visibility_timeout_seconds}s. Refusing to issue a second publish request; use recovery only after inspecting npm."
+    else
+      echo "::error::npm publish returned an error and no fully verified release became visible within ${npm_visibility_timeout_seconds}s. Refusing an automatic second publish request; inspect npm before recovery."
+    fi
     exit 1
   fi
 fi
 
 if [ "${published_version_visible}" = "true" ]; then
   verify_published_package
-  if [ "${published_version_preexisting}" = "false" ]; then
-    wait_for_npm_dist_tag
-  elif npm_dist_tag_matches; then
+  if [ "${published_version_preexisting}" = "true" ] && npm_dist_tag_matches; then
     echo "Existing npm dist-tag ${NPM_DIST_TAG} still points to ${RELEASE_VERSION}."
-  else
+  elif [ "${published_version_preexisting}" = "true" ]; then
     echo "::notice::Existing npm version ${RELEASE_VERSION} was verified, but mutable dist-tag ${NPM_DIST_TAG} now points elsewhere. Leaving it unchanged during recovery/idempotent rerun."
   fi
 else

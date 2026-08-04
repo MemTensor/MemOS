@@ -416,6 +416,10 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /Formal publish source .* is not in .* history/);
   assert.match(workflow, /Formal publishing must use the latest release automation from/);
   assert.match(workflow, /Select \$\{DEFAULT_BRANCH\} in Run workflow and retry/);
+  assert.match(workflow, /Validate npm authentication before platform builds/);
+  assert.match(workflow, /if: \$\{\{ inputs\.dry_run != true \}\}/);
+  assert.match(workflow, /npm whoami/);
+  assert.match(workflow, /NPM_TOKEN authentication failed; stopping before platform builds/);
   assert.match(workflow, /cp -R \.release-workflow\/\.github\/scripts \.github\/scripts/);
   assert.match(workflow, /Package source ref: \$\(git rev-parse --short HEAD\)/);
   assert.match(workflow, /Release automation ref: \$\{\{ github\.workflow_sha \}\}/);
@@ -424,6 +428,8 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /EXPECTED_PACKAGE_SOURCE_SHA/);
   assert.match(workflow, /RELEASE_METADATA_STATE/);
   assert.match(workflow, /audit-local-plugin-package\.mjs/);
+  assert.match(workflow, /wait-for-local-plugin-npm-release\.test\.mjs/);
+  assert.match(workflow, /NPM_VISIBILITY_TIMEOUT_SECONDS: "150"/);
   assert.match(workflow, /FORCE_PACKAGE_ONLY_RELEASE: \$\{\{ inputs\.tag != 'latest' \|\| contains\(inputs\.version, '-'\) \}\}/);
   assert.match(workflow, /if \[ -n "\$\{DOCS_SYNC_MODE\}" \]; then/);
   assert.doesNotMatch(workflow, /EVENT_NAME: \$\{\{ github\.event_name \}\}/);

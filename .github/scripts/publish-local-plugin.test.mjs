@@ -51,6 +51,15 @@ case "\${1:-}" in
     echo "+ \${PACKAGE_NAME}@\${RELEASE_VERSION}"
     exit 0
     ;;
+  whoami)
+    increment_counter whoami >/dev/null
+    if [ "\${NPM_MOCK_SCENARIO}" = "auth-fails" ]; then
+      echo "npm error code E401" >&2
+      exit 1
+    fi
+    echo "release-bot"
+    exit 0
+    ;;
   pack)
     increment_counter pack >/dev/null
     destination=""
@@ -90,6 +99,36 @@ case "\${1:-}" in
 esac
 `;
 
+const mockNode = `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == *"wait-for-local-plugin-npm-release.mjs" ]]; then
+  increment_file="\${NPM_MOCK_STATE_DIR}/metadata_wait"
+  count=0
+  if [ -f "\${increment_file}" ]; then count="$(cat "\${increment_file}")"; fi
+  count=$((count + 1))
+  printf '%s' "\${count}" > "\${increment_file}"
+  case "\${NPM_MOCK_SCENARIO}" in
+    always-missing|publish-fails)
+      echo "::error::npm release was not fully visible within 150s"
+      exit 1
+      ;;
+    integrity-mismatch)
+      echo "::error::npm release verification failed: integrity mismatch"
+      exit 2
+      ;;
+    *)
+      if [ "\${NPM_MOCK_DIST_TAG_VERSION:-\${RELEASE_VERSION}}" != "\${RELEASE_VERSION}" ]; then
+        echo "::error::npm release was not fully visible within 150s: dist-tag \${NPM_DIST_TAG} did not point to \${RELEASE_VERSION}"
+        exit 1
+      fi
+      echo '{"ok":true,"attempts":3}'
+      exit 0
+      ;;
+  esac
+fi
+exec "${process.execPath}" "$@"
+`;
+
 const mockGit = `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "ls-remote" ]; then
@@ -115,10 +154,13 @@ function runScenario(scenario, overrides = {}) {
   mkdirSync(stateDirectory);
 
   const npmPath = join(binDirectory, "npm");
+  const nodePath = join(binDirectory, "node");
   const gitPath = join(binDirectory, "git");
   const releaseTarball = join(fixtureDirectory, "release.tgz");
   writeFileSync(npmPath, mockNpm, "utf8");
   chmodSync(npmPath, 0o755);
+  writeFileSync(nodePath, mockNode, "utf8");
+  chmodSync(nodePath, 0o755);
   writeFileSync(gitPath, mockGit, "utf8");
   chmodSync(gitPath, 0o755);
   const localPackRoot = join(fixtureDirectory, "local-pack-root");
@@ -149,6 +191,7 @@ function runScenario(scenario, overrides = {}) {
       RELEASE_TAG: "memos-local-plugin-v2.0.12",
       NPM_DIST_TAG: "latest",
       RELEASE_TARBALL: releaseTarball,
+      NODE_AUTH_TOKEN: "test-token",
       RECOVER_EXISTING_NPM_RELEASE: "false",
       DOC_AGENT_RELEASE_FAILURE_URL: "",
       DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: "",
@@ -165,7 +208,9 @@ function runScenario(scenario, overrides = {}) {
     ...result,
     viewCount: readCounter(stateDirectory, "view"),
     publishCount: readCounter(stateDirectory, "publish"),
+    whoamiCount: readCounter(stateDirectory, "whoami"),
     packCount: readCounter(stateDirectory, "pack"),
+    metadataWaitCount: readCounter(stateDirectory, "metadata_wait"),
     publishedArgument: (() => {
       try {
         return readFileSync(join(stateDirectory, "published-argument"), "utf8");
@@ -185,16 +230,18 @@ function runScenario(scenario, overrides = {}) {
   return outcome;
 }
 
-test("waits through two post-publish 404 responses before the version becomes visible", () => {
+test("publishes once and continues only after bounded registry verification", () => {
   const result = runScenario("eventually-visible");
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.publishCount, 1);
-  assert.equal(result.viewCount, 4);
+  assert.equal(result.metadataWaitCount, 1);
   assert.equal(result.packCount, 1);
   assert.match(result.publishedArgument, /release\.tgz$/);
   assert.match(result.publishArguments, /--fetch-retries=0/);
-  assert.match(result.stdout, /became visible on attempt 3/);
+  assert.match(result.publishArguments, /--fetch-timeout=120000/);
+  assert.match(result.publishArguments, /--registry=https:\/\/registry\.npmjs\.org/);
+  assert.match(result.stdout, /bounded registry visibility check both succeeded/);
 });
 
 test("stops before tag creation when publish succeeds but visibility remains delayed", () => {
@@ -202,9 +249,9 @@ test("stops before tag creation when publish succeeds but visibility remains del
 
   assert.notEqual(result.status, 0);
   assert.equal(result.publishCount, 1);
-  assert.equal(result.viewCount, 4);
+  assert.equal(result.metadataWaitCount, 1);
   assert.equal(result.packCount, 0);
-  assert.match(result.stdout + result.stderr, /Stop before tag creation/);
+  assert.match(result.stdout + result.stderr, /Refusing to issue a second publish request/);
 });
 
 test("fails when publish fails and the requested version remains absent", () => {
@@ -212,7 +259,28 @@ test("fails when publish fails and the requested version remains absent", () => 
 
   assert.notEqual(result.status, 0);
   assert.equal(result.publishCount, 1);
+  assert.equal(result.metadataWaitCount, 1);
   assert.match(result.stdout + result.stderr, /Refusing an automatic second publish request/);
+});
+
+test("fails before publish when npm authentication is invalid", () => {
+  const result = runScenario("auth-fails");
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.whoamiCount, 1);
+  assert.equal(result.publishCount, 0);
+  assert.equal(result.metadataWaitCount, 0);
+  assert.match(result.stdout + result.stderr, /authentication failed before publish/);
+});
+
+test("fails before npm authentication when NPM_TOKEN is missing", () => {
+  const result = runScenario("eventually-visible", { NODE_AUTH_TOKEN: "" });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.whoamiCount, 0);
+  assert.equal(result.publishCount, 0);
+  assert.equal(result.metadataWaitCount, 0);
+  assert.match(result.stdout + result.stderr, /NPM_TOKEN is missing/);
 });
 
 test("does not issue a second publish when an error becomes visible after propagation", () => {
@@ -220,8 +288,19 @@ test("does not issue a second publish when an error becomes visible after propag
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.publishCount, 1);
+  assert.equal(result.metadataWaitCount, 1);
   assert.equal(result.packCount, 1);
   assert.match(result.stdout, /No second publish request was sent/);
+});
+
+test("stops immediately when registry integrity conflicts with the validated tarball", () => {
+  const result = runScenario("integrity-mismatch");
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.publishCount, 1);
+  assert.equal(result.metadataWaitCount, 1);
+  assert.equal(result.packCount, 0);
+  assert.match(result.stdout + result.stderr, /immutable integrity metadata/);
 });
 
 test("fails when the requested npm dist-tag points to another version", () => {
