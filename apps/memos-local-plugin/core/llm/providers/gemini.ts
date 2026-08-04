@@ -39,7 +39,7 @@ export class GeminiLlmProvider implements LlmProvider {
     opts: ProviderCallInput,
     ctx: LlmProviderCtx,
   ): Promise<ProviderCompletion> {
-    const { config, log, signal, deadlineAt } = ctx;
+    const { config, log, signal } = ctx;
     if (!config.apiKey) {
       throw new MemosError(
         ERROR_CODES.LLM_UNAVAILABLE,
@@ -59,8 +59,6 @@ export class GeminiLlmProvider implements LlmProvider {
       timeoutMs: config.timeoutMs,
       maxRetries: config.maxRetries,
       signal,
-      deadlineAt,
-      cooldownScope: config.model,
       provider: this.name,
       log,
     });

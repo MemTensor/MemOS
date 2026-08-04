@@ -36,7 +36,7 @@ export class BedrockLlmProvider implements LlmProvider {
     opts: ProviderCallInput,
     ctx: LlmProviderCtx,
   ): Promise<ProviderCompletion> {
-    const { config, log, signal, deadlineAt } = ctx;
+    const { config, log, signal } = ctx;
     if (!config.endpoint || config.endpoint.length === 0) {
       throw new MemosError(
         ERROR_CODES.LLM_UNAVAILABLE,
@@ -85,8 +85,6 @@ export class BedrockLlmProvider implements LlmProvider {
       timeoutMs: config.timeoutMs,
       maxRetries: config.maxRetries,
       signal,
-      deadlineAt,
-      cooldownScope: config.model,
       provider: this.name,
       log,
     });

@@ -6,7 +6,6 @@
  */
 
 import type { ReasoningConfig as ConfigReasoningConfig } from "../config/schema.js";
-import type { RetryDiagnosticDetails } from "../util/retry-after.js";
 
 // ─── Providers & config ──────────────────────────────────────────────────────
 
@@ -89,7 +88,7 @@ export interface LlmCircuitBreakerConfig {
   now?: () => number;
 }
 
-export interface LlmErrorDetail extends RetryDiagnosticDetails {
+export interface LlmErrorDetail {
   provider: LlmProviderName | string;
   model: string;
   message: string;
@@ -106,7 +105,7 @@ export interface LlmErrorDetail extends RetryDiagnosticDetails {
   role?: "llm" | "skillEvolver";
 }
 
-export interface LlmStatusDetail extends RetryDiagnosticDetails {
+export interface LlmStatusDetail {
   status: "ok" | "fallback" | "error" | "circuit_open";
   provider: LlmProviderName | string;
   model: string;
@@ -150,8 +149,6 @@ export interface LlmCallOptions {
   maxTokens?: number;
   /** Per-call timeout. */
   timeoutMs?: number;
-  /** Absolute end-to-end deadline shared across provider retry attempts. */
-  deadlineAt?: number;
   /** AbortSignal honored across HTTP + host-bridge calls. */
   signal?: AbortSignal;
   /**
@@ -216,8 +213,6 @@ export interface LlmProviderCtx {
   log: LlmProviderLogger;
   /** Call abort signal; providers must honor it. */
   signal?: AbortSignal;
-  /** Absolute end-to-end deadline; providers must not renew it per retry. */
-  deadlineAt?: number;
 }
 
 export interface LlmProviderLogger {

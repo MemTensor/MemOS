@@ -193,8 +193,6 @@ export interface RelationInput {
    * is "scoring whether to terminate prevEpisodeId".
    */
   prevEpisodeId?: EpisodeId;
-  /** Foreground request cancellation propagated to LLM classification. */
-  signal?: AbortSignal;
 }
 
 // ─── Event bus ──────────────────────────────────────────────────────────────

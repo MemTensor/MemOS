@@ -679,11 +679,7 @@ export interface RetrievalRepos {
 
 /** Abstract embedder surface consumed by retrieval. Mirrors `Embedder`. */
 export interface RetrievalEmbedder {
-  embed: (
-    text: string,
-    role?: "query" | "document",
-    options?: { signal?: AbortSignal; deadlineAt?: number },
-  ) => Promise<EmbeddingVector>;
+  embed: (text: string, role?: "query" | "document") => Promise<EmbeddingVector>;
 }
 
 export interface RetrievalDeps {

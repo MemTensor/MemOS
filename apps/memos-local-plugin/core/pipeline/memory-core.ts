@@ -1232,59 +1232,18 @@ export function createMemoryCore(
         const statsLine =
           `phase=${phase}, stored=${storedCount}` +
           (r.warnings.length > 0 ? `, warnings=${r.warnings.length}` : "");
-        const action = phase === "lite"
-          ? ("stored" as const)
-          : ("reflected" as const);
-        const details = r.traces.flatMap((tc) => {
-          const items: Array<{
-            role: "user" | "assistant" | "tool" | "reflection" | "other";
-            action: typeof action;
-            summary: string | null;
-            content: string;
-            traceId: string;
-          }> = [];
-
-          if (tc.userText) {
-            items.push({
-              role: "user",
-              action,
-              summary: null,
-              content: tc.userText.slice(0, 400),
-              traceId: tc.traceId,
-            });
-          }
-          if (tc.agentText) {
-            items.push({
-              role: "assistant",
-              action,
-              summary: null,
-              content: tc.agentText.slice(0, 400),
-              traceId: tc.traceId,
-            });
-          }
-
-          const toolSummary = summarizeToolCalls(tc.toolCalls);
-          if (items.length === 0) {
-            items.push({
-              role: toolSummary ? "tool" : "other",
-              action,
-              summary: tc.reflection?.text ?? null,
-              content: toolSummary.slice(0, 400),
-              traceId: tc.traceId,
-            });
-          } else if (tc.reflection?.text) {
-            // Keep the existing reflect-phase summary visible without
-            // presenting it as either side's original chat content.
-            items.push({
-              role: "reflection",
-              action,
-              summary: tc.reflection.text,
-              content: "",
-              traceId: tc.traceId,
-            });
-          }
-          return items;
-        });
+        const details = r.traces.map((tc) => ({
+          role: inferTurnRole(tc),
+          action: phase === "lite" ? ("stored" as const) : ("reflected" as const),
+          summary: tc.reflection?.text ?? null,
+          content: (
+            tc.userText ||
+            tc.agentText ||
+            summarizeToolCalls(tc.toolCalls) ||
+            ""
+          ).slice(0, 400),
+          traceId: tc.traceId,
+        }));
         handle.repos.apiLogs.insert({
           toolName: "memory_add",
           input: {
@@ -6235,4 +6194,27 @@ function summarizeToolCalls(
       return out ? `[${name}] ${out}` : `[${name}]`;
     })
     .join("\n");
+}
+
+/**
+ * Heuristic role inference for api_logs "memory_add" rows — mirrors
+ * the legacy plugin's behaviour where each captured turn showed up
+ * labelled `user` / `assistant` / `tool` on the Logs page.
+ *
+ * Priority: if the step carries userText (the user's query), label it
+ * "user" even when toolCalls are present — this is the first sub-step
+ * of a multi-tool turn and semantically represents the user request.
+ */
+function inferTurnRole(step: {
+  userText?: string;
+  agentText?: string;
+  toolCalls?: readonly unknown[];
+}): "user" | "assistant" | "tool" | "other" {
+  const u = (step.userText ?? "").length;
+  const a = (step.agentText ?? "").length;
+  if (u > 0 && (step.toolCalls?.length ?? 0) > 0) return "user";
+  if ((step.toolCalls?.length ?? 0) > 0) return "tool";
+  if (u >= a && u > 0) return "user";
+  if (a > 0) return "assistant";
+  return "other";
 }

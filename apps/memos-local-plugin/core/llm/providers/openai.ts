@@ -51,7 +51,7 @@ export class OpenAiLlmProvider implements LlmProvider {
     opts: ProviderCallInput,
     ctx: LlmProviderCtx,
   ): Promise<ProviderCompletion> {
-    const { config, log, signal, deadlineAt } = ctx;
+    const { config, log, signal } = ctx;
     const url = normalizeEndpoint(
       config.endpoint && config.endpoint.length > 0
         ? config.endpoint
@@ -93,8 +93,6 @@ export class OpenAiLlmProvider implements LlmProvider {
       timeoutMs: config.timeoutMs,
       maxRetries: config.maxRetries,
       signal,
-      deadlineAt,
-      cooldownScope: config.model,
       provider: this.name,
       log,
     });

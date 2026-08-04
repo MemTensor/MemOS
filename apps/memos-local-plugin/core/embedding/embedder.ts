@@ -18,7 +18,6 @@ import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import type { EmbeddingVector } from "../types.js";
-import { extractRetryDiagnostics } from "../util/retry-after.js";
 import {
   LruEmbedCache,
   NullEmbedCache,
@@ -33,7 +32,6 @@ import { MistralEmbeddingProvider } from "./providers/mistral.js";
 import { OpenAiEmbeddingProvider } from "./providers/openai.js";
 import { VoyageEmbeddingProvider } from "./providers/voyage.js";
 import type {
-  EmbedCallOptions,
   EmbedInput,
   EmbedRole,
   EmbedStats,
@@ -89,10 +87,6 @@ export function createEmbedderWithProvider(
     code?: string;
     at?: number;
     durationMs?: number;
-    retryAfterMs?: number;
-    retryAt?: number;
-    retryDecision?: "wait" | "defer" | "stop";
-    retryReason?: string;
   }): void {
     if (!config.onStatus) return;
     try {
@@ -102,17 +96,13 @@ export function createEmbedderWithProvider(
     }
   }
 
-  async function embedOne(
-    input: string | EmbedInput,
-    options?: EmbedCallOptions,
-  ): Promise<EmbeddingVector> {
-    const vecs = await embedMany([input], options);
+  async function embedOne(input: string | EmbedInput): Promise<EmbeddingVector> {
+    const vecs = await embedMany([input]);
     return vecs[0]!;
   }
 
   async function embedMany(
     inputs: Array<string | EmbedInput>,
-    options?: EmbedCallOptions,
   ): Promise<EmbeddingVector[]> {
     requests += inputs.length;
     if (inputs.length === 0) return [];
@@ -189,8 +179,6 @@ export function createEmbedderWithProvider(
           const ctx: ProviderCallCtx = {
             config,
             log: providerCtxLog,
-            signal: options?.signal,
-            deadlineAt: options?.deadlineAt,
           };
           raw = await provider.embed(texts, role, ctx);
           // Record success but DO NOT clear `lastError` — the viewer
@@ -235,7 +223,6 @@ export function createEmbedderWithProvider(
                 message: errMessage,
                 code: err instanceof MemosError ? err.code : undefined,
                 at: errAt,
-                ...extractRetryDiagnostics(err instanceof MemosError ? err.details : undefined),
               });
             } catch {
               /* sink errors are non-fatal */
@@ -249,7 +236,6 @@ export function createEmbedderWithProvider(
             code: err instanceof MemosError ? err.code : undefined,
             at: errAt,
             durationMs: errAt - startedAt,
-            ...extractRetryDiagnostics(err instanceof MemosError ? err.details : undefined),
           });
           throw err instanceof MemosError
             ? err

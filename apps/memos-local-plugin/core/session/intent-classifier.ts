@@ -46,8 +46,6 @@ export interface IntentClassifierOptions {
 export interface IntentClassifyOptions {
   /** Episode id this classification is being run for, when known. */
   episodeId?: EpisodeId;
-  /** Foreground request cancellation propagated to the provider call. */
-  signal?: AbortSignal;
 }
 
 export interface IntentClassifier {
@@ -93,7 +91,7 @@ export function createIntentClassifier(opts: IntentClassifierOptions = {}): Inte
       if (!llmDisabled && llm) {
         try {
           const result = await withTimeout(
-            callLlm(llm, text, options?.episodeId, timeoutMs, options?.signal),
+            callLlm(llm, text, options?.episodeId),
             timeoutMs,
             "intent.llm.timeout",
           );
@@ -209,8 +207,6 @@ async function callLlm(
   llm: LlmClient,
   text: string,
   episodeId?: EpisodeId,
-  timeoutMs?: number,
-  signal?: AbortSignal,
 ): Promise<LlmIntentAnswer> {
   const rsp = await llm.completeJson<{ kind: unknown; confidence: unknown; reason: unknown }>(
     [
@@ -221,8 +217,6 @@ async function callLlm(
       op: "session.intent.classify",
       phase: "session",
       episodeId,
-      timeoutMs,
-      signal,
       schemaHint: `{"kind":"task"|"memory_probe"|"chitchat"|"meta"|"unknown","confidence":0..1,"reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;

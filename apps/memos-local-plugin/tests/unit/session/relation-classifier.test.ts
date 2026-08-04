@@ -119,33 +119,6 @@ describe("relation-classifier — V7 §0.1", () => {
     expect(d.llmModel).toBe("fake/test-model");
   });
 
-  it("forwards the foreground abort signal and classifier timeout", async () => {
-    let seen: { signal?: AbortSignal; timeoutMs?: number } | undefined;
-    const controller = new AbortController();
-    const c = createRelationClassifier({
-      timeoutMs: 456,
-      llm: {
-        completeJson: async (_messages, opts) => {
-          seen = opts;
-          return {
-            value: { relation: "follow_up", confidence: 0.9, reason: "same task" },
-            servedBy: "fake/llm",
-          } as never;
-        },
-      } as LlmClient,
-    });
-
-    await c.classify({
-      prevUserText: "investigate retrieval latency",
-      prevAssistantText: "I found several possible causes.",
-      newUserText: "could the queue contribute to this behavior?",
-      signal: controller.signal,
-    });
-
-    expect(seen?.signal).toBe(controller.signal);
-    expect(seen?.timeoutMs).toBe(456);
-  });
-
   it("falls back to heuristic when LLM throws", async () => {
     const llm: Partial<LlmClient> = {
       completeJson: async () => {

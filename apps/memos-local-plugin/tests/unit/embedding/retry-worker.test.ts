@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createEmbeddingRetryWorker } from "../../../core/embedding/retry-worker.js";
-import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
 import { rootLogger } from "../../../core/logger/index.js";
 import type { EpisodeId, SessionId, TraceId } from "../../../core/types.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
@@ -175,39 +174,6 @@ describe("embedding retry worker", () => {
     expect(handle.repos.apiLogs.list({ toolName: "system_error", limit: 5, offset: 0 })).toHaveLength(1);
   });
 
-  it("never schedules a durable retry before the provider retryAt", async () => {
-    const retryAt = NOW + 120_000;
-    handle.repos.embeddingRetryQueue.enqueue({
-      id: "er_retry_after",
-      targetKind: "trace",
-      targetId: "tr_retry",
-      vectorField: "vec_summary",
-      sourceText: "retry me later",
-      maxAttempts: 3,
-      now: NOW,
-    });
-    const worker = createEmbeddingRetryWorker({
-      repos: handle.repos,
-      embedder: fakeEmbedder({
-        throwWith: new MemosError(
-          ERROR_CODES.EMBEDDING_UNAVAILABLE,
-          "provider cooling down",
-          { retryAt, retryAfterMs: 120_000, retryDecision: "defer" },
-        ),
-      }),
-      log: rootLogger.child({ channel: "test.embedding.retry" }),
-      now: () => NOW,
-    });
-
-    await worker.flush();
-
-    expect(queueRow(handle, "er_retry_after")).toMatchObject({
-      status: "pending",
-      attempts: 1,
-      next_attempt_at: retryAt,
-    });
-  });
-
   it("treats missing target rows as retry failures", async () => {
     handle.repos.embeddingRetryQueue.enqueue({
       id: "er_missing",
@@ -233,32 +199,6 @@ describe("embedding retry worker", () => {
       claimed_by: null,
       lease_until: null,
       last_error: "embedding retry target not found: trace:tr_missing",
-    });
-  });
-
-  it("does not claim new retry jobs after stop during shutdown", async () => {
-    handle.repos.embeddingRetryQueue.enqueue({
-      id: "er_shutdown",
-      targetKind: "trace",
-      targetId: "tr_retry",
-      vectorField: "vec_summary",
-      sourceText: "do not start during shutdown",
-      now: NOW,
-    });
-    const worker = createEmbeddingRetryWorker({
-      repos: handle.repos,
-      embedder: fakeEmbedder({ dimensions: 8 }),
-      log: rootLogger.child({ channel: "test.embedding.retry" }),
-      now: () => NOW,
-    });
-
-    worker.stop();
-    await worker.flush();
-
-    expect(queueRow(handle, "er_shutdown")).toMatchObject({
-      status: "pending",
-      attempts: 0,
-      claimed_by: null,
     });
   });
 });

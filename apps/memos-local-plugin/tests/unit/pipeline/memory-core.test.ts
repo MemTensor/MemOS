@@ -898,53 +898,6 @@ describe("MemoryCore façade", () => {
     expect(scored.priority).toBe(1);
   });
 
-  it("logs both user and assistant content with the matching role", async () => {
-    pipeline = createPipeline(buildDeps(db!));
-    core = createMemoryCore(
-      pipeline,
-      resolveHome("openclaw", "/tmp/memos-mc-test"),
-      "test",
-    );
-    await core.init();
-
-    const userText = "今晚吃什么，推荐一下";
-    const agentText = "可以考虑清淡的汤面、盖饭或者附近评价不错的家常菜。";
-    const start = await core.onTurnStart({
-      agent: "openclaw",
-      sessionId: "s-memory-add-roles",
-      userText,
-      ts: 1_700_000_000_000,
-    });
-    await core.onTurnEnd({
-      agent: "openclaw",
-      sessionId: start.query.sessionId!,
-      episodeId: start.query.episodeId!,
-      agentText,
-      toolCalls: [],
-      ts: 1_700_000_000_500,
-    });
-
-    const { logs } = await core.listApiLogs({
-      toolName: "memory_add",
-      limit: 10,
-    });
-    const liteLog = logs.find((log) => {
-      const input = JSON.parse(log.inputJson) as { phase?: string };
-      return input.phase === "lite";
-    });
-    expect(liteLog).toBeDefined();
-
-    const output = JSON.parse(liteLog!.outputJson) as {
-      details?: Array<{ role?: string; content?: string }>;
-    };
-    expect(
-      output.details?.map(({ role, content }) => ({ role, content })),
-    ).toEqual([
-      { role: "user", content: userText },
-      { role: "assistant", content: agentText },
-    ]);
-  });
-
   it("onTurnEnd preserves adapter-provided historical timestamps", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(

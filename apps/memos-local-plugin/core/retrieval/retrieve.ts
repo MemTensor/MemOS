@@ -75,10 +75,6 @@ export interface RetrieveOptions {
    * one unified final LLM filter across all routes.
    */
   skipLlmFilter?: boolean;
-  /** Shared foreground cancellation signal. */
-  signal?: AbortSignal;
-  /** Absolute request deadline used to cap optional LLM filtering. */
-  deadlineAt?: number;
 }
 
 export interface RetrievePlanOverride {
@@ -262,28 +258,22 @@ async function runAll(
       degraded: false,
     };
     const queryVec = compiled.text
-      ? await deps.embedder
-          .embed(compiled.text, "query", {
-            signal: opts.signal,
-            deadlineAt: opts.deadlineAt,
-          })
-          .then((vec) => {
-            embeddingStats.ok = true;
-            return vec;
-          })
-          .catch((err) => {
-            const code = (err as { code?: string })?.code;
-            const message = err instanceof Error ? err.message : String(err);
-            embeddingStats.degraded = true;
-            embeddingStats.errorCode = code;
-            embeddingStats.errorMessage = message;
-            log.warn("embed_failed", {
-              reason: ctx.reason,
-              code,
-              err: message,
-            });
-            return null;
-          })
+      ? await deps.embedder.embed(compiled.text, "query").then((vec) => {
+          embeddingStats.ok = true;
+          return vec;
+        }).catch((err) => {
+          const code = (err as { code?: string })?.code;
+          const message = err instanceof Error ? err.message : String(err);
+          embeddingStats.degraded = true;
+          embeddingStats.errorCode = code;
+          embeddingStats.errorMessage = message;
+          log.warn("embed_failed", {
+            reason: ctx.reason,
+            code,
+            err: message,
+          });
+          return null;
+        })
       : null;
 
     // The keyword channels (FTS + pattern) work even without an embedder,
@@ -425,9 +415,6 @@ async function runAll(
             llm: deps.llm ?? null,
             log,
             config: deps.config,
-            signal: opts.signal,
-            deadlineAt: opts.deadlineAt,
-            timeoutMs: filterTimeoutMs(opts.deadlineAt),
           },
         );
 
@@ -485,9 +472,6 @@ async function runAll(
           llm: deps.llm ?? null,
           log,
           config: deps.config,
-          signal: opts.signal,
-          deadlineAt: opts.deadlineAt,
-          timeoutMs: filterTimeoutMs(opts.deadlineAt),
         },
       );
 
@@ -682,11 +666,6 @@ async function runAll(
     });
     return emptyResult(ctx.reason, agent, sessionId, episodeId, ts, deps.now());
   }
-}
-
-function filterTimeoutMs(deadlineAt?: number): number | undefined {
-  if (deadlineAt === undefined) return undefined;
-  return Math.max(1, Math.min(2_000, deadlineAt - Date.now()));
 }
 
 function emptyResult(

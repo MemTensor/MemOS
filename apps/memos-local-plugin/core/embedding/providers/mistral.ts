@@ -23,7 +23,7 @@ export class MistralEmbeddingProvider implements EmbeddingProvider {
   readonly name: EmbeddingProviderName = "mistral";
 
   async embed(texts: string[], _role: EmbedRole, ctx: ProviderCallCtx): Promise<number[][]> {
-    const { config, log, signal, deadlineAt } = ctx;
+    const { config, log, signal } = ctx;
     if (!config.apiKey) {
       throw new MemosError(
         ERROR_CODES.EMBEDDING_UNAVAILABLE,
@@ -46,8 +46,6 @@ export class MistralEmbeddingProvider implements EmbeddingProvider {
       timeoutMs: config.timeoutMs,
       maxRetries: config.maxRetries,
       signal,
-      deadlineAt,
-      cooldownScope: config.model,
       provider: this.name,
       log,
     });
