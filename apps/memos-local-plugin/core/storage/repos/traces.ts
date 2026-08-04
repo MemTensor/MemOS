@@ -650,33 +650,36 @@ export function makeTracesRepo(db: StorageDb) {
         k: Math.max(1, Math.min(500, Math.floor(k))),
       };
       const ors: string[] = [];
-      dedup.slice(0, 16).forEach((t, i) => {
+      const matchScores: string[] = [];
+      const limitedTerms = dedup.slice(0, 16);
+      limitedTerms.forEach((t, i) => {
         const key = `pat_${i}`;
         // Escape SQL LIKE wildcards in the user term so a literal `%`
         // doesn't accidentally match everything.
         const escaped = t.replace(/[\\%_]/g, (m) => `\\${m}`);
         params[key] = `%${escaped}%`;
-        ors.push(
-          `(user_text LIKE @${key} ESCAPE '\\' OR
+        const match = `(user_text LIKE @${key} ESCAPE '\\' OR
             agent_text LIKE @${key} ESCAPE '\\' OR
             COALESCE(summary,'') LIKE @${key} ESCAPE '\\' OR
             COALESCE(reflection,'') LIKE @${key} ESCAPE '\\' OR
-            tags_json LIKE @${key} ESCAPE '\\')`,
-        );
+            tags_json LIKE @${key} ESCAPE '\\')`;
+        ors.push(match);
+        matchScores.push(`CASE WHEN ${match} THEN 1 ELSE 0 END`);
       });
       const extra = opts.where ? ` AND (${opts.where})` : "";
       const sql = `
         SELECT id, ts, priority, value, episode_id, session_id, tags_json,
                owner_agent_kind, owner_profile_id, owner_workspace_id,
-               error_signatures_json
+               error_signatures_json,
+               (${matchScores.join(" + ")}) AS pattern_matches
           FROM traces
          WHERE (${ors.join(" OR ")})${extra}
-         ORDER BY ts DESC
+         ORDER BY pattern_matches DESC, ts DESC
          LIMIT @k`;
-      const rows = db.prepare<typeof params, RawHit>(sql).all(params);
-      return rows.map((r, idx) => ({
+      const rows = db.prepare<typeof params, RawHit & { pattern_matches: number }>(sql).all(params);
+      return rows.map((r) => ({
         id: r.id,
-        score: 1 / (idx + 1),
+        score: r.pattern_matches / limitedTerms.length,
         meta: {
           ts: r.ts,
           priority: r.priority,

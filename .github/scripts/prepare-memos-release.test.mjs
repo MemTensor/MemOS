@@ -218,6 +218,41 @@ test("resolves the local plugin docs version from package or auto patch incremen
   assert.throws(() => validateLocalPluginVersionPlan(evidence, "2.0.12"), /does not match/);
 
   assert.deepEqual(
+    validateLocalPluginVersionPlan(
+      {
+        ...evidence,
+        local_plugin_previous_version: "v2.0.11",
+        local_plugin_previous_version_raw: "2.0.11",
+        local_plugin_version: "v2.0.12-beta.1",
+        local_plugin_version_raw: "2.0.12-beta.1",
+        local_plugin_version_changed: true,
+        local_plugin_package_previous_version: "v2.0.11",
+        local_plugin_package_previous_version_raw: "2.0.11",
+        local_plugin_package_version: "v2.0.12-beta.1",
+        local_plugin_package_version_raw: "2.0.12-beta.1",
+        local_plugin_package_version_changed: true,
+      },
+      "2.0.12",
+    ),
+    {
+      ok: true,
+      expected_version: "v2.0.12",
+      previous_version: "v2.0.11",
+      version: "v2.0.12",
+      version_changed: true,
+      version_required: true,
+      version_source: "auto_patch_from_previous_released_version_prerelease_package_ignored",
+      auto_incremented: true,
+      input_ignored: false,
+      input_ignored_reason: "",
+      input_raw: "2.0.12",
+      package_previous_version: "v2.0.11",
+      package_version: "v2.0.12-beta.1",
+      package_version_changed: true,
+    },
+  );
+
+  assert.deepEqual(
     validateLocalPluginVersionPlan({
       ...evidence,
       local_plugin_previous_version: "v2.0.10",
@@ -417,6 +452,14 @@ test("publish workflow defaults real releases to draft before release.published"
   assert.match(workflow, /Validate publish confirmation/);
   assert.match(workflow, /publish_confirmation must exactly equal/);
   assert.match(workflow, /flags\+=\(--draft\)/);
+  assert.match(workflow, /wait_for_remote_tag\(\)/);
+  assert.match(workflow, /wait_for_release_visibility\(\)/);
+  assert.match(workflow, /create_release_if_missing\(\)/);
+  assert.match(workflow, /--json isDraft,tagName,targetCommitish,url/);
+  assert.match(workflow, /target_commitish/);
+  assert.match(workflow, /GitHub Release \$\{CURRENT_TAG\} targets \$\{target_commitish\}, expected \$\{TARGET_SHA\}/);
+  assert.match(workflow, /exists after a failed create response; treating it as success/);
+  assert.match(workflow, /did not become visible in time/);
   assert.match(workflow, /Publish manually to trigger release\.published/);
 });
 
@@ -427,8 +470,18 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /guard-legacy-publish:/);
   assert.match(workflow, /guard-legacy-publish:\n\s+runs-on: ubuntu-latest\n\s+timeout-minutes: 5/);
   assert.match(workflow, /expected="LEGACY PUBLISH memos-local-plugin-v\$\{RELEASE_VERSION\}"/);
-  assert.match(workflow, /current official path is MemOS Release — Publish/);
+  assert.match(workflow, /standalone local-plugin npm publisher for beta or latest package releases/);
+  assert.match(workflow, /MemOS Release — Publish remains the weekly whole-repo release path/);
   assert.match(workflow, /needs: guard-legacy-publish/);
+});
+
+test("legacy standalone local-plugin post-merge dry run is not push-triggered", () => {
+  const workflow = readFileSync(join(workflowsDir, "memos-local-plugin-post-merge-dry-run.yml"), "utf8");
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /\npush:/);
+  assert.doesNotMatch(workflow, /uses:\s+\.\/\.github\/workflows\/memos-local-plugin-publish\.yml/);
+  assert.match(workflow, /This workflow no longer runs on push to main/);
+  assert.match(workflow, /Use MemOS Release — Post-Merge Dry Run/);
 });
 
 test("read-only dry-run workflows declare bounded fallback behavior", () => {
@@ -581,6 +634,8 @@ test("filters standalone local-plugin release metadata from docs evidence", () =
     );
     writeRepoFile("apps/memos-local-plugin/package-lock.json", "{\"lockfileVersion\": 3}\n");
     commitAll("release: @memtensor/memos-local-plugin v9.9.1 (#12)");
+    writeRepoFile("apps/memos-local-plugin/package-lock.json", "{\"lockfileVersion\": 3, \"packages\": {}}\n");
+    commitAll("Release/memos local plugin v9.9.1 beta.1 (#13)");
 
     const result = collectLocalPluginEvidence({
       previousTag: "v9.9.0",
@@ -746,6 +801,27 @@ test("fallback topic rewrites V7 session default fixes into user-facing docs cop
   assert.match(topic.text_cn, /会话合并窗口/);
   assert.match(topic.text_en, /V7 session defaults/);
   assert.doesNotMatch(topic.text_cn, /fix\(plugin\)/);
+});
+
+test("fallback topic rewrites recall and host input work without raw commit prefixes", () => {
+  const topic = fallbackTopicForText("fix(plugin): improve recall relevance and host input handling (#2196)", {
+    allowGeneric: true,
+  });
+  assert.equal(topic.category, "Improved");
+  assert.match(topic.text_cn, /召回相关性与宿主输入处理/);
+  assert.match(topic.text_en, /Recall relevance and host input handling/);
+  assert.doesNotMatch(topic.text_cn, /fix\(plugin\)/);
+  assert.doesNotMatch(topic.text_en, /fix\(plugin\)/);
+});
+
+test("generic fallback strips Conventional Commit prefixes before validation", () => {
+  const topic = fallbackTopicForText("fix(plugin): stabilize sandbox widget (#9999)", {
+    allowGeneric: true,
+  });
+  assert.equal(topic.category, "Fixed");
+  assert.match(topic.text_cn, /stabilize sandbox widget/);
+  assert.doesNotMatch(topic.text_cn, /fix\(plugin\)/);
+  assert.doesNotMatch(topic.text_en, /fix\(plugin\)/);
 });
 
 test("GitHub release notes fallback stays whole-repo when API access is unavailable", async () => {

@@ -197,10 +197,172 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          remote_tag_sha="$(
-            git ls-remote --tags origin "refs/tags/${CURRENT_TAG}" "refs/tags/${CURRENT_TAG}^{}" |
-              awk '$2 ~ /\^\{\}$/ {sha=$1} $2 !~ /\^\{\}$/ && sha=="" {sha=$1} END {print sha}'
-          )"
+          retry_delay() {
+            local attempt="$1"
+            local delay=$((attempt * 5))
+            if [ "${delay}" -gt 30 ]; then
+              delay=30
+            fi
+            printf '%s\n' "${delay}"
+          }
+
+          remote_tag_sha_for() {
+            local tag="$1"
+            local out="${RUNNER_TEMP}/memos-release-remote-tag.txt"
+            local err="${RUNNER_TEMP}/memos-release-remote-tag.err"
+            local attempt
+            local status
+
+            for attempt in 1 2 3 4 5; do
+              set +e
+              git ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}" >"${out}" 2>"${err}"
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                awk '$2 ~ /\^\{\}$/ {sha=$1} $2 !~ /\^\{\}$/ && sha=="" {sha=$1} END {print sha}' "${out}"
+                return 0
+              fi
+              sed -n '1,120p' "${err}" >&2
+              if [ "${attempt}" = 5 ]; then
+                echo "::error::Failed to check remote tag ${tag} after ${attempt} attempts."
+                exit "${status}"
+              fi
+              sleep "$(retry_delay "${attempt}")"
+            done
+          }
+
+          wait_for_remote_tag() {
+            local tag="$1"
+            local expected_sha="$2"
+            local attempt
+            local visible_sha
+
+            for attempt in 1 2 3 4 5 6; do
+              visible_sha="$(remote_tag_sha_for "${tag}")"
+              if [ "${visible_sha}" = "${expected_sha}" ]; then
+                echo "Remote tag ${tag} is visible at ${expected_sha}."
+                return 0
+              fi
+              if [ -n "${visible_sha}" ]; then
+                echo "::error::Remote tag ${tag} became visible at ${visible_sha}, expected ${expected_sha}."
+                exit 1
+              fi
+              echo "::notice::Remote tag ${tag} is not visible yet; retrying before creating the GitHub Release."
+              sleep "$(retry_delay "${attempt}")"
+            done
+
+            echo "::error::Remote tag ${tag} was pushed but did not become visible in time."
+            exit 1
+          }
+
+          release_info_file="${RUNNER_TEMP}/memos-release-view.json"
+          release_error_file="${RUNNER_TEMP}/memos-release-view.err"
+
+          release_info_if_visible() {
+            set +e
+            gh release view "${CURRENT_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json isDraft,tagName,targetCommitish,url >"${release_info_file}" 2>"${release_error_file}"
+            local status=$?
+            set -e
+            if [ "${status}" = 0 ]; then
+              cat "${release_info_file}"
+              return 0
+            fi
+            return 1
+          }
+
+          handle_existing_release() {
+            local release_json="$1"
+            local is_draft
+            local tag_name
+            local target_commitish
+            local release_url
+
+            is_draft="$(printf '%s' "${release_json}" | jq -r '.isDraft')"
+            tag_name="$(printf '%s' "${release_json}" | jq -r '.tagName // ""')"
+            target_commitish="$(printf '%s' "${release_json}" | jq -r '.targetCommitish // ""')"
+            release_url="$(printf '%s' "${release_json}" | jq -r '.url')"
+            if [ "${tag_name}" != "${CURRENT_TAG}" ]; then
+              echo "::error::GitHub Release lookup for ${CURRENT_TAG} returned tag ${tag_name:-n/a}; refusing to continue."
+              exit 1
+            fi
+            if [[ "${target_commitish}" =~ ^[0-9a-f]{40}$ ]] && [ "${target_commitish}" != "${TARGET_SHA}" ]; then
+              echo "::error::GitHub Release ${CURRENT_TAG} targets ${target_commitish}, expected ${TARGET_SHA}. Review or recreate the Release before rerunning."
+              exit 1
+            fi
+            if [ "${is_draft}" = "true" ] && [ "${CREATE_DRAFT_RELEASE}" != "true" ]; then
+              echo "::error::GitHub Release ${CURRENT_TAG} already exists as draft (${release_url}); publish or delete it manually before rerunning."
+              exit 1
+            fi
+            echo "::notice::GitHub Release ${CURRENT_TAG} already exists (${release_url}); leaving it unchanged."
+          }
+
+          wait_for_release_visibility() {
+            local attempt
+            local release_json
+
+            for attempt in 1 2 3 4 5 6; do
+              if release_json="$(release_info_if_visible)"; then
+                handle_existing_release "${release_json}"
+                echo "GitHub Release ${CURRENT_TAG} became visible."
+                return 0
+              fi
+              if [ "${attempt}" = 6 ]; then
+                sed -n '1,120p' "${release_error_file}" >&2 || true
+                echo "::error::GitHub Release ${CURRENT_TAG} was created but did not become visible in time."
+                exit 1
+              fi
+              echo "::notice::GitHub Release ${CURRENT_TAG} is not visible yet; retrying."
+              sleep "$(retry_delay "${attempt}")"
+            done
+          }
+
+          create_release_if_missing() {
+            local release_json
+            local attempt
+            local status
+            local create_log="${RUNNER_TEMP}/memos-release-create.log"
+            local -a flags=()
+
+            if release_json="$(release_info_if_visible)"; then
+              handle_existing_release "${release_json}"
+              return 0
+            fi
+
+            if [ "${CREATE_DRAFT_RELEASE}" = "true" ]; then
+              flags+=(--draft)
+            fi
+
+            for attempt in 1 2 3; do
+              set +e
+              gh release create "${CURRENT_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --target "${TARGET_SHA}" \
+                --title "Release ${CURRENT_TAG}" \
+                --notes-file "${RELEASE_NOTES_FILE}" \
+                "${flags[@]}" >"${create_log}" 2>&1
+              status=$?
+              set -e
+              sed -n '1,160p' "${create_log}"
+              if [ "${status}" = 0 ]; then
+                wait_for_release_visibility
+                return 0
+              fi
+              if release_json="$(release_info_if_visible)"; then
+                echo "GitHub Release ${CURRENT_TAG} exists after a failed create response; treating it as success."
+                handle_existing_release "${release_json}"
+                return 0
+              fi
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::Failed to create GitHub Release ${CURRENT_TAG} after ${attempt} attempts."
+                exit "${status}"
+              fi
+              sleep "$(retry_delay "${attempt}")"
+            done
+          }
+
+          remote_tag_sha="$(remote_tag_sha_for "${CURRENT_TAG}")"
 
           if [ -n "${remote_tag_sha}" ]; then
             if [ "${remote_tag_sha}" != "${TARGET_SHA}" ]; then
@@ -211,30 +373,7 @@ jobs:
           else
             git tag "${CURRENT_TAG}" "${TARGET_SHA}"
             git push origin "refs/tags/${CURRENT_TAG}"
+            wait_for_remote_tag "${CURRENT_TAG}" "${TARGET_SHA}"
           fi
 
-          if gh release view "${CURRENT_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            release_info="$(
-              gh release view "${CURRENT_TAG}" \
-                --repo "${GITHUB_REPOSITORY}" \
-                --json isDraft,url \
-                --jq '[.isDraft, .url] | @tsv'
-            )"
-            IFS=$'\t' read -r is_draft release_url <<< "${release_info}"
-            if [ "${is_draft}" = "true" ] && [ "${CREATE_DRAFT_RELEASE}" != "true" ]; then
-              echo "::error::GitHub Release ${CURRENT_TAG} already exists as draft (${release_url}); publish or delete it manually before rerunning."
-              exit 1
-            fi
-            echo "::notice::GitHub Release ${CURRENT_TAG} already exists (${release_url}); leaving it unchanged."
-          else
-            flags=()
-            if [ "${CREATE_DRAFT_RELEASE}" = "true" ]; then
-              flags+=(--draft)
-            fi
-            gh release create "${CURRENT_TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --target "${TARGET_SHA}" \
-              --title "Release ${CURRENT_TAG}" \
-              --notes-file "${RELEASE_NOTES_FILE}" \
-              "${flags[@]}"
-          fi
+          create_release_if_missing
