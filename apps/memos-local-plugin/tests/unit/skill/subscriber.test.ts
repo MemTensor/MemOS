@@ -250,4 +250,51 @@ describe("skill/subscriber", () => {
     expect(h.repos.skills.count({ status: "active" })).toBe(0);
     sub.dispose();
   });
+
+  it("caps idle archival at ten batches per lifecycle tick", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    for (let i = 0; i < 5_001; i++) {
+      seedSkill(h, {
+        id: `sk_backlog_${i}` as never,
+        name: `backlog_skill_${i}`,
+        status: "active",
+        eta: 0.05,
+        createdAt: 1 as never,
+        updatedAt: (i + 1) as never,
+        lastUsedAt: 1 as never,
+      });
+    }
+    const log = rootLogger.child({ channel: "core.skill.subscriber" });
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const sub = attachSkillSubscriber({
+      l2Bus: createL2EventBus(),
+      rewardBus: createRewardEventBus(),
+      bus: createSkillEventBus(),
+      repos: h.repos,
+      embedder: null,
+      llm: null,
+      log,
+      config: makeSkillConfig({ minEtaForRetrieval: 0.1, idleArchiveMs: 1_000 }),
+    });
+
+    await sub.lifecycleTick();
+
+    expect(h.repos.skills.count({ status: "archived" })).toBe(5_000);
+    expect(h.repos.skills.count({ status: "active" })).toBe(1);
+    expect(warnSpy).toHaveBeenCalledWith("skill.idle_archive_batch_limit_reached", {
+      batchCount: 10,
+      archivedCount: 5_000,
+      batchSize: 500,
+    });
+
+    await sub.lifecycleTick();
+
+    expect(h.repos.skills.count({ status: "archived" })).toBe(5_001);
+    expect(h.repos.skills.count({ status: "active" })).toBe(0);
+    sub.dispose();
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
 });

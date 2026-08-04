@@ -253,7 +253,9 @@ the next lifecycle tick.
 `lastUsedAt` is updated by the existing recorded-use path. A never-used
 skill falls back to `createdAt`; unrelated metadata updates therefore do
 not reset its idle clock. The scan runs through the orchestrator's normal
-flush lifecycle and does not introduce a separate timer.
+flush lifecycle and does not introduce a separate timer. Each tick processes
+at most ten 500-row batches; any remaining backlog is deferred to a later tick
+so a large archive queue cannot monopolize the event loop.
 
 ---
 
