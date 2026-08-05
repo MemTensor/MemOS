@@ -75,8 +75,7 @@ class CompositeCubeView(MemCubeView):
             f"Composite cube {operation} failed for all {attempted_count} selected cubes: "
             f"{failed_cube_ids}"
         )
-        error = MemCubeError(message)
-        error.causes = [exc for _, exc in failures]
+        error = MemCubeError(message, causes=[exc for _, exc in failures])
         raise error from failures[0][1]
 
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
@@ -162,10 +161,13 @@ class CompositeCubeView(MemCubeView):
                 )
                 for key in memory_keys:
                     memories = cube_result.get(key, [])
+                    memories_with_provenance = []
                     for memory in memories:
                         if isinstance(memory, dict):
+                            memory = memory.copy()
                             memory.setdefault("cube_id", view.cube_id)
-                    merged_results[key].extend(memories)
+                        memories_with_provenance.append(memory)
+                    merged_results[key].extend(memories_with_provenance)
                 note = cube_result.get("pref_note")
                 if note:
                     if merged_results["pref_note"]:

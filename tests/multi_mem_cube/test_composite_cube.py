@@ -1,4 +1,3 @@
-import copy
 import logging
 
 from dataclasses import dataclass, field
@@ -37,7 +36,7 @@ class FakeCubeView:
         self.search_calls += 1
         if self.error:
             raise self.error
-        return copy.deepcopy(self.search_result)
+        return self.search_result
 
 
 def test_add_handler_routes_to_explicit_target_cube(monkeypatch):
@@ -61,11 +60,12 @@ def test_add_handler_routes_to_explicit_target_cube(monkeypatch):
     composite = handler._build_cube_view(request)
     calls: list[str] = []
 
-    def add_memories(view, _request):
-        calls.append(view.cube_id)
-        return [{"memory": view.cube_id}]
-
-    monkeypatch.setattr(type(composite.cube_views[0]), "add_memories", add_memories)
+    for view in composite.cube_views:
+        monkeypatch.setattr(
+            view,
+            "add_memories",
+            lambda _request, cube_id=view.cube_id: (calls.append(cube_id) or [{"memory": cube_id}]),
+        )
 
     result = composite.add_memories(request)
 
@@ -89,9 +89,10 @@ def test_composite_falls_back_to_fanout_without_route_match():
 
 
 def test_composite_search_adds_missing_cube_provenance():
+    original_memory = {"memory": "g"}
     general = FakeCubeView(
         cube_id="general",
-        search_result={"text_mem": [{"memory": "g"}], "pref_note": "general note"},
+        search_result={"text_mem": [original_memory], "pref_note": "general note"},
     )
     product = FakeCubeView(
         cube_id="product",
@@ -107,10 +108,7 @@ def test_composite_search_adds_missing_cube_provenance():
     by_memory = {item["memory"]: item for item in result["text_mem"]}
     assert by_memory["g"]["cube_id"] == "general"
     assert by_memory["p"]["cube_id"] == "existing"
-    assert general.search_result == {
-        "text_mem": [{"memory": "g"}],
-        "pref_note": "general note",
-    }
+    assert original_memory == {"memory": "g"}
 
 
 def test_composite_search_routes_to_explicit_target_cube():
@@ -206,3 +204,11 @@ def test_composite_raises_memcube_error_when_all_cubes_fail(operation):
             composite.feedback_memories(request)
 
     assert exc_info.value.causes == causes
+
+
+def test_memcube_error_exposes_causes_in_constructor():
+    causes = [ValueError("first"), RuntimeError("second")]
+
+    error = MemCubeError("all failed", causes=causes)
+
+    assert error.causes == causes
