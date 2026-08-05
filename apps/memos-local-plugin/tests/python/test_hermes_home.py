@@ -53,8 +53,10 @@ class HermesHomeResolverTests(unittest.TestCase):
             "LOCALAPPDATA": "C:\\Users\\bob\\AppData\\Local",
         }
         got = resolve_hermes_home(env=env, platform="win32")
-        # Path resolution should preserve the drive letter path.
-        self.assertIn("hermes-workshop", str(got))
+        # HERMES_HOME override must be returned as-is (resolved), with no
+        # suffix added. Comparing to Path(...).resolve() keeps the test
+        # portable — both sides go through the same normalisation.
+        self.assertEqual(str(got), str(Path("D:\\hermes-workshop").resolve()))
 
     def test_windows_uses_localappdata_when_hermes_home_unset(self) -> None:
         from hermes_home import resolve_hermes_home
@@ -72,11 +74,21 @@ class HermesHomeResolverTests(unittest.TestCase):
     def test_windows_falls_back_to_home_appdata_when_localappdata_missing(self) -> None:
         from hermes_home import resolve_hermes_home
 
-        env = {"HOME": "C:\\Users\\bob"}
+        # Use a POSIX-shaped HOME so the test is portable — Path("C:\\…")
+        # is a relative-filename-with-backslash on Linux/macOS, which
+        # would resolve against CWD and give misleading results.
+        env = {"HOME": "/home/tester"}
         got = resolve_hermes_home(env=env, platform="win32")
-        got_str = str(got).replace("/", "\\")
-        # Falls back to ~/AppData/Local/hermes on Windows.
-        self.assertIn("AppData\\Local\\hermes", got_str)
+        got_str = str(got).replace("\\", "/")
+        # Falls back to <HOME>/AppData/Local/hermes on Windows.
+        self.assertTrue(
+            got_str.endswith("/AppData/Local/hermes"),
+            f"expected …/AppData/Local/hermes, got {got_str!r}",
+        )
+        self.assertTrue(
+            got_str.startswith("/home/tester/"),
+            f"expected HOME-rooted path, got {got_str!r}",
+        )
 
     def test_posix_default_is_dot_hermes(self) -> None:
         from hermes_home import resolve_hermes_home
@@ -100,7 +112,7 @@ class HermesHomeResolverTests(unittest.TestCase):
         else:
             # Any platform is fine; the branch must not raise and must
             # return an absolute path.
-            self.assertTrue(got.is_absolute() or str(got))
+            self.assertTrue(got.is_absolute(), f"expected absolute path, got {got!r}")
 
 
 class ResolvedRuntimeHomeUsesResolverTests(unittest.TestCase):

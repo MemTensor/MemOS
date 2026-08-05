@@ -62,7 +62,7 @@ export function resolveHome(agent: AgentKind, defaultHome?: string): ResolvedHom
   } else if (defaultHome && defaultHome.trim()) {
     root = pathResolve(expandHome(defaultHome));
     configFile = join(root, "config.yaml");
-  } else if (String(agent) === "hermes") {
+  } else if (agent === "hermes") {
     root = pathResolve(join(resolveHermesHome(), "memos-plugin"));
     configFile = join(root, "config.yaml");
   } else {

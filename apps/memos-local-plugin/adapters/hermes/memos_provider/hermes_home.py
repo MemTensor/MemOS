@@ -26,9 +26,11 @@ from pathlib import Path
 def _expand(value: str, env: dict[str, str] | None = None) -> Path:
     """Expand ~ using the caller-supplied HOME if available.
 
-    Uses ``os.path.expanduser`` for the leading ``~`` semantics but
-    swaps in the child-environment HOME first so bridge subprocesses
-    inherit a stable resolution.
+    Only the bare ``~``, ``~/…`` and ``~\\…`` forms are supported: the
+    plugin resolves the *current* user's Hermes home, so shell-style
+    ``~username/…`` values (which point at a different user's home) are
+    rejected with :class:`ValueError` rather than being silently resolved
+    against the current working directory.
     """
     src = value
     home = ""
@@ -40,6 +42,13 @@ def _expand(value: str, env: dict[str, str] | None = None) -> Path:
             src = base
         elif src.startswith("~/") or src.startswith("~\\"):
             src = str(Path(base) / src[2:])
+        else:
+            # e.g. "~alice/hermes" — POSIX-style named-user expansion is
+            # deliberately out of scope. Fail loudly so callers get a
+            # clear signal instead of a path resolved against CWD.
+            raise ValueError(
+                f"named-user tilde paths are not supported: {value!r}"
+            )
     return Path(src).resolve()
 
 
@@ -68,10 +77,14 @@ def resolve_hermes_home(
         local_appdata = effective_env.get("LOCALAPPDATA", "").strip()
         if local_appdata:
             return _expand(local_appdata, effective_env) / "hermes"
-        # Match Hermes' fallback: <home>/AppData/Local/hermes.
-        home = effective_env.get(
-            "USERPROFILE",
-            effective_env.get("HOME", "") or str(Path.home()),
+        # Match Hermes' fallback: <home>/AppData/Local/hermes. Use
+        # ``.strip()`` guards so an env var that is *set* to an empty
+        # string (common in scrubbed subprocess envs) still falls back
+        # to ``Path.home()`` rather than resolving CWD.
+        home = (
+            effective_env.get("USERPROFILE", "").strip()
+            or effective_env.get("HOME", "").strip()
+            or str(Path.home())
         )
         return _expand(home, effective_env) / "AppData" / "Local" / "hermes"
 
