@@ -402,7 +402,7 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 function Install-Hermes {
     Write-Host "`n=== Hermes Install ===" -ForegroundColor Cyan
     $Prefix = Join-Path $env:LOCALAPPDATA "hermes\memos-plugin"
-    $HomeDir = $Prefix
+    $HomeDir = Join-Path $env:USERPROFILE ".hermes\memos-plugin"
     $ConfigFile = Join-Path $env:LOCALAPPDATA "hermes\config.yaml"
     $AdapterDir = Join-Path $Prefix "adapters\hermes"
     
