@@ -292,7 +292,16 @@ def _probe_json_url(url: str) -> dict | str:
     except urllib.error.URLError as err:
         reason = getattr(err, "reason", None)
         errno = getattr(reason, "errno", None)
-        if errno in {61, 111}:  # macOS/Linux connection refused
+        # 61 = macOS ECONNREFUSED, 111 = Linux ECONNREFUSED,
+        # 10061 = Windows WSAECONNREFUSED. See issue #2218.
+        if errno in {61, 111, 10061}:
+            return "free"
+        # Robust cross-platform check: Python raises ConnectionRefusedError
+        # consistently regardless of OS errno or locale-specific message
+        # text, so trust the exception type even when errno is missing or
+        # the message is localised (e.g. Czech Windows: "cílový počítač je
+        # aktivně odmítl").
+        if isinstance(reason, ConnectionRefusedError):
             return "free"
         msg = str(err).lower()
         if "connection refused" in msg or "failed to establish" in msg:

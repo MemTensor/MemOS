@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 
 from pathlib import Path
 from unittest.mock import patch
@@ -1213,6 +1214,81 @@ class ViewerDaemonTests(unittest.TestCase):
         ):
             self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
             popen.assert_not_called()
+
+
+class ProbeJsonUrlConnectionRefusedTests(unittest.TestCase):
+    """Regression tests for issue #2218.
+
+    `_probe_json_url()` used to recognise only macOS/Linux ECONNREFUSED
+    errno values (61, 111) and the English "connection refused" phrase.
+    On Windows the socket raises errno 10061 (WSAECONNREFUSED) and a
+    locale-dependent message (Czech: "cílový počítač je aktivně odmítl"),
+    which matched neither branch — so an unused port was permanently
+    misclassified as "blocked" and the viewer panel never launched.
+
+    The fix: recognise errno 10061, and (more importantly) trust the
+    `ConnectionRefusedError` type check that Python raises consistently
+    across all platforms regardless of locale.
+    """
+
+    def _make_urlerror(self, reason) -> urllib.error.URLError:
+        return urllib.error.URLError(reason)
+
+    def _run_probe(self, urlerror) -> object:
+        with patch.object(
+            daemon_manager_mod.urllib.request,
+            "urlopen",
+            side_effect=urlerror,
+        ):
+            return daemon_manager_mod._probe_json_url("http://127.0.0.1:18800/api/v1/ping")
+
+    def test_windows_wsaeconnrefused_errno_10061_reports_free(self) -> None:
+        # Simulate the Windows socket path: ConnectionRefusedError with the
+        # Windows-specific WSAECONNREFUSED errno (10061). Before the fix, the
+        # errno check {61, 111} missed 10061 and the locale-dependent Windows
+        # message ("cílový počítač je aktivně odmítl" in Czech) never matched
+        # the English "connection refused" substring, so the port was
+        # misclassified as "blocked".
+        reason = ConnectionRefusedError(10061, "cílový počítač je aktivně odmítl")
+        result = self._run_probe(self._make_urlerror(reason))
+        self.assertEqual(result, "free")
+
+    def test_windows_localised_message_without_english_phrase_reports_free(self) -> None:
+        # Belt-and-suspenders: even if the reason is a bare OSError (no
+        # ConnectionRefusedError type), errno 10061 alone must be enough to
+        # classify the port as free — the errno set is platform-portable.
+        reason = OSError(10061, "cílový počítač je aktivně odmítl")
+        result = self._run_probe(self._make_urlerror(reason))
+        self.assertEqual(result, "free")
+
+    def test_connection_refused_type_check_is_locale_agnostic(self) -> None:
+        # The most robust signal is the exception type: Python raises
+        # ConnectionRefusedError whenever the OS refuses the connection,
+        # regardless of platform, errno, or message locale. Even if the
+        # errno is missing/unknown, the type alone must classify as free.
+        reason = ConnectionRefusedError()  # no errno, no message
+        result = self._run_probe(self._make_urlerror(reason))
+        self.assertEqual(result, "free")
+
+    def test_macos_errno_61_still_reports_free(self) -> None:
+        # Original behaviour on macOS: ECONNREFUSED errno 61.
+        reason = ConnectionRefusedError(61, "Connection refused")
+        result = self._run_probe(self._make_urlerror(reason))
+        self.assertEqual(result, "free")
+
+    def test_linux_errno_111_still_reports_free(self) -> None:
+        # Original behaviour on Linux: ECONNREFUSED errno 111.
+        reason = ConnectionRefusedError(111, "Connection refused")
+        result = self._run_probe(self._make_urlerror(reason))
+        self.assertEqual(result, "free")
+
+    def test_non_refusal_urlerror_still_reports_blocked(self) -> None:
+        # Any other URLError (DNS failure, unrelated socket error, etc.)
+        # must still be classified as "blocked" — we only widen the "free"
+        # branch, never the fall-through.
+        reason = OSError(13, "Permission denied")
+        result = self._run_probe(self._make_urlerror(reason))
+        self.assertEqual(result, "blocked")
 
 
 class BridgeOkCacheTests(unittest.TestCase):
