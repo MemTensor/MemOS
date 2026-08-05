@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from memos.context.context import ContextThreadPoolExecutor
+from memos.exceptions import MemCubeError
 from memos.multi_mem_cube.views import MemCubeView
 from memos.utils import timed_stage
 
@@ -20,8 +21,12 @@ class CompositeCubeView(MemCubeView):
     A composite view over multiple logical cubes.
 
     By default, writes keep the legacy fan-out behavior. If request metadata
-    explicitly names a target cube or responsibility, writes are routed only to
-    matching cube views and fall back to fan-out when nothing matches.
+    explicitly names ``info.target_cube_id``, writes are routed only to that
+    writable cube and fall back to fan-out when it does not match.
+
+    Cube operations are isolated from each other. A partial failure is logged
+    and successful results are returned; if every selected cube fails, the
+    operation raises ``MemCubeError``.
     """
 
     cube_views: list[SingleCubeView]
@@ -31,19 +36,8 @@ class CompositeCubeView(MemCubeView):
         info = getattr(request, "info", None)
         return info if isinstance(info, dict) else {}
 
-    def _view_responsibilities(self, view: SingleCubeView) -> set[str]:
-        values: set[str] = set()
-        for attr in ("responsibility", "responsibilities"):
-            raw = getattr(view, attr, None)
-            if isinstance(raw, str):
-                values.add(raw)
-            elif isinstance(raw, list | tuple | set):
-                values.update(str(item) for item in raw if item)
-        return values
-
     def _route_views(self, request: Any) -> list[SingleCubeView]:
-        info = self._request_info(request)
-        target_cube_id = info.get("target_cube_id") or info.get("cube_id")
+        target_cube_id = self._request_info(request).get("target_cube_id")
         if target_cube_id:
             routed = [view for view in self.cube_views if view.cube_id == target_cube_id]
             if routed:
@@ -53,26 +47,42 @@ class CompositeCubeView(MemCubeView):
                 target_cube_id,
             )
 
-        responsibility = info.get("responsibility") or info.get("cube_responsibility")
-        if responsibility:
-            routed = [
-                view
-                for view in self.cube_views
-                if responsibility in self._view_responsibilities(view)
-            ]
-            if routed:
-                return routed
-            self.logger.warning(
-                "[CompositeCubeView] responsibility %s not matched; fallback to fan-out",
-                responsibility,
-            )
-
         return self.cube_views
+
+    def _handle_failures(
+        self,
+        operation: str,
+        attempted_count: int,
+        succeeded_count: int,
+        failures: list[tuple[str, Exception]],
+    ) -> None:
+        if not failures:
+            return
+
+        failed_cube_ids = [cube_id for cube_id, _ in failures]
+        if succeeded_count:
+            self.logger.warning(
+                "[CompositeCubeView] partial failure operation=%s succeeded=%d failed=%d "
+                "failed_cubes=%s",
+                operation,
+                succeeded_count,
+                len(failures),
+                failed_cube_ids,
+            )
+            return
+
+        message = (
+            f"Composite cube {operation} failed for all {attempted_count} selected cubes: "
+            f"{failed_cube_ids}"
+        )
+        raise MemCubeError(message) from failures[0][1]
 
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         all_results: list[dict[str, Any]] = []
         target_views = self._route_views(add_req)
         cube_count = len(target_views)
+        succeeded_count = 0
+        failures: list[tuple[str, Exception]] = []
 
         with timed_stage("add", "multi_cube", cube_count=cube_count):
             for idx, view in enumerate(target_views):
@@ -82,9 +92,20 @@ class CompositeCubeView(MemCubeView):
                     idx + 1,
                     cube_count,
                 )
-                results = view.add_memories(add_req)
-                all_results.extend(results)
+                try:
+                    results = view.add_memories(add_req)
+                except Exception as exc:
+                    failures.append((view.cube_id, exc))
+                    self.logger.error(
+                        "[CompositeCubeView] add failed for cube=%s",
+                        view.cube_id,
+                        exc_info=True,
+                    )
+                else:
+                    succeeded_count += 1
+                    all_results.extend(results)
 
+        self._handle_failures("add", cube_count, succeeded_count, failures)
         return all_results
 
     def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
@@ -98,6 +119,8 @@ class CompositeCubeView(MemCubeView):
             "tool_mem": [],
             "skill_mem": [],
         }
+        succeeded_count = 0
+        failures: list[tuple[str, Exception]] = []
 
         def _search_single_cube(view: SingleCubeView) -> dict[str, Any]:
             self.logger.info(f"[CompositeCubeView] fan-out search to cube={view.cube_id}")
@@ -111,7 +134,18 @@ class CompositeCubeView(MemCubeView):
 
             for future in as_completed(future_to_view):
                 view = future_to_view[future]
-                cube_result = future.result()
+                try:
+                    cube_result = future.result()
+                except Exception as exc:
+                    failures.append((view.cube_id, exc))
+                    self.logger.error(
+                        "[CompositeCubeView] search failed for cube=%s",
+                        view.cube_id,
+                        exc_info=True,
+                    )
+                    continue
+
+                succeeded_count += 1
                 memory_keys = (
                     "text_mem",
                     "act_mem",
@@ -133,15 +167,29 @@ class CompositeCubeView(MemCubeView):
                     else:
                         merged_results["pref_note"] = note
 
+        self._handle_failures("search", len(self.cube_views), succeeded_count, failures)
         return merged_results
 
     def feedback_memories(self, feedback_req: APIFeedbackRequest) -> list[dict[str, Any]]:
         all_results: list[dict[str, Any]] = []
         target_views = self._route_views(feedback_req)
+        succeeded_count = 0
+        failures: list[tuple[str, Exception]] = []
 
         for view in target_views:
             self.logger.info(f"[CompositeCubeView] route feedback to cube={view.cube_id}")
-            results = view.feedback_memories(feedback_req)
-            all_results.extend(results)
+            try:
+                results = view.feedback_memories(feedback_req)
+            except Exception as exc:
+                failures.append((view.cube_id, exc))
+                self.logger.error(
+                    "[CompositeCubeView] feedback failed for cube=%s",
+                    view.cube_id,
+                    exc_info=True,
+                )
+            else:
+                succeeded_count += 1
+                all_results.extend(results)
 
+        self._handle_failures("feedback", len(target_views), succeeded_count, failures)
         return all_results

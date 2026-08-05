@@ -4,58 +4,70 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from memos.exceptions import MemCubeError
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 
 
 @dataclass
 class FakeCubeView:
     cube_id: str
-    responsibility: str | None = None
     result: list[dict[str, Any]] = field(default_factory=list)
     search_result: dict[str, Any] = field(default_factory=dict)
+    error: Exception | None = None
     add_calls: int = 0
     feedback_calls: int = 0
 
     def add_memories(self, _add_req):
         self.add_calls += 1
+        if self.error:
+            raise self.error
         return list(self.result)
 
     def feedback_memories(self, _feedback_req):
         self.feedback_calls += 1
+        if self.error:
+            raise self.error
         return list(self.result)
 
     def search_memories(self, _search_req):
+        if self.error:
+            raise self.error
         return dict(self.search_result)
 
 
-def test_composite_routes_add_to_explicit_target_cube():
-    general = FakeCubeView(cube_id="general", result=[{"memory": "g"}])
-    product = FakeCubeView(cube_id="product", result=[{"memory": "p"}])
-    composite = CompositeCubeView(
-        cube_views=[general, product],
-        logger=logging.getLogger("test.composite"),
+def test_add_handler_routes_to_explicit_target_cube(monkeypatch):
+    from memos.api.handlers.add_handler import AddHandler
+    from memos.api.handlers.base_handler import HandlerDependencies
+    from memos.api.product_models import APIADDRequest
+
+    handler = AddHandler(
+        HandlerDependencies(
+            naive_mem_cube=object(),
+            mem_reader=object(),
+            mem_scheduler=object(),
+            feedback_server=object(),
+        )
     )
-
-    result = composite.add_memories(SimpleNamespace(info={"target_cube_id": "product"}))
-
-    assert result == [{"memory": "p"}]
-    assert general.add_calls == 0
-    assert product.add_calls == 1
-
-
-def test_composite_routes_feedback_by_responsibility():
-    general = FakeCubeView(cube_id="general", responsibility="general")
-    product = FakeCubeView(cube_id="product", responsibility="shopping", result=[{"ok": True}])
-    composite = CompositeCubeView(
-        cube_views=[general, product],
-        logger=logging.getLogger("test.composite"),
+    request = APIADDRequest(
+        user_id="user",
+        writable_cube_ids=["general", "product"],
+        info={"target_cube_id": "product"},
     )
+    composite = handler._build_cube_view(request)
+    calls: list[str] = []
 
-    result = composite.feedback_memories(SimpleNamespace(info={"responsibility": "shopping"}))
+    def add_memories(view, _request):
+        calls.append(view.cube_id)
+        return [{"memory": view.cube_id}]
 
-    assert result == [{"ok": True}]
-    assert general.feedback_calls == 0
-    assert product.feedback_calls == 1
+    monkeypatch.setattr(type(composite.cube_views[0]), "add_memories", add_memories)
+
+    result = composite.add_memories(request)
+
+    assert result == [{"memory": "product"}]
+    assert calls == ["product"]
 
 
 def test_composite_falls_back_to_fanout_without_route_match():
@@ -66,7 +78,7 @@ def test_composite_falls_back_to_fanout_without_route_match():
         logger=logging.getLogger("test.composite"),
     )
 
-    result = composite.add_memories(SimpleNamespace(info={"responsibility": "unknown"}))
+    result = composite.add_memories(SimpleNamespace(info={"target_cube_id": "unknown"}))
 
     assert result == [{"memory": "g"}, {"memory": "p"}]
     assert general.add_calls == 1
@@ -92,3 +104,72 @@ def test_composite_search_adds_missing_cube_provenance():
     by_memory = {item["memory"]: item for item in result["text_mem"]}
     assert by_memory["g"]["cube_id"] == "general"
     assert by_memory["p"]["cube_id"] == "existing"
+
+
+def test_composite_add_continues_after_partial_failure(caplog):
+    failing = FakeCubeView(cube_id="failing", error=ValueError("unavailable"))
+    healthy = FakeCubeView(cube_id="healthy", result=[{"memory": "saved"}])
+    composite = CompositeCubeView(
+        cube_views=[failing, healthy],
+        logger=logging.getLogger("test.composite"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = composite.add_memories(SimpleNamespace(info={}))
+
+    assert result == [{"memory": "saved"}]
+    assert "partial failure operation=add" in caplog.text
+    assert "failing" in caplog.text
+
+
+def test_composite_search_continues_after_partial_failure(caplog):
+    failing = FakeCubeView(cube_id="failing", error=ValueError("unavailable"))
+    healthy = FakeCubeView(
+        cube_id="healthy",
+        search_result={"text_mem": [{"memory": "found"}]},
+    )
+    composite = CompositeCubeView(
+        cube_views=[failing, healthy],
+        logger=logging.getLogger("test.composite"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = composite.search_memories(SimpleNamespace())
+
+    assert result["text_mem"] == [{"memory": "found", "cube_id": "healthy"}]
+    assert "partial failure operation=search" in caplog.text
+
+
+def test_composite_feedback_continues_after_partial_failure(caplog):
+    failing = FakeCubeView(cube_id="failing", error=ValueError("unavailable"))
+    healthy = FakeCubeView(cube_id="healthy", result=[{"ok": True}])
+    composite = CompositeCubeView(
+        cube_views=[failing, healthy],
+        logger=logging.getLogger("test.composite"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = composite.feedback_memories(SimpleNamespace(info={}))
+
+    assert result == [{"ok": True}]
+    assert "partial failure operation=feedback" in caplog.text
+
+
+@pytest.mark.parametrize("operation", ["add", "search", "feedback"])
+def test_composite_raises_memcube_error_when_all_cubes_fail(operation):
+    composite = CompositeCubeView(
+        cube_views=[
+            FakeCubeView(cube_id="first", error=ValueError("first failure")),
+            FakeCubeView(cube_id="second", error=ValueError("second failure")),
+        ],
+        logger=logging.getLogger("test.composite"),
+    )
+    request = SimpleNamespace(info={})
+
+    with pytest.raises(MemCubeError, match=f"{operation} failed for all 2 selected cubes"):
+        if operation == "add":
+            composite.add_memories(request)
+        elif operation == "search":
+            composite.search_memories(request)
+        else:
+            composite.feedback_memories(request)
