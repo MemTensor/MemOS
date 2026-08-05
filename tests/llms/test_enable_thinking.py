@@ -6,7 +6,6 @@ from memos.llms.openai import OpenAILLM
 
 def _make_config(**overrides):
     defaults = {
-        "provider": "openai",
         "api_key": "test-key",
         "model_name_or_path": "gpt-4o",
     }
