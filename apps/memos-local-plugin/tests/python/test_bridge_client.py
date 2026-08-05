@@ -1234,7 +1234,7 @@ class ProbeJsonUrlConnectionRefusedTests(unittest.TestCase):
     def _make_urlerror(self, reason) -> urllib.error.URLError:
         return urllib.error.URLError(reason)
 
-    def _run_probe(self, urlerror) -> object:
+    def _run_probe(self, urlerror) -> str:
         with patch.object(
             daemon_manager_mod.urllib.request,
             "urlopen",
