@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 
 from typing import Any
@@ -7,12 +8,61 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 
 # Assuming these are your imports
+from memos import telemetry as _telemetry
 from memos.mem_os.main import MOS
 from memos.mem_os.utils.default_config import get_default
 from memos.mem_user.user_manager import UserRole
 
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+
+def _bootstrap_telemetry() -> None:
+    """
+    Bootstrap the OTel SDK for the MCP server entry-point.
+
+    The ``mos_core.add/search/update/delete`` calls invoked by the MCP tools below
+    are already instrumented (memos.telemetry.memory_span / instrument_op), but
+    those spans/metrics/logs only reach a collector when a real (exporting)
+    TracerProvider is installed.  The REST server (server_api.py) bootstraps this,
+    but the MCP entry-point previously did not — so when MemOS was driven over MCP
+    (e.g. the memory-benchmark driver) it emitted NO telemetry and the "memos"
+    service never appeared in the end-to-end trace (ISI-1918 board report).
+
+    configure_from_env() is a no-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set, so
+    local stdio runs without a collector stay silent.
+
+    We then best-effort enable server-side MCP instrumentation so an incoming
+    W3C traceparent (injected by an instrumented MCP client) is extracted and the
+    memory.* spans nest under the caller's trace instead of starting a new root.
+    """
+    configured = _telemetry.configure_from_env()
+    if configured:
+        logger.info(
+            "[MCP_SERVE] OTel telemetry configured -> %s (service=%s)",
+            os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            os.getenv("OTEL_SERVICE_NAME", "memos"),
+        )
+        # Extract incoming trace context from MCP requests so memory.* spans join
+        # the caller's trace (end-to-end). Optional: warn loudly if the package is
+        # absent rather than silently losing cross-service correlation.
+        try:
+            from opentelemetry.instrumentation.mcp import MCPInstrumentor
+
+            MCPInstrumentor().instrument()
+            logger.info(
+                "[MCP_SERVE] MCP instrumentation active — trace context propagates over MCP"
+            )
+        except ImportError:
+            logger.warning(
+                "[MCP_SERVE] opentelemetry-instrumentation-mcp NOT installed: memos spans "
+                "will export but start a NEW trace instead of nesting under the caller. "
+                "Install it (client + server) for end-to-end cross-service traces."
+            )
+    else:
+        logger.info("[MCP_SERVE] OTel telemetry not configured (OTEL_EXPORTER_OTLP_ENDPOINT unset)")
 
 
 def load_default_config(user_id="default_user"):
@@ -126,6 +176,9 @@ class MOSMCPServer:
     """MCP Server that accepts an existing MOS instance."""
 
     def __init__(self, mos_instance: MOS | None = None):
+        # Bootstrap OTel BEFORE building MOS so instrumentation binds to the real
+        # (exporting) TracerProvider rather than the global no-op default.
+        _bootstrap_telemetry()
         self.mcp = FastMCP("MOS Memory System")
         if mos_instance is None:
             # Fall back to creating from default config
