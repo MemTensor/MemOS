@@ -1,7 +1,5 @@
 """Tests for UniversalAPIEmbedder."""
 
-import asyncio
-
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,7 +27,10 @@ def _make_config(**overrides):
 def _mock_embedding_response(vectors_per_text=1, dims=2):
     """Build a MagicMock that mimics openai's embeddings response."""
     response = MagicMock()
-    response.data = [MagicMock(embedding=[0.1 * (i + 1)] * dims) for i in range(vectors_per_text)]
+    response.data = [
+        MagicMock(embedding=[0.1 * (dimension + 1) for dimension in range(dims)])
+        for _ in range(vectors_per_text)
+    ]
     return response
 
 
@@ -154,10 +155,7 @@ class TestUniversalAPIEmbedderFallback:
 
         mock_client.embeddings = SimpleNamespace(create=mock_create)
 
-        with patch.object(asyncio, "wait_for", side_effect=lambda coro, timeout: coro):
-            result = embedder._call_embeddings_api(
-                mock_client, "text-embedding-3-large", ["hello"], 5
-            )
+        result = embedder._call_embeddings_api(mock_client, "text-embedding-3-large", ["hello"], 5)
 
         assert call_count[0] == 2
         assert result == [[0.1, 0.2]]
@@ -176,9 +174,6 @@ class TestUniversalAPIEmbedderFallback:
 
         mock_client.embeddings = SimpleNamespace(create=mock_create)
 
-        with patch.object(asyncio, "wait_for", side_effect=lambda coro, timeout: coro):
-            result = embedder._call_embeddings_api(
-                mock_client, "text-embedding-3-large", ["hello"], 5
-            )
+        result = embedder._call_embeddings_api(mock_client, "text-embedding-3-large", ["hello"], 5)
 
         assert result == [[0.1]]
