@@ -23,6 +23,8 @@ from memos.memories.textual.item import (
 
 logger = get_logger(__name__)
 
+_REQUEST_TIMEOUT_SECONDS = 30
+
 
 class BochaAISearchAPI:
     """BochaAI Search API Client"""
@@ -102,7 +104,12 @@ class BochaAISearchAPI:
     def _post(self, url: str, body: dict) -> list[dict]:
         """Send POST request and parse BochaAI search results."""
         try:
-            resp = requests.post(url, headers=self.headers, json=body)
+            resp = requests.post(
+                url,
+                headers=self.headers,
+                json=body,
+                timeout=_REQUEST_TIMEOUT_SECONDS,
+            )
             resp.raise_for_status()
             raw_data = resp.json()
 

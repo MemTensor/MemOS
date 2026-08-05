@@ -14,6 +14,9 @@ from memos.memories.textual.item import (
 )
 
 
+_REQUEST_TIMEOUT_SECONDS = 30
+
+
 class GoogleCustomSearchAPI:
     """Google Custom Search API Client"""
 
@@ -59,7 +62,11 @@ class GoogleCustomSearchAPI:
         }
 
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(
+                self.base_url,
+                params=params,
+                timeout=_REQUEST_TIMEOUT_SECONDS,
+            )
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
