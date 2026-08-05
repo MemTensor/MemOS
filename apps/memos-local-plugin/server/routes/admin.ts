@@ -37,9 +37,9 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     const supervised = isSupervisorManaged(options);
     const platform = resolvePlatform(options);
     // Windows portable install has no pkill/bash equivalent, so we cannot
-    // kill the chat or spawn a replacement daemon. Wipe the DB, drop our
-    // handles, but leave the process alive and let the user restart
-    // Hermes manually.
+    // kill the chat or spawn a replacement daemon. Wipe the DB and leave
+    // the process alive; the Hermes chat is NOT killed (no pkill available)
+    // and the user must restart Hermes manually to obtain a clean state.
     const windowsManual = agent === "hermes" && !supervised && isWindowsPlatform(platform);
 
     let killedHermes = false;
@@ -65,7 +65,7 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
         restarting: false,
         killedHermes,
         manualRestartRequired: true,
-        platform: "win32",
+        platform,
         message:
           "Data cleared. Restart Hermes manually to re-open the Memory Viewer.",
       };
@@ -84,25 +84,28 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
 
   routes.set("POST /api/v1/admin/restart", async (_ctx) => {
     const agent = options.agent ?? "unknown";
+    const supervised = isSupervisorManaged(options);
+    const platform = resolvePlatform(options);
+
     if (agent === "openclaw") {
       setTimeout(() => process.exit(0), 300);
       return { ok: true, restarting: true };
     }
 
     if (agent === "hermes") {
-      const supervised = isSupervisorManaged(options);
-      const platform = resolvePlatform(options);
-
       if (!supervised && isWindowsPlatform(platform)) {
         // Windows without a supervisor: there is no reliable way to
         // spawn a replacement (no pkill, no bash) and self-shutdown
         // would leave the viewer permanently dark. Keep the daemon
         // alive and tell the client to prompt for a manual restart.
+        // ok: true mirrors the clear-data Windows path so typed SDK
+        // wrappers that treat `ok` as a success discriminant classify
+        // this "intentional decline" identically across both routes.
         return {
-          ok: false,
+          ok: true,
           restarting: false,
           manualRestartRequired: true,
-          platform: "win32",
+          platform,
           message:
             "Restart is unavailable on Windows without a supervisor. " +
             "Close and reopen Hermes to apply changes.",
@@ -154,7 +157,7 @@ function isSupervisorManaged(options: ServerOptions): boolean {
 }
 
 function resolvePlatform(options: ServerOptions): NodeJS.Platform {
-  return options.platform ?? process.platform;
+  return options.lifecycle?.platform ?? process.platform;
 }
 
 function scheduleHermesShutdown(options: ServerOptions, delayMs: number): void {

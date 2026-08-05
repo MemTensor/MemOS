@@ -45,24 +45,27 @@ export interface ServerOptions {
    * A supervised Hermes viewer must let launchd/systemd perform the
    * replacement; spawning a second daemon from the route races the
    * supervisor's KeepAlive restart. Tests and portable embedders may
-   * override the auto-detection and shutdown action explicitly.
+   * override the auto-detection, shutdown action, or platform explicitly.
    */
   lifecycle?: {
     /** Override launchd/systemd detection. */
     supervised?: boolean;
     /** Request graceful host shutdown after the HTTP response is returned. */
     requestShutdown?: () => void;
+    /**
+     * Override the runtime platform. Defaults to `process.platform`.
+     *
+     * The admin restart route uses this to decide whether the current
+     * process runs on Windows, where the historical `pkill` + `bash`
+     * replacement path is a no-op (which used to leave the daemon dead
+     * with nothing to respawn it). Tests inject this to exercise the
+     * Windows guard without spoofing `process.platform` globally.
+     *
+     * Grouped with `supervised`/`requestShutdown` because they are the
+     * same category of process/environment override.
+     */
+    platform?: NodeJS.Platform;
   };
-  /**
-   * Override the runtime platform. Defaults to `process.platform`.
-   *
-   * The admin restart route uses this to decide whether the current
-   * process runs on Windows, where the historical `pkill` + `bash`
-   * replacement path is a no-op (which used to leave the daemon dead
-   * with nothing to respawn it). Tests inject this to exercise the
-   * Windows guard without spoofing `process.platform` globally.
-   */
-  platform?: NodeJS.Platform;
 }
 
 export interface ServerHandle {

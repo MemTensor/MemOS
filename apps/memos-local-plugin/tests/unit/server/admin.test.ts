@@ -75,8 +75,7 @@ describe("admin lifecycle routes", () => {
       { core: {} as MemoryCore },
       {
         agent: "hermes",
-        lifecycle: { supervised: false, requestShutdown },
-        platform: "linux",
+        lifecycle: { supervised: false, requestShutdown, platform: "linux" },
       },
     );
 
@@ -124,8 +123,7 @@ describe("admin lifecycle routes", () => {
       { core: {} as MemoryCore },
       {
         agent: "hermes",
-        lifecycle: { supervised: false, requestShutdown },
-        platform: "win32",
+        lifecycle: { supervised: false, requestShutdown, platform: "win32" },
       },
     );
 
@@ -135,9 +133,10 @@ describe("admin lifecycle routes", () => {
     const result = await restart!({} as never);
 
     expect(result).toMatchObject({
-      ok: false,
+      ok: true,
       restarting: false,
       manualRestartRequired: true,
+      platform: "win32",
     });
     // No pkill, no bash — those are what corrupt the flow on Windows.
     expect(spawnMock).not.toHaveBeenCalled();
@@ -155,8 +154,7 @@ describe("admin lifecycle routes", () => {
       { core: {} as MemoryCore },
       {
         agent: "hermes",
-        lifecycle: { supervised: true, requestShutdown },
-        platform: "win32",
+        lifecycle: { supervised: true, requestShutdown, platform: "win32" },
       },
     );
 
@@ -192,8 +190,7 @@ describe("admin lifecycle routes", () => {
       },
       {
         agent: "hermes",
-        lifecycle: { supervised: false, requestShutdown },
-        platform: "win32",
+        lifecycle: { supervised: false, requestShutdown, platform: "win32" },
       },
     );
 

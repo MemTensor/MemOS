@@ -23,6 +23,24 @@ export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
 
+/**
+ * Shape returned by `POST /api/v1/admin/restart`.
+ *
+ * Matches `apps/memos-local-plugin/server/routes/admin.ts`. All fields
+ * beyond `ok` are optional — the Windows-portable path emits
+ * `manualRestartRequired: true` with a human `message`; the happy paths
+ * omit them.
+ */
+interface RestartResponse {
+  ok: boolean;
+  restarting?: boolean;
+  manualRestartRequired?: boolean;
+  message?: string;
+  platform?: string;
+  killed?: boolean;
+  error?: string;
+}
+
 function isOpenClaw(): boolean {
   return health.value?.agent === "openclaw";
 }
@@ -83,9 +101,9 @@ async function quickPollUp(maxAttempts = 30): Promise<boolean> {
 export async function triggerRestart(): Promise<void> {
   restartState.value = { phase: "restarting" };
   if (!isOpenClaw()) {
-    let response: unknown;
+    let response: RestartResponse | undefined;
     try {
-      response = await api.post("/api/v1/admin/restart");
+      response = await api.post<RestartResponse>("/api/v1/admin/restart");
     } catch {
       restartState.value = { phase: "restartFailed" };
       throw new Error("restart failed");
@@ -96,17 +114,8 @@ export async function triggerRestart(): Promise<void> {
     // the daemon alive and returns manualRestartRequired so we can tell
     // the user to restart Hermes themselves instead of endlessly polling
     // a server that never went down.
-    if (
-      response &&
-      typeof response === "object" &&
-      "manualRestartRequired" in (response as Record<string, unknown>) &&
-      (response as { manualRestartRequired?: unknown }).manualRestartRequired === true
-    ) {
-      const message =
-        typeof (response as { message?: unknown }).message === "string"
-          ? ((response as { message: string }).message)
-          : undefined;
-      restartState.value = { phase: "manualRestartRequired", message };
+    if (response?.manualRestartRequired === true) {
+      restartState.value = { phase: "manualRestartRequired", message: response.message };
       return;
     }
 

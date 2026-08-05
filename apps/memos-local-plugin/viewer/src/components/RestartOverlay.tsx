@@ -18,23 +18,25 @@ function FullScreenSpinner() {
 
   const isTerminal = s.phase === "restartFailed" || s.phase === "manualRestartRequired";
 
-  const message =
-    s.phase === "manualRestartRequired"
-      ? (s.message || t("restart.manualRequired"))
-      : s.phase === "restartFailed"
-        ? t("restart.failed")
-        : s.phase === "waitingUp"
-          ? t("restart.waitingUp")
-          : agentType === "hermes"
-            ? t("restart.restarting.hermes")
-            : t("restart.restarting");
+  let message: string;
+  if (s.phase === "manualRestartRequired") {
+    message = s.message || t("restart.manualRequired");
+  } else if (s.phase === "restartFailed") {
+    message = t("restart.failed");
+  } else if (s.phase === "waitingUp") {
+    message = t("restart.waitingUp");
+  } else {
+    message = agentType === "hermes" ? t("restart.restarting.hermes") : t("restart.restarting");
+  }
 
-  const hint =
-    s.phase === "manualRestartRequired"
-      ? t("restart.manualRequiredHint")
-      : s.phase === "restartFailed"
-        ? t(`restart.failedHint.${agentType}` as any)
-        : t("restart.autoRefresh");
+  let hint: string;
+  if (s.phase === "manualRestartRequired") {
+    hint = t("restart.manualRequiredHint");
+  } else if (s.phase === "restartFailed") {
+    hint = t(`restart.failedHint.${agentType}` as any);
+  } else {
+    hint = t("restart.autoRefresh");
+  }
 
   return (
     <div
