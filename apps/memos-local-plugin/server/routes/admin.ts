@@ -15,6 +15,13 @@
  *       For Hermes, terminate the active `hermes chat`, then ask the bridge
  *       to shut down gracefully. launchd/systemd owns replacement when the
  *       viewer is supervised; portable viewers retain the detached fallback.
+ *
+ *       Windows portable installs are a special case: `pkill` and `bash`
+ *       are unavailable, so the historical spawn-then-suicide sequence
+ *       would kill this daemon with no replacement waiting. On Windows
+ *       (without a detectable supervisor) we refuse the restart, keep
+ *       the daemon alive, and return `manualRestartRequired: true` so
+ *       the viewer can prompt the operator to restart Hermes themselves.
  */
 import { spawn } from "node:child_process";
 import type { ServerDeps, ServerOptions } from "../types.js";
@@ -27,8 +34,16 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       return { ok: false, error: "database path not configured" };
     }
     const agent = options.agent ?? "unknown";
+    const supervised = isSupervisorManaged(options);
+    const platform = resolvePlatform(options);
+    // Windows portable install has no pkill/bash equivalent, so we cannot
+    // kill the chat or spawn a replacement daemon. Wipe the DB, drop our
+    // handles, but leave the process alive and let the user restart
+    // Hermes manually.
+    const windowsManual = agent === "hermes" && !supervised && isWindowsPlatform(platform);
+
     let killedHermes = false;
-    if (agent === "hermes") {
+    if (agent === "hermes" && !windowsManual) {
       // The viewer daemon and an active Hermes chat have separate Node
       // bridges. Kill the chat first so its stdio bridge releases any
       // SQLite handle before we unlink the DB files.
@@ -44,7 +59,18 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     if (agent === "hermes" && deps.home?.root) {
       try { await fs.unlink(`${deps.home.root}/bridge-status.json`); } catch { /* may not exist */ }
     }
-    if (agent !== "openclaw" && !isSupervisorManaged(options)) {
+    if (windowsManual) {
+      return {
+        ok: true,
+        restarting: false,
+        killedHermes,
+        manualRestartRequired: true,
+        platform: "win32",
+        message:
+          "Data cleared. Restart Hermes manually to re-open the Memory Viewer.",
+      };
+    }
+    if (agent !== "openclaw" && !supervised) {
       // Portable Hermes: there is no supervisor to replace this process.
       await spawnReplacementDaemon(agent);
     }
@@ -64,8 +90,27 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     }
 
     if (agent === "hermes") {
+      const supervised = isSupervisorManaged(options);
+      const platform = resolvePlatform(options);
+
+      if (!supervised && isWindowsPlatform(platform)) {
+        // Windows without a supervisor: there is no reliable way to
+        // spawn a replacement (no pkill, no bash) and self-shutdown
+        // would leave the viewer permanently dark. Keep the daemon
+        // alive and tell the client to prompt for a manual restart.
+        return {
+          ok: false,
+          restarting: false,
+          manualRestartRequired: true,
+          platform: "win32",
+          message:
+            "Restart is unavailable on Windows without a supervisor. " +
+            "Close and reopen Hermes to apply changes.",
+        };
+      }
+
       const killed = await terminateHermesChat();
-      if (!isSupervisorManaged(options)) {
+      if (!supervised) {
         await spawnReplacementDaemon(agent);
       }
       scheduleHermesShutdown(options, 200);
@@ -92,8 +137,24 @@ export function isSupervisorManagedProcess(
   return Boolean(env.INVOCATION_ID?.trim());
 }
 
+/**
+ * True when the current (or provided) platform is Windows.
+ *
+ * Exposed for the admin routes and their tests so we can unit-test the
+ * Windows guard without spoofing `process.platform`.
+ */
+export function isWindowsPlatform(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === "win32";
+}
+
 function isSupervisorManaged(options: ServerOptions): boolean {
   return options.lifecycle?.supervised ?? isSupervisorManagedProcess();
+}
+
+function resolvePlatform(options: ServerOptions): NodeJS.Platform {
+  return options.platform ?? process.platform;
 }
 
 function scheduleHermesShutdown(options: ServerOptions, delayMs: number): void {

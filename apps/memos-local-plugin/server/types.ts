@@ -53,6 +53,16 @@ export interface ServerOptions {
     /** Request graceful host shutdown after the HTTP response is returned. */
     requestShutdown?: () => void;
   };
+  /**
+   * Override the runtime platform. Defaults to `process.platform`.
+   *
+   * The admin restart route uses this to decide whether the current
+   * process runs on Windows, where the historical `pkill` + `bash`
+   * replacement path is a no-op (which used to leave the daemon dead
+   * with nothing to respawn it). Tests inject this to exercise the
+   * Windows guard without spoofing `process.platform` globally.
+   */
+  platform?: NodeJS.Platform;
 }
 
 export interface ServerHandle {

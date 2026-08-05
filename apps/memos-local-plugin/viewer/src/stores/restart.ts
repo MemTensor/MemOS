@@ -16,7 +16,8 @@ export type RestartPhase =
   | "idle"
   | "restarting"
   | "waitingUp"
-  | "restartFailed";
+  | "restartFailed"
+  | "manualRestartRequired";
 
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
@@ -82,11 +83,31 @@ async function quickPollUp(maxAttempts = 30): Promise<boolean> {
 export async function triggerRestart(): Promise<void> {
   restartState.value = { phase: "restarting" };
   if (!isOpenClaw()) {
+    let response: unknown;
     try {
-      await api.post("/api/v1/admin/restart");
+      response = await api.post("/api/v1/admin/restart");
     } catch {
       restartState.value = { phase: "restartFailed" };
       throw new Error("restart failed");
+    }
+
+    // Windows portable installs cannot self-restart (see
+    // apps/memos-local-plugin/server/routes/admin.ts). The server keeps
+    // the daemon alive and returns manualRestartRequired so we can tell
+    // the user to restart Hermes themselves instead of endlessly polling
+    // a server that never went down.
+    if (
+      response &&
+      typeof response === "object" &&
+      "manualRestartRequired" in (response as Record<string, unknown>) &&
+      (response as { manualRestartRequired?: unknown }).manualRestartRequired === true
+    ) {
+      const message =
+        typeof (response as { message?: unknown }).message === "string"
+          ? ((response as { message: string }).message)
+          : undefined;
+      restartState.value = { phase: "manualRestartRequired", message };
+      return;
     }
 
     const ok = await pollHealthUntilUp(60);
