@@ -353,11 +353,24 @@ function normaliseDraft(
   const displayTitle =
     sanitizeDerivedText(raw.display_title ?? raw.displayTitle ?? input.policy.title ?? name) ||
     name;
-  const summary = sanitizeDerivedText(raw.summary);
 
   const parameters = asArray(raw.parameters).map(coerceParameter).filter(Boolean) as SkillParameterDraft[];
   const preconditions = sanitizeDerivedMarkdownList(asStringArray(raw.preconditions));
   const steps = asArray(raw.steps).map(coerceStep).filter(Boolean) as SkillStepDraft[];
+  const summary =
+    sanitizeDerivedText(raw.summary) ||
+    [
+      raw.retrieval_blurb,
+      raw.retrievalBlurb,
+      steps[0]?.body,
+      steps[0]?.title,
+      displayTitle,
+      name,
+    ]
+      .map(sanitizeDerivedText)
+      .find((candidate) => candidate.length > 0)
+      ?.slice(0, 200) ||
+    "skill procedure";
   const examples = asArray(raw.examples).map(coerceExample).filter(Boolean) as SkillExampleDraft[];
   const tags = dedupeLc(sanitizeDerivedList(asStringArray(raw.tags)));
   // V7 §2.4.6 — coerce both `decision_guidance` (preferred LLM key)
