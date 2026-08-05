@@ -1,3 +1,4 @@
+import copy
 import logging
 
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ class FakeCubeView:
     search_result: dict[str, Any] = field(default_factory=dict)
     error: Exception | None = None
     add_calls: int = 0
+    search_calls: int = 0
     feedback_calls: int = 0
 
     def add_memories(self, _add_req):
@@ -32,9 +34,10 @@ class FakeCubeView:
         return list(self.result)
 
     def search_memories(self, _search_req):
+        self.search_calls += 1
         if self.error:
             raise self.error
-        return dict(self.search_result)
+        return copy.deepcopy(self.search_result)
 
 
 def test_add_handler_routes_to_explicit_target_cube(monkeypatch):
@@ -104,6 +107,31 @@ def test_composite_search_adds_missing_cube_provenance():
     by_memory = {item["memory"]: item for item in result["text_mem"]}
     assert by_memory["g"]["cube_id"] == "general"
     assert by_memory["p"]["cube_id"] == "existing"
+    assert general.search_result == {
+        "text_mem": [{"memory": "g"}],
+        "pref_note": "general note",
+    }
+
+
+def test_composite_search_routes_to_explicit_target_cube():
+    general = FakeCubeView(
+        cube_id="general",
+        search_result={"text_mem": [{"memory": "g"}]},
+    )
+    product = FakeCubeView(
+        cube_id="product",
+        search_result={"text_mem": [{"memory": "p"}]},
+    )
+    composite = CompositeCubeView(
+        cube_views=[general, product],
+        logger=logging.getLogger("test.composite"),
+    )
+
+    result = composite.search_memories(SimpleNamespace(info={"target_cube_id": "product"}))
+
+    assert result["text_mem"] == [{"memory": "p", "cube_id": "product"}]
+    assert general.search_calls == 0
+    assert product.search_calls == 1
 
 
 def test_composite_add_continues_after_partial_failure(caplog):
@@ -157,19 +185,24 @@ def test_composite_feedback_continues_after_partial_failure(caplog):
 
 @pytest.mark.parametrize("operation", ["add", "search", "feedback"])
 def test_composite_raises_memcube_error_when_all_cubes_fail(operation):
+    causes = [ValueError("first failure"), ValueError("second failure")]
     composite = CompositeCubeView(
         cube_views=[
-            FakeCubeView(cube_id="first", error=ValueError("first failure")),
-            FakeCubeView(cube_id="second", error=ValueError("second failure")),
+            FakeCubeView(cube_id="first", error=causes[0]),
+            FakeCubeView(cube_id="second", error=causes[1]),
         ],
         logger=logging.getLogger("test.composite"),
     )
     request = SimpleNamespace(info={})
 
-    with pytest.raises(MemCubeError, match=f"{operation} failed for all 2 selected cubes"):
+    with pytest.raises(
+        MemCubeError, match=f"{operation} failed for all 2 selected cubes"
+    ) as exc_info:
         if operation == "add":
             composite.add_memories(request)
         elif operation == "search":
             composite.search_memories(request)
         else:
             composite.feedback_memories(request)
+
+    assert exc_info.value.causes == causes

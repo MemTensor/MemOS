@@ -20,9 +20,9 @@ class CompositeCubeView(MemCubeView):
     """
     A composite view over multiple logical cubes.
 
-    By default, writes keep the legacy fan-out behavior. If request metadata
-    explicitly names ``info.target_cube_id``, writes are routed only to that
-    writable cube and fall back to fan-out when it does not match.
+    By default, operations keep the legacy fan-out behavior. If request metadata
+    explicitly names ``info.target_cube_id``, operations are routed only to that
+    cube and fall back to fan-out when it does not match.
 
     Cube operations are isolated from each other. A partial failure is logged
     and successful results are returned; if every selected cube fails, the
@@ -75,7 +75,9 @@ class CompositeCubeView(MemCubeView):
             f"Composite cube {operation} failed for all {attempted_count} selected cubes: "
             f"{failed_cube_ids}"
         )
-        raise MemCubeError(message) from failures[0][1]
+        error = MemCubeError(message)
+        error.causes = [exc for _, exc in failures]
+        raise error from failures[0][1]
 
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         all_results: list[dict[str, Any]] = []
@@ -119,17 +121,21 @@ class CompositeCubeView(MemCubeView):
             "tool_mem": [],
             "skill_mem": [],
         }
+        target_views = self._route_views(search_req)
         succeeded_count = 0
         failures: list[tuple[str, Exception]] = []
 
         def _search_single_cube(view: SingleCubeView) -> dict[str, Any]:
-            self.logger.info(f"[CompositeCubeView] fan-out search to cube={view.cube_id}")
+            self.logger.info(
+                "[CompositeCubeView] route search to cube=%s",
+                view.cube_id,
+            )
             return view.search_memories(search_req)
 
         # parallel search for each cube
         with ContextThreadPoolExecutor(max_workers=2) as executor:
             future_to_view = {
-                executor.submit(_search_single_cube, view): view for view in self.cube_views
+                executor.submit(_search_single_cube, view): view for view in target_views
             }
 
             for future in as_completed(future_to_view):
@@ -167,7 +173,7 @@ class CompositeCubeView(MemCubeView):
                     else:
                         merged_results["pref_note"] = note
 
-        self._handle_failures("search", len(self.cube_views), succeeded_count, failures)
+        self._handle_failures("search", len(target_views), succeeded_count, failures)
         return merged_results
 
     def feedback_memories(self, feedback_req: APIFeedbackRequest) -> list[dict[str, Any]]:
@@ -177,7 +183,10 @@ class CompositeCubeView(MemCubeView):
         failures: list[tuple[str, Exception]] = []
 
         for view in target_views:
-            self.logger.info(f"[CompositeCubeView] route feedback to cube={view.cube_id}")
+            self.logger.info(
+                "[CompositeCubeView] route feedback to cube=%s",
+                view.cube_id,
+            )
             try:
                 results = view.feedback_memories(feedback_req)
             except Exception as exc:
