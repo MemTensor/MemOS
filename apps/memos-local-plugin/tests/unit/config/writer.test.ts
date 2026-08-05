@@ -53,7 +53,9 @@ llm:
   it("validates after merge — invalid patches are rejected", async () => {
     const ctx = await makeTmpHome({ agent: "openclaw" });
     cleanup = ctx.cleanup;
-    await expect(patchConfig(ctx.home, { viewer: { port: -3 } as Record<string, unknown> }))
+    // `viewer.port` is adapter-owned and silently stripped from patches
+    // (see #2212), so pick a still-validated field for the schema check.
+    await expect(patchConfig(ctx.home, { bridge: { port: -3 } as Record<string, unknown> }))
       .rejects.toThrow(/schema validation/);
   });
 
@@ -117,5 +119,111 @@ skillEvolver: ""
     const reloaded = await loadConfig(ctx.home);
     expect(reloaded.config.skillEvolver.provider).toBe("gemini");
     expect(reloaded.config.skillEvolver.model).toBe("gemini-2.5-flash");
+  });
+
+  /**
+   * Regression: #2212. On Hermes the viewer daemon is hardcoded to :18800
+   * (see bridge.mts::AGENT_DEFAULT_PORTS), but the shared UI default in
+   * defaults.ts is :18799 (the OpenClaw port). A PATCH body that carries
+   * `viewer.port: 18799` — from a viewer form that rehydrated the
+   * cross-agent default, or from any third-party client that mirrors GET
+   * back into PATCH — used to be written to disk verbatim, silently
+   * corrupting the Hermes config so the bridge could not find the viewer
+   * on next start. The writer must protect adapter-owned viewer fields
+   * (`viewer.port`, `viewer.bindHost`) and preserve whatever is already
+   * on disk instead.
+   */
+  it("ignores viewer.port in the incoming patch to protect adapter ownership", async () => {
+    const original = `viewer:
+  port: 18800
+  bindHost: 127.0.0.1
+llm:
+  provider: openai_compatible
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      viewer: { port: 18799 },
+      llm: { temperature: 0.4 },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    // viewer.port must survive untouched — the adapter owns it.
+    expect(reloaded.config.viewer.port).toBe(18800);
+    // Sibling patches still land normally.
+    expect(reloaded.config.llm.temperature).toBe(0.4);
+    // On-disk YAML must not contain the rejected 18799 value under viewer.
+    const text = await fs.readFile(ctx.home.configFile, "utf8");
+    expect(text).not.toMatch(/port:\s*18799/);
+    expect(text).toMatch(/port:\s*18800/);
+  });
+
+  it("ignores viewer.bindHost in the incoming patch to protect adapter ownership", async () => {
+    const original = `viewer:
+  port: 18800
+  bindHost: 127.0.0.1
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      viewer: { bindHost: "0.0.0.0" },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.viewer.bindHost).toBe("127.0.0.1");
+    const text = await fs.readFile(ctx.home.configFile, "utf8");
+    expect(text).not.toMatch(/0\.0\.0\.0/);
+  });
+
+  /**
+   * viewer.openOnFirstTurn is an actual user-facing preference (the UI
+   * exposes it via the settings page), so it must remain patchable even
+   * though it sits under the same `viewer:` map as the adapter-owned
+   * port/bindHost fields.
+   */
+  it("still allows patching non-adapter viewer fields (openOnFirstTurn)", async () => {
+    const original = `viewer:
+  port: 18800
+  bindHost: 127.0.0.1
+  openOnFirstTurn: false
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      viewer: { openOnFirstTurn: true, port: 18799 },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.viewer.openOnFirstTurn).toBe(true);
+    expect(reloaded.config.viewer.port).toBe(18800);
+  });
+
+  /**
+   * Companion of the viewer.port guard: the reporter also observed a
+   * placeholder-looking `embedding.endpoint: "mem os"` slipping into the
+   * on-disk config after a save. Empty-string patches on `embedding.endpoint`
+   * (rehydrated by the UI when the field is untouched) must not clobber a
+   * previously-configured endpoint — mirror the treatment `stripEmptySecrets`
+   * gives to `apiKey` fields.
+   */
+  it("does not overwrite embedding.endpoint with an empty-string patch", async () => {
+    const original = `embedding:
+  provider: openai_compatible
+  endpoint: "https://api.openai.com/v1"
+  model: text-embedding-3-small
+  apiKey: "sk-existing"
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      embedding: { endpoint: "" },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.embedding.endpoint).toBe("https://api.openai.com/v1");
   });
 });
