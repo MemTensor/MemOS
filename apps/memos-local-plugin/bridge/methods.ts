@@ -389,6 +389,15 @@ function validateTurnInput(p: Record<string, unknown>): void {
       "turn.start: optional 'turnKey' must be a string",
     );
   }
+  if (
+    p.deadlineAt !== undefined &&
+    (typeof p.deadlineAt !== "number" || !Number.isFinite(p.deadlineAt))
+  ) {
+    throw new MemosError(
+      "invalid_argument",
+      "turn.start: optional 'deadlineAt' must be a finite number",
+    );
+  }
 }
 
 function validateTurnResult(p: Record<string, unknown>): void {
