@@ -98,6 +98,7 @@ rich-toolkit==0.15.1
 rignore==0.7.6
 rpds-py==0.28.0
 safetensors==0.6.2
+schedule==1.2.2
 scikit-learn==1.7.2
 scipy==1.16.3
 sentry-sdk==2.44.0
