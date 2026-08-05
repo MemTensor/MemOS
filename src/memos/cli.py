@@ -42,7 +42,7 @@ def download_examples(dest: str) -> bool:
     print(f"📥 Downloading examples from {zip_url}...")
 
     try:
-        response = requests.get(zip_url)
+        response = requests.get(zip_url, timeout=30)
         response.raise_for_status()
 
         with zipfile.ZipFile(BytesIO(response.content)) as z:
