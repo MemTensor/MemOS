@@ -226,4 +226,62 @@ llm:
     const reloaded = await loadConfig(ctx.home);
     expect(reloaded.config.embedding.endpoint).toBe("https://api.openai.com/v1");
   });
+
+  /**
+   * Same rationale as the `""` guard above: a UI form can also submit a
+   * whitespace-only string (`"   "`) when the user tabs through the field
+   * without changing it — some HTML pickers pad the value. The guard must
+   * trim before comparing so those inputs are treated the same as empty
+   * strings, otherwise they'd get written to disk verbatim and yield a
+   * broken endpoint configuration with no visible error.
+   */
+  it("does not overwrite endpoint fields with whitespace-only patches", async () => {
+    const original = `embedding:
+  provider: openai_compatible
+  endpoint: "https://api.openai.com/v1"
+llm:
+  provider: openai_compatible
+  endpoint: "https://api.openai.com/v1"
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      embedding: { endpoint: "   " },
+      llm: { endpoint: "\t\n" },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.embedding.endpoint).toBe("https://api.openai.com/v1");
+    expect(reloaded.config.llm.endpoint).toBe("https://api.openai.com/v1");
+  });
+
+  /**
+   * Regression: the sanitiser used to clone the patch via
+   * `JSON.parse(JSON.stringify(...))`, which silently deletes keys whose
+   * value is `undefined`. A caller that legitimately passes
+   * `{ llm: { temperature: undefined } }` (e.g. a form that meant to unset
+   * the override, or a mis-serialised client payload) would have that leaf
+   * disappear before `applyPatch` could act on it, meaning the writer
+   * would silently no-op instead of surfacing the invalid state. Switching
+   * to `structuredClone` preserves the full object graph so the schema
+   * validator sees the invalid leaf and rejects the patch, giving the
+   * caller a clear error instead of silent success.
+   */
+  it("preserves undefined leaves in the patch (structured-clone semantics)", async () => {
+    const ctx = await makeTmpHome({ agent: "openclaw" });
+    cleanup = ctx.cleanup;
+
+    // Old JSON-clone behaviour: `undefined` dropped, patch becomes
+    // `{ llm: {} }`, applyPatch no-ops, schema passes → test would pass.
+    // New structuredClone behaviour: `undefined` survives, applyPatch
+    // calls `doc.setIn(['llm','temperature'], undefined)` which writes a
+    // null scalar, schema then rejects "Expected number" → this assertion
+    // captures the shift.
+    await expect(
+      patchConfig(ctx.home, {
+        llm: { temperature: undefined } as Record<string, unknown>,
+      }),
+    ).rejects.toThrow(/schema validation/);
+  });
 });
