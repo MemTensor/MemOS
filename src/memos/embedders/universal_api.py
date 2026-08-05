@@ -56,29 +56,56 @@ class UniversalAPIEmbedder(BaseEmbedder):
                 else None,
             )
 
+    @staticmethod
+    def _build_embedding_kwargs(model: str, texts: list[str], embedding_dims: int | None) -> dict:
+        kwargs = {"model": model, "input": texts}
+        if embedding_dims is not None:
+            kwargs["dimensions"] = embedding_dims
+        return kwargs
+
+    def _call_embeddings_api(
+        self, client, model: str, texts: list[str], timeout: int
+    ) -> list[list[float]]:
+        embedding_dims = getattr(self.config, "embedding_dims", None)
+        kwargs = self._build_embedding_kwargs(model, texts, embedding_dims)
+
+        try:
+            response = asyncio.run(
+                asyncio.wait_for(
+                    client.embeddings.create(**kwargs),
+                    timeout=timeout,
+                )
+            )
+            return [r.embedding for r in response.data]
+        except Exception as e:
+            if embedding_dims is not None:
+                logger.warning(
+                    "Embeddings request with dimensions=%d failed error_type=%s; "
+                    "retrying without dimensions",
+                    embedding_dims,
+                    type(e).__name__,
+                )
+                fallback_kwargs = self._build_embedding_kwargs(model, texts, None)
+                response = asyncio.run(
+                    asyncio.wait_for(
+                        client.embeddings.create(**fallback_kwargs),
+                        timeout=timeout,
+                    )
+                )
+                return [r.embedding for r in response.data]
+            raise
+
     @log_embedding_call
     def embed(self, texts: list[str]) -> list[list[float]]:
         if isinstance(texts, str):
             texts = [texts]
-        # Sanitize Unicode to prevent encoding errors with emoji/surrogates
         texts = [_sanitize_unicode(t) for t in texts]
-        # Truncate texts if max_tokens is configured
         texts = self._truncate_texts(texts)
         if self.provider == "openai" or self.provider == "azure":
+            timeout = int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5))
             try:
-
-                async def _create_embeddings():
-                    return self.client.embeddings.create(
-                        model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
-                        input=texts,
-                    )
-
-                response = asyncio.run(
-                    asyncio.wait_for(
-                        _create_embeddings(), timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5))
-                    )
-                )
-                return [r.embedding for r in response.data]
+                model = getattr(self.config, "model_name_or_path", "text-embedding-3-large")
+                return self._call_embeddings_api(self.client, model, texts, timeout)
             except Exception as e:
                 if self.use_backup_client:
                     logger.warning(
@@ -86,26 +113,18 @@ class UniversalAPIEmbedder(BaseEmbedder):
                         type(e).__name__,
                     )
                     try:
-
-                        async def _create_embeddings_backup():
-                            return self.backup_client.embeddings.create(
-                                model=getattr(
-                                    self.config,
-                                    "backup_model_name_or_path",
-                                    "text-embedding-3-large",
-                                ),
-                                input=texts,
-                            )
-
-                        response = asyncio.run(
-                            asyncio.wait_for(
-                                _create_embeddings_backup(),
-                                timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5)),
-                            )
+                        backup_model = getattr(
+                            self.config,
+                            "backup_model_name_or_path",
+                            "text-embedding-3-large",
                         )
-                        return [r.embedding for r in response.data]
-                    except Exception as e:
-                        raise ValueError(f"Backup embeddings request ended with error: {e}") from e
+                        return self._call_embeddings_api(
+                            self.backup_client, backup_model, texts, timeout
+                        )
+                    except Exception as e_backup:
+                        raise ValueError(
+                            f"Backup embeddings request ended with error: {e_backup}"
+                        ) from e_backup
                 else:
                     raise ValueError(f"Embeddings request ended with error: {e}") from e
         else:
