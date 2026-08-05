@@ -126,6 +126,43 @@ def test_summarize_search_results_only_counts_buckets_and_items():
     assert len(rendered) <= len(str(results)) * 0.2
 
 
+def test_search_result_summary_log_excludes_embedding_payload(caplog):
+    logger = logging.getLogger("tests.search_results")
+    results = {
+        "text_mem": [
+            {
+                "cube_id": "cube-a",
+                "memories": [
+                    {
+                        "memory": "private memory payload",
+                        "metadata": {
+                            "embedding": [0.123456, 0.654321, 0.999999],
+                            "properties": {"secret": "do-not-log"},
+                        },
+                    }
+                ],
+            }
+        ],
+        "pref_note": "private preference note",
+    }
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        logger.info("Search result summary: %s", log.summarize_search_results(results))
+
+    summary_logs = [
+        record.message for record in caplog.records if "Search result summary" in record.message
+    ]
+    assert len(summary_logs) == 1
+    rendered = summary_logs[0]
+    assert "bucket_counts" in rendered
+    assert "item_counts" in rendered
+    assert "private memory payload" not in rendered
+    assert "private preference note" not in rendered
+    assert "embedding" not in rendered
+    assert "0.123456" not in rendered
+    assert "do-not-log" not in rendered
+
+
 def test_summarize_textual_memories_only_counts_types():
     memories = [
         SimpleNamespace(
