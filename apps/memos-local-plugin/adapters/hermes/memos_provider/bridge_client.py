@@ -24,6 +24,8 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from hermes_home import resolve_hermes_home
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -64,8 +66,17 @@ def _resolved_runtime_home(agent: str, env: dict[str, str]) -> Path:
     config_file = env.get("MEMOS_CONFIG_FILE", "").strip()
     if config_file:
         return _expanded_path(config_file, env).parent
-    agent_home = ".hermes" if agent == "hermes" else f".{agent}"
-    default_home = Path(env.get("HOME", "") or Path.home()) / agent_home / "memos-plugin"
+    # Hermes gets a platform-aware home (HERMES_HOME → LOCALAPPDATA on
+    # Windows → ~/.hermes on POSIX). Other agents keep the ~/.<agent>
+    # convention because they do not participate in the HERMES_HOME
+    # contract. See issue #2221.
+    if agent == "hermes":
+        default_home = resolve_hermes_home(env=env) / "memos-plugin"
+    else:
+        agent_home = f".{agent}"
+        default_home = (
+            Path(env.get("HOME", "") or Path.home()) / agent_home / "memos-plugin"
+        )
     return _expanded_path(str(default_home), env)
 
 

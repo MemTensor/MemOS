@@ -33,6 +33,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveHermesHome } from "./core/config/hermes-home.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -79,10 +81,19 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 const PID_FILENAME = "bridge.pid";
 
 function pidFilePath(agent: string): string {
-  const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
+  if (agent === "hermes") {
+    // Honour HERMES_HOME / %LOCALAPPDATA%\hermes so the PID file lives
+    // inside the same Hermes home the daemon reads (issue #2221).
+    return path.join(
+      resolveHermesHome(),
+      "memos-plugin",
+      "daemon",
+      PID_FILENAME,
+    );
+  }
   return path.join(
     process.env.HOME ?? "/tmp",
-    agentHome,
+    `.${agent}`,
     "memos-plugin",
     "daemon",
     PID_FILENAME,

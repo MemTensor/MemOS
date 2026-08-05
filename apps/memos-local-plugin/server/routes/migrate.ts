@@ -49,6 +49,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { rootLogger } from "../../core/logger/index.js";
+import { resolveHermesHome } from "../../core/config/hermes-home.js";
 import type { ServerDeps, ServerOptions } from "../types.js";
 import { writeError, type Routes, type RouteContext } from "./registry.js";
 import type { TraceDTO, SkillDTO } from "../../agent-contract/dto.js";
@@ -67,7 +68,10 @@ const log = rootLogger.child({ channel: "server.migrate" });
 function legacyDbPath(agent: LegacyAgent): string {
   switch (agent) {
     case "hermes":
-      return join(homedir(), ".hermes", "memos-state", "memos-local", "memos.db");
+      // Anchor on the canonical Hermes home (HERMES_HOME →
+      // %LOCALAPPDATA%\hermes on Windows → ~/.hermes on POSIX) so the
+      // migration finds the real legacy DB on every platform (#2221).
+      return join(resolveHermesHome(), "memos-state", "memos-local", "memos.db");
     case "openclaw":
     default:
       return join(homedir(), ".openclaw", "memos-local", "memos.db");

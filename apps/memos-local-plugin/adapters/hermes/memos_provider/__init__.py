@@ -71,6 +71,7 @@ from daemon_manager import (  # noqa: E402
     ensure_viewer_daemon,
     kill_zombie_bridges,
 )
+from hermes_home import resolve_hermes_home  # noqa: E402
 from shared_bridge_runtime import (  # noqa: E402
     HERMES_HOOK_DISPATCHER,
     SHARED_BRIDGE_REGISTRY,
@@ -129,7 +130,9 @@ def _resolved_memos_runtime_home() -> Path:
     config_file = os.environ.get("MEMOS_CONFIG_FILE", "").strip()
     if config_file:
         return Path(config_file).expanduser().resolve().parent
-    return (Path.home() / ".hermes" / "memos-plugin").resolve()
+    # Fallback: use the canonical Hermes home (HERMES_HOME → LOCALAPPDATA →
+    # ~/.hermes on POSIX). See hermes_home.resolve_hermes_home and issue #2221.
+    return (resolve_hermes_home() / "memos-plugin").resolve()
 
 
 def _memos_runtime_env_snapshot(runtime_home: Path | None = None) -> dict[str, str]:
@@ -1224,7 +1227,7 @@ class MemTensorProvider(MemoryProvider):
         sessions_dir = (
             Path(self._hermes_home).expanduser() / "sessions"
             if self._hermes_home
-            else Path.home() / ".hermes" / "sessions"
+            else resolve_hermes_home() / "sessions"
         )
         session_path = sessions_dir / f"session_{child_session_id}.json"
         try:

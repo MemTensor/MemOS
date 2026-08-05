@@ -93,14 +93,46 @@ const PID_FILENAME = "bridge.pid";
 const STDIO_PID_FILENAME = "bridge-stdio.pid";
 
 function pidFilePath(agent: string, filename: string = PID_FILENAME): string {
-  const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
+  if (agent === "hermes") {
+    // Honour HERMES_HOME / %LOCALAPPDATA%\hermes so the PID file lives
+    // inside the same Hermes home the daemon reads (issue #2221).
+    return path.join(resolveHermesHomeSync(), "memos-plugin", "daemon", filename);
+  }
   return path.join(
     process.env.HOME ?? "/tmp",
-    agentHome,
+    `.${agent}`,
     "memos-plugin",
     "daemon",
     filename,
   );
+}
+
+// `main()` is async and the ESM `resolveHermesHome` import happens lazily
+// inside it. `pidFilePath` runs *before* that dynamic import completes,
+// so we mirror the same tiny resolver here to avoid loading ESM twice.
+function resolveHermesHomeSync(): string {
+  const env = process.env;
+  const explicit = (env["HERMES_HOME"] ?? "").trim();
+  if (explicit) return path.resolve(expandUserSync(explicit));
+
+  if (process.platform === "win32") {
+    const local = (env["LOCALAPPDATA"] ?? "").trim();
+    if (local) return path.resolve(path.join(expandUserSync(local), "hermes"));
+    const home = env["USERPROFILE"] || env["HOME"] || "/tmp";
+    return path.resolve(path.join(expandUserSync(home), "AppData", "Local", "hermes"));
+  }
+  const home = env["HOME"] || "/tmp";
+  return path.resolve(path.join(expandUserSync(home), ".hermes"));
+}
+
+function expandUserSync(value: string): string {
+  const env = process.env;
+  const home = env["HOME"] || env["USERPROFILE"] || "";
+  if (value === "~") return home || value;
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(home || "", value.slice(2));
+  }
+  return value;
 }
 
 function readPidFile(pidPath: string): number | null {

@@ -51,4 +51,14 @@ describe("config/paths", () => {
     const home = resolveHome("custom");
     expect(home.root.endsWith(".custom/memos-plugin")).toBe(true);
   });
+
+  it("resolveHome(hermes) honours HERMES_HOME when MEMOS_* are unset (#2221)", () => {
+    delete process.env["MEMOS_HOME"];
+    delete process.env["MEMOS_CONFIG_FILE"];
+    process.env["HERMES_HOME"] = "/tmp/regression-2221-paths";
+    const home = resolveHome("hermes");
+    // The plugin's runtime home nests inside the Hermes home.
+    expect(home.root.endsWith("regression-2221-paths/memos-plugin")).toBe(true);
+    expect(home.configFile).toBe(join(home.root, "config.yaml"));
+  });
 });
