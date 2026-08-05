@@ -112,7 +112,11 @@ class MemoryManager:
         else:
             added_ids = self._add_memories_parallel(memories, user_name)
 
-        if mode == "sync":
+        # When running inside a reorganize pass, the working-memory pool is
+        # being reconstructed from long-term material, so we must not drop
+        # nodes via ``remove_oldest_memory`` and must not refresh the
+        # aggregated size counters against a temporary population.
+        if mode == "sync" and not self.is_reorganize:
             self._cleanup_working_memory(user_name)
 
         return added_ids
