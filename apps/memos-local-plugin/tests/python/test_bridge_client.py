@@ -32,10 +32,10 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import bridge_client as bridge_client_mod
-import daemon_manager as daemon_manager_mod
+import bridge_client as bridge_client_mod  # noqa: E402
+import daemon_manager as daemon_manager_mod  # noqa: E402
 
-from bridge_client import BridgeError, MemosBridgeClient
+from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
 
 
 class FakePopen:
@@ -1445,7 +1445,7 @@ class ViewerDaemonTests(unittest.TestCase):
 class ViewerProbeTests(unittest.TestCase):
     def test_loopback_probe_bypasses_proxy_on_all_supported_platforms(self) -> None:
         class JsonHandler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self) -> None:
+            def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
                 body = b'{"service":"memos-local-plugin","agent":"hermes"}'
                 self.send_response(200)
                 self.send_header("content-type", "application/json")

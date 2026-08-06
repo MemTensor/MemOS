@@ -342,7 +342,7 @@ def _probe_json_url(url: str) -> LoopbackProbeResult:
         return "unknown"
     except TimeoutError:
         return "unknown"
-    except Exception:  # noqa: BLE001 - an indeterminate probe must fail closed
+    except Exception:
         return "unknown"
 
     if "json" not in content_type.lower() and raw[:1] not in (b"{", b"["):
