@@ -487,23 +487,13 @@ function Install-OpenClaw {
     Write-Info "Patching openclaw.json"
     $LegacyIds = @("memos-local-openclaw-plugin")
     $LegacyJson = ($LegacyIds -join ',')
-    $SourceKindStr = if ($SourceKind -eq 'path') { 'path' } else { 'npm' }
-    
     $env:PLUGIN_ID = $PluginId
-    $env:INSTALL_PATH = $Prefix
-    $env:SOURCE_KIND = $SourceKindStr
-    $env:SOURCE_SPEC = $SourceSpec
-    $env:PLUGIN_VERSION = $PluginVersion
     $env:LEGACY_JSON = $LegacyJson
     $env:CONFIG_PATH = $ConfigPath
 
     $NodeScript = @"
 const fs = require('fs');
-const {
-  CONFIG_PATH: configPath, PLUGIN_ID: pluginId, INSTALL_PATH: installPath,
-  SOURCE_KIND: sourceKind, SOURCE_SPEC: sourceSpec,
-  PLUGIN_VERSION: pluginVersion, LEGACY_JSON: legacyCsv,
-} = process.env;
+const { CONFIG_PATH: configPath, PLUGIN_ID: pluginId, LEGACY_JSON: legacyCsv } = process.env;
 const legacyIds = (legacyCsv || '').split(',').filter(Boolean);
 const MEMOS_TOOL_NAMES = [
   'memos_search',
@@ -546,7 +536,6 @@ if (!config.plugins.allow.includes(pluginId)) config.plugins.allow.push(pluginId
 
 for (const legacyId of legacyIds) {
   if (config.plugins.entries?.[legacyId]) delete config.plugins.entries[legacyId];
-  if (config.plugins.installs?.[legacyId]) delete config.plugins.installs[legacyId];
   if (Array.isArray(config.plugins.allow)) {
     config.plugins.allow = config.plugins.allow.filter((x) => x !== legacyId);
   }
@@ -557,6 +546,25 @@ for (const legacyId of legacyIds) {
   }
 }
 
+// `plugins.installs` was optional through OpenClaw 2026.4.24 and moved to
+// machine-managed plugin index state in 2026.4.25. The extension already lives
+// in OpenClaw's standard discovery directory, so neither generation requires a
+// hand-written MemOS install record. Remove only records owned by this installer
+// so older OpenClaw releases retain metadata for unrelated plugins.
+if (
+  config.plugins.installs &&
+  typeof config.plugins.installs === 'object' &&
+  !Array.isArray(config.plugins.installs)
+) {
+  delete config.plugins.installs[pluginId];
+  for (const legacyId of legacyIds) delete config.plugins.installs[legacyId];
+  if (Object.keys(config.plugins.installs).length === 0) delete config.plugins.installs;
+} else if (Object.prototype.hasOwnProperty.call(config.plugins, 'installs')) {
+  // A malformed legacy value is invalid on old hosts and cannot carry records
+  // worth preserving.
+  delete config.plugins.installs;
+}
+
 if (!config.plugins.slots || typeof config.plugins.slots !== 'object') config.plugins.slots = {};
 config.plugins.slots.memory = pluginId;
 
@@ -565,22 +573,18 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
-if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks;
-
-if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
-const installsEntry = {
-  source: sourceKind === 'path' ? 'path' : 'npm',
-  installPath,
-  version: pluginVersion,
-  resolvedVersion: pluginVersion,
-  installedAt: new Date().toISOString(),
-};
-if (sourceKind !== 'path') {
-  installsEntry.spec = sourceSpec;
-  installsEntry.resolvedName = '@memtensor/memos-local-plugin';
-  installsEntry.resolvedSpec = sourceSpec;
+// OpenClaw requires an explicit opt-in before conversation-bearing hooks can
+// inject memories at prompt time or capture completed turns at agent_end.
+// Preserve any existing hook settings while enforcing the permission MemOS
+// needs; replacing the object would silently discard user/host configuration.
+if (
+  !config.plugins.entries[pluginId].hooks ||
+  typeof config.plugins.entries[pluginId].hooks !== 'object' ||
+  Array.isArray(config.plugins.entries[pluginId].hooks)
+) {
+  config.plugins.entries[pluginId].hooks = {};
 }
-config.plugins.installs[pluginId] = installsEntry;
+config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 "@
