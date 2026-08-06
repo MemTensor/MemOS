@@ -191,11 +191,38 @@ describe("viewer sharing endpoints", () => {
     const shareTaskJson = await shareTaskRes.json();
     expect(shareTaskJson.ok).toBe(true);
     expect(hubStore.getHubTaskBySource(adminUserId, "local-task-1")).not.toBeNull();
-    expect(viewerStore.getHubTaskBySource(adminUserId, "local-task-1")?.visibility).toBe("public");
+    expect(viewerStore.getLocalSharedTask("local-task-1")?.hubTaskId).toBeTruthy();
 
     const taskDetailRes = await fetch(`${viewerUrl}/api/task/local-task-1`, { headers: { cookie } });
     const taskDetailJson = await taskDetailRes.json();
     expect(taskDetailJson.sharingVisibility).toBe("public");
+
+    const shareMemoryRes = await fetch(`${viewerUrl}/api/sharing/memories/share`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ chunkId: "local-chunk-1", visibility: "public" }),
+    });
+    const shareMemoryJson = await shareMemoryRes.json();
+    expect(shareMemoryJson.ok).toBe(true);
+    expect(viewerStore.getTeamSharedChunk("local-chunk-1")?.hubMemoryId).toBeTruthy();
+
+    const memoryListRes = await fetch(`${viewerUrl}/api/memories?limit=10`, { headers: { cookie } });
+    const memoryListJson = await memoryListRes.json();
+    const memoryRow = memoryListJson.memories.find((m: any) => m.id === "local-chunk-1");
+    expect(memoryRow?.sharingVisibility).toBe("public");
+
+    const shareSkillRes = await fetch(`${viewerUrl}/api/sharing/skills/share`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ skillId: "local-skill-1", visibility: "public" }),
+    });
+    const shareSkillJson = await shareSkillRes.json();
+    expect(shareSkillJson.ok).toBe(true);
+    expect(viewerStore.getTeamSharedSkill("local-skill-1")?.hubSkillId).toBeTruthy();
+
+    const skillDetailRes = await fetch(`${viewerUrl}/api/skill/local-skill-1`, { headers: { cookie } });
+    const skillDetailJson = await skillDetailRes.json();
+    expect(skillDetailJson.skill.sharingVisibility).toBe("public");
 
     const pullRes = await fetch(`${viewerUrl}/api/sharing/skills/pull`, {
       method: "POST",
@@ -214,7 +241,25 @@ describe("viewer sharing endpoints", () => {
     const unshareTaskJson = await unshareTaskRes.json();
     expect(unshareTaskJson.ok).toBe(true);
     expect(hubStore.getHubTaskBySource(adminUserId, "local-task-1")).toBeNull();
-    expect(viewerStore.getHubTaskBySource(adminUserId, "local-task-1")).toBeNull();
+    expect(viewerStore.getLocalSharedTask("local-task-1")).toBeNull();
+
+    const unshareMemoryRes = await fetch(`${viewerUrl}/api/sharing/memories/unshare`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ chunkId: "local-chunk-1" }),
+    });
+    const unshareMemoryJson = await unshareMemoryRes.json();
+    expect(unshareMemoryJson.ok).toBe(true);
+    expect(viewerStore.getTeamSharedChunk("local-chunk-1")).toBeNull();
+
+    const unshareSkillRes = await fetch(`${viewerUrl}/api/sharing/skills/unshare`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ skillId: "local-skill-1" }),
+    });
+    const unshareSkillJson = await unshareSkillRes.json();
+    expect(unshareSkillJson.ok).toBe(true);
+    expect(viewerStore.getTeamSharedSkill("local-skill-1")).toBeNull();
   });
 
 

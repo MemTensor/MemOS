@@ -24,7 +24,10 @@ from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem, TaskPriori
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube, is_cloud_env
+from memos.mem_scheduler.utils.misc_utils import (
+    group_messages_by_user_and_mem_cube,
+    is_playground_api,
+)
 from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event, to_iso
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
@@ -140,6 +143,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 # Propagate trace_id and user info to logging context for this handler execution
                 ctx = RequestContext(
                     trace_id=trace_id,
+                    api_path=getattr(first_msg, "api_path", None),
                     user_name=getattr(first_msg, "user_name", None),
                     user_type=None,
                 )
@@ -226,7 +230,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     if task_item.item_id in self._running_tasks:
                         task_item.mark_completed(result)
                         del self._running_tasks[task_item.item_id]
-                logger.info(f"Task completed: {task_item.get_execution_info()}")
+                logger.debug(f"Task completed: {task_item.get_execution_info()}")
                 return result
 
             except Exception as e:
@@ -317,8 +321,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         mem_cube_id = first.mem_cube_id
 
         try:
-            cloud_env = is_cloud_env()
-            if not cloud_env:
+            if is_playground_api():
                 return
 
             for task_id in task_ids:
@@ -345,6 +348,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         log_content=f"Task {task_id} completed",
                         status="completed",
                         source_doc_id=source_doc_id,
+                        api_path=getattr(messages[0], "api_path", None) if messages else None,
                     )
                     self.submit_web_logs(event)
 
@@ -369,6 +373,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         log_content=f"Task {task_id} failed: {error_msg}",
                         status="failed",
                         source_doc_id=source_doc_id,
+                        api_path=getattr(messages[0], "api_path", None) if messages else None,
                     )
                     self.submit_web_logs(event)
         except Exception:
@@ -548,6 +553,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
             running = 0
         try:
             with self._task_lock:
+                done = {f for f in self._futures if f.done()}
+                if done:
+                    self._futures -= done
                 inflight = len(self._futures)
         except Exception:
             inflight = 0
@@ -630,12 +638,12 @@ class SchedulerDispatcher(BaseSchedulerModule):
             with self._task_lock:
                 self._futures.add(future)
             future.add_done_callback(self._handle_future_result)
-            logger.info(
+            logger.debug(
                 f"Dispatch {len(msgs)} message(s) to {task_label} handler for user {user_id} and mem_cube {mem_cube_id}."
             )
         else:
             # For synchronous execution, the wrapper will run and remove the task upon completion
-            logger.info(
+            logger.debug(
                 f"Execute {len(msgs)} message(s) synchronously for {task_label} for user {user_id} and mem_cube {mem_cube_id}."
             )
             wrapped_handler(msgs)
@@ -653,6 +661,12 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         # Group messages by user_id and mem_cube_id first
         user_cube_groups = group_messages_by_user_and_mem_cube(msg_list)
+        logger.info(
+            "Dispatcher received batch. total_messages=%s user_groups=%s unique_labels=%s",
+            len(msg_list),
+            len(user_cube_groups),
+            sorted({msg.label for msg in msg_list}),
+        )
 
         # Process each user and mem_cube combination
         for user_id, cube_groups in user_cube_groups.items():

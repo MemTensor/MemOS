@@ -1,6 +1,26 @@
 ---
 name: memos-memory-guide
 description: "Use the MemOS Local memory system to search and use the user's past conversations. Use this skill whenever the user refers to past chats, their own preferences or history, or when you need to answer from prior context. When auto-recall returns nothing (long or unclear user query), generate your own short search query and call memory_search. Available tools: memory_search, memory_get, memory_write_public, memory_share, memory_unshare, task_summary, skill_get, skill_search, skill_install, skill_publish, skill_unpublish, network_memory_detail, network_skill_pull, network_team_info, memory_timeline, memory_viewer."
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - node
+        - npm
+      anyBins:
+        - curl
+        - wget
+      env:
+        - OPENCLAW_STATE_DIR
+        - OPENCLAW_CONFIG_PATH
+      config:
+        - ~/.openclaw/openclaw.json
+    install:
+      - kind: node
+        package: better-sqlite3
+        bins: []
+    emoji: "\U0001F9E0"
+    homepage: https://github.com/nicekate/MemOS
 ---
 
 # MemOS Local Memory — Agent Guide
@@ -53,8 +73,11 @@ Two sharing planes exist and must not be confused:
 ### memory_share
 
 - **What it does:** Share an existing memory either with local OpenClaw agents, to the team, or to both.
-- **When to call:** You already have a useful memory chunk and want to expose it beyond the current agent.
-- **Do not use when:** You are creating a new shared note from scratch. In that case use `memory_write_public`.
+- **When to call:**
+  - If you want to share conversation content to team or hub, first retrieve memories related to that content to obtain the right `chunkId`(s), then share.
+  - `target='agents'` (default): When those memories would clearly help other agents in the same workspace, you may share proactively without asking the user.
+  - `target='hub'` or `'both'`: Only after explicit user consent when the content would benefit collaborators—explain briefly, ask first, then call `hub`/`both` (Hub must be configured). Never silently Hub-share.
+- **Do not use when:** You are creating a brand-new shared note with **no** existing chunk—use `memory_write_public` instead.
 - **Parameters:**
   - `chunkId` (string, **required**) — Existing memory chunk ID.
   - `target` (string, optional) — `'agents'` (default), `'hub'`, or `'both'`.

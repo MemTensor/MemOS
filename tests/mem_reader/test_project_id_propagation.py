@@ -53,6 +53,7 @@ def _make_fast_item(
     manager_user_id: str | None = MANAGER_USER_ID,
     project_id: str | None = PROJECT_ID,
     role: str = "user",
+    internal_info: dict | None = None,
 ) -> TextualMemoryItem:
     return TextualMemoryItem(
         memory=memory,
@@ -63,6 +64,7 @@ def _make_fast_item(
             sources=[SourceMessage(type="chat", role=role, content=memory)],
             manager_user_id=manager_user_id,
             project_id=project_id,
+            internal_info=internal_info,
         ),
     )
 
@@ -216,6 +218,8 @@ class TestMultiModalProjectIdPropagation(unittest.TestCase):
         self.reader.graph_db = MagicMock()
         self.reader.oss_config = None
         self.reader.skills_dir_config = None
+        self.reader.memory_version_switch = "off"
+        self.reader.qwen_llm = MagicMock()
 
     # -- _build_window_from_items --------------------------------------------
     def test_build_window_propagates_project_id(self):
@@ -254,6 +258,50 @@ class TestMultiModalProjectIdPropagation(unittest.TestCase):
 
         self.assertIsNotNone(result)
         _assert_fields(self, result)
+
+    def test_split_large_memory_item_assigns_shared_ingest_batch_id(self):
+        self.reader._count_tokens = MagicMock(return_value=999)
+        self.reader.chunker.chunk.return_value = ["chunk one", "chunk two"]
+
+        def fake_make_memory_item(
+            *,
+            value,
+            info,
+            memory_type,
+            tags,
+            key,
+            sources,
+            background,
+            need_embed,
+        ):
+            return TextualMemoryItem(
+                memory=value,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=info["user_id"],
+                    session_id=info["session_id"],
+                    memory_type=memory_type,
+                    tags=tags,
+                    key=key,
+                    sources=sources,
+                    background=background,
+                ),
+            )
+
+        self.reader._make_memory_item = MagicMock(side_effect=fake_make_memory_item)
+        source_item = _make_fast_item("very long source", internal_info={"origin": "doc"})
+
+        result = self.reader._split_large_memory_item(source_item, max_tokens=10)
+
+        self.assertEqual(len(result), 2)
+        batch_ids = {
+            item.metadata.internal_info["ingest_batch_id"]
+            for item in result
+            if item.metadata.internal_info and item.metadata.internal_info.get("ingest_batch_id")
+        }
+        self.assertEqual(len(batch_ids), 1)
+        self.assertEqual({item.metadata.internal_info["chunk_index"] for item in result}, {0, 1})
+        self.assertEqual({item.metadata.internal_info["chunk_total"] for item in result}, {2})
+        self.assertEqual({item.metadata.internal_info["origin"] for item in result}, {"doc"})
 
     # -- _process_string_fine ------------------------------------------------
     def test_process_string_fine_propagates_fields(self):

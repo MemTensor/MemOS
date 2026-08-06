@@ -270,7 +270,10 @@ class MOSMCPServer:
 
         @self.mcp.tool()
         async def search_memories(
-            query: str, user_id: str | None = None, cube_ids: list[str] | None = None
+            query: str,
+            user_id: str | None = None,
+            cube_ids: list[str] | None = None,
+            filter: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             """
             Search for memories across user's accessible memory cubes.
@@ -282,11 +285,15 @@ class MOSMCPServer:
                 query (str): Search query to find relevant memories
                 user_id (str, optional): User ID whose cubes to search. If not provided, uses default user
                 cube_ids (list[str], optional): Specific cube IDs to search. If not provided, searches all user's cubes
+                filter (dict, optional): Filter conditions for the search. An empty dict is treated as no filter.
 
             Returns:
                 dict: Search results containing text_mem, act_mem, and para_mem categories with relevant memories
             """
             try:
+                # Some MCP clients always send filter:{} in conversation mode; treat it as no filter
+                if not filter:
+                    filter = None
                 result = self.mos_core.search(query, user_id, cube_ids)
                 return result
             except Exception as e:

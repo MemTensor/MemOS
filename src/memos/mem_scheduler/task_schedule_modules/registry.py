@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,
     ANSWER_TASK_LABEL,
+    MEM_DREAM_TASK_LABEL,
     MEM_FEEDBACK_TASK_LABEL,
     MEM_ORGANIZE_TASK_LABEL,
     MEM_READ_TASK_LABEL,
@@ -23,6 +24,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
 from .handlers.add_handler import AddMessageHandler
 from .handlers.answer_handler import AnswerMessageHandler
 from .handlers.feedback_handler import FeedbackMessageHandler
+from .handlers.mem_dream_handler import MemDreamMessageHandler
 from .handlers.mem_read_handler import MemReadMessageHandler
 from .handlers.mem_reorganize_handler import MemReorganizeMessageHandler
 from .handlers.memory_update_handler import MemoryUpdateHandler
@@ -39,6 +41,7 @@ class SchedulerHandlerRegistry:
         self.mem_feedback = FeedbackMessageHandler(scheduler_context)
         self.mem_read = MemReadMessageHandler(scheduler_context)
         self.mem_reorganize = MemReorganizeMessageHandler(scheduler_context)
+        self.mem_dream = MemDreamMessageHandler(scheduler_context)
         self.pref_add = PrefAddMessageHandler(scheduler_context)
 
     def build_dispatch_map(self) -> dict[str, Callable | tuple]:
@@ -49,6 +52,7 @@ class SchedulerHandlerRegistry:
             ADD_TASK_LABEL: (self.add, TaskPriorityLevel.LEVEL_1, None),
             MEM_READ_TASK_LABEL: self.mem_read,
             MEM_ORGANIZE_TASK_LABEL: self.mem_reorganize,
+            MEM_DREAM_TASK_LABEL: self.mem_dream,
             PREF_ADD_TASK_LABEL: (self.pref_add, None, 600_000),
             MEM_FEEDBACK_TASK_LABEL: self.mem_feedback,
         }

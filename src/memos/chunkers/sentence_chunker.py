@@ -53,4 +53,5 @@ class SentenceChunker(BaseChunker):
             chunks.append(chunk)
 
         logger.debug(f"Generated {len(chunks)} chunks from input text")
+
         return chunks

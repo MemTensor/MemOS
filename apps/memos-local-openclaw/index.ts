@@ -5,19 +5,20 @@
  * Provides: memory_search, memory_get, memory_timeline, task_summary, skill_get, skill_install, memory_viewer
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import * as fs from "fs";
 import * as path from "path";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
 import type { HostModelsConfig } from "./src/openclaw-api";
+import { isPathInside } from "./src/path-utils";
 import { ensureSqliteBinding } from "./src/storage/ensure-binding";
 import { SqliteStore } from "./src/storage/sqlite";
 import { Embedder } from "./src/embedding";
 import { IngestWorker } from "./src/ingest/worker";
 import { RecallEngine } from "./src/recall/engine";
+import { shouldSkipAutoRecallForSession } from "./src/recall/session-policy";
+import { topicJudgePreFilter } from "./src/recall/topic-judge";
 import { captureMessages, stripInboundMetadata } from "./src/capture";
 import { DEFAULTS } from "./src/types";
 import type { SearchHit } from "./src/types";
@@ -31,6 +32,11 @@ import { SkillInstaller } from "./src/skill/installer";
 import { Summarizer } from "./src/ingest/providers";
 import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
+import { parseJsonOrJson5 } from "./src/shared/json5";
+import { patchOpenclawAllowFile } from "./src/shared/openclaw-config";
+
+
+type OpenClawPluginApi = any;
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -53,6 +59,97 @@ function deduplicateHits<T extends { summary: string }>(hits: T[]): T[] {
   return kept;
 }
 
+const NEW_SESSION_PROMPT_RE = /A new session was started via \/new or \/reset\./i;
+const INTERNAL_CONTEXT_RE = /OpenClaw runtime context \(internal\):[\s\S]*/i;
+const CONTINUE_PROMPT_RE = /^Continue where you left off\.[\s\S]*/i;
+
+const buildMemoryPromptSection = ({ availableTools, citationsMode }: {
+  availableTools: Set<string>;
+  citationsMode?: string;
+}) => {
+  const lines: string[] = [];
+  const hasMemorySearch = availableTools.has("memory_search");
+  const hasMemoryGet = availableTools.has("memory_get");
+
+  if (!hasMemorySearch && !hasMemoryGet) {
+    return lines;
+  }
+
+  lines.push("## Memory Recall");
+  lines.push(
+    "This workspace uses MemOS Local as the active memory slot. Prefer recalled memories and the memory tools before claiming prior context is unavailable.",
+  );
+
+  if (hasMemorySearch && hasMemoryGet) {
+    lines.push(
+      "Use `memory_search` to locate relevant memories, then `memory_get` or `memory_timeline` when you need the full source text or surrounding context.",
+    );
+  } else if (hasMemorySearch) {
+    lines.push("Use `memory_search` before answering questions about prior conversations, preferences, plans, or decisions.");
+  } else {
+    lines.push("Use `memory_get` or `memory_timeline` to inspect the referenced memory before answering.");
+  }
+
+  if (citationsMode === "off") {
+    lines.push("Citations are disabled, so avoid mentioning internal memory ids unless the user asks.");
+  } else {
+    lines.push("When it helps the user verify a memory-backed claim, mention the relevant memory identifier or tool result.");
+  }
+
+  lines.push("");
+  return lines;
+};
+
+const INSTRUCTIONAL_PROMPT_MAX_LEN = 300;
+const SYSTEM_ROLE_PROMPT_RE = /^You are\b/i;
+const HERMES_SKILL_REVIEW_RE = /Review the conversation above/i;
+
+export function normalizeAutoRecallQuery(rawPrompt: string): string {
+  let query = rawPrompt.trim();
+
+  const senderTag = "Sender (untrusted metadata):";
+  const senderPos = query.indexOf(senderTag);
+  if (senderPos !== -1) {
+    const afterSender = query.slice(senderPos);
+    const fenceStart = afterSender.indexOf("```json");
+    const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
+    if (fenceEnd > 0) {
+      query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
+    } else {
+      const firstDblNl = afterSender.indexOf("\n\n");
+      if (firstDblNl > 0) {
+        query = afterSender.slice(firstDblNl + 2).trim();
+      }
+    }
+  }
+
+  query = stripInboundMetadata(query);
+  query = query.replace(/<[^>]+>/g, "").trim();
+
+  if (NEW_SESSION_PROMPT_RE.test(query)) {
+    query = query.replace(NEW_SESSION_PROMPT_RE, "").trim();
+    query = query.replace(/^(Execute|Run) your Session Startup sequence[^\n]*\n?/im, "").trim();
+    query = query.replace(/^Current time:[^\n]*(\n|$)/im, "").trim();
+  }
+
+  query = query.replace(INTERNAL_CONTEXT_RE, "").trim();
+  query = query.replace(CONTINUE_PROMPT_RE, "").trim();
+
+  // Drop instructional prompts (system role prompts, Hermes skill-review prompts,
+  // over-long instruction blobs). These shapes are not user search intents — passing
+  // them to FTS5 fails the sanitize step and wastes a downstream LLM filter call.
+  if (
+    query.length > INSTRUCTIONAL_PROMPT_MAX_LEN
+    || SYSTEM_ROLE_PROMPT_RE.test(query)
+    || HERMES_SKILL_REVIEW_RE.test(query)
+  ) {
+    return "";
+  }
+
+  return query;
+}
+
+
 const pluginConfigSchema = {
   type: "object" as const,
   additionalProperties: true,
@@ -74,6 +171,27 @@ const pluginConfigSchema = {
   },
 };
 
+/**
+ * Narrow view of the OpenClaw plugin API surface that this plugin uses for memory
+ * registration. Hoisted to module scope (rather than inlined at the call site) so that
+ * future maintainers can see exactly which host methods the feature detection covers,
+ * and so nobody accidentally reaches for other `OpenClawPluginApi` members through the
+ * narrowed reference. See issue #1559.
+ *
+ * - `registerMemoryPromptSection` was introduced in OpenClaw 2026.3.31.
+ * - `registerMemoryCapability` is the legacy umbrella call that the plugin used to rely
+ *   on; kept here purely so older gateways still work.
+ */
+interface MemoryRegistrationApi {
+  registerMemoryPromptSection?: (builder: typeof buildMemoryPromptSection) => void;
+  registerMemoryCapability?: (capability: { promptBuilder: typeof buildMemoryPromptSection }) => void;
+}
+
+interface ExtendedLogger {
+  warn(msg: string): void;
+  error?(msg: string): void;
+}
+
 const memosLocalPlugin = {
   id: "memos-local-openclaw-plugin",
   name: "MemOS Local Memory",
@@ -84,127 +202,32 @@ const memosLocalPlugin = {
   configSchema: pluginConfigSchema,
 
   register(api: OpenClawPluginApi) {
+    // OpenClaw 2026.3.31 split the legacy `registerMemoryCapability` facade
+    // into focused registration methods. Prefer the new prompt-section API,
+    // then fall back to the legacy capability registration so older hosts
+    // still load.
+    const memoryApi = api as OpenClawPluginApi & MemoryRegistrationApi;
+
+    if (typeof memoryApi.registerMemoryPromptSection === "function") {
+      memoryApi.registerMemoryPromptSection(buildMemoryPromptSection);
+    } else if (typeof memoryApi.registerMemoryCapability === "function") {
+      memoryApi.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
+    } else {
+      const message =
+        "memos-local: host SDK exposes neither registerMemoryPromptSection " +
+        "nor registerMemoryCapability; memory prompt section will not be " +
+        "installed. The plugin may be incompatible with this OpenClaw gateway version.";
+      const logger = api.logger as ExtendedLogger;
+      if (typeof logger.error === "function") {
+        logger.error(message);
+      } else {
+        logger.warn(message);
+      }
+      throw new Error(message);
+    }
+
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-    const localRequire = createRequire(import.meta.url);
-    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-
-    function detectPluginDir(startDir: string): string {
-      let cur = startDir;
-      for (let i = 0; i < 6; i++) {
-        const pkg = path.join(cur, "package.json");
-        if (fs.existsSync(pkg)) return cur;
-        const parent = path.dirname(cur);
-        if (parent === cur) break;
-        cur = parent;
-      }
-      return startDir;
-    }
-
-    const pluginDir = detectPluginDir(moduleDir);
-
-    function normalizeFsPath(p: string): string {
-      return path.resolve(p).replace(/^\\\\\?\\/, "").toLowerCase();
-    }
-
-    function isPathInside(baseDir: string, targetPath: string): boolean {
-      const baseNorm = normalizeFsPath(baseDir);
-      const targetNorm = normalizeFsPath(targetPath);
-      const rel = path.relative(baseNorm, targetNorm);
-      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-    }
-
-    function runNpm(args: string[]) {
-      const { spawnSync } = localRequire("child_process") as typeof import("node:child_process");
-      return spawnSync(npmCmd, args, {
-        cwd: pluginDir,
-        stdio: "pipe",
-        shell: false,
-        timeout: 120_000,
-      });
-    }
-
-    let sqliteReady = false;
-
-    function trySqliteLoad(): boolean {
-      try {
-        const resolved = localRequire.resolve("better-sqlite3", { paths: [pluginDir] });
-        const resolvedReal = fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved;
-        if (!isPathInside(pluginDir, resolvedReal)) {
-          api.logger.warn(`memos-local: better-sqlite3 resolved outside plugin dir: ${resolved}`);
-          return false;
-        }
-        localRequire(resolvedReal);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-
-    sqliteReady = trySqliteLoad();
-
-    if (!sqliteReady) {
-      api.logger.warn(`memos-local: better-sqlite3 not found in ${pluginDir}, attempting auto-rebuild ...`);
-
-      try {
-        const rebuildResult = runNpm(["rebuild", "better-sqlite3"]);
-
-        const stdout = rebuildResult.stdout?.toString() || "";
-        const stderr = rebuildResult.stderr?.toString() || "";
-        if (stdout) api.logger.info(`memos-local: rebuild stdout: ${stdout.slice(0, 500)}`);
-        if (stderr) api.logger.warn(`memos-local: rebuild stderr: ${stderr.slice(0, 500)}`);
-
-        if (rebuildResult.status === 0) {
-          Object.keys(localRequire.cache)
-            .filter(k => k.includes("better-sqlite3") || k.includes("better_sqlite3"))
-            .forEach(k => delete localRequire.cache[k]);
-          sqliteReady = trySqliteLoad();
-          if (sqliteReady) {
-            api.logger.info("memos-local: better-sqlite3 auto-rebuild succeeded!");
-          } else {
-            api.logger.warn("memos-local: rebuild exited 0 but module still not loadable from plugin dir");
-          }
-        } else {
-          api.logger.warn(`memos-local: rebuild exited with code ${rebuildResult.status}`);
-        }
-      } catch (rebuildErr) {
-        api.logger.warn(`memos-local: auto-rebuild error: ${rebuildErr}`);
-      }
-
-      if (!sqliteReady) {
-        const nodeVer = process.version;
-        const nodeMajor = parseInt(process.versions?.node?.split(".")[0] ?? "0", 10);
-        const isNode25Plus = nodeMajor >= 25;
-        const lines = [
-          "",
-          "╔══════════════════════════════════════════════════════════════╗",
-          "║  MemOS Local Memory — better-sqlite3 native module missing  ║",
-          "╠══════════════════════════════════════════════════════════════╣",
-          "║                                                            ║",
-          "║  Auto-rebuild failed (Node " + nodeVer + "). Run manually:              ║",
-          "║                                                            ║",
-          `║  cd ${pluginDir}`,
-          "║  npm rebuild better-sqlite3                                ║",
-          "║  openclaw gateway stop && openclaw gateway start           ║",
-          "║                                                            ║",
-          "║  If rebuild fails, install build tools first:              ║",
-          "║  macOS:  xcode-select --install                            ║",
-          "║  Linux:  sudo apt install build-essential python3          ║",
-        ];
-        if (isNode25Plus) {
-          lines.push("║                                                            ║");
-          lines.push("║  Node 25+ has no prebuild: build tools required, or use    ║");
-          lines.push("║  Node LTS (20/22): nvm install 22 && nvm use 22            ║");
-        }
-        lines.push("║                                                            ║");
-        lines.push("╚══════════════════════════════════════════════════════════════╝");
-        lines.push("");
-        api.logger.warn(lines.join("\n"));
-        throw new Error(
-          `better-sqlite3 native module not found (Node ${nodeVer}). Auto-rebuild failed. Fix: install build tools, then cd ${pluginDir} && npm rebuild better-sqlite3. Or use Node LTS (20/22).`
-        );
-      }
-    }
-
+    const pluginDir = moduleDir; // alias — replaces removed detectPluginDir(moduleDir)
     let pluginCfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
     const stateDir = process.env.OPENCLAW_STATE_DIR || api.resolvePath("~/.openclaw");
 
@@ -212,8 +235,8 @@ const memosLocalPlugin = {
     const configPath = path.join(stateDir, "state", "memos-local", "config.json");
     if (Object.keys(pluginCfg).length === 0 && fs.existsSync(configPath)) {
       try {
-        const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        pluginCfg = fileConfig;
+        const fileConfig = parseJsonOrJson5(fs.readFileSync(configPath, "utf-8"));
+        pluginCfg = fileConfig as Record<string, unknown>;
         api.logger.info(`memos-local: loaded config from ${configPath}`);
       } catch (e) {
         api.logger.warn(`memos-local: failed to load config from ${configPath}: ${e}`);
@@ -271,23 +294,17 @@ const memosLocalPlugin = {
       ctx.log.warn(`memos-local: could not write to managed skills dir: ${e}`);
     }
 
-    // Ensure plugin tools are enabled in openclaw.json tools.allow
+    // Ensure plugin tools are enabled in openclaw.json tools.allow.
+    // openclaw.json is JSON5 (supports // comments / single-quoted strings /
+    // trailing commas) — the patcher tolerates all of these (see issue #1543).
     try {
       const openclawJsonPath = path.join(stateDir, "openclaw.json");
       if (fs.existsSync(openclawJsonPath)) {
-        const raw = fs.readFileSync(openclawJsonPath, "utf-8");
-        const cfg = JSON.parse(raw);
-        const allow: string[] | undefined = cfg?.tools?.allow;
-        if (Array.isArray(allow) && allow.length > 0 && !allow.includes("group:plugins")) {
-          const lastEntry = JSON.stringify(allow[allow.length - 1]);
-          const patched = raw.replace(
-            new RegExp(`(${lastEntry})(\\s*\\])`),
-            `$1,\n      "group:plugins"$2`,
-          );
-          if (patched !== raw && patched.includes("group:plugins")) {
-            fs.writeFileSync(openclawJsonPath, patched, "utf-8");
-            ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
-          }
+        const result = patchOpenclawAllowFile(openclawJsonPath);
+        if (result.changed) {
+          ctx.log.info("memos-local: added 'group:plugins' to tools.allow in openclaw.json");
+        } else if (result.reason) {
+          ctx.log.debug(`memos-local: tools.allow not patched (${result.reason})`);
         }
       }
     } catch (e) {
@@ -307,6 +324,7 @@ const memosLocalPlugin = {
     // Current agent ID — updated by hooks, read by tools for owner isolation.
     // Falls back to "main" when no hook has fired yet (single-agent setups).
     let currentAgentId = "main";
+    const getCurrentOwner = () => `agent:${currentAgentId}`;
 
     // ─── Check allowPromptInjection policy ───
     // When allowPromptInjection=false, the prompt mutation fields (such as prependContext) in the hook return value
@@ -340,25 +358,11 @@ const memosLocalPlugin = {
           try {
             let outputText: string;
             const det = result?.details;
-            if (det && Array.isArray(det.candidates)) {
+            if (det && (Array.isArray(det.candidates) || Array.isArray(det.filtered))) {
               outputText = JSON.stringify({
-                candidates: det.candidates,
-                filtered: det.hits ?? det.filtered ?? [],
-              });
-            } else if (det && det.local && det.hub) {
-              const localHits = det.local?.hits ?? [];
-              const hubHits = (det.hub?.hits ?? []).map((h: any) => ({
-                score: h.score ?? 0,
-                role: h.source?.role ?? h.role ?? "assistant",
-                summary: h.summary ?? "",
-                original_excerpt: h.excerpt ?? h.summary ?? "",
-                origin: "hub-remote",
-                ownerName: h.ownerName ?? "",
-                groupName: h.groupName ?? "",
-              }));
-              outputText = JSON.stringify({
-                candidates: [...localHits, ...hubHits],
-                filtered: [...localHits, ...hubHits],
+                candidates: det.candidates ?? [],
+                hubCandidates: det.hubCandidates ?? [],
+                filtered: det.filtered ?? det.hits ?? [],
               });
             } else {
               outputText = result?.content?.[0]?.text ?? JSON.stringify(result ?? "");
@@ -368,7 +372,6 @@ const memosLocalPlugin = {
         }
       };
 
-    const getCurrentOwner = () => `agent:${currentAgentId}`;
     const resolveMemorySearchScope = (scope?: string): "local" | "group" | "all" =>
       scope === "group" || scope === "all" ? scope : "local";
     const resolveMemoryShareTarget = (target?: string): "agents" | "hub" | "both" =>
@@ -402,6 +405,7 @@ const memosLocalPlugin = {
         body: JSON.stringify({
           memory: {
             sourceChunkId: chunk.id,
+            sourceAgent: chunk.owner || "",
             role: chunk.role,
             content: chunk.content,
             summary: chunk.summary,
@@ -422,6 +426,7 @@ const memosLocalPlugin = {
           id: memoryId,
           sourceChunkId: chunk.id,
           sourceUserId: hubClient.userId,
+          sourceAgent: chunk.owner || "",
           role: chunk.role,
           content: chunk.content,
           summary: chunk.summary ?? "",
@@ -432,7 +437,8 @@ const memosLocalPlugin = {
           updatedAt: now,
         });
       } else if (ctx.config.sharing?.enabled && hubClient.userId) {
-        store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: memoryId, visibility, groupId });
+        const conn = store.getClientHubConnection();
+        store.upsertTeamSharedChunk(chunk.id, { hubMemoryId: memoryId, visibility, groupId, hubInstanceId: conn?.hubInstanceId ?? "" });
       }
 
       return { memoryId, visibility, groupId };
@@ -458,7 +464,7 @@ const memosLocalPlugin = {
     // ─── Tool: memory_search ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_search",
         label: "Memory Search",
         description:
@@ -495,241 +501,201 @@ const memosLocalPlugin = {
           const role = rawRole === "user" || rawRole === "assistant" || rawRole === "tool" || rawRole === "system" ? rawRole : undefined;
           const minScore = typeof rawMinScore === "number" ? Math.max(0.35, Math.min(1, rawMinScore)) : undefined;
           let searchScope = resolveMemorySearchScope(rawScope);
-          if (searchScope === "local" && ctx.config?.sharing?.enabled) {
-            searchScope = "all";
-          }
           const searchLimit = typeof maxResults === "number" ? Math.max(1, Math.min(20, Math.round(maxResults))) : 10;
 
-          const agentId = currentAgentId;
-          const ownerFilter = [getCurrentOwner(), "public"];
+          const agentId = context?.agentId ?? currentAgentId;
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const effectiveMaxResults = searchLimit;
           ctx.log.debug(`memory_search query="${query}" maxResults=${effectiveMaxResults} minScore=${minScore ?? 0.45} role=${role ?? "all"} owner=agent:${agentId}`);
-          const result = await engine.search({ query, maxResults: effectiveMaxResults, minScore, role, ownerFilter });
-          ctx.log.debug(`memory_search raw candidates: ${result.hits.length}`);
 
-          const rawCandidates = result.hits.map((h) => ({
+          // ── Phase 1: Local search ∥ Hub search (parallel) ──
+          const localSearchP = engine.search({ query, maxResults: effectiveMaxResults, minScore, role, ownerFilter });
+          const hubSearchP = searchScope !== "local"
+            ? hubSearchMemories(store, ctx, { query, maxResults: searchLimit, scope: searchScope as any, hubAddress, userToken })
+                .catch(() => ({ hits: [] as any[], meta: { totalCandidates: 0, searchedGroups: [] as string[], includedPublic: searchScope === "all" } }))
+            : Promise.resolve(null);
+
+          const [result, hubResult] = await Promise.all([localSearchP, hubSearchP]);
+          ctx.log.debug(`memory_search raw candidates: local=${result.hits.length}, hub=${hubResult?.hits?.length ?? 0}`);
+
+          // Split local results: pure-local vs hub-memory (Hub role's hub_memories mixed in by RecallEngine)
+          const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
+          const hubLocalHits = searchScope !== "local" ? result.hits.filter((h) => h.origin === "hub-memory") : [];
+
+          const rawLocalCandidates = localHits.map((h) => ({
             chunkId: h.ref.chunkId,
             role: h.source.role,
             score: h.score,
             summary: h.summary,
             original_excerpt: (h.original_excerpt ?? "").slice(0, 200),
             origin: h.origin || "local",
+            owner: h.owner || "",
           }));
 
-          if (result.hits.length === 0 && searchScope === "local") {
+          // Hub remote candidates (from HTTP call) + hub-memory candidates (from RecallEngine for Hub role)
+          const hubRemoteHits = hubResult?.hits ?? [];
+          const rawHubCandidates = [
+            ...hubLocalHits.map((h) => ({
+              score: h.score,
+              role: h.source.role,
+              summary: h.summary,
+              original_excerpt: (h.original_excerpt ?? "").slice(0, 200),
+              origin: "hub-memory" as const,
+              ownerName: "",
+              groupName: "",
+            })),
+            ...hubRemoteHits.map((h: any) => ({
+              score: h.score ?? 0,
+              role: h.source?.role ?? h.role ?? "assistant",
+              summary: h.summary ?? "",
+              original_excerpt: (h.excerpt ?? h.summary ?? "").slice(0, 200),
+              origin: "hub-remote" as const,
+              ownerName: h.ownerName ?? "",
+              groupName: h.groupName ?? "",
+            })),
+          ];
+
+          if (localHits.length === 0 && rawHubCandidates.length === 0) {
             return {
               content: [{ type: "text", text: result.meta.note ?? "No relevant memories found." }],
-              details: { candidates: [], meta: result.meta },
+              details: { candidates: rawLocalCandidates, hubCandidates: [], filtered: [], meta: result.meta },
             };
           }
 
-          let filteredHits = result.hits;
+          // ── Phase 2: Merge all candidates → single LLM filter ──
+          const allHitsForFilter = [...localHits, ...hubLocalHits];
+          const hubRemoteForFilter = hubRemoteHits;
+          const mergedCandidates = [
+            ...allHitsForFilter.map((h, i) => ({
+              index: i + 1,
+              role: h.source.role,
+              content: (h.original_excerpt ?? "").slice(0, 300),
+              time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
+            })),
+            ...hubRemoteForFilter.map((h: any, i: number) => ({
+              index: allHitsForFilter.length + i + 1,
+              role: (h.source?.role || "assistant") as string,
+              content: (h.summary || h.excerpt || "").slice(0, 300),
+              time: h.source?.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
+            })),
+          ];
+
+          let filteredLocalHits = allHitsForFilter;
+          let filteredHubRemoteHits = hubRemoteForFilter;
           let sufficient = false;
 
-          const candidates = result.hits.map((h, i) => ({
-            index: i + 1,
-            role: h.source.role,
-            content: (h.original_excerpt ?? "").slice(0, 300),
-            time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
-          }));
-
-          const filterResult = await summarizer.filterRelevant(query, candidates);
-          if (filterResult !== null) {
-            sufficient = filterResult.sufficient;
-            if (filterResult.relevant.length > 0) {
-              const indexSet = new Set(filterResult.relevant);
-              filteredHits = result.hits.filter((_, i) => indexSet.has(i + 1));
-              ctx.log.debug(`memory_search LLM filter: ${result.hits.length} → ${filteredHits.length} hits, sufficient=${sufficient}`);
-            } else if (searchScope === "local") {
-              return {
-                content: [{ type: "text", text: "No relevant memories found for this query." }],
-                details: { candidates: rawCandidates, filtered: [], meta: result.meta },
-              };
-            } else {
-              filteredHits = [];
+          if (mergedCandidates.length > 0) {
+            const filterResult = await summarizer.filterRelevant(query, mergedCandidates);
+            if (filterResult !== null) {
+              sufficient = filterResult.sufficient;
+              if (filterResult.relevant.length > 0) {
+                const relevantSet = new Set(filterResult.relevant);
+                const hubStartIdx = allHitsForFilter.length + 1;
+                filteredLocalHits = allHitsForFilter.filter((_, i) => relevantSet.has(i + 1));
+                filteredHubRemoteHits = hubRemoteForFilter.filter((_: any, i: number) => relevantSet.has(hubStartIdx + i));
+                ctx.log.debug(`memory_search LLM filter: merged ${mergedCandidates.length} → local ${filteredLocalHits.length}, hub ${filteredHubRemoteHits.length}`);
+              } else {
+                filteredLocalHits = [];
+                filteredHubRemoteHits = [];
+              }
             }
           }
 
-          const beforeDedup = filteredHits.length;
-          filteredHits = deduplicateHits(filteredHits);
-          ctx.log.debug(`memory_search dedup: ${beforeDedup} → ${filteredHits.length}`);
+          const beforeDedup = filteredLocalHits.length;
+          filteredLocalHits = deduplicateHits(filteredLocalHits);
+          ctx.log.debug(`memory_search dedup: ${beforeDedup} → ${filteredLocalHits.length}`);
 
-          const localDetailsHits = filteredHits.map((h) => {
-            let effectiveTaskId = h.taskId;
-            if (effectiveTaskId) {
-              const t = store.getTask(effectiveTaskId);
-              if (t && t.status === "skipped") effectiveTaskId = null;
-            }
-            return {
-              ref: h.ref,
-              chunkId: h.ref.chunkId,
-              taskId: effectiveTaskId,
-              skillId: h.skillId,
-              role: h.source.role,
-              score: h.score,
-              summary: h.summary,
-              origin: h.origin || "local",
-            };
-          });
-
-          if (searchScope !== "local") {
-            const hub = await hubSearchMemories(store, ctx, { query, maxResults: searchLimit, scope: searchScope as any, hubAddress, userToken }).catch(() => ({ hits: [], meta: { totalCandidates: 0, searchedGroups: [], includedPublic: searchScope === "all" } }));
-
-            let filteredHubHits = hub.hits;
-            if (hub.hits.length > 0) {
-              const hubCandidates = hub.hits.map((h, i) => ({
-                index: filteredHits.length + i + 1,
-                role: (h.source?.role || "assistant") as string,
-                content: (h.summary || h.excerpt || "").slice(0, 300),
-                time: h.source?.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
-              }));
-              const localCandidatesForMerge = filteredHits.map((h, i) => ({
-                index: i + 1,
-                role: h.source.role,
-                content: (h.original_excerpt ?? "").slice(0, 300),
-                time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
-              }));
-              const mergedCandidates = [...localCandidatesForMerge, ...hubCandidates];
-              const mergedFilter = await summarizer.filterRelevant(query, mergedCandidates);
-              if (mergedFilter !== null && mergedFilter.relevant.length > 0) {
-                const relevantSet = new Set(mergedFilter.relevant);
-                const hubStartIdx = filteredHits.length + 1;
-                filteredHits = filteredHits.filter((_, i) => relevantSet.has(i + 1));
-                filteredHubHits = hub.hits.filter((_, i) => relevantSet.has(hubStartIdx + i));
-                ctx.log.debug(`memory_search LLM filter (merged): local ${localCandidatesForMerge.length}→${filteredHits.length}, hub ${hub.hits.length}→${filteredHubHits.length}`);
-              }
-            }
-
-            const originLabel = (h: SearchHit) => {
-              if (h.origin === "hub-memory") return " [团队缓存]";
-              if (h.origin === "local-shared") return " [本机共享]";
-              return "";
-            };
-            const localText = filteredHits.length > 0
-              ? filteredHits.map((h, i) => {
-                  const excerpt = h.original_excerpt.length > 220 ? h.original_excerpt.slice(0, 217) + "..." : h.original_excerpt;
-                  return `${i + 1}. [${h.source.role}]${originLabel(h)} ${excerpt}`;
-                }).join("\n")
-              : "(none)";
-            const hubText = filteredHubHits.length > 0
-              ? filteredHubHits.map((h, i) => `${i + 1}. [${h.ownerName}] [团队] ${h.summary}${h.groupName ? ` (${h.groupName})` : ""}`).join("\n")
-              : "(none)";
-
-            const localDetailsFiltered = filteredHits.map((h) => {
-              let effectiveTaskId = h.taskId;
-              if (effectiveTaskId) {
-                const t = store.getTask(effectiveTaskId);
-                if (t && t.status === "skipped") effectiveTaskId = null;
-              }
-              return {
-                ref: h.ref,
-                chunkId: h.ref.chunkId,
-                taskId: effectiveTaskId,
-                skillId: h.skillId,
-                role: h.source.role,
-                score: h.score,
-                summary: h.summary,
-                origin: h.origin,
-              };
-            });
-
-            return {
-              content: [{
-                type: "text",
-                text: `Local results:\n${localText}\n\nHub results:\n${hubText}`,
-              }],
-              details: {
-                local: { hits: localDetailsFiltered, meta: result.meta },
-                hub: { ...hub, hits: filteredHubHits },
-              },
-            };
-          }
-
-          if (filteredHits.length === 0) {
+          if (filteredLocalHits.length === 0 && filteredHubRemoteHits.length === 0) {
             return {
               content: [{ type: "text", text: "No relevant memories found for this query." }],
-              details: { candidates: rawCandidates, filtered: [], meta: result.meta },
+              details: { candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [], meta: result.meta },
             };
           }
 
+          // ── Phase 3: Build response text ──
           const originTag = (o?: string) => {
             if (o === "local-shared") return " [本机共享]";
             if (o === "hub-memory") return " [团队缓存]";
             if (o === "hub-remote") return " [团队]";
             return "";
           };
-          const lines = filteredHits.map((h, i) => {
-            const excerpt = h.original_excerpt;
-            const parts = [`${i + 1}. [${h.source.role}]${originTag(h.origin)}`];
-            if (excerpt) parts.push(`   ${excerpt}`);
+
+          const localLines = filteredLocalHits.map((h, i) => {
+            const excerpt = h.original_excerpt.length > 220 ? h.original_excerpt.slice(0, 217) + "..." : h.original_excerpt;
+            const parts = [`${i + 1}. [${h.source.role}]${originTag(h.origin)} ${excerpt}`];
             parts.push(`   chunkId="${h.ref.chunkId}"`);
             if (h.taskId) {
               const task = store.getTask(h.taskId);
-              if (task && task.status !== "skipped") {
-                parts.push(`   task_id="${h.taskId}"`);
-              }
+              if (task && task.status !== "skipped") parts.push(`   task_id="${h.taskId}"`);
             }
             return parts.join("\n");
           });
 
+          const hubLines = filteredHubRemoteHits.map((h: any, i: number) =>
+            `${i + 1}. [${h.ownerName ?? "team"}] [团队] ${h.summary ?? ""}${h.groupName ? ` (${h.groupName})` : ""}`
+          );
+
           let tipsText = "";
           if (!sufficient) {
-            const hasTask = filteredHits.some((h) => {
+            const hasTask = filteredLocalHits.some((h) => {
               if (!h.taskId) return false;
               const t = store.getTask(h.taskId);
               return t && t.status !== "skipped";
             });
-
             const tips: string[] = [];
             if (hasTask) {
               tips.push("→ call task_summary(taskId) for full task context");
               tips.push("→ call skill_get(taskId=...) if the task has a proven experience guide");
             }
             tips.push("→ call memory_timeline(chunkId) to expand surrounding conversation");
-
-            if (tips.length > 0) {
-              tipsText = "\n\nThese memories may not be enough. You can fetch more context:\n" + tips.join("\n");
-            }
+            if (tips.length > 0) tipsText = "\n\nThese memories may not be enough. You can fetch more context:\n" + tips.join("\n");
           }
 
+          const localText = localLines.length > 0 ? localLines.join("\n\n") : "(none)";
+          const hubText = hubLines.length > 0 ? hubLines.join("\n") : "(none)";
+          const totalFiltered = filteredLocalHits.length + filteredHubRemoteHits.length;
+          const responseText = filteredHubRemoteHits.length > 0
+            ? `Found ${totalFiltered} relevant memories:\n\nLocal results:\n${localText}\n\nHub results:\n${hubText}${tipsText}`
+            : `Found ${totalFiltered} relevant memories:\n\n${localText}${tipsText}`;
+
+          const filteredDetails = [
+            ...filteredLocalHits.map((h) => {
+              let effectiveTaskId = h.taskId;
+              if (effectiveTaskId) { const t = store.getTask(effectiveTaskId); if (t && t.status === "skipped") effectiveTaskId = null; }
+              return {
+                chunkId: h.ref.chunkId, taskId: effectiveTaskId, skillId: h.skillId,
+                role: h.source.role, score: h.score, summary: h.summary,
+                original_excerpt: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "local",
+                owner: h.owner || "",
+              };
+            }),
+            ...filteredHubRemoteHits.map((h: any) => ({
+              chunkId: "", taskId: null, skillId: null,
+              role: h.source?.role ?? h.role ?? "assistant", score: h.score ?? 0,
+              summary: h.summary ?? "", original_excerpt: (h.excerpt ?? h.summary ?? "").slice(0, 200),
+              origin: "hub-remote", ownerName: h.ownerName ?? "", groupName: h.groupName ?? "",
+              sourceAgent: h.sourceAgent ?? "",
+            })),
+          ];
+
           return {
-            content: [
-              {
-                type: "text",
-                text: `Found ${filteredHits.length} relevant memories:\n\n${lines.join("\n\n")}${tipsText}`,
-              },
-            ],
+            content: [{ type: "text", text: responseText }],
             details: {
-              candidates: rawCandidates,
-              hits: filteredHits.map((h) => {
-                let effectiveTaskId = h.taskId;
-                if (effectiveTaskId) {
-                  const t = store.getTask(effectiveTaskId);
-                  if (t && t.status === "skipped") effectiveTaskId = null;
-                }
-                return {
-                  chunkId: h.ref.chunkId,
-                  taskId: effectiveTaskId,
-                  skillId: h.skillId,
-                  role: h.source.role,
-                  score: h.score,
-                  summary: h.summary,
-                  original_excerpt: (h.original_excerpt ?? "").slice(0, 200),
-                  origin: h.origin || "local",
-                };
-              }),
+              candidates: rawLocalCandidates,
+              hubCandidates: rawHubCandidates,
+              filtered: filteredDetails,
               meta: result.meta,
             },
           };
         }),
-      },
+      }),
       { name: "memory_search" },
     );
 
     // ─── Tool: memory_timeline ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_timeline",
         label: "Memory Timeline",
         description:
@@ -740,13 +706,14 @@ const memosLocalPlugin = {
           window: Type.Optional(Type.Number({ description: "Context window ±N (default 2)" })),
         }),
         execute: trackTool("memory_timeline", async (_toolCallId: any, params: any) => {
-          ctx.log.debug(`memory_timeline called (agent=${currentAgentId})`);
+          const agentId = context?.agentId ?? currentAgentId;
+          ctx.log.debug(`memory_timeline called (agent=${agentId})`);
           const { chunkId, window: win } = params as {
             chunkId: string;
             window?: number;
           };
 
-          const ownerFilter = [`agent:${currentAgentId}`, "public"];
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const anchorChunk = store.getChunkForOwners(chunkId, ownerFilter);
           if (!anchorChunk) {
             return {
@@ -782,14 +749,14 @@ const memosLocalPlugin = {
             details: { entries, anchorRef: { sessionKey: anchorChunk.sessionKey, chunkId, turnId: anchorChunk.turnId, seq: anchorChunk.seq } },
           };
         }),
-      },
+      }),
       { name: "memory_timeline" },
     );
 
     // ─── Tool: memory_get ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_get",
         label: "Memory Get",
         description:
@@ -800,11 +767,12 @@ const memosLocalPlugin = {
             Type.Number({ description: `Max chars (default ${DEFAULTS.getMaxCharsDefault}, max ${DEFAULTS.getMaxCharsMax})` }),
           ),
         }),
-        execute: trackTool("memory_get", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("memory_get", async (_toolCallId: any, params: any) => {
           const { chunkId, maxChars } = params as { chunkId: string; maxChars?: number };
           const limit = Math.min(maxChars ?? DEFAULTS.getMaxCharsDefault, DEFAULTS.getMaxCharsMax);
 
-          const ownerFilter = [`agent:${currentAgentId}`, "public"];
+          const agentId = context?.agentId ?? currentAgentId;
+          const ownerFilter = [`agent:${agentId}`, "public"];
           const chunk = store.getChunkForOwners(chunkId, ownerFilter);
           if (!chunk) {
             return {
@@ -825,7 +793,7 @@ const memosLocalPlugin = {
             },
           };
         }),
-      },
+      }),
       { name: "memory_get" },
     );
 
@@ -978,7 +946,8 @@ const memosLocalPlugin = {
             }),
           }) as any;
 
-          store.markTaskShared(task.id, hubTaskId, chunks.length, visibility, groupId);
+          const conn = store.getClientHubConnection();
+          store.markTaskShared(task.id, hubTaskId, chunks.length, visibility, groupId, conn?.hubInstanceId ?? "");
 
           return {
             content: [{ type: "text", text: `Shared task "${task.title}" with ${chunks.length} chunks to the hub.` }],
@@ -1165,6 +1134,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             };
           }
 
+          const disabledWarning = skill.status === "archived"
+            ? "\n\n> **Warning:** This skill is currently **disabled** (archived). Its content is shown for reference only — it will not be used in search or auto-recall.\n\n"
+            : "";
+
           const manifest = skillInstaller.getCompanionManifest(resolvedSkillId);
           let footer = "\n\n---\n";
 
@@ -1189,7 +1162,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           return {
             content: [{
               type: "text",
-              text: `## Skill: ${skill.name} (v${skill.version})\n\n${sv.content}${footer}`,
+              text: `## Skill: ${skill.name} (v${skill.version})${disabledWarning}\n\n${sv.content}${footer}`,
             }],
             details: {
               skillId: skill.id,
@@ -1346,7 +1319,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     const viewerPort = (pluginCfg as any).viewerPort ?? (gatewayPort + 10);
 
     api.registerTool(
-      {
+      (context) => ({
         name: "memory_viewer",
         label: "Open Memory Viewer",
         description:
@@ -1354,10 +1327,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           "or access their stored memories, or asks where the memory dashboard is. " +
           "Returns the URL the user can open in their browser.",
         parameters: Type.Object({}),
-        execute: trackTool("memory_viewer", async () => {
+        execute: trackTool("memory_viewer", async (_toolCallId: any, params: any) => {
           ctx.log.debug(`memory_viewer called`);
           telemetry.trackViewerOpened();
-          const url = `http://127.0.0.1:${viewerPort}`;
+          const agentId = context?.agentId ?? context?.profileId ?? currentAgentId;
+          const url = `http://127.0.0.1:${viewerPort}?agentId=${encodeURIComponent(agentId)}`;
           return {
             content: [
               {
@@ -1378,7 +1352,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             details: { viewerUrl: url },
           };
         }),
-      },
+      }),
       { name: "memory_viewer" },
     );
 
@@ -1451,9 +1425,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         name: "memory_share",
         label: "Share Memory",
         description:
-          "Share an existing memory either with local OpenClaw agents, to the Hub team, or to both targets. " +
-          "Use this only for an existing chunkId. Use target='agents' for local multi-agent sharing, target='hub' for team sharing, or target='both' for both. " +
-          "If you need to create a brand new shared memory instead of exposing an existing one, use memory_write_public.",
+          "Share an existing stored memory (requires a real chunkId from the database) to the Hub team, or to both targets. " +
+          "If you want to share content from the conversation, please first retrieve the memories related to that content to obtain the correct chunkId(s), then proceed with the sharing. " +
+          "target='agents' (default): when retrieved memories would clearly help other agents in the same OpenClaw workspace, you may share proactively without asking the user. " +
+          "target='hub' or 'both': do not share to the team Hub without explicit user consent when the content would benefit collaborators—explain briefly, ask first, and only call hub/both after they agree (Hub must be configured). " +
+          "To create a brand-new shared note with no existing chunk, use memory_write_public.",
         parameters: Type.Object({
           chunkId: Type.String({ description: "Existing local memory chunk ID to share" }),
           target: Type.Optional(Type.String({ description: "Share target: 'agents' (default), 'hub', or 'both'" })),
@@ -1607,7 +1583,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
     // ─── Tool: skill_search ───
 
     api.registerTool(
-      {
+      (context) => ({
         name: "skill_search",
         label: "Skill Search",
         description:
@@ -1617,10 +1593,11 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           query: Type.String({ description: "Natural language description of the needed skill" }),
           scope: Type.Optional(Type.String({ description: "Search scope: 'mix' (default), 'self', 'public', 'group', or 'all'." })),
         }),
-        execute: trackTool("skill_search", async (_toolCallId: any, params: any, context?: any) => {
+        execute: trackTool("skill_search", async (_toolCallId: any, params: any) => {
           const { query: skillQuery, scope: rawScope } = params as { query: string; scope?: string };
           const scope = (rawScope === "self" || rawScope === "public") ? rawScope : "mix";
-          const currentOwner = getCurrentOwner();
+          const agentId = context?.agentId ?? currentAgentId;
+          const currentOwner = `agent:${agentId}`;
 
           if (rawScope === "group" || rawScope === "all") {
             const [localHits, hub] = await Promise.all([
@@ -1635,16 +1612,32 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               };
             }
 
-            const localText = localHits.length > 0
-              ? localHits.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)}${h.visibility === "public" ? " (shared to local agents)" : ""}`).join("\n")
+            let filteredLocal = localHits;
+            let filteredHub = hub.hits;
+            if (localHits.length > 0 && hub.hits.length > 0) {
+              const allCandidates = [
+                ...localHits.map((h, i) => ({ index: i + 1, role: "skill" as const, content: `[${h.name}] ${h.description.slice(0, 200)}` })),
+                ...hub.hits.map((h, i) => ({ index: localHits.length + i + 1, role: "skill" as const, content: `[${h.name}] ${h.description.slice(0, 200)}` })),
+              ];
+              const mergedFilter = await summarizer.filterRelevant(skillQuery, allCandidates);
+              if (mergedFilter !== null && mergedFilter.relevant.length > 0) {
+                const relevantSet = new Set(mergedFilter.relevant);
+                filteredLocal = localHits.filter((_, i) => relevantSet.has(i + 1));
+                filteredHub = hub.hits.filter((_, i) => relevantSet.has(localHits.length + i + 1));
+                ctx.log.debug(`skill_search LLM filter (merged): local ${localHits.length}→${filteredLocal.length}, hub ${hub.hits.length}→${filteredHub.length}`);
+              }
+            }
+
+            const localText = filteredLocal.length > 0
+              ? filteredLocal.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)}${h.visibility === "public" ? " (shared to local agents)" : ""}`).join("\n")
               : "(none)";
-            const hubText = hub.hits.length > 0
-              ? hub.hits.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)} (${h.visibility}${h.groupName ? `:${h.groupName}` : ""}, owner=${h.ownerName})`).join("\n")
+            const hubText = filteredHub.length > 0
+              ? filteredHub.map((h, i) => `${i + 1}. [${h.name}] ${h.description.slice(0, 150)} (${h.visibility}${h.groupName ? `:${h.groupName}` : ""}, owner=${h.ownerName})`).join("\n")
               : "(none)";
 
             return {
               content: [{ type: "text", text: `Local skills:\n${localText}\n\nHub skills:\n${hubText}` }],
-              details: { query: skillQuery, scope: rawScope, local: { hits: localHits }, hub },
+              details: { query: skillQuery, scope: rawScope, local: { hits: filteredLocal }, hub: { hits: filteredHub } },
             };
           }
 
@@ -1666,7 +1659,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
             details: { query: skillQuery, scope, hits },
           };
         }),
-      },
+      }),
       { name: "skill_search" },
     );
 
@@ -1807,112 +1800,28 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Auto-recall: inject relevant memories before agent starts ───
 
-    /**
-     * Pre-filter: use LLM to check if the new message continues the current topic.
-     * Returns "skip" to skip recall (same topic), "proceed" to run recall (new topic or disabled/error).
-     *
-     * Config:
-     *   topicJudgeRounds = 0  → disabled, always returns "proceed"
-     *   topicJudgeRounds > 0  → enabled, uses that many conversation rounds for context
-     */
-    async function topicJudgePreFilter(opts: {
-      messages: unknown[] | undefined;
-      query: string;
-      topicJudgeRounds: number;
-      summarizer: Summarizer;
-      log: { info: (...args: any[]) => void; warn: (...args: any[]) => void; debug: (...args: any[]) => void };
-    }): Promise<"skip" | "proceed"> {
-      const { messages, query, topicJudgeRounds, summarizer, log } = opts;
-
-      if (topicJudgeRounds <= 0) return "proceed";
-      if (!Array.isArray(messages) || messages.length < 3) return "proceed";
-
-      try {
-        const msgs = messages as Array<Record<string, unknown>>;
-        const rawMsgs = msgs.slice(-20);
-        const merged: Array<{ role: string; text: string }> = [];
-        for (const m of rawMsgs) {
-          const role = m.role as string;
-          if (role === "tool") continue;
-          let text = "";
-          if (typeof m.content === "string") {
-            text = m.content;
-          } else if (Array.isArray(m.content)) {
-            for (const block of m.content as Array<Record<string, unknown>>) {
-              if (block.type === "text" && typeof block.text === "string") text += block.text + " ";
-            }
-          }
-          text = text.trim();
-          if (!text) continue;
-          if (merged.length > 0 && merged[merged.length - 1].role === role) {
-            merged[merged.length - 1].text += "\n\n" + text;
-          } else {
-            merged.push({ role, text });
-          }
-        }
-        if (merged.length > 0) merged.pop();
-
-        const sliceLen = topicJudgeRounds * 2;
-        const lastN = merged.length > sliceLen ? merged.slice(-sliceLen) : merged;
-        if (lastN.length > 0 && lastN[0].role !== "user") lastN.shift();
-        if (lastN.length > 0 && lastN[lastN.length - 1].role !== "assistant") lastN.pop();
-
-        const MAX_CONTEXT_LEN = 500;
-        const HEAD_TAIL = 150;
-        const contextLines = lastN.map((m) => {
-          const role = (m.role === "user") ? "USER" : "ASSISTANT";
-          let text = m.text;
-          if (role === "USER") {
-            const senderIdx = text.lastIndexOf("Sender (untrusted metadata):");
-            if (senderIdx > 0) text = text.slice(senderIdx);
-            const fenceStart = text.indexOf("```json");
-            const fenceEnd = fenceStart >= 0 ? text.indexOf("```\n", fenceStart + 7) : -1;
-            if (fenceEnd > 0) text = text.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
-            if (senderIdx < 0) {
-              const injectEnd = text.indexOf("rephrased query to find more.\n\n");
-              if (injectEnd !== -1) {
-                text = text.slice(injectEnd + "rephrased query to find more.\n\n".length).trim();
-              } else {
-                const injectEnd2 = text.indexOf("Do NOT skip this step. Do NOT answer without searching first.\n\n");
-                if (injectEnd2 !== -1) {
-                  text = text.slice(injectEnd2 + "Do NOT skip this step. Do NOT answer without searching first.\n\n".length).trim();
-                }
-              }
-            }
-          }
-          text = text.replace(/^\[.*?\]\s*/, "").trim();
-          if (text.length > MAX_CONTEXT_LEN) {
-            text = text.slice(0, HEAD_TAIL) + "..." + text.slice(-HEAD_TAIL);
-          }
-          return `${role}: ${text.trim()}`;
-        }).filter((l) => l.split(": ")[1]?.length > 0);
-
-        if (contextLines.length < 2) {
-          log.info(`[auto-recall] topic-judge: too-few-lines (${contextLines.length}), skip recall`);
-          return "skip";
-        }
-
-        const currentContext = contextLines.join("\n");
-        log.info(`[auto-recall] topic-judge: lines=${contextLines.length}, query="${query.slice(0, 60)}"`);
-        const isNew = await summarizer.judgeNewTopic(currentContext, query);
-        const topicResult = isNew === true ? "NEW" : isNew === false ? "SAME" : `ERROR(${isNew})`;
-        log.info(`[auto-recall] topic-judge: result=${topicResult}`);
-
-        return isNew === false ? "skip" : "proceed";
-      } catch (judgeErr) {
-        log.warn(`[auto-recall] topic-judge error="${judgeErr}", fallback=proceed`);
-        return "proceed";
-      }
-    }
+    // Track current session to detect cross-session memories
+    let currentSessionKey: string | null = null;
 
     api.on("before_prompt_build", async (event: { prompt?: string; messages?: unknown[] }, hookCtx?: { agentId?: string; sessionKey?: string }) => {
       if (!allowPromptInjection) return {};
       if (!event.prompt || event.prompt.length < 3) return;
 
-      const recallAgentId = hookCtx?.agentId ?? "main";
+      // ─── Cron / excluded-session gate (GitHub #1311) ───────────────
+      // Skip auto-recall (and skill auto-recall) entirely for OpenClaw
+      // cron sessions by default. The cron prompt is the spec — recalling
+      // prior meta-discussion about the cron contaminates the next run.
+      const recallSessionKey = hookCtx?.sessionKey ?? (event as any)?.sessionKey;
+      if (shouldSkipAutoRecallForSession(recallSessionKey, ctx.config.autoRecall)) {
+        ctx.log.info(`auto-recall: skipping (cron/excluded session: "${recallSessionKey}")`);
+        return;
+      }
+
+      const recallAgentId = hookCtx?.agentId ?? (event as any)?.agentId ?? (event as any)?.profileId ?? "main";
       currentAgentId = recallAgentId;
       const recallOwnerFilter = [`agent:${recallAgentId}`, "public"];
-      ctx.log.info(`auto-recall: agentId=${recallAgentId} (from hookCtx)`);
+      const incomingSessionKey = hookCtx?.sessionKey ?? "default";
+      ctx.log.info(`auto-recall: agentId=${recallAgentId} sessionKey=${incomingSessionKey} (from hookCtx)`);
 
       const recallT0 = performance.now();
       let recallQuery = "";
@@ -1921,82 +1830,94 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const rawPrompt = event.prompt;
         ctx.log.debug(`auto-recall: rawPrompt="${rawPrompt.slice(0, 300)}"`);
 
-        let query = rawPrompt;
-        const senderTag = "Sender (untrusted metadata):";
-        const senderPos = rawPrompt.indexOf(senderTag);
-        if (senderPos !== -1) {
-          const afterSender = rawPrompt.slice(senderPos);
-          const fenceStart = afterSender.indexOf("```json");
-          const fenceEnd = fenceStart >= 0 ? afterSender.indexOf("```\n", fenceStart + 7) : -1;
-          if (fenceEnd > 0) {
-            query = afterSender.slice(fenceEnd + 4).replace(/^\s*\n/, "").trim();
-          } else {
-            const firstDblNl = afterSender.indexOf("\n\n");
-            if (firstDblNl > 0) {
-              query = afterSender.slice(firstDblNl + 2).trim();
-            }
-          }
-        }
-        query = stripInboundMetadata(query);
-        query = query.replace(/<[^>]+>/g, "").trim();
+        const query = normalizeAutoRecallQuery(rawPrompt);
         recallQuery = query;
 
-        if (query.length < 2) {
-          ctx.log.debug("auto-recall: extracted query too short, skipping");
+        // Detect if this is a new session
+        const isNewSession = currentSessionKey !== incomingSessionKey || NEW_SESSION_PROMPT_RE.test(rawPrompt);
+        if (isNewSession && currentSessionKey !== null) {
+          ctx.log.info(`auto-recall: new session detected (prev=${currentSessionKey}, curr=${incomingSessionKey})`);
+        }
+        currentSessionKey = incomingSessionKey;
+
+        const minQueryLength = ctx.config.recall?.autoRecallMinQueryLength ?? DEFAULTS.autoRecallMinQueryLength;
+        if (query.length < minQueryLength) {
+          ctx.log.debug(`auto-recall: query too short (len=${query.length} < minQueryLength=${minQueryLength}), skipping`);
           return;
         }
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
 
-        // ─── Pre-filter: topic-judge to skip recall on topic continuation ───
-        const shouldSkipRecall = await topicJudgePreFilter({
+        const topicDecision = await topicJudgePreFilter({
           messages: event.messages,
           query,
-          topicJudgeRounds: ctx.config.recall?.topicJudgeRounds ?? 4,
+          topicJudgeRounds: ctx.config.recall?.topicJudgeRounds ?? DEFAULTS.topicJudgeRounds,
           summarizer,
           log: ctx.log,
         });
-        if (shouldSkipRecall === "skip") return;
-
-        const result = await engine.search({ query, maxResults: 10, minScore: 0.45, ownerFilter: recallOwnerFilter });
-
-        // Hub fallback helper: search team shared memories when local search has no relevant results
-        const hubFallback = async (): Promise<SearchHit[]> => {
-          if (!ctx.config?.sharing?.enabled) return [];
-          try {
-            const hubResult = await hubSearchMemories(store, ctx, { query, maxResults: 10, scope: "all" });
-            if (hubResult.hits.length === 0) return [];
-            ctx.log.debug(`auto-recall: hub fallback returned ${hubResult.hits.length} hit(s)`);
-            return hubResult.hits.map((h) => ({
-              summary: h.summary,
-              original_excerpt: h.excerpt || h.summary,
-              ref: { sessionKey: "", chunkId: h.remoteHitId, turnId: "", seq: 0 },
-              score: 0.9,
-              taskId: null,
-              skillId: null,
-              origin: "hub-remote" as const,
-              source: { ts: h.source.ts, role: h.source.role, sessionKey: "" },
-            }));
-          } catch (err) {
-            ctx.log.debug(`auto-recall: hub fallback failed (${err})`);
-            return [];
-          }
-        };
-
-        if (result.hits.length === 0) {
-          // Local found nothing — try hub before giving up
-          const hubHits = await hubFallback();
-          if (hubHits.length > 0) {
-            result.hits.push(...hubHits);
-            ctx.log.debug(`auto-recall: local empty, using ${hubHits.length} hub hit(s)`);
-          }
+        if (topicDecision === "skip") {
+          ctx.log.debug("auto-recall: topic continuation detected, skipping recall");
+          return;
         }
-        if (result.hits.length === 0) {
+
+        // ── Phase 1: Local search ∥ Hub search (parallel) ──
+        // Issue #1514: previously hardcoded maxResults: 10 here, which made
+        // `recall.maxResultsDefault` and the new `recall.autoRecallMaxResults`
+        // ineffective for the auto-recall path. Resolution order:
+        //   1. `recall.autoRecallMaxResults` (explicit auto-recall cap)
+        //   2. `recall.maxResultsDefault`    (shared default with memory_search)
+        //   3. literal 10                    (defensive — `resolveConfig`
+        //      always fills `maxResultsDefault`, so this fires only if a
+        //      caller built a context without going through `resolveConfig`).
+        const recallCfg = ctx.config.recall ?? {};
+        const autoRecallMax = recallCfg.autoRecallMaxResults ?? recallCfg.maxResultsDefault ?? 10;
+
+        const arLocalP = engine.search({ query, maxResults: autoRecallMax, minScore: 0.45, ownerFilter: recallOwnerFilter });
+        const arHubP = ctx.config?.sharing?.enabled
+          ? hubSearchMemories(store, ctx, { query, maxResults: autoRecallMax, scope: "all" })
+              .catch((err: any) => { ctx.log.debug(`auto-recall: hub search failed (${err})`); return { hits: [] as any[], meta: {} }; })
+          : Promise.resolve({ hits: [] as any[], meta: {} });
+
+        const [result, arHubResult] = await Promise.all([arLocalP, arHubP]);
+
+        const localHits = result.hits.filter((h) => h.origin !== "hub-memory");
+        const hubLocalHits = result.hits.filter((h) => h.origin === "hub-memory");
+        const hubRemoteHits: SearchHit[] = (arHubResult.hits ?? []).map((h: any) => ({
+          summary: h.summary,
+          original_excerpt: h.excerpt || h.summary,
+          ref: { sessionKey: "", chunkId: h.remoteHitId ?? "", turnId: "", seq: 0 },
+          score: 0.9,
+          taskId: null,
+          skillId: null,
+          origin: "hub-remote" as const,
+          source: { ts: h.source?.ts, role: h.source?.role ?? "assistant", sessionKey: "" },
+          ownerName: h.ownerName,
+          groupName: h.groupName,
+        }));
+        const allHubHits = [...hubLocalHits, ...hubRemoteHits];
+
+        ctx.log.debug(`auto-recall: local=${localHits.length}, hub-memory=${hubLocalHits.length}, hub-remote=${hubRemoteHits.length}`);
+
+        const rawLocalCandidates = localHits.map((h) => ({
+          score: h.score, role: h.source.role, summary: h.summary,
+          content: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "local",
+          owner: h.owner || "",
+        }));
+        const rawHubCandidates = allHubHits.map((h) => ({
+          score: h.score, role: h.source.role, summary: h.summary,
+          content: (h.original_excerpt ?? "").slice(0, 200), origin: h.origin || "hub-remote",
+          ownerName: (h as any).ownerName ?? "", groupName: (h as any).groupName ?? "",
+        }));
+
+        const allRawHits = [...localHits, ...allHubHits];
+
+        if (allRawHits.length === 0) {
           ctx.log.debug("auto-recall: no memory candidates found");
           const dur = performance.now() - recallT0;
           store.recordToolCall("memory_search", dur, true);
-          store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({ candidates: [], filtered: [] }), dur, true);
+          store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
+            candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [],
+          }), dur, true);
 
-          // Even without memory hits, try skill recall
           const skillAutoRecallEarly = ctx.config.skillEvolution?.autoRecallSkills ?? DEFAULTS.skillAutoRecall;
           if (skillAutoRecallEarly) {
             try {
@@ -2036,64 +1957,57 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           return;
         }
 
-        const candidates = result.hits.map((h, i) => ({
+        // ── Phase 2: Merge all → single LLM filter ──
+        const mergedForFilter = allRawHits.map((h, i) => ({
           index: i + 1,
           role: h.source.role,
           content: (h.original_excerpt ?? "").slice(0, 300),
           time: h.source.ts ? new Date(h.source.ts).toISOString().slice(0, 16) : "",
         }));
 
-        let filteredHits = result.hits;
+        let filteredHits = allRawHits;
         let sufficient = false;
 
-        const filterResult = await summarizer.filterRelevant(query, candidates);
+        const filterResult = await summarizer.filterRelevant(query, mergedForFilter);
         if (filterResult !== null) {
           sufficient = filterResult.sufficient;
           if (filterResult.relevant.length > 0) {
             const indexSet = new Set(filterResult.relevant);
-            filteredHits = result.hits.filter((_, i) => indexSet.has(i + 1));
+            filteredHits = allRawHits.filter((_, i) => indexSet.has(i + 1));
           } else {
-            ctx.log.debug("auto-recall: LLM filter returned no relevant local hits, trying hub fallback");
-            const hubHits = await hubFallback();
-            if (hubHits.length > 0) {
-              ctx.log.debug(`auto-recall: hub fallback provided ${hubHits.length} hit(s) after local filter yielded 0`);
-              filteredHits = hubHits;
-            } else {
-              const dur = performance.now() - recallT0;
-              store.recordToolCall("memory_search", dur, true);
-              store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
-                candidates: result.hits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local" })),
-                filtered: []
-              }), dur, true);
-              if (query.length > 50) {
-                const noRecallHint =
-                  "## Memory system — ACTION REQUIRED\n\n" +
-                  "Auto-recall found no relevant results for a long query. " +
-                  "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
-                  "Do NOT skip this step. Do NOT answer without searching first.";
-                return { prependContext: noRecallHint };
-              }
-              return;
+            const dur = performance.now() - recallT0;
+            store.recordToolCall("memory_search", dur, true);
+            store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
+              candidates: rawLocalCandidates, hubCandidates: rawHubCandidates, filtered: [],
+            }), dur, true);
+            if (query.length > 50) {
+              const noRecallHint =
+                "## Memory system — ACTION REQUIRED\n\n" +
+                "Auto-recall found no relevant results for a long query. " +
+                "You MUST call `memory_search` now with a shortened query (2-5 key words) before answering. " +
+                "Do NOT skip this step. Do NOT answer without searching first.";
+              return { prependContext: noRecallHint };
             }
-          }
-        }
-
-        if (!sufficient && filteredHits.length > 0 && ctx.config?.sharing?.enabled) {
-          const hubSupp = await hubFallback();
-          if (hubSupp.length > 0) {
-            ctx.log.debug(`auto-recall: local insufficient, supplementing with ${hubSupp.length} hub hit(s)`);
-            filteredHits.push(...hubSupp);
+            return;
           }
         }
 
         const beforeDedup = filteredHits.length;
         filteredHits = deduplicateHits(filteredHits);
-        ctx.log.debug(`auto-recall: ${result.hits.length} → ${beforeDedup} relevant → ${filteredHits.length} after dedup, sufficient=${sufficient}`);
+        ctx.log.debug(`auto-recall: merged ${allRawHits.length} → ${beforeDedup} relevant → ${filteredHits.length} after dedup, sufficient=${sufficient}`);
+
+        // Check if any memories are from a different session
+        const hasCrossSessionMemories = filteredHits.some(h =>
+          h.source.sessionKey && h.source.sessionKey !== incomingSessionKey
+        );
+        ctx.log.debug(`auto-recall: isNewSession=${isNewSession}, hasCrossSessionMemories=${hasCrossSessionMemories}`);
 
         const lines = filteredHits.map((h, i) => {
           const excerpt = h.original_excerpt;
+          const isCrossSession = h.source.sessionKey && h.source.sessionKey !== incomingSessionKey;
+          const sessionTag = isCrossSession ? " [from previous session]" : "";
           const oTag = h.origin === "local-shared" ? " [本机共享]" : h.origin === "hub-memory" ? " [团队缓存]" : "";
-          const parts: string[] = [`${i + 1}. [${h.source.role}]${oTag}`];
+          const parts: string[] = [`${i + 1}. [${h.source.role}]${sessionTag}${oTag}`];
           if (excerpt) parts.push(`   ${excerpt}`);
           parts.push(`   chunkId="${h.ref.chunkId}"`);
           if (h.taskId) {
@@ -2118,15 +2032,32 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         tips.push("- Need more surrounding dialogue → call `memory_timeline(chunkId=\"...\")` to expand context around a hit");
         const tipsText = "\n\nAvailable follow-up tools:\n" + tips.join("\n");
 
+        // Use different instructions based on whether memories are from current or previous sessions
         const contextParts = [
           "## User's conversation history (from memory system)",
           "",
-          "IMPORTANT: The following are facts from previous conversations with this user.",
-          "You MUST treat these as established knowledge and use them directly when answering.",
-          "Do NOT say you don't know or don't have information if the answer is in these memories.",
-          "",
-          lines.join("\n\n"),
         ];
+
+        if (hasCrossSessionMemories || isNewSession) {
+          contextParts.push(
+            "IMPORTANT: The following memories are from PREVIOUS SESSIONS.",
+            "Treat them as BACKGROUND KNOWLEDGE ONLY:",
+            "- Do NOT act on them unprompted or proactively respond based solely on these memories",
+            "- WAIT for the user's explicit instruction before taking any action",
+            "- These memories provide context, but the user must initiate the conversation",
+            "- If you reference these memories, explicitly note they are from a previous session (e.g., \"根据之前的会话...\" or \"Based on a previous conversation...\")",
+            "",
+          );
+        } else {
+          contextParts.push(
+            "IMPORTANT: The following are facts from previous conversations with this user.",
+            "You MUST treat these as established knowledge and use them directly when answering.",
+            "Do NOT say you don't know or don't have information if the answer is in these memories.",
+            "",
+          );
+        }
+
+        contextParts.push(lines.join("\n\n"));
         if (tipsText) contextParts.push(tipsText);
 
         // ─── Skill auto-recall ───
@@ -2138,7 +2069,6 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           try {
             const skillCandidateMap = new Map<string, { name: string; description: string; skillId: string; source: string }>();
 
-            // Source 1: direct skill search based on user query
             try {
               const directSkillHits = await engine.searchSkills(query, "mix" as any, getCurrentOwner());
               for (const sh of directSkillHits.slice(0, skillLimit + 2)) {
@@ -2150,7 +2080,6 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               ctx.log.debug(`auto-recall-skill: direct search failed: ${err}`);
             }
 
-            // Source 2: skills linked to tasks from memory hits
             const taskIds = new Set<string>();
             for (const h of filteredHits) {
               if (h.taskId) {
@@ -2202,8 +2131,9 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         const recallDur = performance.now() - recallT0;
         store.recordToolCall("memory_search", recallDur, true);
         store.recordApiLog("memory_search", { type: "auto_recall", query }, JSON.stringify({
-          candidates: result.hits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local" })),
-          filtered: filteredHits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local" }))
+          candidates: rawLocalCandidates,
+          hubCandidates: rawHubCandidates,
+          filtered: filteredHits.map(h => ({ score: h.score, role: h.source.role, summary: h.summary, content: h.original_excerpt, origin: h.origin || "local", owner: h.owner || "" })),
         }), recallDur, true);
         telemetry.trackAutoRecall(filteredHits.length, recallDur);
 
@@ -2239,7 +2169,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       if (!event.success || !event.messages || event.messages.length === 0) return;
 
       try {
-        const captureAgentId = hookCtx?.agentId ?? "main";
+        const captureAgentId = hookCtx?.agentId ?? event?.agentId ?? event?.profileId ?? "main";
         currentAgentId = captureAgentId;
         const captureOwner = `agent:${captureAgentId}`;
         const sessionKey = hookCtx?.sessionKey ?? "default";
@@ -2379,6 +2309,10 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const shared = store.listLocalSharedTasks();
       if (shared.length === 0) return;
 
+      // Only sync tasks that have a hub_task_id (actively shared to remote)
+      const conn = store.getClientHubConnection();
+      const currentHubInstanceId = conn?.hubInstanceId || "";
+
       let hubClient: { hubUrl: string; userToken: string; userId: string } | undefined;
       try {
         hubClient = await resolveHubClient(store, ctx);
@@ -2388,6 +2322,8 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
       const { v4: uuidv4 } = require("uuid");
 
       for (const entry of shared) {
+        if (!entry.hubTaskId) continue;
+        if (currentHubInstanceId && entry.hubInstanceId && entry.hubInstanceId !== currentHubInstanceId) continue;
         const task = store.getTask(entry.taskId);
         if (!task) continue;
         const chunks = store.getChunksByTask(entry.taskId);
@@ -2425,7 +2361,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
               })),
             }),
           });
-          store.markTaskShared(entry.taskId, entry.hubTaskId, chunks.length, entry.visibility, entry.groupId);
+          store.markTaskShared(entry.taskId, entry.hubTaskId, chunks.length, entry.visibility, entry.groupId, currentHubInstanceId);
         } catch (err) {
           ctx.log.warn(`incremental sync failed for task=${entry.taskId}: ${err}`);
         }
@@ -2451,48 +2387,70 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
 
     // ─── Service lifecycle ───
 
+    let serviceStarted = false;
+
+    // Hub client connection is split out from startServiceCore so it can be
+    // attempted eagerly at plugin-load time, regardless of how the host
+    // chooses to launch the plugin. Some hosts (notably the QClaw desktop
+    // app) load the plugin without calling service.start(), which used to
+    // mean Hub connection never happened (see GitHub issue #1612).
+    //
+    // The guard makes this safe to call from multiple entry points: the
+    // service.start() callback (gateway CLI path) and the eager fire at the
+    // end of register() (QClaw desktop path) both funnel through here and
+    // only one attempt actually runs.
+    let hubClientConnectAttempted = false;
+    const connectClientToHubIfNeeded = async () => {
+      if (hubClientConnectAttempted) return;
+      if (!ctx.config.sharing?.enabled || ctx.config.sharing.role !== "client") return;
+      hubClientConnectAttempted = true;
+      try {
+        const session = await connectToHub(store, ctx.config, ctx.log);
+        api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
+      } catch (err) {
+        api.logger.warn(`memos-local: Hub connection failed: ${err}`);
+      }
+    };
+
+    const startServiceCore = async () => {
+      if (serviceStarted) return;
+      serviceStarted = true;
+
+      if (hubServer) {
+        const hubUrl = await hubServer.start();
+        api.logger.info(`memos-local: hub started at ${hubUrl}`);
+      }
+
+      await connectClientToHubIfNeeded();
+
+      try {
+        const viewerUrl = await viewer.start();
+        api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
+        api.logger.info(`╔══════════════════════════════════════════╗`);
+        api.logger.info(`║  MemOS Memory Viewer                     ║`);
+        api.logger.info(`║  → ${viewerUrl.padEnd(37)}║`);
+        api.logger.info(`║  Open in browser to manage memories       ║`);
+        api.logger.info(`╚══════════════════════════════════════════╝`);
+        api.logger.info(`memos-local: password reset token: ${viewer.getResetToken()}`);
+        api.logger.info(`memos-local: forgot password? Use the reset token on the login page.`);
+        skillEvolver.recoverOrphanedTasks().then((count) => {
+          if (count > 0) api.logger.info(`memos-local: recovered ${count} orphaned skill tasks`);
+        }).catch((err) => {
+          api.logger.warn(`memos-local: skill recovery failed: ${err}`);
+        });
+      } catch (err) {
+        api.logger.warn(`memos-local: viewer failed to start: ${err}`);
+        api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
+      }
+      telemetry.trackPluginStarted(
+        ctx.config.embedding?.provider ?? "local",
+        ctx.config.summarizer?.provider ?? "none",
+      );
+    };
+
     api.registerService({
       id: "memos-local-openclaw-plugin",
-      start: async () => {
-        if (hubServer) {
-          const hubUrl = await hubServer.start();
-          api.logger.info(`memos-local: hub started at ${hubUrl}`);
-        }
-
-        // Auto-connect to Hub in client mode (handles both existing token and auto-join via teamToken)
-        if (ctx.config.sharing?.enabled && ctx.config.sharing.role === "client") {
-          try {
-            const session = await connectToHub(store, ctx.config, ctx.log);
-            api.logger.info(`memos-local: connected to Hub as "${session.username}" (${session.userId})`);
-          } catch (err) {
-            api.logger.warn(`memos-local: Hub connection failed: ${err}`);
-          }
-        }
-
-        try {
-          const viewerUrl = await viewer.start();
-          api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
-          api.logger.info(`╔══════════════════════════════════════════╗`);
-          api.logger.info(`║  MemOS Memory Viewer                     ║`);
-          api.logger.info(`║  → ${viewerUrl.padEnd(37)}║`);
-          api.logger.info(`║  Open in browser to manage memories       ║`);
-          api.logger.info(`╚══════════════════════════════════════════╝`);
-          api.logger.info(`memos-local: password reset token: ${viewer.getResetToken()}`);
-          api.logger.info(`memos-local: forgot password? Use the reset token on the login page.`);
-          skillEvolver.recoverOrphanedTasks().then((count) => {
-            if (count > 0) api.logger.info(`memos-local: recovered ${count} orphaned skill tasks`);
-          }).catch((err) => {
-            api.logger.warn(`memos-local: skill recovery failed: ${err}`);
-          });
-        } catch (err) {
-          api.logger.warn(`memos-local: viewer failed to start: ${err}`);
-          api.logger.info(`memos-local: started (embedding: ${embedder.provider})`);
-        }
-        telemetry.trackPluginStarted(
-          ctx.config.embedding?.provider ?? "local",
-          ctx.config.summarizer?.provider ?? "none",
-        );
-      },
+      start: async () => { await startServiceCore(); },
       stop: async () => {
         await worker.flush();
         await telemetry.shutdown();
@@ -2502,6 +2460,31 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
         api.logger.info("memos-local: stopped");
       },
     });
+
+    // Eager Hub client connection: kick off the Hub login as soon as the
+    // plugin is registered, independent of the host's service lifecycle.
+    // This guarantees team sharing works in hosts that load the plugin
+    // without calling service.start() (e.g. the QClaw desktop app — see
+    // GitHub issue #1612). The setTimeout(0) fallback below still handles
+    // viewer startup; this fire-and-forget call does not block register().
+    connectClientToHubIfNeeded().catch((err) => {
+      api.logger.warn(`memos-local: eager Hub connection failed: ${err}`);
+    });
+
+    // Fallback: OpenClaw may load this plugin via deferred reload after
+    // startPluginServices has already run, so service.start() never fires.
+    // Start on the next tick instead of waiting several seconds; the
+    // serviceStarted guard still prevents duplicate startup if the host calls
+    // service.start() immediately after registration.
+    const SELF_START_DELAY_MS = 0;
+    setTimeout(() => {
+      if (!serviceStarted) {
+        api.logger.info("memos-local: service.start() not called by host, self-starting viewer...");
+        startServiceCore().catch((err) => {
+          api.logger.warn(`memos-local: self-start failed: ${err}`);
+        });
+      }
+    }, SELF_START_DELAY_MS);
   },
 };
 

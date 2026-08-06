@@ -112,6 +112,8 @@ describe("plugin-impl OpenClaw wiring", () => {
       resolvePath: () => "/tmp/memos-openclaw-wiring",
       logger: { info() {}, warn() {} },
       registerTool: () => {},
+      registerMemoryPromptSection: () => {},
+      registerMemoryCapability: () => {},
       registerService: () => {},
       on: () => {},
     } as any);

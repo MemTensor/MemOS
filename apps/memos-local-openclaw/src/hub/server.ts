@@ -21,6 +21,7 @@ type HubAuthState = {
   authSecret: string;
   bootstrapAdminUserId?: string;
   bootstrapAdminToken?: string;
+  hubInstanceId?: string;
 };
 
 export class HubServer {
@@ -123,6 +124,8 @@ export class HubServer {
     this.initOnlineTracking();
     this.offlineCheckTimer = setInterval(() => this.checkOfflineUsers(), HubServer.OFFLINE_CHECK_INTERVAL_MS);
 
+    this.backfillMemoryEmbeddings();
+
     return `http://127.0.0.1:${hubPort}`;
   }
 
@@ -168,13 +171,23 @@ export class HubServer {
     return this.authState.authSecret;
   }
 
+  get hubInstanceId(): string {
+    return this.authState.hubInstanceId ?? "";
+  }
+
   private loadAuthState(): HubAuthState {
     try {
       const raw = fs.readFileSync(this.authStatePath, "utf8");
       const parsed = JSON.parse(raw) as HubAuthState;
-      if (parsed.authSecret) return parsed;
+      if (parsed.authSecret) {
+        if (!parsed.hubInstanceId) {
+          parsed.hubInstanceId = randomUUID();
+          fs.writeFileSync(this.authStatePath, JSON.stringify(parsed, null, 2), "utf8");
+        }
+        return parsed;
+      }
     } catch {}
-    const initial = { authSecret: randomBytes(32).toString("hex") } as HubAuthState;
+    const initial: HubAuthState = { authSecret: randomBytes(32).toString("hex"), hubInstanceId: randomUUID() };
     fs.mkdirSync(path.dirname(this.authStatePath), { recursive: true });
     fs.writeFileSync(this.authStatePath, JSON.stringify(initial, null, 2), "utf8");
     return initial;
@@ -188,11 +201,12 @@ export class HubServer {
   private embedChunksAsync(chunkIds: string[], chunks: Array<{ id: string; summary?: string; content?: string }>): void {
     const embedder = this.opts.embedder;
     if (!embedder) return;
+    const producer = { provider: embedder.provider, model: embedder.model };
     const texts = chunks.map(c => c.summary || (c.content ? c.content.slice(0, 500) : ""));
     embedder.embed(texts).then((vectors) => {
       for (let i = 0; i < vectors.length; i++) {
         if (vectors[i]) {
-          this.opts.store.upsertHubEmbedding(chunkIds[i], new Float32Array(vectors[i]));
+          this.opts.store.upsertHubEmbedding(chunkIds[i], new Float32Array(vectors[i]), producer);
         }
       }
       this.opts.log.info(`hub: embedded ${vectors.filter(Boolean).length}/${chunkIds.length} shared chunks`);
@@ -204,10 +218,11 @@ export class HubServer {
   private embedSkillAsync(skillId: string, name: string, description: string, sourceUserId: string, sourceSkillId: string): void {
     const embedder = this.opts.embedder;
     if (!embedder) return;
+    const producer = { provider: embedder.provider, model: embedder.model };
     const text = `${name}: ${description}`;
     embedder.embed([text]).then((vectors) => {
       if (vectors[0]) {
-        this.opts.store.upsertHubSkillEmbedding(skillId, Array.from(vectors[0]), sourceUserId, sourceSkillId);
+        this.opts.store.upsertHubSkillEmbedding(skillId, Array.from(vectors[0]), sourceUserId, sourceSkillId, producer);
         this.opts.log.info(`hub: embedded shared skill ${skillId}`);
       }
     }).catch((err) => {
@@ -215,13 +230,44 @@ export class HubServer {
     });
   }
 
+  private backfillMemoryEmbeddings(): void {
+    if (!this.opts.embedder) return;
+    const embedder = this.opts.embedder;
+    const producer = { provider: embedder.provider, model: embedder.model };
+    try {
+      const all = this.opts.store.listHubMemories({ limit: 500 });
+      const missing = all.filter(m => {
+        try { return !this.opts.store.getHubMemoryEmbedding(m.id); } catch { return true; }
+      });
+      if (missing.length === 0) return;
+      this.opts.log.info(`hub: backfilling embeddings for ${missing.length} hub memories`);
+      const texts = missing.map(m => (m.summary || m.content || "").slice(0, 500));
+      embedder.embed(texts).then((vectors) => {
+        let count = 0;
+        for (let i = 0; i < vectors.length; i++) {
+          if (vectors[i]) {
+            this.opts.store.upsertHubMemoryEmbedding(missing[i].id, new Float32Array(vectors[i]), producer);
+            count++;
+          }
+        }
+        this.opts.log.info(`hub: backfilled ${count}/${missing.length} memory embeddings`);
+      }).catch((err) => {
+        this.opts.log.warn(`hub: backfill memory embeddings failed: ${err}`);
+      });
+    } catch (err) {
+      this.opts.log.warn(`hub: backfill memory embeddings error: ${err}`);
+    }
+  }
+
   private embedMemoryAsync(memoryId: string, summary: string, content: string): void {
     const embedder = this.opts.embedder;
     if (!embedder) return;
-    const text = summary || content.slice(0, 500);
+    const producer = { provider: embedder.provider, model: embedder.model };
+    const text = (summary || content || "").slice(0, 500);
+    if (!text) return;
     embedder.embed([text]).then((vectors) => {
       if (vectors[0]) {
-        this.opts.store.upsertHubMemoryEmbedding(memoryId, new Float32Array(vectors[0]));
+        this.opts.store.upsertHubMemoryEmbedding(memoryId, new Float32Array(vectors[0]), producer);
         this.opts.log.info(`hub: embedded shared memory ${memoryId}`);
       }
     }).catch((err) => {
@@ -238,6 +284,7 @@ export class HubServer {
         teamName: this.teamName,
         version: "0.0.0",
         apiVersion: "v1",
+        hubInstanceId: this.hubInstanceId,
       });
     }
 
@@ -252,57 +299,62 @@ export class HubServer {
         || (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
         || req.socket.remoteAddress || "";
       const identityKey = typeof body.identityKey === "string" ? body.identityKey.trim() : "";
+      const dryRun = body.dryRun === true;
 
-      let existingUser = identityKey
+      const identityMatch = identityKey
         ? this.userManager.findByIdentityKey(identityKey)
         : null;
-      if (!existingUser) {
-        const existingUsers = this.opts.store.listHubUsers();
-        existingUser = existingUsers.find(u => u.username === username && u.status !== "left" && u.status !== "removed") ?? null;
-      }
 
-      if (existingUser) {
-        try { this.opts.store.updateHubUserActivity(existingUser.id, joinIp); } catch { /* best-effort */ }
+      if (identityMatch) {
+        if (!dryRun) {
+          try { this.opts.store.updateHubUserActivity(identityMatch.id, joinIp); } catch { /* best-effort */ }
+        }
 
-        if (existingUser.status === "active") {
+        if (identityMatch.status === "active") {
+          if (dryRun) return this.json(res, 200, { status: "active", dryRun: true });
           const token = issueUserToken(
-            { userId: existingUser.id, username: existingUser.username, role: existingUser.role, status: "active" },
+            { userId: identityMatch.id, username: identityMatch.username, role: identityMatch.role, status: "active" },
             this.authSecret,
           );
-          this.userManager.approveUser(existingUser.id, token);
-          if (identityKey && !existingUser.identityKey) {
-            this.opts.store.upsertHubUser({ ...existingUser, identityKey });
-          }
-          return this.json(res, 200, { status: "active", userId: existingUser.id, userToken: token, identityKey: existingUser.identityKey || identityKey });
+          this.userManager.approveUser(identityMatch.id, token);
+          return this.json(res, 200, { status: "active", userId: identityMatch.id, userToken: token, identityKey: identityMatch.identityKey || identityKey });
         }
-        if (existingUser.status === "pending") {
-          this.notifyAdmins("user_join_request", "user", username, "", { dedup: true });
-          return this.json(res, 200, { status: "pending", userId: existingUser.id, identityKey: existingUser.identityKey || identityKey });
+        if (identityMatch.status === "pending") {
+          if (dryRun) return this.json(res, 200, { status: "pending", dryRun: true });
+          this.notifyAdmins("user_join_request", "user", identityMatch.username, "", { dedup: true });
+          return this.json(res, 200, { status: "pending", userId: identityMatch.id, identityKey: identityMatch.identityKey || identityKey });
         }
-        if (existingUser.status === "rejected") {
+        if (identityMatch.status === "rejected") {
+          if (dryRun) return this.json(res, 200, { status: "rejected", dryRun: true });
           if (body.reapply === true) {
-            this.userManager.resetToPending(existingUser.id);
-            this.notifyAdmins("user_join_request", "user", username, "");
-            this.opts.log.info(`Hub: rejected user "${username}" (${existingUser.id}) re-applied, reset to pending`);
-            return this.json(res, 200, { status: "pending", userId: existingUser.id, identityKey: existingUser.identityKey || identityKey });
+            this.userManager.resetToPending(identityMatch.id);
+            this.notifyAdmins("user_join_request", "user", identityMatch.username, "");
+            this.opts.log.info(`Hub: rejected user "${identityMatch.username}" (${identityMatch.id}) re-applied, reset to pending`);
+            return this.json(res, 200, { status: "pending", userId: identityMatch.id, identityKey: identityMatch.identityKey || identityKey });
           }
-          return this.json(res, 200, { status: "rejected", userId: existingUser.id });
+          return this.json(res, 200, { status: "rejected", userId: identityMatch.id });
         }
-        if (existingUser.status === "removed") {
-          this.userManager.rejoinUser(existingUser.id);
-          this.notifyAdmins("user_join_request", "user", username, "", { dedup: true });
-          this.opts.log.info(`Hub: removed user "${username}" (${existingUser.id}) re-applied via rejoin, reset to pending`);
-          return this.json(res, 200, { status: "pending", userId: existingUser.id, identityKey: existingUser.identityKey || identityKey });
+        if (identityMatch.status === "removed" || identityMatch.status === "left") {
+          if (dryRun) return this.json(res, 200, { status: "can_rejoin", dryRun: true });
+          this.userManager.rejoinUser(identityMatch.id);
+          this.notifyAdmins("user_join_request", "user", identityMatch.username, "", { dedup: true });
+          this.opts.log.info(`Hub: ${identityMatch.status} user "${identityMatch.username}" (${identityMatch.id}) re-applied via rejoin, reset to pending`);
+          return this.json(res, 200, { status: "pending", userId: identityMatch.id, identityKey: identityMatch.identityKey || identityKey });
         }
-        if (existingUser.status === "left") {
-          this.userManager.rejoinUser(existingUser.id);
-          this.notifyAdmins("user_join_request", "user", username, "", { dedup: true });
-          this.opts.log.info(`Hub: left user "${username}" (${existingUser.id}) re-applied via rejoin, reset to pending`);
-          return this.json(res, 200, { status: "pending", userId: existingUser.id, identityKey: existingUser.identityKey || identityKey });
+        if (identityMatch.status === "blocked") {
+          return this.json(res, 200, { status: "blocked", userId: identityMatch.id });
         }
-        if (existingUser.status === "blocked") {
-          return this.json(res, 200, { status: "blocked", userId: existingUser.id });
-        }
+      }
+
+      const existingUsers = this.opts.store.listHubUsers();
+      const nameConflict = existingUsers.find(u => u.username === username);
+      if (nameConflict) {
+        this.opts.log.info(`Hub: join rejected — username "${username}" already taken by user ${nameConflict.id} (status=${nameConflict.status})`);
+        return this.json(res, 409, { error: "username_taken", message: `Username "${username}" is already in use. Please choose a different nickname.` });
+      }
+
+      if (dryRun) {
+        return this.json(res, 200, { status: "ok", dryRun: true });
       }
 
       const generatedIdentityKey = identityKey || randomUUID();
@@ -382,10 +434,13 @@ export class HubServer {
     }
 
     if (req.method === "POST" && routePath === "/api/v1/hub/leave") {
+      this.opts.store.deleteHubMemoriesByUser(auth.userId);
+      this.opts.store.deleteHubTasksByUser(auth.userId);
+      this.opts.store.deleteHubSkillsByUser(auth.userId);
       this.userManager.markUserLeft(auth.userId);
       this.knownOnlineUsers.delete(auth.userId);
       this.notifyAdmins("user_left", "user", auth.username, auth.userId);
-      this.opts.log.info(`Hub: user "${auth.username}" (${auth.userId}) left voluntarily, status set to "left"`);
+      this.opts.log.info(`Hub: user "${auth.username}" (${auth.userId}) left voluntarily, resources cleaned, status set to "left"`);
       return this.json(res, 200, { ok: true });
     }
 
@@ -530,6 +585,12 @@ export class HubServer {
         this.authState.bootstrapAdminToken = newToken;
         this.saveAuthState();
       }
+      try {
+        this.opts.store.insertHubNotification({
+          id: randomUUID(), userId, type: "username_renamed",
+          resource: "user", title: `Your nickname has been changed from "${user.username}" to "${newUsername}" by the admin.`,
+        });
+      } catch { /* best-effort */ }
       this.opts.log.info(`Hub: admin "${auth.userId}" renamed user "${userId}" to "${newUsername}"`);
       return this.json(res, 200, { ok: true, username: newUsername });
     }
@@ -602,6 +663,7 @@ export class HubServer {
         id: memoryId,
         sourceChunkId,
         sourceUserId: auth.userId,
+        sourceAgent: String(m.sourceAgent || ""),
         role: String(m.role || "assistant"),
         content: String(m.content || ""),
         summary: String(m.summary || ""),
@@ -611,9 +673,7 @@ export class HubServer {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       });
-      if (this.opts.embedder) {
-        this.embedMemoryAsync(memoryId, String(m.summary || ""), String(m.content || ""));
-      }
+      this.embedMemoryAsync(memoryId, String(m.summary || ""), String(m.content || ""));
       if (!existing) {
         this.notifyAdmins("resource_shared", "memory", String(m.summary || m.content?.slice(0, 60) || memoryId), auth.userId);
       }
@@ -659,27 +719,39 @@ export class HubServer {
 
       // Track which IDs are memories vs chunks
       const memoryIdSet = new Set(memFtsHits.map(({ hit }) => hit.id));
+      const ftsHitIdSet = new Set<string>();
+      for (const { hit } of ftsHits) ftsHitIdSet.add(hit.id);
+      for (const { hit } of memFtsHits) ftsHitIdSet.add(hit.id);
 
-      // Attempt vector search and RRF merge if embedder is available
+      // Two-stage retrieval: FTS candidates first, then embed + cosine rerank
       let mergedIds: string[];
+      /** Vector RRF channel: require min cosine similarity unless id is already an FTS hit. */
+      const MIN_VECTOR_SIM = 0.45;
       if (this.opts.embedder) {
         try {
           const [queryVec] = await this.opts.embedder.embed([query]);
           if (queryVec) {
             const allEmb = this.opts.store.getVisibleHubEmbeddings(auth.userId);
-            const memEmb = this.opts.store.getVisibleHubMemoryEmbeddings(auth.userId);
             const scored: Array<{ id: string; score: number }> = [];
-            const cosineSim = (vec: Float32Array) => {
+            const cosineSim = (a: Float32Array | number[], b: number[]) => {
               let dot = 0, nA = 0, nB = 0;
-              for (let i = 0; i < queryVec.length && i < vec.length; i++) {
-                dot += queryVec[i] * vec[i]; nA += queryVec[i] * queryVec[i]; nB += vec[i] * vec[i];
+              const len = Math.min(a.length, b.length);
+              for (let i = 0; i < len; i++) {
+                dot += a[i] * b[i]; nA += a[i] * a[i]; nB += b[i] * b[i];
               }
               return nA > 0 && nB > 0 ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
             };
-            for (const e of allEmb) scored.push({ id: e.chunkId, score: cosineSim(e.vector) });
-            for (const e of memEmb) { scored.push({ id: e.memoryId, score: cosineSim(e.vector) }); memoryIdSet.add(e.memoryId); }
-            scored.sort((a, b) => b.score - a.score);
-            const topScored = scored.slice(0, maxResults * 2);
+            for (const e of allEmb) scored.push({ id: e.chunkId, score: cosineSim(e.vector, queryVec) });
+
+            const memEmb = this.opts.store.getVisibleHubMemoryEmbeddings(auth.userId);
+            for (const e of memEmb) {
+              scored.push({ id: e.memoryId, score: cosineSim(e.vector, queryVec) });
+              memoryIdSet.add(e.memoryId);
+            }
+
+            const vecCandidates = scored.filter((s) => s.score >= MIN_VECTOR_SIM || ftsHitIdSet.has(s.id));
+            vecCandidates.sort((a, b) => b.score - a.score);
+            const topScored = vecCandidates.slice(0, maxResults * 2);
 
             const K = 60;
             const rrfScores = new Map<string, number>();
@@ -718,8 +790,8 @@ export class HubServer {
           this.remoteHitMap.set(remoteHitId, { chunkId: id, type: "memory", expiresAt: Date.now() + 10 * 60 * 1000, requesterUserId: auth.userId });
           return {
             remoteHitId, summary: mhit.summary, excerpt: mhit.content.slice(0, 240), hubRank: rank + 1,
-            taskTitle: null, ownerName: mhit.owner_name || "unknown", groupName: mhit.group_name,
-            visibility: mhit.visibility, source: { ts: mhit.created_at, role: mhit.role },
+            taskTitle: null, ownerName: mhit.owner_name || "unknown", sourceAgent: (mhit as any).source_agent || "",
+            groupName: mhit.group_name, visibility: mhit.visibility, source: { ts: mhit.created_at, role: mhit.role },
           };
         }
         let hit = ftsMap.get(id);
@@ -732,8 +804,8 @@ export class HubServer {
         this.remoteHitMap.set(remoteHitId, { chunkId: id, type: "chunk", expiresAt: Date.now() + 10 * 60 * 1000, requesterUserId: auth.userId });
         return {
           remoteHitId, summary: hit!.summary, excerpt: hit!.content.slice(0, 240), hubRank: rank + 1,
-          taskTitle: hit!.task_title, ownerName: hit!.owner_name || "unknown", groupName: hit!.group_name,
-          visibility: hit!.visibility, source: { ts: hit!.created_at, role: hit!.role },
+          taskTitle: hit!.task_title, ownerName: hit!.owner_name || "unknown", sourceAgent: "",
+          groupName: hit!.group_name, visibility: hit!.visibility, source: { ts: hit!.created_at, role: hit!.role },
         };
       }).filter(Boolean);
       return this.json(res, 200, { hits, meta: { totalCandidates: hits.length, searchedGroups: [], includedPublic: true } });

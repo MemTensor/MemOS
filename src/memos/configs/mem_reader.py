@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -25,7 +25,8 @@ class BaseMemReaderConfig(BaseConfig):
         return value
 
     llm: LLMConfigFactory = Field(
-        ..., description="LLM configuration for chat/doc memory extraction (fine-tuned model)"
+        ...,
+        description="Main LLM configuration for standard text/chat memory extraction",
     )
     general_llm: LLMConfigFactory | None = Field(
         default=None,
@@ -35,6 +36,14 @@ class BaseMemReaderConfig(BaseConfig):
     image_parser_llm: LLMConfigFactory | None = Field(
         default=None,
         description="Vision LLM for image parsing. Falls back to general_llm if not set.",
+    )
+    document_parser_llm: LLMConfigFactory | None = Field(
+        default=None,
+        description="Dedicated LLM for document content extraction",
+    )
+    preference_extractor_llm: LLMConfigFactory | None = Field(
+        default=None,
+        description="LLM for preference extraction. Falls back to general_llm if not set.",
     )
     embedder: EmbedderConfigFactory = Field(
         ..., description="Embedder configuration for the MemReader"
@@ -76,6 +85,13 @@ class MultiModalStructMemReaderConfig(BaseMemReaderConfig):
         default=None,
         description="Skills directory for the MemReader",
     )
+    memory_version_switch: Literal["on", "off"] = Field(
+        default="off",
+        description="Turn on memory version or off",
+    )
+
+    # Allow passing additional fields without raising validation errors
+    model_config = ConfigDict(extra="allow", strict=True)
 
 
 class StrategyStructMemReaderConfig(BaseMemReaderConfig):

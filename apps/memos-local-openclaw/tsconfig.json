@@ -1,20 +1,25 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
+    "module": "ES2022",
     "lib": ["ES2022"],
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "moduleResolution": "node"
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": false,
+    "paths": {
+      "openclaw/plugin-sdk": ["./types/openclaw__plugin-sdk/index.d.ts"]
+    }
   },
-  "include": ["src"],
+  "include": ["index.ts", "plugin-impl.ts", "src"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

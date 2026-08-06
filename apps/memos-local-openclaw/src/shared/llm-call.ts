@@ -1,6 +1,21 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { SummarizerConfig, SummaryProvider, Logger, PluginContext, OpenClawAPI } from "../types";
+import { parseJsonOrJson5 } from "./json5";
+import { applyOpenRouterProviderRouting } from "./openrouter";
+
+/**
+ * Resolve a SecretInput (string | SecretRef) to a plain string.
+ * Supports env-sourced SecretRef from OpenClaw's credential system.
+ */
+function resolveApiKey(
+  input: string | { source: string; provider?: string; id: string } | undefined,
+): string | undefined {
+  if (!input) return undefined;
+  if (typeof input === "string") return input;
+  if (input.source === "env") return process.env[input.id];
+  return undefined;
+}
 
 /**
  * Detect provider type from provider key name or base URL.
@@ -41,7 +56,7 @@ export function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | unde
       || path.join(process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw"), "openclaw.json");
     if (!fs.existsSync(cfgPath)) return undefined;
 
-    const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+    const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
 
     const agentModel: string | undefined = raw?.agents?.defaults?.model?.primary;
     if (!agentModel) return undefined;
@@ -56,7 +71,7 @@ export function loadOpenClawFallbackConfig(log: Logger): SummarizerConfig | unde
     if (!providerCfg) return undefined;
 
     const baseUrl: string | undefined = providerCfg.baseUrl;
-    const apiKey: string | undefined = providerCfg.apiKey;
+    const apiKey = resolveApiKey(providerCfg.apiKey);
     if (!baseUrl || !apiKey) return undefined;
 
     const provider = detectProvider(providerKey, baseUrl);
@@ -175,8 +190,8 @@ async function callLLMOnceAnthropic(
   });
 
   if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`LLM call failed (${resp.status}): ${body}`);
+    const errorText = await resp.text();
+    throw new Error(`LLM call failed (${resp.status}): ${errorText}`);
   }
 
   const json = (await resp.json()) as { content: Array<{ type: string; text: string }> };
@@ -197,22 +212,24 @@ async function callLLMOnceOpenAI(
     Authorization: `Bearer ${cfg.apiKey}`,
     ...cfg.headers,
   };
+  const requestBody: Record<string, unknown> = {
+    model,
+    temperature: opts.temperature ?? 0.1,
+    max_tokens: opts.maxTokens ?? 1024,
+    messages: [{ role: "user", content: prompt }],
+  };
+  applyOpenRouterProviderRouting(cfg, requestBody);
 
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model,
-      temperature: opts.temperature ?? 0.1,
-      max_tokens: opts.maxTokens ?? 1024,
-      messages: [{ role: "user", content: prompt }],
-    }),
+    body: JSON.stringify(requestBody),
     signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
   });
 
   if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`LLM call failed (${resp.status}): ${body}`);
+    const errorText = await resp.text();
+    throw new Error(`LLM call failed (${resp.status}): ${errorText}`);
   }
 
   const json = (await resp.json()) as { choices: Array<{ message: { content: string } }> };

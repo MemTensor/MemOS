@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_scheduler.schemas.task_schemas import DEFAULT_STREAM_KEY_PREFIX
+from memos.mem_scheduler.schemas.task_schemas import get_stream_key_prefix
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
@@ -26,7 +26,7 @@ class SchedulerLocalQueue(RedisSchedulerModule):
     def __init__(
         self,
         maxsize: int = 0,
-        stream_key_prefix: str = DEFAULT_STREAM_KEY_PREFIX,
+        stream_key_prefix: str | None = None,
         orchestrator: SchedulerOrchestrator | None = None,
         status_tracker: TaskStatusTracker | None = None,
     ):
@@ -42,7 +42,7 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         """
         super().__init__()
 
-        self.stream_key_prefix = stream_key_prefix or "local_queue"
+        self.stream_key_prefix = stream_key_prefix or get_stream_key_prefix()
 
         self.max_internal_message_queue_size = maxsize
 
@@ -56,7 +56,9 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         self._message_handler: Callable[[ScheduleMessageItem], None] | None = None
 
         logger.info(
-            f"SchedulerLocalQueue initialized with max_internal_message_queue_size={self.max_internal_message_queue_size}"
+            "SchedulerLocalQueue initialized with max_internal_message_queue_size=%s, stream_prefix=%s",
+            self.max_internal_message_queue_size,
+            self.stream_key_prefix,
         )
 
     def get_stream_key(self, user_id: str, mem_cube_id: str, task_label: str) -> str:
@@ -95,8 +97,12 @@ class SchedulerLocalQueue(RedisSchedulerModule):
 
         try:
             self.queue_streams[stream_key].put(item=message, block=block, timeout=timeout)
-            logger.info(
-                f"Message successfully put into queue '{stream_key}'. Current size: {self.queue_streams[stream_key].qsize()}"
+            logger.debug(
+                "Local queue enqueued. stream=%s size=%s label=%s item_id=%s",
+                stream_key,
+                self.queue_streams[stream_key].qsize(),
+                message.label,
+                message.item_id,
             )
         except Exception as e:
             logger.error(f"Failed to put message into queue '{stream_key}': {e}", exc_info=True)
@@ -117,7 +123,7 @@ class SchedulerLocalQueue(RedisSchedulerModule):
 
         # Return empty list if queue does not exist
         if stream_key not in self.queue_streams:
-            logger.error(f"Stream {stream_key} does not exist when trying to get messages.")
+            logger.debug("Stream %s does not exist when trying to get messages", stream_key)
             return []
 
         # Ensure we always request a batch so we get a list back
@@ -174,6 +180,14 @@ class SchedulerLocalQueue(RedisSchedulerModule):
             fetched = self.get_nowait(stream_key=stream_key, batch_size=needed)
             messages.extend(fetched)
 
+        if messages and len(messages) >= batch_size:
+            logger.debug(
+                "Local queue dequeued batch. batch_size=%s requested_batch_size=%s active_streams=%s",
+                len(messages),
+                batch_size,
+                len(stream_keys),
+            )
+
         return messages
 
     def qsize(self) -> dict:
@@ -196,9 +210,11 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         if stream_key:
             if stream_key in self.queue_streams:
                 self.queue_streams[stream_key].clear()
+                logger.info("Cleared local queue stream: %s", stream_key)
         else:
             for queue in self.queue_streams.values():
                 queue.clear()
+            logger.info("Cleared all local queue streams. stream_count=%s", len(self.queue_streams))
 
     @property
     def unfinished_tasks(self) -> int:

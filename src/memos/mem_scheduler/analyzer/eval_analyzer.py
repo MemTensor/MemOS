@@ -36,7 +36,7 @@ class EvalAnalyzer:
         self,
         openai_api_key: str | None = None,
         openai_base_url: str | None = None,
-        openai_model: str = "gpt-4o-mini",
+        openai_model: str | None = None,
         output_dir: str = "./tmp/eval_analyzer",
     ):
         """
@@ -53,8 +53,8 @@ class EvalAnalyzer:
 
         # Initialize OpenAI client
         self.openai_client = OpenAI(
-            api_key=openai_api_key or os.getenv("MEMSCHEDULER_OPENAI_API_KEY"),
-            base_url=openai_base_url or os.getenv("MEMSCHEDULER_OPENAI_BASE_URL"),
+            api_key=openai_api_key or os.getenv("OPENAI_API_KEY"),
+            base_url=openai_base_url or os.getenv("OPENAI_API_BASE"),
         )
         self.openai_model = openai_model or os.getenv(
             "MEMSCHEDULER_OPENAI_DEFAULT_MODEL", "gpt-4o-mini"

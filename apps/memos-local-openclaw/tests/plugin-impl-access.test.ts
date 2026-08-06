@@ -21,9 +21,22 @@ function makeApi(stateDir: string, pluginConfig: Record<string, unknown> = {}) {
       info: () => {},
       warn: () => {},
     },
-    registerTool(def: any) {
+    registerTool(def: any, meta?: { name?: string }) {
+      if (typeof def === "function") {
+        const key = meta?.name ?? def({ agentId: "main", sessionKey: "default" }).name;
+        tools.set(key, {
+          name: key,
+          execute: (...args: any[]) => {
+            const runtimeCtx = args[2] ?? { agentId: "main", sessionKey: "default" };
+            return def(runtimeCtx).execute(...args);
+          },
+        });
+        return;
+      }
       tools.set(def.name, def);
     },
+    registerMemoryPromptSection() {},
+    registerMemoryCapability() {},
     registerService(def: any) {
       service = def;
     },
@@ -101,9 +114,21 @@ describe("plugin-impl hub service skeleton", () => {
     });
     expect(join.status).toBe(200);
     const joinJson = await join.json();
-    expect(joinJson.status).toBe("active");
+    expect(joinJson.status).toBe("pending");
     expect(joinJson.userId).toBeTruthy();
-    expect(joinJson.userToken).toBeTruthy();
+
+    const authState = JSON.parse(fs.readFileSync(path.join(tmpDir, "hub-auth.json"), "utf-8"));
+    const adminToken = authState.bootstrapAdminToken;
+
+    const approve = await fetch(`http://127.0.0.1:${port}/api/v1/hub/admin/approve-user`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ userId: joinJson.userId, username: "bob" }),
+    });
+    expect(approve.status).toBe(200);
+    const approveJson = await approve.json();
+    expect(approveJson.status).toBe("active");
+    expect(approveJson.token).toBeTruthy();
   });
 
   it("should reject forged admin tokens derived from the team token", async () => {
@@ -160,32 +185,46 @@ describe("plugin-impl owner isolation", () => {
   let tools: Map<string, any>;
   let events: Map<string, Function>;
   let service: any;
+  let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
+  let savedConfigPath: string | undefined;
+  let savedStateDir: string | undefined;
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "memos-plugin-impl-access-"));
+    savedHome = process.env.HOME;
+    savedUserProfile = process.env.USERPROFILE;
+    savedConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    savedStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.HOME = tmpDir;
+    process.env.USERPROFILE = tmpDir;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_STATE_DIR;
     ({ tools, events, service } = makeApi(tmpDir));
 
     const agentEnd = events.get("agent_end")!;
 
-    await agentEnd({
-      success: true,
-      agentId: "alpha",
-      sessionKey: "alpha-session",
-      messages: [
-        { role: "user", content: "alpha private marker deployment guide" },
-        { role: "assistant", content: "alpha private marker response" },
-      ],
-    });
+    await agentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "alpha private marker deployment guide" },
+          { role: "assistant", content: "alpha private marker response" },
+        ],
+      },
+      { agentId: "alpha", sessionKey: "alpha-session" },
+    );
 
-    await agentEnd({
-      success: true,
-      agentId: "beta",
-      sessionKey: "beta-session",
-      messages: [
-        { role: "user", content: "beta private marker rollback guide" },
-        { role: "assistant", content: "beta private marker response" },
-      ],
-    });
+    await agentEnd(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: "beta private marker rollback guide" },
+          { role: "assistant", content: "beta private marker response" },
+        ],
+      },
+      { agentId: "beta", sessionKey: "beta-session" },
+    );
 
     const publicWrite = tools.get("memory_write_public");
     await publicWrite.execute("call-public", { content: "shared public marker convention" }, { agentId: "alpha" });
@@ -193,13 +232,21 @@ describe("plugin-impl owner isolation", () => {
     const search = tools.get("memory_search");
     await waitFor(async () => {
       const result = await search.execute("call-search", { query: "alpha private marker", maxResults: 5, minScore: 0.1 }, { agentId: "alpha" });
-      return (result?.details?.hits?.length ?? 0) > 0;
+      return (result?.details?.filtered?.length ?? 0) > 0;
     });
   });
 
   afterEach(() => {
     service?.stop?.();
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+    if (savedConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+    else process.env.OPENCLAW_CONFIG_PATH = savedConfigPath;
+    if (savedStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = savedStateDir;
   });
 
   it("memory_search should scope results by agentId", async () => {
@@ -209,11 +256,12 @@ describe("plugin-impl owner isolation", () => {
     const beta = await search.execute("call-search", { query: "alpha private marker", maxResults: 5, minScore: 0.1 }, { agentId: "beta" });
     const publicHit = await search.execute("call-search", { query: "shared public marker", maxResults: 5, minScore: 0.1 }, { agentId: "beta" });
 
-    expect(alpha.details.hits.length).toBeGreaterThan(0);
-    // beta should not see alpha's private memories, but may see public ones
-    const betaPrivateHits = (beta.details?.hits ?? []).filter((h: any) => h.ref?.sessionKey !== "public");
-    expect(betaPrivateHits).toEqual([]);
-    expect(publicHit.details.hits.length).toBeGreaterThan(0);
+    expect(alpha.details.filtered.length).toBeGreaterThan(0);
+    const betaAlphaHits = (beta.details?.filtered ?? []).filter((h: any) =>
+      h.original_excerpt?.includes("alpha") || h.summary?.includes("alpha"),
+    );
+    expect(betaAlphaHits).toHaveLength(0);
+    expect(publicHit.details.filtered.length).toBeGreaterThan(0);
   });
 
   it("memory_timeline should not leak another agent's private neighbors", async () => {
@@ -221,8 +269,8 @@ describe("plugin-impl owner isolation", () => {
     const timeline = tools.get("memory_timeline");
 
     const alpha = await search.execute("call-search", { query: "alpha private marker", maxResults: 5, minScore: 0.1 }, { agentId: "alpha" });
-    const ref = alpha.details.hits[0].ref;
-    const betaTimeline = await timeline.execute("call-timeline", ref, { agentId: "beta" });
+    const chunkId = alpha.details.filtered[0].chunkId;
+    const betaTimeline = await timeline.execute("call-timeline", { chunkId }, { agentId: "beta" });
 
     expect(betaTimeline.details.entries).toEqual([]);
   });
@@ -381,8 +429,8 @@ describe("plugin-impl owner isolation", () => {
     const getTool = tools.get("memory_get");
 
     const alpha = await search.execute("call-search", { query: "alpha private marker", maxResults: 5, minScore: 0.1 }, { agentId: "alpha" });
-    const ref = alpha.details.hits[0].ref;
-    const betaGet = await getTool.execute("call-get", { chunkId: ref.chunkId }, { agentId: "beta" });
+    const chunkId = alpha.details.filtered[0].chunkId;
+    const betaGet = await getTool.execute("call-get", { chunkId }, { agentId: "beta" });
 
     expect(betaGet.details.error).toBe("not_found");
   });

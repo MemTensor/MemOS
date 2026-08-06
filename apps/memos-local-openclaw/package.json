@@ -1,16 +1,16 @@
 {
   "name": "@memtensor/memos-local-openclaw-plugin",
-  "version": "1.0.5",
+  "version": "1.0.9-beta.1",
   "description": "MemOS Local memory plugin for OpenClaw — full-write, hybrid-recall, progressive retrieval",
-  "type": "module",
-  "main": "index.ts",
-  "types": "dist/index.d.ts",
+  "type": "commonjs",
+  "main": "./dist/index.js",
   "files": [
-    "index.ts",
-    "src",
     "dist",
+    "tsconfig.json",
+    "src",
     "skill",
     "prebuilds",
+    "scripts/native-binding.cjs",
     "scripts/postinstall.cjs",
     "openclaw.plugin.json",
     "telemetry.credentials.json",
@@ -20,7 +20,7 @@
   "openclaw": {
     "id": "memos-local-openclaw-plugin",
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ],
     "skills": [
       "skill/memos-memory-guide"
@@ -51,7 +51,8 @@
   "dependencies": {
     "@huggingface/transformers": "^3.8.0",
     "@sinclair/typebox": "^0.34.48",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^12.10.0",
+    "posthog-node": "^5.28.0",
     "puppeteer": "^24.38.0",
     "semver": "^7.7.4",
     "uuid": "^10.0.0"

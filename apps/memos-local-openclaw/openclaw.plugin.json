@@ -3,7 +3,7 @@
   "name": "MemOS Local Memory",
   "description": "Full-write local conversation memory with hybrid search (RRF + MMR + recency), task summarization, skill evolution, and team sharing (Hub-Client). Provides memory_search, memory_get, task_summary, skill_search, task_share, network_skill_pull, network_team_info, memory_viewer for layered retrieval and team collaboration.",
   "kind": "memory",
-  "version": "0.1.12",
+  "version": "1.0.8",
   "skills": [
     "skill/memos-memory-guide"
   ],
@@ -20,7 +20,7 @@
     }
   },
   "requirements": {
-    "node": ">=18.0.0",
+    "node": ">=22.0.0",
     "openclaw": ">=2026.2.0"
   },
   "setup": {
@@ -33,5 +33,31 @@
       "If better-sqlite3 fails to build, ensure you have C++ build tools: xcode-select --install (macOS) or build-essential (Linux)"
     ]
   },
-  "extensions": ["./index.ts"]
+  "extensions": [
+    "./dist/index.js"
+  ],
+  "contracts": {
+    "tools": [
+      "memory_get",
+      "memory_search",
+      "memory_share",
+      "memory_timeline",
+      "memory_unshare",
+      "memory_viewer",
+      "memory_write_public",
+      "network_memory_detail",
+      "network_skill_pull",
+      "network_team_info",
+      "skill_file_get",
+      "skill_files",
+      "skill_get",
+      "skill_install",
+      "skill_publish",
+      "skill_search",
+      "skill_unpublish",
+      "task_share",
+      "task_summary",
+      "task_unshare"
+    ]
+  }
 }

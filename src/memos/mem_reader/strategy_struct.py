@@ -13,8 +13,6 @@ from memos.templates.mem_reader_prompts import (
     CUSTOM_TAGS_INSTRUCTION_ZH,
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
-    SIMPLE_STRUCT_MEM_READER_EXAMPLE,
-    SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
 )
 from memos.templates.mem_reader_strategy_prompts import (
     STRATEGY_STRUCT_MEM_READER_PROMPT,
@@ -27,8 +25,6 @@ STRATEGY_PROMPT_DICT = {
     "chat": {
         "en": STRATEGY_STRUCT_MEM_READER_PROMPT,
         "zh": STRATEGY_STRUCT_MEM_READER_PROMPT_ZH,
-        "en_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE,
-        "zh_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
     "custom_tags": {"en": CUSTOM_TAGS_INSTRUCTION, "zh": CUSTOM_TAGS_INSTRUCTION_ZH},
@@ -45,7 +41,6 @@ class StrategyStructMemReader(SimpleStructMemReader, ABC):
     def _get_llm_response(self, mem_str: str, custom_tags: list[str] | None) -> dict:
         lang = detect_lang(mem_str)
         template = STRATEGY_PROMPT_DICT["chat"][lang]
-        examples = STRATEGY_PROMPT_DICT["chat"][f"{lang}_example"]
         prompt = template.replace("${conversation}", mem_str)
 
         custom_tags_prompt = (
@@ -54,9 +49,6 @@ class StrategyStructMemReader(SimpleStructMemReader, ABC):
             else ""
         )
         prompt = prompt.replace("${custom_tags_prompt}", custom_tags_prompt)
-
-        if self.config.remove_prompt_example:  # TODO unused
-            prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
         try:
             response_text = self.llm.generate(messages)

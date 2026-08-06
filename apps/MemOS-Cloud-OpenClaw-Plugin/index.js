@@ -5,10 +5,14 @@ import {
   extractResultData,
   extractText,
   formatRecallHookResult,
-  USER_QUERY_MARKER,
+  isAgentAllowed,
+  resolveAgentConfig,
   searchMemory,
+  stripOpenClawInjectedPrefix,
 } from "./lib/memos-cloud-api.js";
+import { reportRumEvent } from "./lib/arms-reporter.js";
 import { startUpdateChecker } from "./lib/check-update.js";
+import { closeConfigUiService, ensureConfigUiService, waitForGatewayReady } from "./lib/config-ui-server.js";
 let lastCaptureTime = 0;
 const conversationCounters = new Map();
 const API_KEY_HELP_URL = "https://memos-dashboard.openmem.net/cn/apikeys/";
@@ -33,13 +37,6 @@ function warnMissingApiKey(log, context) {
   );
 }
 
-function stripPrependedPrompt(content) {
-  if (!content) return content;
-  const idx = content.lastIndexOf(USER_QUERY_MARKER);
-  if (idx === -1) return content;
-  return content.slice(idx + USER_QUERY_MARKER.length).trimStart();
-}
-
 function getCounterSuffix(sessionKey) {
   if (!sessionKey) return "";
   const current = conversationCounters.get(sessionKey) ?? 0;
@@ -60,6 +57,21 @@ function getEffectiveAgentId(cfg, ctx) {
   return agentId === "main" ? undefined : agentId;
 }
 
+export function extractDirectSessionUserId(sessionKey) {
+  if (!sessionKey || typeof sessionKey !== "string") return "";
+  const parts = sessionKey.split(":");
+  const directIndex = parts.lastIndexOf("direct");
+  if (directIndex === -1) return "";
+  return parts[directIndex + 1] || "";
+}
+
+export function resolveMemosUserId(cfg, ctx) {
+  const fallback = cfg?.userId || "openclaw-user";
+  if (!cfg?.useDirectSessionUserId) return fallback;
+  const directUserId = extractDirectSessionUserId(ctx?.sessionKey);
+  return directUserId || fallback;
+}
+
 function resolveConversationId(cfg, ctx) {
   if (cfg.conversationId) return cfg.conversationId;
   // TODO: consider binding conversation_id directly to OpenClaw sessionId (prefer ctx.sessionId).
@@ -72,15 +84,16 @@ function resolveConversationId(cfg, ctx) {
   return `${prefix}openclaw-${Date.now()}${dynamicSuffix}${suffix}`;
 }
 
-function buildSearchPayload(cfg, prompt, ctx) {
-  const queryRaw = `${cfg.queryPrefix || ""}${prompt}`;
+export function buildSearchPayload(cfg, prompt, ctx) {
+  const cleanPrompt = stripOpenClawInjectedPrefix(prompt);
+  const queryRaw = `${cfg.queryPrefix || ""}${cleanPrompt}`;
   const query =
     Number.isFinite(cfg.maxQueryChars) && cfg.maxQueryChars > 0
       ? queryRaw.slice(0, cfg.maxQueryChars)
       : queryRaw;
 
   const payload = {
-    user_id: cfg.userId,
+    user_id: resolveMemosUserId(cfg, ctx),
     query,
     source: MEMOS_SOURCE,
   };
@@ -119,9 +132,9 @@ function buildSearchPayload(cfg, prompt, ctx) {
   return payload;
 }
 
-function buildAddMessagePayload(cfg, messages, ctx) {
+export function buildAddMessagePayload(cfg, messages, ctx) {
   const payload = {
-    user_id: cfg.userId,
+    user_id: resolveMemosUserId(cfg, ctx),
     conversation_id: resolveConversationId(cfg, ctx),
     messages,
     source: MEMOS_SOURCE,
@@ -162,7 +175,7 @@ function pickLastTurnMessages(messages, cfg) {
   for (const msg of slice) {
     if (!msg || !msg.role) continue;
     if (msg.role === "user") {
-      const content = stripPrependedPrompt(extractText(msg.content));
+      const content = stripOpenClawInjectedPrefix(extractText(msg.content));
       if (content) results.push({ role: "user", content: truncate(content, cfg.maxMessageChars) });
       continue;
     }
@@ -180,7 +193,7 @@ function pickFullSessionMessages(messages, cfg) {
   for (const msg of messages) {
     if (!msg || !msg.role) continue;
     if (msg.role === "user") {
-      const content = stripPrependedPrompt(extractText(msg.content));
+      const content = stripOpenClawInjectedPrefix(extractText(msg.content));
       if (content) results.push({ role: "user", content: truncate(content, cfg.maxMessageChars) });
     }
     if (msg.role === "assistant" && cfg.includeAssistant) {
@@ -332,20 +345,20 @@ async function callRecallFilterModel(cfg, userPrompt, candidatePayload) {
   };
 
   let lastError;
-  const retries = Number.isFinite(cfg.recallFilterRetries) ? Math.max(0, cfg.recallFilterRetries) : 0;
-  const timeoutMs = Number.isFinite(cfg.recallFilterTimeoutMs) ? Math.max(1000, cfg.recallFilterTimeoutMs) : 6000;
+  const retries = Number.isFinite(cfg.recallFilterRetries) ? Math.max(0, cfg.recallFilterRetries) : 1;
+  const timeoutMs = Number.isFinite(cfg.recallFilterTimeoutMs) ? Math.max(1000, cfg.recallFilterTimeoutMs) : 30000;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    let timeoutId;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const res = await fetch(`${cfg.recallFilterBaseUrl}/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      clearTimeout(timeoutId);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
@@ -357,16 +370,23 @@ async function callRecallFilterModel(cfg, userPrompt, candidatePayload) {
       }
       return parsed;
     } catch (err) {
-      lastError = err;
+      const isAbort = err?.name === "AbortError" || /aborted/i.test(String(err?.message ?? err));
+      lastError = isAbort
+        ? new Error(
+            `timed out after ${timeoutMs}ms (raise recallFilterTimeoutMs; local LLMs often need 30s+ on cold start)`,
+          )
+        : err;
       if (attempt < retries) {
         await sleep(120 * (attempt + 1));
       }
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }
   throw lastError;
 }
 
-async function maybeFilterRecallData(cfg, data, userPrompt, log) {
+async function maybeFilterRecallData(cfg, data, userPrompt, log, ctx) {
   if (!cfg.recallFilterEnabled) return data;
   if (!cfg.recallFilterBaseUrl || !cfg.recallFilterModel) {
     log.warn?.("[memos-cloud] recall filter enabled but missing recallFilterBaseUrl/recallFilterModel; skip filter");
@@ -380,8 +400,15 @@ async function maybeFilterRecallData(cfg, data, userPrompt, log) {
   if (!hasCandidates) return data;
 
   try {
+    reportRumEvent("recall_filter", { recall_filter_enable: cfg.recallFilterEnabled }, cfg, ctx, log);
     const decision = await callRecallFilterModel(cfg, userPrompt, lists.candidatePayload);
-    return applyRecallDecision(data, decision, lists);
+    const filtered = applyRecallDecision(data, decision, lists);
+    log.info?.(
+      `[memos-cloud] recall filter applied: memory ${lists.memoryList.length}->${filtered.memory_detail_list?.length ?? 0}, ` +
+        `preference ${lists.preferenceList.length}->${filtered.preference_detail_list?.length ?? 0}, ` +
+        `tool_memory ${lists.toolList.length}->${filtered.tool_memory_detail_list?.length ?? 0}`,
+    );
+    return filtered;
   } catch (err) {
     log.warn?.(`[memos-cloud] recall filter failed: ${String(err)}`);
     return cfg.recallFilterFailOpen ? data : { ...data, memory_detail_list: [], preference_detail_list: [], tool_memory_detail_list: [] };
@@ -397,13 +424,30 @@ export default {
   register(api) {
     const cfg = buildConfig(api.pluginConfig);
     const log = api.logger ?? console;
+    let configUiStartupCancelled = false;
 
     // Start 12-hour background update interval
     startUpdateChecker(log);
+    void (async () => {
+      const ready = await waitForGatewayReady(api.config, log);
+      if (!ready || configUiStartupCancelled) return;
+      await ensureConfigUiService(log);
+    })().catch((error) => {
+      log.warn?.(`[memos-cloud] config UI failed to start: ${String(error)}`);
+    });
 
     if (!cfg.envFileStatus?.found) {
       const searchPaths = cfg.envFileStatus?.searchPaths?.join(", ") ?? ENV_FILE_SEARCH_HINTS.join(", ");
       log.warn?.(`[memos-cloud] No .env found in ${searchPaths}; falling back to process env or plugin config.`);
+    }
+
+    if (cfg.multiAgentMode && cfg.allowedAgents?.length > 0) {
+      log.info?.(`[memos-cloud] Multi-agent mode enabled. Allowed agents: [${cfg.allowedAgents.join(", ")}]`);
+    }
+
+    const overrideAgentIds = Object.keys(cfg._agentOverrides || {});
+    if (overrideAgentIds.length > 0) {
+      log.info?.(`[memos-cloud] Per-agent overrides configured for: [${overrideAgentIds.join(", ")}]`);
     }
 
     if (cfg.conversationSuffixMode === "counter" && cfg.resetOnNew) {
@@ -425,23 +469,30 @@ export default {
     }
 
     api.on("before_agent_start", async (event, ctx) => {
-      if (!cfg.recallEnabled) return;
-      if (!event?.prompt || event.prompt.length < 3) return;
-      if (!cfg.apiKey) {
+      if (!isAgentAllowed(cfg, ctx)) {
+        log.info?.(`[memos-cloud] recall skipped: agent "${ctx?.agentId}" not in allowedAgents [${cfg.allowedAgents?.join(", ")}]`);
+        return;
+      }
+      const agentCfg = resolveAgentConfig(cfg, ctx?.agentId);
+      if (!agentCfg.recallEnabled) return;
+      const userPrompt = stripOpenClawInjectedPrefix(event?.prompt || "");
+      if (!userPrompt || userPrompt.length < 3) return;
+      if (!agentCfg.apiKey) {
         warnMissingApiKey(log, "recall");
         return;
       }
 
       try {
-        const payload = buildSearchPayload(cfg, event.prompt, ctx);
-        const result = await searchMemory(cfg, payload);
+        const payload = buildSearchPayload(agentCfg, userPrompt, ctx);
+        reportRumEvent('search_memory', payload, agentCfg, ctx, log);
+        const result = await searchMemory(agentCfg, payload);
         const resultData = extractResultData(result);
         if (!resultData) return;
-        const filteredData = await maybeFilterRecallData(cfg, resultData, event.prompt, log);
+        const filteredData = await maybeFilterRecallData(agentCfg, resultData, userPrompt, log, ctx);
         const hookResult = formatRecallHookResult({ data: filteredData }, {
           wrapTagBlocks: true,
           relativity: payload.relativity,
-          maxItemChars: cfg.maxItemChars,
+          maxItemChars: agentCfg.maxItemChars,
         });
         if (!hookResult.appendSystemContext && !hookResult.prependContext) return;
 
@@ -452,32 +503,42 @@ export default {
     });
 
     api.on("agent_end", async (event, ctx) => {
-      if (!cfg.addEnabled) return;
+      if (!isAgentAllowed(cfg, ctx)) {
+        log.info?.(`[memos-cloud] add skipped: agent "${ctx?.agentId}" not in allowedAgents [${cfg.allowedAgents?.join(", ")}]`);
+        return;
+      }
+      const agentCfg = resolveAgentConfig(cfg, ctx?.agentId);
+      if (!agentCfg.addEnabled) return;
       if (!event?.success || !event?.messages?.length) return;
-      if (!cfg.apiKey) {
+      if (!agentCfg.apiKey) {
         warnMissingApiKey(log, "add");
         return;
       }
 
       const now = Date.now();
-      if (cfg.throttleMs && now - lastCaptureTime < cfg.throttleMs) {
+      if (agentCfg.throttleMs && now - lastCaptureTime < agentCfg.throttleMs) {
         return;
       }
       lastCaptureTime = now;
 
       try {
         const messages =
-          cfg.captureStrategy === "full_session"
-            ? pickFullSessionMessages(event.messages, cfg)
-            : pickLastTurnMessages(event.messages, cfg);
+          agentCfg.captureStrategy === "full_session"
+            ? pickFullSessionMessages(event.messages, agentCfg)
+            : pickLastTurnMessages(event.messages, agentCfg);
 
         if (!messages.length) return;
 
-        const payload = buildAddMessagePayload(cfg, messages, ctx);
-        await addMessage(cfg, payload);
+        const payload = buildAddMessagePayload(agentCfg, messages, ctx);
+        await addMessage(agentCfg, payload);
       } catch (err) {
         log.warn?.(`[memos-cloud] add failed: ${String(err)}`);
       }
     });
+
+    return () => {
+      configUiStartupCancelled = true;
+      void closeConfigUiService();
+    };
   },
 };

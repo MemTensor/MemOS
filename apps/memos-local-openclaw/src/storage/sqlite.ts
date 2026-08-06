@@ -110,17 +110,65 @@ export class SqliteStore {
     this.migrateOwnerFields();
     this.migrateSkillVisibility();
     this.migrateSkillEmbeddingsAndFts();
+    this.migrateTaskTopicColumn();
+    this.migrateTaskEmbeddingsAndFts();
     this.migrateFtsToTrigram();
     this.migrateHubTables();
     this.migrateHubFtsToTrigram();
+    this.migrateHubMemorySourceAgent();
     this.migrateLocalSharedTasksOwner();
     this.migrateHubUserIdentityFields();
     this.migrateClientHubConnectionIdentityFields();
+    this.migrateTeamSharingInstanceId();
+    this.migrateEmbeddingProducerColumns();
     this.log.debug("Database schema initialized");
+  }
+
+  /**
+   * Tag every cached embedding row with the producer that created it.
+   * Adds `provider TEXT NOT NULL DEFAULT ''` + `model TEXT NOT NULL DEFAULT ''`
+   * to every embedding-shaped table. Idempotent: skips tables that already
+   * have the columns. `dimensions` already exists on every target table.
+   */
+  private migrateEmbeddingProducerColumns(): void {
+    const tables = [
+      "embeddings",
+      "skill_embeddings",
+      "task_embeddings",
+      "hub_embeddings",
+      "hub_skill_embeddings",
+      "hub_memory_embeddings",
+    ];
+    for (const table of tables) {
+      try {
+        const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+        if (cols.length === 0) continue; // table didn't exist yet
+        if (!cols.some((c) => c.name === "provider")) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN provider TEXT NOT NULL DEFAULT ''`);
+          this.log.info(`Migrated: added provider column to ${table}`);
+        }
+        if (!cols.some((c) => c.name === "model")) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN model TEXT NOT NULL DEFAULT ''`);
+          this.log.info(`Migrated: added model column to ${table}`);
+        }
+      } catch (err) {
+        this.log.warn(`migrateEmbeddingProducerColumns(${table}) failed: ${err}`);
+      }
+    }
   }
 
   private migrateChunksIndexesForRecall(): void {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_dedup_created ON chunks(dedup_status, created_at DESC)");
+  }
+
+  private migrateHubMemorySourceAgent(): void {
+    try {
+      const cols = this.db.prepare("PRAGMA table_info(hub_memories)").all() as Array<{ name: string }>;
+      if (cols.length > 0 && !cols.some((c) => c.name === "source_agent")) {
+        this.db.exec("ALTER TABLE hub_memories ADD COLUMN source_agent TEXT NOT NULL DEFAULT ''");
+        this.log.info("Migrated: added source_agent column to hub_memories");
+      }
+    } catch { /* table may not exist yet */ }
   }
 
   private migrateLocalSharedTasksOwner(): void {
@@ -174,6 +222,40 @@ export class SqliteStore {
         this.log.info("Migrated: added last_known_status to client_hub_connection");
       }
     } catch { /* table may not exist yet */ }
+  }
+
+  private migrateTeamSharingInstanceId(): void {
+    try {
+      const tscCols = this.db.prepare("PRAGMA table_info(team_shared_chunks)").all() as Array<{ name: string }>;
+      if (tscCols.length > 0 && !tscCols.some(c => c.name === "hub_instance_id")) {
+        this.db.exec("ALTER TABLE team_shared_chunks ADD COLUMN hub_instance_id TEXT NOT NULL DEFAULT ''");
+        this.log.info("Migrated: added hub_instance_id to team_shared_chunks");
+      }
+    } catch { /* table may not exist yet */ }
+    try {
+      const lstCols = this.db.prepare("PRAGMA table_info(local_shared_tasks)").all() as Array<{ name: string }>;
+      if (lstCols.length > 0 && !lstCols.some(c => c.name === "hub_instance_id")) {
+        this.db.exec("ALTER TABLE local_shared_tasks ADD COLUMN hub_instance_id TEXT NOT NULL DEFAULT ''");
+        this.log.info("Migrated: added hub_instance_id to local_shared_tasks");
+      }
+    } catch { /* table may not exist yet */ }
+    try {
+      const connCols = this.db.prepare("PRAGMA table_info(client_hub_connection)").all() as Array<{ name: string }>;
+      if (connCols.length > 0 && !connCols.some(c => c.name === "hub_instance_id")) {
+        this.db.exec("ALTER TABLE client_hub_connection ADD COLUMN hub_instance_id TEXT NOT NULL DEFAULT ''");
+        this.log.info("Migrated: added hub_instance_id to client_hub_connection");
+      }
+    } catch { /* table may not exist yet */ }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS team_shared_skills (
+        skill_id        TEXT PRIMARY KEY,
+        hub_skill_id    TEXT NOT NULL DEFAULT '',
+        visibility      TEXT NOT NULL DEFAULT 'public',
+        group_id        TEXT,
+        hub_instance_id TEXT NOT NULL DEFAULT '',
+        shared_at       INTEGER NOT NULL
+      )
+    `);
   }
 
   private migrateOwnerFields(): void {
@@ -251,6 +333,55 @@ export class SqliteStore {
       if (count === 0 && skillCount > 0) {
         this.db.exec("INSERT INTO skills_fts(rowid, name, description) SELECT rowid, name, description FROM skills");
         this.log.info(`Migrated: backfilled skills_fts for ${skillCount} skills`);
+      }
+    } catch { /* best-effort */ }
+  }
+
+  private migrateTaskEmbeddingsAndFts(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS task_embeddings (
+        task_id    TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        vector     BLOB NOT NULL,
+        dimensions INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+        summary,
+        topic,
+        content='tasks',
+        content_rowid='rowid',
+        tokenize='trigram'
+      );
+    `);
+
+    try {
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS tasks_fts_ai AFTER INSERT ON tasks BEGIN
+          INSERT INTO tasks_fts(rowid, summary, topic)
+          VALUES (new.rowid, new.summary, COALESCE(new.topic, ''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS tasks_fts_ad AFTER DELETE ON tasks BEGIN
+          INSERT INTO tasks_fts(tasks_fts, rowid, summary, topic)
+          VALUES ('delete', old.rowid, old.summary, COALESCE(old.topic, ''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS tasks_fts_au AFTER UPDATE ON tasks BEGIN
+          INSERT INTO tasks_fts(tasks_fts, rowid, summary, topic)
+          VALUES ('delete', old.rowid, old.summary, COALESCE(old.topic, ''));
+          INSERT INTO tasks_fts(rowid, summary, topic)
+          VALUES (new.rowid, new.summary, COALESCE(new.topic, ''));
+        END;
+      `);
+    } catch {
+      // triggers may already exist
+    }
+
+    try {
+      const count = (this.db.prepare("SELECT COUNT(*) as c FROM tasks_fts").get() as { c: number }).c;
+      const taskCount = (this.db.prepare("SELECT COUNT(*) as c FROM tasks").get() as { c: number }).c;
+      if (count === 0 && taskCount > 0) {
+        this.db.exec("INSERT INTO tasks_fts(rowid, summary, topic) SELECT rowid, summary, COALESCE(topic, '') FROM tasks");
+        this.log.info(`Migrated: backfilled tasks_fts for ${taskCount} tasks`);
       }
     } catch { /* best-effort */ }
   }
@@ -469,6 +600,14 @@ export class SqliteStore {
     if (!versionCols.some((c) => c.name === "change_summary")) {
       this.db.exec("ALTER TABLE skill_versions ADD COLUMN change_summary TEXT NOT NULL DEFAULT ''");
       this.log.info("Migrated: added change_summary column to skill_versions");
+    }
+  }
+
+  private migrateTaskTopicColumn(): void {
+    const cols = this.db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "topic")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN topic TEXT DEFAULT NULL");
+      this.log.info("Migrated: added topic column to tasks");
     }
   }
 
@@ -778,12 +917,13 @@ export class SqliteStore {
       );
 
       CREATE TABLE IF NOT EXISTS local_shared_tasks (
-        task_id       TEXT PRIMARY KEY,
-        hub_task_id   TEXT NOT NULL,
-        visibility    TEXT NOT NULL DEFAULT 'public',
-        group_id      TEXT,
-        synced_chunks INTEGER NOT NULL DEFAULT 0,
-        shared_at     INTEGER NOT NULL
+        task_id         TEXT PRIMARY KEY,
+        hub_task_id     TEXT NOT NULL,
+        visibility      TEXT NOT NULL DEFAULT 'public',
+        group_id        TEXT,
+        synced_chunks   INTEGER NOT NULL DEFAULT 0,
+        hub_instance_id TEXT NOT NULL DEFAULT '',
+        shared_at       INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS local_shared_memories (
@@ -794,11 +934,21 @@ export class SqliteStore {
 
       -- Client: team share UI metadata only (no hub_memories row — avoids local FTS/embed recall duplication)
       CREATE TABLE IF NOT EXISTS team_shared_chunks (
-        chunk_id       TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-        hub_memory_id  TEXT NOT NULL DEFAULT '',
-        visibility     TEXT NOT NULL DEFAULT 'public',
-        group_id       TEXT,
-        shared_at      INTEGER NOT NULL
+        chunk_id        TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+        hub_memory_id   TEXT NOT NULL DEFAULT '',
+        visibility      TEXT NOT NULL DEFAULT 'public',
+        group_id        TEXT,
+        hub_instance_id TEXT NOT NULL DEFAULT '',
+        shared_at       INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS team_shared_skills (
+        skill_id        TEXT PRIMARY KEY,
+        hub_skill_id    TEXT NOT NULL DEFAULT '',
+        visibility      TEXT NOT NULL DEFAULT 'public',
+        group_id        TEXT,
+        hub_instance_id TEXT NOT NULL DEFAULT '',
+        shared_at       INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS hub_users (
@@ -946,6 +1096,7 @@ export class SqliteStore {
         id              TEXT PRIMARY KEY,
         source_chunk_id TEXT NOT NULL,
         source_user_id  TEXT NOT NULL,
+        source_agent    TEXT NOT NULL DEFAULT '',
         role            TEXT NOT NULL,
         content         TEXT NOT NULL,
         summary         TEXT NOT NULL DEFAULT '',
@@ -960,10 +1111,10 @@ export class SqliteStore {
       CREATE INDEX IF NOT EXISTS idx_hub_memories_group ON hub_memories(group_id);
 
       CREATE TABLE IF NOT EXISTS hub_memory_embeddings (
-        memory_id    TEXT PRIMARY KEY REFERENCES hub_memories(id) ON DELETE CASCADE,
-        vector       BLOB NOT NULL,
-        dimensions   INTEGER NOT NULL,
-        updated_at   INTEGER NOT NULL
+        memory_id   TEXT PRIMARY KEY REFERENCES hub_memories(id) ON DELETE CASCADE,
+        vector      BLOB NOT NULL,
+        dimensions  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
       );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS hub_memories_fts USING fts5(
@@ -1060,12 +1211,12 @@ export class SqliteStore {
     );
   }
 
-  upsertEmbedding(chunkId: string, vector: number[]): void {
+  upsertEmbedding(chunkId: string, vector: number[], producer?: { provider?: string; model?: string }): void {
     const buf = Buffer.from(new Float32Array(vector).buffer);
     this.db.prepare(`
-      INSERT OR REPLACE INTO embeddings (chunk_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-    `).run(chunkId, buf, vector.length, Date.now());
+      INSERT OR REPLACE INTO embeddings (chunk_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(chunkId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   deleteEmbedding(chunkId: string): void {
@@ -1124,7 +1275,7 @@ export class SqliteStore {
 
   // ─── FTS Search ───
 
-  ftsSearch(query: string, limit: number, ownerFilter?: string[]): Array<{ chunkId: string; score: number }> {
+  ftsSearch(query: string, limit: number, ownerFilter?: string[], excludeSessionKey?: string): Array<{ chunkId: string; score: number }> {
     const sanitized = sanitizeFtsQuery(query);
     if (!sanitized) return [];
 
@@ -1140,6 +1291,11 @@ export class SqliteStore {
         const placeholders = ownerFilter.map(() => "?").join(",");
         sql += ` AND c.owner IN (${placeholders})`;
         params.push(...ownerFilter);
+      }
+
+      if (excludeSessionKey) {
+        sql += ` AND c.session_key != ?`;
+        params.push(excludeSessionKey);
       }
 
       sql += ` ORDER BY rank LIMIT ?`;
@@ -1161,7 +1317,7 @@ export class SqliteStore {
 
   // ─── Pattern Search (LIKE-based, for CJK text where FTS tokenization is weak) ───
 
-  patternSearch(patterns: string[], opts: { role?: string; limit?: number } = {}): Array<{ chunkId: string; content: string; role: string; createdAt: number }> {
+  patternSearch(patterns: string[], opts: { role?: string; limit?: number; ownerFilter?: string[]; excludeSessionKey?: string } = {}): Array<{ chunkId: string; content: string; role: string; createdAt: number }> {
     if (patterns.length === 0) return [];
     const limit = opts.limit ?? 10;
 
@@ -1170,13 +1326,27 @@ export class SqliteStore {
     const roleClause = opts.role ? " AND c.role = ?" : "";
     const params: (string | number)[] = patterns.map(p => `%${p}%`);
     if (opts.role) params.push(opts.role);
+
+    let ownerClause = "";
+    if (opts.ownerFilter && opts.ownerFilter.length > 0) {
+      const placeholders = opts.ownerFilter.map(() => "?").join(",");
+      ownerClause = ` AND c.owner IN (${placeholders})`;
+      params.push(...opts.ownerFilter);
+    }
+
+    let sessionClause = "";
+    if (opts.excludeSessionKey) {
+      sessionClause = ` AND c.session_key != ?`;
+      params.push(opts.excludeSessionKey);
+    }
+
     params.push(limit);
 
     try {
       const rows = this.db.prepare(`
         SELECT c.id as chunk_id, c.content, c.role, c.created_at
         FROM chunks c
-        WHERE (${whereClause})${roleClause} AND c.dedup_status = 'active'
+        WHERE (${whereClause})${roleClause}${ownerClause}${sessionClause} AND c.dedup_status = 'active'
         ORDER BY c.created_at DESC
         LIMIT ?
       `).all(...params) as Array<{ chunk_id: string; content: string; role: string; created_at: number }>;
@@ -1211,9 +1381,16 @@ export class SqliteStore {
     } catch { return []; }
   }
 
+  listHubMemories(opts: { limit?: number } = {}): Array<{ id: string; summary?: string; content?: string }> {
+    const limit = opts.limit ?? 200;
+    try {
+      return this.db.prepare("SELECT id, summary, content FROM hub_memories ORDER BY created_at DESC LIMIT ?").all(limit) as Array<{ id: string; summary?: string; content?: string }>;
+    } catch { return []; }
+  }
+
   // ─── Vector Search ───
 
-  getAllEmbeddings(ownerFilter?: string[]): Array<{ chunkId: string; vector: number[] }> {
+  getAllEmbeddings(ownerFilter?: string[], excludeSessionKey?: string): Array<{ chunkId: string; vector: number[] }> {
     let sql = `SELECT e.chunk_id, e.vector, e.dimensions FROM embeddings e
        JOIN chunks c ON c.id = e.chunk_id
        WHERE c.dedup_status = 'active'`;
@@ -1225,6 +1402,11 @@ export class SqliteStore {
       params.push(...ownerFilter);
     }
 
+    if (excludeSessionKey) {
+      sql += ` AND c.session_key != ?`;
+      params.push(excludeSessionKey);
+    }
+
     const rows = this.db.prepare(sql).all(...params) as Array<{ chunk_id: string; vector: Buffer; dimensions: number }>;
 
     return rows.map((r) => ({
@@ -1233,8 +1415,8 @@ export class SqliteStore {
     }));
   }
 
-  getRecentEmbeddings(limit: number, ownerFilter?: string[]): Array<{ chunkId: string; vector: number[] }> {
-    if (limit <= 0) return this.getAllEmbeddings(ownerFilter);
+  getRecentEmbeddings(limit: number, ownerFilter?: string[], excludeSessionKey?: string): Array<{ chunkId: string; vector: number[] }> {
+    if (limit <= 0) return this.getAllEmbeddings(ownerFilter, excludeSessionKey);
 
     let sql = `SELECT e.chunk_id, e.vector, e.dimensions
        FROM chunks c
@@ -1246,6 +1428,11 @@ export class SqliteStore {
       const placeholders = ownerFilter.map(() => "?").join(",");
       sql += ` AND c.owner IN (${placeholders})`;
       params.push(...ownerFilter);
+    }
+
+    if (excludeSessionKey) {
+      sql += ` AND c.session_key != ?`;
+      params.push(excludeSessionKey);
     }
 
     sql += ` ORDER BY c.created_at DESC LIMIT ?`;
@@ -1266,6 +1453,87 @@ export class SqliteStore {
     if (!row) return null;
     return Array.from(new Float32Array(row.vector.buffer, row.vector.byteOffset, row.dimensions));
   }
+
+  // ─── Embedding model signature reporting (issue #1333) ───
+
+  /**
+   * Snapshot of cached vector rows compared against the live `current`
+   * embedder signature. `legacy` are rows that pre-date the producer
+   * tagging columns (provider = ''). `mismatched` are rows whose
+   * producer was tagged but differs from `current`. `missing` counts
+   * active chunks that have no embedding row at all.
+   */
+  getEmbeddingStats(current: { provider: string; model: string; dimensions: number }): {
+    total: number;
+    matched: number;
+    mismatched: number;
+    legacy: number;
+    missing: number;
+    current: { provider: string; model: string; dimensions: number };
+    byProducer: Array<{ provider: string; model: string; dimensions: number; count: number }>;
+  } {
+    const total = (this.db.prepare("SELECT COUNT(*) as c FROM embeddings").get() as { c: number }).c;
+    const matched = (this.db.prepare(
+      "SELECT COUNT(*) as c FROM embeddings WHERE provider = ? AND model = ? AND dimensions = ?",
+    ).get(current.provider, current.model, current.dimensions) as { c: number }).c;
+    const legacy = (this.db.prepare(
+      "SELECT COUNT(*) as c FROM embeddings WHERE provider = ''",
+    ).get() as { c: number }).c;
+    const mismatched = (this.db.prepare(
+      "SELECT COUNT(*) as c FROM embeddings WHERE provider != '' AND NOT (provider = ? AND model = ? AND dimensions = ?)",
+    ).get(current.provider, current.model, current.dimensions) as { c: number }).c;
+    const missing = (this.db.prepare(`
+      SELECT COUNT(*) as c FROM chunks c
+      WHERE c.dedup_status = 'active'
+        AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = c.id)
+    `).get() as { c: number }).c;
+
+    const byProducer = (this.db.prepare(
+      "SELECT provider, model, dimensions, COUNT(*) as count FROM embeddings GROUP BY provider, model, dimensions ORDER BY count DESC",
+    ).all() as Array<{ provider: string; model: string; dimensions: number; count: number }>);
+
+    return { total, matched, mismatched, legacy, missing, current, byProducer };
+  }
+
+  /**
+   * Chunk ids that should be re-embedded under `current`. By default returns
+   * every chunk whose embedding row's producer doesn't match (including legacy
+   * empty rows) plus chunks with no embedding row at all. With
+   * `missingOnly: true`, returns only the latter. Ordered by `created_at ASC`
+   * so re-embed runs are deterministic and resumable.
+   */
+  listChunkIdsForReembed(
+    current: { provider: string; model: string; dimensions: number },
+    opts: { missingOnly?: boolean; limit?: number } = {},
+  ): string[] {
+    const limit = opts.limit ?? Number.MAX_SAFE_INTEGER;
+    if (opts.missingOnly) {
+      const rows = this.db.prepare(`
+        SELECT c.id as id FROM chunks c
+        WHERE c.dedup_status = 'active'
+          AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = c.id)
+        ORDER BY c.created_at ASC
+        LIMIT ?
+      `).all(limit) as Array<{ id: string }>;
+      return rows.map((r) => r.id);
+    }
+    const rows = this.db.prepare(`
+      SELECT c.id as id FROM chunks c
+      WHERE c.dedup_status = 'active'
+        AND (
+          NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.chunk_id = c.id)
+          OR EXISTS (
+            SELECT 1 FROM embeddings e
+            WHERE e.chunk_id = c.id
+              AND NOT (e.provider = ? AND e.model = ? AND e.dimensions = ?)
+          )
+        )
+      ORDER BY c.created_at ASC
+      LIMIT ?
+    `).all(current.provider, current.model, current.dimensions, limit) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
 
   // ─── Update ───
 
@@ -1372,13 +1640,21 @@ export class SqliteStore {
 
   deleteAll(): number {
     this.db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.db.exec("DROP TRIGGER IF EXISTS tasks_fts_ai");
+      this.db.exec("DROP TRIGGER IF EXISTS tasks_fts_ad");
+      this.db.exec("DROP TRIGGER IF EXISTS tasks_fts_au");
+      this.db.exec("DELETE FROM tasks_fts");
+    } catch (_) {}
     const tables = [
       "task_skills",
+      "task_embeddings",
       "skill_embeddings",
       "skill_versions",
       "skills",
       "local_shared_memories",
       "team_shared_chunks",
+      "team_shared_skills",
       "local_shared_tasks",
       "embeddings",
       "chunks",
@@ -1395,6 +1671,7 @@ export class SqliteStore {
       }
     }
     this.db.exec("PRAGMA foreign_keys = ON");
+    this.migrateTaskEmbeddingsAndFts();
     const remaining = this.countChunks();
     return remaining === 0 ? 1 : 0;
   }
@@ -1413,6 +1690,21 @@ export class SqliteStore {
     this.db.prepare("UPDATE chunks SET skill_id = NULL WHERE skill_id = ?").run(skillId);
     const result = this.db.prepare("DELETE FROM skills WHERE id = ?").run(skillId);
     return result.changes > 0;
+  }
+
+  disableSkill(skillId: string): boolean {
+    const skill = this.getSkill(skillId);
+    if (!skill || skill.status === "archived") return false;
+    this.db.prepare("DELETE FROM skill_embeddings WHERE skill_id = ?").run(skillId);
+    this.updateSkill(skillId, { status: "archived", installed: 0 });
+    return true;
+  }
+
+  enableSkill(skillId: string): boolean {
+    const skill = this.getSkill(skillId);
+    if (!skill || skill.status !== "archived") return false;
+    this.updateSkill(skillId, { status: "active" });
+    return true;
   }
 
   // ─── Task CRUD ───
@@ -1496,10 +1788,11 @@ export class SqliteStore {
     return rows.map(rowToChunk);
   }
 
-  listTasks(opts: { status?: string; limit?: number; offset?: number; owner?: string } = {}): { tasks: Task[]; total: number } {
+  listTasks(opts: { status?: string; limit?: number; offset?: number; owner?: string; session?: string } = {}): { tasks: Task[]; total: number } {
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (opts.status) { conditions.push("status = ?"); params.push(opts.status); }
+    if (opts.session) { conditions.push("session_key = ?"); params.push(opts.session); }
     if (opts.owner) {
       conditions.push("(owner = ? OR (owner = 'public' AND id IN (SELECT task_id FROM local_shared_tasks WHERE original_owner = ?)))");
       params.push(opts.owner, opts.owner);
@@ -1621,9 +1914,24 @@ export class SqliteStore {
     this.db.prepare(`UPDATE skills SET ${sets.join(", ")} WHERE id = ?`).run(...params);
   }
 
-  listSkills(opts: { status?: string } = {}): Skill[] {
-    const cond = opts.status ? "WHERE status = ?" : "";
-    const params = opts.status ? [opts.status] : [];
+  listSkills(opts: { status?: string; session?: string; owner?: string } = {}): Skill[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (opts.status) { conditions.push("status = ?"); params.push(opts.status); }
+    if (opts.owner) {
+      conditions.push("(owner = ? OR owner = 'public')");
+      params.push(opts.owner);
+    }
+    if (opts.session) {
+      conditions.push(`EXISTS (
+        SELECT 1
+        FROM task_skills ts
+        JOIN tasks t ON t.id = ts.task_id
+        WHERE ts.skill_id = skills.id AND t.session_key = ?
+      )`);
+      params.push(opts.session);
+    }
+    const cond = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = this.db.prepare(`SELECT * FROM skills ${cond} ORDER BY updated_at DESC`).all(...params) as SkillRow[];
     return rows.map(rowToSkill);
   }
@@ -1635,12 +1943,12 @@ export class SqliteStore {
       .run(visibility, Date.now(), skillId);
   }
 
-  upsertSkillEmbedding(skillId: string, vector: number[]): void {
+  upsertSkillEmbedding(skillId: string, vector: number[], producer?: { provider?: string; model?: string }): void {
     const buf = Buffer.from(new Float32Array(vector).buffer);
     this.db.prepare(`
-      INSERT OR REPLACE INTO skill_embeddings (skill_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-    `).run(skillId, buf, vector.length, Date.now());
+      INSERT OR REPLACE INTO skill_embeddings (skill_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(skillId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   getSkillEmbedding(skillId: string): number[] | null {
@@ -1709,6 +2017,61 @@ export class SqliteStore {
       }));
     } catch {
       this.log.warn(`Skill FTS query failed for: "${sanitized}", returning empty`);
+      return [];
+    }
+  }
+
+  // ─── Task Embeddings & Search ───
+
+  upsertTaskEmbedding(taskId: string, vector: number[], producer?: { provider?: string; model?: string }): void {
+    const buf = Buffer.from(new Float32Array(vector).buffer);
+    this.db.prepare(`
+      INSERT OR REPLACE INTO task_embeddings (task_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(taskId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
+  }
+
+  getTaskEmbeddings(owner?: string): Array<{ taskId: string; vector: number[] }> {
+    let sql = `SELECT te.task_id, te.vector, te.dimensions
+       FROM task_embeddings te
+       JOIN tasks t ON t.id = te.task_id`;
+    const params: any[] = [];
+    if (owner) {
+      sql += ` WHERE (t.owner = ? OR t.owner = 'public')`;
+      params.push(owner);
+    }
+    const rows = this.db.prepare(sql).all(...params) as Array<{ task_id: string; vector: Buffer; dimensions: number }>;
+    return rows.map((r) => ({
+      taskId: r.task_id,
+      vector: Array.from(new Float32Array(r.vector.buffer, r.vector.byteOffset, r.dimensions)),
+    }));
+  }
+
+  taskFtsSearch(query: string, limit: number, owner?: string): Array<{ taskId: string; score: number }> {
+    const sanitized = sanitizeFtsQuery(query);
+    if (!sanitized) return [];
+    try {
+      let sql = `
+        SELECT t.id as task_id, rank
+        FROM tasks_fts f
+        JOIN tasks t ON t.rowid = f.rowid
+        WHERE tasks_fts MATCH ?`;
+      const params: any[] = [sanitized];
+      if (owner) {
+        sql += ` AND (t.owner = ? OR t.owner = 'public')`;
+        params.push(owner);
+      }
+      sql += ` ORDER BY rank LIMIT ?`;
+      params.push(limit);
+      const rows = this.db.prepare(sql).all(...params) as Array<{ task_id: string; rank: number }>;
+      if (rows.length === 0) return [];
+      const maxAbsRank = Math.max(...rows.map((r) => Math.abs(r.rank)));
+      return rows.map((r) => ({
+        taskId: r.task_id,
+        score: maxAbsRank > 0 ? Math.abs(r.rank) / maxAbsRank : 0,
+      }));
+    } catch {
+      this.log.warn(`Task FTS query failed for: "${sanitized}", returning empty`);
       return [];
     }
   }
@@ -1803,8 +2166,8 @@ export class SqliteStore {
 
   setClientHubConnection(conn: ClientHubConnection): void {
     this.db.prepare(`
-      INSERT INTO client_hub_connection (id, hub_url, user_id, username, user_token, role, connected_at, identity_key, last_known_status)
-      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO client_hub_connection (id, hub_url, user_id, username, user_token, role, connected_at, identity_key, last_known_status, hub_instance_id)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         hub_url = excluded.hub_url,
         user_id = excluded.user_id,
@@ -1813,8 +2176,9 @@ export class SqliteStore {
         role = excluded.role,
         connected_at = excluded.connected_at,
         identity_key = excluded.identity_key,
-        last_known_status = excluded.last_known_status
-    `).run(conn.hubUrl, conn.userId, conn.username, conn.userToken, conn.role, conn.connectedAt, conn.identityKey ?? "", conn.lastKnownStatus ?? "");
+        last_known_status = excluded.last_known_status,
+        hub_instance_id = excluded.hub_instance_id
+    `).run(conn.hubUrl, conn.userId, conn.username, conn.userToken, conn.role, conn.connectedAt, conn.identityKey ?? "", conn.lastKnownStatus ?? "", conn.hubInstanceId ?? "");
   }
 
   getClientHubConnection(): ClientHubConnection | null {
@@ -1828,32 +2192,33 @@ export class SqliteStore {
 
   // ─── Local Shared Tasks (client-side tracking) ───
 
-  markTaskShared(taskId: string, hubTaskId: string, syncedChunks: number, visibility: string, groupId?: string | null): void {
+  markTaskShared(taskId: string, hubTaskId: string, syncedChunks: number, visibility: string, groupId?: string | null, hubInstanceId?: string): void {
     this.db.prepare(`
-      INSERT INTO local_shared_tasks (task_id, hub_task_id, visibility, group_id, synced_chunks, shared_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO local_shared_tasks (task_id, hub_task_id, visibility, group_id, synced_chunks, hub_instance_id, shared_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(task_id) DO UPDATE SET
         hub_task_id = excluded.hub_task_id,
         visibility = excluded.visibility,
         group_id = excluded.group_id,
         synced_chunks = excluded.synced_chunks,
+        hub_instance_id = excluded.hub_instance_id,
         shared_at = excluded.shared_at
-    `).run(taskId, hubTaskId, visibility, groupId ?? null, syncedChunks, Date.now());
+    `).run(taskId, hubTaskId, visibility, groupId ?? null, syncedChunks, hubInstanceId ?? "", Date.now());
   }
 
   unmarkTaskShared(taskId: string): void {
     this.db.prepare('DELETE FROM local_shared_tasks WHERE task_id = ?').run(taskId);
   }
 
-  getLocalSharedTask(taskId: string): { taskId: string; hubTaskId: string; visibility: string; groupId: string | null; syncedChunks: number; sharedAt: number } | null {
+  getLocalSharedTask(taskId: string): { taskId: string; hubTaskId: string; visibility: string; groupId: string | null; syncedChunks: number; sharedAt: number; hubInstanceId: string } | null {
     const row = this.db.prepare('SELECT * FROM local_shared_tasks WHERE task_id = ?').get(taskId) as any;
     if (!row) return null;
-    return { taskId: row.task_id, hubTaskId: row.hub_task_id, visibility: row.visibility, groupId: row.group_id, syncedChunks: row.synced_chunks, sharedAt: row.shared_at };
+    return { taskId: row.task_id, hubTaskId: row.hub_task_id, visibility: row.visibility, groupId: row.group_id, syncedChunks: row.synced_chunks, sharedAt: row.shared_at, hubInstanceId: row.hub_instance_id || "" };
   }
 
-  listLocalSharedTasks(): Array<{ taskId: string; hubTaskId: string; visibility: string; groupId: string | null; syncedChunks: number }> {
-    const rows = this.db.prepare('SELECT task_id, hub_task_id, visibility, group_id, synced_chunks FROM local_shared_tasks').all() as any[];
-    return rows.map(r => ({ taskId: r.task_id, hubTaskId: r.hub_task_id, visibility: r.visibility, groupId: r.group_id, syncedChunks: r.synced_chunks }));
+  listLocalSharedTasks(): Array<{ taskId: string; hubTaskId: string; visibility: string; groupId: string | null; syncedChunks: number; hubInstanceId: string }> {
+    const rows = this.db.prepare('SELECT task_id, hub_task_id, visibility, group_id, synced_chunks, hub_instance_id FROM local_shared_tasks').all() as any[];
+    return rows.map(r => ({ taskId: r.task_id, hubTaskId: r.hub_task_id, visibility: r.visibility, groupId: r.group_id, syncedChunks: r.synced_chunks, hubInstanceId: r.hub_instance_id || "" }));
   }
 
   // ─── Local Shared Memories (client-side tracking) ───
@@ -1958,11 +2323,23 @@ export class SqliteStore {
     });
   }
 
+  deleteHubMemoriesByUser(userId: string): void {
+    this.db.prepare('DELETE FROM hub_memories WHERE source_user_id = ?').run(userId);
+  }
+
+  deleteHubTasksByUser(userId: string): void {
+    this.db.prepare('DELETE FROM hub_tasks WHERE source_user_id = ?').run(userId);
+  }
+
+  deleteHubSkillsByUser(userId: string): void {
+    this.db.prepare('DELETE FROM hub_skills WHERE source_user_id = ?').run(userId);
+  }
+
   deleteHubUser(userId: string, cleanResources = false): boolean {
     if (cleanResources) {
-      this.db.prepare('DELETE FROM hub_tasks WHERE source_user_id = ?').run(userId);
-      this.db.prepare('DELETE FROM hub_skills WHERE source_user_id = ?').run(userId);
-      this.db.prepare('DELETE FROM hub_memories WHERE source_user_id = ?').run(userId);
+      this.deleteHubTasksByUser(userId);
+      this.deleteHubSkillsByUser(userId);
+      this.deleteHubMemoriesByUser(userId);
       const result = this.db.prepare('DELETE FROM hub_users WHERE id = ?').run(userId);
       return result.changes > 0;
     }
@@ -2103,19 +2480,21 @@ export class SqliteStore {
     return row ? rowToHubSkill(row) : null;
   }
 
-  upsertHubSkillEmbedding(skillId: string, vector: number[], sourceUserId: string, sourceSkillId: string): void {
+  upsertHubSkillEmbedding(skillId: string, vector: number[], sourceUserId: string, sourceSkillId: string, producer?: { provider?: string; model?: string }): void {
     if (!sourceUserId || !sourceSkillId) throw new Error("sourceUserId and sourceSkillId are required for hub skill embedding upserts");
     const canonicalSkillId = this.resolveCanonicalHubSkillId(skillId, sourceUserId, sourceSkillId);
     const buf = Buffer.allocUnsafe(vector.length * 4);
     for (let i = 0; i < vector.length; i++) buf.writeFloatLE(vector[i], i * 4);
     this.db.prepare(`
-      INSERT INTO hub_skill_embeddings (skill_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO hub_skill_embeddings (skill_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(skill_id) DO UPDATE SET
         vector = excluded.vector,
         dimensions = excluded.dimensions,
+        provider = excluded.provider,
+        model = excluded.model,
         updated_at = excluded.updated_at
-    `).run(canonicalSkillId, buf, vector.length, Date.now());
+    `).run(canonicalSkillId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   getHubSkillEmbedding(skillId: string): number[] | null {
@@ -2134,6 +2513,36 @@ export class SqliteStore {
     `).all() as Array<{ skill_id: string; vector: Buffer; dimensions: number }>;
     return rows.map(r => ({
       skillId: r.skill_id,
+      vector: new Float32Array(r.vector.buffer, r.vector.byteOffset, r.dimensions),
+    }));
+  }
+
+  upsertHubMemoryEmbedding(memoryId: string, vector: Float32Array, producer?: { provider?: string; model?: string }): void {
+    const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+    this.db.prepare(`
+      INSERT INTO hub_memory_embeddings (memory_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, provider = excluded.provider, model = excluded.model, updated_at = excluded.updated_at
+    `).run(memoryId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
+  }
+
+  getHubMemoryEmbedding(memoryId: string): Float32Array | null {
+    const row = this.db.prepare('SELECT vector, dimensions FROM hub_memory_embeddings WHERE memory_id = ?').get(memoryId) as { vector: Buffer; dimensions: number } | undefined;
+    if (!row) return null;
+    return new Float32Array(row.vector.buffer, row.vector.byteOffset, row.dimensions);
+  }
+
+  getVisibleHubMemoryEmbeddings(userId: string): Array<{ memoryId: string; vector: Float32Array }> {
+    const rows = this.db.prepare(`
+      SELECT hme.memory_id, hme.vector, hme.dimensions
+      FROM hub_memory_embeddings hme
+      JOIN hub_memories hm ON hm.id = hme.memory_id
+      WHERE hm.visibility = 'public'
+        OR hm.source_user_id = ?
+        OR EXISTS (SELECT 1 FROM hub_group_members gm WHERE gm.group_id = hm.group_id AND gm.user_id = ?)
+    `).all(userId, userId) as Array<{ memory_id: string; vector: Buffer; dimensions: number }>;
+    return rows.map(r => ({
+      memoryId: r.memory_id,
       vector: new Float32Array(r.vector.buffer, r.vector.byteOffset, r.dimensions),
     }));
   }
@@ -2160,13 +2569,13 @@ export class SqliteStore {
     return rows.map((row, idx) => ({ hit: row, rank: idx + 1 }));
   }
 
-  upsertHubEmbedding(chunkId: string, vector: Float32Array): void {
+  upsertHubEmbedding(chunkId: string, vector: Float32Array, producer?: { provider?: string; model?: string }): void {
     const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
     this.db.prepare(`
-      INSERT INTO hub_embeddings (chunk_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(chunk_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, updated_at = excluded.updated_at
-    `).run(chunkId, buf, vector.length, Date.now());
+      INSERT INTO hub_embeddings (chunk_id, vector, dimensions, provider, model, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(chunk_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, provider = excluded.provider, model = excluded.model, updated_at = excluded.updated_at
+    `).run(chunkId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
   }
 
   getHubEmbedding(chunkId: string): Float32Array | null {
@@ -2332,9 +2741,10 @@ export class SqliteStore {
 
   upsertHubMemory(memory: HubMemoryRecord): void {
     this.db.prepare(`
-      INSERT INTO hub_memories (id, source_chunk_id, source_user_id, role, content, summary, kind, group_id, visibility, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO hub_memories (id, source_chunk_id, source_user_id, source_agent, role, content, summary, kind, group_id, visibility, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_user_id, source_chunk_id) DO UPDATE SET
+        source_agent = excluded.source_agent,
         role = excluded.role,
         content = excluded.content,
         summary = excluded.summary,
@@ -2343,7 +2753,7 @@ export class SqliteStore {
         visibility = excluded.visibility,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
-    `).run(memory.id, memory.sourceChunkId, memory.sourceUserId, memory.role, memory.content, memory.summary, memory.kind, memory.groupId, memory.visibility, memory.createdAt, memory.updatedAt);
+    `).run(memory.id, memory.sourceChunkId, memory.sourceUserId, memory.sourceAgent, memory.role, memory.content, memory.summary, memory.kind, memory.groupId, memory.visibility, memory.createdAt, memory.updatedAt);
   }
 
   getHubMemoryBySource(sourceUserId: string, sourceChunkId: string): HubMemoryRecord | null {
@@ -2369,25 +2779,26 @@ export class SqliteStore {
 
   upsertTeamSharedChunk(
     chunkId: string,
-    row: { hubMemoryId?: string; visibility?: string; groupId?: string | null },
+    row: { hubMemoryId?: string; visibility?: string; groupId?: string | null; hubInstanceId?: string },
   ): void {
     const now = Date.now();
     const vis = row.visibility === "group" ? "group" : "public";
     const gid = vis === "group" ? (row.groupId ?? null) : null;
     this.db.prepare(`
-      INSERT INTO team_shared_chunks (chunk_id, hub_memory_id, visibility, group_id, shared_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO team_shared_chunks (chunk_id, hub_memory_id, visibility, group_id, hub_instance_id, shared_at)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(chunk_id) DO UPDATE SET
         hub_memory_id = excluded.hub_memory_id,
         visibility = excluded.visibility,
         group_id = excluded.group_id,
+        hub_instance_id = excluded.hub_instance_id,
         shared_at = excluded.shared_at
-    `).run(chunkId, row.hubMemoryId ?? "", vis, gid, now);
+    `).run(chunkId, row.hubMemoryId ?? "", vis, gid, row.hubInstanceId ?? "", now);
   }
 
-  getTeamSharedChunk(chunkId: string): { chunkId: string; hubMemoryId: string; visibility: string; groupId: string | null; sharedAt: number } | null {
-    const r = this.db.prepare("SELECT chunk_id, hub_memory_id, visibility, group_id, shared_at FROM team_shared_chunks WHERE chunk_id = ?").get(chunkId) as {
-      chunk_id: string; hub_memory_id: string; visibility: string; group_id: string | null; shared_at: number;
+  getTeamSharedChunk(chunkId: string): { chunkId: string; hubMemoryId: string; visibility: string; groupId: string | null; hubInstanceId: string; sharedAt: number } | null {
+    const r = this.db.prepare("SELECT chunk_id, hub_memory_id, visibility, group_id, hub_instance_id, shared_at FROM team_shared_chunks WHERE chunk_id = ?").get(chunkId) as {
+      chunk_id: string; hub_memory_id: string; visibility: string; group_id: string | null; hub_instance_id: string; shared_at: number;
     } | undefined;
     if (!r) return null;
     return {
@@ -2395,6 +2806,7 @@ export class SqliteStore {
       hubMemoryId: r.hub_memory_id,
       visibility: r.visibility,
       groupId: r.group_id,
+      hubInstanceId: r.hub_instance_id || "",
       sharedAt: r.shared_at,
     };
   }
@@ -2402,6 +2814,63 @@ export class SqliteStore {
   deleteTeamSharedChunk(chunkId: string): boolean {
     const info = this.db.prepare("DELETE FROM team_shared_chunks WHERE chunk_id = ?").run(chunkId);
     return info.changes > 0;
+  }
+
+  // ─── Team Shared Skills (Client role — UI metadata only) ───
+
+  upsertTeamSharedSkill(skillId: string, row: { hubSkillId?: string; visibility?: string; groupId?: string | null; hubInstanceId?: string }): void {
+    const now = Date.now();
+    const vis = row.visibility === "group" ? "group" : "public";
+    const gid = vis === "group" ? (row.groupId ?? null) : null;
+    this.db.prepare(`
+      INSERT INTO team_shared_skills (skill_id, hub_skill_id, visibility, group_id, hub_instance_id, shared_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(skill_id) DO UPDATE SET
+        hub_skill_id = excluded.hub_skill_id,
+        visibility = excluded.visibility,
+        group_id = excluded.group_id,
+        hub_instance_id = excluded.hub_instance_id,
+        shared_at = excluded.shared_at
+    `).run(skillId, row.hubSkillId ?? "", vis, gid, row.hubInstanceId ?? "", now);
+  }
+
+  getTeamSharedSkill(skillId: string): { skillId: string; hubSkillId: string; visibility: string; groupId: string | null; hubInstanceId: string; sharedAt: number } | null {
+    const r = this.db.prepare("SELECT * FROM team_shared_skills WHERE skill_id = ?").get(skillId) as any;
+    if (!r) return null;
+    return { skillId: r.skill_id, hubSkillId: r.hub_skill_id, visibility: r.visibility, groupId: r.group_id, hubInstanceId: r.hub_instance_id || "", sharedAt: r.shared_at };
+  }
+
+  deleteTeamSharedSkill(skillId: string): boolean {
+    return this.db.prepare("DELETE FROM team_shared_skills WHERE skill_id = ?").run(skillId).changes > 0;
+  }
+
+  // ─── Team sharing cleanup (role switch / leave) ───
+
+  clearTeamSharedChunks(): void {
+    this.db.prepare("DELETE FROM team_shared_chunks").run();
+  }
+
+  clearTeamSharedSkills(): void {
+    this.db.prepare("DELETE FROM team_shared_skills").run();
+  }
+
+  downgradeTeamSharedTasksToLocal(): void {
+    this.db.prepare("UPDATE local_shared_tasks SET hub_task_id = '', hub_instance_id = '', visibility = 'public', group_id = NULL, synced_chunks = 0").run();
+  }
+
+  downgradeTeamSharedTaskToLocal(taskId: string): void {
+    this.db.prepare("UPDATE local_shared_tasks SET hub_task_id = '', hub_instance_id = '', visibility = 'public', group_id = NULL, synced_chunks = 0 WHERE task_id = ?").run(taskId);
+  }
+
+  /** Client UI: remove team_shared_chunks rows for all chunks linked to this task (list badge chunk fallback). */
+  clearTeamSharedChunksForTask(taskId: string): void {
+    this.db.prepare("DELETE FROM team_shared_chunks WHERE chunk_id IN (SELECT id FROM chunks WHERE task_id = ?)").run(taskId);
+  }
+
+  clearAllTeamSharingState(): void {
+    this.clearTeamSharedChunks();
+    this.clearTeamSharedSkills();
+    this.downgradeTeamSharedTasksToLocal();
   }
 
   // ─── Hub Notifications ───
@@ -2445,20 +2914,8 @@ export class SqliteStore {
     this.db.prepare('DELETE FROM hub_notifications WHERE user_id = ?').run(userId);
   }
 
-  upsertHubMemoryEmbedding(memoryId: string, vector: Float32Array): void {
-    const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
-    this.db.prepare(`
-      INSERT INTO hub_memory_embeddings (memory_id, vector, dimensions, updated_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions, updated_at = excluded.updated_at
-    `).run(memoryId, buf, vector.length, Date.now());
-  }
-
-  getHubMemoryEmbedding(memoryId: string): Float32Array | null {
-    const row = this.db.prepare('SELECT vector, dimensions FROM hub_memory_embeddings WHERE memory_id = ?').get(memoryId) as { vector: Buffer; dimensions: number } | undefined;
-    if (!row) return null;
-    return new Float32Array(row.vector.buffer, row.vector.byteOffset, row.dimensions);
-  }
+  // upsertHubMemoryEmbedding / getHubMemoryEmbedding removed:
+  // hub memory vectors are now computed on-the-fly at search time.
 
   searchHubMemories(query: string, options?: { userId?: string; maxResults?: number }): Array<{ hit: HubMemorySearchRow; rank: number }> {
     const limit = options?.maxResults ?? 10;
@@ -2467,7 +2924,7 @@ export class SqliteStore {
     if (!sanitized) return [];
     const rows = this.db.prepare(`
       SELECT hm.id, hm.content, hm.summary, hm.role, hm.created_at, hm.visibility, '' as group_name, hu.username as owner_name,
-             bm25(hub_memories_fts) as rank
+             COALESCE(hm.source_agent, '') as source_agent, bm25(hub_memories_fts) as rank
       FROM hub_memories_fts f
       JOIN hub_memories hm ON hm.rowid = f.rowid
       LEFT JOIN hub_users hu ON hu.id = hm.source_user_id
@@ -2478,22 +2935,12 @@ export class SqliteStore {
     return rows.map((row, idx) => ({ hit: row, rank: idx + 1 }));
   }
 
-  getVisibleHubMemoryEmbeddings(userId: string): Array<{ memoryId: string; vector: Float32Array }> {
-    const rows = this.db.prepare(`
-      SELECT hme.memory_id, hme.vector, hme.dimensions
-      FROM hub_memory_embeddings hme
-      JOIN hub_memories hm ON hm.id = hme.memory_id
-    `).all() as Array<{ memory_id: string; vector: Buffer; dimensions: number }>;
-    return rows.map(r => ({
-      memoryId: r.memory_id,
-      vector: new Float32Array(r.vector.buffer, r.vector.byteOffset, r.dimensions),
-    }));
-  }
+  // getVisibleHubMemoryEmbeddings removed: vectors computed on-the-fly at search time.
 
   getVisibleHubSearchHitByMemoryId(memoryId: string, userId: string): HubMemorySearchRow | null {
     const row = this.db.prepare(`
       SELECT hm.id, hm.content, hm.summary, hm.role, hm.created_at, hm.visibility, '' as group_name, hu.username as owner_name,
-             0 as rank
+             COALESCE(hm.source_agent, '') as source_agent, 0 as rank
       FROM hub_memories hm
       LEFT JOIN hub_users hu ON hu.id = hm.source_user_id
       WHERE hm.id = ?
@@ -2564,6 +3011,39 @@ export class SqliteStore {
     return result;
   }
 
+  // ─── Export ───
+
+  exportAll(): { memories: unknown[]; tasks: unknown[]; skills: unknown[] } {
+    const memories = this.db.prepare(
+      "SELECT * FROM chunks ORDER BY created_at ASC",
+    ).all();
+
+    const tasks = this.db.prepare(
+      "SELECT * FROM tasks ORDER BY started_at ASC",
+    ).all();
+
+    const skills = this.db.prepare(
+      "SELECT id, name, description, content, version, status, visibility, owner, created_at, updated_at FROM skills ORDER BY created_at ASC",
+    ).all();
+
+    return { memories, tasks, skills };
+  }
+
+  exportMemoriesAsCsv(): string {
+    const rows = this.db.prepare(
+      "SELECT id, session_key, role, summary, content, created_at FROM chunks ORDER BY created_at ASC",
+    ).all() as Array<{ id: string; session_key: string; role: string; summary: string; content: string; created_at: number }>;
+
+    const escape = (v: string) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const header = ["id", "session_key", "role", "summary", "content", "created_at"].join(",");
+    const lines = rows.map((r) =>
+      [r.id, r.session_key, r.role, r.summary, r.content, new Date(r.created_at).toISOString()]
+        .map(escape)
+        .join(","),
+    );
+    return [header, ...lines].join("\n");
+  }
+
   close(): void {
     this.db.close();
   }
@@ -2584,7 +3064,7 @@ function sanitizeFtsQuery(raw: string): string {
     .filter((t) => t.length > 1)
     .filter((t) => !FTS_RESERVED.has(t.toUpperCase()));
 
-  return tokens.join(" ");
+  return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(" ");
 }
 
 const FTS_RESERVED = new Set(["AND", "OR", "NOT", "NEAR"]);
@@ -2740,6 +3220,7 @@ interface ClientHubConnection {
   connectedAt: number;
   identityKey?: string;
   lastKnownStatus?: string;
+  hubInstanceId?: string;
 }
 
 interface ClientHubConnectionRow {
@@ -2751,6 +3232,7 @@ interface ClientHubConnectionRow {
   connected_at: number;
   identity_key?: string;
   last_known_status?: string;
+  hub_instance_id?: string;
 }
 
 function rowToClientHubConnection(row: ClientHubConnectionRow): ClientHubConnection {
@@ -2763,6 +3245,7 @@ function rowToClientHubConnection(row: ClientHubConnectionRow): ClientHubConnect
     connectedAt: row.connected_at,
     identityKey: row.identity_key || "",
     lastKnownStatus: row.last_known_status || "",
+    hubInstanceId: row.hub_instance_id || "",
   };
 }
 
@@ -2984,6 +3467,7 @@ export interface HubMemoryRecord {
   id: string;
   sourceChunkId: string;
   sourceUserId: string;
+  sourceAgent: string;
   role: string;
   content: string;
   summary: string;
@@ -2998,6 +3482,7 @@ interface HubMemoryRow {
   id: string;
   source_chunk_id: string;
   source_user_id: string;
+  source_agent: string;
   role: string;
   content: string;
   summary: string;
@@ -3013,6 +3498,7 @@ function rowToHubMemory(row: HubMemoryRow): HubMemoryRecord {
     id: row.id,
     sourceChunkId: row.source_chunk_id,
     sourceUserId: row.source_user_id,
+    sourceAgent: row.source_agent || "",
     role: row.role,
     content: row.content,
     summary: row.summary,
@@ -3033,6 +3519,7 @@ interface HubMemorySearchRow {
   visibility: string;
   group_name: string | null;
   owner_name: string | null;
+  source_agent: string;
   rank: number;
 }
 

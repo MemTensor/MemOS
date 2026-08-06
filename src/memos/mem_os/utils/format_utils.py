@@ -1399,5 +1399,18 @@ def clean_json_response(response: str) -> str:
 
     Returns:
         str: Clean JSON string without markdown formatting
+
+    Raises:
+        ValueError: If ``response`` is None. This is almost always an upstream
+            failure (LLM call returned None instead of raising) and surfacing
+            it here is much easier to diagnose than the implicit
+            ``AttributeError: 'NoneType' object has no attribute 'replace'``
+            that would otherwise be thrown.
     """
+    if response is None:
+        raise ValueError(
+            "clean_json_response received None — upstream LLM call likely "
+            "failed silently (check timed_with_status / generate() error "
+            "handling)."
+        )
     return response.replace("```json", "").replace("```", "").strip()
