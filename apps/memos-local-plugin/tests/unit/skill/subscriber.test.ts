@@ -241,17 +241,20 @@ describe("skill/subscriber", () => {
     });
     const log = rootLogger.child({ channel: "core.skill.subscriber" });
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-    const archiveIfIdle = h.repos.skills.archiveIfIdle.bind(h.repos.skills);
-    const archiveSpy = vi.spyOn(h.repos.skills, "archiveIfIdle").mockImplementation(
-      (id, input) => {
-        const index = Number(String(id).slice(String(id).lastIndexOf("_") + 1));
-        if (index < 500) {
-          h.repos.skills.setStatus(id, "archived", input.updatedAt);
-          return false;
-        }
-        return archiveIfIdle(id, input);
-      },
+    const archiveIdleBatch = h.repos.skills.archiveIdleBatch.bind(
+      h.repos.skills,
     );
+    const archiveSpy = vi
+      .spyOn(h.repos.skills, "archiveIdleBatch")
+      .mockImplementation((ids, input) => {
+        for (const id of ids) {
+          const index = Number(String(id).slice(String(id).lastIndexOf("_") + 1));
+          if (index < 500) {
+            h.repos.skills.setStatus(id, "archived", input.updatedAt);
+          }
+        }
+        return archiveIdleBatch(ids, input);
+      });
     const sub = attachSkillSubscriber({
       l2Bus: createL2EventBus(),
       rewardBus: createRewardEventBus(),

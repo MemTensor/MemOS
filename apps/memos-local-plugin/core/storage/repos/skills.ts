@@ -16,6 +16,9 @@ import {
 
 export const IDLE_ARCHIVE_BATCH_LIMIT = 500;
 
+const IDLE_ARCHIVE_PREDICATE =
+  "status = 'active' AND eta < @min_eta AND COALESCE(last_used_at, created_at) <= @cutoff";
+
 const COLUMNS = [
   "id",
   "owner_agent_kind",
@@ -72,9 +75,7 @@ export function makeSkillsRepo(db: StorageDb) {
     `UPDATE skills
         SET status = 'archived', updated_at = @updated_at
       WHERE id = @id
-        AND status = 'active'
-        AND eta < @min_eta
-        AND COALESCE(last_used_at, created_at) <= @cutoff`,
+        AND ${IDLE_ARCHIVE_PREDICATE}`,
   );
   const updateTrials = db.prepare(
     buildUpdate({
@@ -102,17 +103,24 @@ export function makeSkillsRepo(db: StorageDb) {
       updateStatus.run({ id, status, updated_at: updatedAt });
     },
 
-    archiveIfIdle(
-      id: SkillId,
+    archiveIdleBatch(
+      ids: readonly SkillId[],
       input: { minEtaForRetrieval: number; cutoff: number; updatedAt: number },
-    ): boolean {
-      const res = archiveIdle.run({
-        id,
-        min_eta: input.minEtaForRetrieval,
-        cutoff: input.cutoff,
-        updated_at: input.updatedAt,
+    ): SkillId[] {
+      if (ids.length === 0) return [];
+      return db.tx(() => {
+        const archived: SkillId[] = [];
+        for (const id of ids) {
+          const res = archiveIdle.run({
+            id,
+            min_eta: input.minEtaForRetrieval,
+            cutoff: input.cutoff,
+            updated_at: input.updatedAt,
+          });
+          if (res.changes > 0) archived.push(id);
+        }
+        return archived;
       });
-      return res.changes > 0;
     },
 
     bumpTrial(
@@ -192,9 +200,7 @@ export function makeSkillsRepo(db: StorageDb) {
       const sql = `
         SELECT ${COLUMNS.join(", ")}
           FROM skills
-         WHERE status = 'active'
-           AND eta < @min_eta
-           AND COALESCE(last_used_at, created_at) <= @cutoff
+         WHERE ${IDLE_ARCHIVE_PREDICATE}
          ORDER BY COALESCE(last_used_at, created_at) ASC
          LIMIT @limit`;
       return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);

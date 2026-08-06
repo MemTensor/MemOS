@@ -25,7 +25,7 @@ import {
   runSkill,
   type RunSkillDeps,
 } from "./skill.js";
-import { shouldArchiveIdle, shouldPromoteCandidate } from "./lifecycle.js";
+import { shouldPromoteCandidate } from "./lifecycle.js";
 import type {
   RunSkillInput,
   RunSkillResult,
@@ -242,17 +242,20 @@ export function attachSkillSubscriber(
         limit: IDLE_ARCHIVE_BATCH_LIMIT,
       });
       batchesProcessed += 1;
-      let archivedThisBatch = 0;
+      const archivedIds = new Set(
+        deps.repos.skills.archiveIdleBatch(
+          archiveCandidates.map((skill) => skill.id),
+          {
+            minEtaForRetrieval: deps.config.minEtaForRetrieval,
+            cutoff,
+            updatedAt: at,
+          },
+        ),
+      );
+      const archivedThisBatch = archivedIds.size;
+      archivedTotal += archivedThisBatch;
       for (const s of archiveCandidates) {
-        if (!shouldArchiveIdle(s, deps.config.idleArchiveMs, deps.config, at)) continue;
-        const archived = deps.repos.skills.archiveIfIdle(s.id, {
-          minEtaForRetrieval: deps.config.minEtaForRetrieval,
-          cutoff,
-          updatedAt: at,
-        });
-        if (!archived) continue;
-        archivedThisBatch += 1;
-        archivedTotal += 1;
+        if (!archivedIds.has(s.id)) continue;
         log.info("skill.idle_archived", {
           skillId: s.id,
           name: s.name,
@@ -270,6 +273,8 @@ export function attachSkillSubscriber(
         });
       }
       if (archiveCandidates.length > 0 && archivedThisBatch === 0) {
+        // A full zero-change batch was invalidated by concurrent writers.
+        // Re-query so later eligible rows are not abandoned for this tick.
         log.warn("skill.idle_archive_stalled", {
           candidateCount: archiveCandidates.length,
           cutoff,

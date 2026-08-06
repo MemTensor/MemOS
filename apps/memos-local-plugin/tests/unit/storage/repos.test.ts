@@ -315,7 +315,7 @@ describe("storage/repos — happy paths", () => {
   });
 
   it("skills: selects idle archive candidates and excludes a skill after recorded use", () => {
-    const { repos, cleanup } = makeTmpDb();
+    const { db, repos, cleanup } = makeTmpDb();
     try {
       const insertSkill = (
         id: string,
@@ -365,23 +365,49 @@ describe("storage/repos — happy paths", () => {
 
       expect(repos.skills.recordUse("old_used", 9_500)).toBe(true);
       expect(repos.skills.getById("old_used")?.lastUsedAt).toBe(9_500);
-      expect(repos.skills.archiveIfIdle("old_used", {
-        minEtaForRetrieval: 0.1,
-        cutoff: 9_000,
-        updatedAt: 10_000,
-      })).toBe(false);
+      expect(
+        repos.skills.archiveIdleBatch(["old_used"], {
+          minEtaForRetrieval: 0.1,
+          cutoff: 9_000,
+          updatedAt: 10_000,
+        }),
+      ).toEqual([]);
       expect(repos.skills.getById("old_used")?.status).toBe("active");
       expect(repos.skills.listIdleArchiveCandidates({
         minEtaForRetrieval: 0.1,
         cutoff: 9_000,
         limit: 500,
       }).map((skill) => skill.id)).toEqual(["never_used"]);
-      expect(repos.skills.archiveIfIdle("never_used", {
-        minEtaForRetrieval: 0.1,
-        cutoff: 9_000,
-        updatedAt: 10_000,
-      })).toBe(true);
+      expect(
+        repos.skills.archiveIdleBatch(["never_used"], {
+          minEtaForRetrieval: 0.1,
+          cutoff: 9_000,
+          updatedAt: 10_000,
+        }),
+      ).toEqual(["never_used"]);
       expect(repos.skills.getById("never_used")?.status).toBe("archived");
+
+      insertSkill("rollback_first", "active", 0.05, 1, 100);
+      insertSkill("rollback_fail", "active", 0.05, 1, 100);
+      db.exec(`
+        CREATE TRIGGER reject_idle_archive
+        BEFORE UPDATE OF status ON skills
+        WHEN OLD.id = 'rollback_fail' AND NEW.status = 'archived'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced archive failure');
+        END`);
+      expect(() =>
+        repos.skills.archiveIdleBatch(
+          ["rollback_first", "rollback_fail"],
+          {
+            minEtaForRetrieval: 0.1,
+            cutoff: 9_000,
+            updatedAt: 10_000,
+          },
+        ),
+      ).toThrow(/forced archive failure/);
+      expect(repos.skills.getById("rollback_first")?.status).toBe("active");
+      expect(repos.skills.getById("rollback_fail")?.status).toBe("active");
     } finally {
       cleanup();
     }
