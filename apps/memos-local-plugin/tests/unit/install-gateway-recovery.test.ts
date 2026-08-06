@@ -67,7 +67,7 @@ exit 0`,
   );
   writeExecutable(join(bin, "sleep"), "exit 0");
   writeExecutable(join(bin, "lsof"), "exit 1");
-  writeExecutable(join(bin, "curl"), "exit 0");
+  writeExecutable(join(bin, "curl"), 'exit "${FAKE_CURL_EXIT:-0}"');
 
   return { root, home, bin, temp, gatewayLog };
 }
@@ -137,6 +137,35 @@ describe.skipIf(process.platform === "win32")("installer gateway recovery", () =
       expect(result.status).not.toBe(0);
       expect(gatewayCalls(harness)).toEqual(["gateway stop", "gateway start"]);
       expect(result.stderr).toContain("Gateway recovery start failed");
+      expectTempCleaned(harness);
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not restart the gateway after the unified installer enters foreground fallback", () => {
+    const harness = createHarness();
+    try {
+      const packageRoot = join(harness.root, "package");
+      const runtimeDir = join(packageRoot, "dist", "adapters", "openclaw");
+      const tarball = join(harness.root, "plugin.tgz");
+      mkdirSync(runtimeDir, { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), '{"name":"test-plugin"}\n', "utf8");
+      writeFileSync(join(runtimeDir, "index.js"), "export {};\n", "utf8");
+      const tar = spawnSync("tar", ["-czf", tarball, "-C", harness.root, "package"], {
+        encoding: "utf8",
+      });
+      expect(tar.status, tar.stderr).toBe(0);
+
+      const result = runInstaller(
+        harness,
+        pluginInstaller,
+        ["--agent", "openclaw", "--version", tarball],
+        { FAKE_CURL_EXIT: "1" },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(gatewayCalls(harness)).toEqual(["gateway stop", "gateway start", "gateway"]);
       expectTempCleaned(harness);
     } finally {
       rmSync(harness.root, { recursive: true, force: true });

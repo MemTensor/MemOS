@@ -443,6 +443,7 @@ install_openclaw() {
   mkdir -p "${HOME}/.openclaw"
 
   local oc_bin=""
+  # These remain global because the EXIT trap reads them after this function returns.
   # The top-level agent dispatch invokes this installer at most once.
   GATEWAY_RECOVERY_BIN=""
   GATEWAY_FINAL_START_FAILED="false"
@@ -636,6 +637,8 @@ NODE
   else
     success "OpenClaw gateway started"
   fi
+  # The service started (or was already running), so the viewer fallback must not
+  # trigger another service start from the EXIT trap.
   GATEWAY_RECOVERY_BIN=""
 
   step "Waiting for Memory Viewer"
