@@ -39,8 +39,12 @@ import * as childProcess from "node:child_process";
  * string we hand to `pgrep` and confirm we have not silently regressed
  * back to a literal substring match.
  */
-function buildHermesChatPattern(space: string, nonSpace: string): string {
-  return `hermes(${space}+${nonSpace}+)*${space}+chat(${space}|$)`;
+function buildHermesChatPattern(
+  space: string,
+  nonSpace: string,
+  groupStart = "(",
+): string {
+  return `hermes${groupStart}${space}+${nonSpace}+)*${space}+chat${groupStart}${space}|$)`;
 }
 
 export const HERMES_CHAT_PROCESS_PATTERN = buildHermesChatPattern(
@@ -49,7 +53,7 @@ export const HERMES_CHAT_PROCESS_PATTERN = buildHermesChatPattern(
 );
 
 const HERMES_CHAT_JS_PATTERN = new RegExp(
-  buildHermesChatPattern("\\s", "\\S"),
+  buildHermesChatPattern("\\s", "\\S", "(?:"),
 );
 
 /**
