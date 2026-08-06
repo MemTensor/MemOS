@@ -276,7 +276,7 @@ const AlgorithmSchema = Type.Object({
      * gate is bypassed. Empty by default to preserve existing scoring
      * behavior until an operator explicitly configures a sentinel.
      */
-    cronSentinels: Type.Array(Type.String({ minLength: 1, pattern: "\\S" }), {
+    cronSentinels: Type.Array(Type.String({ minLength: 1, pattern: "^\\S" }), {
       default: [],
     }),
   }, { default: {} }),

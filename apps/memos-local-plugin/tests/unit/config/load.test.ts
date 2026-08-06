@@ -226,6 +226,14 @@ viewer:
         }),
       ).toThrow(/schema validation/);
     });
+
+    it("rejects a prefix with leading whitespace", () => {
+      expect(() =>
+        resolveConfig({
+          algorithm: { reward: { cronSentinels: [" CRON:"] } },
+        }),
+      ).toThrow(/schema validation/);
+    });
   });
 
   // ─── Issue #1929 — vectorScanMaxAgeMs contract ──────────────────────

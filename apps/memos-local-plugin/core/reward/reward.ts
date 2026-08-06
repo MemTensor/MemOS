@@ -460,15 +460,18 @@ function decideSkipReason(
     // with a known cron sentinel — cron jobs are inherently substantive, and
     // the content/triviality checks below provide the real substance filter.
     //
-    // Fallback: if snapshot.turns is empty (recovery path), we also check
-    // snapshot.meta?.initialUserText. This field is set by the pipeline on
-    // episode creation and is generally reliable, but could be absent or
-    // stale in unusual recovery scenarios — if so, the episode falls through
-    // to the old "skip" behavior (no false positives, just a missed score).
+    // Fallback: if the first materialised user turn is empty (including the
+    // recovery path), also check snapshot.meta?.initialUserText. This field is
+    // set by the pipeline on episode creation and is generally reliable, but
+    // could be absent or stale in unusual recovery scenarios — if so, the
+    // episode falls through to the old "skip" behavior.
     const metaInitialUserText = snapshot.meta?.initialUserText;
     const firstUserContent =
-      userContents[0] ??
-      (typeof metaInitialUserText === "string" ? metaInitialUserText : "");
+      userContents[0]?.trim().length
+        ? userContents[0]
+        : typeof metaInitialUserText === "string"
+          ? metaInitialUserText
+          : "";
     const isCronEpisode = (cfg.cronSentinels ?? []).some(
       (sentinel) =>
         typeof sentinel === "string" &&

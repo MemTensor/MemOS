@@ -496,6 +496,69 @@ describe("reward/integration", () => {
     expect((scoredEvent as { source?: string } | undefined)?.source).not.toBe("heuristic");
   });
 
+  it("uses initialUserText when the first materialized user turn is empty", async () => {
+    const sid = "s_cron_meta";
+    const eid = "ep_cron_meta";
+    seedEpisode(handle, eid, sid, ["tr_cron_meta"]);
+    seedTrace(handle, "tr_cron_meta", eid, sid);
+    const snapshot: EpisodeSnapshot = {
+      ...rewardSnapshot(eid, sid, ["tr_cron_meta"]),
+      turnCount: 3,
+      turns: [
+        { role: "user", content: "", ts: NOW, meta: {} },
+        {
+          role: "assistant",
+          content:
+            "Reviewed recent activity and prepared a detailed reflection card for the user.",
+          ts: NOW,
+          meta: {},
+        },
+        {
+          role: "user",
+          content:
+            "Include the completed work, remaining risks, and concrete follow-up actions.",
+          ts: NOW,
+          meta: {},
+        },
+      ],
+      meta: { initialUserText: "[CRON] Review recent activity." },
+    };
+    const llm = fakeLlm({
+      completeJson: {
+        "reward.reward.r_human.v3": {
+          goal_achievement: 0.8,
+          process_quality: 0.8,
+          user_satisfaction: 0.8,
+          label: "success",
+          reason: "cron reflection card prepared",
+        },
+      },
+    });
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      getEpisodeSnapshot: () => snapshot,
+      llm,
+      bus: createRewardEventBus(),
+      cfg: {
+        ...cfg(),
+        minExchangesForCompletion: 2,
+        cronSentinels: ["[CRON]"],
+      },
+      now: () => NOW,
+    });
+
+    const res = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    expect(res.humanScore.source).toBe("llm");
+    expect(llm.stats().requests).toBe(1);
+  });
+
   it.each([
     {
       label: "the configured sentinel does not match",
