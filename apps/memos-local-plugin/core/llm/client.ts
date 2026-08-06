@@ -18,6 +18,7 @@
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
+import { extractRetryDiagnostics } from "../util/retry-after.js";
 import { getHostLlmBridge } from "./host-bridge.js";
 import { buildJsonSystemHint, parseLlmJson } from "./json-mode.js";
 import { AnthropicLlmProvider } from "./providers/anthropic.js";
@@ -292,6 +293,7 @@ export function createLlmClientWithProvider(
       },
       log: pLog,
       signal: opts?.signal,
+      deadlineAt: opts?.deadlineAt,
     };
   }
 
@@ -370,6 +372,7 @@ export function createLlmClientWithProvider(
             model: config.model,
             message: summarizeErrMessage(hostErr),
             code: hostErr instanceof MemosError ? hostErr.code : undefined,
+            ...extractRetryDiagnostics(hostErr instanceof MemosError ? hostErr.details : undefined),
             at: failAt,
             durationMs: Date.now() - startedAt,
             fallbackProvider: "host",
@@ -395,6 +398,7 @@ export function createLlmClientWithProvider(
         model: config.model,
         message: summarizeErrMessage(err),
         code: err instanceof MemosError ? err.code : undefined,
+        ...extractRetryDiagnostics(err instanceof MemosError ? err.details : undefined),
         at: failAt,
         durationMs: Date.now() - startedAt,
         op,
@@ -425,6 +429,7 @@ export function createLlmClientWithProvider(
         message: summarizeErrMessage(err),
         code: err instanceof MemosError ? err.code : undefined,
         at: Date.now(),
+        ...extractRetryDiagnostics(err instanceof MemosError ? err.details : undefined),
       });
     } catch {
       /* sink errors are non-fatal */
@@ -444,6 +449,10 @@ export function createLlmClientWithProvider(
     op?: string;
     episodeId?: string;
     phase?: string;
+    retryAfterMs?: number;
+    retryAt?: number;
+    retryDecision?: "wait" | "defer" | "stop";
+    retryReason?: string;
   }): void {
     if (!config.onStatus) return;
     try {
@@ -616,6 +625,7 @@ export function createLlmClientWithProvider(
         model: config.model,
         message: summarizeErrMessage(err),
         code: err instanceof MemosError ? err.code : undefined,
+        ...extractRetryDiagnostics(err instanceof MemosError ? err.details : undefined),
         at: failAt,
         durationMs: Date.now() - start,
         op: opts?.op ?? "stream",
@@ -669,6 +679,7 @@ export function createLlmClientWithProvider(
       model: config.model,
       message: summarizeErrMessage(primaryErr),
       code: primaryErr instanceof MemosError ? primaryErr.code : undefined,
+      ...extractRetryDiagnostics(primaryErr instanceof MemosError ? primaryErr.details : undefined),
       at: fallbackAt,
       durationMs: completion.durationMs,
       fallbackProvider: "host",
