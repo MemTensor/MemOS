@@ -230,15 +230,15 @@ GATEWAY_RECOVERY_ACTIVE="false"
 GATEWAY_START_ATTEMPTED="false"
 
 cleanup_on_exit() {
-  local exit_status=$?
   if [[ "${GATEWAY_RECOVERY_ACTIVE:-false}" == "true" && "${GATEWAY_START_ATTEMPTED:-false}" != "true" ]]; then
     GATEWAY_START_ATTEMPTED="true"
-    "${OPENCLAW_BIN}" gateway start >/dev/null 2>&1 || true
+    if ! "${OPENCLAW_BIN}" gateway start >/dev/null 2>&1; then
+      warn "Gateway recovery start failed; OpenClaw Gateway may still be stopped. Gateway 恢复启动失败，服务可能仍处于停止状态。" >&2
+    fi
   fi
   if [[ -n "${TMP_PACK_DIR:-}" ]]; then
     rm -rf "${TMP_PACK_DIR}"
   fi
-  return "${exit_status}"
 }
 
 trap cleanup_on_exit EXIT

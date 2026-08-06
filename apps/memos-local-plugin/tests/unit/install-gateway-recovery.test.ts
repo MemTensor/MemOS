@@ -124,18 +124,19 @@ describe.skipIf(process.platform === "win32")("installer gateway recovery", () =
     }
   });
 
-  it("restarts the gateway when the legacy installer cannot download the package", () => {
+  it("warns when legacy-installer gateway recovery also fails", () => {
     const harness = createHarness();
     try {
       const result = runInstaller(
         harness,
         legacyInstaller,
         ["--version", "missing-test-version", "--openclaw-home", join(harness.home, ".openclaw")],
-        { FAKE_NPM_PACK_EXIT: "23" },
+        { FAKE_GATEWAY_START_EXIT: "17", FAKE_NPM_PACK_EXIT: "23" },
       );
 
       expect(result.status).not.toBe(0);
       expect(gatewayCalls(harness)).toEqual(["gateway stop", "gateway start"]);
+      expect(result.stderr).toContain("Gateway recovery start failed");
       expectTempCleaned(harness);
     } finally {
       rmSync(harness.root, { recursive: true, force: true });

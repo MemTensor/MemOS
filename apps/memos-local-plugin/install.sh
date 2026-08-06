@@ -268,15 +268,15 @@ GATEWAY_RECOVERY_BIN=""
 GATEWAY_START_ATTEMPTED="false"
 
 cleanup_on_exit() {
-  local exit_status=$?
   if [[ -n "${GATEWAY_RECOVERY_BIN:-}" && "${GATEWAY_START_ATTEMPTED:-false}" != "true" ]]; then
     GATEWAY_START_ATTEMPTED="true"
-    "${GATEWAY_RECOVERY_BIN}" gateway start >/dev/null 2>&1 || true
+    if ! "${GATEWAY_RECOVERY_BIN}" gateway start >/dev/null 2>&1; then
+      warn "OpenClaw gateway recovery failed; the gateway may still be stopped."
+    fi
   fi
   if [[ -n "${STAGE_DIR:-}" ]]; then
     rm -rf "${STAGE_DIR}"
   fi
-  return "${exit_status}"
 }
 
 trap cleanup_on_exit EXIT
