@@ -56,6 +56,25 @@ describe("config/loadConfig", () => {
     expect(cfg.embedding.openRouter).toBe(false);
   });
 
+  it("defaults and validates LLM output-token budgets", () => {
+    const defaults = resolveConfig({});
+    expect(defaults.llm.maxTokens).toBe(4_000);
+    expect(defaults.skillEvolver.maxTokens).toBe(4_000);
+    expect(defaults.l3Llm.maxTokens).toBe(4_000);
+
+    const configured = resolveConfig({
+      llm: { maxTokens: 2_048 },
+      skillEvolver: { maxTokens: 8_192 },
+      l3Llm: { maxTokens: 16_384 },
+    });
+    expect(configured.llm.maxTokens).toBe(2_048);
+    expect(configured.skillEvolver.maxTokens).toBe(8_192);
+    expect(configured.l3Llm.maxTokens).toBe(16_384);
+
+    expect(() => resolveConfig({ llm: { maxTokens: 1_023 } })).toThrow(/schema validation/);
+    expect(() => resolveConfig({ skillEvolver: { maxTokens: 32_769 } })).toThrow(/schema validation/);
+  });
+
   it("merges YAML over defaults and preserves unspecified branches", async () => {
     const yaml = `
 viewer:

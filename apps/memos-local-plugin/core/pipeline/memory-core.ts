@@ -133,6 +133,7 @@ type DedicatedLlmConfig = {
   apiKey?: string;
   temperature?: number;
   timeoutMs?: number;
+  maxTokens?: number;
   providerIgnore?: string[];
   providerOrder?: string[];
   openRouter?: boolean;
@@ -433,6 +434,7 @@ export async function bootstrapMemoryCoreFull(
         apiKey: evolver?.apiKey ?? "",
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
+        maxTokens: evolver?.maxTokens,
         providerIgnore: evolver?.providerIgnore,
         providerOrder: evolver?.providerOrder,
         openRouter: evolver?.openRouter ?? false,
@@ -495,6 +497,7 @@ export async function bootstrapMemoryCoreFull(
         apiKey: l3c?.apiKey ?? "",
         temperature: l3c?.temperature ?? 0,
         timeoutMs: l3c?.timeoutMs ?? 60_000,
+        maxTokens: l3c?.maxTokens,
         providerIgnore: l3c?.providerIgnore,
         providerOrder: l3c?.providerOrder,
         openRouter: l3c?.openRouter ?? false,
