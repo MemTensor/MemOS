@@ -1,4 +1,5 @@
 import re
+import uuid
 
 from abc import ABC, abstractmethod
 
@@ -14,22 +15,33 @@ class Chunk:
         self.sentences = sentences
 
 
-class URLProtectionMixin:
-    """Shared URL protect/restore helpers used across chunkers.
-
-    Extracted so that lightweight fallbacks such as
-    :class:`memos.chunkers.simple_chunker.SimpleTextSplitter` can reuse the
-    same URL-aware splitting logic as :class:`BaseChunker` without inheriting
-    the full chunker contract (see issue #2115).
-    """
+class BaseChunker(ABC):
+    """Base class for all text chunkers."""
 
     _URL_PATTERN = r'https?://[^\s<>"{}|\\^`\[\]]+'
-    # Prefix used for the placeholders emitted by :meth:`protect_urls`. Exposed
-    # as a class-level constant so tests (and any other consumer that needs to
-    # detect leaked placeholders) can reference it without hardcoding the
-    # literal — keeping the assertion in sync with the implementation if the
-    # placeholder format ever changes.
     _URL_PLACEHOLDER_PREFIX = "__URL_"
+    _URL_PLACEHOLDER_PATTERN = re.compile(
+        rf"{re.escape(_URL_PLACEHOLDER_PREFIX)}(?:[0-9a-f]+_)?\d+__"
+    )
+
+    @abstractmethod
+    def __init__(self, config: BaseChunkerConfig):
+        """Initialize the chunker with the given configuration."""
+
+    @abstractmethod
+    def chunk(self, text: str) -> list[Chunk]:
+        """Chunk the given text into smaller chunks."""
+
+    @classmethod
+    def _new_url_placeholder_prefix(cls, text: str) -> str:
+        """Return a placeholder namespace that cannot collide with the input."""
+        if cls._URL_PLACEHOLDER_PREFIX not in text:
+            return cls._URL_PLACEHOLDER_PREFIX
+
+        while True:
+            placeholder_prefix = f"{cls._URL_PLACEHOLDER_PREFIX}{uuid.uuid4().hex[:8]}_"
+            if placeholder_prefix not in text:
+                return placeholder_prefix
 
     def protect_urls(self, text: str) -> tuple[str, dict[str, str]]:
         """
@@ -42,10 +54,11 @@ class URLProtectionMixin:
             tuple: (Text with URLs replaced by placeholders, URL mapping dictionary)
         """
         url_map: dict[str, str] = {}
+        placeholder_prefix = self._new_url_placeholder_prefix(text)
 
         def replace_url(match):
             url = match.group(0)
-            placeholder = f"{self._URL_PLACEHOLDER_PREFIX}{len(url_map)}__"
+            placeholder = f"{placeholder_prefix}{len(url_map)}__"
             url_map[placeholder] = url
             return placeholder
 
@@ -63,20 +76,6 @@ class URLProtectionMixin:
         Returns:
             str: Text with URLs restored
         """
-        restored_text = text
-        for placeholder, url in url_map.items():
-            restored_text = restored_text.replace(placeholder, url)
-
-        return restored_text
-
-
-class BaseChunker(URLProtectionMixin, ABC):
-    """Base class for all text chunkers."""
-
-    @abstractmethod
-    def __init__(self, config: BaseChunkerConfig):
-        """Initialize the chunker with the given configuration."""
-
-    @abstractmethod
-    def chunk(self, text: str) -> list[Chunk]:
-        """Chunk the given text into smaller chunks."""
+        return self._URL_PLACEHOLDER_PATTERN.sub(
+            lambda match: url_map.get(match.group(0), match.group(0)), text
+        )

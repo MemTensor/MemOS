@@ -283,6 +283,45 @@ describe("llm/client", () => {
     await expect(client.complete([] as LlmMessage[])).rejects.toBeInstanceOf(MemosError);
   });
 
+  it("preserves deferred retry diagnostics in error and status sinks", async () => {
+    const errors: Array<Record<string, unknown>> = [];
+    const statuses: LlmStatusDetail[] = [];
+    const retryAt = Date.now() + 120_000;
+    const provider = new ThrowingProvider(
+      new MemosError(ERROR_CODES.LLM_RATE_LIMITED, "provider cooldown", {
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    const client = createLlmClientWithProvider(
+      cfg({
+        onError: (detail) => errors.push(detail as unknown as Record<string, unknown>),
+        onStatus: (detail) => statuses.push(detail),
+      }),
+      provider,
+    );
+
+    await expect(client.complete("x")).rejects.toBeInstanceOf(MemosError);
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: "error",
+        retryAt,
+        retryDecision: "defer",
+      }),
+    );
+  });
+
   // ─── Circuit breaker (issue #1897) ──────────────────────────────────────
   describe("circuit breaker", () => {
     function statusSink(): { rows: LlmStatusDetail[]; push: (d: LlmStatusDetail) => void } {
