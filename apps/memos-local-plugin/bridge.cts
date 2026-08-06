@@ -29,6 +29,8 @@ const path = require("node:path") as typeof import("node:path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require("node:fs") as typeof import("node:fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const { homedir } = require("node:os") as typeof import("node:os");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const childProcess = require("node:child_process") as typeof import("node:child_process");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const url = require("node:url") as typeof import("node:url");
@@ -95,7 +97,7 @@ const STDIO_PID_FILENAME = "bridge-stdio.pid";
 function pidFilePath(agent: string, filename: string = PID_FILENAME): string {
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
-    process.env.HOME ?? "/tmp",
+    homedir(),
     agentHome,
     "memos-plugin",
     "daemon",

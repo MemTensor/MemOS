@@ -30,6 +30,7 @@
  */
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,7 +82,7 @@ const PID_FILENAME = "bridge.pid";
 function pidFilePath(agent: string): string {
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
-    process.env.HOME ?? "/tmp",
+    homedir(),
     agentHome,
     "memos-plugin",
     "daemon",
