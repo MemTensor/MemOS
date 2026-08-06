@@ -72,10 +72,10 @@ export function displayVersion(raw) {
   return value ? `v${value}` : "";
 }
 
-export function isLegacyPackageOnlyRelease({ targetVersion, npmDistTag = "" } = {}) {
+export function isLegacyPackageOnlyRelease({ targetVersion, npmDistTag = "", forcePackageOnly = false } = {}) {
   const parsed = parseSemver(targetVersion);
   const distTag = String(npmDistTag || "").trim();
-  return Boolean(parsed?.prerelease) || Boolean(distTag && distTag !== "latest");
+  return Boolean(forcePackageOnly) || Boolean(parsed?.prerelease) || Boolean(distTag && distTag !== "latest");
 }
 
 export function versionFromTag(tag) {
@@ -359,6 +359,14 @@ export function collectEvidence({ targetVersion, currentTag, previousTag, curren
     product_id: PRODUCT_ID,
     product_title: PRODUCT_TITLE,
     release_note_guidance: releaseNoteGuidanceForCommits(commits),
+    release_note_quality_request: {
+      candidate_count: 3,
+      max_repair_attempts: MAX_DRAFT_REPAIR_ATTEMPTS,
+      selection_policy: [
+        "Preserve complete evidence coverage and valid source_refs before optimizing readability.",
+        "Prefer 6-10 concise product-facing bullets and never exceed 12 bullets.",
+      ],
+    },
     repo,
     previous_tag: previousTag,
     current_tag: currentTag,
@@ -389,7 +397,7 @@ export function evidenceForInspection(evidence) {
     ...publicEvidence
   } = evidence || {};
   return {
-    ...publicEvidence,
+    ...sanitizeInspectionValue(publicEvidence),
     release_note_guidance: {
       source_ref_category_hints: Array.isArray(guidance.source_ref_category_hints)
         ? guidance.source_ref_category_hints
@@ -403,7 +411,7 @@ export function evidenceForInspection(evidence) {
 }
 
 export function draftForInspection(draft) {
-  return {
+  return sanitizeInspectionValue({
     ok: Boolean(draft?.ok),
     needs_review: Boolean(draft?.needs_review),
     confidence: draft?.confidence || "",
@@ -416,6 +424,13 @@ export function draftForInspection(draft) {
       covered_refs: Array.isArray(draft?.coverage?.covered_refs) ? draft.coverage.covered_refs : [],
       missing_required: Array.isArray(draft?.coverage?.missing_required) ? draft.coverage.missing_required : [],
       invalid_item_refs: Array.isArray(draft?.coverage?.invalid_item_refs) ? draft.coverage.invalid_item_refs : [],
+      items_missing_source_refs: Array.isArray(draft?.coverage?.items_missing_source_refs)
+        ? draft.coverage.items_missing_source_refs
+        : [],
+      quality_issues: Array.isArray(draft?.coverage?.quality_issues)
+        ? draft.coverage.quality_issues
+        : [],
+      candidate_generation_incomplete: draft?.coverage?.candidate_generation_incomplete || null,
     },
     warnings: Array.isArray(draft?.warnings) ? draft.warnings : [],
     language_issues: Array.isArray(draft?.language_issues) ? draft.language_issues : [],
@@ -428,7 +443,7 @@ export function draftForInspection(draft) {
       server_debug_fields: "omitted from public workflow artifacts",
       model_and_prompt_details: "omitted from public workflow artifacts",
     },
-  };
+  });
 }
 
 function appendOutput(name, value) {
@@ -1045,11 +1060,14 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
   const commitCount = Array.isArray(evidence?.commits) ? evidence.commits.length : 0;
   const packageChanges = Array.isArray(evidence?.package_changes) ? evidence.package_changes : [];
   const versionChange = packageChanges.find((item) => item.field === "version");
+  const prerelease = Boolean(parseSemver(targetPackageVersion)?.prerelease) || distTag !== "latest";
   const lines = [
     "## Changelog",
     "",
-    "### Prerelease",
-    `- Published ${PRODUCT_TITLE.en} ${version} as a package prerelease for validation through the npm \`${distTag}\` dist-tag.`,
+    prerelease ? "### Prerelease" : "### Package Release",
+    prerelease
+      ? `- Published ${PRODUCT_TITLE.en} ${version} as a package prerelease for validation through the npm \`${distTag}\` dist-tag.`
+      : `- Published ${PRODUCT_TITLE.en} ${version} through the npm \`${distTag}\` dist-tag.`,
     "",
     "### Release Evidence",
     `- Package tag: ${currentTag}`,
@@ -1061,11 +1079,14 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
   const previousPackageVersion = versionChange?.before || "unknown";
   lines.push(`- Package version: ${previousPackageVersion} -> ${targetPackageVersion}`);
   lines.push("");
-  lines.push("This legacy prerelease is package-only and does not update the MemOS-Docs Plugin tab.");
+  lines.push(
+    "This prerelease creates an independent local-plugin GitHub Prerelease for traceability. " +
+      "Its release.published event is intentionally ignored by Doc Agent, so it does not update the MemOS-Docs Plugin tab or trigger pre/gray deployment.",
+  );
   return {
     ok: true,
     needs_review: false,
-    confidence: "legacy-package-only",
+    confidence: "standalone-prerelease-no-docs",
     release_items: [],
     coverage: {
       needs_review: false,
@@ -1075,9 +1096,12 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
       covered_refs: [],
       missing_required: [],
       invalid_item_refs: [],
-      policy: "legacy local-plugin prereleases are package-only and do not create docs payloads",
+      policy:
+        "standalone local-plugin prereleases create npm/tag/GitHub Prerelease metadata but never create docs payloads",
     },
-    warnings: ["legacy package-only prerelease skipped Doc Agent draft and docs payload generation"],
+    warnings: [
+      "standalone prerelease skipped Doc Agent drafting and docs payload generation",
+    ],
     release_notes_markdown: `${lines.join("\n").trim()}\n`,
   };
 }
@@ -1169,8 +1193,14 @@ export function validateManualNotes(notes) {
     fail("Manual release notes evidence coverage must explicitly set needs_review=false.");
   }
   for (const item of payload.items) {
-    if (!item?.text_cn || !item?.text_en || !Array.isArray(item?.source_refs) || item.source_refs.length === 0) {
-      fail("Every manual release-note item must include text_cn, text_en, and source_refs.");
+    if (
+      !RELEASE_CATEGORY_ORDER.includes(String(item?.category || "")) ||
+      !item?.text_cn ||
+      !item?.text_en ||
+      !Array.isArray(item?.source_refs) ||
+      item.source_refs.length === 0
+    ) {
+      fail("Every manual release-note item must include a valid category, text_cn, text_en, and source_refs.");
     }
     if (!CJK_RE.test(String(item.text_cn || ""))) {
       fail("Every manual release-note item text_cn must contain Chinese text.");
@@ -1182,6 +1212,35 @@ export function validateManualNotes(notes) {
   return text;
 }
 
+export function manualDraftFromNotes(notes, evidence) {
+  const text = validateManualNotes(notes);
+  const match = text.match(/<!--\s*doc-agent-release-notes-json\s*\n([\s\S]*?)\n-->/);
+  const payload = JSON.parse(match[1]);
+  const draft = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      confidence: "manual-evidence-bound",
+      release_items: payload.items,
+      coverage: payload.coverage,
+      warnings: [],
+    },
+    evidence,
+  );
+  const validationReport = validationReportFromPostprocessedDraft(draft);
+  if (!validationReport.ok) {
+    fail(`Manual release notes failed evidence validation: ${JSON.stringify(validationReport)}`);
+  }
+  return {
+    ...draft,
+    confidence: "manual-evidence-bound",
+    validation_report: validationReport,
+    validation_attempt_count: 1,
+    repair_attempt_count: 0,
+    release_notes_markdown: ensureSourceHint(text),
+  };
+}
+
 function isRetryableStatus(status) {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
@@ -1189,11 +1248,84 @@ function isRetryableStatus(status) {
 function cleanError(value) {
   return String(value || "")
     .replace(/Bearer\s+\S+/gi, "Bearer ***")
+    .replace(/(?:github_pat_|gh[pousr]_|npm_|xox[baprs]-)[A-Za-z0-9_-]+/gi, "[REDACTED_TOKEN]")
     .replace(/sk-[A-Za-z0-9_-]+/g, "sk-***")
     .replace(/https?:\/\/[^\s"'<>]+/gi, "https://***")
     .replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, "***")
     .replace(/\s+/g, " ")
-    .slice(0, 600);
+    .slice(0, 1200);
+}
+
+function sanitizeInspectionValue(value) {
+  if (typeof value === "string") return cleanError(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizeInspectionValue(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, sanitizeInspectionValue(item)]),
+    );
+  }
+  return value;
+}
+
+function draftReviewSummary(payload) {
+  const coverage = payload?.coverage || {};
+  return {
+    needs_review: Boolean(payload?.needs_review || coverage.needs_review),
+    required_count: Number(coverage.required_count || 0),
+    covered_required_count: Number(coverage.covered_required_count || 0),
+    missing_required_count: Number(coverage.missing_required_count || 0),
+    invalid_item_ref_count: Array.isArray(coverage.invalid_item_refs)
+      ? coverage.invalid_item_refs.length
+      : 0,
+    items_missing_source_refs_count: Array.isArray(coverage.items_missing_source_refs)
+      ? coverage.items_missing_source_refs.length
+      : 0,
+    item_count: Array.isArray(payload?.release_items) ? payload.release_items.length : 0,
+    quality_issues: Array.isArray(coverage.quality_issues)
+      ? coverage.quality_issues.map((item) => cleanError(item))
+      : [],
+    warnings: Array.isArray(payload?.warnings)
+      ? payload.warnings.map((item) => cleanError(item))
+      : [],
+  };
+}
+
+export function writeDraftFailureInspection({ evidence, payload, error }) {
+  const directory =
+    String(process.env.RELEASE_NOTES_FAILURE_DIR || "").trim() ||
+    join(tmpdir(), "memos-local-plugin-release-notes-failure");
+  mkdirSync(directory, { recursive: true });
+  const safeDraft = draftForInspection(payload || {});
+  const summary = draftReviewSummary(payload || {});
+  const failure = {
+    schema: "memos.local-plugin.release-notes-failure.v1",
+    ok: false,
+    phase: "release-notes",
+    error: cleanError(error?.message || error),
+    ...summary,
+  };
+  writeFileSync(join(directory, "evidence.json"), JSON.stringify(evidenceForInspection(evidence), null, 2), "utf8");
+  writeFileSync(join(directory, "release-notes-draft.json"), JSON.stringify(safeDraft, null, 2), "utf8");
+  writeFileSync(join(directory, "quality-report.json"), JSON.stringify(failure, null, 2), "utf8");
+  writeFileSync(
+    join(directory, "README.md"),
+    [
+      "# MemOS local plugin release-notes failure",
+      "",
+      "Publishing stopped before npm, tag, and GitHub Release side effects.",
+      "",
+      `- required sources: ${summary.covered_required_count}/${summary.required_count}`,
+      `- generated items: ${summary.item_count}`,
+      `- missing source refs: ${summary.items_missing_source_refs_count}`,
+      `- invalid source refs: ${summary.invalid_item_ref_count}`,
+      `- quality issues: ${summary.quality_issues.length}`,
+      "",
+      "Inspect quality-report.json, release-notes-draft.json, and the redacted evidence.json.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return directory;
 }
 
 function requiredUrlFromEnv(name) {
@@ -1319,9 +1451,7 @@ export async function requestDraft(
       }
       if (!payload.ok || payload.needs_review) {
         const serverAttempts = Array.isArray(payload.attempts) ? payload.attempts : [];
-        const coverage = payload.coverage ? JSON.stringify(payload.coverage) : "";
-        const warnings = Array.isArray(payload.warnings) ? payload.warnings.join("; ") : "";
-        const message = `Release notes draft needs review. ${coverage} ${warnings}`.trim();
+        const message = `Release notes draft needs review: ${JSON.stringify(draftReviewSummary(payload))}`;
         if (serverAttempts.length >= 3) {
           await reportFailure({
             evidence,
@@ -1334,7 +1464,11 @@ export async function requestDraft(
             fetchImpl,
           });
         }
-        fail(message);
+        throw Object.assign(new Error(message), {
+          retryable: false,
+          errorCode: "DRAFT_VALIDATION",
+          draftPayload: payload,
+        });
       }
       if (!String(payload.release_notes_markdown || "").trim()) {
         fail("Release-notes draft service returned an empty release_notes_markdown.");
@@ -1351,7 +1485,10 @@ export async function requestDraft(
         if (attempts.length === 3) {
           await reportFailure({ evidence, attempts, finalError: entry.message, fetchImpl });
         }
-        fail(`Release-notes draft request failed on attempt ${attempt}: ${entry.message}`);
+        throw Object.assign(
+          new Error(`Release-notes draft request failed on attempt ${attempt}: ${entry.message}`),
+          { draftPayload: error?.draftPayload },
+        );
       }
       warn(`Release-notes draft attempt ${attempt} failed; retrying: ${entry.message}`);
       await sleep(250 * 2 ** (attempt - 1));
@@ -1366,26 +1503,16 @@ export async function main() {
 
   const currentTag = process.env.RELEASE_TAG || `${CURRENT_TAG_PREFIX}${targetVersion}`;
   const npmDistTag = String(process.env.NPM_DIST_TAG || "").trim();
-  const legacyPackageOnly = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag });
+  const forcePackageOnly = String(process.env.FORCE_PACKAGE_ONLY_RELEASE || "").trim() === "true";
+  const legacyPackageOnly = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag, forcePackageOnly });
+  const includePrereleaseBaseline = isLegacyPackageOnlyRelease({ targetVersion, npmDistTag });
   const notesPath =
     process.env.RELEASE_NOTES_FILE ||
     join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes.md`);
   mkdirSync(dirname(notesPath), { recursive: true });
 
-  const manualNotes = String(process.env.MANUAL_RELEASE_NOTES || "").trim();
-  if (manualNotes) {
-    const notes = legacyPackageOnly
-      ? validateLegacyPackageNotes(manualNotes)
-      : ensureSourceHint(validateManualNotes(manualNotes));
-    writeFileSync(notesPath, notes, "utf8");
-    appendOutput("release_notes_file", notesPath);
-    appendOutput("draft_used", "false");
-    console.log(`Using manually provided release notes: ${notesPath}`);
-    return;
-  }
-
   const previousTag = findPreviousTag(targetVersion, currentTag, {
-    includePrerelease: legacyPackageOnly,
+    includePrerelease: includePrereleaseBaseline,
   });
   if (!previousTag) {
     fail(`Cannot find a previous local plugin tag before ${currentTag}.`);
@@ -1395,6 +1522,32 @@ export async function main() {
   const evidence = collectEvidence({ targetVersion, currentTag, previousTag, currentRef });
   const evidencePath = join(tmpdir(), `memos-local-plugin-${targetVersion}-evidence.json`);
   writeFileSync(evidencePath, JSON.stringify(evidenceForInspection(evidence), null, 2), "utf8");
+
+  const manualNotes = String(process.env.MANUAL_RELEASE_NOTES || "").trim();
+  if (manualNotes) {
+    const draft = legacyPackageOnly
+      ? legacyPackageDraftFromEvidence(evidence, { npmDistTag })
+      : manualDraftFromNotes(manualNotes, evidence);
+    const notes = legacyPackageOnly
+      ? validateLegacyPackageNotes(manualNotes)
+      : draft.release_notes_markdown;
+    const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
+    writeFileSync(draftPath, JSON.stringify(draftForInspection(draft), null, 2), "utf8");
+    writeFileSync(notesPath, notes, "utf8");
+    appendOutput("release_notes_file", notesPath);
+    appendOutput("evidence_file", evidencePath);
+    appendOutput("draft_file", draftPath);
+    appendOutput("draft_used", legacyPackageOnly ? "false" : "true");
+    appendOutput("previous_tag", previousTag);
+    appendOutput("current_tag", currentTag);
+    appendOutput("current_ref", currentRef);
+    appendOutput("draft_confidence", draft.confidence);
+    appendOutput("missing_required_count", String(draft.coverage?.missing_required_count ?? ""));
+    appendOutput("validation_attempt_count", String(draft.validation_attempt_count ?? 0));
+    appendOutput("repair_attempt_count", String(draft.repair_attempt_count ?? 0));
+    console.log(`Using manually provided evidence-bound release notes: ${notesPath}`);
+    return;
+  }
 
   if (legacyPackageOnly) {
     const draft = legacyPackageDraftFromEvidence(evidence, { npmDistTag });
@@ -1414,14 +1567,24 @@ export async function main() {
     appendOutput("validation_attempt_count", "0");
     appendOutput("repair_attempt_count", "0");
 
-    console.log(`Generated package-only prerelease notes without Doc Agent: ${notesPath}`);
+    console.log(`Generated standalone package inspection notes without Doc Agent: ${notesPath}`);
     console.log(`Previous tag: ${previousTag}`);
     console.log(`Current tag: ${currentTag}`);
     console.log(`Current evidence ref: ${currentRef}`);
     return;
   }
 
-  const draft = await requestValidatedDraft(evidence);
+  let draft;
+  try {
+    draft = await requestValidatedDraft(evidence);
+  } catch (error) {
+    writeDraftFailureInspection({
+      evidence,
+      payload: error?.draftPayload || {},
+      error,
+    });
+    throw error;
+  }
   if (!draft.ok || draft.needs_review) {
     fail(`Postprocessed release notes require review: ${JSON.stringify(draft.validation_report || draft.coverage || {})}`);
   }
