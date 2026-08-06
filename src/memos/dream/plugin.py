@@ -46,6 +46,7 @@ class CommunityDreamPlugin(MemOSPlugin):
     version = "0.1.0"
     description = "Built-in Dream plugin"
     priority = 10
+    enabled_by_default = False
 
     def on_load(self) -> None:
         self.context: dict[str, Any] = {"shared": {}, "configs": {}}

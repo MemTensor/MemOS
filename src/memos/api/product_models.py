@@ -68,6 +68,71 @@ class MemCubeRegister(BaseRequest):
     mem_cube_id: str | None = Field(None, description="ID for the MemCube")
 
 
+class CreateCubeRequest(BaseRequest):
+    """Request model for creating a new memory cube."""
+
+    cube_name: str = Field(..., description="Human-readable name for the memory cube")
+    owner_id: str = Field(..., description="User ID of the cube owner")
+    cube_path: str | None = Field(
+        None, description="File system path where cube data will be stored"
+    )
+    cube_id: str | None = Field(
+        None,
+        description=(
+            "Custom unique identifier for the cube. If not provided, one will be generated. "
+            "Note: cube_id is also referred to as mem_cube_id throughout the API."
+        ),
+    )
+
+
+class CreateCubeResponseData(BaseModel):
+    """Data model for cube creation response."""
+
+    cube_id: str = Field(..., description="The created cube ID (also called mem_cube_id)")
+    cube_name: str = Field(..., description="Name of the created cube")
+    owner_id: str = Field(..., description="Owner user ID")
+
+
+class CreateCubeResponse(BaseResponse[CreateCubeResponseData]):
+    """Response model for cube creation."""
+
+    message: str = "Cube created successfully"
+
+
+class RegisterCubeRequest(BaseRequest):
+    """Request model for registering an existing memory cube.
+
+    This allows loading a cube from disk or creating a new one if the path doesn't exist.
+    """
+
+    mem_cube_name_or_path: str = Field(
+        ..., description="File path to the memory cube or name for a new cube"
+    )
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "Custom identifier for the cube (also called cube_id). "
+            "If not provided, one will be generated."
+        ),
+    )
+    user_id: str | None = Field(
+        None, description="User ID to associate with the cube. If not provided, uses default user"
+    )
+
+
+class RegisterCubeResponseData(BaseModel):
+    """Data model for cube registration response."""
+
+    cube_id: str = Field(..., description="The registered cube ID (also called mem_cube_id)")
+    cube_name_or_path: str = Field(..., description="Name or path of the registered cube")
+
+
+class RegisterCubeResponse(BaseResponse[RegisterCubeResponseData]):
+    """Response model for cube registration."""
+
+    message: str = "Cube registered successfully"
+
+
 class ChatRequest(BaseRequest):
     """Request model for chat operations.
 
@@ -111,15 +176,12 @@ class ChatRequest(BaseRequest):
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Filter for the memory, example:
-        {
-            "`and` or `or`": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to recalled memories. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
@@ -200,7 +262,10 @@ class ChatCompleteRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    filter: dict[str, Any] | None = Field(
+        None,
+        description="Optional metadata filter applied to memories used for chat recall.",
+    )
     model_name_or_path: str | None = Field(None, description="Model name to use for chat")
     max_tokens: int | None = Field(None, description="Max tokens to generate")
     temperature: float | None = Field(None, description="Temperature for sampling")
@@ -357,6 +422,14 @@ class APISearchRequest(BaseRequest):
         ),
     )
 
+    rerank: bool = Field(
+        True,
+        description=(
+            "Whether to apply the textual memory reranker during search. "
+            "Set false to return retrieval-order candidates before post-search dedup/formatting."
+        ),
+    )
+
     pref_top_k: int = Field(
         6,
         ge=0,
@@ -399,19 +472,20 @@ class APISearchRequest(BaseRequest):
         description="Number of skill memories to retrieve (top-K). Default: 3.",
     )
 
+    context_format: str = Field(
+        "memory",
+        description="Optional search context format passed through to installed plugins.",
+    )
+
     # ==== Filter conditions ====
-    # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Filter for the memory, example:
-        {
-            "`and` or `or`": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to memory search results. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
@@ -434,7 +508,12 @@ class APISearchRequest(BaseRequest):
     # Internal field for search memory type
     search_memory_type: str = Field(
         "All",
-        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory, PreferenceMemory",
+        description=(
+            "Memory category to search. Supported values include All, WorkingMemory, "
+            "LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, "
+            "ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory, "
+            "and PreferenceMemory. Default: All."
+        ),
     )
 
     # ==== Context ====
@@ -477,7 +556,10 @@ class APISearchRequest(BaseRequest):
     # ==== Source for  plugin ====
     source: str | None = Field(
         None,
-        description="Source of the search query [plugin will router diff search]",
+        description=(
+            "Origin of the search request. Plugin callers can use this value to route "
+            "different search behavior without changing the query payload."
+        ),
     )
 
     neighbor_discovery: bool = Field(
@@ -526,13 +608,28 @@ class APISearchRequest(BaseRequest):
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
 
+    # Model-level example so the interactive docs (/docs) show a copy-paste-ready
+    # payload. Without it, Swagger UI renders the leading `str` branch of the
+    # `messages` union as `"string"` (see issue #1505). This only affects the
+    # generated OpenAPI schema, not validation or runtime behaviour.
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "user_id": "8736b16e-1d20-4163-980b-a5063c3facdc",
+                "writable_cube_ids": ["b32d0977-435d-4828-a86f-4f47f8b55bca"],
+                "messages": [{"role": "user", "content": "I am learning ggplot2 in R."}],
+                "async_mode": "async",
+            }
+        }
+    }
+
     # ==== Basic identifiers ====
     user_id: str = Field(None, description="User ID")
     session_id: str | None = Field(
         None,
         description="Session ID. If not provided, a default session will be used.",
     )
-    task_id: str | None = Field(None, description="Task ID for monitering async tasks")
+    task_id: str | None = Field(None, description="Task ID for monitoring async tasks")
     manager_user_id: str | None = Field(None, description="Manager User ID")
     project_id: str | None = Field(None, description="Project ID")
 
@@ -741,7 +838,7 @@ class APIFeedbackRequest(BaseRequest):
     session_id: str | None = Field(
         "default_session", description="Session ID for soft-filtering memories"
     )
-    task_id: str | None = Field(None, description="Task ID for monitering async tasks")
+    task_id: str | None = Field(None, description="Task ID for monitoring async tasks")
     history: MessageList | None = Field(..., description="Chat history")
     retrieved_memory_ids: list[str] | None = Field(
         None, description="Retrieved memory ids at last turn"
@@ -816,15 +913,12 @@ class APIChatCompleteRequest(BaseRequest):
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
         None,
-        description="""
-        Filter for the memory, example:
-        {
-            "`and` or `or`": [
-                {"id": "uuid-xxx"},
-                {"created_at": {"gt": "2024-01-01"}},
-            ]
-        }
-        """,
+        description=(
+            "Optional metadata filter applied to recalled memories. Supports nested "
+            '"and" / "or" conditions and comparison operators such as "gt" for fields '
+            'like "id", "created_at", or other indexed metadata. Example: '
+            '{"and": [{"id": "uuid-xxx"}, {"created_at": {"gt": "2024-01-01"}}]}'
+        ),
     )
 
     # ==== Extended capabilities ====
@@ -854,7 +948,10 @@ class GetMemoryRequest(BaseRequest):
     include_preference: bool = Field(True, description="Whether to return preference memory")
     include_tool_memory: bool = Field(True, description="Whether to return tool memory")
     include_skill_memory: bool = Field(True, description="Whether to return skill memory")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    filter: dict[str, Any] | None = Field(
+        None,
+        description="Optional metadata filter applied when retrieving memories.",
+    )
     page: int | None = Field(
         None,
         description="Page number (starts from 1). If None, exports all data without pagination.",
@@ -876,7 +973,10 @@ class DeleteMemoryRequest(BaseRequest):
     writable_cube_ids: list[str] | None = Field(None, description="Writable cube IDs")
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    filter: dict[str, Any] | None = Field(
+        None,
+        description="Optional metadata filter applied when selecting memories for deletion.",
+    )
     user_id: str | None = Field(
         None,
         description="Quick delete condition: remove memories for this user_id.",
@@ -970,6 +1070,15 @@ class SearchMemoryData(BaseModel):
         alias="tool_memory_detail_list",
         description="List of tool_memor details (usually None)",
     )
+    skill_detail_list: list[MemoryDetail] | None = Field(
+        None, alias="skill_detail_list", description="List of skill memory details"
+    )
+    profile_detail_list: list[MemoryDetail] | None = Field(
+        None, alias="profile_detail_list", description="List of profile memory details"
+    )
+    event_detail_list: list[MemoryDetail] | None = Field(
+        None, alias="event_detail_list", description="List of event memory details"
+    )
     preference_note: str = Field(
         None, alias="preference_note", description="String of preference_note"
     )
@@ -981,6 +1090,9 @@ class GetKnowledgebaseFileData(BaseModel):
     file_detail_list: list[FileDetail] = Field(
         default_factory=list, alias="file_detail_list", description="List of files details"
     )
+    total: int | None = Field(None, description="Total number of matching files")
+    page: int | None = Field(None, description="Current page number")
+    page_size: int | None = Field(None, alias="page_size", description="Page size")
 
 
 class GetMemoryData(BaseModel):
@@ -992,6 +1104,22 @@ class GetMemoryData(BaseModel):
     preference_detail_list: list[MessageDetail] | None = Field(
         None, alias="preference_detail_list", description="List of preference detail"
     )
+    tool_memory_detail_list: list[MemoryDetail] | None = Field(
+        None, alias="tool_memory_detail_list", description="List of tool memory details"
+    )
+    profile_detail_list: list[MemoryDetail] | None = Field(
+        None, alias="profile_detail_list", description="List of profile memory details"
+    )
+    event_detail_list: list[MemoryDetail] | None = Field(
+        None, alias="event_detail_list", description="List of event memory details"
+    )
+    skill_detail_list: list[MemoryDetail] | None = Field(
+        None, alias="skill_detail_list", description="List of skill memory details"
+    )
+    total: int | None = Field(None, description="Total number of memories")
+    size: int | None = Field(None, description="Page size")
+    current: int | None = Field(None, description="Current page number")
+    pages: int | None = Field(None, description="Total number of pages")
 
 
 class AddMessageData(BaseModel):
@@ -1018,6 +1146,16 @@ class GetTaskStatusMessageData(BaseModel):
     """Data model for task status Message based on actual API."""
 
     status: str = Field(..., description="Operation task status")
+
+
+class GetTaskStatusData(BaseModel):
+    """Current OpenMem task status response data."""
+
+    task_id: str = Field(..., description="Task identifier")
+    status: str = Field(..., description="Operation task status")
+    memory_views: dict[str, Any] | None = Field(
+        None, alias="memory_views", description="Memory view changes produced by the task"
+    )
 
 
 # ─── MemOS Response Models (Similar to OpenAI ChatCompletion) ──────────────────
@@ -1103,12 +1241,12 @@ class MemOSGetTaskStatusResponse(BaseModel):
 
     code: int = Field(..., description="Response status code")
     message: str = Field(..., description="Response message")
-    data: list[GetTaskStatusMessageData] = Field(..., description="Task status data")
+    data: GetTaskStatusData = Field(..., description="Task status data")
 
     @property
-    def messages(self) -> list[GetTaskStatusMessageData]:
-        """Convenient access to task status messages."""
-        return self.data
+    def messages(self) -> list[GetTaskStatusData]:
+        """Backward-compatible list access to task status data."""
+        return [self.data]
 
 
 class MemOSCreateKnowledgebaseResponse(BaseModel):

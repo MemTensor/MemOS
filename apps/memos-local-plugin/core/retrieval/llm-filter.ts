@@ -24,7 +24,10 @@ import type { LlmClient } from "../llm/index.js";
 import type { Logger } from "../logger/types.js";
 import { RETRIEVAL_FILTER_PROMPT } from "../llm/prompts/index.js";
 import type { RankedCandidate } from "./ranker.js";
-import type { RetrievalConfig } from "./types.js";
+import type {
+  RetrievalConfig,
+  RetrievalProfile,
+} from "./types.js";
 
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
 const MIN_FILTER_OUTPUT_TOKENS = 160;
@@ -33,6 +36,7 @@ const MAX_FILTER_OUTPUT_TOKENS = 2048;
 export interface FilterInput {
   query: string;
   ranked: readonly RankedCandidate[];
+  profile?: RetrievalProfile;
   /**
    * Episode this retrieval is happening for (typically the active or
    * just-opening episode). Forwarded to the LLM call so the resulting
@@ -46,6 +50,8 @@ export interface FilterDeps {
   llm: LlmClient | null;
   log: Logger;
   timeoutMs?: number;
+  deadlineAt?: number;
+  signal?: AbortSignal;
   config: Pick<
     RetrievalConfig,
     | "llmFilterEnabled"
@@ -70,6 +76,10 @@ export interface FilterResult {
     | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
+    | "llm_filtered_empty"
+    // Legacy outcome retained for historical api_logs compatibility.
+    // New calls no longer mechanically refill a valid empty LLM result.
+    | "llm_filtered_refilled"
     // The LLM was supposed to run but the call failed / parsed badly.
     // We applied a mechanical relevance cutoff (top-K above
     // `relativeThresholdFloor · topRelevance`) instead of dumping the
@@ -109,6 +119,10 @@ export async function llmFilterCandidates(
   if (!deps.llm) {
     return passthrough(ranked, "no_llm");
   }
+  if (deps.signal?.aborted) {
+    deps.log.debug("llm_filter.deadline_exceeded", { candidateCount: ranked.length });
+    return safeCutoff(ranked, deps);
+  }
 
   const bodyChars =
     deps.config.llmFilterCandidateBodyChars ?? DEFAULT_CANDIDATE_BODY_CHARS;
@@ -140,6 +154,8 @@ ${list}`,
         episodeId: input.episodeId,
         temperature: 0,
         timeoutMs: deps.timeoutMs,
+        deadlineAt: deps.deadlineAt,
+        signal: deps.signal,
         // Output is only ordered indices + one bool, but the list can
         // legitimately be as long as the ranked candidates.
         maxTokens: filterOutputTokenBudget(ranked.length),
@@ -169,21 +185,16 @@ ${list}`,
     );
     const keepIndices = new Set(cappedIndices);
     if (keepIndices.size === 0) {
-      // Model asked us to drop everything — honoured. Surface this
-      // explicitly so the Logs page can show "LLM found nothing
-      // relevant" instead of silently injecting a partial packet.
       return {
         kept: [],
         dropped: [...ranked],
-        outcome: "llm_filtered",
+        outcome: "llm_filtered_empty",
         sufficient: sufficient ?? false,
       };
     }
     const kept = cappedIndices.map((i) => ranked[i]!);
-    const dropped: RankedCandidate[] = [];
-    ranked.forEach((r, i) => {
-      if (!keepIndices.has(i)) dropped.push(r);
-    });
+    const keptSet = new Set(kept);
+    const dropped = ranked.filter((candidate) => !keptSet.has(candidate));
     return {
       kept,
       dropped,

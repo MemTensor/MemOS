@@ -24,7 +24,10 @@ from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem, TaskPriori
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube, is_playground_api
+from memos.mem_scheduler.utils.misc_utils import (
+    group_messages_by_user_and_mem_cube,
+    is_playground_api,
+)
 from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event, to_iso
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 

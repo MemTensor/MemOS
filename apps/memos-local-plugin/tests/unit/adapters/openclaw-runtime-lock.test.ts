@@ -33,7 +33,7 @@ function tmpHome(): ResolvedHome {
   };
 }
 
-function acquire(home: ResolvedHome, pid = process.pid) {
+function acquire(home: ResolvedHome, pid = process.pid, skipLock = false) {
   return acquireOpenClawRuntimeLock({
     home,
     pluginId: "memos-local-plugin",
@@ -42,6 +42,7 @@ function acquire(home: ResolvedHome, pid = process.pid) {
     pid,
     now: () => 1_700_000_000_000,
     unwrittenOwnerStaleMs: 0,
+    skipLock,
   });
 }
 
@@ -97,5 +98,39 @@ describe("OpenClaw runtime lock", () => {
     expect(lock.owner.token).not.toBe("stale-token");
 
     lock.release();
+  });
+
+  it("allows diagnostic mode to skip lock when gateway is running", () => {
+    const home = tmpHome();
+    const gatewayLock = acquire(home, process.pid, false);
+
+    // Diagnostic mode should not throw even though gateway lock exists
+    const diagnosticLock = acquire(home, process.pid + 1, true);
+    expect(diagnosticLock.owner.token).toBe("diagnostic-noop");
+
+    // Gateway lock file should still exist
+    const ownerPath = path.join(gatewayLock.lockDir, "owner.json");
+    expect(fs.existsSync(ownerPath)).toBe(true);
+
+    // Diagnostic release is a no-op
+    diagnosticLock.release();
+    expect(fs.existsSync(ownerPath)).toBe(true);
+
+    // Gateway release cleans up
+    gatewayLock.release();
+    expect(fs.existsSync(gatewayLock.lockDir)).toBe(false);
+  });
+
+  it("diagnostic mode does not create lock files", () => {
+    const home = tmpHome();
+    const lock = acquire(home, process.pid, true);
+    const lockDir = openClawRuntimeLockDir(home);
+
+    // Lock directory should not be created in diagnostic mode
+    expect(fs.existsSync(lockDir)).toBe(false);
+    expect(lock.owner.token).toBe("diagnostic-noop");
+
+    lock.release();
+    expect(fs.existsSync(lockDir)).toBe(false);
   });
 });

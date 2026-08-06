@@ -48,7 +48,11 @@ export async function loadConfig(home: ResolvedHome): Promise<LoadConfigResult> 
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") {
-      warnings.push(`config file not found at ${home.configFile}; using defaults`);
+      warnings.push(
+        `config file not found at ${home.configFile}; using defaults. ` +
+        `To fix: set MEMOS_HOME or MEMOS_CONFIG_FILE env var, or use --home CLI flag. ` +
+        `See: https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin#configuration`
+      );
     } else if (MemosError.is(err)) {
       throw err;
     } else {
@@ -80,6 +84,12 @@ export function resolveConfig(raw: unknown, warnings?: string[]): ResolvedConfig
       errorCount: errors.length,
       first: errors.slice(0, 5).map((e) => ({ path: e.path, message: e.message })),
     });
+  }
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: completed.logging.timezone }).format(0);
+  } catch {
+    throw new MemosError("config_invalid", `invalid logging.timezone: ${completed.logging.timezone}`);
   }
 
   return Object.freeze(completed) as ResolvedConfig;

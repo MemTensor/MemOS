@@ -5,6 +5,8 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
+- `2.0.6` (unreleased) — Documentation fix: clarify install path and stale
+  directory names (#1540).
 - `2.0.0-beta.1` — Complete end-to-end implementation: L1/L2/L3/Skill layers,
   three-tier retrieval, decision repair, crystallization, dual adapters,
   HTTP/SSE server, Vite viewer.

@@ -6,20 +6,67 @@ import type { EpochMs } from "../../../core/types.js";
 const NOW = 1_700_000_000_000 as EpochMs;
 
 describe("retrieval/query-builder", () => {
-  it("turn_start embeds userText + hints", () => {
+  it("turn_start embeds only userText and excludes routing contextHints", () => {
     const cq = buildQuery({
       reason: "turn_start",
       agent: "openclaw",
       sessionId: "s1" as unknown as never,
       userText: "Fix this docker compose file",
-      contextHints: { cwd: "/tmp/x", role: "planner" },
+      contextHints: {
+        cwd: "/tmp/x",
+        role: "planner",
+        message_id: "om_x100b69aac421a4a4ddbedba7b69bbb6",
+        sender_id: "ou_7ca281bf4db7089a424187d677f3cfa3",
+      },
       ts: NOW,
     });
-    expect(cq.text).toContain("Fix this docker compose file");
-    expect(cq.text).toContain("cwd: /tmp/x");
-    expect(cq.text).toContain("role: planner");
+    expect(cq.text).toBe("Fix this docker compose file");
+    expect(cq.text).not.toContain("cwd");
+    expect(cq.text).not.toContain("message_id");
+    expect(cq.text).not.toContain("sender_id");
     expect(cq.tags).toContain("docker");
+    expect(cq.exactIdentifiers).toEqual([]);
     expect(cq.truncated).toBe(false);
+  });
+
+  it("extracts bounded long identifiers without promoting ordinary pattern terms", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s1" as unknown as never,
+      userText: "请查询 project_id_2026_alpha_001 的记录",
+      ts: NOW,
+    });
+
+    expect(cq.exactIdentifiers).toEqual(["project_id_2026_alpha_001"]);
+    expect(cq.patternTerms).toEqual(["查询"]);
+  });
+
+  it("does not extract long identifiers from routing context hints", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s1" as unknown as never,
+      userText: "我喜欢芒果",
+      contextHints: {
+        message_id: "om_x100b69aac421a4a4ddbedba7b69bbb6",
+      },
+      ts: NOW,
+    });
+
+    expect(cq.exactIdentifiers).toEqual([]);
+  });
+
+  it("rejects oversized identifiers instead of confirming a truncated prefix", () => {
+    const cq = buildQuery({
+      reason: "turn_start",
+      agent: "openclaw",
+      sessionId: "s1" as unknown as never,
+      userText: `查询 project_${"a".repeat(200)}`,
+      ts: NOW,
+    });
+
+    expect(cq.exactIdentifiers).toEqual([]);
   });
 
   it("tool_driven uses explicit search query text when present", () => {
@@ -35,6 +82,24 @@ describe("retrieval/query-builder", () => {
     expect(cq.text).toContain('"limit":5');
     expect(cq.text).not.toContain("tool:memos_search");
     expect(cq.tags).toContain("docker");
+  });
+
+  it("passes CJK tokenizer mode to keyword query compilation", () => {
+    const cq = buildQuery(
+      {
+        reason: "tool_driven",
+        agent: "openclaw",
+        sessionId: "s1" as unknown as never,
+        tool: "memos_search",
+        args: { query: "早报 API配置 C盘" },
+        ts: NOW,
+      },
+      { ftsTokenizer: "cjk" },
+    );
+    expect(cq.ftsMatch).toContain('"早报"');
+    expect(cq.ftsMatch).toContain('"API"');
+    expect(cq.ftsMatch).toContain('"配置"');
+    expect(cq.ftsMatch).toContain('"C盘"');
   });
 
   it("skill_invoke prepends skill id when provided", () => {

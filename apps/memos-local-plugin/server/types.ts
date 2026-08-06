@@ -39,6 +39,20 @@ export interface ServerOptions {
    * installed on disk.
    */
   agent?: "openclaw" | "hermes";
+  /**
+   * Process lifecycle hooks used by the admin restart route.
+   *
+   * A supervised Hermes viewer must let launchd/systemd perform the
+   * replacement; spawning a second daemon from the route races the
+   * supervisor's KeepAlive restart. Tests and portable embedders may
+   * override the auto-detection and shutdown action explicitly.
+   */
+  lifecycle?: {
+    /** Override launchd/systemd detection. */
+    supervised?: boolean;
+    /** Request graceful host shutdown after the HTTP response is returned. */
+    requestShutdown?: () => void;
+  };
 }
 
 export interface ServerHandle {

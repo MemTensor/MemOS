@@ -15,6 +15,15 @@ export interface RecallOptions {
   minScore?: number;
   role?: string;
   ownerFilter?: string[];
+  /**
+   * If set, chunks whose `sessionKey` equals this value are filtered out at the
+   * SQL layer (FTS, vector, pattern) before fusion. Use this to suppress recall
+   * of the **current** conversation session so the model doesn't waste tokens
+   * on its own recent turns. Hub-memory hits are not affected by this filter
+   * because they represent cross-user shared knowledge keyed by a synthetic
+   * `sessionKey` (`hub-shared:<userId>`).
+   */
+  excludeSessionKey?: string;
 }
 
 const MAX_RECENT_QUERIES = 20;
@@ -41,10 +50,11 @@ export class RecallEngine {
     const repeatNote = this.checkRepeat(query, maxResults, minScore);
     const candidatePool = maxResults * 5;
     const ownerFilter = opts.ownerFilter;
+    const excludeSessionKey = opts.excludeSessionKey;
 
     // Step 1: Gather candidates from FTS, vector search, and pattern search
     const ftsCandidates = query
-      ? this.store.ftsSearch(query, candidatePool, ownerFilter)
+      ? this.store.ftsSearch(query, candidatePool, ownerFilter, excludeSessionKey)
       : [];
 
     let vecCandidates: Array<{ chunkId: string; score: number }> = [];
@@ -54,7 +64,7 @@ export class RecallEngine {
         const maxChunks = recallCfg.vectorSearchMaxChunks && recallCfg.vectorSearchMaxChunks > 0
           ? recallCfg.vectorSearchMaxChunks
           : undefined;
-        vecCandidates = vectorSearch(this.store, queryVec, candidatePool, maxChunks, ownerFilter);
+        vecCandidates = vectorSearch(this.store, queryVec, candidatePool, maxChunks, ownerFilter, excludeSessionKey);
       } catch (err) {
         this.ctx.log.warn(`Vector search failed, using FTS only: ${err}`);
       }
@@ -77,7 +87,7 @@ export class RecallEngine {
     }
     const shortTerms = [...new Set([...spaceSplit, ...cjkBigrams])];
     const patternHits = shortTerms.length > 0
-      ? this.store.patternSearch(shortTerms, { limit: candidatePool, ownerFilter })
+      ? this.store.patternSearch(shortTerms, { limit: candidatePool, ownerFilter, excludeSessionKey })
       : [];
     const patternRanked = patternHits.map((h, i) => ({
       id: h.chunkId,

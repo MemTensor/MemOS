@@ -32,6 +32,11 @@ export interface AcquireOpenClawRuntimeLockOptions {
   pid?: number;
   now?: () => number;
   unwrittenOwnerStaleMs?: number;
+  /**
+   * Skip lock acquisition for read-only diagnostic processes (e.g., `openclaw doctor`).
+   * When true, returns a no-op lock handle that doesn't create lock files.
+   */
+  skipLock?: boolean;
 }
 
 export class DuplicateOpenClawRuntimeError extends Error {
@@ -58,9 +63,30 @@ export function acquireOpenClawRuntimeLock(
   options: AcquireOpenClawRuntimeLockOptions,
 ): OpenClawRuntimeLockHandle {
   const lockDir = openClawRuntimeLockDir(options.home);
-  const ownerFile = path.join(lockDir, OWNER_FILENAME);
-  const now = options.now ?? Date.now;
   const pid = options.pid ?? process.pid;
+  const now = options.now ?? Date.now;
+
+  // Skip lock acquisition for diagnostic processes (e.g., openclaw doctor)
+  if (options.skipLock) {
+    const noopOwner: OpenClawRuntimeLockOwner = {
+      pluginId: options.pluginId,
+      version: options.version,
+      pid,
+      token: "diagnostic-noop",
+      startedAt: now(),
+      dbFile: options.home.dbFile,
+      viewerPort: options.viewerPort,
+    };
+    return {
+      lockDir,
+      owner: noopOwner,
+      release() {
+        // No-op: diagnostic mode doesn't hold a lock
+      },
+    };
+  }
+
+  const ownerFile = path.join(lockDir, OWNER_FILENAME);
   const unwrittenOwnerStaleMs =
     options.unwrittenOwnerStaleMs ?? UNWRITTEN_OWNER_STALE_MS;
 

@@ -84,3 +84,16 @@ export { makeSkillsRepo } from "./skills.js";
 export { makeTracePolicyLinksRepo } from "./trace-policy-links.js";
 export { makeTracesRepo } from "./traces.js";
 export { makeWorldModelRepo } from "./world_model.js";
+
+/**
+ * SQL-only embedding maintenance stats — see `./embedding_maintenance.ts`
+ * for the design rationale. Regression pin for issue #1929: the old JS
+ * path hydrated 270 MB of BLOBs per request; this SQL fast path uses
+ * `LENGTH(vec)` alone and never touches the buffers.
+ */
+export {
+  embeddingMaintenanceCounts,
+  inferStoredEmbeddingByteLen,
+  FLOAT32_BYTES,
+} from "./embedding_maintenance.js";
+export type { EmbeddingCounts, EmbeddingCountsBucket } from "./embedding_maintenance.js";

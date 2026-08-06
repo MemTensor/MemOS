@@ -8,10 +8,18 @@ structures for API responses, including memory items and preferences.
 from typing import Any
 
 from memos.log import get_logger
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import detect_lang
 from memos.templates.instruction_completion import instruct_completion
 
 
 logger = get_logger(__name__)
+
+__all__ = [
+    "format_memory_item",
+    "post_process_textual_mem",
+    "rerank_knowledge_mem",
+    "to_iter",
+]
 
 
 def to_iter(running: Any) -> list[Any]:
@@ -164,6 +172,7 @@ def rerank_knowledge_mem(
     text_mem: list[dict[str, Any]],
     top_k: int,
     file_mem_proportion: float = 0.5,
+    strip_conversation_sources: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Rerank knowledge memories and keep conversation memories.
@@ -188,13 +197,20 @@ def rerank_knowledge_mem(
         key=lambda item: item.get("metadata", {}).get("relativity", 0.0),
         reverse=True,
     )
-    # replace memory value with source.content for LongTermMemory, WorkingMemory or UserMemory
+    # Combine the extracted memory with its original file source.
+    is_chinese_query = detect_lang(query) == "zh"
     for item in reranked_knowledge_mem:
-        item["memory"] = item["metadata"]["sources"][0]["content"]
+        memory = item.get("memory", "")
+        source_content = item["metadata"]["sources"][0]["content"]
+        if is_chinese_query:
+            item["memory"] = f"记忆：{memory}，原文：{source_content}"
+        else:
+            item["memory"] = f"Memory: {memory}, Original text: {source_content}"
         item["metadata"]["sources"] = []
 
-    for item in conversation_mem:
-        item.setdefault("metadata", {})["sources"] = []
+    if strip_conversation_sources:
+        for item in conversation_mem:
+            item.setdefault("metadata", {})["sources"] = []
 
     # deduplicate: remove items with duplicate memory content
     original_count = len(reranked_knowledge_mem)

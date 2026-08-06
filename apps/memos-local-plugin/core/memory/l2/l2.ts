@@ -34,7 +34,7 @@ import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
 import { buildPolicyRow, induceDraft } from "./induce.js";
-import { applyGain, computeGain, smoothGain } from "./gain.js";
+import { applyGain, computeGain, nextStatus, smoothGain } from "./gain.js";
 import { signatureOf } from "./signature.js";
 import { tracePolicySimilarity } from "./similarity.js";
 import type {
@@ -453,6 +453,47 @@ export async function runL2(
       });
     }
     timings.gain = Date.now() - t0;
+  }
+
+  // ─── Step 5: Re-evaluate untouched candidates ────────────────────────
+  // A candidate policy that was induced in a previous episode but no longer
+  // matches any trace will never enter `touched` and therefore never have
+  // `nextStatus()` run against it. Without this sweep, it stays `candidate`
+  // forever even though its stored gain/support already satisfy the
+  // promotion thresholds.
+  {
+    const untouchedCandidates = repos.policies.list({ status: "candidate" });
+    for (const policy of untouchedCandidates) {
+      if (touched.has(policy.id)) continue; // already handled in Step 4
+      const next = nextStatus({
+        currentStatus: policy.status,
+        support: policy.support,
+        gain: policy.gain,
+        thresholds,
+      });
+      if (next !== policy.status) {
+        repos.policies.updateStats(policy.id, {
+          support: policy.support,
+          gain: policy.gain,
+          status: next,
+          updatedAt: input.now ?? Date.now(),
+        });
+        emit(bus, {
+          kind: "l2.policy.updated",
+          episodeId: input.episodeId,
+          policyId: policy.id,
+          status: next,
+          support: policy.support,
+          gain: policy.gain,
+        });
+        log.info("run.recheck_candidate_promoted", {
+          policyId: policy.id,
+          status: next,
+          support: policy.support,
+          gain: policy.gain,
+        });
+      }
+    }
   }
 
   timings.persist = 0; // reserved for future split

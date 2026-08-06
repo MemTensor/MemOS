@@ -62,6 +62,8 @@ interface LoggerCore {
   pid: number;
   host: string;
   seq: number;
+  /** IANA timezone used by display formatters. */
+  tz: string;
   /** Whether file sinks are wired up (false in pre-init / null mode). */
   filesActive: boolean;
 }
@@ -90,6 +92,7 @@ function bootstrapConsoleOnly(): LoggerCore {
     pid: process.pid,
     host: hostname(),
     seq: 0,
+    tz: "UTC",
     filesActive: false,
   };
 }
@@ -199,6 +202,7 @@ export function initLogger(
     pid: process.pid,
     host: hostname(),
     seq: 0,
+    tz: logging.timezone,
     filesActive: filesEnabled,
   };
 
@@ -229,6 +233,7 @@ export function initTestLogger(): void {
     pid: process.pid,
     host: hostname(),
     seq: 0,
+    tz: "UTC",
     filesActive: false,
   };
 }
@@ -360,6 +365,7 @@ function emitToCore(record: LogRecord, skipLevelGate = false): void {
     host: core.host,
     src: "ts",
     seq: ++core.seq,
+    tz: core.tz,
     ...record,
   };
   const safe = core.redactor.redact(enriched);
@@ -405,7 +411,7 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-// ─── Process-exit hooks (only register once) ──────────────────────────────
+// ─── Process-exit hook (only register once) ───────────────────────────────
 
 let exitHooked = false;
 function hookProcessExit(): void {
@@ -413,8 +419,11 @@ function hookProcessExit(): void {
   exitHooked = true;
   const onExit = () => { void shutdownLogger(); };
   process.once("beforeExit", onExit);
-  process.once("SIGINT", () => { onExit(); process.exit(130); });
-  process.once("SIGTERM", () => { onExit(); process.exit(143); });
+  // Deliberately do not own SIGINT/SIGTERM here. The dedicated bridge
+  // entries drain their HTTP/stdin handles and MemoryCore before exiting;
+  // a library-level process.exit() used to pre-empt those handlers and
+  // leave episodes/SQLite work half-finished. Embedded hosts likewise own
+  // their process lifecycle.
 }
 
 // ─── Public root logger ────────────────────────────────────────────────────

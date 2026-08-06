@@ -21,6 +21,7 @@ from memos.api import handlers
 from memos.api.handlers.add_handler import AddHandler
 from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.chat_handler import ChatHandler
+from memos.api.handlers.cube_handler import CubeHandler
 from memos.api.handlers.feedback_handler import FeedbackHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
@@ -32,6 +33,8 @@ from memos.api.product_models import (
     ChatBusinessRequest,
     ChatPlaygroundRequest,
     ChatRequest,
+    CreateCubeRequest,
+    CreateCubeResponse,
     DeleteMemoryByRecordIdRequest,
     DeleteMemoryByRecordIdResponse,
     DeleteMemoryRequest,
@@ -47,6 +50,8 @@ from memos.api.product_models import (
     MemoryResponse,
     RecoverMemoryByRecordIdRequest,
     RecoverMemoryByRecordIdResponse,
+    RegisterCubeRequest,
+    RegisterCubeResponse,
     SearchResponse,
     StatusResponse,
     SuggestionRequest,
@@ -87,6 +92,7 @@ chat_handler = (
     else None
 )
 feedback_handler = FeedbackHandler(dependencies)
+cube_handler = CubeHandler(dependencies)
 # Extract commonly used components for function-based handlers
 # (These can be accessed from the components dict without unpacking all of them)
 mem_scheduler: BaseScheduler = components["mem_scheduler"]
@@ -126,6 +132,57 @@ def add_memories(add_req: APIADDRequest):
     This endpoint uses the class-based AddHandler for better code organization.
     """
     return add_handler.handle_add_memories(add_req)
+
+
+# =============================================================================
+# Cube Management API Endpoints
+# =============================================================================
+
+
+@router.post("/create_cube", summary="Create a new memory cube", response_model=CreateCubeResponse)
+async def create_cube(request: CreateCubeRequest) -> CreateCubeResponse:
+    """
+    Create a new memory cube for a user.
+
+    Memory cubes are containers that store different types of memories (textual, activation, parametric).
+    Each cube can be owned by a user and shared with other users.
+
+    **Note on cube_id vs mem_cube_id:**
+    These terms are used interchangeably throughout the API:
+    - `cube_id` is the canonical identifier for a cube
+    - `mem_cube_id` appears in many legacy endpoints and means the same thing
+    - When using other endpoints (search, add, chat), you can reference this cube using either term
+
+    **Semantic Clarification:**
+    - **Single mem_cube_id** (deprecated): Used in older endpoints to identify a single cube.
+      New code should use `readable_cube_ids` / `writable_cube_ids` lists instead.
+    - **readable_cube_ids**: List of cube IDs the user can read from (used in search/chat)
+    - **writable_cube_ids**: List of cube IDs the user can write to (used in add/chat)
+    """
+    return await cube_handler.create_cube(request)
+
+
+@router.post(
+    "/register_cube",
+    summary="Register an existing memory cube",
+    response_model=RegisterCubeResponse,
+)
+async def register_cube(request: RegisterCubeRequest) -> RegisterCubeResponse:
+    """
+    Register an existing memory cube with the MOS system.
+
+    This method loads and registers a memory cube from a file path or creates a new one
+    if the path doesn't exist. The cube becomes available for memory operations.
+
+    **Note on cube_id vs mem_cube_id:**
+    These terms are used interchangeably throughout the API. The registered cube can then
+    be referenced by its cube_id/mem_cube_id in other endpoints.
+
+    **Current Status:**
+    This endpoint validates the registration request. Full registration functionality
+    requires architectural integration with MOSCore, which will be completed in a future update.
+    """
+    return await cube_handler.register_cube(request)
 
 
 # =============================================================================

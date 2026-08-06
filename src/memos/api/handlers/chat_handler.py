@@ -1112,7 +1112,7 @@ class ChatHandler(BaseHandler):
         )
 
     def _format_mem_block(
-        self, memories_all: list, max_items: int = 20, max_chars_each: int = 320
+        self, memories_all: list, max_items: int = 10, max_chars_each: int = 1600
     ) -> tuple[str, str]:
         """
         Format memory block for prompt.
@@ -1225,7 +1225,13 @@ class ChatHandler(BaseHandler):
                 [f"{msg['role']}: {msg['content']}" for msg in current_messages[-2:]]
             )
             further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
-            message_list = [{"role": "system", "content": further_suggestion_prompt}]
+            message_list = [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that generates suggestion queries based on dialogue context.",
+                },
+                {"role": "user", "content": further_suggestion_prompt},
+            ]
             response = self.llm.generate(message_list)
             clean_response = clean_json_response(response)
             response_json = json.loads(clean_response)

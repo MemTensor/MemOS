@@ -81,6 +81,19 @@ def _extract_implicit_preference(qa_pair_str: str, llm) -> list[dict[str, Any]] 
         return None
 
 
+def _normalize_preference_data(preference_data: dict[str, Any]) -> dict[str, Any] | None:
+    preference = str(preference_data.get("preference") or "").strip()
+    context_summary = str(preference_data.get("context_summary") or "").strip()
+
+    if not preference or not context_summary:
+        return None
+
+    normalized_data = preference_data.copy()
+    normalized_data["preference"] = preference
+    normalized_data["context_summary"] = context_summary
+    return normalized_data
+
+
 def _create_preference_memory_item(
     preference_data: dict[str, Any],
     preference_type: str,
@@ -167,8 +180,12 @@ def _process_single_chunk_explicit(
 
     memories = []
     for pref in explicit_pref:
+        normalized_pref = _normalize_preference_data(pref)
+        if not normalized_pref:
+            continue
+
         memory = _create_preference_memory_item(
-            preference_data=pref,
+            preference_data=normalized_pref,
             preference_type="explicit_preference",
             fast_item=fast_item,
             info=info,
@@ -198,8 +215,12 @@ def _process_single_chunk_implicit(
 
     memories = []
     for pref in implicit_pref:
+        normalized_pref = _normalize_preference_data(pref)
+        if not normalized_pref:
+            continue
+
         memory = _create_preference_memory_item(
-            preference_data=pref,
+            preference_data=normalized_pref,
             preference_type="implicit_preference",
             fast_item=fast_item,
             info=info,

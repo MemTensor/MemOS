@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from memos.log import get_logger
 from memos.context.context import get_current_api_path
+from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
 from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,

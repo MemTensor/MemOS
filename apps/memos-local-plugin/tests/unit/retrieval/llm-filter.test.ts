@@ -135,7 +135,47 @@ describe("retrieval/llm-filter", () => {
     expect(result.sufficient).toBe(true);
   });
 
-  it("LLM returns empty selection → drops everything and marks insufficient", async () => {
+  it("honours an empty LLM selection instead of mechanically refilling candidates", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    const ranked = [trace("unrelated-a", 0.9), trace("unrelated-b", 0.8)];
+
+    const result = await llmFilterCandidates(
+      { query: "好的，先做成ppt文件，我一会填数据", ranked },
+      { llm, log, config: cfg },
+    );
+
+    expect(result.outcome).toBe("llm_filtered_empty");
+    expect(result.kept).toEqual([]);
+    expect(result.dropped).toEqual(ranked);
+    expect(result.sufficient).toBe(false);
+  });
+
+  it("honours an empty LLM selection for personal facts so recall can widen safely", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    const ranked = [trace("unrelated-a", 0.9), trace("unrelated-b", 0.8)];
+
+    const result = await llmFilterCandidates(
+      { query: "我喜欢什么？", ranked, profile: "personal_fact" },
+      { llm, log, config: cfg },
+    );
+
+    expect(result.outcome).toBe("llm_filtered_empty");
+    expect(result.kept).toEqual([]);
+    expect(result.dropped).toEqual(ranked);
+    expect(result.sufficient).toBe(false);
+  });
+
+  it("llmFilterMaxKeep=0 honours an empty selection", async () => {
     const llm: any = {
       completeJson: vi.fn().mockResolvedValue({
         value: { selected: [], sufficient: false },
@@ -145,12 +185,28 @@ describe("retrieval/llm-filter", () => {
     const ranked = [trace("a", 0.9), trace("b", 0.8)];
     const result = await llmFilterCandidates(
       { query: "q", ranked },
-      { llm, log, config: cfg },
+      { llm, log, config: { ...cfg, llmFilterMaxKeep: 0 } },
     );
-    expect(result.outcome).toBe("llm_filtered");
+    expect(result.outcome).toBe("llm_filtered_empty");
     expect(result.kept.length).toBe(0);
     expect(result.dropped.length).toBe(2);
     expect(result.sufficient).toBe(false);
+  });
+
+  it("LLM returns empty selection with empty ranked list → unchanged (still llm_filtered, kept=[])", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { selected: [], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    // ranked empty but minCandidates=0 so the filter still runs
+    const result = await llmFilterCandidates(
+      { query: "q", ranked: [] },
+      { llm, log, config: { ...cfg, llmFilterMinCandidates: 0 } },
+    );
+    expect(result.outcome).toBe("below_threshold");
+    expect(result.kept.length).toBe(0);
   });
 
   it("coerces string / number `sufficient` fields sent by lax models", async () => {

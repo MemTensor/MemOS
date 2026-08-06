@@ -41,7 +41,13 @@ function invokeUpdateInstall(viewer: ViewerServer, body: unknown): Promise<{ sta
         this.statusCode = code;
         this.headers = headers;
       },
-      end(payload: string) {
+      // `jsonResponseAndRestart` passes a "flushed" callback to `res.end` and only
+      // schedules the SIGUSR1 timer once that callback fires. Real
+      // `http.ServerResponse` invokes it as soon as the payload is written; the mock
+      // must do the same, otherwise the fake timers never see the setTimeout and the
+      // restart signal is silently dropped in the test. See issue #1559 review round 2.
+      end(payload: string, cb?: () => void) {
+        if (typeof cb === "function") cb();
         resolve({ statusCode: this.statusCode, data: JSON.parse(payload) });
       },
     } as any;
@@ -181,7 +187,9 @@ describe("viewer update-install", () => {
     expect(JSON.parse(fs.readFileSync(path.join(extDir, "package.json"), "utf8")).version).toBe("2.0.0-beta.2");
     expect(fs.readdirSync(path.dirname(extDir)).filter((name) => name.includes(".backup-"))).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(500);
+    // `jsonResponseAndRestart` schedules SIGUSR1 with a 1500ms delay by default; advance
+    // past that (2000ms buffer) so the fake timer definitely fires the restart signal.
+    await vi.advanceTimersByTimeAsync(2000);
     expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGUSR1");
   });
 });

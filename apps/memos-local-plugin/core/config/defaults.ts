@@ -27,6 +27,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     endpoint: "",
     model: "Xenova/all-MiniLM-L6-v2",
     apiKey: "",
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
     cache: {
       enabled: true,
       maxItems: 20_000,
@@ -42,6 +45,26 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     timeoutMs: 45_000,
     maxRetries: 3,
     maxTokens: 4_000,
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
+  },
+  l3Llm: {
+    // Empty by default — falls back to the shared `llm` settings.
+    // Operators set this when they want a stronger model for L3
+    // abstraction. L3 runs off the turn-response path, so a slower
+    // but more reliable model improves world-model quality without
+    // affecting companion latency.
+    provider: "",
+    endpoint: "",
+    model: "",
+    apiKey: "",
+    temperature: 0,
+    timeoutMs: 60_000,
+    maxTokens: 4_000,
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -54,6 +77,12 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     temperature: 0,
     timeoutMs: 60_000,
     maxTokens: 4_000,
+    providerIgnore: [],
+    providerOrder: [],
+    openRouter: false,
+  },
+  storage: {
+    ftsTokenizer: "trigram",
   },
   algorithm: {
     lightweightMemory: {
@@ -74,6 +103,12 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // still contribute useful α values.
       synthReflections: true,
       llmConcurrency: 4,
+      // Bound topic-end reflect work so dirty startup recovery cannot replay
+      // a huge historical episode into thousands of paid LLM calls.
+      maxReflectLlmCalls: 128,
+      // Recovered episodes are reconstructed from persisted traces; replay
+      // orphans are usually matching drift, so do not insert duplicate rows.
+      maxRecoveryOrphanInserts: 0,
       // V7 §3.2 batched variant. With "auto" we issue a single LLM call
       // per episode for both reflection synth and α scoring as long as
       // the episode is short enough — this collapses 2N per-step calls
@@ -223,6 +258,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     session: {
       followUpMode: "merge_follow_ups",
       mergeMaxGapMs: 2 * 60 * 60 * 1000,
+      maxTurnsPerEpisode: 30,
+      classifyTimeoutMs: 5000,
+      bgLlmConcurrency: 2,
     },
     retrieval: {
       tier1TopK: 3,
@@ -263,6 +301,12 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // hits before injection.
       llmFilterMinCandidates: 2,
       llmFilterCandidateBodyChars: 500,
+      // Default 0 — no time-window bound, keeping the legacy
+      // brute-force scan behaviour for fresh installs that haven't
+      // grown past the threshold where the bound starts paying off.
+      // Operators with >50K traces are expected to flip this on (we
+      // suggest 86_400_000 = 24h, or 2_592_000_000 = 30 days).
+      vectorScanMaxAgeMs: 0,
     },
   },
   hub: {
@@ -279,6 +323,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   logging: {
     level: "info",
     detailedView: false,
+    timezone: "UTC",
     console: { enabled: true, pretty: true, channels: ["*"] },
     file: {
       enabled: true,
@@ -309,6 +354,7 @@ export const SECRET_FIELD_PATHS: readonly string[] = Object.freeze([
   "embedding.apiKey",
   "llm.apiKey",
   "skillEvolver.apiKey",
+  "l3Llm.apiKey",
   "hub.teamToken",
   "hub.userToken",
 ]);
