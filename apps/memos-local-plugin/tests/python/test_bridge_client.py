@@ -11,13 +11,16 @@ Run:
 from __future__ import annotations
 
 import contextlib
+import http.server
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 
 from pathlib import Path
 from unittest.mock import patch
@@ -29,10 +32,10 @@ for _p in (_ADAPTER_ROOT, _PLUGIN_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import bridge_client as bridge_client_mod  # noqa: E402
-import daemon_manager as daemon_manager_mod  # noqa: E402
+import bridge_client as bridge_client_mod
+import daemon_manager as daemon_manager_mod
 
-from bridge_client import BridgeError, MemosBridgeClient  # noqa: E402
+from bridge_client import BridgeError, MemosBridgeClient
 
 
 class FakePopen:
@@ -1143,6 +1146,8 @@ class MemTensorProviderTests(unittest.TestCase):
         keys = {item["key"] for item in schema}
         self.assertIn("llm_provider", keys)
         self.assertIn("embedding_provider", keys)
+        viewer = next(item for item in schema if item["key"] == "viewer_port")
+        self.assertEqual(viewer["default"], 18800)
 
     def test_save_config_writes_yaml_with_correct_mode(self) -> None:
         import tempfile
@@ -1164,8 +1169,22 @@ class MemTensorProviderTests(unittest.TestCase):
             mode = cfg_path.stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
             loaded = yaml.safe_load(cfg_path.read_text())
-            self.assertEqual(loaded["viewer"]["port"], 18920)
+            self.assertEqual(loaded["viewer"]["port"], 18800)
             self.assertEqual(loaded["llm"]["provider"], "openai_compatible")
+
+    def test_save_config_reuses_the_initialized_runtime_home(self) -> None:
+        import tempfile
+
+        p = self._provider_mod.MemTensorProvider()
+        with tempfile.TemporaryDirectory() as tmp:
+            selected_home = Path(tmp) / "selected-runtime"
+            host_home = Path(tmp) / "different-hermes-home"
+            p._runtime_home = selected_home
+
+            p.save_config({"viewer_port": 18799}, str(host_home))
+
+            self.assertTrue((selected_home / "config.yaml").exists())
+            self.assertFalse((host_home / "memos-plugin" / "config.yaml").exists())
 
     # ─── Long-operation RPC timeouts (issue #2028) ──────────────────────
     #
@@ -1301,7 +1320,15 @@ class ViewerDaemonTests(unittest.TestCase):
 
     def test_non_memos_port_occupant_blocks_daemon_start(self) -> None:
         with (
-            patch.object(daemon_manager_mod, "_probe_viewer", return_value="blocked"),
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="occupied"),
+            patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
+        ):
+            self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
+            popen.assert_not_called()
+
+    def test_unknown_probe_result_is_handled_conservatively(self) -> None:
+        with (
+            patch.object(daemon_manager_mod, "_probe_viewer", return_value="unknown"),
             patch.object(daemon_manager_mod.subprocess, "Popen") as popen,
         ):
             self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
@@ -1339,6 +1366,51 @@ class ViewerDaemonTests(unittest.TestCase):
                 self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
                 popen.assert_called_once()
 
+    def test_windows_manual_restart_starts_viewer_with_explicit_runtime_home(self) -> None:
+        class FakeDaemon:
+            returncode = None
+
+            def poll(self):
+                return None
+
+        @contextlib.contextmanager
+        def acquired_lock(_runtime_home=None):
+            yield True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_home = Path(tmp) / "legacy-hermes-home"
+            runtime_home.mkdir()
+            with (
+                patch.object(
+                    daemon_manager_mod,
+                    "_probe_viewer",
+                    side_effect=["free", "free", "running_memos"],
+                ),
+                patch.object(daemon_manager_mod, "_viewer_start_lock", acquired_lock),
+                patch.object(daemon_manager_mod, "ensure_bridge_running", return_value=True),
+                patch.object(
+                    daemon_manager_mod,
+                    "_bridge_command",
+                    return_value=[
+                        "node.exe",
+                        "bridge.cjs",
+                        "--agent=hermes",
+                        "--daemon",
+                        f"--home={runtime_home.resolve()}",
+                    ],
+                ),
+                patch.object(
+                    daemon_manager_mod.subprocess,
+                    "Popen",
+                    return_value=FakeDaemon(),
+                ) as popen,
+            ):
+                self.assertTrue(daemon_manager_mod.ensure_viewer_daemon(runtime_home=runtime_home))
+
+            kwargs = popen.call_args.kwargs
+            self.assertEqual(kwargs["env"]["MEMOS_HOME"], str(runtime_home.resolve()))
+            self.assertIn(f"--home={runtime_home.resolve()}", popen.call_args.args[0])
+
     def test_start_lock_reprobes_before_spawning_daemon(self) -> None:
         @contextlib.contextmanager
         def acquired_lock():
@@ -1368,6 +1440,154 @@ class ViewerDaemonTests(unittest.TestCase):
         ):
             self.assertFalse(daemon_manager_mod.ensure_viewer_daemon())
             popen.assert_not_called()
+
+
+class ViewerProbeTests(unittest.TestCase):
+    def test_loopback_probe_bypasses_proxy_on_all_supported_platforms(self) -> None:
+        class JsonHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = b'{"service":"memos-local-plugin","agent":"hermes"}'
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), JsonHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/api/v1/health"
+            for platform_name in ("windows", "macos", "linux"):
+                with (
+                    self.subTest(platform=platform_name),
+                    patch.dict(
+                        os.environ,
+                        {
+                            "HTTP_PROXY": "http://127.0.0.1:9",
+                            "HTTPS_PROXY": "http://127.0.0.1:9",
+                            "ALL_PROXY": "http://127.0.0.1:9",
+                            "NO_PROXY": "",
+                            "no_proxy": "",
+                        },
+                        clear=False,
+                    ),
+                    patch.object(
+                        daemon_manager_mod.urllib.request,
+                        "urlopen",
+                        side_effect=AssertionError("proxy-aware urlopen must not be used"),
+                    ),
+                ):
+                    self.assertEqual(
+                        daemon_manager_mod._probe_json_url(url),
+                        {"service": "memos-local-plugin", "agent": "hermes"},
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_connection_refused_codes_are_free(self) -> None:
+        for errno in (61, 111, 10061):
+            with (
+                self.subTest(errno=errno),
+                patch.object(
+                    daemon_manager_mod._LOOPBACK_OPENER,
+                    "open",
+                    side_effect=urllib.error.URLError(OSError(errno, "refused")),
+                ),
+            ):
+                self.assertEqual(
+                    daemon_manager_mod._probe_json_url("http://127.0.0.1:18800/test"),
+                    "free",
+                )
+
+    def test_http_error_means_the_port_is_occupied(self) -> None:
+        error = urllib.error.HTTPError(
+            "http://127.0.0.1:18800/test",
+            401,
+            "Unauthorized",
+            {},
+            None,
+        )
+        try:
+            with patch.object(
+                daemon_manager_mod._LOOPBACK_OPENER,
+                "open",
+                side_effect=error,
+            ):
+                self.assertEqual(
+                    daemon_manager_mod._probe_json_url("http://127.0.0.1:18800/test"),
+                    "occupied",
+                )
+        finally:
+            error.close()
+
+    def test_timeout_is_unknown(self) -> None:
+        with patch.object(
+            daemon_manager_mod._LOOPBACK_OPENER,
+            "open",
+            side_effect=TimeoutError("timed out"),
+        ):
+            self.assertEqual(
+                daemon_manager_mod._probe_json_url("http://127.0.0.1:18800/test"),
+                "unknown",
+            )
+
+    def test_viewer_probe_exposes_all_four_states(self) -> None:
+        cases = (
+            ({"service": "memos-local-plugin", "agent": "hermes"}, None, "running_memos"),
+            ({"agent": "hermes", "version": "2.0.12"}, None, "running_memos"),
+            ({"service": "some-other-service"}, None, "occupied"),
+            ("free", None, "free"),
+            ("unknown", "free", "free"),
+            ("unknown", "occupied", "occupied"),
+            ("unknown", "unknown", "unknown"),
+        )
+        for health_result, bind_result, expected in cases:
+            with (
+                self.subTest(health_result=health_result, bind_result=bind_result),
+                patch.object(
+                    daemon_manager_mod,
+                    "_probe_json_url",
+                    return_value=health_result,
+                ),
+                patch.object(
+                    daemon_manager_mod,
+                    "_probe_loopback_port",
+                    return_value=bind_result,
+                ) as bind_probe,
+            ):
+                self.assertEqual(daemon_manager_mod._probe_viewer(), expected)
+                if health_result == "unknown":
+                    bind_probe.assert_called_once_with(daemon_manager_mod.HERMES_VIEWER_PORT)
+                else:
+                    bind_probe.assert_not_called()
+
+    def test_bind_probe_confirms_a_free_loopback_port(self) -> None:
+        with tempfile.TemporaryDirectory():
+            self.assertEqual(daemon_manager_mod._probe_loopback_port(0), "free")
+
+    def test_bind_probe_confirms_an_occupied_loopback_port(self) -> None:
+        with daemon_manager_mod.socket.socket(
+            daemon_manager_mod.socket.AF_INET,
+            daemon_manager_mod.socket.SOCK_STREAM,
+        ) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            self.assertEqual(daemon_manager_mod._probe_loopback_port(port), "occupied")
+
+    def test_bind_probe_keeps_unexpected_socket_errors_unknown(self) -> None:
+        with patch.object(
+            daemon_manager_mod.socket,
+            "socket",
+            side_effect=OSError(13, "permission denied"),
+        ):
+            self.assertEqual(daemon_manager_mod._probe_loopback_port(18800), "unknown")
 
 
 class BridgeOkCacheTests(unittest.TestCase):

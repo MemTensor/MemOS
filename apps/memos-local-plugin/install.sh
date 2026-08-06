@@ -310,7 +310,7 @@ deploy_tarball_to_prefix() {
   local prefix="$1"
   step "Deploying to ${prefix}"
   local saved_dir=""
-  local preserve=(node_modules data logs skills daemon config.yaml .auth.json .memos-node-bin)
+  local preserve=(node_modules data logs skills daemon .migrations config.yaml .auth.json .memos-node-bin)
   if [[ -d "${prefix}" ]]; then
     saved_dir="$(mktemp -d)"
     local item

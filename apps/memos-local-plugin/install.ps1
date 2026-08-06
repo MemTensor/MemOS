@@ -35,6 +35,31 @@ function Write-Success($msg) { Write-Host "  [OK] $msg" -ForegroundColor Green }
 function Write-Warn($msg)    { Write-Host "  [WARN] $msg" -ForegroundColor Yellow }
 function Stop-Die($msg)      { Write-Host "  [ERROR] $msg" -ForegroundColor Red; exit 1 }
 
+function Invoke-NativeChecked {
+    param(
+        [string]$Command,
+        [string[]]$Arguments,
+        [string]$FailureMessage
+    )
+    & $Command @Arguments | Out-Host
+    $ExitCode = $LASTEXITCODE
+    if ($ExitCode -ne 0) {
+        throw "$FailureMessage (exit code $ExitCode)"
+    }
+}
+
+function Test-BetterSqlite3 {
+    param([string]$NodeBin, [string]$Prefix)
+    $SmokeScript = "const Database=require('better-sqlite3');const db=new Database(':memory:');db.exec('SELECT 1');db.close();"
+    Push-Location $Prefix
+    try {
+        & $NodeBin -e $SmokeScript *> $null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        Pop-Location
+    }
+}
+
 $PluginId = "memos-local-plugin"
 $NpmPackage = "@memtensor/memos-local-plugin"
 $OpenClawPort = 18799
@@ -118,7 +143,12 @@ if ($Version) {
 if (-not $BuiltTarball) {
     Push-Location $StageDir
     try {
-        cmd /c "npm pack $SourceSpec --loglevel=error"
+        $NpmPackCommand = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
+        if (-not $NpmPackCommand) { $NpmPackCommand = (Get-Command "npm" -ErrorAction SilentlyContinue).Source }
+        if (-not $NpmPackCommand) { throw "npm executable not found" }
+        Invoke-NativeChecked -Command $NpmPackCommand -Arguments @(
+            "pack", $SourceSpec, "--loglevel=error"
+        ) -FailureMessage "npm pack failed"
         $BuiltTarball = (Get-ChildItem -Filter *.tgz | Select-Object -First 1).FullName
     } finally {
         Pop-Location
@@ -128,63 +158,170 @@ if (-not $BuiltTarball) {
 }
 
 function Deploy-Tarball {
-    param([string]$Prefix)
+    param(
+        [string]$Prefix,
+        [scriptblock]$BeforeSwap
+    )
     Write-Info "Deploying to $Prefix"
-    
-    $Preserve = @("node_modules", "data", "logs", "skills", "daemon", "config.yaml", ".auth.json")
-    
-    if (Test-Path $Prefix) {
-        $SavedDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString())) -Force
-        foreach ($Item in $Preserve) {
-            $Src = Join-Path $Prefix $Item
-            if (Test-Path $Src) {
-                $Dst = Join-Path $SavedDir $Item
-                New-Item -ItemType Directory -Force -Path (Split-Path $Dst -Parent) -ErrorAction SilentlyContinue | Out-Null
-                Move-Item -Path $Src -Destination $Dst -Force
-            }
-        }
-        Remove-Item -Recurse -Force $Prefix -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-        
-        tar xzf $BuiltTarball -C $Prefix --strip-components=1
-        
-        foreach ($Item in $Preserve) {
-            $SavedItem = Join-Path $SavedDir $Item
-            if (Test-Path $SavedItem) {
-                $Dst = Join-Path $Prefix $Item
-                if (Test-Path $Dst) { Remove-Item -Recurse -Force $Dst }
-                Move-Item -Path $SavedItem -Destination $Dst -Force
-            }
-        }
-        Remove-Item -Recurse -Force $SavedDir -ErrorAction SilentlyContinue
-    } else {
-        New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-        tar xzf $BuiltTarball -C $Prefix --strip-components=1
-    }
-    
-    if (-not (Test-Path (Join-Path $Prefix "package.json"))) { Stop-Die "Extraction failed" }
-    Write-Success "Package extracted"
-    
-    Write-Info "Installing npm dependencies"
-    Push-Location $Prefix
+    $Preserve = @("data", "logs", "skills", "daemon", ".migrations", "config.yaml", ".auth.json", ".memos-runtime-home")
+    $StagedPrefix = Prepare-StagedPackage
+    $BackupDir = "$Prefix.memos-backup-$([guid]::NewGuid().ToString('N'))"
+    $HadExisting = Test-Path $Prefix
+    $LiveMovedToBackup = $false
+    $StagedMovedLive = $false
+    $DeploySucceeded = $false
+
     try {
-        $env:MEMOS_SKIP_SETUP = "1"
-        cmd /c "npm install --omit=dev --no-fund --no-audit --loglevel=error"
-        
-        if (Test-Path "node_modules\better-sqlite3") {
-            Write-Info "Rebuilding better-sqlite3..."
-            cmd /c "npm rebuild better-sqlite3 --loglevel=error"
+        # Staging can take minutes. Re-check immediately before swapping the
+        # live tree so an active Hermes session cannot re-lock native modules.
+        if ($BeforeSwap) {
+            & $BeforeSwap
         }
+        Stop-WindowsPluginBridges -Prefix $Prefix
+        if ($HadExisting) {
+            Move-Item -Path $Prefix -Destination $BackupDir -Force
+            $LiveMovedToBackup = $true
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path $Prefix -Parent) | Out-Null
+        Move-Item -Path $StagedPrefix -Destination $Prefix -Force
+        $StagedMovedLive = $true
+
+        if ($HadExisting) {
+            foreach ($Item in $Preserve) {
+                $SavedItem = Join-Path $BackupDir $Item
+                if (Test-Path $SavedItem) {
+                    $Dst = Join-Path $Prefix $Item
+                    if (Test-Path $Dst) { Remove-Item -Recurse -Force $Dst }
+                    Copy-Item -Path $SavedItem -Destination $Dst -Recurse -Force
+                }
+            }
+        }
+
+        if (-not (Test-Path (Join-Path $Prefix "package.json"))) {
+            throw "Extraction failed: package.json missing after staged deploy"
+        }
+        Write-Success "Package extracted"
+        Write-Success "Dependencies ready"
+        $DeploySucceeded = $true
+    } catch {
+        $DeployError = $_
+        if ($StagedMovedLive -and (Test-Path $Prefix)) {
+            Remove-Item -Recurse -Force $Prefix -ErrorAction SilentlyContinue
+        }
+        if ($LiveMovedToBackup -and (Test-Path $BackupDir)) {
+            Move-Item -Path $BackupDir -Destination $Prefix -Force
+        }
+        if (Test-Path $StagedPrefix) {
+            Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
+        }
+        throw $DeployError
     } finally {
-        Pop-Location
+        if ($DeploySucceeded -and (Test-Path $BackupDir)) {
+            Remove-Item -Recurse -Force $BackupDir -ErrorAction SilentlyContinue
+        }
     }
-    
+}
+
+function Prepare-StagedPackage {
+    $StagedPrefix = Join-Path $env:TEMP ("memos-package-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $StagedPrefix | Out-Null
     $SystemNode = Join-Path $env:ProgramFiles "nodejs\node.exe"
-    $NodeForBridge = if (Test-Path $SystemNode) { $SystemNode } else { (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source }
-    if ($NodeForBridge) {
-        Set-Content -Path (Join-Path $Prefix ".memos-node-bin") -Value $NodeForBridge -Encoding UTF8
+    $NodeForBridge = if (Test-Path $SystemNode) {
+        $SystemNode
+    } else {
+        (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source
     }
-    Write-Success "Dependencies ready"
+    if (-not $NodeForBridge) {
+        Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
+        throw "Node.js executable not found for staged install"
+    }
+    $NpmCommand = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
+    if (-not $NpmCommand) { $NpmCommand = (Get-Command "npm" -ErrorAction SilentlyContinue).Source }
+    if (-not $NpmCommand) {
+        Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
+        throw "npm executable not found for staged install"
+    }
+
+    try {
+        Invoke-NativeChecked -Command "tar" -Arguments @(
+            "xzf", $BuiltTarball, "-C", $StagedPrefix, "--strip-components=1"
+        ) -FailureMessage "Package extraction failed"
+        if (-not (Test-Path (Join-Path $StagedPrefix "package.json"))) {
+            throw "Package extraction failed: package.json missing"
+        }
+
+        Write-Info "Installing npm dependencies in staging"
+        $PreviousSkipSetup = $env:MEMOS_SKIP_SETUP
+        Push-Location $StagedPrefix
+        try {
+            $env:MEMOS_SKIP_SETUP = "1"
+            Invoke-NativeChecked -Command $NpmCommand -Arguments @(
+                "install", "--omit=dev", "--no-fund", "--no-audit", "--loglevel=error"
+            ) -FailureMessage "npm install failed"
+        } finally {
+            if ($null -eq $PreviousSkipSetup) {
+                Remove-Item Env:MEMOS_SKIP_SETUP -ErrorAction SilentlyContinue
+            } else {
+                $env:MEMOS_SKIP_SETUP = $PreviousSkipSetup
+            }
+            Pop-Location
+        }
+
+        if (-not (Test-BetterSqlite3 -NodeBin $NodeForBridge -Prefix $StagedPrefix)) {
+            Write-Info "Rebuilding better-sqlite3 in staging..."
+            Push-Location $StagedPrefix
+            try {
+                Invoke-NativeChecked -Command $NpmCommand -Arguments @(
+                    "rebuild", "better-sqlite3", "--loglevel=error"
+                ) -FailureMessage "better-sqlite3 rebuild failed"
+            } finally {
+                Pop-Location
+            }
+            if (-not (Test-BetterSqlite3 -NodeBin $NodeForBridge -Prefix $StagedPrefix)) {
+                throw "better-sqlite3 is not loadable after rebuild"
+            }
+        }
+
+        Set-Content -Path (Join-Path $StagedPrefix ".memos-node-bin") -Value $NodeForBridge -Encoding UTF8
+        return $StagedPrefix
+    } catch {
+        Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+function Stop-WindowsPluginBridges {
+    param([string]$Prefix)
+    $ResolvedPrefix = [IO.Path]::GetFullPath($Prefix)
+    $BridgePattern = 'bridge\.(cts|cjs|mts|mjs)'
+    $Deadline = [DateTime]::UtcNow.AddSeconds(15)
+    $QuietSince = $null
+
+    do {
+        $BridgeProcesses = @(
+            Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.CommandLine -and
+                    $_.CommandLine.IndexOf($ResolvedPrefix, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                    $_.CommandLine -match $BridgePattern
+                }
+        )
+        foreach ($Process in $BridgeProcesses) {
+            Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        if ($BridgeProcesses.Count -eq 0) {
+            if ($null -eq $QuietSince) {
+                $QuietSince = [DateTime]::UtcNow
+            } elseif (([DateTime]::UtcNow - $QuietSince).TotalSeconds -ge 1) {
+                return
+            }
+        } else {
+            $QuietSince = $null
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw "MemOS bridge processes are still running. Close Hermes completely and run the installer again."
 }
 
 function Ensure-RuntimeHome {
@@ -209,6 +346,73 @@ function Ensure-RuntimeHome {
     } else {
         Write-Success "config.yaml exists — kept as-is"
     }
+}
+
+function Test-HermesRuntimeData {
+    param([string]$HomeDir)
+    if (Test-Path (Join-Path $HomeDir "config.yaml") -PathType Leaf) { return $true }
+    if (Test-Path (Join-Path $HomeDir ".auth.json") -PathType Leaf) { return $true }
+    $SkillsDir = Join-Path $HomeDir "skills"
+    if (Test-Path $SkillsDir -PathType Container) {
+        return $null -ne (Get-ChildItem -Path $SkillsDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
+    }
+    return $false
+}
+
+function Resolve-HermesRuntimeHome {
+    param([string]$InstallRoot)
+
+    if ($env:MEMOS_HOME -and $env:MEMOS_HOME.Trim()) {
+        return [PSCustomObject]@{ Path = [IO.Path]::GetFullPath($env:MEMOS_HOME); Source = "environment"; Persist = $true }
+    }
+    if ($env:MEMOS_CONFIG_FILE -and $env:MEMOS_CONFIG_FILE.Trim()) {
+        $ConfigParent = Split-Path -Parent ([IO.Path]::GetFullPath($env:MEMOS_CONFIG_FILE))
+        return [PSCustomObject]@{ Path = $ConfigParent; Source = "config-environment"; Persist = $true }
+    }
+
+    $MarkerFile = Join-Path $InstallRoot ".memos-runtime-home"
+    if (Test-Path $MarkerFile -PathType Leaf) {
+        try {
+            $Marker = Get-Content -Path $MarkerFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($Marker.version -eq 1 -and $Marker.path -and $Marker.path.Trim()) {
+                return [PSCustomObject]@{ Path = [IO.Path]::GetFullPath($Marker.path); Source = "marker"; Persist = $false }
+            }
+        } catch {
+            Write-Warn "Ignoring invalid runtime-home marker: $MarkerFile"
+        }
+    }
+
+    $LegacyHome = Join-Path $env:USERPROFILE ".hermes\memos-plugin"
+    $LegacyDb = Join-Path $LegacyHome "data\memos.db"
+    $CanonicalDb = Join-Path $InstallRoot "data\memos.db"
+    $HasLegacyDb = Test-Path $LegacyDb -PathType Leaf
+    $HasCanonicalDb = Test-Path $CanonicalDb -PathType Leaf
+    if ($HasLegacyDb -and $HasCanonicalDb) {
+        Stop-Die "both Windows Hermes runtime homes contain a database. Set MEMOS_HOME to '$LegacyHome' or '$InstallRoot', then run the installer again."
+    }
+
+    if ($HasLegacyDb) {
+        return [PSCustomObject]@{ Path = $LegacyHome; Source = "legacy-database"; Persist = $true }
+    }
+    if ($HasCanonicalDb) {
+        return [PSCustomObject]@{ Path = $InstallRoot; Source = "canonical-database"; Persist = $true }
+    }
+    if (Test-HermesRuntimeData -HomeDir $LegacyHome) {
+        return [PSCustomObject]@{ Path = $LegacyHome; Source = "legacy-data"; Persist = $true }
+    }
+    return [PSCustomObject]@{ Path = $InstallRoot; Source = "new-install"; Persist = $true }
+}
+
+function Write-RuntimeHomeMarker {
+    param([string]$InstallRoot, [string]$RuntimeHome, [string]$Source)
+    New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+    $MarkerFile = Join-Path $InstallRoot ".memos-runtime-home"
+    $TempFile = "$MarkerFile.$PID.tmp"
+    $Payload = [ordered]@{ version = 1; path = [IO.Path]::GetFullPath($RuntimeHome); source = $Source }
+    $Json = ($Payload | ConvertTo-Json) + "`n"
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($TempFile, $Json, $Utf8NoBom)
+    Move-Item -Path $TempFile -Destination $MarkerFile -Force
 }
 
 function Wait-ForViewer {
@@ -402,14 +606,19 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 function Install-Hermes {
     Write-Host "`n=== Hermes Install ===" -ForegroundColor Cyan
     $Prefix = Join-Path $env:LOCALAPPDATA "hermes\memos-plugin"
-    $HomeDir = $Prefix
+    $RuntimeSelection = Resolve-HermesRuntimeHome -InstallRoot $Prefix
+    $HomeDir = $RuntimeSelection.Path
     $ConfigFile = Join-Path $env:LOCALAPPDATA "hermes\config.yaml"
     $AdapterDir = Join-Path $Prefix "adapters\hermes"
     
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match "bridge\.(cts|cjs)" } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Get-Process -Name "hermes" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    
-    Deploy-Tarball -Prefix $Prefix
+    Deploy-Tarball -Prefix $Prefix -BeforeSwap {
+        Get-Process -Name "hermes" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    if ($RuntimeSelection.Persist) {
+        Write-RuntimeHomeMarker -InstallRoot $Prefix -RuntimeHome $HomeDir -Source $RuntimeSelection.Source
+    }
+    Write-Success "Runtime home: $HomeDir ($($RuntimeSelection.Source))"
     Ensure-RuntimeHome -Agent "hermes" -HomeDir $HomeDir -Prefix $Prefix
     
     $BridgeEntry = Join-Path $Prefix "dist\bridge.cjs"
@@ -509,9 +718,11 @@ memory:
         $DaemonLog = Join-Path $Prefix "logs\daemon-start.log"
         $DaemonLogErr = Join-Path $Prefix "logs\daemon-start-err.log"
         if ($BridgeEntry.EndsWith(".cjs")) {
-            Start-Process -FilePath $NodeBin -ArgumentList "$BridgeEntry --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
+            $DaemonArgs = "`"$BridgeEntry`" --agent=hermes --daemon --home=`"$HomeDir`""
+            Start-Process -FilePath $NodeBin -ArgumentList $DaemonArgs -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
         } else {
-            Start-Process -FilePath $NodeBin -ArgumentList "$TsxBin $BridgeEntry --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
+            $DaemonArgs = "`"$TsxBin`" `"$BridgeEntry`" --agent=hermes --daemon --home=`"$HomeDir`""
+            Start-Process -FilePath $NodeBin -ArgumentList $DaemonArgs -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
         }
         
         if (Wait-ForViewer -Port $HermesPort -Timeout 120) {

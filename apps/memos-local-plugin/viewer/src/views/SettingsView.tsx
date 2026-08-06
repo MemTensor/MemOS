@@ -14,11 +14,18 @@
  */
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
+import { classifyModelTestFailure } from "../model-test-error";
 import { t, locale, setLocale } from "../stores/i18n";
 import { theme, setTheme } from "../stores/theme";
 import { Icon } from "../components/Icon";
 import { HubAdminPanel } from "../components/HubAdminPanel";
-import { triggerRestart, triggerCleared } from "../stores/restart";
+import {
+  triggerRestart,
+  triggerCleared,
+  beginClearData,
+  markClearResultUnknown,
+  type ClearDataResponse,
+} from "../stores/restart";
 
 type Tab = "models" | "hub" | "general";
 
@@ -396,7 +403,18 @@ function ModelCard({
       });
       setResult(r);
     } catch (err) {
-      setResult({ ok: false, error: (err as Error).message });
+      const failureKind = await classifyModelTestFailure(
+        err,
+        () => api.get(`/api/v1/health`),
+      );
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setResult({
+        ok: false,
+        error:
+          failureKind === "viewer_offline"
+            ? t("settings.test.viewerOffline")
+            : `${t("settings.test.modelFailed")}: ${errorMessage}`,
+      });
     } finally {
       setTesting(false);
     }
@@ -1104,18 +1122,20 @@ function DangerZoneSection() {
 
   const clearAllData = async () => {
     setClearing(true);
+    beginClearData();
     try {
       // The server wipes SQLite + cleanly tears down its core; the
       // next agent boot will recreate an empty DB. We don't try to
       // restart the agent process from here — the toast tells the
       // user to do it manually (see `stores/restart.ts` for why).
-      await api.post("/api/v1/admin/clear-data", {});
+      const response = await api.post<ClearDataResponse>("/api/v1/admin/clear-data", {});
       setConfirming(false);
       setClearing(false);
-      await triggerCleared();
+      await triggerCleared(response);
     } catch {
       setClearing(false);
       setConfirming(false);
+      markClearResultUnknown();
     }
   };
 
