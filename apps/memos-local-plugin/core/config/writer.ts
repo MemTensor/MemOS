@@ -55,7 +55,8 @@ export async function patchConfig(
 
   // Parse (or seed) the YAML document.
   const doc = existingText ? parseDoc(existingText, home.configFile) : parseDoc(stringifyYaml(DEFAULT_CONFIG), "<defaults>");
-  applyPatch(doc, patch);
+  const sanitized = sanitizePatch(patch);
+  applyPatch(doc, sanitized);
   removeUnsupportedUserConfig(doc);
 
   // Validate against schema using the merged JS view.
@@ -122,6 +123,101 @@ function removeUnsupportedUserConfig(doc: ReturnType<typeof parseDoc>): void {
     doc.deleteIn(["embedding", "dimensions"]);
   } catch {
     /* best-effort cleanup */
+  }
+}
+
+/**
+ * Adapter-owned config keys the client is never allowed to patch via
+ * `PATCH /api/v1/config`. See #2212: the Hermes adapter hardcodes the
+ * viewer port to :18800 via `bridge.mts::AGENT_DEFAULT_PORTS`, but the
+ * shared UI defaults surface :18799 (the OpenClaw port) in the resolved
+ * config the viewer reads back. If the client mirrors that value into a
+ * subsequent PATCH — either because the settings form rehydrated a
+ * "dirty" viewer block or because a third-party tool round-tripped GET
+ * into PATCH — we used to write 18799 to disk verbatim, silently
+ * breaking the bridge until the user hand-edited config.yaml.
+ *
+ * Sanitising once here means every PATCH path (routes, direct calls,
+ * hub-triggered rewrites) inherits the guard.
+ */
+const ADAPTER_OWNED_PATCH_PATHS: readonly string[] = Object.freeze([
+  "viewer.port",
+]);
+
+/**
+ * Non-empty whitespace-only patches on these fields are silently dropped.
+ * An exact empty string remains meaningful: it clears a custom endpoint
+ * and restores the provider's default base URL.
+ */
+const ENDPOINT_PATCH_PATHS: readonly string[] = Object.freeze([
+  "embedding.endpoint",
+  "llm.endpoint",
+  "l3Llm.endpoint",
+  "skillEvolver.endpoint",
+]);
+
+/**
+ * Strip adapter-owned keys and whitespace-only endpoints from an incoming
+ * patch before it reaches the YAML writer. Never mutates the caller's
+ * object. Prunes now-empty parent maps so we don't leave dangling
+ * `viewer: {}` in the patch (which would still be a no-op but is
+ * noisier in debug logs).
+ */
+function sanitizePatch(patch: Record<string, unknown>): Record<string, unknown> {
+  // Use `structuredClone` (Node 17+) rather than a JSON round-trip because
+  // the latter silently drops `undefined` values — a caller may legitimately
+  // pass `{ llm: { endpoint: undefined } }` and expect `applyPatch` to see
+  // that leaf (`doc.setIn` handles the write). JSON.stringify would delete
+  // the key before it ever reached the writer, silently suppressing the
+  // intended patch. `structuredClone` preserves the full object graph.
+  const cloned = structuredClone(patch) as Record<string, unknown>;
+  for (const dotted of ADAPTER_OWNED_PATCH_PATHS) {
+    deleteDottedPath(cloned, dotted);
+  }
+  for (const dotted of ENDPOINT_PATCH_PATHS) {
+    const value = readDottedPath(cloned, dotted);
+    // Preserve "" so users can reset a custom endpoint. Reject only
+    // non-empty strings that contain no usable characters.
+    if (typeof value === "string" && value.length > 0 && value.trim() === "") {
+      deleteDottedPath(cloned, dotted);
+    }
+  }
+  return cloned;
+}
+
+function readDottedPath(obj: Record<string, unknown>, dotted: string): unknown {
+  const keys = dotted.split(".");
+  let cursor: unknown = obj;
+  for (const key of keys) {
+    if (!isPlainObject(cursor)) return undefined;
+    cursor = (cursor as Record<string, unknown>)[key];
+  }
+  return cursor;
+}
+
+function deleteDottedPath(obj: Record<string, unknown>, dotted: string): void {
+  const keys = dotted.split(".");
+  const stack: Array<{ parent: Record<string, unknown>; key: string }> = [];
+  let cursor: Record<string, unknown> = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i]!;
+    const next = cursor[key];
+    if (!isPlainObject(next)) return;
+    stack.push({ parent: cursor, key });
+    cursor = next;
+  }
+  const leaf = keys[keys.length - 1]!;
+  if (!(leaf in cursor)) return;
+  delete cursor[leaf];
+  // Prune now-empty parent maps back up the stack.
+  for (let i = stack.length - 1; i >= 0; i--) {
+    const frame = stack[i]!;
+    const target = frame.parent[frame.key] as Record<string, unknown>;
+    if (Object.keys(target).length === 0) {
+      delete frame.parent[frame.key];
+    } else {
+      break;
+    }
   }
 }
 

@@ -53,7 +53,9 @@ llm:
   it("validates after merge — invalid patches are rejected", async () => {
     const ctx = await makeTmpHome({ agent: "openclaw" });
     cleanup = ctx.cleanup;
-    await expect(patchConfig(ctx.home, { viewer: { port: -3 } as Record<string, unknown> }))
+    // `viewer.port` is adapter-owned and silently stripped from patches
+    // (see #2212), so pick a still-validated field for the schema check.
+    await expect(patchConfig(ctx.home, { bridge: { port: -3 } as Record<string, unknown> }))
       .rejects.toThrow(/schema validation/);
   });
 
@@ -117,5 +119,159 @@ skillEvolver: ""
     const reloaded = await loadConfig(ctx.home);
     expect(reloaded.config.skillEvolver.provider).toBe("gemini");
     expect(reloaded.config.skillEvolver.model).toBe("gemini-2.5-flash");
+  });
+
+  /**
+   * Regression: #2212. On Hermes the viewer daemon is hardcoded to :18800
+   * (see bridge.mts::AGENT_DEFAULT_PORTS), but the shared UI default in
+   * defaults.ts is :18799 (the OpenClaw port). A PATCH body that carries
+   * `viewer.port: 18799` — from a viewer form that rehydrated the
+   * cross-agent default, or from any third-party client that mirrors GET
+   * back into PATCH — used to be written to disk verbatim, silently
+   * corrupting the Hermes config so the bridge could not find the viewer
+   * on next start. The writer must protect the fixed `viewer.port` while
+   * leaving other viewer settings patchable.
+   */
+  it("ignores viewer.port in the incoming patch to protect adapter ownership", async () => {
+    const original = `viewer:
+  port: 18800
+  bindHost: 127.0.0.1
+llm:
+  provider: openai_compatible
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      viewer: { port: 18799 },
+      llm: { temperature: 0.4 },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    // viewer.port must survive untouched — the adapter owns it.
+    expect(reloaded.config.viewer.port).toBe(18800);
+    // Sibling patches still land normally.
+    expect(reloaded.config.llm.temperature).toBe(0.4);
+    // On-disk YAML must not contain the rejected 18799 value under viewer.
+    const text = await fs.readFile(ctx.home.configFile, "utf8");
+    expect(text).not.toMatch(/port:\s*18799/);
+    expect(text).toMatch(/port:\s*18800/);
+  });
+
+  it("allows patching viewer.bindHost because the server honors it", async () => {
+    const original = `viewer:
+  port: 18800
+  bindHost: 127.0.0.1
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      viewer: { bindHost: "0.0.0.0" },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.viewer.bindHost).toBe("0.0.0.0");
+    const text = await fs.readFile(ctx.home.configFile, "utf8");
+    expect(text).toMatch(/bindHost:\s*0\.0\.0\.0/);
+  });
+
+  /**
+   * viewer.openOnFirstTurn is an actual user-facing preference (the UI
+   * exposes it via the settings page), so it must remain patchable even
+   * though it sits under the same `viewer:` map as the adapter-owned port.
+   */
+  it("still allows patching non-adapter viewer fields (openOnFirstTurn)", async () => {
+    const original = `viewer:
+  port: 18800
+  bindHost: 127.0.0.1
+  openOnFirstTurn: false
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      viewer: { openOnFirstTurn: true, port: 18799 },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.viewer.openOnFirstTurn).toBe(true);
+    expect(reloaded.config.viewer.port).toBe(18800);
+  });
+
+  /** Empty means "use the provider default" and must remain patchable. */
+  it("allows clearing embedding.endpoint to restore the provider default", async () => {
+    const original = `embedding:
+  provider: openai_compatible
+  endpoint: "https://api.openai.com/v1"
+  model: text-embedding-3-small
+  apiKey: "sk-existing"
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      embedding: { endpoint: "" },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.embedding.endpoint).toBe("");
+    const text = await fs.readFile(ctx.home.configFile, "utf8");
+    expect(text).toMatch(/endpoint:\s*""/);
+  });
+
+  /**
+   * A non-empty whitespace-only string is never a usable endpoint. Ignore
+   * that accidental form value without conflating it with the valid empty
+   * reset above.
+   */
+  it("does not overwrite endpoint fields with whitespace-only patches", async () => {
+    const original = `embedding:
+  provider: openai_compatible
+  endpoint: "https://api.openai.com/v1"
+llm:
+  provider: openai_compatible
+  endpoint: "https://api.openai.com/v1"
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml: original });
+    cleanup = ctx.cleanup;
+
+    await patchConfig(ctx.home, {
+      embedding: { endpoint: "   " },
+      llm: { endpoint: "\t\n" },
+    });
+
+    const reloaded = await loadConfig(ctx.home);
+    expect(reloaded.config.embedding.endpoint).toBe("https://api.openai.com/v1");
+    expect(reloaded.config.llm.endpoint).toBe("https://api.openai.com/v1");
+  });
+
+  /**
+   * Regression: the sanitiser used to clone the patch via
+   * `JSON.parse(JSON.stringify(...))`, which silently deletes keys whose
+   * value is `undefined`. A caller that legitimately passes
+   * `{ llm: { temperature: undefined } }` (e.g. a form that meant to unset
+   * the override, or a mis-serialised client payload) would have that leaf
+   * disappear before `applyPatch` could act on it, meaning the writer
+   * would silently no-op instead of surfacing the invalid state. Switching
+   * to `structuredClone` preserves the full object graph so the schema
+   * validator sees the invalid leaf and rejects the patch, giving the
+   * caller a clear error instead of silent success.
+   */
+  it("preserves undefined leaves in the patch (structured-clone semantics)", async () => {
+    const ctx = await makeTmpHome({ agent: "openclaw" });
+    cleanup = ctx.cleanup;
+
+    // Old JSON-clone behaviour: `undefined` dropped, patch becomes
+    // `{ llm: {} }`, applyPatch no-ops, schema passes → test would pass.
+    // New structuredClone behaviour: `undefined` survives, applyPatch
+    // calls `doc.setIn(['llm','temperature'], undefined)` which writes a
+    // null scalar, schema then rejects "Expected number" → this assertion
+    // captures the shift.
+    await expect(
+      patchConfig(ctx.home, {
+        llm: { temperature: undefined } as Record<string, unknown>,
+      }),
+    ).rejects.toThrow(/schema validation/);
   });
 });
