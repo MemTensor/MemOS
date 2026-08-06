@@ -1,34 +1,33 @@
-from memos.chunkers.base import URLProtectionMixin
+from .base import BaseChunker
 
 
-class SimpleTextSplitter(URLProtectionMixin):
-    """Simple text splitter wrapper.
-
-    Fallback used by :mod:`memos.mem_reader.read_multi_modal.utils` when the
-    optional ``langchain_text_splitters``-backed chunkers (``CharacterTextChunker``
-    / ``MarkdownChunker``) cannot be constructed at import time.
-
-    Inherits URL protect/restore helpers from :class:`URLProtectionMixin`
-    (see issue #2115: without the mixin, ``chunk()`` raised ``AttributeError``
-    on every call that reached the fallback path).
-    """
+class SimpleTextSplitter(BaseChunker):
+    """Simple text splitter wrapper."""
 
     def __init__(self, chunk_size: int, chunk_overlap: int):
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than 0")
+        if chunk_overlap < 0:
+            raise ValueError("chunk_overlap must be non-negative")
+        if chunk_overlap >= chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
+
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
     def chunk(self, text: str, **kwargs) -> list[str]:
         return self._simple_split_text(text, self.chunk_size, self.chunk_overlap)
 
-    @staticmethod
-    def _placeholder_spans(protected_text: str, url_map: dict[str, str]) -> list[tuple[int, int]]:
+    @classmethod
+    def _placeholder_spans(
+        cls, protected_text: str, url_map: dict[str, str]
+    ) -> list[tuple[int, int]]:
         """Return the protected-text ranges occupied by URL placeholders."""
-        spans = []
-        for placeholder in url_map:
-            placeholder_start = protected_text.find(placeholder)
-            if placeholder_start >= 0:
-                spans.append((placeholder_start, placeholder_start + len(placeholder)))
-        return sorted(spans)
+        return [
+            (match.start(), match.end())
+            for match in cls._URL_PLACEHOLDER_PATTERN.finditer(protected_text)
+            if match.group(0) in url_map
+        ]
 
     @staticmethod
     def _align_end_to_placeholder(
