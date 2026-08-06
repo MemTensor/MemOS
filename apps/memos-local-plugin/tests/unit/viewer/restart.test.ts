@@ -13,7 +13,11 @@ const fakeWindow = {
 };
 
 import { health } from "../../../viewer/src/stores/health";
-import { triggerRestart } from "../../../viewer/src/stores/restart";
+import {
+  restartState,
+  triggerCleared,
+  triggerRestart,
+} from "../../../viewer/src/stores/restart";
 
 describe("viewer restart flow", () => {
   const originalFetch = globalThis.fetch;
@@ -22,6 +26,7 @@ describe("viewer restart flow", () => {
     vi.useFakeTimers();
     fakeWindow.location.href = "";
     health.value = { ok: true, agent: "hermes" };
+    restartState.value = { phase: "idle" };
   });
 
   afterEach(() => {
@@ -49,5 +54,50 @@ describe("viewer restart flow", () => {
 
     expect(healthChecks).toBe(2);
     expect(fakeWindow.location.href).toMatch(/^\/\?_t=\d+$/);
+  });
+
+  it("shows the manual restart state returned by Windows restart", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          restarting: false,
+          manualRestartRequired: true,
+          message: "Close and reopen Hermes.",
+        }),
+        { status: 200 },
+      ),
+    ) as typeof fetch;
+
+    await triggerRestart();
+
+    expect(restartState.value).toEqual({
+      phase: "manualRestartRequired",
+      message: "Close and reopen Hermes.",
+    });
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+    expect(fakeWindow.location.href).toBe("");
+  });
+
+  it("shows the manual restart state returned by Windows clear-data", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(null, { status: 200 }),
+    ) as typeof fetch;
+
+    const clearing = triggerCleared({
+      ok: true,
+      restarting: false,
+      manualRestartRequired: true,
+      message: "Restart Hermes manually.",
+    });
+    await vi.runAllTimersAsync();
+    await clearing;
+
+    expect(restartState.value).toEqual({
+      phase: "manualRestartRequired",
+      message: "Restart Hermes manually.",
+    });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(fakeWindow.location.href).toBe("");
   });
 });

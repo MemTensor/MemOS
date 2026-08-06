@@ -18,7 +18,11 @@ import { t, locale, setLocale } from "../stores/i18n";
 import { theme, setTheme } from "../stores/theme";
 import { Icon } from "../components/Icon";
 import { HubAdminPanel } from "../components/HubAdminPanel";
-import { triggerRestart, triggerCleared } from "../stores/restart";
+import {
+  triggerRestart,
+  triggerCleared,
+  type RestartResponse,
+} from "../stores/restart";
 
 type Tab = "models" | "hub" | "general";
 
@@ -1105,14 +1109,16 @@ function DangerZoneSection() {
   const clearAllData = async () => {
     setClearing(true);
     try {
-      // The server wipes SQLite + cleanly tears down its core; the
-      // next agent boot will recreate an empty DB. We don't try to
-      // restart the agent process from here — the toast tells the
-      // user to do it manually (see `stores/restart.ts` for why).
-      await api.post("/api/v1/admin/clear-data", {});
+      // The server wipes SQLite and tears down its core. Its response
+      // tells the restart store whether a supervisor will respawn the
+      // daemon or the user must restart Hermes manually.
+      const response = await api.post<RestartResponse>(
+        "/api/v1/admin/clear-data",
+        {},
+      );
       setConfirming(false);
       setClearing(false);
-      await triggerCleared();
+      await triggerCleared(response);
     } catch {
       setClearing(false);
       setConfirming(false);

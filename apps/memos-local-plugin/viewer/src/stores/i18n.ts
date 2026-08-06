@@ -184,6 +184,10 @@ const en = {
     "Try manually: openclaw gateway stop && openclaw gateway start",
   "restart.failedHint.hermes":
     "Try manually: stop the current Hermes session and rerun `hermes chat`",
+  "restart.manualRequired":
+    "Restart is unavailable on this platform. Close and reopen Hermes to apply changes.",
+  "restart.manualRequiredHint":
+    "The viewer daemon stayed running so your data is safe — you just need to restart Hermes yourself.",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -1079,6 +1083,10 @@ const zh: Record<TranslationKey, string> = {
     "请手动重启：openclaw gateway stop && openclaw gateway start",
   "restart.failedHint.hermes":
     "请手动重启：停止当前 Hermes 会话后重新执行 `hermes chat`",
+  "restart.manualRequired":
+    "当前平台不支持自动重启，请手动关闭并重新打开 Hermes 以应用变更。",
+  "restart.manualRequiredHint":
+    "查看器守护进程仍在运行，数据已安全保存，你只需要手动重启 Hermes 即可。",
   "common.never": "从未",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",

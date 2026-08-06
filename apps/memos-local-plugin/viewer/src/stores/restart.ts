@@ -16,11 +16,39 @@ export type RestartPhase =
   | "idle"
   | "restarting"
   | "waitingUp"
-  | "restartFailed";
+  | "restartFailed"
+  | "manualRestartRequired";
 
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
+
+/**
+ * Shape returned by the admin restart and clear-data endpoints.
+ *
+ * Matches `apps/memos-local-plugin/server/routes/admin.ts`. All fields
+ * beyond `ok` are optional — the Windows-portable path emits
+ * `manualRestartRequired: true` with a human `message`; the happy paths
+ * omit them.
+ */
+export interface RestartResponse {
+  ok: boolean;
+  restarting?: boolean;
+  manualRestartRequired?: boolean;
+  message?: string;
+  platform?: string;
+  killed?: boolean;
+  error?: string;
+}
+
+function applyManualRestart(response: RestartResponse | undefined): boolean {
+  if (response?.manualRestartRequired !== true) return false;
+  restartState.value = {
+    phase: "manualRestartRequired",
+    message: response.message,
+  };
+  return true;
+}
 
 function isOpenClaw(): boolean {
   return health.value?.agent === "openclaw";
@@ -82,12 +110,20 @@ async function quickPollUp(maxAttempts = 30): Promise<boolean> {
 export async function triggerRestart(): Promise<void> {
   restartState.value = { phase: "restarting" };
   if (!isOpenClaw()) {
+    let response: RestartResponse | undefined;
     try {
-      await api.post("/api/v1/admin/restart");
+      response = await api.post<RestartResponse>("/api/v1/admin/restart");
     } catch {
       restartState.value = { phase: "restartFailed" };
       throw new Error("restart failed");
     }
+
+    // Windows portable installs cannot self-restart (see
+    // apps/memos-local-plugin/server/routes/admin.ts). The server keeps
+    // the daemon alive and returns manualRestartRequired so we can tell
+    // the user to restart Hermes themselves instead of endlessly polling
+    // a server that never went down.
+    if (applyManualRestart(response)) return;
 
     const ok = await pollHealthUntilUp(60);
     if (ok) {
@@ -117,10 +153,12 @@ export async function triggerRestart(): Promise<void> {
 }
 
 /**
- * Data cleared. Both agents self-respawn via the daemon mechanism.
+ * Data cleared. Supervised installs self-respawn; Windows portable
+ * installs stay alive long enough to request a manual Hermes restart.
  */
-export async function triggerCleared(): Promise<void> {
+export async function triggerCleared(response?: RestartResponse): Promise<void> {
   restartState.value = { phase: "restarting" };
+  if (applyManualRestart(response)) return;
   if (isOpenClaw()) {
     const ok = await pollHealthUntilUp(60);
     if (ok) {

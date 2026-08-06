@@ -16,19 +16,27 @@ function FullScreenSpinner() {
   const s = restartState.value;
   const agentType = health.value?.agent === "openclaw" ? "openclaw" : "hermes";
 
-  const message =
-    s.phase === "restartFailed"
-      ? t("restart.failed")
-      : s.phase === "waitingUp"
-        ? t("restart.waitingUp")
-        : agentType === "hermes"
-          ? t("restart.restarting.hermes")
-          : t("restart.restarting");
+  const isTerminal = s.phase === "restartFailed" || s.phase === "manualRestartRequired";
 
-  const hint =
-    s.phase === "restartFailed"
-      ? t(`restart.failedHint.${agentType}` as any)
-      : t("restart.autoRefresh");
+  let message: string;
+  if (s.phase === "manualRestartRequired") {
+    message = s.message || t("restart.manualRequired");
+  } else if (s.phase === "restartFailed") {
+    message = t("restart.failed");
+  } else if (s.phase === "waitingUp") {
+    message = t("restart.waitingUp");
+  } else {
+    message = agentType === "hermes" ? t("restart.restarting.hermes") : t("restart.restarting");
+  }
+
+  let hint: string;
+  if (s.phase === "manualRestartRequired") {
+    hint = t("restart.manualRequiredHint");
+  } else if (s.phase === "restartFailed") {
+    hint = t(`restart.failedHint.${agentType}` as any);
+  } else {
+    hint = t("restart.autoRefresh");
+  }
 
   return (
     <div
@@ -47,7 +55,7 @@ function FullScreenSpinner() {
           gap:16px;max-width:400px;text-align:center;
         `}
       >
-        {s.phase !== "restartFailed" ? (
+        {!isTerminal ? (
           <div
             style={`
               width:36px;height:36px;
@@ -62,7 +70,7 @@ function FullScreenSpinner() {
         )}
         <div style="font-size:15px;font-weight:600">{message}</div>
         <div style="font-size:12px;opacity:.6">{hint}</div>
-        {s.phase === "restartFailed" && (
+        {isTerminal && (
           <button
             class="btn btn--ghost btn--sm"
             onClick={dismissRestartBanner}
