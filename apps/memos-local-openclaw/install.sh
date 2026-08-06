@@ -226,13 +226,16 @@ PACKAGE_SPEC="${PLUGIN_PACKAGE}@${PLUGIN_VERSION}"
 EXTENSION_DIR="${OPENCLAW_HOME}/extensions/${PLUGIN_ID}"
 OPENCLAW_CONFIG_PATH="${OPENCLAW_HOME}/openclaw.json"
 TMP_PACK_DIR=""
-GATEWAY_RECOVERY_ACTIVE="false"
-GATEWAY_FINAL_START_FAILED="false"
+GATEWAY_RECOVERY_STATE="inactive"
 
 cleanup_on_exit() {
-  if [[ "${GATEWAY_RECOVERY_ACTIVE:-false}" == "true" && "${GATEWAY_FINAL_START_FAILED:-false}" != "true" ]]; then
-    if ! "${OPENCLAW_BIN}" gateway start >/dev/null 2>&1; then
+  if [[ "${GATEWAY_RECOVERY_STATE:-inactive}" == "needs_recovery" ]]; then
+    local recovery_out=""
+    if ! recovery_out="$("${OPENCLAW_BIN}" gateway start 2>&1)"; then
       warn "Gateway recovery start failed; OpenClaw Gateway may still be stopped. Gateway 恢复启动失败，服务可能仍处于停止状态。"
+      if [[ -n "${recovery_out}" ]]; then
+        printf '%s\n' "${recovery_out}" | sed 's/^/       /' >&2
+      fi
     fi
   fi
   if [[ -n "${TMP_PACK_DIR:-}" ]]; then
@@ -333,7 +336,7 @@ NODE
 
 info "Stop OpenClaw Gateway, 停止 OpenClaw Gateway..."
 "${OPENCLAW_BIN}" gateway stop >/dev/null 2>&1 || true
-GATEWAY_RECOVERY_ACTIVE="true"
+GATEWAY_RECOVERY_STATE="needs_recovery"
 
 if command -v lsof >/dev/null 2>&1; then
   PIDS="$(lsof -i :"${PORT}" -t 2>/dev/null || true)"
@@ -423,11 +426,11 @@ info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
 info "Starting OpenClaw Gateway service, 正在启动 OpenClaw Gateway 服务..."
 if ! "${OPENCLAW_BIN}" gateway start 2>&1; then
   # Do not repeat the same failed final start from the EXIT cleanup.
-  GATEWAY_FINAL_START_FAILED="true"
+  GATEWAY_RECOVERY_STATE="final_failed"
   error "Failed to start OpenClaw Gateway, OpenClaw Gateway 启动失败"
   exit 1
 fi
-GATEWAY_RECOVERY_ACTIVE="false"
+GATEWAY_RECOVERY_STATE="inactive"
 success "OpenClaw Gateway started, OpenClaw Gateway 已启动"
 
 info "Starting Memory Viewer, 正在启动记忆面板..."

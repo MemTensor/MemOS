@@ -61,6 +61,9 @@ esac`,
     join(bin, "openclaw"),
     `printf '%s\\n' "$*" >> "\${FAKE_GATEWAY_LOG:?}"
 if [[ "$*" == "gateway start" ]]; then
+  if [[ "\${FAKE_GATEWAY_START_EXIT:-0}" != "0" ]]; then
+    printf 'fake gateway start failure\\n' >&2
+  fi
   exit "\${FAKE_GATEWAY_START_EXIT:-0}"
 fi
 exit 0`,
@@ -137,6 +140,7 @@ describe.skipIf(process.platform === "win32")("installer gateway recovery", () =
       expect(result.status).not.toBe(0);
       expect(gatewayCalls(harness)).toEqual(["gateway stop", "gateway start"]);
       expect(result.stderr).toContain("Gateway recovery start failed");
+      expect(result.stderr).toContain("fake gateway start failure");
       expectTempCleaned(harness);
     } finally {
       rmSync(harness.root, { recursive: true, force: true });
