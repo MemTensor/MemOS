@@ -166,6 +166,10 @@ describe.skipIf(process.platform === "win32")("installer gateway recovery", () =
       const calls = gatewayCalls(harness);
       expect(calls[0]).toBe("gateway stop");
       expect(calls.filter((call) => call === "gateway start")).toHaveLength(1);
+      expect(result.stdout).toContain("Starting OpenClaw Gateway service");
+      expect(result.stdout).not.toContain("OpenClaw Gateway started");
+      expect(result.stdout).not.toContain("Start OpenClaw Gateway service");
+      expect(result.stderr).toContain("Failed to start OpenClaw Gateway");
       expectTempCleaned(harness);
     } finally {
       rmSync(harness.root, { recursive: true, force: true });

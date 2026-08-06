@@ -265,11 +265,10 @@ STAGE_DIR=""
 SOURCE_KIND=""   # "path" for a local file, "npm" otherwise
 SOURCE_SPEC=""
 GATEWAY_RECOVERY_BIN=""
-GATEWAY_START_ATTEMPTED="false"
+GATEWAY_FINAL_START_FAILED="false"
 
 cleanup_on_exit() {
-  if [[ -n "${GATEWAY_RECOVERY_BIN:-}" && "${GATEWAY_START_ATTEMPTED:-false}" != "true" ]]; then
-    GATEWAY_START_ATTEMPTED="true"
+  if [[ -n "${GATEWAY_RECOVERY_BIN:-}" && "${GATEWAY_FINAL_START_FAILED:-false}" != "true" ]]; then
     if ! "${GATEWAY_RECOVERY_BIN}" gateway start >/dev/null 2>&1; then
       warn "OpenClaw gateway recovery failed; the gateway may still be stopped."
     fi
@@ -444,8 +443,9 @@ install_openclaw() {
   mkdir -p "${HOME}/.openclaw"
 
   local oc_bin=""
+  # The top-level agent dispatch invokes this installer at most once.
   GATEWAY_RECOVERY_BIN=""
-  GATEWAY_START_ATTEMPTED="false"
+  GATEWAY_FINAL_START_FAILED="false"
   if oc_bin="$(find_openclaw_cli)"; then
     step "Stopping OpenClaw gateway"
     "${oc_bin}" gateway stop >/dev/null 2>&1 || true
@@ -617,7 +617,6 @@ NODE
   fi
   step "Starting OpenClaw gateway"
   local start_out
-  GATEWAY_START_ATTEMPTED="true"
   if ! start_out="$("${oc_bin}" gateway start 2>&1)"; then
     # launchd KeepAlive may have already restarted the service after
     # the stop above, making "gateway start" fail with a kickstart
@@ -627,6 +626,8 @@ NODE
        || (command -v lsof >/dev/null 2>&1 && lsof -i ":18789" -t >/dev/null 2>&1); then
       success "OpenClaw gateway already running"
     else
+      # Do not repeat the same failed final start from the EXIT cleanup.
+      GATEWAY_FINAL_START_FAILED="true"
       error "openclaw gateway start failed:"
       echo "${start_out}" | sed 's/^/       /' >&2
       warn "Inspect ~/.openclaw/logs/gateway.err.log for the full reason."

@@ -19,11 +19,11 @@ success() {
 }
 
 warn() {
-  echo -e "${YELLOW}$1${NC}"
+  echo -e "${YELLOW}$1${NC}" >&2
 }
 
 error() {
-  echo -e "${RED}$1${NC}"
+  echo -e "${RED}$1${NC}" >&2
 }
 
 node_major_version() {
@@ -227,13 +227,12 @@ EXTENSION_DIR="${OPENCLAW_HOME}/extensions/${PLUGIN_ID}"
 OPENCLAW_CONFIG_PATH="${OPENCLAW_HOME}/openclaw.json"
 TMP_PACK_DIR=""
 GATEWAY_RECOVERY_ACTIVE="false"
-GATEWAY_START_ATTEMPTED="false"
+GATEWAY_FINAL_START_FAILED="false"
 
 cleanup_on_exit() {
-  if [[ "${GATEWAY_RECOVERY_ACTIVE:-false}" == "true" && "${GATEWAY_START_ATTEMPTED:-false}" != "true" ]]; then
-    GATEWAY_START_ATTEMPTED="true"
+  if [[ "${GATEWAY_RECOVERY_ACTIVE:-false}" == "true" && "${GATEWAY_FINAL_START_FAILED:-false}" != "true" ]]; then
     if ! "${OPENCLAW_BIN}" gateway start >/dev/null 2>&1; then
-      warn "Gateway recovery start failed; OpenClaw Gateway may still be stopped. Gateway 恢复启动失败，服务可能仍处于停止状态。" >&2
+      warn "Gateway recovery start failed; OpenClaw Gateway may still be stopped. Gateway 恢复启动失败，服务可能仍处于停止状态。"
     fi
   fi
   if [[ -n "${TMP_PACK_DIR:-}" ]]; then
@@ -421,13 +420,15 @@ update_openclaw_config
 info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
 "${OPENCLAW_BIN}" gateway install --port "${PORT}" --force 2>&1 || true
 
-success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
-GATEWAY_START_ATTEMPTED="true"
+info "Starting OpenClaw Gateway service, 正在启动 OpenClaw Gateway 服务..."
 if ! "${OPENCLAW_BIN}" gateway start 2>&1; then
+  # Do not repeat the same failed final start from the EXIT cleanup.
+  GATEWAY_FINAL_START_FAILED="true"
   error "Failed to start OpenClaw Gateway, OpenClaw Gateway 启动失败"
   exit 1
 fi
 GATEWAY_RECOVERY_ACTIVE="false"
+success "OpenClaw Gateway started, OpenClaw Gateway 已启动"
 
 info "Starting Memory Viewer, 正在启动记忆面板..."
 VIEWER_URL="http://127.0.0.1:18799"
