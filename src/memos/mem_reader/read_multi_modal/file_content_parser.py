@@ -100,7 +100,7 @@ class FileContentParser(BaseMessageParser):
     def _handle_url(self, url_str: str, filename: str) -> tuple[str, str | None, bool]:
         """Download and parse file from URL."""
         try:
-            from urllib.parse import urlparse
+            from urllib.parse import unquote, urlparse
 
             import requests
 
@@ -118,7 +118,13 @@ class FileContentParser(BaseMessageParser):
                 return response.text, None, True
 
             file_ext = os.path.splitext(filename)[1].lower()
-            if file_ext in [".md", ".markdown", ".txt"] or self._is_oss_md(url_str):
+            url_path_ext = os.path.splitext(unquote(parsed_url.path))[1].lower()
+            markdown_extensions = {".md", ".markdown", ".txt"}
+            if (
+                file_ext in markdown_extensions
+                or url_path_ext in markdown_extensions
+                or self._is_oss_md(url_str)
+            ):
                 return response.text, None, True
             with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=file_ext) as temp_file:
                 temp_file.write(response.content)
@@ -333,7 +339,7 @@ class FileContentParser(BaseMessageParser):
 
         Args:
             embedder: Embedder for generating embeddings
-            llm: Optional LLM for fine mode processing
+            llm: Optional dedicated LLM for document extraction
             parser: Optional parser for parsing file contents
             direct_markdown_hostnames: List of hostnames that should return markdown directly
                 without parsing. If None, reads from FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES
@@ -739,6 +745,13 @@ class FileContentParser(BaseMessageParser):
             logger.info(
                 f"[Chunker: FileContentParser] Extracted {len(headers)} headers from markdown"
             )
+            document_context = self._build_markdown_document_context(headers, filename)
+            if document_context:
+                context_parts = []
+                if message_text_context:
+                    context_parts.append(f"Related message context:\n{message_text_context}")
+                context_parts.append(document_context)
+                message_text_context = "\n\n".join(context_parts)
 
         # Extract and process images from parsed_text
         if is_markdown and parsed_text and self.image_parser:
@@ -1049,6 +1062,37 @@ class FileContentParser(BaseMessageParser):
 
         logger.info(f"[Chunker: FileContentParser] Extracted {len(headers)} headers from markdown")
         return headers
+
+    @staticmethod
+    def _build_markdown_document_context(
+        headers: dict[int, dict],
+        filename: str,
+    ) -> str | None:
+        """Build document-level context from a Markdown filename and H1 titles."""
+        h1_titles = []
+        seen_titles = set()
+        for header in headers.values():
+            if header.get("level") != 1:
+                continue
+            title = str(header.get("title", "")).strip()
+            if not title or title in seen_titles:
+                continue
+            seen_titles.add(title)
+            h1_titles.append(title)
+
+        if not filename and not h1_titles:
+            return None
+
+        lines = [
+            "Document-level context for disambiguation only. "
+            "Do not create memories from this context unless the current chunk supports them."
+        ]
+        if filename:
+            lines.append(f"Filename: {filename}")
+        if h1_titles:
+            lines.append("Top-level Markdown headings:")
+            lines.extend(f"- {title}" for title in h1_titles)
+        return "\n".join(lines)
 
     def _get_header_context(
         self, text: str, image_position: int, headers: dict[int, dict]

@@ -11,6 +11,7 @@
 
 import { extractErrorSignatures } from "../capture/error-signature.js";
 import {
+  extractExactIdentifiers,
   extractPatternTerms,
   prepareFtsMatch,
   type FtsTokenizerMode,
@@ -68,6 +69,12 @@ export interface CompiledQuery {
    * `LIKE %term%` clause in `searchByPattern`. Empty array = skip.
    */
   patternTerms: string[];
+  /**
+   * Concrete long identifiers that require exact candidate confirmation.
+   * Kept separate from pattern terms so generic CJK bigrams cannot satisfy
+   * the precision guard.
+   */
+  exactIdentifiers: string[];
   /** Did we truncate the text? Useful for logs. */
   truncated: boolean;
 }
@@ -79,10 +86,11 @@ export interface CompiledQuery {
 export function buildQuery(ctx: RetrievalCtx, opts: BuildQueryOptions = {}): CompiledQuery {
   switch (ctx.reason) {
     case "turn_start": {
-      const hintText = hintToText(ctx.contextHints);
-      const parts = [ctx.userText?.trim() ?? ""];
-      if (hintText) parts.push(hintText);
-      return finalize(parts.join("\n"), opts);
+      // contextHints carry host routing / transport metadata (workspace,
+      // channel, message id, sender id, etc.). They are useful to the
+      // runtime, but pollute both embeddings and lexical channels when
+      // mixed into the user's semantic query.
+      return finalize(ctx.userText?.trim() ?? "", opts);
     }
     case "tool_driven": {
       if (typeof ctx.args?.query === "string" && ctx.args.query.trim()) {
@@ -117,6 +125,7 @@ export function buildQuery(ctx: RetrievalCtx, opts: BuildQueryOptions = {}): Com
         structuralFragments: [],
         ftsMatch: null,
         patternTerms: [],
+        exactIdentifiers: [],
         truncated: false,
       };
     }
@@ -143,6 +152,7 @@ function finalize(raw: string, opts: BuildQueryOptions): CompiledQuery {
       structuralFragments: [],
       ftsMatch: null,
       patternTerms: [],
+      exactIdentifiers: [],
       truncated: false,
     };
   }
@@ -159,6 +169,7 @@ function finalize(raw: string, opts: BuildQueryOptions): CompiledQuery {
   // helpers themselves.
   const ftsMatch = prepareFtsMatch(trimmed, { tokenizer: opts.ftsTokenizer });
   const patternTerms = extractPatternTerms(trimmed);
+  const exactIdentifiers = extractExactIdentifiers(trimmed);
   if (trimmed.length <= MAX_QUERY_CHARS) {
     return {
       text: trimmed,
@@ -166,6 +177,7 @@ function finalize(raw: string, opts: BuildQueryOptions): CompiledQuery {
       structuralFragments,
       ftsMatch,
       patternTerms,
+      exactIdentifiers,
       truncated: false,
     };
   }
@@ -178,6 +190,7 @@ function finalize(raw: string, opts: BuildQueryOptions): CompiledQuery {
     structuralFragments,
     ftsMatch,
     patternTerms,
+    exactIdentifiers,
     truncated: true,
   };
 }
@@ -188,24 +201,5 @@ function renderArgs(args: Record<string, unknown> | undefined): string {
     return JSON.stringify(args, null, 0);
   } catch {
     return String(args);
-  }
-}
-
-function hintToText(hints: Record<string, unknown> | undefined): string {
-  if (!hints) return "";
-  const entries = Object.entries(hints).slice(0, 8);
-  if (entries.length === 0) return "";
-  const lines = entries.map(([k, v]) => `${k}: ${renderHintValue(v)}`);
-  return lines.join("\n");
-}
-
-function renderHintValue(v: unknown): string {
-  if (v === null || v === undefined) return "";
-  if (typeof v === "string") return v;
-  if (typeof v === "number" || typeof v === "boolean") return String(v);
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
   }
 }

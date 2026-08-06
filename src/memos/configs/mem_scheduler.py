@@ -212,6 +212,14 @@ class OpenAIConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
     base_url: str = Field(default="", description="Base URL for API endpoint")
     default_model: str = Field(default="", description="Default model to use")
 
+    @classmethod
+    def from_env(cls) -> "OpenAIConfig":
+        return cls(
+            api_key=os.getenv("OPENAI_API_KEY", ""),
+            base_url=os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+            default_model=os.getenv("MEMSCHEDULER_OPENAI_DEFAULT_MODEL", "gpt-4o-mini"),
+        )
+
 
 class AuthConfig(BaseConfig, DictConversionMixin):
     rabbitmq: RabbitMQConfig | None = None
@@ -339,10 +347,16 @@ class AuthConfig(BaseConfig, DictConversionMixin):
         except (ValueError, Exception) as e:
             logger.warning(f"Failed to initialize RabbitMQ config from environment: {e}")
 
-        # Try to initialize OpenAI config - check if any OpenAI env vars exist
+        # Try to initialize OpenAI config - shared credentials plus scheduler model override.
         try:
-            openai_prefix = OpenAIConfig.get_env_prefix()
-            has_openai_env = any(key.startswith(openai_prefix) for key in os.environ)
+            has_openai_env = any(
+                key in os.environ
+                for key in [
+                    "OPENAI_API_KEY",
+                    "OPENAI_API_BASE",
+                    "MEMSCHEDULER_OPENAI_DEFAULT_MODEL",
+                ]
+            )
             if has_openai_env:
                 openai_config = OpenAIConfig.from_env()
                 logger.info("Successfully initialized OpenAI configuration")
@@ -375,7 +389,7 @@ class AuthConfig(BaseConfig, DictConversionMixin):
         # Set environment variables only if openai config is available
         if self.openai is not None:
             os.environ["OPENAI_API_KEY"] = self.openai.api_key
-            os.environ["OPENAI_BASE_URL"] = self.openai.base_url
+            os.environ["OPENAI_API_BASE"] = self.openai.base_url
             os.environ["MODEL"] = self.openai.default_model
         else:
             logger = logging.getLogger(__name__)

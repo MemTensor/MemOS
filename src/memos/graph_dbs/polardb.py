@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import textwrap
 import threading
@@ -18,6 +19,29 @@ from memos.utils import timed
 
 
 logger = get_logger(__name__)
+
+
+def _build_lightweight_return_columns(return_fields: list[str]) -> str:
+    columns = []
+    for field in return_fields:
+        expression = (
+            "embedding"
+            if field == "embedding"
+            else f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)"
+        )
+        columns.append(f"{expression} AS return_{field}")
+    return "".join(f",\n                               {column}" for column in columns)
+
+
+def _decode_lightweight_return_value(value: Any) -> Any:
+    if hasattr(value, "value"):
+        value = value.value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+    return value
 
 
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -100,6 +124,8 @@ def escape_sql_string(value: str) -> str:
 
 class PolarDBGraphDB(BaseGraphDB):
     """PolarDB-based implementation using Apache AGE graph database extension."""
+
+    supports_lightweight_vector_search = True
 
     @require_python_package(
         import_name="psycopg2",
@@ -1828,6 +1854,7 @@ class PolarDBGraphDB(BaseGraphDB):
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
         return_fields: list[str] | None = None,
+        light_weight_mode: bool = False,
         **kwargs,
     ) -> list[dict]:
         logger.info(
@@ -1841,6 +1868,14 @@ class PolarDBGraphDB(BaseGraphDB):
             knowledgebase_ids,
             return_fields,
         )
+        validated_return_fields = [
+            field for field in self._validate_return_fields(return_fields) if field != "id"
+        ]
+        properties_projection = "NULL::agtype AS properties" if light_weight_mode else "properties"
+        lightweight_return_columns = (
+            _build_lightweight_return_columns(validated_return_fields) if light_weight_mode else ""
+        )
+
         start_time = time.perf_counter()
         where_clauses = []
         if scope:
@@ -1888,10 +1923,10 @@ class PolarDBGraphDB(BaseGraphDB):
                     set hnsw.ef_search = 100;set hnsw.iterative_scan = relaxed_order;
                     WITH t AS (
                         SELECT id,
-                               properties,
+                               {properties_projection},
                                timeline,
                                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
-                               (embedding <=> %s::vector(1024)) AS scope_distance
+                               (embedding <=> %s::vector(1024)) AS scope_distance{lightweight_return_columns}
                         FROM "{self.db_name}_graph"."Memory"
                         {where_clause}
                         ORDER BY scope_distance ASC
@@ -1916,7 +1951,19 @@ class PolarDBGraphDB(BaseGraphDB):
             else:
                 pass
 
-        logger.info(" search_by_embedding query: %s", query)
+        if os.getenv("POLARDB_LOG_EMBEDDING_QUERY", "false").lower() == "true":
+            logger.info(" search_by_embedding query: %s", query)
+        else:
+            logger.info(
+                "search_by_embedding query omitted query_len=%d vector_dim=%d "
+                "user_name=%s top_k=%s scope=%s status=%s",
+                len(query),
+                len(vector) if vector else 0,
+                user_name,
+                top_k,
+                scope,
+                status,
+            )
 
         with self._get_connection() as conn, conn.cursor() as cursor:
             if params:
@@ -1926,8 +1973,11 @@ class PolarDBGraphDB(BaseGraphDB):
             results = cursor.fetchall()
             output = []
             for row in results:
-                if len(row) < 5:
-                    logger.warning(f"Row has {len(row)} columns, expected 5. Row: {row}")
+                expected_columns = 6 + len(validated_return_fields) if light_weight_mode else 5
+                if len(row) < expected_columns:
+                    logger.warning(
+                        "Row has %d columns, expected at least %d", len(row), expected_columns
+                    )
                     continue
                 oldid = row[3]  # old_id
                 score = row[4]  # scope
@@ -1938,9 +1988,16 @@ class PolarDBGraphDB(BaseGraphDB):
                 score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
                 if threshold is None or score_val >= threshold:
                     item = {"id": id_val, "score": score_val}
-                    if return_fields:
+                    if light_weight_mode:
+                        for offset, field in enumerate(validated_return_fields, start=5):
+                            item[field] = _decode_lightweight_return_value(row[offset])
+                    elif validated_return_fields:
                         properties = row[1]  # properties column
-                        item.update(self._extract_fields_from_properties(properties, return_fields))
+                        item.update(
+                            self._extract_fields_from_properties(
+                                properties, validated_return_fields
+                            )
+                        )
                     output.append(item)
             elapsed_time = (time.perf_counter() - start_time) * 1000.0
             logger.info(

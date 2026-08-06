@@ -28,7 +28,12 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createOpenClawBridge, type BridgeHandle } from "./bridge.js";
+import {
+  createOpenClawBridge,
+  createOpenClawInboundTextStore,
+  type BridgeHandle,
+  type OpenClawInboundTextStore,
+} from "./bridge.js";
 import {
   acquireOpenClawRuntimeLock,
   DuplicateOpenClawRuntimeError,
@@ -135,6 +140,7 @@ const OPENCLAW_VIEWER_PORT = 18799;
 async function createRuntime(
   api: OpenClawPluginApi,
   runtimeLock: OpenClawRuntimeLockHandle,
+  inboundUserText: OpenClawInboundTextStore,
 ): Promise<PluginRuntime> {
   const log = rootLogger.child({ channel: "adapters.openclaw" });
   log.info("plugin.bootstrap", { version: PLUGIN_VERSION });
@@ -187,6 +193,7 @@ async function createRuntime(
       agent: "openclaw",
       core,
       log: api.logger,
+      inboundUserText,
     });
 
     // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
@@ -328,6 +335,11 @@ function register(api: OpenClawPluginApi): void {
     throw err;
   }
 
+  // OpenClaw publishes its clean, command-facing inbound body before
+  // prompt construction. Keep this store independent of core bootstrap
+  // so early messages are not lost while SQLite/providers initialize.
+  const inboundUserText = createOpenClawInboundTextStore();
+
   // 1. Memory capability (prompt prelude) — register synchronously so the
   //    host immediately knows who owns the memory slot, even if bootstrap
   //    fails later.
@@ -385,7 +397,7 @@ function register(api: OpenClawPluginApi): void {
   //    tools register a shell now and wait for runtime inside execute().
   let runtime: PluginRuntime | null = null;
   let bootstrapError: Error | null = null;
-  const bootstrapPromise = createRuntime(api, runtimeLock)
+  const bootstrapPromise = createRuntime(api, runtimeLock, inboundUserText)
     .then((r) => {
       runtime = r;
       api.logger.info("memos-local: plugin ready");
@@ -467,6 +479,14 @@ function register(api: OpenClawPluginApi): void {
   // `prependContext` for OpenClaw to inject — it is a value-returning
   // hook, not a void hook, and OpenClaw is willing to await its result
   // (the timeout is laxer than `agent_end`'s 30 s budget).
+  api.on("message_received", (event, ctx) => {
+    // Synchronous and intentionally independent of runtime readiness.
+    // `event.content` is OpenClaw's BodyForCommands/RawBody value, while
+    // before_prompt_build.prompt and agent_end.messages are model-facing
+    // and may contain IM-specific sender/message-id decoration.
+    inboundUserText.remember(event, ctx);
+  });
+
   api.on("before_prompt_build", async (event, ctx) => {
     const r = await ensureRuntime();
     if (!r) return;

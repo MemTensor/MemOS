@@ -21,6 +21,7 @@ export { l2Normalize, enforceDim, postProcess, toFloat32 } from "./normalize.js"
 export { createEmbeddingRetryWorker, systemErrorEvent } from "./retry-worker.js";
 export type { EmbeddingRetryWorker } from "./retry-worker.js";
 export type {
+  EmbedCallOptions,
   EmbedInput,
   EmbedRole,
   EmbedStats,
