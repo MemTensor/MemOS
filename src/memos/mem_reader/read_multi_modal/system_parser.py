@@ -90,6 +90,21 @@ class SystemParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
+        """
+        Parse system messages in fast mode.
+
+        Only tool schemas (within <tool_schema> tags) are stored as ToolSchemaMemory.
+        Regular system prompts and internal review messages are NOT stored to avoid
+        polluting user memory with system-level instructions.
+
+        Args:
+            message: System message to parse
+            info: Dictionary containing user_id and session_id
+            **kwargs: Additional parameters
+
+        Returns:
+            List of TextualMemoryItem objects (empty for non-tool-schema system messages)
+        """
         content = message.get("content", "")
         if isinstance(content, dict):
             content = content.get("text", "")
@@ -97,6 +112,14 @@ class SystemParser(BaseMessageParser):
         # Find first tool_schema block
         tool_schema_pattern = r"<tool_schema>(.*?)</tool_schema>"
         match = re.search(tool_schema_pattern, content, flags=re.DOTALL)
+
+        if not match:
+            # No tool schema found - this is a regular system prompt or internal review message
+            # Do NOT store these as memory chunks to avoid polluting user memory
+            logger.debug(
+                f"[SystemParser] Skipping system message without tool schema (message_id={message.get('message_id', 'unknown')})"
+            )
+            return []
 
         if match:
             original_text = match.group(0)  # Complete <tool_schema>...</tool_schema> block
@@ -233,48 +256,11 @@ class SystemParser(BaseMessageParser):
 
                 content = content.replace(original_text, processed_text, 1)
 
-        parts = ["system: "]
-        if message.get("chat_time"):
-            parts.append(f"[{message.get('chat_time')}]: ")
-        prefix = "".join(parts)
-        msg_line = f"{prefix}{content}\n"
-
-        source = self.create_source(message, info)
-
-        # Extract info fields
-        info_ = info.copy()
-        user_id = info_.pop("user_id", "")
-        session_id = info_.pop("session_id", "")
-
-        # Extract manager_user_id and project_id from user_context
-        user_context: UserContext | None = kwargs.get("user_context")
-        manager_user_id = user_context.manager_user_id if user_context else None
-        project_id = user_context.project_id if user_context else None
-
-        # Split parsed text into chunks
-        content_chunks = self._split_text(msg_line)
-
-        memory_items = []
-        for _chunk_idx, chunk_text in enumerate(content_chunks):
-            if not chunk_text.strip():
-                continue
-
-            memory_item = TextualMemoryItem(
-                memory=chunk_text,
-                metadata=TreeNodeTextualMemoryMetadata(
-                    user_id=user_id,
-                    session_id=session_id,
-                    memory_type="LongTermMemory",  # only choce long term memory for system messages as a placeholder
-                    status="activated",
-                    tags=["mode:fast"],
-                    sources=[source],
-                    info=info_,
-                    manager_user_id=manager_user_id,
-                    project_id=project_id,
-                ),
-            )
-            memory_items.append(memory_item)
-        return memory_items
+        # At this point, we have a tool schema that was successfully processed
+        # We do NOT store the compressed system message content as LongTermMemory
+        # Only the tool schema itself is extracted and stored via parse_fine
+        # Return empty list to defer to parse_fine for actual storage
+        return []
 
     def parse_fine(
         self,

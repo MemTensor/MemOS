@@ -1,0 +1,2 @@
+-- Namespace + visibility migration is implemented idempotently in migrator.ts
+-- because fresh installs may already get these columns from 001-initial.sql.

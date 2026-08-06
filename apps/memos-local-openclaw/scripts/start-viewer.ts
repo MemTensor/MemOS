@@ -55,6 +55,7 @@ async function main() {
     },
     log,
   );
+  store.configureVectorIndex(embedder.dimensions);
 
   const port = parseInt(process.env.VIEWER_PORT ?? "18799", 10);
   const ctx = buildContext(dataDir, process.cwd(), undefined, log);

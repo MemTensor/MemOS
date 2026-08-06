@@ -5,7 +5,7 @@ This module provides a Redis-based queue implementation that can replace
 the local memos_message_queue functionality in BaseScheduler.
 """
 
-from memos.context.context import get_current_trace_id
+from memos.context.context import get_current_api_path, get_current_trace_id
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.task_schedule_modules.local_queue import SchedulerLocalQueue
@@ -48,6 +48,12 @@ class ScheduleTaskQueue:
             self.memos_message_queue = SchedulerLocalQueue(maxsize=self.maxsize)
 
         self.disabled_handlers = disabled_handlers
+        logger.info(
+            "[SCHEDULE_TASK_QUEUE] Initialized queue wrapper. use_redis_queue=%s, queue_type=%s, stream_prefix=%s",
+            self.use_redis_queue,
+            type(self.memos_message_queue).__name__,
+            getattr(self.memos_message_queue, "stream_key_prefix", None),
+        )
 
     def set_status_tracker(self, status_tracker: TaskStatusTracker) -> None:
         """
@@ -98,11 +104,14 @@ class ScheduleTaskQueue:
             return
 
         current_trace_id = get_current_trace_id()
+        current_api_path = get_current_api_path()
 
         for msg in messages:
             if current_trace_id:
                 # Prefer current request trace_id so logs can be correlated
                 msg.trace_id = current_trace_id
+            if current_api_path and not getattr(msg, "api_path", None):
+                msg.api_path = current_api_path
             msg.stream_key = self.memos_message_queue.get_stream_key(
                 user_id=msg.user_id, mem_cube_id=msg.mem_cube_id, task_label=msg.label
             )

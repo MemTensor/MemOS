@@ -1,50 +1,44 @@
 import type { EmbeddingConfig, Logger } from "../../types";
 
+interface OllamaEmbedResponse {
+  embeddings?: unknown;
+}
+
 export async function embedOllama(
   texts: string[],
   cfg: EmbeddingConfig,
   log: Logger,
 ): Promise<number[][]> {
+  if (texts.length === 0) return [];
+
   const endpoint = cfg.endpoint ?? "http://localhost:11434";
-  const model = cfg.model ?? "qwen";
-  
-  // Ollama embedding API endpoint
-  const url = `${endpoint.replace(/\/+$/, "")}/api/embed`;
-  
-  const results: number[][] = [];
-  
-  // Ollama 支持批量 embedding，但某些模型可能有限制
-  // 这里使用单个处理以确保兼容性
-  for (const text of texts) {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...cfg.headers,
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-      }),
-      signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
-    });
+  const model = cfg.model ?? "nomic-embed-text";
+  const baseUrl = endpoint.replace(/\/+$/, "");
+  const url = baseUrl.endsWith("/api/embed") ? baseUrl : `${baseUrl}/api/embed`;
 
-    if (!resp.ok) {
-      const body = await resp.text();
-      throw new Error(`Ollama embedding failed (${resp.status}): ${body}`);
-    }
+  log.debug(`Calling Ollama embedding API for ${texts.length} texts`);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...cfg.headers,
+    },
+    body: JSON.stringify({ model, input: texts }),
+    signal: AbortSignal.timeout(cfg.timeoutMs ?? 60_000),
+  });
 
-    const json = (await resp.json()) as {
-      embeddings: number[][] | number[];
-    };
-    
-    // Ollama 返回的 embeddings 可能是二维数组或一维数组
-    const embedding = Array.isArray(json.embeddings[0]) 
-      ? (json.embeddings as number[][])[0]
-      : (json.embeddings as number[]);
-    
-    results.push(embedding);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Ollama embedding failed (${response.status}): ${body}`);
   }
 
-  return results;
+  const payload = await response.json() as OllamaEmbedResponse;
+  if (!Array.isArray(payload.embeddings)
+    || payload.embeddings.length !== texts.length
+    || payload.embeddings.some((vector) => !Array.isArray(vector)
+      || vector.some((value) => typeof value !== "number"))) {
+    throw new Error("Ollama embedding response has an invalid embeddings shape");
+  }
+
+  return payload.embeddings as number[][];
 }

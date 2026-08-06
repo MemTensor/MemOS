@@ -5,25 +5,27 @@ import contextlib
 import json
 import traceback
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     LONG_TERM_MEMORY_TYPE,
+    MEM_ORGANIZE_TASK_LABEL,
     MEM_READ_TASK_LABEL,
     USER_INPUT_TYPE,
 )
 from memos.mem_scheduler.task_schedule_modules.base_handler import BaseSchedulerHandler
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
-from memos.mem_scheduler.utils.misc_utils import is_cloud_env
+from memos.mem_scheduler.utils.misc_utils import is_playground_api
 from memos.memories.textual.tree import TreeTextMemory
 
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
     from memos.types.general_types import UserContext
 
 
@@ -163,6 +165,9 @@ class MemReadMessageHandler(BaseSchedulerHandler):
 
             logger.info("Processing %s memories with mem_reader", len(memory_items))
 
+            info = dict(info or {})
+            is_upload_skill = info.pop("is_upload_skill", False)
+
             try:
                 processed_memories = mem_reader.fine_transfer_simple_mem(
                     memory_items,
@@ -171,6 +176,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     user_name=user_name,
                     chat_history=chat_history,
                     user_context=user_context,
+                    is_upload_skill=is_upload_skill,
                 )
             except Exception as e:
                 logger.warning("%s: Fail to transfer mem: %s", e, memory_items)
@@ -211,47 +217,59 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                         )
                         logger.info("Added %s Rawfile memories.", len(raw_file_mem_group))
 
-                    # Mark merged_from memories as archived when provided in memory metadata
-                    summary_memories = [
-                        memory
-                        for memory in flattened_memories
-                        if memory.metadata.memory_type != "RawFileMemory"
-                    ]
-                    if mem_reader.graph_db:
-                        for memory in summary_memories:
-                            merged_from = (memory.metadata.info or {}).get("merged_from")
-                            if merged_from:
-                                old_ids = (
-                                    merged_from
-                                    if isinstance(merged_from, (list | tuple | set))
-                                    else [merged_from]
-                                )
-                                for old_id in old_ids:
-                                    try:
-                                        mem_reader.graph_db.update_node(
-                                            str(old_id), {"status": "archived"}, user_name=user_name
-                                        )
-                                        logger.info(
-                                            "[Scheduler] Archived merged_from memory: %s",
-                                            old_id,
-                                        )
-                                    except Exception as e:
-                                        logger.warning(
-                                            "[Scheduler] Failed to archive merged_from memory %s: %s",
-                                            old_id,
-                                            e,
-                                        )
-                    else:
-                        has_merged_from = any(
-                            (m.metadata.info or {}).get("merged_from") for m in summary_memories
-                        )
-                        if has_merged_from:
-                            logger.warning(
-                                "[Scheduler] merged_from provided but graph_db is unavailable; skip archiving."
-                            )
+                    self._try_submit_organize_task(
+                        enhanced_mem_ids=enhanced_mem_ids,
+                        text_mem=text_mem,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        user_name=user_name,
+                    )
 
-                    cloud_env = is_cloud_env()
-                    if cloud_env:
+                    # fallback to simple deduplication logic when mem version switch is off
+                    if getattr(mem_reader, "memory_version_switch", "off") != "on":
+                        # Mark merged_from memories as archived when provided in memory metadata
+                        summary_memories = [
+                            memory
+                            for memory in flattened_memories
+                            if memory.metadata.memory_type != "RawFileMemory"
+                        ]
+                        if mem_reader.graph_db:
+                            for memory in summary_memories:
+                                merged_from = (memory.metadata.info or {}).get("merged_from")
+                                if merged_from:
+                                    old_ids = (
+                                        merged_from
+                                        if isinstance(merged_from, (list | tuple | set))
+                                        else [merged_from]
+                                    )
+                                    for old_id in old_ids:
+                                        try:
+                                            mem_reader.graph_db.update_node(
+                                                str(old_id),
+                                                {"status": "archived"},
+                                                user_name=user_name,
+                                            )
+                                            logger.info(
+                                                "[Scheduler] Archived merged_from memory: %s",
+                                                old_id,
+                                            )
+                                        except Exception as e:
+                                            logger.warning(
+                                                "[Scheduler] Failed to archive merged_from memory %s: %s",
+                                                old_id,
+                                                e,
+                                            )
+                        else:
+                            has_merged_from = any(
+                                (m.metadata.info or {}).get("merged_from") for m in summary_memories
+                            )
+                            if has_merged_from:
+                                logger.warning(
+                                    "[Scheduler] merged_from provided but graph_db is unavailable; skip archiving."
+                                )
+
+                    playground_api = is_playground_api()
+                    if not playground_api:
                         kb_log_content = []
                         for item in flattened_memories:
                             metadata = getattr(item, "metadata", None)
@@ -386,10 +404,34 @@ class MemReadMessageHandler(BaseSchedulerHandler):
             delete_ids = list(dict.fromkeys(delete_ids))
             if delete_ids:
                 try:
-                    text_mem.delete(delete_ids, user_name=user_name)
-                    logger.info(
-                        "Delete raw/working mem_ids: %s for user_name: %s", delete_ids, user_name
-                    )
+                    if getattr(mem_reader, "memory_version_switch", "off") != "on":
+                        text_mem.delete(delete_ids, user_name=user_name)
+                        logger.info(
+                            "Delete raw/working mem_ids: %s for user_name: %s",
+                            delete_ids,
+                            user_name,
+                        )
+                    else:
+                        # change to soft-delete for mem versions
+                        flattened_memories = []
+                        if processed_memories and len(processed_memories) > 0:
+                            for memory_list in processed_memories:
+                                flattened_memories.extend(memory_list)
+                        allowed_types = ["UserMemory", "LongTermMemory"]
+                        text_mem.soft_delete(
+                            delete_ids,
+                            user_name,
+                            [
+                                mem.id
+                                for mem in flattened_memories
+                                if mem.metadata.memory_type in allowed_types
+                            ],
+                        )
+                        logger.info(
+                            "Soft delete raw/working mem_ids: %s for user_name: %s",
+                            delete_ids,
+                            user_name,
+                        )
                 except Exception as e:
                     logger.warning("Failed to delete some mem_ids %s: %s", delete_ids, e)
             else:
@@ -406,8 +448,8 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 exc_info=True,
             )
             with contextlib.suppress(Exception):
-                cloud_env = is_cloud_env()
-                if cloud_env:
+                playground_api = is_playground_api()
+                if not playground_api:
                     if not kb_log_content:
                         trigger_source = (
                             info.get("trigger_source", "Messages") if info else "Messages"
@@ -440,3 +482,35 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     event.task_id = task_id
                     event.status = "failed"
                     self.scheduler_context.services.submit_web_logs([event])
+
+    def _try_submit_organize_task(
+        self,
+        enhanced_mem_ids: list[str],
+        text_mem: TreeTextMemory,
+        user_id: str,
+        mem_cube_id: str,
+        user_name: str,
+    ) -> None:
+        """Submit a MEM_ORGANIZE task so the reorganizer can run optimize_structure."""
+        try:
+            reorganizer = getattr(text_mem.memory_manager, "reorganizer", None)
+            if not reorganizer or not getattr(reorganizer, "is_reorganize", False):
+                return
+
+            message_item = ScheduleMessageItem(
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                label=MEM_ORGANIZE_TASK_LABEL,
+                content=json.dumps(enhanced_mem_ids),
+                timestamp=datetime.now(tz=timezone.utc),
+                user_name=user_name,
+            )
+            self.scheduler_context.services.submit_messages([message_item])
+            logger.info(
+                "[mem_read_handler] Submitted MEM_ORGANIZE task for user_id=%s, mem_cube_id=%s, mem_ids=%s",
+                user_id,
+                mem_cube_id,
+                enhanced_mem_ids,
+            )
+        except Exception as e:
+            logger.error("Failed to enqueue MEM_ORGANIZE task: %s", e, exc_info=True)

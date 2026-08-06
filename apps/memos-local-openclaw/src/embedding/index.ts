@@ -7,7 +7,9 @@ import { embedMistral } from "./providers/mistral";
 import { embedOllama } from "./providers/ollama";
 import { embedLocal } from "./local";
 import { modelHealth } from "../ingest/providers";
-import { EmbeddingCache, DEFAULT_CACHE_OPTIONS, getGlobalCache } from "./cache";
+import { EmbeddingCache, getGlobalCache } from "./cache";
+
+type EmbeddingInputKind = "document" | "query";
 
 export class Embedder {
   private cache: EmbeddingCache;
@@ -25,8 +27,7 @@ export class Embedder {
    * Get embedding for query with caching support
    */
   async embedQueryWithCache(text: string): Promise<number[]> {
-    // Try cache first
-    const cached = await this.cache.get(text);
+    const cached = await this.cache.get(this.signature, text);
     if (cached) {
       this.log.debug(`[Embedder] Cache hit for query: "${text.slice(0, 50)}..."`);
       return cached;
@@ -37,9 +38,14 @@ export class Embedder {
     const vector = await this.embedQuery(text);
     const duration = Date.now() - startTime;
 
-    // Store in cache
-    await this.cache.set(text, vector);
-    this.log.debug(`[Embedder] Cached embedding (${duration}ms) for query: "${text.slice(0, 50)}..."`);
+    if (vector.length === this.dimensions) {
+      await this.cache.set(this.signature, text, vector);
+      this.log.debug(`[Embedder] Cached embedding (${duration}ms) for query: "${text.slice(0, 50)}..."`);
+    } else {
+      this.log.debug(
+        `[Embedder] Skipped query cache because expected ${this.dimensions} dimensions but received ${vector.length}`,
+      );
+    }
 
     return vector;
   }
@@ -65,9 +71,24 @@ export class Embedder {
     return this.cfg?.provider ?? "local";
   }
 
+  get model(): string {
+    if (this.provider === "local") return "";
+    if (this.provider === "ollama") return this.cfg?.model ?? "nomic-embed-text";
+    return this.cfg?.model ?? "";
+  }
+
   get dimensions(): number {
     if (this.provider === "local") return 384;
     return this.cfg?.dimensions ?? 1536;
+  }
+
+  /**
+   * Canonical identity of the embedding space this embedder produces vectors in.
+   * Format: "provider:model:dimensions". Used to detect when stored vectors
+   * were produced by a different model than the live config.
+   */
+  get signature(): string {
+    return `${this.provider}:${this.model}:${this.dimensions}`;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -87,13 +108,17 @@ export class Embedder {
     if (this.provider === "cohere" && this.cfg) {
       return embedCohereQuery(text, this.cfg, this.log);
     }
-    const vecs = await this.embedBatch([text]);
+    const vecs = await this.embedBatch([text], "query");
     return vecs[0];
   }
 
-  private async embedBatch(texts: string[]): Promise<number[][]> {
+  private async embedBatch(
+    texts: string[],
+    inputKind: EmbeddingInputKind = "document",
+  ): Promise<number[][]> {
     const provider = this.provider;
     const cfg = this.cfg;
+    const inputType = this.resolveInputType(inputKind);
 
     const modelInfo = `${provider}/${cfg?.model ?? "default"}`;
     try {
@@ -105,7 +130,9 @@ export class Embedder {
         case "zhipu":
         case "siliconflow":
         case "bailian":
-          result = await embedOpenAI(texts, cfg!, this.log); break;
+          result = await embedOpenAI(texts, cfg!, this.log, inputType); break;
+        case "openclaw":
+          result = await this.embedOpenClaw(texts, inputType); break;
         case "gemini":
           result = await embedGemini(texts, cfg!, this.log); break;
         case "cohere":
@@ -132,7 +159,13 @@ export class Embedder {
     }
   }
 
-  private async embedOpenClaw(texts: string[]): Promise<number[][]> {
+  private resolveInputType(inputKind: EmbeddingInputKind): string | undefined {
+    if (!this.cfg) return undefined;
+    if (inputKind === "query") return this.cfg.queryInputType ?? this.cfg.inputType;
+    return this.cfg.documentInputType ?? this.cfg.inputType;
+  }
+
+  private async embedOpenClaw(texts: string[], inputType?: string): Promise<number[][]> {
     if (!this.openclawAPI) {
       throw new Error(
         "OpenClaw API not available. Ensure sharing.capabilities.hostEmbedding is enabled in config."
@@ -143,6 +176,7 @@ export class Embedder {
     const response = await this.openclawAPI.embed({
       texts,
       model: this.cfg?.model,
+      inputType,
     });
 
     return response.embeddings;

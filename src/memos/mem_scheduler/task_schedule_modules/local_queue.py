@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_scheduler.schemas.task_schemas import DEFAULT_STREAM_KEY_PREFIX
+from memos.mem_scheduler.schemas.task_schemas import get_stream_key_prefix
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
@@ -26,7 +26,7 @@ class SchedulerLocalQueue(RedisSchedulerModule):
     def __init__(
         self,
         maxsize: int = 0,
-        stream_key_prefix: str = DEFAULT_STREAM_KEY_PREFIX,
+        stream_key_prefix: str | None = None,
         orchestrator: SchedulerOrchestrator | None = None,
         status_tracker: TaskStatusTracker | None = None,
     ):
@@ -42,7 +42,7 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         """
         super().__init__()
 
-        self.stream_key_prefix = stream_key_prefix or "local_queue"
+        self.stream_key_prefix = stream_key_prefix or get_stream_key_prefix()
 
         self.max_internal_message_queue_size = maxsize
 
@@ -56,7 +56,9 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         self._message_handler: Callable[[ScheduleMessageItem], None] | None = None
 
         logger.info(
-            f"SchedulerLocalQueue initialized with max_internal_message_queue_size={self.max_internal_message_queue_size}"
+            "SchedulerLocalQueue initialized with max_internal_message_queue_size=%s, stream_prefix=%s",
+            self.max_internal_message_queue_size,
+            self.stream_key_prefix,
         )
 
     def get_stream_key(self, user_id: str, mem_cube_id: str, task_label: str) -> str:
