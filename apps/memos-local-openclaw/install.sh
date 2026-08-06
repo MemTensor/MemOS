@@ -225,6 +225,23 @@ success "Using global OpenClaw CLI, 使用全局 OpenClaw CLI: ${OPENCLAW_BIN}"
 PACKAGE_SPEC="${PLUGIN_PACKAGE}@${PLUGIN_VERSION}"
 EXTENSION_DIR="${OPENCLAW_HOME}/extensions/${PLUGIN_ID}"
 OPENCLAW_CONFIG_PATH="${OPENCLAW_HOME}/openclaw.json"
+TMP_PACK_DIR=""
+GATEWAY_RECOVERY_ACTIVE="false"
+GATEWAY_START_ATTEMPTED="false"
+
+cleanup_on_exit() {
+  local exit_status=$?
+  if [[ "${GATEWAY_RECOVERY_ACTIVE:-false}" == "true" && "${GATEWAY_START_ATTEMPTED:-false}" != "true" ]]; then
+    GATEWAY_START_ATTEMPTED="true"
+    "${OPENCLAW_BIN}" gateway start >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${TMP_PACK_DIR:-}" ]]; then
+    rm -rf "${TMP_PACK_DIR}"
+  fi
+  return "${exit_status}"
+}
+
+trap cleanup_on_exit EXIT
 
 update_openclaw_config() {
   info "Update OpenClaw config, 更新 OpenClaw 配置..."
@@ -317,10 +334,7 @@ NODE
 
 info "Stop OpenClaw Gateway, 停止 OpenClaw Gateway..."
 "${OPENCLAW_BIN}" gateway stop >/dev/null 2>&1 || true
-
-# Ensure the gateway is restarted if the install fails after this point.
-# The trap is cleared once the normal start step at the end succeeds.
-trap '"${OPENCLAW_BIN}" gateway start >/dev/null 2>&1 || true' ERR
+GATEWAY_RECOVERY_ACTIVE="true"
 
 if command -v lsof >/dev/null 2>&1; then
   PIDS="$(lsof -i :"${PORT}" -t 2>/dev/null || true)"
@@ -338,7 +352,6 @@ fi
 
 info "Install plugin ${PACKAGE_SPEC}, 安装插件 ${PACKAGE_SPEC}..."
 TMP_PACK_DIR="$(mktemp -d)"
-trap 'rm -rf "${TMP_PACK_DIR}"' EXIT
 
 if [[ -f "${PLUGIN_VERSION}" ]]; then
   info "Using local tarball, 使用本地包: ${PLUGIN_VERSION}"
@@ -409,9 +422,12 @@ info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
 "${OPENCLAW_BIN}" gateway install --port "${PORT}" --force 2>&1 || true
 
 success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
-"${OPENCLAW_BIN}" gateway start 2>&1
-# Gateway is back up - clear the error recovery trap.
-trap - ERR
+GATEWAY_START_ATTEMPTED="true"
+if ! "${OPENCLAW_BIN}" gateway start 2>&1; then
+  error "Failed to start OpenClaw Gateway, OpenClaw Gateway 启动失败"
+  exit 1
+fi
+GATEWAY_RECOVERY_ACTIVE="false"
 
 info "Starting Memory Viewer, 正在启动记忆面板..."
 VIEWER_URL="http://127.0.0.1:18799"

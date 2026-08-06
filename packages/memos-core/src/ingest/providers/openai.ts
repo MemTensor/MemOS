@@ -262,7 +262,7 @@ export interface TopicClassifyResult {
   reason: string; // may be empty for compact responses
 }
 
-const TOPIC_CLASSIFIER_PROMPT = `Classify if NEW MESSAGE continues current task or starts an unrelated one.
+export const TOPIC_CLASSIFIER_PROMPT = `Classify if NEW MESSAGE continues current task or starts an unrelated one.
 Output ONLY JSON: {"d":"S"|"N","c":0.0-1.0}
 d=S(same) or N(new). c=confidence. Default S. Only N if completely unrelated domain.
 Sub-questions, tools, methods, details of current topic = S.`;
@@ -310,7 +310,7 @@ export async function classifyTopicOpenAI(
   return parseTopicClassifyResult(raw, log);
 }
 
-const TOPIC_ARBITRATION_PROMPT = `A classifier flagged this message as possibly new topic (low confidence). Is it truly UNRELATED, or a sub-question/follow-up?
+export const TOPIC_ARBITRATION_PROMPT = `A classifier flagged this message as possibly new topic (low confidence). Is it truly UNRELATED, or a sub-question/follow-up?
 Tools/methods/details of current task = SAME. Shared entity/theme = SAME. Entirely different domain = NEW.
 Reply one word: NEW or SAME`;
 

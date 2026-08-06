@@ -109,6 +109,25 @@ describe("session/intent-classifier", () => {
     expect(d.signals).toEqual(["llm"]);
   });
 
+  it("forwards the foreground abort signal and classifier timeout", async () => {
+    let seen: { signal?: AbortSignal; timeoutMs?: number } | undefined;
+    const llm = fakeLlm(() => ({ kind: "task", confidence: 0.8, reason: "task" }));
+    const original = llm.completeJson.bind(llm);
+    llm.completeJson = async (messages, opts) => {
+      seen = opts;
+      return original(messages, opts);
+    };
+    const controller = new AbortController();
+    const c = createIntentClassifier({ llm, timeoutMs: 321 });
+
+    await c.classify("investigate an ambiguous pipeline issue", {
+      signal: controller.signal,
+    });
+
+    expect(seen?.signal).toBe(controller.signal);
+    expect(seen?.timeoutMs).toBe(321);
+  });
+
   it("LLM failure falls back to heuristic", async () => {
     const c = createIntentClassifier({
       llm: fakeLlm(() => {

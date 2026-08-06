@@ -9,7 +9,7 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
-from memos.log import get_logger
+from memos.log import get_logger, summarize_textual_memories
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -277,13 +277,7 @@ class Searcher:
             dedup=dedup,
         )
 
-        logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
-        res_results = ""
-        for _num_i, result in enumerate(final_results):
-            res_results += "\n" + (
-                result.id + "|" + result.metadata.memory_type + "|" + result.memory
-            )
-        logger.info(f"[SEARCH] Results. {res_results}")
+        logger.info("[SEARCH] Result summary: %s", summarize_textual_memories(final_results))
         return final_results
 
     @timed

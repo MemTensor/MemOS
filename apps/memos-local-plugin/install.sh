@@ -264,10 +264,25 @@ BUILT_TARBALL=""
 STAGE_DIR=""
 SOURCE_KIND=""   # "path" for a local file, "npm" otherwise
 SOURCE_SPEC=""
+GATEWAY_RECOVERY_BIN=""
+GATEWAY_START_ATTEMPTED="false"
+
+cleanup_on_exit() {
+  local exit_status=$?
+  if [[ -n "${GATEWAY_RECOVERY_BIN:-}" && "${GATEWAY_START_ATTEMPTED:-false}" != "true" ]]; then
+    GATEWAY_START_ATTEMPTED="true"
+    "${GATEWAY_RECOVERY_BIN}" gateway start >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${STAGE_DIR:-}" ]]; then
+    rm -rf "${STAGE_DIR}"
+  fi
+  return "${exit_status}"
+}
+
+trap cleanup_on_exit EXIT
 
 resolve_tarball() {
   STAGE_DIR="$(mktemp -d)"
-  trap 'rm -rf "${STAGE_DIR}"' EXIT
 
   if [[ -n "${VERSION_ARG}" && -f "${VERSION_ARG}" ]]; then
     BUILT_TARBALL="$(cd "$(dirname "${VERSION_ARG}")" && pwd)/$(basename "${VERSION_ARG}")"
@@ -419,18 +434,6 @@ wait_for_viewer() {
   return 1
 }
 
-# ─── Gateway recovery helper ──────────────────────────────────────────────
-# If the install fails after stopping the OpenClaw gateway (set -e / die),
-# this trap ensures the gateway is restarted so the user is not left with
-# a downed service.
-_gateway_recovery() {
-  local oc_bin
-  oc_bin="$(find_openclaw_cli 2>/dev/null || true)"
-  if [[ -n "${oc_bin}" ]]; then
-    "${oc_bin}" gateway start >/dev/null 2>&1 || true
-  fi
-}
-
 # ─── OpenClaw install ─────────────────────────────────────────────────────
 install_openclaw() {
   STEP_CURRENT=0
@@ -441,16 +444,14 @@ install_openclaw() {
   mkdir -p "${HOME}/.openclaw"
 
   local oc_bin=""
-  local _gateway_was_stopped="false"
+  GATEWAY_RECOVERY_BIN=""
+  GATEWAY_START_ATTEMPTED="false"
   if oc_bin="$(find_openclaw_cli)"; then
     step "Stopping OpenClaw gateway"
     "${oc_bin}" gateway stop >/dev/null 2>&1 || true
     sleep 1
     success "Gateway stopped"
-    _gateway_was_stopped="true"
-    # Ensure the gateway is restarted if the install fails after this point.
-    # The trap is cleared once the normal start step at the end succeeds.
-    trap '_gateway_recovery' ERR
+    GATEWAY_RECOVERY_BIN="${oc_bin}"
   fi
 
   deploy_tarball_to_prefix "${prefix}"
@@ -616,6 +617,7 @@ NODE
   fi
   step "Starting OpenClaw gateway"
   local start_out
+  GATEWAY_START_ATTEMPTED="true"
   if ! start_out="$("${oc_bin}" gateway start 2>&1)"; then
     # launchd KeepAlive may have already restarted the service after
     # the stop above, making "gateway start" fail with a kickstart
@@ -633,8 +635,7 @@ NODE
   else
     success "OpenClaw gateway started"
   fi
-  # Gateway is back up — clear the error recovery trap.
-  trap - ERR
+  GATEWAY_RECOVERY_BIN=""
 
   step "Waiting for Memory Viewer"
   if wait_for_viewer "${OPENCLAW_PORT}"; then
@@ -753,6 +754,13 @@ except Exception:
   step "Linking memtensor provider"
   local user_plugin_dir="${HOME}/.hermes/plugins/memory"
   mkdir -p "${user_plugin_dir}"
+  local version_sync="${prefix}/scripts/sync-hermes-version.cjs"
+  if [[ -f "${version_sync}" ]]; then
+    node "${version_sync}" "${prefix}" >/dev/null \
+      || die "Failed to synchronize Hermes plugin version metadata."
+  else
+    warn "Hermes version sync helper missing; using packaged plugin.yaml as-is."
+  fi
   # Ensure the provider directory is fully populated before symlinking so
   # the second symlink (user-level) already points at a complete tree.
   cp "${adapter_dir}/plugin.yaml" "${adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null || true
