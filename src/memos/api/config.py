@@ -260,12 +260,55 @@ NacosConfigManager.start_watch_if_enabled()
 class APIConfig:
     """Centralized configuration management for MemOS APIs."""
 
+    _OPENAI_API_BASE = "https://api.openai.com/v1"
+    _QWEN_API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
     @staticmethod
-    def _preference_extractor_extra_body(model_name: str) -> dict[str, Any] | None:
+    def _is_qwen_model(model_name: str) -> bool:
+        normalized_model = model_name.strip().lower()
+        return normalized_model.startswith("qwen") or "/qwen" in normalized_model
+
+    @staticmethod
+    def _qwen_flash_extra_body(model_name: str) -> dict[str, Any] | None:
         normalized_model = model_name.strip().lower()
         if normalized_model.startswith(("qwen3.5", "qwen3.6")):
             return {"enable_thinking": False}
         return None
+
+    @staticmethod
+    def _build_provider_llm_config(
+        model_name: str,
+        *,
+        temperature: float = 0.6,
+        max_tokens: int = 8000,
+        top_p: float = 0.95,
+        top_k: int = 20,
+        remove_think_prefix: bool = True,
+    ) -> dict[str, Any]:
+        """Build task LLM config from model name plus shared provider credentials.
+
+        MEMRADER_MODEL remains a dedicated fine-tuned extractor. Other task-specific
+        model knobs choose only the model; endpoint credentials come from either
+        QWEN_* or OPENAI_* according to the model family.
+        """
+        is_qwen = APIConfig._is_qwen_model(model_name)
+        config = {
+            "model_name_or_path": model_name,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "top_k": top_k,
+            "remove_think_prefix": remove_think_prefix,
+            "api_key": os.getenv("QWEN_API_KEY" if is_qwen else "OPENAI_API_KEY", "EMPTY"),
+            "api_base": os.getenv(
+                "QWEN_API_BASE" if is_qwen else "OPENAI_API_BASE",
+                APIConfig._QWEN_API_BASE if is_qwen else APIConfig._OPENAI_API_BASE,
+            ),
+        }
+        extra_body = APIConfig._qwen_flash_extra_body(model_name) if is_qwen else None
+        if extra_body is not None:
+            config["extra_body"] = extra_body
+        return {"backend": "qwen" if is_qwen else "openai", "config": config}
 
     @staticmethod
     def get_profile_memory_reserved_top_k() -> int:
@@ -293,7 +336,7 @@ class APIConfig:
             "top_k": int(os.getenv("MOS_TOP_K", "50")),
             "remove_think_prefix": True,
             "api_key": os.getenv("OPENAI_API_KEY", "your-api-key-here"),
-            "api_base": os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+            "api_base": os.getenv("OPENAI_API_BASE", APIConfig._OPENAI_API_BASE),
         }
 
     @staticmethod
@@ -357,7 +400,7 @@ class APIConfig:
 
     @staticmethod
     def get_memreader_config() -> dict[str, Any]:
-        """Get MemReader configuration for chat/doc extraction (fine-tuned 0.6B model).
+        """Get the main MemReader configuration for text/chat extraction.
 
         When MEMREADER_GENERAL_MODEL is configured (i.e. a separate stable LLM exists),
         the backup client is automatically enabled so that primary failures (self-deployed
@@ -379,15 +422,11 @@ class APIConfig:
         general_model = os.getenv("MEMREADER_GENERAL_MODEL")
         enable_backup = os.getenv("MEMREADER_ENABLE_BACKUP", "false").lower() == "true"
         if general_model and enable_backup:
+            backup_config = APIConfig._build_provider_llm_config(general_model)["config"]
             config["backup_client"] = True
             config["backup_model_name_or_path"] = general_model
-            config["backup_api_key"] = os.getenv(
-                "MEMREADER_GENERAL_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
-            )
-            config["backup_api_base"] = os.getenv(
-                "MEMREADER_GENERAL_API_BASE",
-                os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
-            )
+            config["backup_api_key"] = backup_config["api_key"]
+            config["backup_api_base"] = backup_config["api_base"]
 
         return {"backend": "openai", "config": config}
 
@@ -395,25 +434,17 @@ class APIConfig:
     def get_qwen_llm_config() -> dict[str, Any] | None:
         if not os.getenv("QWEN_API_KEY"):
             return None
-        return {
-            "backend": "qwen",
-            "config": {
-                "model_name_or_path": os.getenv("QWEN_MODEL", "qwen-flash"),
-                "temperature": float(os.getenv("QWEN_TEMPERATURE", "0.8")),
-                "max_tokens": int(os.getenv("QWEN_MAX_TOKENS", "8000")),
-                "top_p": float(os.getenv("QWEN_TOP_P", "0.9")),
-                "top_k": int(os.getenv("QWEN_TOP_K", "50")),
-                "remove_think_prefix": os.getenv("QWEN_REMOVE_THINK_PREFIX", "true").lower()
-                == "true",
-                "api_key": os.getenv("QWEN_API_KEY", ""),
-                "api_base": os.getenv("QWEN_API_BASE", ""),
-                "model_schema": os.getenv("QWEN_MODEL_SCHEMA", "memos.configs.llm.QwenLLMConfig"),
-            },
-        }
+        return APIConfig._build_provider_llm_config(
+            os.getenv("QWEN_MODEL", "qwen-flash"),
+            temperature=0.8,
+            max_tokens=8000,
+            top_p=0.9,
+            top_k=50,
+        )
 
     @staticmethod
     def get_memreader_general_llm_config() -> dict[str, Any]:
-        """Get general LLM configuration for non-chat/doc tasks.
+        """Get general LLM configuration for non-primary extraction tasks.
 
         Used for: hallucination filter, memory rewrite, memory merge,
         tool trajectory extraction, skill memory extraction.
@@ -428,24 +459,7 @@ class APIConfig:
         # Check if specific general model is configured
         general_model = os.getenv("MEMREADER_GENERAL_MODEL")
         if general_model:
-            return {
-                "backend": os.getenv("MEMREADER_GENERAL_BACKEND", "openai"),
-                "config": {
-                    "model_name_or_path": general_model,
-                    "temperature": 0.6,
-                    "max_tokens": int(os.getenv("MEMREADER_GENERAL_MAX_TOKENS", "8000")),
-                    "top_p": 0.95,
-                    "top_k": 20,
-                    "api_key": os.getenv(
-                        "MEMREADER_GENERAL_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
-                    ),
-                    "api_base": os.getenv(
-                        "MEMREADER_GENERAL_API_BASE",
-                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
-                    ),
-                    "remove_think_prefix": True,
-                },
-            }
+            return APIConfig._build_provider_llm_config(general_model)
         # Fallback to memreader config (same behavior as before for users who don't customize)
         return APIConfig.get_memreader_config()
 
@@ -460,26 +474,27 @@ class APIConfig:
         """
         image_model = os.getenv("IMAGE_PARSER_MODEL")
         if image_model:
-            return {
-                "backend": os.getenv("IMAGE_PARSER_BACKEND", "openai"),
-                "config": {
-                    "model_name_or_path": image_model,
-                    "temperature": 0.6,
-                    "max_tokens": int(os.getenv("IMAGE_PARSER_MAX_TOKENS", "4096")),
-                    "top_p": 0.95,
-                    "top_k": 20,
-                    "api_key": os.getenv(
-                        "IMAGE_PARSER_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
-                    ),
-                    "api_base": os.getenv(
-                        "IMAGE_PARSER_API_BASE",
-                        os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
-                    ),
-                    "remove_think_prefix": True,
-                },
-            }
+            return APIConfig._build_provider_llm_config(image_model, max_tokens=4096)
         # Fallback to general_llm config (which itself falls back to OpenAI)
         return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
+    def get_document_parser_llm_config() -> dict[str, Any] | None:
+        """Get the dedicated LLM configuration for document extraction.
+
+        The provider endpoint and credentials are selected from QWEN_* or
+        OPENAI_* according to DOCUMENT_PARSER_MODEL.
+
+        Fallback chain: DOCUMENT_PARSER_MODEL -> MEMREADER_GENERAL_MODEL.
+        Returns None when neither model is configured.
+        """
+        document_model = os.getenv("DOCUMENT_PARSER_MODEL") or os.getenv("MEMREADER_GENERAL_MODEL")
+        if not document_model:
+            return None
+        return APIConfig._build_provider_llm_config(
+            document_model,
+            temperature=0.8,
+        )
 
     @staticmethod
     def get_preference_extractor_llm_config() -> dict[str, Any]:
@@ -491,29 +506,21 @@ class APIConfig:
         """
         pref_model = os.getenv("PREFERENCE_EXTRACTOR_MODEL")
         if pref_model:
-            extra_body = APIConfig._preference_extractor_extra_body(pref_model)
-            config = {
-                "model_name_or_path": pref_model,
-                "temperature": 0.6,
-                "max_tokens": int(os.getenv("PREFERENCE_EXTRACTOR_MAX_TOKENS", "8000")),
-                "top_p": 0.95,
-                "top_k": 20,
-                "api_key": os.getenv(
-                    "PREFERENCE_EXTRACTOR_API_KEY", os.getenv("OPENAI_API_KEY", "EMPTY")
-                ),
-                "api_base": os.getenv(
-                    "PREFERENCE_EXTRACTOR_API_BASE",
-                    os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
-                ),
-                "remove_think_prefix": True,
-            }
-            if extra_body is not None:
-                config["extra_body"] = extra_body
-            return {
-                "backend": os.getenv("PREFERENCE_EXTRACTOR_BACKEND", "openai"),
-                "config": config,
-            }
+            return APIConfig._build_provider_llm_config(pref_model)
         # Fallback to general_llm config (which itself falls back to OpenAI)
+        return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
+    def get_feedback_llm_config() -> dict[str, Any]:
+        """Get LLM configuration for feedback processing.
+
+        Used for: feedback judgement, semantic add/update decisions, and update safety review.
+
+        Fallback chain: FEEDBACK_MODEL -> general_llm -> memreader config.
+        """
+        feedback_model = os.getenv("FEEDBACK_MODEL")
+        if feedback_model:
+            return APIConfig._build_provider_llm_config(feedback_model, temperature=0.8)
         return APIConfig.get_memreader_general_llm_config()
 
     @staticmethod
@@ -1005,6 +1012,8 @@ class APIConfig:
                     "general_llm": APIConfig.get_memreader_general_llm_config(),
                     # Image parser LLM (requires vision model)
                     "image_parser_llm": APIConfig.get_image_parser_llm_config(),
+                    # Dedicated LLM for document chunk extraction
+                    "document_parser_llm": APIConfig.get_document_parser_llm_config(),
                     # Preference extractor LLM. Reader falls back to general_llm when unset.
                     "preference_extractor_llm": APIConfig.get_preference_extractor_llm_config()
                     if os.getenv("PREFERENCE_EXTRACTOR_MODEL")
@@ -1138,6 +1147,8 @@ class APIConfig:
                     "general_llm": APIConfig.get_memreader_general_llm_config(),
                     # Image parser LLM (requires vision model)
                     "image_parser_llm": APIConfig.get_image_parser_llm_config(),
+                    # Dedicated LLM for document chunk extraction
+                    "document_parser_llm": APIConfig.get_document_parser_llm_config(),
                     # Preference extractor LLM. Reader falls back to general_llm when unset.
                     "preference_extractor_llm": APIConfig.get_preference_extractor_llm_config()
                     if os.getenv("PREFERENCE_EXTRACTOR_MODEL")

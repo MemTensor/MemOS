@@ -11,6 +11,8 @@ const cfg: CaptureConfig = {
   alphaScoring: false,
   synthReflections: false,
   llmConcurrency: 1,
+  maxReflectLlmCalls: 128,
+  maxRecoveryOrphanInserts: 0,
   batchMode: "per_step",
   batchThreshold: 12,
 };

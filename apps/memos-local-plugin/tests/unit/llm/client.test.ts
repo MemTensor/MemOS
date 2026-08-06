@@ -96,12 +96,14 @@ describe("llm/client", () => {
     expect(fake.lastMessages).toEqual([{ role: "user", content: "hi there" }]);
   });
 
-  it("injects a json system hint when jsonMode=true", async () => {
+  it("injects json hints into system and user messages when jsonMode=true", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: '{"ok":1}', durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
     await client.complete("do it", { jsonMode: true });
     expect(fake.lastMessages?.[0]?.role).toBe("system");
     expect(fake.lastMessages?.[0]?.content).toMatch(/single valid JSON value/i);
+    expect(fake.lastMessages?.at(-1)?.role).toBe("user");
+    expect(fake.lastMessages?.at(-1)?.content).toMatch(/valid json only/i);
     expect(fake.lastInput?.jsonMode).toBe(true);
   });
 
@@ -270,13 +272,54 @@ describe("llm/client", () => {
     expect(fake.lastMessages?.[0]?.role).toBe("system");
     expect(fake.lastMessages?.[0]?.content).toMatch(/You are strict\./);
     expect(fake.lastMessages?.[0]?.content).toMatch(/single valid JSON value/);
-    expect(fake.lastMessages?.[1]).toEqual({ role: "user", content: "go" });
+    expect(fake.lastMessages?.[1]?.role).toBe("user");
+    expect(fake.lastMessages?.[1]?.content).toMatch(/^go/);
+    expect(fake.lastMessages?.[1]?.content).toMatch(/valid json only/i);
   });
 
   it("rejects empty messages array", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: "", durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
     await expect(client.complete([] as LlmMessage[])).rejects.toBeInstanceOf(MemosError);
+  });
+
+  it("preserves deferred retry diagnostics in error and status sinks", async () => {
+    const errors: Array<Record<string, unknown>> = [];
+    const statuses: LlmStatusDetail[] = [];
+    const retryAt = Date.now() + 120_000;
+    const provider = new ThrowingProvider(
+      new MemosError(ERROR_CODES.LLM_RATE_LIMITED, "provider cooldown", {
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    const client = createLlmClientWithProvider(
+      cfg({
+        onError: (detail) => errors.push(detail as unknown as Record<string, unknown>),
+        onStatus: (detail) => statuses.push(detail),
+      }),
+      provider,
+    );
+
+    await expect(client.complete("x")).rejects.toBeInstanceOf(MemosError);
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: "error",
+        retryAt,
+        retryDecision: "defer",
+      }),
+    );
   });
 
   // ─── Circuit breaker (issue #1897) ──────────────────────────────────────

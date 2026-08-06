@@ -13,6 +13,7 @@ from memos.api.config import APIConfig
 from memos.api.handlers.config_builders import (
     build_chat_llm_config,
     build_embedder_config,
+    build_feedback_llm_config,
     build_feedback_reranker_config,
     build_graph_db_config,
     build_internet_retriever_config,
@@ -156,6 +157,7 @@ def init_server() -> dict[str, Any]:
     # Build component configurations
     graph_db_config = build_graph_db_config()
     llm_config = build_llm_config()
+    feedback_llm_config = build_feedback_llm_config()
     chat_llm_config = build_chat_llm_config()
     playground_chat_llm_config = build_chat_llm_config("PLAYGROUND_CHAT_MODEL_LIST")
     embedder_config = build_embedder_config()
@@ -170,6 +172,7 @@ def init_server() -> dict[str, Any]:
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
     llm = LLMFactory.from_config(llm_config)
+    feedback_llm = LLMFactory.from_config(feedback_llm_config)
     chat_llms = (
         _init_chat_llms(chat_llm_config)
         if os.getenv("ENABLE_CHAT_API", "false") == "true"
@@ -260,7 +263,7 @@ def init_server() -> dict[str, Any]:
 
     # Initialize feedback server
     feedback_server = SimpleMemFeedback(
-        llm=llm,
+        llm=feedback_llm,
         embedder=embedder,
         graph_store=graph_db,
         memory_manager=memory_manager,
