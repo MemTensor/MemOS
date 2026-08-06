@@ -7,14 +7,12 @@
  * subcommand (`hermes --skills memory-routing chat`) was silently
  * missed and the viewer was stuck on `"disconnected"`.
  *
- * The pattern under test is `hermes(\s+\S+)*\s+chat\b` — these cases
- * lock in the exact shape of the fix. It must stay valid POSIX ERE
- * (no `(?:…)` groups): glibc ERE rejects non-capturing groups, so a
- * PCRE-ism in the pattern makes every `pgrep -f` call fail with a
- * regex error and `isHermesChatRunning()` return `false` forever.
+ * The pgrep pattern uses POSIX character classes while the JS helper
+ * uses equivalent `\s` / `\S` tokens. These cases lock in both the
+ * shared command grammar and the exact wire format passed to pgrep.
  */
-import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   HERMES_CHAT_PROCESS_PATTERN,
@@ -27,21 +25,23 @@ describe("HERMES_CHAT_PROCESS_PATTERN", () => {
     // If this string ever changes, audit `bridge.cts` callers and the
     // issue description before adjusting — the constant is the only
     // surface that fixes the substring-detection bug.
-    expect(HERMES_CHAT_PROCESS_PATTERN).toBe("hermes(\\s+\\S+)*\\s+chat\\b");
+    expect(HERMES_CHAT_PROCESS_PATTERN).toBe(
+      "hermes([[:space:]]+[^[:space:]]+)*[[:space:]]+chat([[:space:]]|$)",
+    );
   });
 
-  it("compiles under glibc POSIX ERE — pgrep must not exit 2 (regex error)", () => {
-    // Regression for the `(?:…)` non-capturing group: JS RegExp accepts
-    // it, but glibc ERE (what `pgrep -f` uses on Linux) rejects the
-    // whole pattern with "Invalid preceding regular expression". Run the
-    // real binary so a PCRE-ism can never silently sneak back in.
-    // exit 0 = match, 1 = no match (both fine), 2 = regex syntax error.
-    const result = spawnSync("pgrep", ["-f", HERMES_CHAT_PROCESS_PATTERN], {
-      encoding: "utf8",
-      timeout: 2000,
-    });
-    expect(result.status).not.toBe(2);
-  });
+  it.skipIf(process.platform !== "linux")(
+    "compiles under the glibc ERE engine used by pgrep",
+    () => {
+      const result = spawnSync("pgrep", ["-f", HERMES_CHAT_PROCESS_PATTERN], {
+        encoding: "utf8",
+        timeout: 2000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect([0, 1]).toContain(result.status);
+    },
+  );
 });
 
 describe("matchesHermesChatCommandLine", () => {
@@ -92,6 +92,12 @@ describe("matchesHermesChatCommandLine", () => {
   it("does not match `hermes chatter` (chat must end at a word boundary)", () => {
     expect(
       matchesHermesChatCommandLine("/usr/local/bin/hermes chatter"),
+    ).toBe(false);
+  });
+
+  it("does not match `hermes chat-server` (chat must be a complete token)", () => {
+    expect(
+      matchesHermesChatCommandLine("/usr/local/bin/hermes chat-server"),
     ).toBe(false);
   });
 
