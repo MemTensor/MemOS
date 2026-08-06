@@ -24,14 +24,14 @@ export const restartState = signal<{ phase: RestartPhase; message?: string }>({
 });
 
 /**
- * Shape returned by `POST /api/v1/admin/restart`.
+ * Shape returned by the admin restart and clear-data endpoints.
  *
  * Matches `apps/memos-local-plugin/server/routes/admin.ts`. All fields
  * beyond `ok` are optional — the Windows-portable path emits
  * `manualRestartRequired: true` with a human `message`; the happy paths
  * omit them.
  */
-interface RestartResponse {
+export interface RestartResponse {
   ok: boolean;
   restarting?: boolean;
   manualRestartRequired?: boolean;
@@ -39,6 +39,15 @@ interface RestartResponse {
   platform?: string;
   killed?: boolean;
   error?: string;
+}
+
+function applyManualRestart(response: RestartResponse | undefined): boolean {
+  if (response?.manualRestartRequired !== true) return false;
+  restartState.value = {
+    phase: "manualRestartRequired",
+    message: response.message,
+  };
+  return true;
 }
 
 function isOpenClaw(): boolean {
@@ -114,10 +123,7 @@ export async function triggerRestart(): Promise<void> {
     // the daemon alive and returns manualRestartRequired so we can tell
     // the user to restart Hermes themselves instead of endlessly polling
     // a server that never went down.
-    if (response?.manualRestartRequired === true) {
-      restartState.value = { phase: "manualRestartRequired", message: response.message };
-      return;
-    }
+    if (applyManualRestart(response)) return;
 
     const ok = await pollHealthUntilUp(60);
     if (ok) {
@@ -147,10 +153,12 @@ export async function triggerRestart(): Promise<void> {
 }
 
 /**
- * Data cleared. Both agents self-respawn via the daemon mechanism.
+ * Data cleared. Supervised installs self-respawn; Windows portable
+ * installs stay alive long enough to request a manual Hermes restart.
  */
-export async function triggerCleared(): Promise<void> {
+export async function triggerCleared(response?: RestartResponse): Promise<void> {
   restartState.value = { phase: "restarting" };
+  if (applyManualRestart(response)) return;
   if (isOpenClaw()) {
     const ok = await pollHealthUntilUp(60);
     if (ok) {
