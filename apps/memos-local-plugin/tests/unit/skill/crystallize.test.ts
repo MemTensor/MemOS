@@ -120,6 +120,64 @@ describe("skill/crystallize", () => {
     expect(r.draft.tools).toEqual(["shell", "pip.install"]);
   });
 
+  it("derives a summary from the first step when the LLM omits it", async () => {
+    const draft = makeDraft({
+      steps: [{ title: "Inspect failure", body: "Read the package install error." }],
+    }) as unknown as Record<string, unknown>;
+    delete draft.summary;
+    const llm = fakeLlm({
+      completeJson: { "skill.crystallize": draft },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.summary).toBe("Read the package install error.");
+  });
+
+  it("prefers a retrieval blurb when deriving a missing summary", async () => {
+    const draft = makeDraft({
+      steps: [{ title: "Inspect failure", body: "Read the package install error." }],
+    }) as unknown as Record<string, unknown>;
+    delete draft.summary;
+    draft.retrieval_blurb = "Use this skill for Alpine package installation failures.";
+    const llm = fakeLlm({
+      completeJson: { "skill.crystallize": draft },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.summary).toBe(
+      "Use this skill for Alpine package installation failures.",
+    );
+  });
+
+  it("caps an explicit summary at 200 characters", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": makeDraft({ summary: "x".repeat(250) }),
+      },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.summary).toBe("x".repeat(200));
+  });
+
   it("cleans unsafe markup from LLM-derived skill fields", async () => {
     const policy = mkPolicy();
     const llm = fakeLlm({
