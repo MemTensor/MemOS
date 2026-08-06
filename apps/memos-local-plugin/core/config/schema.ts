@@ -273,10 +273,11 @@ const AlgorithmSchema = Type.Object({
     /**
      * User-turn prefixes that identify cron/scheduled episodes. When
      * the first user turn starts with any of these, the exchange-count
-     * gate is bypassed. Default: Hermes cron sentinel.
+     * gate is bypassed. Empty by default to preserve existing scoring
+     * behavior until an operator explicitly configures a sentinel.
      */
-    cronSentinels: Type.Array(Type.String(), {
-      default: ["[IMPORTANT: You are running as a scheduled cron job"],
+    cronSentinels: Type.Array(Type.String({ minLength: 1, pattern: "\\S" }), {
+      default: [],
     }),
   }, { default: {} }),
   l2Induction: Type.Object({

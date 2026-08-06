@@ -205,6 +205,29 @@ viewer:
     expect("dimensions" in cfg.embedding).toBe(false);
   });
 
+  describe("algorithm.reward.cronSentinels", () => {
+    it("is opt-in and defaults to an empty list", () => {
+      const cfg = resolveConfig({});
+      expect(cfg.algorithm.reward.cronSentinels).toEqual([]);
+    });
+
+    it("accepts explicit non-blank prefixes", () => {
+      const cronSentinels = [
+        "[IMPORTANT: You are running as a scheduled cron job",
+      ];
+      const cfg = resolveConfig({ algorithm: { reward: { cronSentinels } } });
+      expect(cfg.algorithm.reward.cronSentinels).toEqual(cronSentinels);
+    });
+
+    it.each(["", "   "])("rejects a blank prefix (%j)", (sentinel) => {
+      expect(() =>
+        resolveConfig({
+          algorithm: { reward: { cronSentinels: [sentinel] } },
+        }),
+      ).toThrow(/schema validation/);
+    });
+  });
+
   // ─── Issue #1929 — vectorScanMaxAgeMs contract ──────────────────────
   // The schema must reject obviously bad values (negative, larger than
   // a year, or non-numbers) so a "dirty" `PATCH /api/v1/config` cannot

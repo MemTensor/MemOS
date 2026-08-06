@@ -397,7 +397,14 @@ function looksLikeTrivialContent(text: string): boolean {
 function decideSkipReason(
   snapshot: import("../session/types.js").EpisodeSnapshot,
   traces: readonly TraceRow[],
-  cfg: Pick<RewardConfig, "minExchangesForCompletion" | "minContentCharsForCompletion" | "toolHeavyRatio" | "minAssistantCharsForToolHeavy" | "cronSentinels">,
+  cfg: Pick<
+    RewardConfig,
+    | "minExchangesForCompletion"
+    | "minContentCharsForCompletion"
+    | "toolHeavyRatio"
+    | "minAssistantCharsForToolHeavy"
+    | "cronSentinels"
+  >,
 ): string | null {
   // Prefer the live snapshot's turn list; fall back to traces when the
   // snapshot came from a SQLite row (no turns materialised).
@@ -458,20 +465,17 @@ function decideSkipReason(
     // episode creation and is generally reliable, but could be absent or
     // stale in unusual recovery scenarios — if so, the episode falls through
     // to the old "skip" behavior (no false positives, just a missed score).
-    const sentinels = cfg.cronSentinels ?? [];
-    if (sentinels.length > 0) {
-      const firstUserContent =
-        userContents[0] ??
-        (snapshot.meta?.initialUserText as string | undefined) ??
-        "";
-      if (sentinels.some((s) => firstUserContent.startsWith(s))) {
-        // Cron episode — skip the exchange-count gate, fall through to content checks.
-      } else {
-        return (
-          `对话轮次不足（${exchanges} 轮），需要至少 ${cfg.minExchangesForCompletion} 轮完整的问答交互才能生成摘要。`
-        );
-      }
-    } else {
+    const metaInitialUserText = snapshot.meta?.initialUserText;
+    const firstUserContent =
+      userContents[0] ??
+      (typeof metaInitialUserText === "string" ? metaInitialUserText : "");
+    const isCronEpisode = (cfg.cronSentinels ?? []).some(
+      (sentinel) =>
+        typeof sentinel === "string" &&
+        sentinel.trim().length > 0 &&
+        firstUserContent.startsWith(sentinel),
+    );
+    if (!isCronEpisode) {
       return (
         `对话轮次不足（${exchanges} 轮），需要至少 ${cfg.minExchangesForCompletion} 轮完整的问答交互才能生成摘要。`
       );
