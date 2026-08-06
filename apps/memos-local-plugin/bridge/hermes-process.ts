@@ -26,8 +26,8 @@
  *
  * `pgrep -f` on Linux uses glibc's POSIX ERE engine, so its pattern uses
  * POSIX character classes and capturing groups only. JavaScript does not
- * implement POSIX character classes, so the test helper builds the same
- * grammar with `\s` and `\S` tokens instead.
+ * implement POSIX character classes, so the test helper declares the same
+ * grammar with `\s`, `\S`, and non-capturing groups instead.
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import * as childProcess from "node:child_process";
@@ -39,22 +39,12 @@ import * as childProcess from "node:child_process";
  * string we hand to `pgrep` and confirm we have not silently regressed
  * back to a literal substring match.
  */
-function buildHermesChatPattern(
-  space: string,
-  nonSpace: string,
-  groupStart = "(",
-): string {
-  return `hermes${groupStart}${space}+${nonSpace}+)*${space}+chat${groupStart}${space}|$)`;
-}
+export const HERMES_CHAT_PROCESS_PATTERN =
+  "hermes([[:space:]]+[^[:space:]]+)*[[:space:]]+chat([[:space:]]|$)";
 
-export const HERMES_CHAT_PROCESS_PATTERN = buildHermesChatPattern(
-  "[[:space:]]",
-  "[^[:space:]]",
-);
-
-const HERMES_CHAT_JS_PATTERN = new RegExp(
-  buildHermesChatPattern("\\s", "\\S", "(?:"),
-);
+// Keep this semantically aligned with HERMES_CHAT_PROCESS_PATTERN. POSIX ERE
+// has no non-capturing groups, while JavaScript can avoid unused captures.
+const HERMES_CHAT_JS_PATTERN = /hermes(?:\s+\S+)*\s+chat(?:\s|$)/;
 
 /**
  * JS-side equivalent of `pgrep -f HERMES_CHAT_PROCESS_PATTERN`.
