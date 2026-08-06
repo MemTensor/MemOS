@@ -10,8 +10,9 @@
  *
  *   POST /api/v1/admin/restart
  *       Agent-aware restart. For OpenClaw the plugin lives inside the
- *       gateway process, which is managed by macOS launchd — calling
- *       `process.exit(0)` causes launchd to respawn it automatically.
+ *       gateway process. Windows Scheduled Tasks do not respawn a process
+ *       that exits successfully, so Windows returns a manual handoff while
+ *       supervised Unix installs retain the process-exit restart path.
  *       For Hermes on Unix, terminate the active `hermes chat`, then ask the
  *       bridge to shut down gracefully. launchd/systemd owns replacement when
  *       supervised; portable viewers retain the detached fallback. Windows
@@ -117,6 +118,18 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
   routes.set("POST /api/v1/admin/restart", async (_ctx) => {
     const agent = options.agent ?? "unknown";
     if (agent === "openclaw") {
+      const platform = options.lifecycle?.platform ?? process.platform;
+      if (platform === "win32") {
+        return {
+          ok: true,
+          restarting: false,
+          manualRestartRequired: true,
+          platform,
+          message:
+            "Configuration saved. In PowerShell, run openclaw gateway stop, " +
+            "then openclaw gateway start.",
+        };
+      }
       setTimeout(() => process.exit(0), 300);
       return { ok: true, restarting: true };
     }

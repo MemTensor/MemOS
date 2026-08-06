@@ -10,15 +10,15 @@
 import {
   restartState,
   dismissRestartBanner,
+  resolveRestartAgent,
   type RestartPhase,
 } from "../stores/restart";
-import { health } from "../stores/health";
 import { t } from "../stores/i18n";
 import { Icon } from "./Icon";
 
 function FullScreenSpinner() {
   const s = restartState.value;
-  const agentType = health.value?.agent === "openclaw" ? "openclaw" : "hermes";
+  const agentType = resolveRestartAgent();
   const message = overlayMessage(s.phase, agentType, s.message);
   const hint = overlayHint(s.phase, agentType);
   const terminal = isTerminalPhase(s.phase);

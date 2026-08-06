@@ -16,6 +16,7 @@ import { health } from "../../../viewer/src/stores/health";
 import {
   beginClearData,
   markClearResultUnknown,
+  resolveRestartAgent,
   restartState,
   triggerCleared,
   triggerRestart,
@@ -74,6 +75,27 @@ describe("viewer restart flow", () => {
       phase: "manualRestartRequired",
       message: "Close Hermes and start it again.",
     });
+    expect(fakeWindow.location.href).toBe("");
+  });
+
+  it("shows manual restart instructions returned by Windows OpenClaw", async () => {
+    health.value = { ok: true, agent: "openclaw" };
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      restarting: false,
+      manualRestartRequired: true,
+      platform: "win32",
+      message: "Run openclaw gateway stop && openclaw gateway start.",
+    }), { status: 200 })) as typeof fetch;
+
+    await triggerRestart();
+
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+    expect(restartState.value).toEqual({
+      phase: "manualRestartRequired",
+      message: "Run openclaw gateway stop && openclaw gateway start.",
+    });
+    expect(resolveRestartAgent()).toBe("openclaw");
     expect(fakeWindow.location.href).toBe("");
   });
 
@@ -141,5 +163,36 @@ describe("viewer restart flow", () => {
     markClearResultUnknown();
 
     expect(restartState.value).toEqual({ phase: "clearResultUnknown" });
+  });
+
+  it("keeps OpenClaw restart instructions after health goes offline", () => {
+    health.value = { ok: true, agent: "openclaw" };
+
+    beginClearData();
+    health.value = null;
+    markClearResultUnknown();
+
+    expect(resolveRestartAgent()).toBe("openclaw");
+  });
+
+  it("keeps OpenClaw restart instructions when save-and-restart times out", async () => {
+    health.value = { ok: true, agent: "openclaw" };
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return new Response(JSON.stringify({ ok: true, restarting: true }), {
+          status: 200,
+        });
+      }
+      throw new TypeError("gateway is down");
+    }) as typeof fetch;
+
+    const restarting = triggerRestart();
+    const rejected = expect(restarting).rejects.toThrow("restart did not complete");
+    health.value = null;
+    await vi.runAllTimersAsync();
+    await rejected;
+
+    expect(restartState.value).toEqual({ phase: "restartFailed" });
+    expect(resolveRestartAgent()).toBe("openclaw");
   });
 });

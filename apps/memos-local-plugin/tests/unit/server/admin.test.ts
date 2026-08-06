@@ -148,6 +148,46 @@ describe("admin lifecycle routes", () => {
     expect(requestShutdown).not.toHaveBeenCalled();
   });
 
+  it("keeps Windows OpenClaw alive and returns manual gateway restart instructions", async () => {
+    const requestShutdown = vi.fn();
+    const routes = new Routes();
+    registerAdminRoutes(
+      routes,
+      { core: {} as MemoryCore },
+      {
+        agent: "openclaw",
+        lifecycle: { platform: "win32", requestShutdown },
+      },
+    );
+
+    const restart = routes.getExact("POST /api/v1/admin/restart");
+    const result = await restart!({} as never);
+
+    expect(result).toMatchObject({
+      ok: true,
+      restarting: false,
+      manualRestartRequired: true,
+      platform: "win32",
+      message: expect.stringContaining("openclaw gateway stop"),
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(requestShutdown).not.toHaveBeenCalled();
+  });
+
+  it("retains the supervised restart response for Unix OpenClaw", async () => {
+    const routes = new Routes();
+    registerAdminRoutes(
+      routes,
+      { core: {} as MemoryCore },
+      { agent: "openclaw", lifecycle: { platform: "linux", supervised: true } },
+    );
+
+    const restart = routes.getExact("POST /api/v1/admin/restart");
+    const result = await restart!({} as never);
+
+    expect(result).toEqual({ ok: true, restarting: true });
+  });
+
   it("refuses Windows clear-data while the Hermes bridge is still connected", async () => {
     const shutdown = vi.fn();
     const requestShutdown = vi.fn();

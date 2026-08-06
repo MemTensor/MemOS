@@ -185,7 +185,8 @@ const en = {
   "restart.manual": "A manual restart is required.",
   "restart.clearing": "Clearing local memory data…",
   "restart.manualClose": "Hermes is still connected.",
-  "restart.manualHint.openclaw": "Start OpenClaw again, then reopen the Memory Viewer.",
+  "restart.manualHint.openclaw":
+    "Run in PowerShell: openclaw gateway stop; then openclaw gateway start.",
   "restart.manualHint.hermes": "Close Hermes, start it again, then reopen the Memory Viewer.",
   "restart.manualCloseHint": "Close this message, fully exit Hermes, then retry clearing data.",
   "restart.clearComplete": "Local memory data has been cleared.",
@@ -201,7 +202,7 @@ const en = {
     "Start Hermes, then check whether the local memory data was cleared.",
   "restart.failed": "Restart didn't complete — the service didn't come back in time.",
   "restart.failedHint.openclaw":
-    "Try manually: openclaw gateway stop && openclaw gateway start",
+    "Run in PowerShell: openclaw gateway stop; then openclaw gateway start.",
   "restart.failedHint.hermes":
     "Try manually: stop the current Hermes session and rerun `hermes chat`",
   "common.selectAll": "Select all",
@@ -1099,7 +1100,8 @@ const zh: Record<TranslationKey, string> = {
   "restart.manual": "需要手动重启。",
   "restart.clearing": "正在清理本地记忆数据…",
   "restart.manualClose": "Hermes 仍处于连接状态。",
-  "restart.manualHint.openclaw": "请重新启动 OpenClaw，然后再次打开 Memory Viewer。",
+  "restart.manualHint.openclaw":
+    "请在 PowerShell 中依次执行：openclaw gateway stop；openclaw gateway start",
   "restart.manualHint.hermes": "请关闭 Hermes，重新启动后再打开 Memory Viewer。",
   "restart.manualCloseHint": "请关闭此提示并完全退出 Hermes，然后重新执行清空数据。",
   "restart.clearComplete": "本地记忆数据已清理。",
@@ -1113,7 +1115,7 @@ const zh: Record<TranslationKey, string> = {
   "restart.clearResultUnknownHint.hermes": "请启动 Hermes，然后检查本地记忆数据是否已清理。",
   "restart.failed": "重启超时 — 服务未能在预期时间内恢复。",
   "restart.failedHint.openclaw":
-    "请手动重启：openclaw gateway stop && openclaw gateway start",
+    "请在 PowerShell 中依次执行：openclaw gateway stop；openclaw gateway start",
   "restart.failedHint.hermes":
     "请手动重启：停止当前 Hermes 会话后重新执行 `hermes chat`",
   "common.never": "从未",
