@@ -127,7 +127,7 @@ function removeUnsupportedUserConfig(doc: ReturnType<typeof parseDoc>): void {
 }
 
 /**
- * Adapter-owned config keys the client is NEVER allowed to patch via
+ * Adapter-owned config keys the client is never allowed to patch via
  * `PATCH /api/v1/config`. See #2212: the Hermes adapter hardcodes the
  * viewer port to :18800 via `bridge.mts::AGENT_DEFAULT_PORTS`, but the
  * shared UI defaults surface :18799 (the OpenClaw port) in the resolved
@@ -142,18 +142,14 @@ function removeUnsupportedUserConfig(doc: ReturnType<typeof parseDoc>): void {
  */
 const ADAPTER_OWNED_PATCH_PATHS: readonly string[] = Object.freeze([
   "viewer.port",
-  "viewer.bindHost",
 ]);
 
 /**
- * Empty-string patches on these fields are silently dropped (like the
- * secret-field treatment in `stripEmptySecrets` on the API layer). This
- * covers UI rehydration paths where an untouched form field would
- * otherwise send `""` and overwrite a previously-configured value — the
- * companion symptom from #2212 where `embedding.endpoint` was clobbered
- * with a stray value after save. Secret fields are handled upstream.
+ * Non-empty whitespace-only patches on these fields are silently dropped.
+ * An exact empty string remains meaningful: it clears a custom endpoint
+ * and restores the provider's default base URL.
  */
-const NON_EMPTY_PATCH_PATHS: readonly string[] = Object.freeze([
+const ENDPOINT_PATCH_PATHS: readonly string[] = Object.freeze([
   "embedding.endpoint",
   "llm.endpoint",
   "l3Llm.endpoint",
@@ -161,7 +157,7 @@ const NON_EMPTY_PATCH_PATHS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * Strip adapter-owned keys and empty-string endpoints from an incoming
+ * Strip adapter-owned keys and whitespace-only endpoints from an incoming
  * patch before it reaches the YAML writer. Never mutates the caller's
  * object. Prunes now-empty parent maps so we don't leave dangling
  * `viewer: {}` in the patch (which would still be a no-op but is
@@ -178,14 +174,11 @@ function sanitizePatch(patch: Record<string, unknown>): Record<string, unknown> 
   for (const dotted of ADAPTER_OWNED_PATCH_PATHS) {
     deleteDottedPath(cloned, dotted);
   }
-  for (const dotted of NON_EMPTY_PATCH_PATHS) {
+  for (const dotted of ENDPOINT_PATCH_PATHS) {
     const value = readDottedPath(cloned, dotted);
-    // Trim before comparing so whitespace-only strings (e.g. `"   "` from
-    // a UI form) are treated the same as `""` — otherwise they'd slip past
-    // this guard and get written to disk as broken endpoint values. The
-    // typeof guard also keeps this safe if a non-string value shows up at
-    // one of these paths.
-    if (typeof value === "string" && value.trim() === "") {
+    // Preserve "" so users can reset a custom endpoint. Reject only
+    // non-empty strings that contain no usable characters.
+    if (typeof value === "string" && value.length > 0 && value.trim() === "") {
       deleteDottedPath(cloned, dotted);
     }
   }

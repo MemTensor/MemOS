@@ -129,9 +129,8 @@ skillEvolver: ""
    * cross-agent default, or from any third-party client that mirrors GET
    * back into PATCH — used to be written to disk verbatim, silently
    * corrupting the Hermes config so the bridge could not find the viewer
-   * on next start. The writer must protect adapter-owned viewer fields
-   * (`viewer.port`, `viewer.bindHost`) and preserve whatever is already
-   * on disk instead.
+   * on next start. The writer must protect the fixed `viewer.port` while
+   * leaving other viewer settings patchable.
    */
   it("ignores viewer.port in the incoming patch to protect adapter ownership", async () => {
     const original = `viewer:
@@ -159,7 +158,7 @@ llm:
     expect(text).toMatch(/port:\s*18800/);
   });
 
-  it("ignores viewer.bindHost in the incoming patch to protect adapter ownership", async () => {
+  it("allows patching viewer.bindHost because the server honors it", async () => {
     const original = `viewer:
   port: 18800
   bindHost: 127.0.0.1
@@ -172,16 +171,15 @@ llm:
     });
 
     const reloaded = await loadConfig(ctx.home);
-    expect(reloaded.config.viewer.bindHost).toBe("127.0.0.1");
+    expect(reloaded.config.viewer.bindHost).toBe("0.0.0.0");
     const text = await fs.readFile(ctx.home.configFile, "utf8");
-    expect(text).not.toMatch(/0\.0\.0\.0/);
+    expect(text).toMatch(/bindHost:\s*0\.0\.0\.0/);
   });
 
   /**
    * viewer.openOnFirstTurn is an actual user-facing preference (the UI
    * exposes it via the settings page), so it must remain patchable even
-   * though it sits under the same `viewer:` map as the adapter-owned
-   * port/bindHost fields.
+   * though it sits under the same `viewer:` map as the adapter-owned port.
    */
   it("still allows patching non-adapter viewer fields (openOnFirstTurn)", async () => {
     const original = `viewer:
@@ -201,15 +199,8 @@ llm:
     expect(reloaded.config.viewer.port).toBe(18800);
   });
 
-  /**
-   * Companion of the viewer.port guard: the reporter also observed a
-   * placeholder-looking `embedding.endpoint: "mem os"` slipping into the
-   * on-disk config after a save. Empty-string patches on `embedding.endpoint`
-   * (rehydrated by the UI when the field is untouched) must not clobber a
-   * previously-configured endpoint — mirror the treatment `stripEmptySecrets`
-   * gives to `apiKey` fields.
-   */
-  it("does not overwrite embedding.endpoint with an empty-string patch", async () => {
+  /** Empty means "use the provider default" and must remain patchable. */
+  it("allows clearing embedding.endpoint to restore the provider default", async () => {
     const original = `embedding:
   provider: openai_compatible
   endpoint: "https://api.openai.com/v1"
@@ -224,16 +215,15 @@ llm:
     });
 
     const reloaded = await loadConfig(ctx.home);
-    expect(reloaded.config.embedding.endpoint).toBe("https://api.openai.com/v1");
+    expect(reloaded.config.embedding.endpoint).toBe("");
+    const text = await fs.readFile(ctx.home.configFile, "utf8");
+    expect(text).toMatch(/endpoint:\s*""/);
   });
 
   /**
-   * Same rationale as the `""` guard above: a UI form can also submit a
-   * whitespace-only string (`"   "`) when the user tabs through the field
-   * without changing it — some HTML pickers pad the value. The guard must
-   * trim before comparing so those inputs are treated the same as empty
-   * strings, otherwise they'd get written to disk verbatim and yield a
-   * broken endpoint configuration with no visible error.
+   * A non-empty whitespace-only string is never a usable endpoint. Ignore
+   * that accidental form value without conflating it with the valid empty
+   * reset above.
    */
   it("does not overwrite endpoint fields with whitespace-only patches", async () => {
     const original = `embedding:
