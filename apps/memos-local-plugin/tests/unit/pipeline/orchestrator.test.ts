@@ -77,6 +77,39 @@ afterEach(async () => {
 });
 
 describe("pipeline/orchestrator", () => {
+  it("degrades retrieval at the adapter deadline and aborts the provider call", async () => {
+    const base = fakeEmbedder({ dimensions: 384 });
+    let sawAbort = false;
+    const embedder = {
+      ...base,
+      async embedOne(input: Parameters<typeof base.embedOne>[0], options?: { signal?: AbortSignal }) {
+        return await new Promise<Awaited<ReturnType<typeof base.embedOne>>>((resolve, reject) => {
+          const onAbort = () => {
+            sawAbort = true;
+            reject(new DOMException("deadline", "AbortError"));
+          };
+          if (options?.signal?.aborted) return onAbort();
+          options?.signal?.addEventListener("abort", onAbort, { once: true });
+          void resolve;
+        });
+      },
+    };
+    pipeline = createPipeline(buildDeps(dbHandle!, embedder));
+    const startedAt = Date.now();
+
+    const packet = await pipeline.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-deadline",
+      userText: "find the previous build decision",
+      ts: Date.now(),
+      deadlineAt: Date.now() + 25,
+    });
+
+    expect(sawAbort).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(packet.reason).toBe("turn_start");
+  });
+
   it("threads a dedicated l3Llm through to the handle", () => {
     const l3Llm = fakeLlm({ completeJson: {} });
     pipeline = createPipeline({ ...buildDeps(dbHandle!), l3Llm });

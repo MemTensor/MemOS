@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ import {
   ensureSourceHint,
   isLegacyPackageOnlyRelease,
   legacyPackageDraftFromEvidence,
+  manualDraftFromNotes,
   parseSemver,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
@@ -23,6 +24,7 @@ import {
   validateLegacyPackageNotes,
   validateManualNotes,
   versionFromTag,
+  writeDraftFailureInspection,
 } from "./draft-local-plugin-release-notes.mjs";
 
 const evidence = {
@@ -60,6 +62,17 @@ test("detects legacy package-only prereleases", () => {
   assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "" }), false);
 });
 
+test("can force a stable standalone publish to remain package-only", () => {
+  assert.equal(
+    isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest", forcePackageOnly: true }),
+    true,
+  );
+  assert.equal(
+    isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest", forcePackageOnly: false }),
+    false,
+  );
+});
+
 test("treats SemVer build metadata as stable metadata, not a prerelease channel", () => {
   assert.equal(parseSemver("2.0.13+build.7").prerelease, "");
   assert.equal(parseSemver("2.0.13-beta.1+build.7").prerelease, "beta.1");
@@ -84,7 +97,7 @@ test("uses the previous stable tag for docs-generating latest releases", () => {
   );
 });
 
-test("generates package-only prerelease notes without docs payloads", () => {
+test("generates independent prerelease notes without docs payloads", () => {
   const draft = legacyPackageDraftFromEvidence(
     {
       current_tag: "memos-local-plugin-v2.0.13-beta.1",
@@ -106,11 +119,12 @@ test("generates package-only prerelease notes without docs payloads", () => {
 
   assert.equal(draft.ok, true);
   assert.equal(draft.needs_review, false);
-  assert.equal(draft.confidence, "legacy-package-only");
+  assert.equal(draft.confidence, "standalone-prerelease-no-docs");
   assert.equal(draft.coverage.missing_required_count, 0);
   assert.match(draft.release_notes_markdown, /## Changelog/);
   assert.match(draft.release_notes_markdown, /npm `beta` dist-tag/);
-  assert.match(draft.release_notes_markdown, /package-only/);
+  assert.match(draft.release_notes_markdown, /independent local-plugin GitHub Prerelease/);
+  assert.match(draft.release_notes_markdown, /does not update the MemOS-Docs Plugin tab/);
   assert.doesNotMatch(draft.release_notes_markdown, /doc-agent: source-id=/);
   assert.doesNotMatch(draft.release_notes_markdown, /doc-agent-release-notes-json/);
 });
@@ -225,6 +239,23 @@ test("redacts server debug fields from inspection draft", () => {
   assert.equal(inspection.debug, undefined);
   assert.deepEqual(inspection.release_items[0].source_refs, ["abc1234"]);
   assert.match(inspection.redactions.model_and_prompt_details, /omitted/);
+});
+
+test("keeps release-note quality issues in the inspection draft", () => {
+  const inspection = draftForInspection({
+    ok: false,
+    needs_review: true,
+    coverage: {
+      needs_review: true,
+      required_count: 16,
+      covered_required_count: 16,
+      quality_issues: ["too many release items: 16 > 12"],
+      items_missing_source_refs: [],
+    },
+  });
+
+  assert.deepEqual(inspection.coverage.quality_issues, ["too many release items: 16 > 12"]);
+  assert.deepEqual(inspection.coverage.items_missing_source_refs, []);
 });
 
 test("postprocesses duplicate source refs into the best evidence category", () => {
@@ -673,7 +704,7 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 - local memory
 
 <!-- doc-agent-release-notes-json
-{"items":[{"text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+  {"items":[{"category":"Added","text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
 -->`;
   assert.equal(validateManualNotes(valid), valid);
   assert.match(ensureSourceHint(valid), /source-id=openclaw-local-plugin/);
@@ -686,9 +717,44 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 - local memory
 
 <!-- doc-agent-release-notes-json
-{"items":[{"text_cn":"Local memory","text_en":"本地记忆","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+  {"items":[{"category":"Added","text_cn":"Local memory","text_en":"本地记忆","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
 -->`),
     /text_cn must contain Chinese/,
+  );
+});
+
+test("manual stable notes are revalidated against collected evidence", () => {
+  const notes = `## Changelog
+
+### Fixed
+- 修复 Hermes 桥接状态恢复。
+
+<!-- doc-agent-release-notes-json
+{"items":[{"category":"Fixed","text_cn":"修复 Hermes 桥接状态恢复。","text_en":"Restores Hermes bridge state.","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+-->`;
+  const evidence = {
+    commits: [{
+      sha: "abc1234567890abc1234567890abc1234567890",
+      short_sha: "abc1234",
+      subject: "fix: restore Hermes bridge state",
+    }],
+    important_commits: [{
+      sha: "abc1234567890abc1234567890abc1234567890",
+      short_sha: "abc1234",
+      subject: "fix: restore Hermes bridge state",
+    }],
+    release_note_guidance: {
+      source_ref_category_hints: [{ source_refs: ["abc1234"], category: "Fixed" }],
+    },
+  };
+  const draft = manualDraftFromNotes(notes, evidence);
+  assert.equal(draft.ok, true);
+  assert.equal(draft.release_items[0].category, "Fixed");
+  assert.match(draft.release_notes_markdown, /source-id=openclaw-local-plugin/);
+
+  assert.throws(
+    () => manualDraftFromNotes(notes.replaceAll("abc1234", "deadbee"), evidence),
+    /failed evidence validation/,
   );
 });
 
@@ -731,6 +797,82 @@ test("retries transient draft failures and passes prior error context", async ()
     assert.equal(requests[2].workflow_retry_context.previous_errors.length, 2);
   } finally {
     process.env = previous;
+  }
+});
+
+test("reports compact quality details and preserves the rejected draft for diagnostics", async () => {
+  const previous = { ...process.env };
+  try {
+    process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL = "https://example.invalid/draft";
+    process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN = "test-token";
+    const payload = {
+      ok: false,
+      needs_review: true,
+      release_items: Array.from({ length: 16 }, (_, index) => ({
+        category: "Fixed",
+        text_cn: `修复条目 ${index + 1}`,
+        text_en: `Fix item ${index + 1}`,
+        source_refs: [`abc${String(index).padStart(4, "0")}`],
+      })),
+      coverage: {
+        needs_review: true,
+        required_count: 16,
+        covered_required_count: 16,
+        missing_required_count: 0,
+        invalid_item_refs: [],
+        items_missing_source_refs: [],
+        quality_issues: ["too many release items: 16 > 12"],
+      },
+      warnings: ["too many release items: 16 > 12"],
+      attempts: [],
+    };
+
+    await assert.rejects(
+      requestDraft(evidence, {
+        fetchImpl: async () => response(200, payload),
+        sleep: async () => {},
+      }),
+      (error) => {
+        assert.match(error.message, /too many release items: 16 > 12/);
+        assert.deepEqual(error.draftPayload, payload);
+        return true;
+      },
+    );
+  } finally {
+    process.env = previous;
+  }
+});
+
+test("writes a redacted failure artifact without endpoint or token details", () => {
+  const previous = { ...process.env };
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-draft-failure-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    writeDraftFailureInspection({
+      evidence: {
+        ...evidence,
+        important_diff: { "apps/memos-local-plugin/**": "private diff" },
+      },
+      payload: {
+        ok: false,
+        needs_review: true,
+        coverage: {
+          required_count: 16,
+          covered_required_count: 16,
+          quality_issues: ["too many release items: 16 > 12"],
+        },
+      },
+      error: new Error("failed at https://private.example/draft with Bearer secret-token"),
+    });
+
+    const report = readFileSync(join(directory, "quality-report.json"), "utf8");
+    const redactedEvidence = readFileSync(join(directory, "evidence.json"), "utf8");
+    assert.match(report, /too many release items: 16 > 12/);
+    assert.doesNotMatch(report, /private\.example|secret-token/);
+    assert.doesNotMatch(redactedEvidence, /private diff/);
+  } finally {
+    process.env = previous;
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
