@@ -219,6 +219,64 @@ describe("skill/subscriber", () => {
     sub.dispose();
   });
 
+  it("continues after a full batch is archived concurrently", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    for (let i = 0; i < 501; i++) {
+      seedSkill(h, {
+        id: `sk_concurrent_${i}` as never,
+        name: `concurrent_skill_${i}`,
+        status: "active",
+        eta: 0.05,
+        createdAt: 1 as never,
+        updatedAt: (i + 1) as never,
+        lastUsedAt: (i + 1) as never,
+      });
+    }
+
+    const bus = createSkillEventBus();
+    const events: string[] = [];
+    bus.on("skill.status.changed", (event) => {
+      if (event.kind === "skill.status.changed") events.push(event.skillId);
+    });
+    const log = rootLogger.child({ channel: "core.skill.subscriber" });
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const archiveIfIdle = h.repos.skills.archiveIfIdle.bind(h.repos.skills);
+    const archiveSpy = vi.spyOn(h.repos.skills, "archiveIfIdle").mockImplementation(
+      (id, input) => {
+        const index = Number(String(id).slice(String(id).lastIndexOf("_") + 1));
+        if (index < 500) {
+          h.repos.skills.setStatus(id, "archived", input.updatedAt);
+          return false;
+        }
+        return archiveIfIdle(id, input);
+      },
+    );
+    const sub = attachSkillSubscriber({
+      l2Bus: createL2EventBus(),
+      rewardBus: createRewardEventBus(),
+      bus,
+      repos: h.repos,
+      embedder: null,
+      llm: null,
+      log,
+      config: makeSkillConfig({ minEtaForRetrieval: 0.1, idleArchiveMs: 1_000 }),
+    });
+
+    await sub.lifecycleTick();
+
+    expect(h.repos.skills.count({ status: "archived" })).toBe(501);
+    expect(events).toEqual(["sk_concurrent_500"]);
+    expect(warnSpy).toHaveBeenCalledWith("skill.idle_archive_stalled", {
+      candidateCount: 500,
+      cutoff: expect.any(Number),
+      minEtaForRetrieval: 0.1,
+    });
+    sub.dispose();
+    archiveSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
   it("drains more than one 500-skill idle archive batch in one lifecycle tick", async () => {
     handle = makeTmpDb();
     const h = handle;

@@ -63,6 +63,19 @@ export function makeSkillsRepo(db: StorageDb) {
   const updateStatus = db.prepare(
     buildUpdate({ table: "skills", columns: ["id", "status", "updated_at"] }),
   );
+  const archiveIdle = db.prepare<{
+    id: string;
+    min_eta: number;
+    cutoff: number;
+    updated_at: number;
+  }>(
+    `UPDATE skills
+        SET status = 'archived', updated_at = @updated_at
+      WHERE id = @id
+        AND status = 'active'
+        AND eta < @min_eta
+        AND COALESCE(last_used_at, created_at) <= @cutoff`,
+  );
   const updateTrials = db.prepare(
     buildUpdate({
       table: "skills",
@@ -87,6 +100,19 @@ export function makeSkillsRepo(db: StorageDb) {
 
     setStatus(id: SkillId, status: SkillRow["status"], updatedAt: number): void {
       updateStatus.run({ id, status, updated_at: updatedAt });
+    },
+
+    archiveIfIdle(
+      id: SkillId,
+      input: { minEtaForRetrieval: number; cutoff: number; updatedAt: number },
+    ): boolean {
+      const res = archiveIdle.run({
+        id,
+        min_eta: input.minEtaForRetrieval,
+        cutoff: input.cutoff,
+        updated_at: input.updatedAt,
+      });
+      return res.changes > 0;
     },
 
     bumpTrial(

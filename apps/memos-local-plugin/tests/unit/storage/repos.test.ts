@@ -365,11 +365,23 @@ describe("storage/repos — happy paths", () => {
 
       expect(repos.skills.recordUse("old_used", 9_500)).toBe(true);
       expect(repos.skills.getById("old_used")?.lastUsedAt).toBe(9_500);
+      expect(repos.skills.archiveIfIdle("old_used", {
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        updatedAt: 10_000,
+      })).toBe(false);
+      expect(repos.skills.getById("old_used")?.status).toBe("active");
       expect(repos.skills.listIdleArchiveCandidates({
         minEtaForRetrieval: 0.1,
         cutoff: 9_000,
         limit: 500,
       }).map((skill) => skill.id)).toEqual(["never_used"]);
+      expect(repos.skills.archiveIfIdle("never_used", {
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        updatedAt: 10_000,
+      })).toBe(true);
+      expect(repos.skills.getById("never_used")?.status).toBe("archived");
     } finally {
       cleanup();
     }

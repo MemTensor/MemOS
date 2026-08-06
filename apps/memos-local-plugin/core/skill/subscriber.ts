@@ -37,6 +37,7 @@ import type { SkillId } from "../types.js";
 import { now as nowMs } from "../time.js";
 import { IDLE_ARCHIVE_BATCH_LIMIT } from "../storage/repos/skills.js";
 
+/** Bound one lifecycle pass to 5,000 archival writes. */
 const IDLE_ARCHIVE_MAX_BATCHES_PER_TICK = 10;
 
 export interface SkillSubscriberDeps
@@ -244,7 +245,12 @@ export function attachSkillSubscriber(
       let archivedThisBatch = 0;
       for (const s of archiveCandidates) {
         if (!shouldArchiveIdle(s, deps.config.idleArchiveMs, deps.config, at)) continue;
-        deps.repos.skills.setStatus(s.id, "archived", at);
+        const archived = deps.repos.skills.archiveIfIdle(s.id, {
+          minEtaForRetrieval: deps.config.minEtaForRetrieval,
+          cutoff,
+          updatedAt: at,
+        });
+        if (!archived) continue;
         archivedThisBatch += 1;
         archivedTotal += 1;
         log.info("skill.idle_archived", {
@@ -269,7 +275,8 @@ export function attachSkillSubscriber(
           cutoff,
           minEtaForRetrieval: deps.config.minEtaForRetrieval,
         });
-        break;
+        if (archiveCandidates.length < IDLE_ARCHIVE_BATCH_LIMIT) break;
+        continue;
       }
       if (archiveCandidates.length < IDLE_ARCHIVE_BATCH_LIMIT) break;
       if (batchesProcessed === IDLE_ARCHIVE_MAX_BATCHES_PER_TICK) {
