@@ -107,7 +107,7 @@ export function acquireOpenClawRuntimeLock(
       }
       // A live self PID without a locally held lock can only be a stale owner
       // from an earlier process lifecycle whose PID was recycled by the OS.
-      if (owner && owner.pid !== process.pid && pidIsAlive(owner.pid)) {
+      if (owner && owner.pid !== pid && pidIsAlive(owner.pid)) {
         throw new DuplicateOpenClawRuntimeError(lockDir, owner);
       }
       if (!owner && !lockLooksStale(lockDir, now(), unwrittenOwnerStaleMs)) {

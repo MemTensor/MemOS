@@ -128,6 +128,32 @@ describe("OpenClaw runtime lock", () => {
     lock.release();
   });
 
+  it("reclaims a stale owner whose PID matches the configured owner PID", () => {
+    const home = tmpHome();
+    const lockDir = openClawRuntimeLockDir(home);
+    const ownerPid = process.ppid;
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({
+        pluginId: "memos-local-plugin",
+        version: "old",
+        pid: ownerPid,
+        token: "stale-configured-pid-token",
+        startedAt: 1,
+        dbFile: home.dbFile,
+        viewerPort: 18799,
+      }),
+      "utf8",
+    );
+
+    const lock = acquire(home, ownerPid);
+    expect(lock.owner.pid).toBe(ownerPid);
+    expect(lock.owner.token).not.toBe("stale-configured-pid-token");
+
+    lock.release();
+  });
+
   it("allows diagnostic mode to skip lock when gateway is running", () => {
     const home = tmpHome();
     const gatewayLock = acquire(home, process.pid, false);
