@@ -161,6 +161,23 @@ describe("skill/crystallize", () => {
     );
   });
 
+  it("caps an explicit summary at 200 characters", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": makeDraft({ summary: "x".repeat(250) }),
+      },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.summary).toBe("x".repeat(200));
+  });
+
   it("cleans unsafe markup from LLM-derived skill fields", async () => {
     const policy = mkPolicy();
     const llm = fakeLlm({
