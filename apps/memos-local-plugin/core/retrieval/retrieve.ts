@@ -34,10 +34,10 @@ import type { RetrievalEventBus } from "./events.js";
 import { dedupeTraceEpisodeByEpisodeId } from "./dedupe-trace-episode.js";
 import { toPacket, renderSnippetForDebug } from "./injector.js";
 import { llmFilterCandidates } from "./llm-filter.js";
-import { rank, type RankedCandidate } from "./ranker.js";
+import { rank } from "./ranker.js";
 import { runTier1 } from "./tier1-skill.js";
 import { runTier2Experience } from "./tier2-experience.js";
-import { runTier2 } from "./tier2-trace.js";
+import { runTier2, type Tier2Input } from "./tier2-trace.js";
 import { runTier3 } from "./tier3-world.js";
 import type {
   EpisodeCandidate,
@@ -45,6 +45,7 @@ import type {
   RetrievalCtx,
   RetrievalDeps,
   RetrievalResult,
+  RetrievalProfile,
   RetrievalStats,
   SkillCandidate,
   TraceCandidate,
@@ -74,10 +75,15 @@ export interface RetrieveOptions {
    * one unified final LLM filter across all routes.
    */
   skipLlmFilter?: boolean;
+  /** Shared foreground cancellation signal. */
+  signal?: AbortSignal;
+  /** Absolute request deadline used to cap optional LLM filtering. */
+  deadlineAt?: number;
 }
 
 export interface RetrievePlanOverride {
   scenarioId?: string;
+  profile?: RetrievalProfile;
   wantTier1?: boolean;
   wantTier2?: boolean;
   wantTier3?: boolean;
@@ -205,6 +211,7 @@ export async function repairRetrieve(
 
 interface RunPlan {
   scenarioId?: string;
+  profile?: RetrievalProfile;
   wantTier1: boolean;
   wantTier2: boolean;
   wantTier3: boolean;
@@ -218,6 +225,7 @@ function applyPlanOverride(plan: RunPlan, override?: RetrievePlanOverride): RunP
   return {
     ...plan,
     scenarioId: override.scenarioId ?? plan.scenarioId,
+    profile: override.profile ?? plan.profile,
     wantTier1: override.wantTier1 ?? plan.wantTier1,
     wantTier2: override.wantTier2 ?? plan.wantTier2,
     wantTier3: override.wantTier3 ?? plan.wantTier3,
@@ -254,36 +262,48 @@ async function runAll(
       degraded: false,
     };
     const queryVec = compiled.text
-      ? await deps.embedder.embed(compiled.text, "query").then((vec) => {
-          embeddingStats.ok = true;
-          return vec;
-        }).catch((err) => {
-          const code = (err as { code?: string })?.code;
-          const message = err instanceof Error ? err.message : String(err);
-          embeddingStats.degraded = true;
-          embeddingStats.errorCode = code;
-          embeddingStats.errorMessage = message;
-          log.warn("embed_failed", {
-            reason: ctx.reason,
-            code,
-            err: message,
-          });
-          return null;
-        })
+      ? await deps.embedder
+          .embed(compiled.text, "query", {
+            signal: opts.signal,
+            deadlineAt: opts.deadlineAt,
+          })
+          .then((vec) => {
+            embeddingStats.ok = true;
+            return vec;
+          })
+          .catch((err) => {
+            const code = (err as { code?: string })?.code;
+            const message = err instanceof Error ? err.message : String(err);
+            embeddingStats.degraded = true;
+            embeddingStats.errorCode = code;
+            embeddingStats.errorMessage = message;
+            log.warn("embed_failed", {
+              reason: ctx.reason,
+              code,
+              err: message,
+            });
+            return null;
+          })
       : null;
 
     // The keyword channels (FTS + pattern) work even without an embedder,
     // so we no longer short-circuit on `emptyVec`. We only require *some*
     // channel to be armed.
     const haveKeywordChannel =
-      !!compiled.ftsMatch || (compiled.patternTerms?.length ?? 0) > 0;
+      !!compiled.ftsMatch ||
+      compiled.patternTerms.length > 0 ||
+      compiled.exactIdentifiers.length > 0;
     const noUsableChannel = !queryVec && !haveKeywordChannel;
 
     // Kick off the tiers in parallel — each resolves to its own list.
     const wantTier1 = plan.wantTier1 && deps.config.tier1TopK > 0;
     const wantTier2 = plan.wantTier2 && deps.config.tier2TopK > 0;
     const wantTier3 = plan.wantTier3 && deps.config.tier3TopK > 0;
-    const traceOnly = plan.traceOnly === true || deps.config.lightweightMemory === true;
+    const profile = plan.profile ?? "default";
+    const traceOnly =
+      plan.traceOnly === true ||
+      deps.config.lightweightMemory === true ||
+      profile === "personal_fact";
 
     const tier1Start = Date.now();
     const tier1Promise: Promise<SkillCandidate[]> =
@@ -296,11 +316,13 @@ async function runAll(
               rawText: compiled.text,
               ftsMatch: compiled.ftsMatch,
               patternTerms: compiled.patternTerms,
+              exactIdentifiers: compiled.exactIdentifiers,
             },
           )
         : Promise.resolve([]);
 
     const tier2Start = Date.now();
+    const currentVisibleContext = resolveVisibleContext(ctx, sessionId, deps.config);
     const tier2Promise: Promise<{ traces: TraceCandidate[]; episodes: EpisodeCandidate[] }> =
       wantTier2 && !noUsableChannel
         ? runTier2(
@@ -311,11 +333,10 @@ async function runAll(
               structuralFragments: compiled.structuralFragments,
               ftsMatch: compiled.ftsMatch,
               patternTerms: compiled.patternTerms,
+              exactIdentifiers: compiled.exactIdentifiers,
+              profile,
               includeLowValue: plan.includeLowValue,
-              excludeSessionId:
-                ctx.reason === "turn_start" && sessionId && !deps.config.lightweightMemory
-                  ? sessionId
-                  : undefined,
+              ...currentVisibleContext,
             },
           )
         : Promise.resolve({ traces: [], episodes: [] });
@@ -328,6 +349,7 @@ async function runAll(
               queryVec,
               ftsMatch: compiled.ftsMatch,
               patternTerms: compiled.patternTerms,
+              exactIdentifiers: compiled.exactIdentifiers,
             },
           )
         : Promise.resolve([]);
@@ -341,6 +363,7 @@ async function runAll(
               queryVec: queryVec ?? null,
               ftsMatch: compiled.ftsMatch,
               patternTerms: compiled.patternTerms,
+              exactIdentifiers: compiled.exactIdentifiers,
             },
           )
         : Promise.resolve([]);
@@ -353,33 +376,33 @@ async function runAll(
     ]);
 
     const tier1LatencyMs = wantTier1 ? Date.now() - tier1Start : 0;
-    const tier2LatencyMs = wantTier2 ? Date.now() - tier2Start : 0;
+    let tier2LatencyMs = wantTier2 ? Date.now() - tier2Start : 0;
     const tier3LatencyMs = wantTier3 ? Date.now() - tier3Start : 0;
 
     const fuseStart = Date.now();
-    const rawCandidateCount =
+    let activeTier2 = tier2;
+    let rawCandidateCount =
       tier1.length +
-      tier2.traces.length +
-      tier2.episodes.length +
+      activeTier2.traces.length +
+      activeTier2.episodes.length +
       tier2Experiences.length +
       tier3.length;
-    const ranked = rank({
+    const exactIdentifiers =
+      ctx.reason === "decision_repair" ? [] : compiled.exactIdentifiers;
+    let ranked = rank({
       tier1,
-      tier2Traces: tier2.traces,
-      tier2Episodes: traceOnly ? [] : tier2.episodes,
+      tier2Traces: activeTier2.traces,
+      tier2Episodes: traceOnly ? [] : activeTier2.episodes,
       tier2Experiences,
       tier3,
       limit: plan.limit,
       config: deps.config,
       now: deps.now(),
+      profile,
+      exactIdentifiers,
     });
-    const mechanicalRanked = ctx.reason !== "decision_repair" &&
-      requiresKeywordConfirmation(compiled.text)
-      ? ranked.ranked.filter((candidate) =>
-          bypassesKeywordConfirmation(candidate) || hasKeywordChannel(candidate)
-        )
-      : ranked.ranked;
-    const fuseLatencyMs = Date.now() - fuseStart;
+    let mechanicalRanked = ranked.ranked;
+    let fuseLatencyMs = Date.now() - fuseStart;
 
     // ─── LLM relevance filter ──────────────────────────────────────────
     // Mechanical retrieval produces high-recall but low-precision
@@ -389,7 +412,7 @@ async function runAll(
     // keeps the mechanical ranking so local lightweight memories remain
     // searchable in offline/default installs.
     const queryText = (ctx as { userText?: string }).userText ?? compiled.text ?? "";
-    const filterResult = opts.skipLlmFilter
+    let filterResult = opts.skipLlmFilter
       ? {
           kept: mechanicalRanked,
           dropped: [],
@@ -397,14 +420,99 @@ async function runAll(
           sufficient: null,
         }
       : await llmFilterCandidates(
-          { query: queryText, ranked: mechanicalRanked, episodeId },
+          { query: queryText, ranked: mechanicalRanked, episodeId, profile },
           {
             llm: deps.llm ?? null,
             log,
             config: deps.config,
+            signal: opts.signal,
+            deadlineAt: opts.deadlineAt,
+            timeoutMs: filterTimeoutMs(opts.deadlineAt),
           },
         );
+
+    let retrievalPasses = 1;
+    if (
+      profile === "personal_fact" &&
+      filterResult.kept.length === 0 &&
+      (filterResult.outcome === "llm_filtered_empty" ||
+        mechanicalRanked.length === 0) &&
+      wantTier2 &&
+      queryVec &&
+      !opts.skipLlmFilter
+    ) {
+      const wideningStartedAt = Date.now();
+      const widenedTier2 = await runTier2(
+        { repos: deps.repos, config: deps.config, now: deps.now },
+        {
+          queryVec,
+          tags: compiled.tags,
+          structuralFragments: compiled.structuralFragments,
+          ftsMatch: compiled.ftsMatch,
+          patternTerms: compiled.patternTerms,
+          exactIdentifiers: compiled.exactIdentifiers,
+          profile,
+          includeActionVector: true,
+          includeLowValue: plan.includeLowValue,
+          ...currentVisibleContext,
+        },
+      );
+      tier2LatencyMs += Date.now() - wideningStartedAt;
+
+      const wideningFuseStartedAt = Date.now();
+      const widenedRanked = rank({
+        tier1: [],
+        tier2Traces: widenedTier2.traces,
+        tier2Episodes: [],
+        tier2Experiences: [],
+        tier3: [],
+        limit: plan.limit,
+        config: deps.config,
+        now: deps.now(),
+        profile,
+        exactIdentifiers,
+      });
+      const widenedMechanical = widenedRanked.ranked;
+      fuseLatencyMs += Date.now() - wideningFuseStartedAt;
+      const widenedFilter = await llmFilterCandidates(
+        {
+          query: queryText,
+          ranked: widenedMechanical,
+          episodeId,
+          profile,
+        },
+        {
+          llm: deps.llm ?? null,
+          log,
+          config: deps.config,
+          signal: opts.signal,
+          deadlineAt: opts.deadlineAt,
+          timeoutMs: filterTimeoutMs(opts.deadlineAt),
+        },
+      );
+
+      activeTier2 = widenedTier2;
+      ranked = widenedRanked;
+      mechanicalRanked = widenedMechanical;
+      filterResult = widenedFilter;
+      rawCandidateCount = widenedTier2.traces.length;
+      retrievalPasses = 2;
+      log.debug("retrieval.widened", {
+        profile,
+        pass: retrievalPasses,
+        actionChannel: true,
+        candidates: rawCandidateCount,
+        outcome: widenedFilter.outcome,
+      });
+    }
     const filtered = filterResult;
+    for (const candidate of mechanicalRanked) {
+      log.debug("rank.candidate", {
+        refKind: candidate.candidate.refKind,
+        refId: candidate.candidate.refId,
+        ...candidate.scoreDetails,
+      });
+    }
     log.debug("llm_filter.done", {
       outcome: filtered.outcome,
       enforced: false,
@@ -412,6 +520,9 @@ async function runAll(
       raw: rawCandidateCount,
       afterThreshold: mechanicalRanked.length,
       droppedByThreshold: ranked.droppedByThreshold,
+      dedupedBeforeMmr: ranked.dedupedBeforeMmr,
+      dedupedAfterThreshold: ranked.dedupedAfterThreshold,
+      droppedByKeywordConfirmation: ranked.droppedByKeywordConfirmation,
       thresholdFloor: round(ranked.thresholdFloor, 3),
       topRelevance: round(ranked.topRelevance, 3),
       kept: filtered.kept.length,
@@ -471,12 +582,21 @@ async function runAll(
     // "initial N → kept M" without the viewer having to re-run the
     // mechanical pipeline.
     packet.droppedByLlm = filtered.dropped
-      .map((r) => renderSnippetForDebug(r.candidate))
+      .map((r) => {
+        const snippet = renderSnippetForDebug(r.candidate);
+        if (snippet) {
+          snippet.score = round(r.score, 4);
+          snippet.scoreDetails = r.scoreDetails;
+        }
+        return snippet;
+      })
       .filter((s): s is NonNullable<typeof s> => s !== null);
 
     const stats: RetrievalStats = {
       reason: ctx.reason,
       scenarioId: plan.scenarioId,
+      profile,
+      retrievalPasses,
       agent,
       sessionId,
       episodeId,
@@ -486,7 +606,10 @@ async function runAll(
         tier3: plan.wantTier3,
       },
       tier1Count: tier1.length,
-      tier2Count: tier2.traces.length + (traceOnly ? 0 : tier2.episodes.length) + tier2Experiences.length,
+      tier2Count:
+        activeTier2.traces.length +
+        (traceOnly ? 0 : activeTier2.episodes.length) +
+        tier2Experiences.length,
       tier3Count: tier3.length,
       tier1LatencyMs,
       tier2LatencyMs,
@@ -495,10 +618,15 @@ async function runAll(
       totalLatencyMs: Date.now() - ts,
       queryTokens: approxTokens(compiled.text),
       queryTags: compiled.tags,
+      exactIdentifierCount: compiled.exactIdentifiers.length,
       emptyPacket: packet.snippets.length === 0,
       embedding: embeddingStats,
       rawCandidateCount,
       droppedByThresholdCount: ranked.droppedByThreshold,
+      dedupedBeforeMmrCount: ranked.dedupedBeforeMmr,
+      dedupedAfterThresholdCount: ranked.dedupedAfterThreshold,
+      droppedByKeywordConfirmationCount:
+        ranked.droppedByKeywordConfirmation,
       thresholdFloor: ranked.thresholdFloor,
       topRelevance: ranked.topRelevance,
       rankedCount: mechanicalRanked.length,
@@ -515,8 +643,8 @@ async function runAll(
       reason: ctx.reason,
       sessionId,
       tier1: tier1.length,
-      tier2: tier2.traces.length,
-      tier2Ep: traceOnly ? 0 : tier2.episodes.length,
+      tier2: activeTier2.traces.length,
+      tier2Ep: traceOnly ? 0 : activeTier2.episodes.length,
       tier2Experience: tier2Experiences.length,
       tier3: tier3.length,
       kept: packet.snippets.length,
@@ -554,6 +682,11 @@ async function runAll(
     });
     return emptyResult(ctx.reason, agent, sessionId, episodeId, ts, deps.now());
   }
+}
+
+function filterTimeoutMs(deadlineAt?: number): number | undefined {
+  if (deadlineAt === undefined) return undefined;
+  return Math.max(1, Math.min(2_000, deadlineAt - Date.now()));
 }
 
 function emptyResult(
@@ -596,31 +729,52 @@ function emptyResult(
   };
 }
 
-function requiresKeywordConfirmation(text: string): boolean {
-  const tokens = text.match(/[A-Za-z0-9_:-]{12,}/g) ?? [];
-  return tokens.some((token) => {
-    const hasIdentifierShape = /[_:-]/.test(token) || /\d/.test(token);
-    const hasEnoughEntropy = /[A-Za-z]/.test(token) && token.length >= 16;
-    return hasIdentifierShape && hasEnoughEntropy;
-  });
-}
-
-function hasKeywordChannel(candidate: RankedCandidate): boolean {
-  return (candidate.candidate.channels ?? []).some((channel) =>
-    channel.channel === "fts" ||
-    channel.channel === "pattern" ||
-    channel.channel === "structural"
-  );
-}
-
-function bypassesKeywordConfirmation(candidate: RankedCandidate): boolean {
-  const refKind = candidate.candidate.refKind;
-  return refKind === "skill" || refKind === "world-model";
-}
-
 function approxTokens(s: string): number {
   if (!s) return 0;
   return Math.ceil(s.length / 4);
+}
+
+function resolveVisibleContext(
+  ctx: RetrievalCtx,
+  sessionId: SessionId | undefined,
+  config: RetrievalDeps["config"],
+): Pick<Tier2Input, "visibleContext" | "excludeSessionId"> {
+  if (
+    ctx.reason !== "turn_start" ||
+    !sessionId ||
+    config.lightweightMemory
+  ) {
+    return {};
+  }
+
+  const hints = ctx.contextHints;
+  if (hints?.visibleContextKnown !== true) {
+    // Backward compatibility for adapters that cannot yet report the
+    // model-visible window. This preserves the old no-repeat behaviour
+    // instead of guessing that the session has been compacted.
+    return { excludeSessionId: sessionId };
+  }
+
+  const rawStartTs = hints.visibleContextStartTs;
+  const startTs =
+    typeof rawStartTs === "number" && Number.isFinite(rawStartTs)
+      ? rawStartTs
+      : undefined;
+  const userTexts = Array.isArray(hints.visibleContextUserTexts)
+    ? hints.visibleContextUserTexts
+        .filter((text): text is string => typeof text === "string")
+        .map((text) => text.trim())
+        .filter(Boolean)
+        .slice(-128)
+    : [];
+
+  return {
+    visibleContext: {
+      sessionId,
+      ...(startTs !== undefined ? { startTs } : {}),
+      ...(userTexts.length > 0 ? { userTexts } : {}),
+    },
+  };
 }
 
 function round(n: number, d: number): number {

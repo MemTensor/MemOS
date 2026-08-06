@@ -103,6 +103,11 @@ export interface TurnInputDTO {
   contextHints?: Record<string, unknown>;
   /** Wall-clock when the turn began. */
   ts: EpochMs;
+  /**
+   * Absolute adapter deadline for foreground work. Every pipeline stage
+   * shares this budget; it is not reset after relation or intent handling.
+   */
+  deadlineAt?: EpochMs;
 }
 
 export interface TurnResultDTO {
@@ -644,6 +649,21 @@ export interface InjectionSnippet {
   title?: string;
   body: string;
   score?: number;
+  /** Structured score composition for retrieval logs and diagnostics. */
+  scoreDetails?: InjectionScoreDetails;
+}
+
+export interface InjectionScoreDetails {
+  profile: string;
+  semantic: number;
+  tierBoost: number;
+  rrfBoost: number;
+  relevance: number;
+  mmrLambda: number;
+  redundancy: number;
+  finalScore: number;
+  channels: string[];
+  bypassedThreshold: boolean;
 }
 
 /**

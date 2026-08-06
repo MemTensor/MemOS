@@ -442,6 +442,29 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(snapshot, "")
         self.assertFalse(any(method == "turn.start" for method, _ in bridge.calls))
 
+    def test_compression_boundary_is_forwarded_to_next_turn_retrieval(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider.time.time", return_value=1_700_000_123.456),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("compress-session")
+            provider.on_pre_compress([{"role": "user", "content": "old visible turn"}])
+            provider.on_turn_start(3, "what did we discuss before compression?")
+            provider.prefetch("what did we discuss before compression?")
+
+        turn_start = next(
+            payload for method, payload in reversed(bridge.calls) if method == "turn.start"
+        )
+        self.assertEqual(
+            turn_start["contextHints"]["visibleContextStartTs"],
+            1_700_000_123_456,
+        )
+        self.assertTrue(turn_start["contextHints"]["visibleContextKnown"])
+
     def test_prefetch_passes_stable_turn_key_to_bridge(self) -> None:
         bridge = FakeBridge()
         with (
@@ -456,6 +479,75 @@ class HermesProviderPipelineTests(unittest.TestCase):
 
         turn_start = next(params for method, params in bridge.calls if method == "turn.start")
         self.assertEqual(turn_start["turnKey"], "turn-key-session:7")
+
+    def test_prefetch_uses_a_dedicated_budget_and_forwards_absolute_deadline(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider._PREFETCH_RPC_TIMEOUT", 6.0),
+            patch("memos_provider.time.time", return_value=1_700_000_000.0),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("budget-session")
+            provider.on_turn_start(1, "recall the build decision")
+            with patch.object(
+                provider,
+                "_bridge_request_with_retry",
+                wraps=provider._bridge_request_with_retry,
+            ) as request:
+                provider.prefetch("recall the build decision")
+
+        turn_start = next(params for method, params in bridge.calls if method == "turn.start")
+        self.assertEqual(turn_start["deadlineAt"], 1_700_000_005_750)
+        request.assert_called_once()
+        self.assertLessEqual(request.call_args.kwargs["timeout"], 6.0)
+        self.assertIn("deadline_monotonic", request.call_args.kwargs)
+
+    def test_prefetch_budget_includes_bridge_ensure_time(self) -> None:
+        bridge = FakeBridge()
+        monotonic_now = [100.0]
+
+        def ensure_bridge(_session_id: str, *, timeout: float) -> bool:
+            self.assertAlmostEqual(timeout, 6.0, places=3)
+            monotonic_now[0] += 2.5
+            return True
+
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider._PREFETCH_RPC_TIMEOUT", 6.0),
+            patch("memos_provider.time.time", return_value=1_700_000_000.0),
+            patch("memos_provider.time.monotonic", side_effect=lambda: monotonic_now[0]),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("budget-session")
+            provider.on_turn_start(1, "recall the build decision")
+            with (
+                patch.object(provider, "_ensure_bridge", side_effect=ensure_bridge),
+                patch.object(
+                    provider,
+                    "_bridge_request_with_retry",
+                    wraps=provider._bridge_request_with_retry,
+                ) as request,
+            ):
+                provider.prefetch("recall the build decision")
+
+        self.assertLessEqual(request.call_args.kwargs["timeout"], 3.5)
+        turn_start = next(params for method, params in bridge.calls if method == "turn.start")
+        self.assertEqual(turn_start["deadlineAt"], 1_700_000_005_750)
+
+    def test_prefetch_timeout_config_rejects_non_positive_values(self) -> None:
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "0"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 6.0)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "nan"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 6.0)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "4.5"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 4.5)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "30"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 7.0)
 
     def test_prefetch_suppresses_memory_injection_for_explicit_delegation(self) -> None:
         bridge = FakeBridge()

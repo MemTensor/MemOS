@@ -110,6 +110,7 @@ export {
   MistralEmbeddingProvider,
   type EmbedCache,
   type EmbedCacheStats,
+  type EmbedCallOptions,
   type EmbedInput,
   type EmbedRole,
   type EmbedStats,

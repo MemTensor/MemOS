@@ -6,8 +6,10 @@ import { initTestLogger } from "../../../core/logger/index.js";
 import type {
   EmbedRole,
   EmbeddingConfig,
+  EmbeddingErrorDetail,
   EmbeddingProvider,
   EmbeddingProviderName,
+  EmbeddingStatusDetail,
   ProviderCallCtx,
 } from "../../../core/embedding/types.js";
 
@@ -73,6 +75,24 @@ describe("embedder facade", () => {
     expect(v).toBeInstanceOf(Float32Array);
     expect(v.length).toBe(3);
     expect(Array.from(v)).toEqual([3, 97, 0]); // a=97
+  });
+
+  it("forwards the caller abort signal and deadline to the provider", async () => {
+    const seen: Array<Pick<ProviderCallCtx, "signal" | "deadlineAt">> = [];
+    const p: EmbeddingProvider = {
+      name: "openai_compatible",
+      async embed(texts, _role, ctx) {
+        seen.push({ signal: ctx.signal, deadlineAt: ctx.deadlineAt });
+        return texts.map(() => [1, 2, 3]);
+      },
+    };
+    const e = createEmbedderWithProvider(cfg(), p);
+    const controller = new AbortController();
+
+    const deadlineAt = Date.now() + 1_000;
+    await e.embedOne("signal", { signal: controller.signal, deadlineAt });
+
+    expect(seen).toEqual([{ signal: controller.signal, deadlineAt }]);
   });
 
   it("dedups identical inputs into one provider call", async () => {
@@ -173,6 +193,45 @@ describe("embedder facade", () => {
       expect(err).toBeInstanceOf(MemosError);
       expect((err as MemosError).code).toBe("embedding_unavailable");
     }
+  });
+
+  it("preserves deferred retry diagnostics in error and status sinks", async () => {
+    const errors: EmbeddingErrorDetail[] = [];
+    const statuses: EmbeddingStatusDetail[] = [];
+    const retryAt = Date.now() + 120_000;
+    const provider: EmbeddingProvider = {
+      name: "openai_compatible",
+      async embed() {
+        throw new MemosError("embedding_unavailable", "provider cooldown", {
+          retryAfterMs: 120_000,
+          retryAt,
+          retryDecision: "defer",
+          retryReason: "retry_after_too_long",
+        });
+      },
+    };
+    const e = createEmbedderWithProvider(
+      cfg({ onError: (detail) => errors.push(detail), onStatus: (detail) => statuses.push(detail) }),
+      provider,
+    );
+
+    await expect(e.embedOne("x")).rejects.toBeInstanceOf(MemosError);
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: "error",
+        retryAt,
+        retryDecision: "defer",
+      }),
+    );
   });
 
   it("rejects when provider returns too few rows", async () => {

@@ -50,19 +50,20 @@ export type Tier1Input =
       rawText: string;
       ftsMatch?: string | null;
       patternTerms?: readonly string[];
+      exactIdentifiers?: readonly string[];
     }
   | {
       kind: "raw";
       text: string;
       ftsMatch?: string | null;
       patternTerms?: readonly string[];
+      exactIdentifiers?: readonly string[];
     };
 
 interface CandidateState {
   cosine: number;
   channels: ChannelRank[];
   meta: { name: string; status: SkillStatus; eta: number; gain: number };
-  vec: EmbeddingVector | null;
 }
 
 export async function runTier1(
@@ -75,11 +76,15 @@ export async function runTier1(
     const queryVec = await resolveVec(deps, input);
     const ftsMatch = "ftsMatch" in input ? input.ftsMatch ?? null : null;
     const patternTerms = "patternTerms" in input ? input.patternTerms ?? [] : [];
+    const exactIdentifiers =
+      "exactIdentifiers" in input ? input.exactIdentifiers ?? [] : [];
 
     const haveVec = !!queryVec && queryVec.length > 0;
     const haveFts = !!ftsMatch && !!repos.skills.searchByText;
     const havePattern = patternTerms.length > 0 && !!repos.skills.searchByPattern;
-    if (!haveVec && !haveFts && !havePattern) {
+    const haveExact =
+      exactIdentifiers.length > 0 && !!repos.skills.searchByPattern;
+    if (!haveVec && !haveFts && !havePattern && !haveExact) {
       log.debug("empty_query", { reason: "no channels armed" });
       return [];
     }
@@ -106,7 +111,6 @@ export async function runTier1(
           rank: idx,
           score: h.score,
           meta: h.meta,
-          vec: queryVec!,
         });
       });
     }
@@ -120,7 +124,6 @@ export async function runTier1(
           rank: idx,
           score: h.score,
           meta: h.meta,
-          vec: queryVec ?? null,
         });
       });
     }
@@ -136,7 +139,23 @@ export async function runTier1(
           rank: idx,
           score: h.score,
           meta: h.meta,
-          vec: queryVec ?? null,
+        });
+      });
+    }
+
+    if (haveExact) {
+      const exactHits = repos.skills.searchByPattern!(
+        exactIdentifiers,
+        keywordPoolSize,
+        { statusIn },
+      );
+      exactHits.forEach((h, idx) => {
+        upsertCandidate(merged, h.id as SkillId, {
+          cosine: 0,
+          channel: "exact_identifier",
+          rank: idx,
+          score: 1,
+          meta: h.meta,
         });
       });
     }
@@ -165,7 +184,7 @@ export async function runTier1(
         refId: sk.id,
         cosine: state.cosine,
         ts: Date.now(),
-        vec: state.vec,
+        vec: sk.vec ?? null,
         skillName: sk.name,
         eta: sk.eta,
         status: sk.status,
@@ -189,6 +208,7 @@ export async function runTier1(
         vec: haveVec,
         fts: haveFts,
         pattern: havePattern,
+        exactIdentifier: haveExact,
       },
       latencyMs: Date.now() - startedAt,
     });
@@ -245,7 +265,6 @@ function upsertCandidate(
     rank: number;
     score: number;
     meta?: { name: string; status: SkillStatus; eta: number; gain: number };
-    vec: EmbeddingVector | null;
   },
 ): void {
   const entry = into.get(id);
@@ -255,13 +274,11 @@ function upsertCandidate(
       cosine: patch.cosine,
       channels: [{ channel: patch.channel, rank: patch.rank, score: patch.score }],
       meta: patch.meta,
-      vec: patch.vec,
     });
     return;
   }
   entry.channels.push({ channel: patch.channel, rank: patch.rank, score: patch.score });
   if (patch.cosine > entry.cosine) entry.cosine = patch.cosine;
-  if (!entry.vec && patch.vec) entry.vec = patch.vec;
 }
 
 function bestChannelScore(c: SkillCandidate): number {

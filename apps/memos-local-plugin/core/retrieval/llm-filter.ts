@@ -24,35 +24,19 @@ import type { LlmClient } from "../llm/index.js";
 import type { Logger } from "../logger/types.js";
 import { RETRIEVAL_FILTER_PROMPT } from "../llm/prompts/index.js";
 import type { RankedCandidate } from "./ranker.js";
-import type { RetrievalConfig, TraceCandidate } from "./types.js";
+import type {
+  RetrievalConfig,
+  RetrievalProfile,
+} from "./types.js";
 
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
 const MIN_FILTER_OUTPUT_TOKENS = 160;
 const MAX_FILTER_OUTPUT_TOKENS = 2048;
 
-/**
- * A trace whose `agentText` falls under this length, with no LLM summary
- * or reflection to back it up, is treated as a near-duplicate question
- * trace (issue #1913). The rescue path keeps these *behind* informative
- * candidates so the answer-bearing trace surfaces first.
- */
-const INFORMATIVE_AGENT_TEXT_MIN_CHARS = 20;
-
-/**
- * Short acknowledgement / scaffold replies that the filter prompt
- * rightly classes as "scaffolding chatter". When the LLM filter empties
- * the kept set we still need to make a rescue call — these strings let
- * us prefer informative replies over plain acks. Bounded list, exact
- * matches only after trimming surrounding punctuation / whitespace.
- */
-const SHORT_ACK_PATTERNS: readonly RegExp[] = [
-  /^(ok|okay|sure|got it|noted|understood|alright|will do|copy|copy that|thanks|thank you|✓|✅|👍)[\s.!]*$/i,
-  /^(记住了|已记住|已经记住|好的|明白|收到|了解|谢谢)[\s。!]*$/,
-];
-
 export interface FilterInput {
   query: string;
   ranked: readonly RankedCandidate[];
+  profile?: RetrievalProfile;
   /**
    * Episode this retrieval is happening for (typically the active or
    * just-opening episode). Forwarded to the LLM call so the resulting
@@ -66,6 +50,8 @@ export interface FilterDeps {
   llm: LlmClient | null;
   log: Logger;
   timeoutMs?: number;
+  deadlineAt?: number;
+  signal?: AbortSignal;
   config: Pick<
     RetrievalConfig,
     | "llmFilterEnabled"
@@ -90,11 +76,9 @@ export interface FilterResult {
     | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
-    // The LLM returned an empty selection over a non-empty ranked list
-    // (issue #1913 — repeated question traces crowding the hit set).
-    // We rescued the top-K best-scoring candidates so the agent always
-    // sees a packet when retrieval succeeded; `sufficient` is forced
-    // to `false` so downstream callers know the injection is weak.
+    | "llm_filtered_empty"
+    // Legacy outcome retained for historical api_logs compatibility.
+    // New calls no longer mechanically refill a valid empty LLM result.
     | "llm_filtered_refilled"
     // The LLM was supposed to run but the call failed / parsed badly.
     // We applied a mechanical relevance cutoff (top-K above
@@ -135,6 +119,10 @@ export async function llmFilterCandidates(
   if (!deps.llm) {
     return passthrough(ranked, "no_llm");
   }
+  if (deps.signal?.aborted) {
+    deps.log.debug("llm_filter.deadline_exceeded", { candidateCount: ranked.length });
+    return safeCutoff(ranked, deps);
+  }
 
   const bodyChars =
     deps.config.llmFilterCandidateBodyChars ?? DEFAULT_CANDIDATE_BODY_CHARS;
@@ -166,6 +154,8 @@ ${list}`,
         episodeId: input.episodeId,
         temperature: 0,
         timeoutMs: deps.timeoutMs,
+        deadlineAt: deps.deadlineAt,
+        signal: deps.signal,
         // Output is only ordered indices + one bool, but the list can
         // legitimately be as long as the ranked candidates.
         maxTokens: filterOutputTokenBudget(ranked.length),
@@ -195,24 +185,16 @@ ${list}`,
     );
     const keepIndices = new Set(cappedIndices);
     if (keepIndices.size === 0) {
-      // Issue #1913: the model asked us to drop everything. Honouring
-      // that verbatim used to collapse `turn.start` injection to "" even
-      // when retrieval was healthy — the failure mode is a hit set
-      // dominated by near-duplicate question traces from prior
-      // sessions, where each candidate individually looks like
-      // "surface-similar wrong sub-problem" to the filter prompt.
-      // Instead, rescue the top-K best-scoring candidates (preferring
-      // informative traces over pure-question / ack-only chatter) so
-      // the agent always sees a packet when retrieval succeeded.
-      // `safeCutoff`'s sibling escape hatch (`llmFilterMaxKeep === 0`)
-      // is honoured so operators can still ask for hard drop.
-      return rescueFromEmptySelection(ranked, deps, sufficient);
+      return {
+        kept: [],
+        dropped: [...ranked],
+        outcome: "llm_filtered_empty",
+        sufficient: sufficient ?? false,
+      };
     }
     const kept = cappedIndices.map((i) => ranked[i]!);
-    const dropped: RankedCandidate[] = [];
-    ranked.forEach((r, i) => {
-      if (!keepIndices.has(i)) dropped.push(r);
-    });
+    const keptSet = new Set(kept);
+    const dropped = ranked.filter((candidate) => !keptSet.has(candidate));
     return {
       kept,
       dropped,
@@ -241,95 +223,6 @@ function passthrough(
   outcome: FilterResult["outcome"],
 ): FilterResult {
   return { kept: [...ranked], dropped: [], outcome, sufficient: null };
-}
-
-/**
- * Issue #1913 rescue path. Invoked when the LLM relevance filter
- * returned `selected: []` for a *non-empty* ranked candidate list — the
- * most common cause is a hit set dominated by near-duplicate question
- * traces from previous sessions, where the filter prompt's "drop
- * scaffolding chatter" / "drop surface-similar wrong sub-problem"
- * rubric is applied to every candidate.
- *
- * Strategy: keep the top-K best-scoring candidates, preferring
- * informative traces (skill / episode / experience / world-model, or a
- * trace whose `agentText`/`summary`/`reflection` carries real content)
- * over pure-question chatter. We do NOT re-query the LLM — the rescue
- * is a single O(n) partition + slice. Outcome label is
- * `"llm_filtered_refilled"` so the Logs viewer can show "LLM collapsed,
- * safety net fired" distinct from a normal `"llm_filtered"`.
- *
- * Escape hatch: `llmFilterMaxKeep === 0` skips the rescue entirely and
- * honours the "drop everything" request (matches existing `safeCutoff`
- * semantics for the same config value).
- */
-function rescueFromEmptySelection(
-  ranked: readonly RankedCandidate[],
-  deps: FilterDeps,
-  sufficient: boolean | null,
-): FilterResult {
-  const keepCap = Math.max(0, deps.config.llmFilterMaxKeep);
-  if (keepCap === 0 || ranked.length === 0) {
-    return {
-      kept: [],
-      dropped: [...ranked],
-      outcome: "llm_filtered",
-      sufficient: sufficient ?? false,
-    };
-  }
-  const informative: RankedCandidate[] = [];
-  const chatter: RankedCandidate[] = [];
-  for (const r of ranked) {
-    if (isInformativeCandidate(r)) informative.push(r);
-    else chatter.push(r);
-  }
-  // Preserve ranker order within each bucket; informative first so the
-  // answer-bearing trace surfaces even when the ranker placed it below
-  // surface-similar question traces.
-  const ordered = [...informative, ...chatter];
-  const kept = ordered.slice(0, Math.min(keepCap, ordered.length));
-  const keptSet = new Set(kept);
-  const dropped = ranked.filter((r) => !keptSet.has(r));
-  deps.log.debug("llm_filter.collapsed_refill", {
-    ranked: ranked.length,
-    rescued: kept.length,
-    informative: informative.length,
-    chatter: chatter.length,
-    filteredAll: true,
-  });
-  return {
-    kept,
-    dropped,
-    outcome: "llm_filtered_refilled",
-    sufficient: sufficient ?? false,
-  };
-}
-
-/**
- * Returns true when a ranked candidate carries content the agent can
- * actually use. Skills, episodes, experiences, and world-models always
- * count. Traces count when their `summary` or `reflection` is non-empty
- * or their `agentText` is longer than a short acknowledgement.
- *
- * Used by the rescue path (and intentionally only there) to bias the
- * rescued set toward traces with informative assistant text. False
- * negatives (an informative trace mistakenly labelled chatter) still
- * get rescued because they sit in the second half of the ordered list.
- */
-function isInformativeCandidate(r: RankedCandidate): boolean {
-  const c = r.candidate;
-  if (c.refKind !== "trace") return true;
-  const t = c as TraceCandidate;
-  if ((t.summary?.trim().length ?? 0) > 0) return true;
-  if ((t.reflection?.trim().length ?? 0) > 0) return true;
-  const agent = t.agentText?.trim() ?? "";
-  if (agent.length === 0) return false;
-  if (isShortAck(agent)) return false;
-  return agent.length >= INFORMATIVE_AGENT_TEXT_MIN_CHARS;
-}
-
-function isShortAck(text: string): boolean {
-  return SHORT_ACK_PATTERNS.some((re) => re.test(text));
 }
 
 /**
