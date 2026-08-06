@@ -30,6 +30,7 @@ import { join } from "node:path";
 import type { TraceDTO } from "../../agent-contract/dto.js";
 import type { ServerOptions } from "../types.js";
 import type { ServerDeps } from "../types.js";
+import { resolveHermesHome } from "../../core/config/hermes-home.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 import { writeJson } from "../middleware/io.js";
 
@@ -334,7 +335,10 @@ function parseMultipartBundle(contentType: string, body: Buffer): string | null 
 }
 
 function hermesNativeMemoryPath(): string {
-  return join(homedir(), ".hermes", "memories", "MEMORY.md");
+  // Anchor on the canonical Hermes home so Windows finds MEMORY.md under
+  // %LOCALAPPDATA%\hermes\memories instead of %USERPROFILE%\.hermes\memories
+  // (issue #2221).
+  return join(resolveHermesHome(), "memories", "MEMORY.md");
 }
 
 function openClawHome(): string {

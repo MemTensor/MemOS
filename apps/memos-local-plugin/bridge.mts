@@ -33,6 +33,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveHome } from "./core/config/paths.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -78,15 +80,8 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 
 const PID_FILENAME = "bridge.pid";
 
-function pidFilePath(agent: string): string {
-  const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
-  return path.join(
-    process.env.HOME ?? "/tmp",
-    agentHome,
-    "memos-plugin",
-    "daemon",
-    PID_FILENAME,
-  );
+function pidFilePath(runtimeHome: string): string {
+  return path.join(runtimeHome, "daemon", PID_FILENAME);
 }
 
 function readPidFile(pidPath: string): number | null {
@@ -146,9 +141,10 @@ function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const pidRuntimeHome = resolveHome(args.agent, args.home).root;
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
-  const pidPath = pidFilePath(args.agent);
+  const pidPath = pidFilePath(pidRuntimeHome);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
@@ -234,9 +230,6 @@ async function main(): Promise<void> {
     };
 
   const { Telemetry } = await import("./core/telemetry/index.js");
-
-  // Resolve home early so we can use resolveHome with explicit defaultHome
-  const { resolveHome } = await import("./core/config/paths.js");
 
   const resolvedHome = args.home
     ? resolveHome(args.agent, args.home)

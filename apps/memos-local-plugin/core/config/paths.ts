@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { resolve as pathResolve, join } from "node:path";
 
 import type { AgentKind } from "../types.js";
+import { resolveHermesHome } from "./hermes-home.js";
 
 export interface ResolvedHome {
   /** Absolute path to the runtime root (e.g. ~/.openclaw/memos-plugin). */
@@ -29,7 +30,8 @@ export interface ResolvedHome {
 
 const DEFAULT_HOME_BY_AGENT: Record<string, string> = {
   openclaw: "{HOME}/.openclaw/memos-plugin",
-  hermes:   "{HOME}/.hermes/memos-plugin",
+  // `hermes` is resolved dynamically via `resolveHermesHome()` so it
+  // honours `HERMES_HOME` and platform conventions (issue #2221).
 };
 
 /**
@@ -39,7 +41,9 @@ const DEFAULT_HOME_BY_AGENT: Record<string, string> = {
  *   2. `MEMOS_CONFIG_FILE` environment variable (covers only the config file
  *      path; data/skills/logs still derive from the same parent dir).
  *   3. `defaultHome` argument.
- *   4. Built-in default for `agent` (`~/.openclaw/memos-plugin/` etc.).
+ *   4. Built-in default for `agent`:
+ *        - `hermes` → `resolveHermesHome() + /memos-plugin`
+ *        - other    → `~/.<agent>/memos-plugin`
  */
 export function resolveHome(agent: AgentKind, defaultHome?: string): ResolvedHome {
   const env = process.env;
@@ -58,8 +62,11 @@ export function resolveHome(agent: AgentKind, defaultHome?: string): ResolvedHom
   } else if (defaultHome && defaultHome.trim()) {
     root = pathResolve(expandHome(defaultHome));
     configFile = join(root, "config.yaml");
+  } else if (agent === "hermes") {
+    root = pathResolve(join(resolveHermesHome(), "memos-plugin"));
+    configFile = join(root, "config.yaml");
   } else {
-    const tmpl = DEFAULT_HOME_BY_AGENT[String(agent)] ?? `{HOME}/.${agent}/memos-plugin`;
+    const tmpl = DEFAULT_HOME_BY_AGENT[agent] ?? `{HOME}/.${agent}/memos-plugin`;
     root = pathResolve(expandHome(tmpl));
     configFile = join(root, "config.yaml");
   }
