@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memos.configs.mem_os import MOSConfig
+from memos.exceptions import ConfigurationError
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.core import MOSCore
 from memos.mem_user.user_manager import UserRole
@@ -938,3 +939,46 @@ class TestShareCubeWithUser:
             mos.share_cube_with_user(cube_id="cube-uuid-1234", target_user_id="missing_user")
 
         mock_user_manager.add_user_to_cube.assert_not_called()
+
+
+class TestDocumentPathConfinement:
+    """A caller-supplied doc_path must not escape the configured documents root."""
+
+    @staticmethod
+    def _core() -> MOSCore:
+        return object.__new__(MOSCore)
+
+    def test_documents_outside_configured_root_are_rejected(self, tmp_path, monkeypatch) -> None:
+        documents_root = tmp_path / "documents"
+        documents_root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.md").write_text("secret")
+
+        monkeypatch.setenv("MEMOS_DOC_ROOT", str(documents_root))
+
+        with pytest.raises(ConfigurationError, match="documents root"):
+            self._core()._get_all_documents(str(outside))
+
+    def test_symlinks_escaping_the_root_are_skipped(self, tmp_path, monkeypatch) -> None:
+        documents_root = tmp_path / "documents"
+        documents_root.mkdir()
+        wanted = documents_root / "note.md"
+        wanted.write_text("note")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.md").write_text("secret")
+        (documents_root / "escape.md").symlink_to(outside / "secret.md")
+
+        monkeypatch.setenv("MEMOS_DOC_ROOT", str(documents_root))
+
+        assert self._core()._get_all_documents(str(documents_root)) == [str(wanted)]
+
+    def test_unset_root_keeps_local_library_behaviour(self, tmp_path, monkeypatch) -> None:
+        wanted = tmp_path / "note.md"
+        wanted.write_text("note")
+
+        monkeypatch.delenv("MEMOS_DOC_ROOT", raising=False)
+        monkeypatch.delenv("FILE_LOCAL_PATH", raising=False)
+
+        assert self._core()._get_all_documents(str(tmp_path)) == [str(wanted)]

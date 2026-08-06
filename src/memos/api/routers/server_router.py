@@ -15,7 +15,7 @@ import os
 import random as _random
 import socket
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from memos.api import handlers
 from memos.api.handlers.add_handler import AddHandler
@@ -24,6 +24,7 @@ from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.cube_handler import CubeHandler
 from memos.api.handlers.feedback_handler import FeedbackHandler
 from memos.api.handlers.search_handler import SearchHandler
+from memos.api.middleware.auth import resolve_authorized_user_id, verify_api_key
 from memos.api.product_models import (
     AllStatusResponse,
     APIADDRequest,
@@ -65,7 +66,7 @@ from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/product", tags=["Server API"])
+router = APIRouter(prefix="/product", tags=["Server API"], dependencies=[Depends(verify_api_key)])
 
 # Instance ID for identifying this server instance in logs and responses
 INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}:{_random.randint(1000, 9999)}"
@@ -109,12 +110,16 @@ graph_db = components["graph_db"]
 
 
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
-def search_memories(search_req: APISearchRequest):
+def search_memories(
+    search_req: APISearchRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """
     Search memories for a specific user.
 
     This endpoint uses the class-based SearchHandler for better code organization.
     """
+    search_req.user_id = resolve_authorized_user_id(auth, search_req.user_id)
     search_results = search_handler.handle_search_memories(search_req)
     return search_results
 
@@ -125,12 +130,18 @@ def search_memories(search_req: APISearchRequest):
 
 
 @router.post("/add", summary="Add memories", response_model=MemoryResponse)
-def add_memories(add_req: APIADDRequest):
+def add_memories(
+    add_req: APIADDRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """
     Add memories for a specific user.
 
     This endpoint uses the class-based AddHandler for better code organization.
     """
+    add_req.user_id = resolve_authorized_user_id(auth, add_req.user_id)
+    if add_req.manager_user_id is not None:
+        add_req.manager_user_id = resolve_authorized_user_id(auth, add_req.manager_user_id)
     return add_handler.handle_add_memories(add_req)
 
 
@@ -140,7 +151,10 @@ def add_memories(add_req: APIADDRequest):
 
 
 @router.post("/create_cube", summary="Create a new memory cube", response_model=CreateCubeResponse)
-async def create_cube(request: CreateCubeRequest) -> CreateCubeResponse:
+async def create_cube(
+    request: CreateCubeRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+) -> CreateCubeResponse:
     """
     Create a new memory cube for a user.
 
@@ -159,6 +173,7 @@ async def create_cube(request: CreateCubeRequest) -> CreateCubeResponse:
     - **readable_cube_ids**: List of cube IDs the user can read from (used in search/chat)
     - **writable_cube_ids**: List of cube IDs the user can write to (used in add/chat)
     """
+    request.owner_id = resolve_authorized_user_id(auth, request.owner_id)
     return await cube_handler.create_cube(request)
 
 
@@ -167,7 +182,10 @@ async def create_cube(request: CreateCubeRequest) -> CreateCubeResponse:
     summary="Register an existing memory cube",
     response_model=RegisterCubeResponse,
 )
-async def register_cube(request: RegisterCubeRequest) -> RegisterCubeResponse:
+async def register_cube(
+    request: RegisterCubeRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+) -> RegisterCubeResponse:
     """
     Register an existing memory cube with the MOS system.
 
@@ -182,6 +200,7 @@ async def register_cube(request: RegisterCubeRequest) -> RegisterCubeResponse:
     This endpoint validates the registration request. Full registration functionality
     requires architectural integration with MOSCore, which will be completed in a future update.
     """
+    request.user_id = resolve_authorized_user_id(auth, request.user_id)
     return await cube_handler.register_cube(request)
 
 
@@ -208,8 +227,10 @@ def scheduler_allstatus():
 def scheduler_status(
     user_id: str = Query(..., description="User ID"),
     task_id: str | None = Query(None, description="Optional Task ID to query a specific task"),
+    auth: dict = Depends(verify_api_key),  # noqa: B008
 ):
     """Get scheduler running status."""
+    user_id = resolve_authorized_user_id(auth, user_id)
     return handlers.scheduler_handler.handle_scheduler_status(
         user_id=user_id,
         task_id=task_id,
@@ -224,8 +245,10 @@ def scheduler_status(
 )
 def scheduler_task_queue_status(
     user_id: str = Query(..., description="User ID whose queue status is requested"),
+    auth: dict = Depends(verify_api_key),  # noqa: B008
 ):
     """Get scheduler task queue backlog/pending status for a user."""
+    user_id = resolve_authorized_user_id(auth, user_id)
     return handlers.scheduler_handler.handle_task_queue_status(
         user_id=user_id, mem_scheduler=mem_scheduler
     )
@@ -236,8 +259,10 @@ def scheduler_wait(
     user_name: str,
     timeout_seconds: float = 120.0,
     poll_interval: float = 0.5,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
 ):
     """Wait until scheduler is idle for a specific user."""
+    user_name = resolve_authorized_user_id(auth, user_name)
     return handlers.scheduler_handler.handle_scheduler_wait(
         user_name=user_name,
         status_tracker=status_tracker,
@@ -251,8 +276,10 @@ def scheduler_wait_stream(
     user_name: str,
     timeout_seconds: float = 120.0,
     poll_interval: float = 0.5,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
 ):
     """Stream scheduler progress via Server-Sent Events (SSE)."""
+    user_name = resolve_authorized_user_id(auth, user_name)
     return handlers.scheduler_handler.handle_scheduler_wait_stream(
         user_name=user_name,
         status_tracker=status_tracker,
@@ -268,7 +295,10 @@ def scheduler_wait_stream(
 
 
 @router.post("/chat/complete", summary="Chat with MemOS (Complete Response)")
-def chat_complete(chat_req: APIChatCompleteRequest):
+def chat_complete(
+    chat_req: APIChatCompleteRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """
     Chat with MemOS for a specific user. Returns complete response (non-streaming).
 
@@ -278,11 +308,17 @@ def chat_complete(chat_req: APIChatCompleteRequest):
         raise HTTPException(
             status_code=503, detail="Chat service is not available. Chat handler not initialized."
         )
+    chat_req.user_id = resolve_authorized_user_id(auth, chat_req.user_id)
+    if chat_req.manager_user_id is not None:
+        chat_req.manager_user_id = resolve_authorized_user_id(auth, chat_req.manager_user_id)
     return chat_handler.handle_chat_complete(chat_req)
 
 
 @router.post("/chat/stream", summary="Chat with MemOS")
-def chat_stream(chat_req: ChatRequest):
+def chat_stream(
+    chat_req: ChatRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """
     Chat with MemOS for a specific user. Returns SSE stream.
 
@@ -293,11 +329,17 @@ def chat_stream(chat_req: ChatRequest):
         raise HTTPException(
             status_code=503, detail="Chat service is not available. Chat handler not initialized."
         )
+    chat_req.user_id = resolve_authorized_user_id(auth, chat_req.user_id)
+    if chat_req.manager_user_id is not None:
+        chat_req.manager_user_id = resolve_authorized_user_id(auth, chat_req.manager_user_id)
     return chat_handler.handle_chat_stream(chat_req)
 
 
 @router.post("/chat/stream/playground", summary="Chat with MemOS playground")
-def chat_stream_playground(chat_req: ChatPlaygroundRequest):
+def chat_stream_playground(
+    chat_req: ChatPlaygroundRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """
     Chat with MemOS for a specific user. Returns SSE stream.
 
@@ -308,6 +350,9 @@ def chat_stream_playground(chat_req: ChatPlaygroundRequest):
         raise HTTPException(
             status_code=503, detail="Chat service is not available. Chat handler not initialized."
         )
+    chat_req.user_id = resolve_authorized_user_id(auth, chat_req.user_id)
+    if chat_req.manager_user_id is not None:
+        chat_req.manager_user_id = resolve_authorized_user_id(auth, chat_req.manager_user_id)
     return chat_handler.handle_chat_stream_playground(chat_req)
 
 
@@ -321,8 +366,12 @@ def chat_stream_playground(chat_req: ChatPlaygroundRequest):
     summary="Get suggestion queries",
     response_model=SuggestionResponse,
 )
-def get_suggestion_queries(suggestion_req: SuggestionRequest):
+def get_suggestion_queries(
+    suggestion_req: SuggestionRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """Get suggestion queries for a specific user with language preference."""
+    suggestion_req.user_id = resolve_authorized_user_id(auth, suggestion_req.user_id)
     return handlers.suggestion_handler.handle_get_suggestion_queries(
         user_id=suggestion_req.mem_cube_id,
         language=suggestion_req.language,
@@ -338,13 +387,17 @@ def get_suggestion_queries(suggestion_req: SuggestionRequest):
 
 
 @router.post("/get_all", summary="Get all memories for user", response_model=MemoryResponse)
-def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
+def get_all_memories(
+    memory_req: GetMemoryPlaygroundRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """
     Get all memories or subgraph for a specific user.
 
     If search_query is provided, returns a subgraph based on the query.
     Otherwise, returns all memories of the specified type.
     """
+    memory_req.user_id = resolve_authorized_user_id(auth, memory_req.user_id)
     if memory_req.search_query:
         return handlers.memory_handler.handle_get_subgraph(
             user_id=memory_req.user_id,
@@ -368,14 +421,22 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
 
 
 @router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
-def get_memories(memory_req: GetMemoryRequest):
+def get_memories(
+    memory_req: GetMemoryRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
+    memory_req.user_id = resolve_authorized_user_id(auth, memory_req.user_id)
     return handlers.memory_handler.handle_get_memories(
         get_mem_req=memory_req,
         naive_mem_cube=naive_mem_cube,
     )
 
 
-@router.get("/get_memory/{memory_id}", summary="Get memory by id", response_model=GetMemoryResponse)
+@router.get(
+    "/get_memory/{memory_id}",
+    summary="Get memory by id",
+    response_model=GetMemoryResponse,
+)
 def get_memory_by_id(memory_id: str):
     return handlers.memory_handler.handle_get_memory(
         memory_id=memory_id,
@@ -383,7 +444,11 @@ def get_memory_by_id(memory_id: str):
     )
 
 
-@router.post("/get_memory_by_ids", summary="Get memory by ids", response_model=GetMemoryResponse)
+@router.post(
+    "/get_memory_by_ids",
+    summary="Get memory by ids",
+    response_model=GetMemoryResponse,
+)
 def get_memory_by_ids(memory_ids: list[str]):
     return handlers.memory_handler.handle_get_memory_by_ids(
         memory_ids=memory_ids,
@@ -392,9 +457,15 @@ def get_memory_by_ids(memory_ids: list[str]):
 
 
 @router.post(
-    "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
+    "/delete_memory",
+    summary="Delete memories for user",
+    response_model=DeleteMemoryResponse,
 )
-def delete_memories(memory_req: DeleteMemoryRequest):
+def delete_memories(
+    memory_req: DeleteMemoryRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
+    memory_req.user_id = resolve_authorized_user_id(auth, memory_req.user_id)
     return handlers.memory_handler.handle_delete_memories(
         delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
     )
@@ -406,12 +477,16 @@ def delete_memories(memory_req: DeleteMemoryRequest):
 
 
 @router.post("/feedback", summary="Feedback memories", response_model=MemoryResponse)
-def feedback_memories(feedback_req: APIFeedbackRequest):
+def feedback_memories(
+    feedback_req: APIFeedbackRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """
     Feedback memories for a specific user.
 
     This endpoint uses the class-based FeedbackHandler for better code organization.
     """
+    feedback_req.user_id = resolve_authorized_user_id(auth, feedback_req.user_id)
     return feedback_handler.handle_feedback_memories(feedback_req)
 
 
@@ -450,14 +525,21 @@ def exist_mem_cube_id(request: ExistMemCubeIdRequest):
     )
 
 
-@router.post("/chat/stream/business_user", summary="Chat with MemOS for business user")
-def chat_stream_business_user(chat_req: ChatBusinessRequest):
+@router.post(
+    "/chat/stream/business_user",
+    summary="Chat with MemOS for business user",
+)
+def chat_stream_business_user(
+    chat_req: ChatBusinessRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
     """(inner) Chat with MemOS for a specific business user. Returns SSE stream."""
     if chat_handler is None:
         raise HTTPException(
             status_code=503, detail="Chat service is not available. Chat handler not initialized."
         )
 
+    chat_req.user_id = resolve_authorized_user_id(auth, chat_req.user_id)
     return chat_handler.handle_chat_stream_for_business_user(chat_req)
 
 
@@ -503,7 +585,11 @@ def recover_memory_by_record_id(memory_req: RecoverMemoryByRecordIdRequest):
 @router.post(
     "/get_memory_dashboard", summary="Get memories for dashboard", response_model=GetMemoryResponse
 )
-def get_memories_dashboard(memory_req: GetMemoryDashboardRequest):
+def get_memories_dashboard(
+    memory_req: GetMemoryDashboardRequest,
+    auth: dict = Depends(verify_api_key),  # noqa: B008
+):
+    memory_req.user_id = resolve_authorized_user_id(auth, memory_req.user_id)
     return handlers.memory_handler.handle_get_memories_dashboard(
         get_mem_req=memory_req,
         naive_mem_cube=naive_mem_cube,

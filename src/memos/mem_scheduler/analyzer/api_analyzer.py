@@ -21,6 +21,12 @@ from memos.types import MessageDict, SearchMode, UserContext
 
 logger = get_logger(__name__)
 
+_DIRECT_ANALYZER_AUTH = {
+    "user_name": "scheduler-analyzer",
+    "scopes": ["all"],
+    "is_internal": True,
+}
+
 
 class APIAnalyzerForScheduler:
     """
@@ -427,7 +433,7 @@ class DirectSearchMemoriesAnalyzer:
             print(f"   Assistant: {assistant_message}")
 
         # Add to memory
-        result = self.add_memories(add_req)
+        result = self.add_memories(add_req, auth=_DIRECT_ANALYZER_AUTH)
         print("   ✅ Added to memory successfully")
 
         return result
@@ -470,7 +476,7 @@ class DirectSearchMemoriesAnalyzer:
         print(f"   History Length: {len(self.conversation_history) if chat_history else 0}")
 
         # Perform search
-        result = self.search_memories(search_req)
+        result = self.search_memories(search_req, auth=_DIRECT_ANALYZER_AUTH)
 
         print("   ✅ Search completed")
         if hasattr(result, "data") and result.data:
@@ -525,7 +531,7 @@ class DirectSearchMemoriesAnalyzer:
             print(
                 f"💬 Adding {len(all_messages)} messages to conversation (Session: {self.current_session_id})"
             )
-            self.add_memories(add_req)
+            self.add_memories(add_req, auth=_DIRECT_ANALYZER_AUTH)
 
             # Update conversation history
             self.conversation_history.extend(all_messages)

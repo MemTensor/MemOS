@@ -218,7 +218,7 @@ def generate_new_master_key(
 )
 def admin_health():
     """Health check for admin endpoints."""
-    auth_enabled = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+    auth_enabled = os.getenv("AUTH_ENABLED", "true").lower() == "true"
     master_key_configured = bool(os.getenv("MASTER_KEY_HASH"))
 
     return {
