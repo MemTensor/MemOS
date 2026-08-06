@@ -110,6 +110,7 @@ export async function crystallizeDraft(
     input.policy.procedure,
     ...input.evidence.flatMap((t) => [t.userText, t.agentText, t.reflection]),
   ]);
+  let lastRaw: string | null = null;
 
   try {
     const rsp = await llm.completeJson<Record<string, unknown>>(
@@ -125,6 +126,7 @@ export async function crystallizeDraft(
         schemaHint: "skill-crystallize.v2",
       },
     );
+    lastRaw = rsp.raw;
     const rawRefusal = detectModelRefusal(rsp.raw);
     if (rawRefusal) {
       const modelRefusal = {
@@ -158,7 +160,7 @@ export async function crystallizeDraft(
     return { ok: true, draft };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const rawPreview = rawPreviewFromError(err);
+    const rawPreview = rawPreviewFromError(err) ?? lastRaw;
     const refusal = rawPreview ? detectModelRefusal(rawPreview) : null;
     if (refusal) {
       const modelRefusal = {

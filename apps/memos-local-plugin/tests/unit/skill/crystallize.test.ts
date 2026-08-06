@@ -242,4 +242,43 @@ describe("skill/crystallize", () => {
     );
     expect(r.ok).toBe(false);
   });
+
+  it("retries drafts that fail validation after JSON parsing", async () => {
+    const invalidDraft = makeDraft({ summary: "" });
+    const correctedDraft = makeDraft({ summary: "Install system libraries before pip" });
+    let attempts = 0;
+    let correctionInput: unknown = null;
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": (input) => {
+          attempts += 1;
+          if (attempts === 1) return invalidDraft;
+          correctionInput = input;
+          return correctedDraft;
+        },
+      },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(attempts).toBe(2);
+    expect(correctionInput).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: JSON.stringify(invalidDraft),
+        }),
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("missing summary"),
+        }),
+      ]),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.summary).toBe(correctedDraft.summary);
+  });
 });
