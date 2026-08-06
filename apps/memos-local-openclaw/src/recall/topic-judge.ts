@@ -11,6 +11,7 @@ interface TopicJudgeOptions {
   messages: unknown[] | undefined;
   query: string;
   topicJudgeRounds: number;
+  isNewSession?: boolean;
   summarizer: TopicJudgeSummarizer;
   log: Logger;
 }
@@ -72,7 +73,8 @@ export function buildTopicJudgeContext(
     }
   }
 
-  // OpenClaw commonly includes the current prompt as the final user message.
+  // before_prompt_build passes the current prompt separately. A trailing user
+  // message therefore represents an incomplete historical round.
   if (merged.at(-1)?.role === "user") merged.pop();
 
   const maxLines = Math.floor(topicJudgeRounds) * 2;
@@ -105,18 +107,23 @@ export async function topicJudgePreFilter({
   messages,
   query,
   topicJudgeRounds,
+  isNewSession,
   summarizer,
   log,
 }: TopicJudgeOptions): Promise<TopicJudgeDecision> {
-  if (topicJudgeRounds <= 0) return "proceed";
-
-  const currentContext = buildTopicJudgeContext(messages, topicJudgeRounds);
-  if (!currentContext) {
-    log.debug("auto-recall: topic-judge has insufficient completed context; proceeding");
+  if (!Number.isFinite(topicJudgeRounds) || topicJudgeRounds <= 0) return "proceed";
+  if (isNewSession) {
+    log.debug("auto-recall: new session detected; bypassing topic-judge");
     return "proceed";
   }
 
   try {
+    const currentContext = buildTopicJudgeContext(messages, topicJudgeRounds);
+    if (!currentContext) {
+      log.debug("auto-recall: topic-judge has insufficient completed context; proceeding");
+      return "proceed";
+    }
+
     log.debug(`auto-recall: topic-judge evaluating ${currentContext.split("\n").length} context lines`);
     const isNewTopic = await summarizer.judgeNewTopic(currentContext, query);
     if (isNewTopic === false) return "skip";

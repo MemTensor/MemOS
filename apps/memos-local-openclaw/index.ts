@@ -1851,6 +1851,7 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           messages: event.messages,
           query,
           topicJudgeRounds: ctx.config.recall?.topicJudgeRounds ?? DEFAULTS.topicJudgeRounds,
+          isNewSession,
           summarizer,
           log: ctx.log,
         });

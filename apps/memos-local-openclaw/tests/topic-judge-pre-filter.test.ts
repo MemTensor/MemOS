@@ -12,7 +12,6 @@ const log: Logger = {
 const conversation = [
   { role: "user", content: "How do I configure retries?" },
   { role: "assistant", content: "Set maxRetries in the client config." },
-  { role: "user", content: "Can you show an example?" },
 ];
 
 function makeSummarizer(result: boolean | null) {
@@ -27,6 +26,33 @@ describe("topicJudgePreFilter", () => {
       messages: conversation,
       query: "Can you show an example?",
       topicJudgeRounds: 0,
+      summarizer,
+      log,
+    })).resolves.toBe("proceed");
+    expect(summarizer.judgeNewTopic).not.toHaveBeenCalled();
+  });
+
+  it("treats non-finite round configuration as disabled", async () => {
+    const summarizer = makeSummarizer(false);
+
+    await expect(topicJudgePreFilter({
+      messages: conversation,
+      query: "Can you show an example?",
+      topicJudgeRounds: Number.NaN,
+      summarizer,
+      log,
+    })).resolves.toBe("proceed");
+    expect(summarizer.judgeNewTopic).not.toHaveBeenCalled();
+  });
+
+  it("bypasses topic classification for a new session", async () => {
+    const summarizer = makeSummarizer(false);
+
+    await expect(topicJudgePreFilter({
+      messages: conversation,
+      query: "Can you show an example?",
+      topicJudgeRounds: 4,
+      isNewSession: true,
       summarizer,
       log,
     })).resolves.toBe("proceed");
@@ -83,6 +109,24 @@ describe("topicJudgePreFilter", () => {
     })).resolves.toBe("proceed");
   });
 
+  it("fails open when context construction throws", async () => {
+    const malformedMessage = Object.defineProperty({}, "role", {
+      get() {
+        throw new Error("invalid message");
+      },
+    });
+    const summarizer = makeSummarizer(false);
+
+    await expect(topicJudgePreFilter({
+      messages: [malformedMessage],
+      query: "Can you show an example?",
+      topicJudgeRounds: 4,
+      summarizer,
+      log,
+    })).resolves.toBe("proceed");
+    expect(summarizer.judgeNewTopic).not.toHaveBeenCalled();
+  });
+
   it("fails open when there is no completed conversation round", async () => {
     const summarizer = makeSummarizer(false);
 
@@ -111,7 +155,6 @@ describe("buildTopicJudgeContext", () => {
       },
       { role: "assistant", content: "Set maxRetries in the client config." },
       { role: "tool", content: "internal tool output" },
-      { role: "user", content: "Can you show an example?" },
     ], 4);
 
     expect(context).toContain("USER: How do I configure retries?");
@@ -119,6 +162,16 @@ describe("buildTopicJudgeContext", () => {
     expect(context).not.toContain("untrusted metadata");
     expect(context).not.toContain("user-1");
     expect(context).not.toContain("internal tool output");
-    expect(context).not.toContain("Can you show an example?");
+  });
+
+  it("excludes a trailing user message because it is not a completed round", () => {
+    const context = buildTopicJudgeContext([
+      ...conversation,
+      { role: "user", content: "Interrupted historical prompt" },
+    ], 4);
+
+    expect(context).toContain("USER: How do I configure retries?");
+    expect(context).toContain("ASSISTANT: Set maxRetries in the client config.");
+    expect(context).not.toContain("Interrupted historical prompt");
   });
 });
