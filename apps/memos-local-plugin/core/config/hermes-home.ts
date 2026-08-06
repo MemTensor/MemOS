@@ -16,7 +16,7 @@
  */
 
 import { homedir } from "node:os";
-import { resolve as pathResolve, join } from "node:path";
+import { posix, win32 } from "node:path";
 
 /**
  * Structural env type; matches `process.env` but stays usable in tests
@@ -51,35 +51,41 @@ function resolveHome(env: EnvLike, platform: NodeJS.Platform): string {
  * expansion is deliberately out of scope, so it raises rather than
  * silently resolving relative to CWD.
  */
-function expandHomePath(value: string, home: string): string {
+function expandHomePath(
+  value: string,
+  home: string,
+  platform: NodeJS.Platform,
+): string {
+  const path = platform === "win32" ? win32 : posix;
   let out = value;
   if (out === "~") {
     out = home;
   } else if (out.startsWith("~/") || out.startsWith("~\\")) {
-    out = join(home, out.slice(2));
+    out = path.join(home, out.slice(2));
   } else if (out.startsWith("~")) {
     throw new Error(
       `named-user tilde paths are not supported: ${JSON.stringify(value)}`,
     );
   }
-  return pathResolve(out);
+  return path.resolve(out);
 }
 
 export function resolveHermesHome(
   env: EnvLike = process.env,
   platform: NodeJS.Platform = process.platform,
 ): string {
+  const path = platform === "win32" ? win32 : posix;
   const home = resolveHome(env, platform);
 
   const hermesHome = (env["HERMES_HOME"] ?? "").trim();
-  if (hermesHome) return expandHomePath(hermesHome, home);
+  if (hermesHome) return expandHomePath(hermesHome, home, platform);
 
   if (platform === "win32") {
     const localAppData = (env["LOCALAPPDATA"] ?? "").trim();
-    if (localAppData) return pathResolve(join(localAppData, "hermes"));
+    if (localAppData) return path.resolve(path.join(localAppData, "hermes"));
     // Match Hermes' own fallback when LOCALAPPDATA is unset.
-    return pathResolve(join(home, "AppData", "Local", "hermes"));
+    return path.resolve(path.join(home, "AppData", "Local", "hermes"));
   }
 
-  return pathResolve(join(home, ".hermes"));
+  return path.resolve(path.join(home, ".hermes"));
 }

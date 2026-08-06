@@ -43,63 +43,58 @@ class HermesHomeResolverTests(unittest.TestCase):
             "LOCALAPPDATA": "C:\\Users\\bob\\AppData\\Local",
         }
         got = resolve_hermes_home(env=env, platform="linux")
-        self.assertEqual(str(got), "/tmp/custom-hermes-home")
+        self.assertEqual(got, Path("/tmp/custom-hermes-home").resolve())
 
     def test_hermes_home_env_wins_on_windows(self) -> None:
         from hermes_home import resolve_hermes_home
 
         env = {
-            "HERMES_HOME": "D:\\hermes-workshop",
-            "LOCALAPPDATA": "C:\\Users\\bob\\AppData\\Local",
+            "HERMES_HOME": "/tmp/hermes-workshop",
+            "LOCALAPPDATA": "/tmp/localappdata",
         }
         got = resolve_hermes_home(env=env, platform="win32")
-        # HERMES_HOME override must be returned as-is (resolved), with no
-        # suffix added. Comparing to Path(...).resolve() keeps the test
-        # portable — both sides go through the same normalisation.
-        self.assertEqual(str(got), str(Path("D:\\hermes-workshop").resolve()))
+        self.assertEqual(got, Path("/tmp/hermes-workshop").resolve())
 
     def test_windows_uses_localappdata_when_hermes_home_unset(self) -> None:
         from hermes_home import resolve_hermes_home
 
-        env = {"LOCALAPPDATA": "C:\\Users\\bob\\AppData\\Local"}
+        env = {"LOCALAPPDATA": "/tmp/localappdata"}
         got = resolve_hermes_home(env=env, platform="win32")
-        got_str = str(got).replace("/", "\\")
-        # The last two segments must always be AppData\Local\hermes.
-        self.assertTrue(
-            got_str.endswith("AppData\\Local\\hermes")
-            or got_str.endswith("AppData\\Local\\hermes\\"),
-            f"expected LOCALAPPDATA/hermes, got {got_str!r}",
+        self.assertEqual(
+            got,
+            Path("/tmp/localappdata/hermes").resolve(),
         )
 
     def test_windows_falls_back_to_home_appdata_when_localappdata_missing(self) -> None:
         from hermes_home import resolve_hermes_home
 
-        # Use a POSIX-shaped HOME so the test is portable — Path("C:\\…")
-        # is a relative-filename-with-backslash on Linux/macOS, which
-        # would resolve against CWD and give misleading results.
-        env = {"HOME": "/home/tester"}
+        env = {
+            "USERPROFILE": "/home/windows-user",
+            "HOME": "/home/posix-user",
+        }
         got = resolve_hermes_home(env=env, platform="win32")
-        got_str = str(got).replace("\\", "/")
-        # Falls back to <HOME>/AppData/Local/hermes on Windows.
-        self.assertTrue(
-            got_str.endswith("/AppData/Local/hermes"),
-            f"expected …/AppData/Local/hermes, got {got_str!r}",
+        self.assertEqual(
+            got,
+            Path("/home/windows-user/AppData/Local/hermes").resolve(),
         )
-        self.assertTrue(
-            got_str.startswith("/home/tester/"),
-            f"expected HOME-rooted path, got {got_str!r}",
-        )
+
+    def test_windows_tilde_override_prefers_userprofile(self) -> None:
+        from hermes_home import resolve_hermes_home
+
+        env = {
+            "HERMES_HOME": "~/custom-hermes",
+            "USERPROFILE": "/home/windows-user",
+            "HOME": "/home/posix-user",
+        }
+        got = resolve_hermes_home(env=env, platform="win32")
+        self.assertEqual(got, Path("/home/windows-user/custom-hermes").resolve())
 
     def test_posix_default_is_dot_hermes(self) -> None:
         from hermes_home import resolve_hermes_home
 
         env = {"HOME": "/home/alice"}
         got = resolve_hermes_home(env=env, platform="linux")
-        # Path.resolve() normalizes; check by suffix.
-        self.assertTrue(
-            str(got).endswith("/.hermes") or str(got).endswith("\\.hermes"),
-            f"expected ~/.hermes, got {got!r}",
-        )
+        self.assertEqual(got, Path("/home/alice/.hermes").resolve())
 
     def test_default_uses_process_env_and_platform_when_none(self) -> None:
         """When no args are provided the helper must read os.environ / sys.platform."""
@@ -130,13 +125,10 @@ class ResolvedRuntimeHomeUsesResolverTests(unittest.TestCase):
             os.environ.pop("MEMOS_CONFIG_FILE", None)
 
             got = memos_provider._resolved_memos_runtime_home()
-            got_str = str(got)
-            # /tmp/regression-2221-hermes/memos-plugin
-            self.assertTrue(
-                got_str.endswith("/memos-plugin") or got_str.endswith("\\memos-plugin"),
-                f"expected …/memos-plugin, got {got_str!r}",
+            self.assertEqual(
+                got,
+                Path("/tmp/regression-2221-hermes/memos-plugin").resolve(),
             )
-            self.assertIn("regression-2221-hermes", got_str)
         finally:
             if original is None:
                 os.environ.pop("HERMES_HOME", None)
@@ -155,11 +147,9 @@ class ResolvedRuntimeHomeUsesResolverTests(unittest.TestCase):
             "HOME": "/home/tester",
         }
         got = bridge_client._resolved_runtime_home("hermes", env)
-        got_str = str(got)
-        self.assertIn("regression-2221-bridge", got_str)
-        self.assertTrue(
-            got_str.endswith("/memos-plugin") or got_str.endswith("\\memos-plugin"),
-            f"expected …/memos-plugin, got {got_str!r}",
+        self.assertEqual(
+            got,
+            Path("/tmp/regression-2221-bridge/memos-plugin").resolve(),
         )
 
 

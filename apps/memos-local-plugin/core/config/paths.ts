@@ -66,7 +66,7 @@ export function resolveHome(agent: AgentKind, defaultHome?: string): ResolvedHom
     root = pathResolve(join(resolveHermesHome(), "memos-plugin"));
     configFile = join(root, "config.yaml");
   } else {
-    const tmpl = DEFAULT_HOME_BY_AGENT[String(agent)] ?? `{HOME}/.${agent}/memos-plugin`;
+    const tmpl = DEFAULT_HOME_BY_AGENT[agent] ?? `{HOME}/.${agent}/memos-plugin`;
     root = pathResolve(expandHome(tmpl));
     configFile = join(root, "config.yaml");
   }

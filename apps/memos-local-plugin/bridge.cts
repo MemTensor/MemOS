@@ -92,47 +92,8 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 const PID_FILENAME = "bridge.pid";
 const STDIO_PID_FILENAME = "bridge-stdio.pid";
 
-function pidFilePath(agent: string, filename: string = PID_FILENAME): string {
-  if (agent === "hermes") {
-    // Honour HERMES_HOME / %LOCALAPPDATA%\hermes so the PID file lives
-    // inside the same Hermes home the daemon reads (issue #2221).
-    return path.join(resolveHermesHomeSync(), "memos-plugin", "daemon", filename);
-  }
-  return path.join(
-    process.env.HOME ?? "/tmp",
-    `.${agent}`,
-    "memos-plugin",
-    "daemon",
-    filename,
-  );
-}
-
-// `main()` is async and the ESM `resolveHermesHome` import happens lazily
-// inside it. `pidFilePath` runs *before* that dynamic import completes,
-// so we mirror the same tiny resolver here to avoid loading ESM twice.
-function resolveHermesHomeSync(): string {
-  const env = process.env;
-  const explicit = (env["HERMES_HOME"] ?? "").trim();
-  if (explicit) return path.resolve(expandUserSync(explicit));
-
-  if (process.platform === "win32") {
-    const local = (env["LOCALAPPDATA"] ?? "").trim();
-    if (local) return path.resolve(path.join(expandUserSync(local), "hermes"));
-    const home = env["USERPROFILE"] || env["HOME"] || "/tmp";
-    return path.resolve(path.join(expandUserSync(home), "AppData", "Local", "hermes"));
-  }
-  const home = env["HOME"] || "/tmp";
-  return path.resolve(path.join(expandUserSync(home), ".hermes"));
-}
-
-function expandUserSync(value: string): string {
-  const env = process.env;
-  const home = env["HOME"] || env["USERPROFILE"] || "";
-  if (value === "~") return home || value;
-  if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return path.join(home || "", value.slice(2));
-  }
-  return value;
+function pidFilePath(runtimeHome: string, filename: string = PID_FILENAME): string {
+  return path.join(runtimeHome, "daemon", filename);
 }
 
 function readPidFile(pidPath: string): number | null {
@@ -192,13 +153,17 @@ function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const { resolveHome } = (await importEsm(
+    runtimeModule("core/config/paths.ts", "dist/core/config/paths.js")
+  )) as typeof import("./core/config/paths.js");
+  const pidRuntimeHome = resolveHome(args.agent, args.home).root;
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
-  const pidPath = pidFilePath(args.agent);
+  const pidPath = pidFilePath(pidRuntimeHome);
   const stdioPidFilename = args.runtimeScope
     ? `bridge-stdio-${args.runtimeScope}.pid`
     : STDIO_PID_FILENAME;
-  const stdioPidPath = pidFilePath(args.agent, stdioPidFilename);
+  const stdioPidPath = pidFilePath(pidRuntimeHome, stdioPidFilename);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
@@ -303,11 +268,6 @@ async function main(): Promise<void> {
   const { Telemetry } = (await importEsm(
     runtimeModule("core/telemetry/index.ts", "dist/core/telemetry/index.js")
   )) as typeof import("./core/telemetry/index.js");
-
-  // Resolve home early so we can use resolveHome with explicit defaultHome
-  const { resolveHome } = (await importEsm(
-    runtimeModule("core/config/paths.ts", "dist/core/config/paths.js")
-  )) as typeof import("./core/config/paths.js");
 
   const resolvedHome = args.home
     ? resolveHome(args.agent, args.home)

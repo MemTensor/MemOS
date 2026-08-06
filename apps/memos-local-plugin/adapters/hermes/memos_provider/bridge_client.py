@@ -76,9 +76,7 @@ def _resolved_runtime_home(agent: str, env: dict[str, str]) -> Path:
         default_home = resolve_hermes_home(env=env) / "memos-plugin"
     else:
         agent_home = f".{agent}"
-        default_home = (
-            Path(env.get("HOME", "") or Path.home()) / agent_home / "memos-plugin"
-        )
+        default_home = Path(env.get("HOME", "") or Path.home()) / agent_home / "memos-plugin"
     return _expanded_path(str(default_home), env)
 
 

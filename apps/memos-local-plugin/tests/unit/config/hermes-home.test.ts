@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 
 import { resolveHermesHome } from "../../../core/config/hermes-home.js";
 
@@ -16,8 +16,7 @@ describe("config/hermes-home", () => {
       { HERMES_HOME: "/tmp/custom-hermes", HOME: "/home/alice" },
       "linux",
     );
-    // Path.resolve normalises; ensure the override is preserved.
-    expect(home.endsWith("custom-hermes")).toBe(true);
+    expect(home).toBe(posix.resolve("/tmp/custom-hermes"));
   });
 
   it("HERMES_HOME env overrides everything on Windows", () => {
@@ -28,7 +27,7 @@ describe("config/hermes-home", () => {
       },
       "win32",
     );
-    expect(home.includes("hermes-workshop")).toBe(true);
+    expect(home).toBe(win32.resolve("D:\\hermes-workshop"));
   });
 
   it("Windows uses LOCALAPPDATA/hermes when HERMES_HOME is unset", () => {
@@ -36,29 +35,36 @@ describe("config/hermes-home", () => {
       { LOCALAPPDATA: "C:\\Users\\bob\\AppData\\Local" },
       "win32",
     );
-    // Node's path.resolve on POSIX won't touch drive letters, but the
-    // final segment must always be "hermes" and the preceding segment
-    // "Local".
-    const normalized = home.replace(/\\/g, "/");
-    expect(normalized.endsWith("/hermes")).toBe(true);
-    expect(normalized.includes("AppData/Local/hermes")).toBe(true);
+    expect(home).toBe(win32.resolve("C:\\Users\\bob\\AppData\\Local\\hermes"));
   });
 
   it("Windows falls back to <home>/AppData/Local/hermes when LOCALAPPDATA is missing", () => {
-    const home = resolveHermesHome({ HOME: "/mnt/user" }, "win32");
-    const normalized = home.replace(/\\/g, "/");
-    expect(normalized.endsWith("AppData/Local/hermes")).toBe(true);
+    const home = resolveHermesHome(
+      { USERPROFILE: "C:\\Users\\bob", HOME: "D:\\fallback" },
+      "win32",
+    );
+    expect(home).toBe(win32.resolve("C:\\Users\\bob\\AppData\\Local\\hermes"));
+  });
+
+  it("Windows expands a tilde override against USERPROFILE", () => {
+    const home = resolveHermesHome(
+      {
+        HERMES_HOME: "~/hermes-workshop",
+        USERPROFILE: "C:\\Users\\bob",
+        HOME: "D:\\fallback",
+      },
+      "win32",
+    );
+    expect(home).toBe(win32.resolve("C:\\Users\\bob\\hermes-workshop"));
   });
 
   it("POSIX default is ~/.hermes", () => {
     const home = resolveHermesHome({ HOME: "/home/alice" }, "linux");
-    const normalized = home.replace(/\\/g, "/");
-    expect(normalized).toBe(join("/home/alice", ".hermes"));
+    expect(home).toBe(posix.resolve("/home/alice/.hermes"));
   });
 
   it("POSIX default on darwin honours HOME", () => {
     const home = resolveHermesHome({ HOME: "/Users/carol" }, "darwin");
-    const normalized = home.replace(/\\/g, "/");
-    expect(normalized).toBe(join("/Users/carol", ".hermes"));
+    expect(home).toBe(posix.resolve("/Users/carol/.hermes"));
   });
 });

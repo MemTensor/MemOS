@@ -23,8 +23,12 @@ import sys
 from pathlib import Path
 
 
-def _expand(value: str, env: dict[str, str] | None = None) -> Path:
-    """Expand ~ using the caller-supplied HOME if available.
+def _expand(
+    value: str,
+    env: dict[str, str] | None = None,
+    platform: str | None = None,
+) -> Path:
+    """Expand ~ using the platform-appropriate current-user home.
 
     Only the bare ``~``, ``~/…`` and ``~\\…`` forms are supported: the
     plugin resolves the *current* user's Hermes home, so shell-style
@@ -33,22 +37,25 @@ def _expand(value: str, env: dict[str, str] | None = None) -> Path:
     against the current working directory.
     """
     src = value
-    home = ""
-    if env is not None:
-        home = env.get("HOME", "").strip() or env.get("USERPROFILE", "").strip()
+    effective_env = dict(os.environ) if env is None else env
+    effective_platform = platform if platform is not None else sys.platform
+    if effective_platform == "win32":
+        home = effective_env.get("USERPROFILE", "").strip()
+        home = home or effective_env.get("HOME", "").strip()
+    else:
+        home = effective_env.get("HOME", "").strip()
+        home = home or effective_env.get("USERPROFILE", "").strip()
     if src.startswith("~"):
         base = home or str(Path.home())
         if src == "~":
             src = base
-        elif src.startswith("~/") or src.startswith("~\\"):
+        elif src.startswith(("~/", "~\\")):
             src = str(Path(base) / src[2:])
         else:
             # e.g. "~alice/hermes" — POSIX-style named-user expansion is
             # deliberately out of scope. Fail loudly so callers get a
             # clear signal instead of a path resolved against CWD.
-            raise ValueError(
-                f"named-user tilde paths are not supported: {value!r}"
-            )
+            raise ValueError(f"named-user tilde paths are not supported: {value!r}")
     return Path(src).resolve()
 
 
@@ -62,21 +69,17 @@ def resolve_hermes_home(
     respectively; callers pass them explicitly to keep the resolver
     unit-testable without process mutation.
     """
-    effective_env: dict[str, str]
-    if env is None:
-        effective_env = dict(os.environ)
-    else:
-        effective_env = dict(env)
+    effective_env = dict(os.environ) if env is None else dict(env)
     effective_platform = platform if platform is not None else sys.platform
 
     hermes_home = effective_env.get("HERMES_HOME", "").strip()
     if hermes_home:
-        return _expand(hermes_home, effective_env)
+        return _expand(hermes_home, effective_env, effective_platform)
 
     if effective_platform == "win32":
         local_appdata = effective_env.get("LOCALAPPDATA", "").strip()
         if local_appdata:
-            return _expand(local_appdata, effective_env) / "hermes"
+            return _expand(local_appdata, effective_env, effective_platform) / "hermes"
         # Match Hermes' fallback: <home>/AppData/Local/hermes. Use
         # ``.strip()`` guards so an env var that is *set* to an empty
         # string (common in scrubbed subprocess envs) still falls back
@@ -86,10 +89,14 @@ def resolve_hermes_home(
             or effective_env.get("HOME", "").strip()
             or str(Path.home())
         )
-        return _expand(home, effective_env) / "AppData" / "Local" / "hermes"
+        return _expand(home, effective_env, effective_platform) / "AppData" / "Local" / "hermes"
 
-    home = effective_env.get("HOME", "").strip() or str(Path.home())
-    return _expand(home, effective_env) / ".hermes"
+    home = (
+        effective_env.get("HOME", "").strip()
+        or effective_env.get("USERPROFILE", "").strip()
+        or str(Path.home())
+    )
+    return _expand(home, effective_env, effective_platform) / ".hermes"
 
 
 __all__ = ["resolve_hermes_home"]
