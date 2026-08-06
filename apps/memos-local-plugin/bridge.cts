@@ -36,6 +36,15 @@ const url = require("node:url") as typeof import("node:url");
 const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
 const BRIDGE_STATUS_STALE_MS = 20_000;
 const BRIDGE_STATUS_FILE = "bridge-status.json";
+// If core.shutdown() or waitForShutdown() blocks (e.g. L2/L3 LLM calls
+// hanging during flush), the bridge process would never exit after stdin
+// EOF or SIGTERM. Race against this deadline so the process always exits
+// within a bounded time even when the parent is already gone.
+const SHUTDOWN_TIMEOUT_MS = 20_000;
+
+function withShutdownTimeout(p: Promise<void>): Promise<void> {
+  return Promise.race([p, new Promise<void>((r) => setTimeout(r, SHUTDOWN_TIMEOUT_MS))]);
+}
 
 interface BridgeArgs {
   daemon: boolean;
@@ -43,6 +52,7 @@ interface BridgeArgs {
   tcpPort?: number;
   agent: "openclaw" | "hermes";
   home?: string;
+  runtimeScope?: string;
 }
 
 type BridgeStatus = "connected" | "reconnecting" | "disconnected" | "unknown";
@@ -63,6 +73,10 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
     else if (raw === "--agent=hermes") args.agent = "hermes";
     else if (raw === "--agent=openclaw") args.agent = "openclaw";
     else if (raw.startsWith("--home=")) args.home = raw.slice(7);
+    else if (raw.startsWith("--runtime-scope=")) {
+      const candidate = raw.slice(16).toLowerCase();
+      if (/^[a-f0-9]{16,64}$/.test(candidate)) args.runtimeScope = candidate;
+    }
   }
   return args;
 }
@@ -149,7 +163,10 @@ async function main(): Promise<void> {
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
   const pidPath = pidFilePath(args.agent);
-  const stdioPidPath = pidFilePath(args.agent, STDIO_PID_FILENAME);
+  const stdioPidFilename = args.runtimeScope
+    ? `bridge-stdio-${args.runtimeScope}.pid`
+    : STDIO_PID_FILENAME;
+  const stdioPidPath = pidFilePath(args.agent, stdioPidFilename);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
@@ -187,7 +204,9 @@ async function main(): Promise<void> {
   )) as typeof import("./bridge/hermes-process.js");
 
   const rootDir = pluginRoot();
-  const pkgVersion = require(path.join(rootDir, "package.json")).version;
+  const pkgVersion = JSON.parse(
+    fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+  ).version;
 
   // ─── Host LLM bridge (reverse RPC, lazy-bound to stdio) ────────
   // We need to register the bridge BEFORE bootstrap creates the
@@ -283,9 +302,15 @@ async function main(): Promise<void> {
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     namespace: { agentKind: args.agent, profileId: resolvedProfileId },
+    autoRecovery: args.agent !== "hermes" || !args.daemon,
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
     home: resolvedHome,
+    // Standalone bridge owns its stdio — initialize the logger from
+    // config.logging (timezone, level, channels, file sinks). Without this the
+    // logger stays on the bootstrap console default (tz pinned to "UTC"), which
+    // makes logging.timezone inert in the daemon.
+    initLogging: true,
   });
 
   const telemetry = new Telemetry(
@@ -455,13 +480,13 @@ async function main(): Promise<void> {
           process.stderr.write(
             `bridge: daemon port :${viewerPort} still in use after ${maxBindAttempts}s — exiting.\n`,
           );
-          await core.shutdown();
+          await withShutdownTimeout(core.shutdown());
           process.exit(1);
         }
         process.stderr.write(
           `bridge: daemon viewer failed: ${(err as Error)?.message ?? String(err)}\n`,
         );
-        await core.shutdown();
+        await withShutdownTimeout(core.shutdown());
         process.exit(1);
       }
     }
@@ -470,8 +495,15 @@ async function main(): Promise<void> {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
       removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
-      await core.shutdown();
-      process.exit(0);
+      try {
+        await withShutdownTimeout(core.shutdown());
+      } catch {
+        // clear-data already shuts the core down before removing SQLite.
+        // The signal still has to terminate the daemon so the supervisor
+        // can replace it.
+      } finally {
+        process.exit(0);
+      }
     };
     process.on("SIGINT", () => void shutdownDaemon("SIGINT"));
     process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));
@@ -541,7 +573,7 @@ async function main(): Promise<void> {
         /* best-effort */
       }
     }
-    await waitForShutdown(core, activeStdio);
+    await withShutdownTimeout(waitForShutdown(core, activeStdio));
     process.exit(0);
   };
 
@@ -562,7 +594,7 @@ async function main(): Promise<void> {
       if (viewer!.closed) {
         clearInterval(keepalive);
         removeOwnedPidFile();
-        void core.shutdown().then(() => process.exit(0));
+        void withShutdownTimeout(core.shutdown()).then(() => process.exit(0));
       }
     }, 5_000);
     (keepalive as unknown as { unref?: () => void }).unref?.();
@@ -571,7 +603,7 @@ async function main(): Promise<void> {
 
   // No viewer (headless bridge) — clean exit.
   removeOwnedPidFile();
-  await core.shutdown();
+  await withShutdownTimeout(core.shutdown());
   process.exit(0);
 }
 

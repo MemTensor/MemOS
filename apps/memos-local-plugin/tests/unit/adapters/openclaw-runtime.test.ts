@@ -257,6 +257,63 @@ function buildBridgeStub() {
 }
 
 describe("OpenClaw hook listener contract (issue #1815)", () => {
+  it("captures message_received content synchronously before runtime bootstrap completes", async () => {
+    const home = useTempMemosHome();
+    const core = makeCore();
+    const bootDeferred = deferred<{
+      core: ReturnType<typeof makeCore>;
+      config: typeof DEFAULT_CONFIG;
+      home: ResolvedHome;
+    }>();
+    const bootstrapMemoryCoreFull = vi.fn(() => bootDeferred.promise);
+    const startHttpServer = vi.fn(async () => ({
+      url: "http://127.0.0.1:18799",
+      port: 18799,
+      closed: false,
+      close: vi.fn(async () => {}),
+    }));
+    const bridge = buildBridgeStub();
+    const createOpenClawBridge = vi.fn(() => bridge);
+    const plugin = await loadPluginWithMocks(
+      bootstrapMemoryCoreFull,
+      startHttpServer,
+      createOpenClawBridge,
+    );
+    const api = makeApi();
+    plugin.register(api);
+
+    const handler = api.hooks.get("message_received") as
+      | OpenClawHookHandlerMap["message_received"]
+      | undefined;
+    expect(handler).toBeDefined();
+    expect(handler!.constructor.name).not.toBe("AsyncFunction");
+    expect(
+      handler!(
+        {
+          from: "ou_sender",
+          content: "OpenClaw 官方干净正文",
+          runId: "run-clean",
+        },
+        {
+          channelId: "feishu",
+          runId: "run-clean",
+          sessionKey: "agent:main:main",
+        },
+      ),
+    ).toBeUndefined();
+
+    bootDeferred.resolve({ core, config: DEFAULT_CONFIG, home });
+    await api.services[0]!.start?.();
+
+    const bridgeOptions = createOpenClawBridge.mock.calls[0]![0] as {
+      inboundUserText?: { get: (runId: string) => string | undefined };
+    };
+    expect(bridgeOptions.inboundUserText?.get("run-clean")).toBe(
+      "OpenClaw 官方干净正文",
+    );
+    await api.services[0]!.stop?.();
+  });
+
   it("registers tool_result_persist as a SYNC listener that returns the bridge result directly (not a Promise)", async () => {
     const bridge = buildBridgeStub();
     const plugin = (await buildPluginWithFakeBridge({ bridge })) as {
@@ -455,6 +512,7 @@ describe("OpenClaw hook listener contract (issue #1815)", () => {
     // before_prompt_build is value-returning and the only listener
     // allowed to be async (OpenClaw awaits its prependContext).
     const voidHooks: OpenClawHookName[] = [
+      "message_received",
       "agent_end",
       "before_tool_call",
       "after_tool_call",

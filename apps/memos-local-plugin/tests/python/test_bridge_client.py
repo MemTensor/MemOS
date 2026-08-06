@@ -44,6 +44,7 @@ class FakePopen:
 
     def __init__(self, *_args, **_kwargs) -> None:
         self.cmd = list(_args[0]) if _args else []
+        self.env = dict(_kwargs.get("env") or {})
         self.pid = 12345
         self.stdin = io.StringIO()
         self._stdin_lines: list[str] = []
@@ -346,6 +347,23 @@ class BridgeClientTests(unittest.TestCase):
         hermes.close()
         openclaw.close()
 
+    def test_module_singleton_isolated_for_distinct_runtime_homes(self) -> None:
+        """Different MemOS data homes must not displace each other's client."""
+        with tempfile.TemporaryDirectory() as root:
+            first = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=str(Path(root) / "home-a"),
+            )
+            second = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=str(Path(root) / "home-b"),
+            )
+
+            self.assertFalse(first._closed)
+            self.assertFalse(second._closed)
+            first.close()
+            second.close()
+
     def test_close_unregisters_active_client_only_when_still_current(self) -> None:
         """A stale close() must not evict the newer registered client."""
         first = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
@@ -353,7 +371,11 @@ class BridgeClientTests(unittest.TestCase):
         # First was already closed by second's __init__. Closing it again is
         # a no-op and must not touch the registry's current entry (second).
         first.close()
-        key = (second._singleton_agent, second._singleton_no_viewer)
+        key = (
+            second._singleton_agent,
+            second._singleton_no_viewer,
+            second._singleton_runtime_home,
+        )
         self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key), second)
         second.close()
         self.assertIsNone(bridge_client_mod._ACTIVE_CLIENTS.get(key))
@@ -364,6 +386,40 @@ class BridgeClientTests(unittest.TestCase):
         cmd = getattr(self._fake, "cmd", [])
         self.assertIn("--no-viewer", cmd)
         client.close()
+
+    def test_stdio_bridge_passes_stable_runtime_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            client = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=root,
+            )
+            assert self._fake is not None
+            scope_args = [
+                arg for arg in getattr(self._fake, "cmd", []) if arg.startswith("--runtime-scope=")
+            ]
+            self.assertEqual(len(scope_args), 1)
+            token = scope_args[0].split("=", 1)[1]
+            self.assertRegex(token, r"^[a-f0-9]{24}$")
+            self.assertEqual(
+                self._fake.env["MEMOS_HOME"],
+                str(Path(root).resolve()),
+            )
+            client.close()
+
+    def test_runtime_home_uses_captured_child_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            runtime_home = str(Path(root) / "captured-home")
+            client = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                extra_env={"MEMOS_HOME": runtime_home},
+            )
+            assert self._fake is not None
+            self.assertEqual(
+                client._singleton_runtime_home,
+                str(Path(runtime_home).resolve()),
+            )
+            self.assertEqual(self._fake.env["MEMOS_HOME"], runtime_home)
+            client.close()
 
     def test_reverse_request_waits_for_late_host_handler_registration(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
@@ -391,6 +447,128 @@ class BridgeClientTests(unittest.TestCase):
         self.assertEqual(response["result"]["text"], "host:ping")
         self.assertNotIn("error", response)
         client.close()
+
+    def test_slow_reverse_handler_does_not_block_regular_rpc_responses(self) -> None:
+        """A host LLM callback must not stall the stdout response demux.
+
+        ``host.llm.complete`` can legitimately spend several seconds in the
+        Hermes model client.  The bridge reader still has to resolve an
+        unrelated foreground ``turn.start`` response during that
+        window; otherwise one background callback head-of-line blocks every
+        provider lease sharing the process.
+        """
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        handler_started = threading.Event()
+        release_handler = threading.Event()
+
+        def _slow_handler(_params: dict) -> dict:
+            handler_started.set()
+            release_handler.wait(timeout=2.0)
+            return {"text": "host:done", "model": "host-test"}
+
+        client.register_host_handler("host.llm.complete", _slow_handler)
+        self._fake.stdout._enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": "srv-slow",
+                "method": "host.llm.complete",
+                "params": {"messages": [{"role": "user", "content": "slow"}]},
+            }
+        )
+        self.assertTrue(handler_started.wait(timeout=0.5))
+
+        try:
+            response = client.request(
+                "turn.start",
+                {
+                    "sessionId": "hermes:session:1",
+                    "userText": "foreground recall",
+                },
+                timeout=0.5,
+            )
+            self.assertIn("foreground recall", response["injectedContext"])
+        finally:
+            release_handler.set()
+
+        reverse_response = self._wait_for_client_write(lambda msg: msg.get("id") == "srv-slow")
+        self.assertEqual(reverse_response["result"]["text"], "host:done")
+        client.close()
+
+    def test_reverse_handler_queue_rejects_overload_without_blocking_reader(self) -> None:
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        handler_started = threading.Event()
+        release_handler = threading.Event()
+
+        def _slow_handler(_params: dict) -> dict:
+            handler_started.set()
+            release_handler.wait(timeout=2.0)
+            return {"text": "done"}
+
+        client.register_host_handler("host.llm.complete", _slow_handler)
+        self._fake.stdout._enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": "srv-running",
+                "method": "host.llm.complete",
+                "params": {},
+            }
+        )
+        self.assertTrue(handler_started.wait(timeout=0.5))
+
+        overflow_id = "srv-overflow"
+        for index in range(bridge_client_mod.HOST_HANDLER_QUEUE_CAPACITY + 1):
+            rpc_id = (
+                overflow_id
+                if index == bridge_client_mod.HOST_HANDLER_QUEUE_CAPACITY
+                else f"srv-{index}"
+            )
+            self._fake.stdout._enqueue(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "method": "host.llm.complete",
+                    "params": {},
+                }
+            )
+
+        try:
+            response = self._wait_for_client_write(lambda msg: msg.get("id") == overflow_id)
+            self.assertEqual(response["error"]["data"]["code"], "host_handler_busy")
+        finally:
+            client.close()
+            release_handler.set()
+
+    def test_close_does_not_wait_for_a_running_reverse_handler(self) -> None:
+        """An uncooperative host callback must not extend bridge shutdown."""
+        client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        assert self._fake is not None
+        handler_started = threading.Event()
+        release_handler = threading.Event()
+
+        def _slow_handler(_params: dict) -> dict:
+            handler_started.set()
+            release_handler.wait(timeout=2.0)
+            return {"text": "late", "model": "host-test"}
+
+        client.register_host_handler("host.llm.complete", _slow_handler)
+        self._fake.stdout._enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": "srv-close",
+                "method": "host.llm.complete",
+                "params": {},
+            }
+        )
+        self.assertTrue(handler_started.wait(timeout=0.5))
+
+        started = time.monotonic()
+        try:
+            client.close()
+        finally:
+            release_handler.set()
+        self.assertLess(time.monotonic() - started, 0.5)
 
     def test_reader_exit_marks_pending_as_transport_closed(self) -> None:
         """R1 (#2028): reader thread EOF must wake pending waiters
@@ -473,8 +651,10 @@ class MemTensorProviderTests(unittest.TestCase):
         import memos_provider
 
         self._provider_mod = memos_provider
+        self._provider_mod.SHARED_BRIDGE_REGISTRY.close_all()
 
         self._patches = [
+            patch.dict("os.environ", {"MEMOS_HERMES_BRIDGE_MODE": "legacy"}),
             patch("memos_provider.ensure_bridge_running", return_value=True),
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
         ]
@@ -482,6 +662,7 @@ class MemTensorProviderTests(unittest.TestCase):
             p.start()
 
     def tearDown(self) -> None:
+        self._provider_mod.SHARED_BRIDGE_REGISTRY.close_all()
         for p in self._patches:
             p.stop()
 
@@ -677,6 +858,7 @@ class MemTensorProviderTests(unittest.TestCase):
 
     def test_on_delegation_is_noop_without_bridge(self) -> None:
         p = self._provider_mod.MemTensorProvider()
+        p._bridge_keepalive_stop.set()
         p.on_delegation("run tests", "all green")  # must not raise
 
     def test_on_pre_compress_without_bridge_returns_empty(self) -> None:
@@ -1051,7 +1233,7 @@ class MemTensorProviderTests(unittest.TestCase):
             "sessions (issue #2028).",
         )
 
-    def test_prefetch_uses_long_rpc_timeout_for_turn_start(self) -> None:
+    def test_prefetch_uses_dedicated_foreground_timeout_for_turn_start(self) -> None:
         p = self._provider_mod.MemTensorProvider()
         bridge = RecordingBridge()
         p._bridge = bridge
@@ -1062,12 +1244,45 @@ class MemTensorProviderTests(unittest.TestCase):
         self.assertIn("turn.start", methods)
         start_index = methods.index("turn.start")
         start_kwargs = bridge.call_kwargs[start_index]
-        self.assertGreaterEqual(
+        self.assertGreater(start_kwargs.get("timeout", 0.0), 0.0)
+        self.assertLessEqual(
             start_kwargs.get("timeout", 0.0),
-            self._EXPECTED_LONG_TIMEOUT,
-            "turn.start suffers the same long-tail latency as turn.end and "
-            "must share the long RPC timeout (issue #2028).",
+            self._provider_mod._PREFETCH_RPC_TIMEOUT,
+            "foreground turn.start must finish before the Hermes host deadline; "
+            "long capture work keeps the separate issue #2028 timeout.",
         )
+        start_payload = bridge.calls[start_index][1]
+        self.assertIn("deadlineAt", start_payload)
+        self.assertGreater(start_payload["deadlineAt"], start_payload["ts"])
+
+    def test_foreground_reconnect_and_retry_share_one_deadline(self) -> None:
+        class ClosedBridge:
+            def request(self, *_args, **_kwargs) -> dict:
+                raise BridgeError("transport_closed", "bridge closed")
+
+        p = self._provider_mod.MemTensorProvider()
+        p._bridge = ClosedBridge()
+        recovered = RecordingBridge()
+        monotonic_now = [100.0]
+
+        def reconnect(_session_id: str, *, timeout: float) -> None:
+            self.assertLessEqual(timeout, 6.0)
+            monotonic_now[0] += 4.0
+            p._bridge = recovered
+
+        with (
+            patch("memos_provider.time.monotonic", side_effect=lambda: monotonic_now[0]),
+            patch.object(p, "_reconnect_bridge", side_effect=reconnect),
+        ):
+            p._bridge_request_with_retry(
+                "turn.start",
+                {"sessionId": "s-1"},
+                timeout=6.0,
+                deadline_monotonic=106.0,
+            )
+
+        self.assertEqual(recovered.calls[0][0], "turn.start")
+        self.assertLessEqual(recovered.call_kwargs[0]["timeout"], 2.0)
 
 
 class ViewerDaemonTests(unittest.TestCase):

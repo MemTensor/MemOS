@@ -4,7 +4,7 @@
 const { spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-const { validateNativeBinding } = require("./native-binding.cjs");
+const { quarantineNativeBinding, validateNativeBinding } = require("./native-binding.cjs");
 
 const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
@@ -402,6 +402,14 @@ function sqliteBindingsExist() {
   if (status.ok) return true;
   if (status.reason === "node-module-version") {
     warn("Native binding exists but was compiled for a different Node.js version.");
+    const quarantine = quarantineNativeBinding(found);
+    if (quarantine.ok && quarantine.quarantinedPath) {
+      warn(`Moved stale native binding aside: ${DIM}${quarantine.quarantinedPath}${RESET}`);
+    } else if (quarantine.ok) {
+      warn("Removed stale native binding before rebuild.");
+    } else {
+      warn(`Could not quarantine stale native binding: ${quarantine.reason}`);
+    }
   } else {
     warn("Native binding exists but failed to load.");
   }

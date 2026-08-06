@@ -396,6 +396,7 @@ export class ViewerServer {
       else if (p === "/api/migrate/postprocess/stream" && req.method === "GET") this.handlePostprocessStream(res);
       else if (p === "/api/migrate/postprocess/stop" && req.method === "POST") this.handlePostprocessStop(res);
       else if (p === "/api/migrate/postprocess/status" && req.method === "GET") this.handlePostprocessStatus(res);
+      else if (p === "/api/export" && req.method === "GET") this.handleExport(res, url);
       else {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "not found" }));
@@ -3069,6 +3070,42 @@ export class ViewerServer {
     res.end(JSON.stringify({ ips }));
   }
 
+  // ─── Export ───
+
+  private handleExport(res: http.ServerResponse, url: URL): void {
+    const format = url.searchParams.get("format") ?? "json";
+    const now = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+
+    try {
+      if (format === "csv") {
+        const csv = this.store.exportMemoriesAsCsv();
+        const filename = `memos-memories-${now}.csv`;
+        res.writeHead(200, {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        });
+        res.end(csv);
+      } else {
+        const data = this.store.exportAll();
+        const payload = JSON.stringify(
+          { exportedAt: new Date().toISOString(), version: 1, ...data },
+          null,
+          2,
+        );
+        const filename = `memos-export-${now}.json`;
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        });
+        res.end(payload);
+      }
+    } catch (err) {
+      this.log.error(`Export failed: ${err}`);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  }
+
   private serveConfig(res: http.ServerResponse): void {
     try {
       const cfgPath = this.getOpenClawConfigPath();
@@ -3874,11 +3911,31 @@ export class ViewerServer {
       return vecs[0].length;
     }
     if (provider === "gemini") {
-      const url = `https://generativelanguage.googleapis.com/v1/models/${model || "text-embedding-004"}:embedContent?key=${apiKey}`;
+      const geminiModel = model || "gemini-embedding-001";
+      const geminiEndpoint = (
+        endpoint ||
+        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:batchEmbedContents`
+      ).replace(/\/+$/, "");
+      const separator = geminiEndpoint.includes("?") ? "&" : "?";
+      // Only append the API key for the default Gemini endpoint; for custom
+      // endpoints the caller is responsible for authentication and we must
+      // never leak the Gemini API key to a user-controlled server.
+      const url = endpoint
+        ? geminiEndpoint
+        : `${geminiEndpoint}${separator}key=${apiKey}`;
+      // When the caller supplies a custom endpoint, don't hardcode the
+      // default model name in the request body either — the proxy may
+      // route based on this field.
+      const bodyModel = endpoint ? undefined : `models/${geminiModel}`;
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: { parts: [{ text: "test embedding vector" }] } }),
+        body: JSON.stringify({
+          requests: [{
+            ...(bodyModel ? { model: bodyModel } : {}),
+            content: { parts: [{ text: "test embedding vector" }] },
+          }],
+        }),
         signal: AbortSignal.timeout(15_000),
       });
       if (!resp.ok) {
@@ -3886,20 +3943,40 @@ export class ViewerServer {
         throw new Error(`Gemini embed ${resp.status}: ${txt}`);
       }
       const json = await resp.json() as any;
-      const vec = json?.embedding?.values;
+      const vec = json?.embeddings?.[0]?.values;
       if (!Array.isArray(vec) || vec.length === 0) {
         throw new Error("Gemini returned empty embedding vector");
       }
       return vec.length;
     }
-    const resp = await fetch(embUrl, {
+    const requestBody = { input: ["test embedding vector"], model: model || "text-embedding-3-small" };
+    let resp = await fetch(embUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify({ input: ["test embedding vector"], model: model || "text-embedding-3-small" }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(15_000),
     });
     if (!resp.ok) {
       const txt = await resp.text();
+      if (/input[_ -]?type/i.test(txt) && /required/i.test(txt)) {
+        resp = await fetch(embUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...requestBody, input_type: "query" }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (resp.ok) {
+          const json = await resp.json() as any;
+          const data = json?.data;
+          const vec = Array.isArray(data) && data.length > 0 ? data[0]?.embedding : undefined;
+          if (!Array.isArray(vec) || vec.length === 0) {
+            throw new Error(
+              `API returned empty embedding vector (got ${JSON.stringify(vec)?.slice(0, 100)})`,
+            );
+          }
+          return vec.length;
+        }
+      }
       throw new Error(`${resp.status}: ${txt}`);
     }
     const json = await resp.json() as any;

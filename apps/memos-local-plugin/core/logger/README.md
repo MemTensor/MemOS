@@ -86,8 +86,9 @@ per-channel notes. Example prefixes:
 
 - **Disk full / permission denied** — file transports degrade to console only
   and emit one error to the in-memory ring buffer (also surfaced via SSE).
-- **Process abort** — every transport `flushSync()`s on `beforeExit` and
-  `SIGINT`/`SIGTERM`.
+- **Process exit** — transports close on `beforeExit`. Executable bridge
+  entries own `SIGINT`/`SIGTERM` so they can drain MemoryCore before exit;
+  file writes themselves are synchronous.
 - **Audit retention** — never deletes. If you really need to free space, gzip
   archives can be moved out of `logs/` manually.
 - **Redaction is best-effort** — exotic key names won't be caught. If you have

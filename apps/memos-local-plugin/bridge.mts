@@ -245,6 +245,7 @@ async function main(): Promise<void> {
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     namespace: { agentKind: args.agent, profileId: "default" },
+    autoRecovery: args.agent !== "hermes" || !args.daemon,
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
     home: resolvedHome,
@@ -407,8 +408,15 @@ async function main(): Promise<void> {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
       removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
-      await core.shutdown();
-      process.exit(0);
+      try {
+        await core.shutdown();
+      } catch {
+        // clear-data already shuts the core down before removing SQLite.
+        // The signal still has to terminate the daemon so the supervisor
+        // can replace it.
+      } finally {
+        process.exit(0);
+      }
     };
     process.on("SIGINT", () => void shutdownDaemon("SIGINT"));
     process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));

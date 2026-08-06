@@ -27,6 +27,9 @@ llm:
   apiKey: ""              # REQUIRED — fill in before running
   model: ""               # blank = provider default (e.g. gpt-4o-mini for openai_compatible)
 
+storage:
+  ftsTokenizer: trigram    # trigram | cjk; cjk improves short Chinese keyword recall
+
 algorithm:
   lightweightMemory:
     enabled: true          # true = low-cost summaries only; false = memory self-evolution with tasks/experiences/world models/skills

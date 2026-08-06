@@ -5,6 +5,9 @@
  * Providers stay internal to `core/llm/`.
  */
 
+import type { ReasoningConfig as ConfigReasoningConfig } from "../config/schema.js";
+import type { RetryDiagnosticDetails } from "../util/retry-after.js";
+
 // ─── Providers & config ──────────────────────────────────────────────────────
 
 export type LlmProviderName =
@@ -14,6 +17,8 @@ export type LlmProviderName =
   | "gemini"
   | "bedrock"
   | "host";
+
+export type ReasoningConfig = ConfigReasoningConfig;
 
 /**
  * Resolved LLM config, post-defaults. Subset of `ResolvedConfig.llm` so
@@ -28,6 +33,14 @@ export interface LlmConfig {
   apiKey?: string;
   timeoutMs: number;
   maxRetries: number;
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore?: string[];
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder?: string[];
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: boolean;
+  /** OpenRouter-compatible reasoning controls. Omit for model defaults. */
+  reasoning?: ReasoningConfig;
   /** Optional per-call default. Default: 1024. */
   maxTokens?: number;
   /** Extra HTTP headers for outgoing requests. */
@@ -76,7 +89,7 @@ export interface LlmCircuitBreakerConfig {
   now?: () => number;
 }
 
-export interface LlmErrorDetail {
+export interface LlmErrorDetail extends RetryDiagnosticDetails {
   provider: LlmProviderName | string;
   model: string;
   message: string;
@@ -93,7 +106,7 @@ export interface LlmErrorDetail {
   role?: "llm" | "skillEvolver";
 }
 
-export interface LlmStatusDetail {
+export interface LlmStatusDetail extends RetryDiagnosticDetails {
   status: "ok" | "fallback" | "error" | "circuit_open";
   provider: LlmProviderName | string;
   model: string;
@@ -137,6 +150,8 @@ export interface LlmCallOptions {
   maxTokens?: number;
   /** Per-call timeout. */
   timeoutMs?: number;
+  /** Absolute end-to-end deadline shared across provider retry attempts. */
+  deadlineAt?: number;
   /** AbortSignal honored across HTTP + host-bridge calls. */
   signal?: AbortSignal;
   /**
@@ -201,6 +216,8 @@ export interface LlmProviderCtx {
   log: LlmProviderLogger;
   /** Call abort signal; providers must honor it. */
   signal?: AbortSignal;
+  /** Absolute end-to-end deadline; providers must not renew it per retry. */
+  deadlineAt?: number;
 }
 
 export interface LlmProviderLogger {

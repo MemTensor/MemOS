@@ -39,10 +39,36 @@ const EmbeddingSchema = Type.Object({
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
   apiKey: StringWithDefault(""),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
   }, { default: {} }),
+}, { default: {} });
+
+const ReasoningSchema = Type.Object({
+  /**
+   * OpenRouter-compatible reasoning toggle. Omit the whole block to keep
+   * the provider/model default.
+   */
+  enabled: Type.Optional(Type.Boolean()),
+  /** Optional provider effort hint for reasoning-capable models. */
+  effort: Type.Optional(Type.Union([
+    Type.Literal("minimal"),
+    Type.Literal("none"),
+    Type.Literal("low"),
+    Type.Literal("medium"),
+    Type.Literal("high"),
+    Type.Literal("xhigh"),
+    Type.Literal("max"),
+  ])),
+  /** Optional token budget for reasoning-capable providers. */
+  maxTokens: Type.Optional(Type.Number({ minimum: 1 })),
 }, { default: {} });
 
 const LlmSchema = Type.Object({
@@ -65,6 +91,14 @@ const LlmSchema = Type.Object({
   timeoutMs: NumberInRange(45_000, 1_000),
   /** Max retries on transient errors. */
   maxRetries: NumberInRange(3, 0, 10),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
 }, { default: {} });
 
 /**
@@ -89,6 +123,26 @@ const SkillEvolverSchema = Type.Object({
   apiKey: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
   timeoutMs: NumberInRange(60_000, 1_000),
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter: Type.Optional(Bool(false)),
+  /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
+  reasoning: Type.Optional(ReasoningSchema),
+}, { default: {} });
+
+const StorageSchema = Type.Object({
+  /**
+   * Keyword tokenizer mode used when compiling FTS5 MATCH expressions.
+   * `trigram` preserves the historical SQLite trigram behavior; `cjk`
+   * keeps short Chinese words and mixed ASCII+CJK tokens searchable.
+   */
+  ftsTokenizer: Type.Union([
+    Type.Literal("trigram"),
+    Type.Literal("cjk"),
+  ], { default: "trigram" }),
 }, { default: {} });
 
 const AlgorithmSchema = Type.Object({
@@ -114,6 +168,10 @@ const AlgorithmSchema = Type.Object({
     synthReflections: Bool(false),
     /** Concurrency for α scoring + synth LLM calls (per_step mode only). */
     llmConcurrency: NumberInRange(4, 1, 32),
+    /** Hard cap for one topic-end reflect pass, including recovery replay. */
+    maxReflectLlmCalls: NumberInRange(128, 0, 10_000),
+    /** Max orphan trace inserts allowed during startup-recovered replay. */
+    maxRecoveryOrphanInserts: NumberInRange(0, 0, 10_000),
     /**
      * V7 §3.2 batched variant. When/how to fold per-step reflection synth +
      * α scoring into one episode-level LLM call:
@@ -344,6 +402,23 @@ const AlgorithmSchema = Type.Object({
      * `taskIdleTimeoutMs`.
      */
     mergeMaxGapMs: NumberInRange(2 * 60 * 60 * 1000, 0, 24 * 60 * 60 * 1000),
+    /**
+     * Hard cap on turns in a merged episode. Once reached, the next
+     * turn forces a topic boundary even if relation classification says
+     * follow-up/revision. Keeps task-end processing bounded.
+     */
+    maxTurnsPerEpisode: NumberInRange(30, 5, 200),
+    /**
+     * Max time to wait for relation classification before defaulting
+     * to a conservative new-task boundary so foreground prompt
+     * construction cannot stall indefinitely.
+     */
+    classifyTimeoutMs: NumberInRange(5000, 1000, 30000),
+    /**
+     * Shared LLM concurrency budget for asynchronous background
+     * capture/reward/L2/L3/skill-evolution processing.
+     */
+    bgLlmConcurrency: NumberInRange(2, 1, 8),
   }, { default: {} }),
   retrieval: Type.Object({
     /** How many Skill snippets to inject at turn start. */
@@ -527,6 +602,8 @@ const LoggingSchema = Type.Object({
   ], { default: "info" }),
   /** Viewer-only switch: expose detailed logs, lifecycle tags and chain view. */
   detailedView: Bool(false),
+  /** IANA timezone for log timestamp display. */
+  timezone: StringWithDefault("UTC"),
   console: Type.Object({
     enabled: Bool(true),
     pretty: Bool(true),
@@ -579,11 +656,15 @@ export const ConfigSchema = Type.Object({
   bridge: BridgeSchema,
   embedding: EmbeddingSchema,
   llm: LlmSchema,
+  /** Dedicated model slot for L3 abstraction. Same shape as skillEvolver. */
+  l3Llm: SkillEvolverSchema,
   skillEvolver: SkillEvolverSchema,
+  storage: StorageSchema,
   algorithm: AlgorithmSchema,
   hub: HubSchema,
   telemetry: TelemetrySchema,
   logging: LoggingSchema,
 }, { default: {} });
 
+export type ReasoningConfig = Static<typeof ReasoningSchema>;
 export type ResolvedConfig = Static<typeof ConfigSchema>;

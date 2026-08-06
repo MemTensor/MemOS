@@ -32,6 +32,14 @@ describe("storage/keyword.prepareFtsMatch", () => {
     expect(prepareFtsMatch("唐波")).toBeNull(); // 2-char CJK only
   });
 
+  it("keeps short CJK and mixed ASCII+CJK terms in cjk mode", () => {
+    const out = prepareFtsMatch("早报 API配置 C盘", { tokenizer: "cjk" });
+    expect(out).toContain('"早报"');
+    expect(out).toContain('"API"');
+    expect(out).toContain('"配置"');
+    expect(out).toContain('"C盘"');
+  });
+
   it("escapes quotes inside tokens for FTS5 phrase syntax", () => {
     const out = prepareFtsMatch('check "quoted" word');
     // FTS5 phrase syntax doubles the inner quote.
@@ -63,9 +71,27 @@ describe("storage/keyword.extractPatternTerms", () => {
 
   it("emits CJK bigrams over each CJK run", () => {
     const out = extractPatternTerms("帮我部署");
-    expect(out).toContain("帮我");
-    expect(out).toContain("我部");
     expect(out).toContain("部署");
+    expect(out).not.toContain("帮我");
+    expect(out).not.toContain("我部");
+  });
+
+  it("removes conversational CJK bigrams from long personal-fact queries", () => {
+    const out = extractPatternTerms("你还记得我喜欢什么吗");
+
+    expect(out).toContain("喜欢");
+    expect(out).not.toContain("你还");
+    expect(out).not.toContain("还记");
+    expect(out).not.toContain("得我");
+    expect(out).not.toContain("什么");
+    expect(out).not.toContain("么吗");
+  });
+
+  it("keeps content bigrams while removing grammatical bridges", () => {
+    const out = extractPatternTerms("我爱吃的水果呢");
+
+    expect(out).toEqual(expect.arrayContaining(["爱吃", "水果"]));
+    expect(out).not.toEqual(expect.arrayContaining(["我爱", "吃的", "的水", "果呢"]));
   });
 
   it("keeps 2-char CJK runs as a single bigram", () => {

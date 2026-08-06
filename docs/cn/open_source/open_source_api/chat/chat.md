@@ -68,11 +68,11 @@ client = MemOSClient(api_key="...", base_url="...")
 # 发起对话请求
 res = client.chat(
     user_id="dev_user_01",
+    conversation_id="conv_r_study_001",
     query="根据我之前的偏好，推荐一套 R 语言数据清理方案",
-    readable_cube_ids=["private_cube_01", "public_kb_r_lang"], # 读：个人偏好+公共库
-    writable_cube_ids=["private_cube_01"],                      # 写：沉淀至个人空间
-    add_message_on_answer=True,                                 # 开启自动记忆回写
-    mode="fine"                                                 # 使用精细检索模式
+    knowledgebase_ids=["kb_r_lang"],  # 检索 R 语言公共知识库
+    add_message_on_answer=True,       # 开启自动记忆回写
+    temperature=0.7
 )
 
 if res:

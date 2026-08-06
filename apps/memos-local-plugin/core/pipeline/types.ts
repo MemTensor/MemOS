@@ -115,6 +115,18 @@ export interface SessionRoutingConfig {
    * new-episode boundary even for revision/follow_up verdicts.
    */
   mergeMaxGapMs: number;
+  /**
+   * Hard cap on turns in a merged episode. Once reached, the next turn
+   * forces a topic boundary before appending to keep topic-end work bounded.
+   */
+  maxTurnsPerEpisode: number;
+  /**
+   * Max time to wait for relation classification before defaulting to
+   * a conservative new-task boundary.
+   */
+  classifyTimeoutMs: number;
+  /** Shared LLM concurrency budget for async background subscribers. */
+  bgLlmConcurrency: number;
 }
 
 // ─── Dependency graph ─────────────────────────────────────────────────────
@@ -138,6 +150,14 @@ export interface PipelineDeps {
    * absent. Summarization and per-turn lite capture still use `llm`.
    */
   reflectLlm: LlmClient | null;
+  /**
+   * Dedicated LLM for L3 abstraction (clustering → world-model facts).
+   * Built from `config.l3Llm.*` when configured; falls back to `llm`
+   * when absent. L3 runs off the turn-response path, so a stronger
+   * (slower) model here improves abstraction quality without affecting
+   * companion latency.
+   */
+  l3Llm: LlmClient | null;
   embedder: Embedder | null;
   log: Logger;
   namespace: RuntimeNamespace;
@@ -169,6 +189,13 @@ export interface PipelineHandle {
    * status instead of falling back to the summary LLM.
    */
   readonly reflectLlm: LlmClient | null;
+  /**
+   * Dedicated client for L3 abstraction. When `l3Llm.*` is blank this is the
+   * same instance as `llm`; when configured it carries its own model so the
+   * clustering → world-model pass can run on a stronger LLM than the cheap
+   * high-frequency main model.
+   */
+  readonly l3Llm: LlmClient | null;
   readonly embedder: Embedder | null;
 
   // Subscribers / runners.

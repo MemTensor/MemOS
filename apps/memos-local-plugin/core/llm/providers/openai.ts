@@ -6,12 +6,14 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
+import { applyOpenRouterProviderRouting } from "../../openrouter.js";
 import { decodeSse, httpPostJson, httpPostStream } from "../fetcher.js";
 import type {
   LlmMessage,
   LlmProvider,
   LlmProviderCtx,
   LlmProviderName,
+  ReasoningConfig,
   LlmStreamChunk,
   ProviderCallInput,
   ProviderCompletion,
@@ -49,7 +51,7 @@ export class OpenAiLlmProvider implements LlmProvider {
     opts: ProviderCallInput,
     ctx: LlmProviderCtx,
   ): Promise<ProviderCompletion> {
-    const { config, log, signal } = ctx;
+    const { config, log, signal, deadlineAt } = ctx;
     const url = normalizeEndpoint(
       config.endpoint && config.endpoint.length > 0
         ? config.endpoint
@@ -73,6 +75,10 @@ export class OpenAiLlmProvider implements LlmProvider {
     };
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
+    if (applyOpenRouterProviderRouting(config, body)) {
+      const reasoning = config.reasoning && serializeOpenRouterReasoning(config.reasoning);
+      if (reasoning) body.reasoning = reasoning;
+    }
 
     const headers: Record<string, string> = {};
     if (config.apiKey) {
@@ -87,6 +93,8 @@ export class OpenAiLlmProvider implements LlmProvider {
       timeoutMs: config.timeoutMs,
       maxRetries: config.maxRetries,
       signal,
+      deadlineAt,
+      cooldownScope: config.model,
       provider: this.name,
       log,
     });
@@ -137,6 +145,10 @@ export class OpenAiLlmProvider implements LlmProvider {
     };
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
+    if (applyOpenRouterProviderRouting(config, body)) {
+      const reasoning = config.reasoning && serializeOpenRouterReasoning(config.reasoning);
+      if (reasoning) body.reasoning = reasoning;
+    }
 
     const headers: Record<string, string> = {};
     if (config.apiKey) {
@@ -202,6 +214,14 @@ function normalizeEndpoint(url: string): string {
   if (stripped.endsWith("/chat/completions")) return stripped;
   if (stripped.endsWith("/completions")) return stripped;
   return `${stripped}/chat/completions`;
+}
+
+function serializeOpenRouterReasoning(reasoning: ReasoningConfig): Record<string, unknown> | undefined {
+  const result: Record<string, unknown> = {};
+  if (reasoning.enabled !== undefined) result.enabled = reasoning.enabled;
+  if (reasoning.effort !== undefined) result.effort = reasoning.effort;
+  if (reasoning.maxTokens !== undefined) result.max_tokens = reasoning.maxTokens;
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function mapFinish(reason: string | undefined): ProviderCompletion["finishReason"] {

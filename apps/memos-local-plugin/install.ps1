@@ -436,14 +436,37 @@ function Install-Hermes {
     }
     
     if (-not $PluginDir -or -not (Test-Path $PluginDir)) { Stop-Die "plugins\memory not found" }
-    
-    $Target = Join-Path $PluginDir "memtensor"
-    if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
-    
-    New-Item -ItemType Junction -Path $Target -Value (Join-Path $AdapterDir "memos_provider") | Out-Null
+
+    $VersionSyncScript = Join-Path $Prefix "scripts\sync-hermes-version.cjs"
+    if (Test-Path $VersionSyncScript) {
+        & node $VersionSyncScript $Prefix
+        if ($LASTEXITCODE -ne 0) {
+            Stop-Die "Failed to synchronize Hermes plugin version metadata."
+        }
+    } else {
+        Write-Warn "Hermes version sync helper missing; using packaged plugin.yaml as-is."
+    }
     Copy-Item -Path (Join-Path $AdapterDir "plugin.yaml") -Destination (Join-Path $AdapterDir "memos_provider\plugin.yaml") -ErrorAction SilentlyContinue
-    Write-Success "Linked -> $Target"
-    
+    if (-not (Test-Path (Join-Path $AdapterDir "memos_provider\plugin.yaml"))) {
+        Write-Warning "plugin.yaml copy may have failed; verify $AdapterDir\memos_provider\plugin.yaml exists."
+    }
+
+    $UserPluginDir = Join-Path $env:LOCALAPPDATA "hermes\plugins\memory"
+    New-Item -ItemType Directory -Path $UserPluginDir -Force | Out-Null
+    Write-Host "Ensuring user plugin dir: $UserPluginDir"
+    $ProviderTargets = @(
+        (Join-Path $PluginDir "memtensor"),
+        (Join-Path $UserPluginDir "memtensor")
+    )
+    foreach ($Target in $ProviderTargets) {
+        if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
+        try {
+            New-Item -ItemType Junction -Path $Target -Value (Join-Path $AdapterDir "memos_provider") -ErrorAction Stop | Out-Null
+            Write-Success "Linked -> $Target"
+        } catch {
+            Write-Warning "Failed to create junction at $Target : $_"
+        }
+    }
     if (Test-Path $ConfigFile) {
         $PyScript = @"
 import sys, yaml

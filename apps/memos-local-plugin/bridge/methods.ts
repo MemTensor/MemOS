@@ -383,6 +383,21 @@ function validateTurnInput(p: Record<string, unknown>): void {
   requireKey(p, "sessionId", "string", "turn.start");
   requireKey(p, "userText", "string", "turn.start");
   requireKey(p, "ts", "number", "turn.start");
+  if (p.turnKey !== undefined && typeof p.turnKey !== "string") {
+    throw new MemosError(
+      "invalid_argument",
+      "turn.start: optional 'turnKey' must be a string",
+    );
+  }
+  if (
+    p.deadlineAt !== undefined &&
+    (typeof p.deadlineAt !== "number" || !Number.isFinite(p.deadlineAt))
+  ) {
+    throw new MemosError(
+      "invalid_argument",
+      "turn.start: optional 'deadlineAt' must be a finite number",
+    );
+  }
 }
 
 function validateTurnResult(p: Record<string, unknown>): void {

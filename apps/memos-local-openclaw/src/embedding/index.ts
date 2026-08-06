@@ -7,6 +7,8 @@ import { embedMistral } from "./providers/mistral";
 import { embedLocal } from "./local";
 import { modelHealth } from "../ingest/providers";
 
+type EmbeddingInputKind = "document" | "query";
+
 export class Embedder {
   constructor(
     private cfg: EmbeddingConfig | undefined,
@@ -57,13 +59,17 @@ export class Embedder {
     if (this.provider === "cohere" && this.cfg) {
       return embedCohereQuery(text, this.cfg, this.log);
     }
-    const vecs = await this.embedBatch([text]);
+    const vecs = await this.embedBatch([text], "query");
     return vecs[0];
   }
 
-  private async embedBatch(texts: string[]): Promise<number[][]> {
+  private async embedBatch(
+    texts: string[],
+    inputKind: EmbeddingInputKind = "document",
+  ): Promise<number[][]> {
     const provider = this.provider;
     const cfg = this.cfg;
+    const inputType = this.resolveInputType(inputKind);
 
     const modelInfo = `${provider}/${cfg?.model ?? "default"}`;
     try {
@@ -75,7 +81,9 @@ export class Embedder {
         case "zhipu":
         case "siliconflow":
         case "bailian":
-          result = await embedOpenAI(texts, cfg!, this.log); break;
+          result = await embedOpenAI(texts, cfg!, this.log, inputType); break;
+        case "openclaw":
+          result = await this.embedOpenClaw(texts, inputType); break;
         case "gemini":
           result = await embedGemini(texts, cfg!, this.log); break;
         case "cohere":
@@ -100,7 +108,13 @@ export class Embedder {
     }
   }
 
-  private async embedOpenClaw(texts: string[]): Promise<number[][]> {
+  private resolveInputType(inputKind: EmbeddingInputKind): string | undefined {
+    if (!this.cfg) return undefined;
+    if (inputKind === "query") return this.cfg.queryInputType ?? this.cfg.inputType;
+    return this.cfg.documentInputType ?? this.cfg.inputType;
+  }
+
+  private async embedOpenClaw(texts: string[], inputType?: string): Promise<number[][]> {
     if (!this.openclawAPI) {
       throw new Error(
         "OpenClaw API not available. Ensure sharing.capabilities.hostEmbedding is enabled in config."
@@ -111,6 +125,7 @@ export class Embedder {
     const response = await this.openclawAPI.embed({
       texts,
       model: this.cfg?.model,
+      inputType,
     });
 
     return response.embeddings;

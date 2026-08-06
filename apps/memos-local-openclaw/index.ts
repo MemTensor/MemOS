@@ -5,11 +5,9 @@
  * Provides: memory_search, memory_get, memory_timeline, task_summary, skill_get, skill_install, memory_viewer
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import * as fs from "fs";
 import * as path from "path";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 import { buildContext } from "./src/config";
 import type { HostModelsConfig } from "./src/openclaw-api";
@@ -35,6 +33,9 @@ import { MEMORY_GUIDE_SKILL_MD } from "./src/skill/bundled-memory-guide";
 import { Telemetry } from "./src/telemetry";
 import { parseJsonOrJson5 } from "./src/shared/json5";
 import { patchOpenclawAllowFile } from "./src/shared/openclaw-config";
+
+
+type OpenClawPluginApi = any;
 
 
 /** Remove near-duplicate hits based on summary word overlap (>70%). Keeps first (highest-scored) hit. */
@@ -225,115 +226,7 @@ const memosLocalPlugin = {
     }
 
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-    const localRequire = createRequire(import.meta.url);
-    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-
-    function detectPluginDir(startDir: string): string {
-      let cur = startDir;
-      for (let i = 0; i < 6; i++) {
-        const pkg = path.join(cur, "package.json");
-        if (fs.existsSync(pkg)) return cur;
-        const parent = path.dirname(cur);
-        if (parent === cur) break;
-        cur = parent;
-      }
-      return startDir;
-    }
-
-    const pluginDir = detectPluginDir(moduleDir);
-
-    function runNpm(args: string[]) {
-      const { spawnSync } = localRequire("child_process") as typeof import("node:child_process");
-      return spawnSync(npmCmd, args, {
-        cwd: pluginDir,
-        stdio: "pipe",
-        shell: false,
-        timeout: 120_000,
-      });
-    }
-
-    let sqliteReady = false;
-
-    function trySqliteLoad(): boolean {
-      try {
-        const resolved = localRequire.resolve("better-sqlite3", { paths: [pluginDir] });
-        const resolvedReal = fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved;
-        if (!isPathInside(pluginDir, resolvedReal)) {
-          api.logger.warn(`memos-local: better-sqlite3 resolved outside plugin dir: ${resolved}`);
-          return false;
-        }
-        localRequire(resolvedReal);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-
-    sqliteReady = trySqliteLoad();
-
-    if (!sqliteReady) {
-      api.logger.warn(`memos-local: better-sqlite3 not found in ${pluginDir}, attempting auto-rebuild ...`);
-
-      try {
-        const rebuildResult = runNpm(["rebuild", "better-sqlite3"]);
-
-        const stdout = rebuildResult.stdout?.toString() || "";
-        const stderr = rebuildResult.stderr?.toString() || "";
-        if (stdout) api.logger.info(`memos-local: rebuild stdout: ${stdout.slice(0, 500)}`);
-        if (stderr) api.logger.warn(`memos-local: rebuild stderr: ${stderr.slice(0, 500)}`);
-
-        if (rebuildResult.status === 0) {
-          Object.keys(localRequire.cache)
-            .filter(k => k.includes("better-sqlite3") || k.includes("better_sqlite3"))
-            .forEach(k => delete localRequire.cache[k]);
-          sqliteReady = trySqliteLoad();
-          if (sqliteReady) {
-            api.logger.info("memos-local: better-sqlite3 auto-rebuild succeeded!");
-          } else {
-            api.logger.warn("memos-local: rebuild exited 0 but module still not loadable from plugin dir");
-          }
-        } else {
-          api.logger.warn(`memos-local: rebuild exited with code ${rebuildResult.status}`);
-        }
-      } catch (rebuildErr) {
-        api.logger.warn(`memos-local: auto-rebuild error: ${rebuildErr}`);
-      }
-
-      if (!sqliteReady) {
-        const nodeVer = process.version;
-        const nodeMajor = parseInt(process.versions?.node?.split(".")[0] ?? "0", 10);
-        const isNode25Plus = nodeMajor >= 25;
-        const lines = [
-          "",
-          "╔══════════════════════════════════════════════════════════════╗",
-          "║  MemOS Local Memory — better-sqlite3 native module missing  ║",
-          "╠══════════════════════════════════════════════════════════════╣",
-          "║                                                            ║",
-          "║  Auto-rebuild failed (Node " + nodeVer + "). Run manually:              ║",
-          "║                                                            ║",
-          `║  cd ${pluginDir}`,
-          "║  npm rebuild better-sqlite3                                ║",
-          "║  openclaw gateway stop && openclaw gateway start           ║",
-          "║                                                            ║",
-          "║  If rebuild fails, install build tools first:              ║",
-          "║  macOS:  xcode-select --install                            ║",
-          "║  Linux:  sudo apt install build-essential python3          ║",
-        ];
-        if (isNode25Plus) {
-          lines.push("║                                                            ║");
-          lines.push("║  Node 25+ has no prebuild: build tools required, or use    ║");
-          lines.push("║  Node LTS (20/22): nvm install 22 && nvm use 22            ║");
-        }
-        lines.push("║                                                            ║");
-        lines.push("╚══════════════════════════════════════════════════════════════╝");
-        lines.push("");
-        api.logger.warn(lines.join("\n"));
-        throw new Error(
-          `better-sqlite3 native module not found (Node ${nodeVer}). Auto-rebuild failed. Fix: install build tools, then cd ${pluginDir} && npm rebuild better-sqlite3. Or use Node LTS (20/22).`
-        );
-      }
-    }
-
+    const pluginDir = moduleDir; // alias — replaces removed detectPluginDir(moduleDir)
     let pluginCfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
     const stateDir = process.env.OPENCLAW_STATE_DIR || api.resolvePath("~/.openclaw");
 
