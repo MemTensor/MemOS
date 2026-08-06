@@ -596,6 +596,9 @@ interface RetrievalStatsPayload {
   raw?: number;
   ranked?: number;
   droppedByThreshold?: number;
+  dedupedBeforeMmr?: number;
+  dedupedAfterThreshold?: number;
+  droppedByKeywordConfirmation?: number;
   thresholdFloor?: number;
   topRelevance?: number;
   llmFilter?: {
@@ -607,6 +610,7 @@ interface RetrievalStatsPayload {
   channelHits?: Record<string, number>;
   queryTokens?: number;
   queryTags?: string[];
+  exactIdentifierCount?: number;
   localReturned?: number;
   hubReturned?: number;
   hubKept?: number;
@@ -725,6 +729,7 @@ function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
   const localFilterDeferred = outcome === "deferred_to_final";
   const finalLlmRan = finalFilter?.outcome === "llm_kept_all" ||
     finalFilter?.outcome === "llm_filtered" ||
+    finalFilter?.outcome === "llm_filtered_empty" ||
     finalFilter?.outcome === "llm_filtered_refilled" ||
     finalFilter?.outcome === "llm_failed_safe_cutoff";
   const fmtNum = (n: number | undefined, digits = 3) =>
@@ -750,9 +755,33 @@ function RetrievalFunnel({ stats }: { stats: RetrievalStatsPayload }) {
         )}
         <span class="pill pill--info">raw {raw}</span>
         <span class="pill pill--info">ranked {ranked}</span>
+        {typeof stats.exactIdentifierCount === "number" &&
+          stats.exactIdentifierCount > 0 && (
+            <span class="pill pill--info">
+              exact identifiers {stats.exactIdentifierCount}
+            </span>
+          )}
         {dropped > 0 && (
           <span class="pill pill--failed">dropped≥floor {dropped}</span>
         )}
+        {typeof stats.dedupedBeforeMmr === "number" &&
+          stats.dedupedBeforeMmr > 0 && (
+            <span class="pill pill--failed">
+              deduped before MMR {stats.dedupedBeforeMmr}
+            </span>
+          )}
+        {typeof stats.dedupedAfterThreshold === "number" &&
+          stats.dedupedAfterThreshold > 0 && (
+            <span class="pill pill--info">
+              of which after threshold {stats.dedupedAfterThreshold}
+            </span>
+          )}
+        {typeof stats.droppedByKeywordConfirmation === "number" &&
+          stats.droppedByKeywordConfirmation > 0 && (
+            <span class="pill pill--failed">
+              identifier rejected {stats.droppedByKeywordConfirmation}
+            </span>
+          )}
         {typeof kept === "number" && (
           <span class="pill pill--active">
             {localFilterDeferred ? "local candidates" : "local llm kept"} {kept}

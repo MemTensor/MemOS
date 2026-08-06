@@ -18,6 +18,7 @@ import { DEFAULT_CONFIG } from "../../../core/config/defaults.js";
 import { resolveHome } from "../../../core/config/paths.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
+import { fakeLlm } from "../../helpers/fake-llm.js";
 import type { CoreEvent } from "../../../agent-contract/events.js";
 import type { TurnInputDTO, TurnResultDTO } from "../../../agent-contract/dto.js";
 
@@ -49,6 +50,7 @@ function buildDeps(
     repos: h.repos,
     llm: null,
     reflectLlm: null,
+    l3Llm: null,
     embedder,
     log: rootLogger.child({ channel: "test.pipeline" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
@@ -75,6 +77,51 @@ afterEach(async () => {
 });
 
 describe("pipeline/orchestrator", () => {
+  it("degrades retrieval at the adapter deadline and aborts the provider call", async () => {
+    const base = fakeEmbedder({ dimensions: 384 });
+    let sawAbort = false;
+    const embedder = {
+      ...base,
+      async embedOne(input: Parameters<typeof base.embedOne>[0], options?: { signal?: AbortSignal }) {
+        return await new Promise<Awaited<ReturnType<typeof base.embedOne>>>((resolve, reject) => {
+          const onAbort = () => {
+            sawAbort = true;
+            reject(new DOMException("deadline", "AbortError"));
+          };
+          if (options?.signal?.aborted) return onAbort();
+          options?.signal?.addEventListener("abort", onAbort, { once: true });
+          void resolve;
+        });
+      },
+    };
+    pipeline = createPipeline(buildDeps(dbHandle!, embedder));
+    const startedAt = Date.now();
+
+    const packet = await pipeline.onTurnStart({
+      agent: "hermes",
+      sessionId: "s-deadline",
+      userText: "find the previous build decision",
+      ts: Date.now(),
+      deadlineAt: Date.now() + 25,
+    });
+
+    expect(sawAbort).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(packet.reason).toBe("turn_start");
+  });
+
+  it("threads a dedicated l3Llm through to the handle", () => {
+    const l3Llm = fakeLlm({ completeJson: {} });
+    pipeline = createPipeline({ ...buildDeps(dbHandle!), l3Llm });
+    expect(pipeline.l3Llm).toBe(l3Llm);
+  });
+
+  it("leaves l3Llm null on the handle when not configured", () => {
+    pipeline = createPipeline(buildDeps(dbHandle!));
+    expect(pipeline.l3Llm).toBeNull();
+  });
+
+
   it("wires session → episode → turn end cleanly", async () => {
     pipeline = createPipeline(buildDeps(dbHandle!));
     const turn: TurnInputDTO = {
@@ -216,6 +263,62 @@ describe("pipeline/orchestrator", () => {
     expect(second.snippets).toHaveLength(0);
     expect(embedder.stats().requests).toBe(requestsBefore);
     expect(stats?.scenarioId).toBe("CHITCHAT");
+  });
+
+  it("makes repeated turn.start calls idempotent by turnKey in lightweight mode", async () => {
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      config: configWithLightweightMemory(true),
+    });
+    const input: TurnInputDTO = {
+      agent: "hermes",
+      sessionId: "s-idempotent",
+      turnKey: "s-idempotent:4",
+      userText: "continue the same real task",
+      ts: 1_700_000_000_000,
+    };
+
+    const [first, concurrent] = await Promise.all([
+      pipeline.onTurnStart(input),
+      pipeline.onTurnStart({
+        ...input,
+        ts: input.ts + 1,
+      }),
+    ]);
+    const repeated = await pipeline.onTurnStart({
+      ...input,
+      ts: input.ts + 2,
+    });
+
+    expect(concurrent.episodeId).toBe(first.episodeId);
+    expect(repeated.episodeId).toBe(first.episodeId);
+    expect(dbHandle!.repos.episodes.list({ sessionId: input.sessionId })).toHaveLength(1);
+    expect(pipeline.sessionManager.getEpisode(first.episodeId)?.turns).toHaveLength(1);
+  });
+
+  it("rejects a reused turnKey carrying different user text", async () => {
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      config: configWithLightweightMemory(true),
+    });
+    const input: TurnInputDTO = {
+      agent: "hermes",
+      sessionId: "s-turn-key-conflict",
+      turnKey: "s-turn-key-conflict:2",
+      userText: "first task text",
+      ts: 1_700_000_000_000,
+    };
+
+    await pipeline.onTurnStart(input);
+
+    await expect(
+      pipeline.onTurnStart({
+        ...input,
+        userText: "different task text",
+        ts: input.ts + 1,
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    expect(dbHandle!.repos.episodes.list({ sessionId: input.sessionId })).toHaveLength(1);
   });
 
   it("records tool success + failure through the feedback subscriber", async () => {

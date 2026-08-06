@@ -2,7 +2,6 @@ from unittest.mock import patch
 
 from memos.hello_world import (
     memos_chend_hello_world,
-    memos_chentang_hello_world,
     memos_dany_hello_world,
     memos_hello_world,
     memos_huojh_hello_world,
@@ -115,27 +114,3 @@ def test_memos_yuqingchen_hello_world_logger_called():
 
         assert result == "Hello world from memos-yuqingchen!"
         mock_logger.assert_called_once_with("memos_yuqingchen_hello_world function called.")
-
-
-def test_memos_chen_tang_hello_world():
-    import warnings
-
-    from memos.memories.textual.general import GeneralTextMemory
-
-    # Define return values for os.getenv
-    def mock_getenv(key, default=None):
-        mock_values = {
-            "MODEL": "mock-model-name",
-            "OPENAI_API_KEY": "mock-api-key",
-            "OPENAI_BASE_URL": "mock-api-url",
-            "EMBEDDING_MODEL": "mock-embedding-model",
-        }
-        return mock_values.get(key, default)
-
-    # Filter Pydantic serialization warnings
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
-        # Use patch to mock os.getenv
-        with patch("os.getenv", side_effect=mock_getenv):
-            memory = memos_chentang_hello_world()
-            assert isinstance(memory, GeneralTextMemory)

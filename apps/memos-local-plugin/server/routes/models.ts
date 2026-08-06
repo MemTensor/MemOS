@@ -163,9 +163,11 @@ async function probeEmbedding(req: TestRequest): Promise<number> {
     case "openai_compatible": {
       if (!endpoint) throw new Error("endpoint is required for openai_compatible");
       const base = endpoint.replace(/\/+$/, "");
-      const url = base.endsWith("/v1")
-        ? `${base}/embeddings`
-        : `${base}/v1/embeddings`;
+      const url = base.endsWith("/embeddings")
+        ? base
+        : base.endsWith("/v1")
+          ? `${base}/embeddings`
+          : `${base}/v1/embeddings`;
       const r = await fetchJson(url, {
         method: "POST",
         headers: { ...authHeader(apiKey), "Content-Type": "application/json" },
@@ -263,9 +265,11 @@ async function probeChat(req: TestRequest): Promise<number> {
     case "openai_compatible": {
       if (!endpoint) throw new Error("endpoint is required for openai_compatible");
       const base = endpoint.replace(/\/+$/, "");
-      const url = base.endsWith("/v1")
-        ? `${base}/chat/completions`
-        : `${base}/v1/chat/completions`;
+      const url = base.endsWith("/chat/completions")
+        ? base
+        : base.endsWith("/v1")
+          ? `${base}/chat/completions`
+          : `${base}/v1/chat/completions`;
       const r = await fetchJson(url, {
         method: "POST",
         headers: { ...authHeader(apiKey), "Content-Type": "application/json" },

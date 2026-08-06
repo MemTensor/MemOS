@@ -25,6 +25,7 @@ defaults:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   build-prebuilds:
@@ -116,18 +117,68 @@ jobs:
         run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Publish to npm
-        run: npm publish --access public --tag ${{ inputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create git tag and push
-        working-directory: .
+          PACKAGE_NAME: "@memtensor/memos-local-openclaw-plugin"
+          RELEASE_VERSION: ${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
         run: |
+          if npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version >/dev/null 2>&1; then
+            echo "${PACKAGE_NAME}@${RELEASE_VERSION} already exists on npm; skipping publish."
+          else
+            npm publish --access public --tag "${NPM_DIST_TAG}"
+          fi
+
+      - name: Create release tag and PR
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          release_tag="openclaw-plugin-v${RELEASE_VERSION}"
+          release_branch="release/${release_tag}"
+          release_title="release: openclaw-plugin v${RELEASE_VERSION}"
+
           git add apps/memos-local-openclaw/package.json
+          created_release_commit=false
           if ! git diff --staged --quiet; then
-            git commit -m "release: openclaw-plugin v${{ inputs.version }}"
+            git commit -m "${release_title}"
+            created_release_commit=true
           fi
-          git tag "openclaw-plugin-v${{ inputs.version }}"
-          git push origin HEAD --tags
+
+          if [ "${created_release_commit}" = "true" ]; then
+            remote_branch_sha="$(git ls-remote --heads origin "${release_branch}" | awk '{print $1}')"
+            if [ -n "${remote_branch_sha}" ]; then
+              git push --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" origin "HEAD:refs/heads/${release_branch}"
+            else
+              git push origin "HEAD:refs/heads/${release_branch}"
+            fi
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${release_tag}" >/dev/null 2>&1; then
+            echo "Tag ${release_tag} already exists on origin; leaving it unchanged."
+          else
+            git tag "${release_tag}"
+            git push origin "refs/tags/${release_tag}"
+          fi
+
+          if [ "${created_release_commit}" = "true" ]; then
+            if gh pr view "${release_branch}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "Release PR already exists for ${release_branch}."
+            else
+              gh pr create \
+                --repo "${GITHUB_REPOSITORY}" \
+                --base "${DEFAULT_BRANCH}" \
+                --head "${release_branch}" \
+                --title "${release_title}" \
+                --body "Bumps apps/memos-local-openclaw/package.json for the published npm release ${RELEASE_VERSION}." \
+                || echo "::warning::Failed to create release PR automatically. Open a PR from ${release_branch} to ${DEFAULT_BRANCH}."
+            fi
+          else
+            echo "No version bump changes to open as a PR."
+          fi

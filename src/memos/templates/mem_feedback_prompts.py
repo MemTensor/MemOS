@@ -679,6 +679,8 @@ This instruction serves as a supplementary safety verification layer for the mem
 
 **Batch Assessment Rules**:
 - Independently assess each entry in the list and record the evaluation results
+- The output must include only `id`, `reason`, and `judgement` for each entry.
+- Do not repeat or return the original `text` or `old_memory` fields.
 
 **Key Decision Rules**:
 1. If the core entities of old and new texts are different → Set `judgement` to "INVALID" (completely invalid)
@@ -690,8 +692,7 @@ This instruction serves as a supplementary safety verification layer for the mem
     "operations_judgement": [
         {{
             "id": "...",
-            "text": "...",
-            "old_memory": "...",
+            "reason": "Briefly explain why this UPDATE is approved or rejected.",
             "judgement": "INVALID" | "NONE" | "UPDATE_APPROVED"
         }},
         ...
@@ -722,14 +723,12 @@ Safety assessment output:
     "operations_judgement": [
         {{
             "id": "275a",
-            "text": "On December 22, 2025 at 6:58 AM UTC, the user mentioned that Mission Terra is from Germany.",
-            "old_memory": "On December 13, 2025 at 4:02 PM UTC, the user mentioned that Mission Terra is a French national.",
+            "reason": "Both memories describe Mission Terra's nationality, and the new statement directly corrects the previous one.",
             "judgement": "UPDATE_APPROVED"
         }},
         {{
             "id": "88a4",
-            "text": "On December 22, 2025 at 6:58 AM UTC, the user mentioned that Mission Terra is from Germany.",
-            "old_memory": "On December 22, 2025 at 6:52 AM UTC, the user confirmed that Gladys Liu is an Italian citizen.",
+            "reason": "The new statement is about Mission Terra, while the old memory is about Gladys Liu.",
             "judgement": "INVALID"
         }}
     ]
@@ -757,6 +756,8 @@ OPERATION_UPDATE_JUDGEMENT_ZH = """## 批量UPDATE安全评估指令
 
 **批量评估规则**：
 - 对列表中的每个条目独立评估，记录评估结果
+- 每个评估结果只允许返回`id`、`reason`、`judgement`。
+- 不要复述或返回原始`text`和`old_memory`字段。
 
 **关键决策规则**：
 1. 如果新旧文本核心实体不同 → `judgement`置为"INVALID"（完全无效）
@@ -770,8 +771,7 @@ OPERATION_UPDATE_JUDGEMENT_ZH = """## 批量UPDATE安全评估指令
         // 评估后的完整operations列表
         {{
             "id": "...",
-            "text": "...",
-            "old_memory": "...",
+            "reason": "简要说明该UPDATE通过或拒绝的原因",
             "judgement": "INVALID" | "NONE" | "UPDATE_APPROVED"
         }},
         ...
@@ -802,14 +802,12 @@ OPERATION_UPDATE_JUDGEMENT_ZH = """## 批量UPDATE安全评估指令
     "operations_judgement": [
         {{
             "id": "275a",
-            "text": "2025年12月22日 UTC 时间6:58，用户提到Mission Terra 来自德国。",
-            "old_memory": "2025年12月13日 UTC 时间16:02，用户提及 Mission Terra 是法国国籍。",
+            "reason": "新旧记忆都描述Mission Terra的国籍，新事实直接修正了旧事实。",
             "judgement": "UPDATE_APPROVED"
         }},
         {{
             "id": "88a4",
-            "text": "2025年12月22日 UTC 时间6:58，用户提到Mission Terra 来自德国。",
-            "old_memory": "2025年12月22日 UTC 时间6:52，用户确认 Gladys Liu 是意大利公民。",
+            "reason": "新事实描述Mission Terra，而旧记忆描述Gladys Liu，核心实体不同。",
             "judgement": "INVALID"
         }}
     ]

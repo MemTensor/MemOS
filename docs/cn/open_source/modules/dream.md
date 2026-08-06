@@ -79,7 +79,7 @@ Dream 模拟这一点：从*未完成的内在动机*出发，而不是从原始
 ```json
 {
   "motive_id": "motive:dream_memory_strategy_alignment",
-  "description": "Several conversations failed for the same hidden reason: weekly reporting, future planning, and filter design were treated as separate tasks, while the user needed a shared strategic narrative.",
+  "description": "几次对话失败，背后是同一个隐藏原因：周报、未来规划和 filter 设计被当成三个独立任务，而用户需要的是一条统一的战略叙事。",
   "memory_ids": ["weekly_report_thread", "future_planning_thread", "filter_design_thread"]
 }
 ```

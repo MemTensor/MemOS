@@ -98,5 +98,13 @@ class CosineLocalReranker(BaseReranker):
             chosen = {it.id for it, _ in top_items}
             remain = [(it, -1.0) for it in graph_results if it.id not in chosen]
             top_items.extend(remain[: top_k - len(top_items)])
-        logger.info(f"CosineLocalReranker rerank result: {top_items[:1]}")
+        top_score = round(top_items[0][1], 6) if top_items else None
+        logger.info(
+            "CosineLocalReranker rerank result: input_count=%s embedded_count=%s "
+            "output_count=%s top_score=%s",
+            len(graph_results),
+            len(items_with_emb),
+            len(top_items),
+            top_score,
+        )
         return top_items

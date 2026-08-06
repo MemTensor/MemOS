@@ -1,3 +1,5 @@
+import os
+
 from memos.configs.llm import LLMConfigFactory, OllamaLLMConfig
 from memos.llms.factory import LLMFactory
 from memos.llms.ollama import OllamaLLM
@@ -51,36 +53,43 @@ print("==" * 20)
 
 # Scenario 3: Using LLMFactory with OpenAI Backend
 # Prerequisites:
-# 1. You need a valid OpenAI API key to run this scenario.
-# 2. Replace 'sk-xxxx' with your actual API key below.
+# 1. export OPENAI_API_KEY="sk-..."   (never commit real keys to git)
+# 2. Optional: export OPENAI_API_BASE="https://api.openai.com/v1" or your compatible endpoint
 
+_openai_key = os.getenv("OPENAI_API_KEY")
+_openai_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 
-config = LLMConfigFactory.model_validate(
-    {
-        "backend": "openai",
-        "config": {
-            "model_name_or_path": "gpt-4.1-nano",
-            "temperature": 0.8,
-            "max_tokens": 1024,
-            "top_p": 0.9,
-            "top_k": 50,
-            "api_key": "sk-xxxx",
-            "api_base": "https://api.openai.com/v1",
-        },
-    }
-)
-llm = LLMFactory.from_config(config)
-messages = [
-    {"role": "user", "content": "Hello, who are you"},
-]
-response = llm.generate(messages)
-print("Scenario 3:", response)
-print("==" * 20)
+if _openai_key:
+    config = LLMConfigFactory.model_validate(
+        {
+            "backend": "openai",
+            "config": {
+                "model_name_or_path": "gpt-4.1-nano",
+                "temperature": 0.8,
+                "max_tokens": 1024,
+                "top_p": 0.9,
+                "top_k": 50,
+                "api_key": _openai_key,
+                "api_base": _openai_base.rstrip("/"),
+            },
+        }
+    )
+    llm = LLMFactory.from_config(config)
+    messages = [
+        {"role": "user", "content": "Hello, who are you"},
+    ]
+    response = llm.generate(messages)
+    print("Scenario 3:", response)
+    print("==" * 20)
 
-print("Scenario 3:\n")
-for chunk in llm.generate_stream(messages):
-    print(chunk, end="")
-print("==" * 20)
+    print("Scenario 3 (stream):\n")
+    for chunk in llm.generate_stream(messages):
+        print(chunk, end="")
+    print("==" * 20)
+else:
+    print(
+        "Scenario 3 skipped: set OPENAI_API_KEY (and optionally OPENAI_API_BASE) to run OpenAI example."
+    )
 
 
 # Scenario 4: Using LLMFactory with Huggingface Models

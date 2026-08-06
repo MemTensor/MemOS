@@ -68,6 +68,69 @@ class FailingSessionOpenBridge(FakeBridge):
 
 
 class HermesProviderPipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch = patch.dict(
+            "os.environ",
+            {"MEMOS_HERMES_BRIDGE_MODE": "legacy"},
+        )
+        self._mode_patch.start()
+
+    def tearDown(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch.stop()
+
+    def test_plugin_version_matches_package_version(self) -> None:
+        package_json = _ADAPTER_ROOT.parent.parent / "package.json"
+        package_version = json.loads(package_json.read_text(encoding="utf-8"))["version"]
+
+        self.assertEqual(memos_provider.PLUGIN_VERSION, package_version)
+
+    def test_module_imports_cleanly(self) -> None:
+        """Regression guard for #2096: asserts that ``MemosHttpClient`` is
+        NOT present in ``memos_provider``, since the class was referenced
+        before it was ever committed (see issue #2096).
+
+        Note: the import itself is already validated at collection time —
+        the ``import memos_provider`` at the top of this file will raise
+        ``ImportError`` if a dangling reference is reintroduced, causing
+        the entire test file to fail to load. This test body only adds:
+
+        * the explicit negative guard on ``MemosHttpClient`` below (unique
+          to this test), which covers both the ``memos_provider``
+          re-export surface *and* ``bridge_client`` itself so a partial
+          re-add of the class only in ``bridge_client`` (with no
+          matching re-export) still fails the guard, and
+        * positive checks on ``MemTensorProvider`` (the class the Hermes
+          host actually instantiates) and on ``bridge_client``'s real
+          contract (``MemosBridgeClient`` / ``BridgeError``), rather than
+          on their incidental re-exports through ``memos_provider`` — the
+          latter only appear on the package namespace because
+          ``__init__.py`` uses a bare ``from bridge_client import ...``,
+          which is an implementation detail we don't want the test to
+          lock in.
+        """
+        import importlib
+
+        # MemTensorProvider is the class hermes-agent host instantiates.
+        self.assertTrue(hasattr(memos_provider, "MemTensorProvider"))
+
+        # Assert the actual contract on bridge_client directly rather
+        # than on its re-exports through memos_provider.
+        bc = importlib.import_module("bridge_client")
+        self.assertTrue(hasattr(bc, "MemosBridgeClient"))
+        self.assertTrue(hasattr(bc, "BridgeError"))
+
+        # ``MemosHttpClient`` was referenced by name in a half-merged HTTP
+        # bridge feature (see #2096). It must not reappear until the class
+        # itself is committed in ``bridge_client``. Guard both the
+        # ``memos_provider`` re-export (which is what the original
+        # ImportError travelled through) and ``bridge_client`` itself —
+        # otherwise a partial re-add of the class in ``bridge_client``
+        # without a matching re-export would slip past this test.
+        self.assertFalse(hasattr(memos_provider, "MemosHttpClient"))
+        self.assertFalse(hasattr(bc, "MemosHttpClient"))
+
     def test_lifecycle_persists_turn_and_closes_real_episode(self) -> None:
         bridge = FakeBridge()
         with (
@@ -141,7 +204,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch(
                 "memos_provider.MemosBridgeClient",
-                side_effect=lambda: bridge_attempts.pop(0),
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
             ),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -206,7 +269,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch(
                 "memos_provider.MemosBridgeClient",
-                side_effect=lambda: bridge_attempts.pop(0),
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
             ),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -227,7 +290,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         recovered_bridge = FakeBridge()
         bridge_attempts = [failed_bridge, recovered_bridge]
 
-        def bridge_factory() -> FakeBridge:
+        def bridge_factory(**_kwargs: object) -> FakeBridge:
             return bridge_attempts.pop(0)
 
         with (
@@ -263,7 +326,10 @@ class HermesProviderPipelineTests(unittest.TestCase):
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
-            patch("memos_provider.MemosBridgeClient", side_effect=lambda: bridge_attempts.pop(0)),
+            patch(
+                "memos_provider.MemosBridgeClient",
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
+            ),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("slow-parent-session")
@@ -334,7 +400,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertFalse(any(method == "turn.start" for method, _ in bridge.calls))
         self.assertFalse(any(method == "turn.end" for method, _ in bridge.calls))
 
-    def test_on_pre_compress_reuses_last_user_text_for_snapshot(self) -> None:
+    def test_on_pre_compress_reuses_cached_prefetch_without_starting_turn(self) -> None:
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
@@ -344,13 +410,144 @@ class HermesProviderPipelineTests(unittest.TestCase):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("compress-session")
             provider.on_turn_start(2, "compress HERMES_MEMOS_E2E_0428 context")
+            provider.prefetch("compress HERMES_MEMOS_E2E_0428 context")
+            episode_id = provider._episode_id
+            turn_starts_before = sum(method == "turn.start" for method, _ in bridge.calls)
 
             snapshot = provider.on_pre_compress([{"role": "user", "content": "x"}])
+            repeated = provider.on_pre_compress([{"role": "user", "content": "x"}])
 
         self.assertIn("MemOS memory snapshot", snapshot)
         self.assertIn("remembered HERMES_MEMOS_E2E_0428", snapshot)
-        self.assertEqual(bridge.calls[-1][0], "turn.start")
-        self.assertIn("HERMES_MEMOS_E2E_0428", bridge.calls[-1][1]["userText"])
+        self.assertEqual(repeated, snapshot)
+        self.assertEqual(provider._episode_id, episode_id)
+        self.assertEqual(
+            sum(method == "turn.start" for method, _ in bridge.calls),
+            turn_starts_before,
+        )
+
+    def test_on_pre_compress_without_cached_prefetch_is_read_only(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("compress-session")
+            provider.on_turn_start(1, "first turn")
+
+            snapshot = provider.on_pre_compress([{"role": "user", "content": "first turn"}])
+
+        self.assertEqual(snapshot, "")
+        self.assertFalse(any(method == "turn.start" for method, _ in bridge.calls))
+
+    def test_compression_boundary_is_forwarded_to_next_turn_retrieval(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider.time.time", return_value=1_700_000_123.456),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("compress-session")
+            provider.on_pre_compress([{"role": "user", "content": "old visible turn"}])
+            provider.on_turn_start(3, "what did we discuss before compression?")
+            provider.prefetch("what did we discuss before compression?")
+
+        turn_start = next(
+            payload for method, payload in reversed(bridge.calls) if method == "turn.start"
+        )
+        self.assertEqual(
+            turn_start["contextHints"]["visibleContextStartTs"],
+            1_700_000_123_456,
+        )
+        self.assertTrue(turn_start["contextHints"]["visibleContextKnown"])
+
+    def test_prefetch_passes_stable_turn_key_to_bridge(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("turn-key-session")
+            provider.on_turn_start(7, "continue the task")
+            provider.prefetch("continue the task")
+
+        turn_start = next(params for method, params in bridge.calls if method == "turn.start")
+        self.assertEqual(turn_start["turnKey"], "turn-key-session:7")
+
+    def test_prefetch_uses_a_dedicated_budget_and_forwards_absolute_deadline(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider._PREFETCH_RPC_TIMEOUT", 6.0),
+            patch("memos_provider.time.time", return_value=1_700_000_000.0),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("budget-session")
+            provider.on_turn_start(1, "recall the build decision")
+            with patch.object(
+                provider,
+                "_bridge_request_with_retry",
+                wraps=provider._bridge_request_with_retry,
+            ) as request:
+                provider.prefetch("recall the build decision")
+
+        turn_start = next(params for method, params in bridge.calls if method == "turn.start")
+        self.assertEqual(turn_start["deadlineAt"], 1_700_000_005_750)
+        request.assert_called_once()
+        self.assertLessEqual(request.call_args.kwargs["timeout"], 6.0)
+        self.assertIn("deadline_monotonic", request.call_args.kwargs)
+
+    def test_prefetch_budget_includes_bridge_ensure_time(self) -> None:
+        bridge = FakeBridge()
+        monotonic_now = [100.0]
+
+        def ensure_bridge(_session_id: str, *, timeout: float) -> bool:
+            self.assertAlmostEqual(timeout, 6.0, places=3)
+            monotonic_now[0] += 2.5
+            return True
+
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider._PREFETCH_RPC_TIMEOUT", 6.0),
+            patch("memos_provider.time.time", return_value=1_700_000_000.0),
+            patch("memos_provider.time.monotonic", side_effect=lambda: monotonic_now[0]),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("budget-session")
+            provider.on_turn_start(1, "recall the build decision")
+            with (
+                patch.object(provider, "_ensure_bridge", side_effect=ensure_bridge),
+                patch.object(
+                    provider,
+                    "_bridge_request_with_retry",
+                    wraps=provider._bridge_request_with_retry,
+                ) as request,
+            ):
+                provider.prefetch("recall the build decision")
+
+        self.assertLessEqual(request.call_args.kwargs["timeout"], 3.5)
+        turn_start = next(params for method, params in bridge.calls if method == "turn.start")
+        self.assertEqual(turn_start["deadlineAt"], 1_700_000_005_750)
+
+    def test_prefetch_timeout_config_rejects_non_positive_values(self) -> None:
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "0"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 6.0)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "nan"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 6.0)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "4.5"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 4.5)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "30"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 7.0)
 
     def test_prefetch_suppresses_memory_injection_for_explicit_delegation(self) -> None:
         bridge = FakeBridge()

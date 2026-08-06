@@ -61,6 +61,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
+        self.name = "MultiModalStructMemReader"
         self.memory_version_switch = getattr(config, "memory_version_switch", "off")
 
         # Image parser LLM (requires vision model)
@@ -70,12 +71,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if config.image_parser_llm is not None
             else self.general_llm
         )
+        # Document parser LLM (separate from the fine-tuned chat extractor)
+        self.document_parser_llm = (
+            LLMFactory.from_config(config.document_parser_llm)
+            if config.document_parser_llm is not None
+            else None
+        )
         # Initialize MultiModalParser for routing to different parsers
-        # Pass image_parser_llm for image parsing
+        # Pass dedicated image/document LLMs to their corresponding parsers
         self.multi_modal_parser = MultiModalParser(
             embedder=self.embedder,
             llm=self.llm,
             image_parser_llm=self.image_parser_llm,
+            document_parser_llm=self.document_parser_llm,
             parser=None,
             direct_markdown_hostnames=direct_markdown_hostnames,
         )
@@ -377,7 +385,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if aggregated_file_ids:
             extra_kwargs["file_ids"] = aggregated_file_ids
 
-        # Propagate manager_user_id and project_id from constituent items
+        # Propagate manager_user_id, project_id, and related_id from constituent items
         for item in items:
             metadata = getattr(item, "metadata", None)
             if metadata is not None:

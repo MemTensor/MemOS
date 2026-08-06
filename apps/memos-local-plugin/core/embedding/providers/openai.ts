@@ -10,6 +10,7 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
+import { applyOpenRouterProviderRouting } from "../../openrouter.js";
 import { httpPostJson } from "../fetcher.js";
 import type {
   EmbedRole,
@@ -26,7 +27,7 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
   readonly name: EmbeddingProviderName = "openai_compatible";
 
   async embed(texts: string[], _role: EmbedRole, ctx: ProviderCallCtx): Promise<number[][]> {
-    const { config, log, signal } = ctx;
+    const { config, log, signal, deadlineAt } = ctx;
     if (!config.apiKey) {
       throw new MemosError(
         ERROR_CODES.EMBEDDING_UNAVAILABLE,
@@ -40,9 +41,11 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
         : "https://api.openai.com/v1/embeddings",
     );
     const model = config.model && config.model.length > 0 ? config.model : "text-embedding-3-small";
+    const body: Record<string, unknown> = { input: texts, model };
+    applyOpenRouterProviderRouting(config, body);
     const resp = await httpPostJson<OpenAiResp>({
       url,
-      body: { input: texts, model },
+      body,
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         ...config.headers,
@@ -50,6 +53,8 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
       timeoutMs: config.timeoutMs,
       maxRetries: config.maxRetries,
       signal,
+      deadlineAt,
+      cooldownScope: config.model,
       provider: this.name,
       log,
     });
