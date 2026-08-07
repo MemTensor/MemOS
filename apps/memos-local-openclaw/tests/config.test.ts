@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { resolveConfig } from "../src/config";
 import { DEFAULTS } from "../src/types";
 
+describe("resolveConfig recall.topicJudgeRounds", () => {
+  it("defaults to disabled", () => {
+    const resolved = resolveConfig({}, "/tmp/memos-config-topic-judge-default");
+    expect(resolved.recall?.topicJudgeRounds).toBe(DEFAULTS.topicJudgeRounds);
+    expect(resolved.recall?.topicJudgeRounds).toBe(0);
+  });
+
+  it("preserves an explicit opt-in value", () => {
+    const resolved = resolveConfig(
+      { recall: { topicJudgeRounds: 4 } },
+      "/tmp/memos-config-topic-judge-override",
+    );
+    expect(resolved.recall?.topicJudgeRounds).toBe(4);
+  });
+});
+
 describe("resolveConfig recall.autoRecallMinQueryLength", () => {
   it("defaults to DEFAULTS.autoRecallMinQueryLength when not set", () => {
     const resolved = resolveConfig({}, "/tmp/memos-config-min-query-default");

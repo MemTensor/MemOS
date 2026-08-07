@@ -18,6 +18,7 @@ import { Embedder } from "./src/embedding";
 import { IngestWorker } from "./src/ingest/worker";
 import { RecallEngine } from "./src/recall/engine";
 import { shouldSkipAutoRecallForSession } from "./src/recall/session-policy";
+import { topicJudgePreFilter } from "./src/recall/topic-judge";
 import { captureMessages, stripInboundMetadata } from "./src/capture";
 import { DEFAULTS } from "./src/types";
 import type { SearchHit } from "./src/types";
@@ -1845,6 +1846,19 @@ Groups: ${groupNames.length > 0 ? groupNames.join(", ") : "(none)"}`,
           return;
         }
         ctx.log.debug(`auto-recall: query="${query.slice(0, 80)}"`);
+
+        const topicDecision = await topicJudgePreFilter({
+          messages: event.messages,
+          query,
+          topicJudgeRounds: ctx.config.recall?.topicJudgeRounds ?? DEFAULTS.topicJudgeRounds,
+          isNewSession,
+          summarizer,
+          log: ctx.log,
+        });
+        if (topicDecision === "skip") {
+          ctx.log.debug("auto-recall: topic continuation detected, skipping recall");
+          return;
+        }
 
         // ── Phase 1: Local search ∥ Hub search (parallel) ──
         // Issue #1514: previously hardcoded maxResults: 10 here, which made

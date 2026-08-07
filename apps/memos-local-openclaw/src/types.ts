@@ -346,6 +346,12 @@ export interface MemosLocalConfig {
     /** Cap vector search to this many most recent chunks. 0 = no cap (search all; may get slower with 200k+ chunks). If you set a cap for performance, use a large value (e.g. 200000–300000) so older memories are still in the window; FTS always searches all. */
     vectorSearchMaxChunks?: number;
     /**
+     * Number of completed conversation rounds used to decide whether the
+     * current prompt continues the same topic. Same-topic prompts skip
+     * auto-recall. Default: 0 (disabled); set a positive value to opt in.
+     */
+    topicJudgeRounds?: number;
+    /**
      * Minimum length (in UTF-16 code units, i.e. `string.length`) of the
      * normalised auto-recall query. When the user prompt is shorter than
      * this threshold (e.g. one-word confirmations like "好的", "可以",
@@ -384,6 +390,8 @@ export const DEFAULTS = {
   mmrLambda: 0.7,
   recencyHalfLifeDays: 14,
   vectorSearchMaxChunks: 0,
+  /** Topic judging is opt-in because it adds an LLM call before auto-recall. */
+  topicJudgeRounds: 0,
   /**
    * Default minimum length of the normalised auto-recall query before
    * the `before_prompt_build` hook will run a memory search. Filters

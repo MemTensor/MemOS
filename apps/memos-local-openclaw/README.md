@@ -521,6 +521,7 @@ All optional — shown with defaults:
       "mmrLambda": 0.7,           // MMR relevance vs diversity (0-1)
       "recencyHalfLifeDays": 14,  // Time decay half-life
       "vectorSearchMaxChunks": 0, // 0 = search all (default). Set 200000–300000 only if search is slow on huge DBs
+      "topicJudgeRounds": 0,      // Optional LLM pre-filter. Positive values skip auto-recall when the prompt continues the current topic. 0 disables it.
       "autoRecallMinQueryLength": 4  // Skip auto-recall when the normalised user prompt is shorter than this many chars (filters "好的"/"可以"/"?"). 0 disables the guard. Has no effect on explicit memory_search tool calls.
     },
     "dedup": {
