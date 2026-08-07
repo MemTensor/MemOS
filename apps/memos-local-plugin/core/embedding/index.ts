@@ -6,7 +6,9 @@ export {
   createEmbedder,
   createEmbedderWithProvider,
   makeProviderFor,
+  resolveMaxInputChars,
 } from "./embedder.js";
+export { DEFAULT_MAX_INPUT_CHARS } from "./constants.js";
 export {
   LruEmbedCache,
   NullEmbedCache,

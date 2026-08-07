@@ -4,6 +4,7 @@
  * to change.
  */
 
+import { DEFAULT_MAX_INPUT_CHARS } from "../embedding/constants.js";
 import type { ResolvedConfig } from "./schema.js";
 
 const FIXED_VIEWER_PORTS: Readonly<Record<string, number>> = Object.freeze({
@@ -44,6 +45,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       enabled: true,
       maxItems: 20_000,
     },
+    maxInputChars: DEFAULT_MAX_INPUT_CHARS,
   },
   llm: {
     provider: "",

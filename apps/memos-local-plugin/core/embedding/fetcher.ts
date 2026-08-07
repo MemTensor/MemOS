@@ -91,6 +91,8 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
             status: resp.status,
           });
         }
+        // `body` is a verbatim third-party response excerpt. Providers may
+        // echo submitted memory content, so log sinks must treat it as sensitive.
         opts.log.warn("http.non_ok", {
           url: opts.url,
           status: resp.status,
@@ -98,6 +100,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
           transient,
           retryAfterMs,
           durationMs: Date.now() - start,
+          body: text ? text.slice(0, 512) : undefined,
         });
         if (transient && attempt <= maxRetries) {
           const plan = planRetry({
