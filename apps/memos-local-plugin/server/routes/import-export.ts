@@ -333,8 +333,16 @@ function parseMultipartBundle(contentType: string, body: Buffer): string | null 
   return null;
 }
 
+function hermesHome(): string {
+  if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
+  if (process.platform === "win32") {
+    return join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "hermes");
+  }
+  return join(homedir(), ".hermes");
+}
+
 function hermesNativeMemoryPath(): string {
-  return join(homedir(), ".hermes", "memories", "MEMORY.md");
+  return join(hermesHome(), "memories", "MEMORY.md");
 }
 
 function openClawHome(): string {
