@@ -66,7 +66,8 @@ class TestDownloadExamples:
 
         assert result is True
         mock_requests.assert_called_once_with(
-            "https://github.com/MemTensor/MemOS/archive/refs/heads/main.zip"
+            "https://github.com/MemTensor/MemOS/archive/refs/heads/main.zip",
+            timeout=30,
         )
         mock_response.raise_for_status.assert_called_once()
 
