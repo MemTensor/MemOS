@@ -50,6 +50,8 @@ export interface ServerOptions {
   lifecycle?: {
     /** Override launchd/systemd detection. */
     supervised?: boolean;
+    /** Override the platform for embedders and deterministic lifecycle tests. */
+    platform?: NodeJS.Platform;
     /** Request graceful host shutdown after the HTTP response is returned. */
     requestShutdown?: () => void;
   };
