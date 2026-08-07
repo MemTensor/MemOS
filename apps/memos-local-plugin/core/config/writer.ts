@@ -17,7 +17,8 @@ import { isMap, YAMLMap } from "yaml";
 import { MemosError } from "../../agent-contract/errors.js";
 import type { ResolvedHome } from "./paths.js";
 import { resolveConfig, type ResolvedConfig } from "./index.js";
-import { DEFAULT_CONFIG } from "./defaults.js";
+import { DEFAULT_CONFIG, effectiveViewerPort } from "./defaults.js";
+import { migrateHermesViewerPort } from "./migrations.js";
 import { parseDoc, stringifyYaml } from "./yaml.js";
 
 export interface PatchConfigResult {
@@ -38,7 +39,9 @@ export interface PatchConfigResult {
 export async function patchConfig(
   home: ResolvedHome,
   patch: Record<string, unknown>,
+  agent?: string,
 ): Promise<PatchConfigResult> {
+  if (agent === "hermes") await migrateHermesViewerPort(home);
   let existingText = "";
   let created = false;
   try {
@@ -55,12 +58,23 @@ export async function patchConfig(
 
   // Parse (or seed) the YAML document.
   const doc = existingText ? parseDoc(existingText, home.configFile) : parseDoc(stringifyYaml(DEFAULT_CONFIG), "<defaults>");
+  if (!existingText) {
+    const initialPort = effectiveViewerPort(agent);
+    if (initialPort !== undefined) doc.setIn(["viewer", "port"], initialPort);
+  }
   applyPatch(doc, patch);
+  if (
+    agent === "hermes" &&
+    isPlainObject(patch.viewer) &&
+    Object.hasOwn(patch.viewer, "port")
+  ) {
+    doc.setIn(["viewer", "port"], effectiveViewerPort("hermes"));
+  }
   removeUnsupportedUserConfig(doc);
 
   // Validate against schema using the merged JS view.
   const merged = doc.toJS({ maxAliasCount: -1 }) as Record<string, unknown>;
-  const config = resolveConfig(merged);
+  const config = resolveConfig(merged, undefined, agent);
 
   // Atomic write.
   await fs.mkdir(dirname(home.configFile), { recursive: true });

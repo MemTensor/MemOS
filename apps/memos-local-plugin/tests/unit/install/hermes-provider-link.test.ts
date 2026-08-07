@@ -39,6 +39,57 @@ describe("Hermes provider install links", () => {
     expect(source).toContain("Failed to create junction at $Target");
   });
 
+  it("PowerShell installer preserves and explicitly passes the selected runtime home", () => {
+    const source = readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
+
+    expect(source).toContain(".memos-runtime-home");
+    expect(source).toContain(".hermes\\memos-plugin");
+    expect(source).toContain("both Windows Hermes runtime homes contain a database");
+    expect(source).toContain('--home=`"$HomeDir`"');
+    expect(source).toContain('".migrations"');
+    expect(source).toContain('Source = "environment"; Persist = $true');
+
+    const unixSource = readFileSync(path.join(repoRoot, "install.sh"), "utf8");
+    expect(unixSource).toContain("daemon .migrations config.yaml");
+  });
+
+  it("PowerShell installer stages dependencies and fails closed on native command errors", () => {
+    const source = readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
+
+    expect(source).toContain("function Invoke-NativeChecked");
+    expect(source).toContain("function Test-BetterSqlite3");
+    expect(source).toContain("function Prepare-StagedPackage");
+    expect(source).toContain("Get-CimInstance Win32_Process");
+    expect(source).toMatch(/bridge\\\.\(cts\|cjs\|mts\|mjs\)/);
+    expect(source).toContain("npm install failed");
+    expect(source).toContain("better-sqlite3 is not loadable");
+
+    const preserveLine = source.split("\n").find((line) => line.includes("$Preserve = @("));
+    expect(preserveLine).toBeDefined();
+    expect(preserveLine).not.toContain('"node_modules"');
+  });
+
+  it("PowerShell installer stops Hermes only after staging succeeds", () => {
+    const source = readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
+    const deployStart = source.indexOf("function Deploy-Tarball");
+    const deployEnd = source.indexOf("function Prepare-StagedPackage");
+    const deploySource = source.slice(deployStart, deployEnd);
+    const preparePos = deploySource.indexOf("Prepare-StagedPackage");
+    const handoffPos = deploySource.indexOf("& $BeforeSwap");
+
+    expect(preparePos).toBeGreaterThan(0);
+    expect(handoffPos).toBeGreaterThan(preparePos);
+
+    const hermesStart = source.indexOf("function Install-Hermes");
+    const hermesEnd = source.indexOf("if ($AgentSelection", hermesStart);
+    const hermesSource = source.slice(hermesStart, hermesEnd);
+    const deployPos = hermesSource.indexOf("Deploy-Tarball");
+    const stopHermesPos = hermesSource.indexOf('Get-Process -Name "hermes"');
+
+    expect(deployPos).toBeGreaterThan(0);
+    expect(stopHermesPos).toBeGreaterThan(deployPos);
+  });
+
   it("Unix adapter installer guards HOME and cleans stale symlink targets", () => {
     const source = readFileSync(
       path.join(repoRoot, "adapters/hermes/install.hermes.sh"),

@@ -25,6 +25,8 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from runtime_home import resolve_runtime_home
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -66,7 +68,10 @@ def _resolved_runtime_home(agent: str, env: dict[str, str]) -> Path:
     config_file = env.get("MEMOS_CONFIG_FILE", "").strip()
     if config_file:
         return _expanded_path(config_file, env).parent
-    agent_home = ".hermes" if agent == "hermes" else f".{agent}"
+    if agent == "hermes":
+        plugin_root = Path(__file__).resolve().parent.parent.parent.parent
+        return resolve_runtime_home(env=env, plugin_root=plugin_root)
+    agent_home = f".{agent}"
     default_home = Path(env.get("HOME", "") or Path.home()) / agent_home / "memos-plugin"
     return _expanded_path(str(default_home), env)
 

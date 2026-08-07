@@ -1,8 +1,14 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as pathResolve, join } from "node:path";
+import { tmpdir } from "node:os";
 
-import { resolveHome, expandHome } from "../../../core/config/paths.js";
+import {
+  resolveHome,
+  expandHome,
+  selectWindowsHermesRuntimeHome,
+} from "../../../core/config/paths.js";
 
 const SAVED = { ...process.env };
 function restoreEnv() {
@@ -50,5 +56,84 @@ describe("config/paths", () => {
     delete process.env["MEMOS_CONFIG_FILE"];
     const home = resolveHome("custom");
     expect(home.root.endsWith(".custom/memos-plugin")).toBe(true);
+  });
+
+  it("keeps a legacy Windows Hermes database in place and persists the choice", () => {
+    const root = mkdtempSync(join(tmpdir(), "memos-win-home-"));
+    const legacyHome = join(root, "legacy", "memos-plugin");
+    const installRoot = join(root, "local", "hermes", "memos-plugin");
+    mkdirSync(join(legacyHome, "data"), { recursive: true });
+    writeFileSync(join(legacyHome, "data", "memos.db"), "legacy");
+
+    const selected = selectWindowsHermesRuntimeHome({ legacyHome, installRoot });
+
+    expect(selected).toMatchObject({ root: legacyHome, source: "legacy-database" });
+    expect(JSON.parse(readFileSync(join(installRoot, ".memos-runtime-home"), "utf8")))
+      .toMatchObject({ version: 1, path: legacyHome, source: "legacy-database" });
+  });
+
+  it("uses LocalAppData for a new Windows install and reuses its marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "memos-win-home-"));
+    const legacyHome = join(root, "legacy", "memos-plugin");
+    const installRoot = join(root, "local", "hermes", "memos-plugin");
+
+    const first = selectWindowsHermesRuntimeHome({ legacyHome, installRoot });
+    mkdirSync(legacyHome, { recursive: true });
+    writeFileSync(join(legacyHome, "config.yaml"), "viewer:\n  port: 18800\n", { flag: "a" });
+    const second = selectWindowsHermesRuntimeHome({ legacyHome, installRoot });
+
+    expect(first).toMatchObject({ root: installRoot, source: "new-install" });
+    expect(second).toMatchObject({ root: installRoot, source: "marker" });
+  });
+
+  it("keeps meaningful legacy config even when neither home has a database", () => {
+    const root = mkdtempSync(join(tmpdir(), "memos-win-home-"));
+    const legacyHome = join(root, "legacy", "memos-plugin");
+    const installRoot = join(root, "local", "hermes", "memos-plugin");
+    mkdirSync(legacyHome, { recursive: true });
+    writeFileSync(join(legacyHome, "config.yaml"), "viewer:\n  port: 18800\n");
+
+    expect(selectWindowsHermesRuntimeHome({ legacyHome, installRoot }))
+      .toMatchObject({ root: legacyHome, source: "legacy-data" });
+  });
+
+  it("uses the canonical Windows home when it is the only database owner", () => {
+    const root = mkdtempSync(join(tmpdir(), "memos-win-home-"));
+    const legacyHome = join(root, "legacy", "memos-plugin");
+    const installRoot = join(root, "local", "hermes", "memos-plugin");
+    mkdirSync(join(installRoot, "data"), { recursive: true });
+    writeFileSync(join(installRoot, "data", "memos.db"), "canonical");
+
+    expect(selectWindowsHermesRuntimeHome({ legacyHome, installRoot }))
+      .toMatchObject({ root: installRoot, source: "canonical-database" });
+  });
+
+  it("refuses to guess when both Windows homes contain a database", () => {
+    const root = mkdtempSync(join(tmpdir(), "memos-win-home-"));
+    const legacyHome = join(root, "legacy", "memos-plugin");
+    const installRoot = join(root, "local", "hermes", "memos-plugin");
+    for (const home of [legacyHome, installRoot]) {
+      mkdirSync(join(home, "data"), { recursive: true });
+      writeFileSync(join(home, "data", "memos.db"), home);
+    }
+
+    expect(() => selectWindowsHermesRuntimeHome({ legacyHome, installRoot }))
+      .toThrow(/both Windows Hermes runtime homes contain a database/);
+  });
+
+  it("honours an existing marker before inspecting newly-created data", () => {
+    const root = mkdtempSync(join(tmpdir(), "memos-win-home-"));
+    const legacyHome = join(root, "legacy", "memos-plugin");
+    const installRoot = join(root, "local", "hermes", "memos-plugin");
+    mkdirSync(installRoot, { recursive: true });
+    writeFileSync(
+      join(installRoot, ".memos-runtime-home"),
+      JSON.stringify({ version: 1, path: legacyHome, source: "legacy-config" }),
+    );
+    mkdirSync(join(installRoot, "data"), { recursive: true });
+    writeFileSync(join(installRoot, "data", "memos.db"), "newer");
+
+    expect(selectWindowsHermesRuntimeHome({ legacyHome, installRoot }))
+      .toMatchObject({ root: legacyHome, source: "marker" });
   });
 });
