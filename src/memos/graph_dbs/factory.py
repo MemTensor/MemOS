@@ -4,6 +4,7 @@ from memos.configs.graph_db import GraphDBConfigFactory
 from memos.graph_dbs.base import BaseGraphDB
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.graph_dbs.neo4j_community import Neo4jCommunityGraphDB
+from memos.graph_dbs.oceanbase import OceanBaseGraphDB
 from memos.graph_dbs.polardb import PolarDBGraphDB
 from memos.graph_dbs.postgres import PostgresGraphDB
 
@@ -16,6 +17,8 @@ class GraphStoreFactory(BaseGraphDB):
         "neo4j-community": Neo4jCommunityGraphDB,
         "polardb": PolarDBGraphDB,
         "postgres": PostgresGraphDB,
+        "oceanbase": OceanBaseGraphDB,
+        "seekdb": OceanBaseGraphDB,
     }
 
     @classmethod
