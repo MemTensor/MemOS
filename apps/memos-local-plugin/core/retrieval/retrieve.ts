@@ -28,6 +28,7 @@ import type {
 import { ERROR_CODES } from "../../agent-contract/errors.js";
 import { ids } from "../id.js";
 import { rootLogger } from "../logger/index.js";
+import { enterForeground } from "../embedding/priority-gate.js";
 import { collectDecisionGuidance } from "./decision-guidance.js";
 import { buildQuery, type CompiledQuery } from "./query-builder.js";
 import type { RetrievalEventBus } from "./events.js";
@@ -262,16 +263,18 @@ async function runAll(
       degraded: false,
     };
     const queryVec = compiled.text
-      ? await deps.embedder
-          .embed(compiled.text, "query", {
-            signal: opts.signal,
-            deadlineAt: opts.deadlineAt,
-          })
-          .then((vec) => {
-            embeddingStats.ok = true;
-            return vec;
-          })
-          .catch((err) => {
+      ? await (() => {
+          const release = enterForeground();
+          return deps.embedder
+            .embed(compiled.text, "query", {
+              signal: opts.signal,
+              deadlineAt: opts.deadlineAt,
+            })
+            .then((vec) => {
+              embeddingStats.ok = true;
+              return vec;
+            })
+            .catch((err) => {
             const code = (err as { code?: string })?.code;
             const message = err instanceof Error ? err.message : String(err);
             embeddingStats.degraded = true;
@@ -283,7 +286,9 @@ async function runAll(
               err: message,
             });
             return null;
-          })
+            })
+            .finally(release);
+        })()
       : null;
 
     // The keyword channels (FTS + pattern) work even without an embedder,
