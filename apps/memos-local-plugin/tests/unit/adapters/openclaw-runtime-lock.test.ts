@@ -63,6 +63,9 @@ describe("OpenClaw runtime lock", () => {
 
     lock.release();
     expect(fs.existsSync(lock.lockDir)).toBe(false);
+
+    const reacquired = acquire(home);
+    reacquired.release();
   });
 
   it("rejects a second live owner before another runtime can bootstrap", () => {
@@ -96,6 +99,57 @@ describe("OpenClaw runtime lock", () => {
     const lock = acquire(home);
     expect(lock.owner.pid).toBe(process.pid);
     expect(lock.owner.token).not.toBe("stale-token");
+
+    lock.release();
+  });
+
+  it("reclaims a stale owner whose PID was recycled to the current process", () => {
+    const home = tmpHome();
+    const lockDir = openClawRuntimeLockDir(home);
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({
+        pluginId: "memos-local-plugin",
+        version: "old",
+        pid: process.pid,
+        token: "stale-self-token",
+        startedAt: 1,
+        dbFile: home.dbFile,
+        viewerPort: 18799,
+      }),
+      "utf8",
+    );
+
+    const lock = acquire(home);
+    expect(lock.owner.pid).toBe(process.pid);
+    expect(lock.owner.token).not.toBe("stale-self-token");
+
+    lock.release();
+  });
+
+  it("reclaims a stale owner whose PID matches the configured owner PID", () => {
+    const home = tmpHome();
+    const lockDir = openClawRuntimeLockDir(home);
+    const ownerPid = process.ppid;
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(lockDir, "owner.json"),
+      JSON.stringify({
+        pluginId: "memos-local-plugin",
+        version: "old",
+        pid: ownerPid,
+        token: "stale-configured-pid-token",
+        startedAt: 1,
+        dbFile: home.dbFile,
+        viewerPort: 18799,
+      }),
+      "utf8",
+    );
+
+    const lock = acquire(home, ownerPid);
+    expect(lock.owner.pid).toBe(ownerPid);
+    expect(lock.owner.token).not.toBe("stale-configured-pid-token");
 
     lock.release();
   });
