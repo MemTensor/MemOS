@@ -19,11 +19,11 @@ success() {
 }
 
 warn() {
-  echo -e "${YELLOW}$1${NC}"
+  echo -e "${YELLOW}$1${NC}" >&2
 }
 
 error() {
-  echo -e "${RED}$1${NC}"
+  echo -e "${RED}$1${NC}" >&2
 }
 
 node_major_version() {
@@ -225,6 +225,25 @@ success "Using global OpenClaw CLI, 使用全局 OpenClaw CLI: ${OPENCLAW_BIN}"
 PACKAGE_SPEC="${PLUGIN_PACKAGE}@${PLUGIN_VERSION}"
 EXTENSION_DIR="${OPENCLAW_HOME}/extensions/${PLUGIN_ID}"
 OPENCLAW_CONFIG_PATH="${OPENCLAW_HOME}/openclaw.json"
+TMP_PACK_DIR=""
+GATEWAY_RECOVERY_STATE="inactive"
+
+cleanup_on_exit() {
+  if [[ "${GATEWAY_RECOVERY_STATE:-inactive}" == "needs_recovery" ]]; then
+    local recovery_out=""
+    if ! recovery_out="$("${OPENCLAW_BIN}" gateway start 2>&1)"; then
+      warn "Gateway recovery start failed; OpenClaw Gateway may still be stopped. Gateway 恢复启动失败，服务可能仍处于停止状态。"
+      if [[ -n "${recovery_out}" ]]; then
+        printf '%s\n' "${recovery_out}" | sed 's/^/       /' >&2
+      fi
+    fi
+  fi
+  if [[ -n "${TMP_PACK_DIR:-}" ]]; then
+    rm -rf "${TMP_PACK_DIR}"
+  fi
+}
+
+trap cleanup_on_exit EXIT
 
 update_openclaw_config() {
   info "Update OpenClaw config, 更新 OpenClaw 配置..."
@@ -317,6 +336,7 @@ NODE
 
 info "Stop OpenClaw Gateway, 停止 OpenClaw Gateway..."
 "${OPENCLAW_BIN}" gateway stop >/dev/null 2>&1 || true
+GATEWAY_RECOVERY_STATE="needs_recovery"
 
 if command -v lsof >/dev/null 2>&1; then
   PIDS="$(lsof -i :"${PORT}" -t 2>/dev/null || true)"
@@ -334,7 +354,6 @@ fi
 
 info "Install plugin ${PACKAGE_SPEC}, 安装插件 ${PACKAGE_SPEC}..."
 TMP_PACK_DIR="$(mktemp -d)"
-trap 'rm -rf "${TMP_PACK_DIR}"' EXIT
 
 if [[ -f "${PLUGIN_VERSION}" ]]; then
   info "Using local tarball, 使用本地包: ${PLUGIN_VERSION}"
@@ -404,8 +423,15 @@ update_openclaw_config
 info "Install OpenClaw Gateway service, 安装 OpenClaw Gateway 服务..."
 "${OPENCLAW_BIN}" gateway install --port "${PORT}" --force 2>&1 || true
 
-success "Start OpenClaw Gateway service, 启动 OpenClaw Gateway 服务..."
-"${OPENCLAW_BIN}" gateway start 2>&1
+info "Starting OpenClaw Gateway service, 正在启动 OpenClaw Gateway 服务..."
+if ! "${OPENCLAW_BIN}" gateway start 2>&1; then
+  # Do not repeat the same failed final start from the EXIT cleanup.
+  GATEWAY_RECOVERY_STATE="final_failed"
+  error "Failed to start OpenClaw Gateway, OpenClaw Gateway 启动失败"
+  exit 1
+fi
+GATEWAY_RECOVERY_STATE="inactive"
+success "OpenClaw Gateway started, OpenClaw Gateway 已启动"
 
 info "Starting Memory Viewer, 正在启动记忆面板..."
 VIEWER_URL="http://127.0.0.1:18799"
