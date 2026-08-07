@@ -397,7 +397,14 @@ function looksLikeTrivialContent(text: string): boolean {
 function decideSkipReason(
   snapshot: import("../session/types.js").EpisodeSnapshot,
   traces: readonly TraceRow[],
-  cfg: Pick<RewardConfig, "minExchangesForCompletion" | "minContentCharsForCompletion" | "toolHeavyRatio" | "minAssistantCharsForToolHeavy">,
+  cfg: Pick<
+    RewardConfig,
+    | "minExchangesForCompletion"
+    | "minContentCharsForCompletion"
+    | "toolHeavyRatio"
+    | "minAssistantCharsForToolHeavy"
+    | "cronSentinels"
+  >,
 ): string | null {
   // Prefer the live snapshot's turn list; fall back to traces when the
   // snapshot came from a SQLite row (no turns materialised).
@@ -448,9 +455,34 @@ function decideSkipReason(
   // 1. Not enough real conversation turns (need at least N user-assistant exchanges)
   const exchanges = Math.min(userTurns, assistantTurns);
   if (exchanges < cfg.minExchangesForCompletion) {
-    return (
-      `对话轮次不足（${exchanges} 轮），需要至少 ${cfg.minExchangesForCompletion} 轮完整的问答交互才能生成摘要。`
+    // Cron episodes always have exactly 1 user turn (the task prompt) so this
+    // gate always fires for them. Bypass it when the first user content starts
+    // with a known cron sentinel — cron jobs are inherently substantive, and
+    // the content/triviality checks below provide the real substance filter.
+    //
+    // Fallback: if the first materialised user turn is empty (including the
+    // recovery path), also check snapshot.meta?.initialUserText. This field is
+    // set by the pipeline on episode creation and is generally reliable, but
+    // could be absent or stale in unusual recovery scenarios — if so, the
+    // episode falls through to the old "skip" behavior.
+    const metaInitialUserText = snapshot.meta?.initialUserText;
+    const firstUserContent =
+      userContents[0]?.trim().length
+        ? userContents[0]
+        : typeof metaInitialUserText === "string"
+          ? metaInitialUserText
+          : "";
+    const isCronEpisode = (cfg.cronSentinels ?? []).some(
+      (sentinel) =>
+        typeof sentinel === "string" &&
+        sentinel.trim().length > 0 &&
+        firstUserContent.startsWith(sentinel),
     );
+    if (!isCronEpisode) {
+      return (
+        `对话轮次不足（${exchanges} 轮），需要至少 ${cfg.minExchangesForCompletion} 轮完整的问答交互才能生成摘要。`
+      );
+    }
   }
 
   // 2. No user messages at all

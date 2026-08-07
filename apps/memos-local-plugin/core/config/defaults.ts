@@ -179,6 +179,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       minContentCharsForCompletion: 40,
       toolHeavyRatio: 0.7,
       minAssistantCharsForToolHeavy: 80,
+      cronSentinels: [],
     },
     l2Induction: {
       minSimilarity: 0.65,

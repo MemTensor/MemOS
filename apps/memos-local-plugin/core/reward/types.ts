@@ -64,6 +64,15 @@ export interface RewardConfig {
    * that the tool-heavy heuristic would otherwise skip. Default 80.
    */
   minAssistantCharsForToolHeavy: number;
+  /**
+   * User-turn prefixes that identify cron/scheduled episodes. When the
+   * first user turn starts with any of these prefixes, the exchange-count
+   * gate (minExchangesForCompletion) is bypassed — cron jobs are
+   * inherently substantive regardless of turn count. Content and
+   * triviality checks still apply. Empty by default, so operators must
+   * explicitly opt in by configuring one or more non-blank prefixes.
+   */
+  cronSentinels?: string[];
 }
 
 // ─── User feedback inputs ──────────────────────────────────────────────────

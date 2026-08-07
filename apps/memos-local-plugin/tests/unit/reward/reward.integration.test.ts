@@ -440,4 +440,213 @@ describe("reward/integration", () => {
     expect(res.feedbackCount).toBe(2);
     expect(res.rHuman).toBeGreaterThan(0);
   });
+
+  it("cron episode with 1 exchange is not skipped when sentinel matches", async () => {
+    const sid = "s_cron_1";
+    const eid = "ep_cron_1";
+    seedEpisode(handle, eid, sid, ["tr_cron_1"]);
+    seedTrace(handle, "tr_cron_1", eid, sid, {
+      userText:
+        "[IMPORTANT: You are running as a scheduled cron job. Please review recent activity and write a reflection card.",
+      agentText:
+        "Reviewed the last 48 hours of conversation traces and wrote a reflection card to ~/Faye/memory/reflections/2026-05-31.md. Commit succeeded.",
+    });
+
+    const events: RewardEvent[] = [];
+    const bus = createRewardEventBus();
+    bus.onAny((e) => events.push(e));
+
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm: fakeLlm({
+        completeJson: {
+          "reward.reward.r_human.v3": {
+            goal_achievement: 0.8,
+            process_quality: 0.8,
+            user_satisfaction: 0.8,
+            label: "success",
+            reason: "cron reflection card written and committed",
+          },
+        },
+      }),
+      bus,
+      cfg: {
+        ...cfg(),
+        minExchangesForCompletion: 2,
+        minContentCharsForCompletion: 40,
+        cronSentinels: ["[IMPORTANT: You are running as a scheduled cron job"],
+      },
+      now: () => NOW,
+    });
+
+    const res = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    // Must reach the LLM scorer, not be abandoned as trivial.
+    expect(res.humanScore.source).toBe("llm");
+    expect(res.rHuman).toBeGreaterThan(0);
+    expect(events.some((e) => e.kind === "reward.updated")).toBe(true);
+    // Must NOT be heuristic-skipped (reward.scored with source=heuristic means skipped).
+    const scoredEvent = events.find((e) => e.kind === "reward.scored");
+    expect((scoredEvent as { source?: string } | undefined)?.source).not.toBe("heuristic");
+  });
+
+  it("uses initialUserText when the first materialized user turn is empty", async () => {
+    const sid = "s_cron_meta";
+    const eid = "ep_cron_meta";
+    seedEpisode(handle, eid, sid, ["tr_cron_meta"]);
+    seedTrace(handle, "tr_cron_meta", eid, sid);
+    const snapshot: EpisodeSnapshot = {
+      ...rewardSnapshot(eid, sid, ["tr_cron_meta"]),
+      turnCount: 3,
+      turns: [
+        { role: "user", content: "", ts: NOW, meta: {} },
+        {
+          role: "assistant",
+          content:
+            "Reviewed recent activity and prepared a detailed reflection card for the user.",
+          ts: NOW,
+          meta: {},
+        },
+        {
+          role: "user",
+          content:
+            "Include the completed work, remaining risks, and concrete follow-up actions.",
+          ts: NOW,
+          meta: {},
+        },
+      ],
+      meta: { initialUserText: "[CRON] Review recent activity." },
+    };
+    const llm = fakeLlm({
+      completeJson: {
+        "reward.reward.r_human.v3": {
+          goal_achievement: 0.8,
+          process_quality: 0.8,
+          user_satisfaction: 0.8,
+          label: "success",
+          reason: "cron reflection card prepared",
+        },
+      },
+    });
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      getEpisodeSnapshot: () => snapshot,
+      llm,
+      bus: createRewardEventBus(),
+      cfg: {
+        ...cfg(),
+        minExchangesForCompletion: 2,
+        cronSentinels: ["[CRON]"],
+      },
+      now: () => NOW,
+    });
+
+    const res = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    expect(res.humanScore.source).toBe("llm");
+    expect(llm.stats().requests).toBe(1);
+  });
+
+  it.each([
+    {
+      label: "the configured sentinel does not match",
+      cronSentinels: ["[IMPORTANT: You are running as a scheduled cron job"],
+      userText: "Please review recent activity and write a reflection card.",
+    },
+    {
+      label: "the feature is disabled",
+      cronSentinels: [],
+      userText:
+        "[IMPORTANT: You are running as a scheduled cron job. Please review recent activity.",
+    },
+    {
+      label: "an invalid empty sentinel reaches the runtime",
+      cronSentinels: [""],
+      userText: "Please review recent activity and write a reflection card.",
+    },
+  ])("keeps the exchange gate when $label", async ({ cronSentinels, userText }) => {
+    const sid = "s_cron_rejected";
+    const eid = "ep_cron_rejected";
+    seedEpisode(handle, eid, sid, ["tr_cron_rejected"]);
+    seedTrace(handle, "tr_cron_rejected", eid, sid, {
+      userText,
+      agentText:
+        "Reviewed recent activity and prepared a substantive reflection card for the user.",
+    });
+    const llm = fakeLlm();
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm,
+      bus: createRewardEventBus(),
+      cfg: {
+        ...cfg(),
+        minExchangesForCompletion: 2,
+        cronSentinels,
+      },
+      now: () => NOW,
+    });
+
+    const res = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    expect(res.humanScore.source).toBe("heuristic");
+    expect(res.humanScore.reason).toContain("对话轮次不足");
+    expect(llm.stats().requests).toBe(0);
+    const episode = handle.repos.episodes.getById(
+      eid as unknown as EpisodeRow["id"],
+    )!;
+    expect(episode.meta?.reward).toMatchObject({ skipped: true });
+  });
+
+  it("still applies the content gate to a matching cron episode", async () => {
+    const sid = "s_cron_short";
+    const eid = "ep_cron_short";
+    seedEpisode(handle, eid, sid, ["tr_cron_short"]);
+    seedTrace(handle, "tr_cron_short", eid, sid, {
+      userText: "[CRON] Review recent activity.",
+      agentText: "Done.",
+    });
+    const llm = fakeLlm();
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm,
+      bus: createRewardEventBus(),
+      cfg: {
+        ...cfg(),
+        minExchangesForCompletion: 2,
+        minContentCharsForCompletion: 100,
+        cronSentinels: ["[CRON]"],
+      },
+      now: () => NOW,
+    });
+
+    const res = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    expect(res.humanScore.source).toBe("heuristic");
+    expect(res.humanScore.reason).toContain("对话内容过短");
+    expect(llm.stats().requests).toBe(0);
+  });
 });

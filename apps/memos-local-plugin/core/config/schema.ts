@@ -270,6 +270,15 @@ const AlgorithmSchema = Type.Object({
      * scored normally even if tool calls dominate. Default 80.
      */
     minAssistantCharsForToolHeavy: NumberInRange(80, 0, 10_000),
+    /**
+     * User-turn prefixes that identify cron/scheduled episodes. When
+     * the first user turn starts with any of these, the exchange-count
+     * gate is bypassed. Empty by default to preserve existing scoring
+     * behavior until an operator explicitly configures a sentinel.
+     */
+    cronSentinels: Type.Array(Type.String({ minLength: 1, pattern: "^\\S" }), {
+      default: [],
+    }),
   }, { default: {} }),
   l2Induction: Type.Object({
     /** Cosine ≥ this to associate a new trace with an existing L2 policy. */
