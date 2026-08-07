@@ -7,10 +7,13 @@ input request formats and return properly formatted responses.
 
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from memos.api.middleware import auth as auth_middleware
 from memos.api.product_models import (
     APIADDRequest,
     APIChatCompleteRequest,
@@ -19,6 +22,9 @@ from memos.api.product_models import (
     SearchResponse,
     SuggestionResponse,
 )
+
+
+TEST_ADMIN_KEY = "test-master-key"
 
 
 # Patch init_server so we can import server_api without starting the full MemOS stack,
@@ -53,7 +59,15 @@ def mock_init_server():
         "deepsearch_agent": Mock(),
     }
 
-    with patch("memos.api.handlers.init_server", return_value=mock_components):
+    with (
+        patch("memos.api.handlers.init_server", return_value=mock_components),
+        patch.object(auth_middleware, "AUTH_ENABLED", True),
+        patch.object(
+            auth_middleware,
+            "MASTER_KEY_HASH",
+            auth_middleware.hash_api_key(TEST_ADMIN_KEY),
+        ),
+    ):
         # Import after patching
         from memos.api import server_api
 
@@ -63,7 +77,10 @@ def mock_init_server():
 @pytest.fixture
 def client(mock_init_server):
     """Create test client for server_api."""
-    return TestClient(mock_init_server)
+    return TestClient(
+        mock_init_server,
+        headers={"Authorization": TEST_ADMIN_KEY},
+    )
 
 
 @pytest.fixture
@@ -110,6 +127,74 @@ def mock_handlers():
             "suggestion": mock_suggestion,
             "memory": mock_memory,
         }
+
+
+class TestServerRouterAuthentication:
+    """Test the authentication boundary shared by all /product routes."""
+
+    def test_every_product_operation_declares_authentication(self, mock_init_server):
+        openapi = mock_init_server.openapi()
+        authorization_schemes = {
+            name
+            for name, scheme in openapi["components"]["securitySchemes"].items()
+            if scheme.get("type") == "apiKey"
+            and scheme.get("in") == "header"
+            and scheme.get("name") == "Authorization"
+        }
+        assert authorization_schemes
+
+        product_operations = [
+            (path, method, operation)
+            for path, methods in openapi["paths"].items()
+            if path.startswith("/product")
+            for method, operation in methods.items()
+        ]
+        assert product_operations
+
+        for path, method, operation in product_operations:
+            referenced = {
+                scheme_name
+                for requirement in operation.get("security", [])
+                for scheme_name in requirement
+            }
+            assert authorization_schemes <= referenced, (
+                f"{method.upper()} {path} is unauthenticated"
+            )
+
+    @pytest.mark.asyncio
+    async def test_product_route_requires_authentication(
+        self,
+        mock_handlers,
+        mock_init_server,
+    ):
+        mock_handlers["search"].reset_mock()
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=mock_init_server),
+            base_url="http://testserver",
+        ) as unauthenticated_client:
+            response = await unauthenticated_client.post(
+                "/product/search",
+                json={"query": "test query", "user_id": "test_user"},
+            )
+
+        assert response.status_code == 401
+        mock_handlers["search"].handle_search_memories.assert_not_called()
+
+    def test_key_cannot_search_another_user(self, mock_handlers):
+        from memos.api.routers import server_router
+
+        mock_handlers["search"].reset_mock()
+        request = APISearchRequest(query="test query", user_id="victim")
+
+        with pytest.raises(HTTPException) as exc_info:
+            server_router.search_memories(
+                request,
+                auth={"user_name": "reader", "scopes": ["read"]},
+            )
+
+        assert exc_info.value.status_code == 403
+        mock_handlers["search"].handle_search_memories.assert_not_called()
 
 
 class TestServerRouterSearch:

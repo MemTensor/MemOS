@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from memos.configs.mem_os import MOSConfig
 from memos.context.context import ContextThreadPoolExecutor
+from memos.exceptions import ConfigurationError
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
@@ -238,13 +239,29 @@ class MOSCore:
 
         Returns:
             list[str]: The list of documents.
+
+        Raises:
+            ConfigurationError: If the path escapes the configured documents root.
         """
         documents = []
 
-        path_obj = Path(path)
+        # Server deployments configure a root, so a caller-supplied path cannot walk the
+        # whole filesystem. Local library usage leaves both variables unset.
+        root = os.getenv("MEMOS_DOC_ROOT") or os.getenv("FILE_LOCAL_PATH")
+        documents_root = Path(root).resolve() if root else None
+
+        path_obj = Path(path).resolve()
+        if documents_root is not None and not path_obj.is_relative_to(documents_root):
+            raise ConfigurationError(
+                f"doc_path must be located under the documents root {documents_root}"
+            )
+
         doc_extensions = {".txt", ".pdf", ".json", ".md", ".ppt", ".pptx"}
         for file_path in path_obj.rglob("*"):
             if file_path.is_file() and (file_path.suffix.lower() in doc_extensions):
+                # rglob follows directory symlinks, so re-check the resolved file.
+                if documents_root and not file_path.resolve().is_relative_to(documents_root):
+                    continue
                 documents.append(str(file_path))
         return documents
 
