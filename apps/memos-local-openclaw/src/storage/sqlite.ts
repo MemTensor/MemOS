@@ -1,12 +1,32 @@
 import Database from "better-sqlite3";
 import { createHash } from "crypto";
+import { createRequire } from "node:module";
 import * as fs from "fs";
 import * as path from "path";
 import type { Chunk, ChunkRef, DedupStatus, Task, TaskStatus, Skill, SkillStatus, SkillVisibility, SkillVersion, TaskSkillLink, TaskSkillRelation, Logger } from "../types";
 import type { SharedVisibility, UserInfo, UserRole, UserStatus } from "../sharing/types";
 
+interface SqliteVecModule {
+  load(db: Database.Database): void;
+}
+
+const requireFromModule = createRequire(import.meta.url);
+let sqliteVecModule: SqliteVecModule | null | undefined;
+
+function loadSqliteVecModule(): SqliteVecModule | null {
+  if (sqliteVecModule !== undefined) return sqliteVecModule;
+  try {
+    sqliteVecModule = requireFromModule("sqlite-vec") as SqliteVecModule;
+  } catch {
+    sqliteVecModule = null;
+  }
+  return sqliteVecModule;
+}
+
 export class SqliteStore {
   private db: Database.Database;
+  private vecExtensionLoaded = false;
+  private vecIndexDimensions: number | null = null;
 
   constructor(dbPath: string, private log: Logger) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -256,6 +276,163 @@ export class SqliteStore {
         shared_at       INTEGER NOT NULL
       )
     `);
+  }
+
+  // ─── sqlite-vec Index ───
+
+  configureVectorIndex(dimensions: number): boolean {
+    if (!Number.isInteger(dimensions) || dimensions <= 0) {
+      this.log.warn(`sqlite-vec disabled: invalid embedding dimensions ${dimensions}`);
+      return false;
+    }
+
+    try {
+      const sqliteVec = loadSqliteVecModule();
+      if (!sqliteVec) throw new Error("sqlite-vec package is unavailable");
+      sqliteVec.load(this.db);
+
+      const row = this.db.prepare(
+        "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'vec_chunks'",
+      ).get() as { sql: string } | undefined;
+      const schema = row?.sql ?? "";
+      const hasExpectedSchema = new RegExp(`FLOAT\\s*\\[${dimensions}\\]`, "i").test(schema)
+        && /distance_metric\s*=\s*cosine/i.test(schema)
+        && /\bowner\s+TEXT\b/i.test(schema)
+        && /\bsession_key\s+TEXT\b/i.test(schema);
+
+      if (!hasExpectedSchema) {
+        this.db.exec("DROP TABLE IF EXISTS vec_chunks");
+        this.db.exec(`
+          CREATE VIRTUAL TABLE vec_chunks USING vec0(
+            chunk_id TEXT PRIMARY KEY,
+            embedding FLOAT[${dimensions}] distance_metric=cosine,
+            owner TEXT,
+            session_key TEXT
+          )
+        `);
+        this.backfillVectorIndex(dimensions);
+      } else if (!this.vectorIndexRowCountMatches(dimensions)) {
+        this.db.prepare("DELETE FROM vec_chunks").run();
+        this.backfillVectorIndex(dimensions);
+      }
+
+      this.vecIndexDimensions = dimensions;
+      this.vecExtensionLoaded = true;
+      this.log.info(`sqlite-vec index ready (${dimensions} dimensions, cosine distance)`);
+      return true;
+    } catch (err) {
+      this.vecExtensionLoaded = false;
+      this.vecIndexDimensions = null;
+      this.log.warn(`sqlite-vec unavailable; using brute-force vector search: ${err}`);
+      return false;
+    }
+  }
+
+  hasVecIndex(): boolean {
+    return this.vecExtensionLoaded && this.vecIndexDimensions !== null;
+  }
+
+  searchVecChunks(
+    queryVec: number[],
+    topK: number,
+    ownerFilter?: string[],
+    excludeSessionKey?: string,
+  ): Array<{ chunkId: string; distance: number }> {
+    if (!this.hasVecIndex()) throw new Error("sqlite-vec index is not configured");
+    if (queryVec.length !== this.vecIndexDimensions) {
+      throw new Error(
+        `sqlite-vec dimension mismatch: index=${this.vecIndexDimensions}, query=${queryVec.length}`,
+      );
+    }
+    if (topK <= 0) return [];
+
+    let sql = `
+      SELECT chunk_id, distance
+      FROM vec_chunks
+      WHERE embedding MATCH ? AND k = ?
+    `;
+    const params: unknown[] = [JSON.stringify(queryVec), topK];
+    if (ownerFilter && ownerFilter.length > 0) {
+      sql += ` AND owner IN (${ownerFilter.map(() => "?").join(",")})`;
+      params.push(...ownerFilter);
+    }
+    if (excludeSessionKey) {
+      sql += " AND session_key != ?";
+      params.push(excludeSessionKey);
+    }
+    sql += " ORDER BY distance";
+
+    const rows = this.db.prepare(sql).all(...params) as Array<{ chunk_id: string; distance: number }>;
+
+    return rows.map((row) => ({ chunkId: row.chunk_id, distance: row.distance }));
+  }
+
+  private backfillVectorIndex(dimensions: number): void {
+    const rows = this.db.prepare(`
+      SELECT e.chunk_id, e.vector, c.owner, c.session_key
+      FROM embeddings e
+      JOIN chunks c ON c.id = e.chunk_id
+      WHERE e.dimensions = ? AND c.dedup_status = 'active'
+    `).all(dimensions) as Array<{ chunk_id: string; vector: Buffer; owner: string; session_key: string }>;
+    const insert = this.db.prepare(
+      "INSERT OR REPLACE INTO vec_chunks (chunk_id, embedding, owner, session_key) VALUES (?, ?, ?, ?)",
+    );
+    const backfill = this.db.transaction((items: Array<{
+      chunk_id: string;
+      vector: Buffer;
+      owner: string;
+      session_key: string;
+    }>) => {
+      for (const item of items) {
+        insert.run(item.chunk_id, item.vector, item.owner, item.session_key);
+      }
+    });
+    backfill(rows);
+  }
+
+  private vectorIndexRowCountMatches(dimensions: number): boolean {
+    const expected = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM embeddings e
+      JOIN chunks c ON c.id = e.chunk_id
+      WHERE e.dimensions = ? AND c.dedup_status = 'active'
+    `).get(dimensions) as { count: number };
+    const indexed = this.db.prepare("SELECT COUNT(*) AS count FROM vec_chunks").get() as { count: number };
+    return expected.count === indexed.count;
+  }
+
+  private syncVectorIndex(chunkId: string, vector: number[]): void {
+    if (!this.hasVecIndex()) return;
+    if (vector.length !== this.vecIndexDimensions) {
+      this.deleteVectorIndexEntry(chunkId);
+      this.log.debug(
+        `sqlite-vec skipped ${chunkId}: index=${this.vecIndexDimensions}, vector=${vector.length}`,
+      );
+      return;
+    }
+
+    const chunk = this.db.prepare(
+      "SELECT dedup_status, owner, session_key FROM chunks WHERE id = ?",
+    ).get(chunkId) as { dedup_status: string; owner: string; session_key: string } | undefined;
+    if (!chunk || chunk.dedup_status !== "active") {
+      this.deleteVectorIndexEntry(chunkId);
+      return;
+    }
+
+    this.db.prepare(
+      "INSERT OR REPLACE INTO vec_chunks (chunk_id, embedding, owner, session_key) VALUES (?, ?, ?, ?)",
+    ).run(chunkId, JSON.stringify(vector), chunk.owner, chunk.session_key);
+  }
+
+  private deleteVectorIndexEntry(chunkId: string): void {
+    if (!this.hasVecIndex()) return;
+    try {
+      this.db.prepare("DELETE FROM vec_chunks WHERE chunk_id = ?").run(chunkId);
+    } catch (err) {
+      this.vecExtensionLoaded = false;
+      this.vecIndexDimensions = null;
+      this.log.warn(`sqlite-vec delete failed for ${chunkId}; index disabled: ${err}`);
+    }
   }
 
   private migrateOwnerFields(): void {
@@ -1201,6 +1378,7 @@ export class SqliteStore {
     this.db.prepare(
       "UPDATE chunks SET dedup_status = ?, dedup_target = ?, dedup_reason = ?, updated_at = ? WHERE id = ?",
     ).run(status, targetChunkId, reason, Date.now(), chunkId);
+    this.deleteVectorIndexEntry(chunkId);
   }
 
   updateSummary(chunkId: string, summary: string): void {
@@ -1217,9 +1395,17 @@ export class SqliteStore {
       INSERT OR REPLACE INTO embeddings (chunk_id, vector, dimensions, provider, model, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(chunkId, buf, vector.length, producer?.provider ?? "", producer?.model ?? "", Date.now());
+    try {
+      this.syncVectorIndex(chunkId, vector);
+    } catch (err) {
+      this.vecExtensionLoaded = false;
+      this.vecIndexDimensions = null;
+      this.log.warn(`sqlite-vec update failed for ${chunkId}; index disabled: ${err}`);
+    }
   }
 
   deleteEmbedding(chunkId: string): void {
+    this.deleteVectorIndexEntry(chunkId);
     this.db.prepare("DELETE FROM embeddings WHERE chunk_id = ?").run(chunkId);
   }
 
@@ -1629,17 +1815,34 @@ export class SqliteStore {
   // ─── Delete ───
 
   deleteChunk(chunkId: string): boolean {
+    this.deleteVectorIndexEntry(chunkId);
     const result = this.db.prepare("DELETE FROM chunks WHERE id = ?").run(chunkId);
     return result.changes > 0;
   }
 
   deleteSession(sessionKey: string): number {
+    if (this.hasVecIndex()) {
+      const rows = this.db.prepare("SELECT id FROM chunks WHERE session_key = ?").all(sessionKey) as Array<{ id: string }>;
+      const remove = this.db.transaction((items: Array<{ id: string }>) => {
+        for (const row of items) this.deleteVectorIndexEntry(row.id);
+      });
+      remove(rows);
+    }
     const result = this.db.prepare("DELETE FROM chunks WHERE session_key = ?").run(sessionKey);
     return result.changes;
   }
 
   deleteAll(): number {
     this.db.exec("PRAGMA foreign_keys = OFF");
+    if (this.hasVecIndex()) {
+      try {
+        this.db.prepare("DELETE FROM vec_chunks").run();
+      } catch (err) {
+        this.vecExtensionLoaded = false;
+        this.vecIndexDimensions = null;
+        this.log.warn(`deleteAll: sqlite-vec index disabled after clear failed: ${err}`);
+      }
+    }
     try {
       this.db.exec("DROP TRIGGER IF EXISTS tasks_fts_ai");
       this.db.exec("DROP TRIGGER IF EXISTS tasks_fts_ad");

@@ -61,6 +61,7 @@ export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
 
   const store = new SqliteStore(ctx.config.storage!.dbPath!, ctx.log);
   const embedder = new Embedder(ctx.config.embedding, ctx.log, ctx.openclawAPI);
+  store.configureVectorIndex?.(embedder.dimensions);
   warnOnEmbeddingMismatch(store, embedder, ctx.log);
   const worker = new IngestWorker(store, embedder, ctx);
   const engine = new RecallEngine(store, embedder, ctx);

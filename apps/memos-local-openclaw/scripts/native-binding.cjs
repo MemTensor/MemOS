@@ -32,6 +32,37 @@ function validateNativeBinding(bindingPath, loadBinding = defaultLoadBinding) {
   }
 }
 
+function validateSqliteVecExtension(
+  sqliteVec,
+  createDatabase,
+  fsImpl = fs,
+) {
+  if (!sqliteVec || typeof sqliteVec.getLoadablePath !== "function" || typeof sqliteVec.load !== "function") {
+    return { ok: false, reason: "missing", message: "sqlite-vec package is unavailable" };
+  }
+
+  let db;
+  try {
+    const extensionPath = sqliteVec.getLoadablePath();
+    if (!extensionPath || !fsImpl.existsSync(extensionPath)) {
+      return {
+        ok: false,
+        reason: "missing-platform-binary",
+        message: `sqlite-vec platform binary not found: ${extensionPath || "unknown"}`,
+      };
+    }
+
+    db = createDatabase();
+    sqliteVec.load(db);
+    const row = db.prepare("SELECT vec_version() AS version").get();
+    return { ok: true, reason: "ok", message: "", version: row?.version || "unknown" };
+  } catch (error) {
+    return { ok: false, reason: "load-error", message: errorMessage(error) };
+  } finally {
+    try { db?.close(); } catch { /* best effort */ }
+  }
+}
+
 function quarantineNativeBinding(
   bindingPath,
   fsImpl = fs,
@@ -74,4 +105,5 @@ module.exports = {
   defaultLoadBinding,
   quarantineNativeBinding,
   validateNativeBinding,
+  validateSqliteVecExtension,
 };

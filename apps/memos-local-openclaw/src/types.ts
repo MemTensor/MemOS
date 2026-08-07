@@ -166,6 +166,7 @@ export type EmbeddingProvider =
   | "cohere"
   | "mistral"
   | "voyage"
+  | "ollama"
   | "local"
   | "openclaw";
 

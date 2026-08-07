@@ -410,7 +410,11 @@ describe("re-embed CLI", () => {
     // Verify the DB embeddings table is unchanged
     const checkDb = new Database(dbPath, { readonly: true });
     const rows = checkDb.prepare("SELECT chunk_id, provider, model FROM embeddings ORDER BY chunk_id").all();
+    const vecTable = checkDb.prepare(
+      "SELECT COUNT(*) AS count FROM sqlite_schema WHERE name = 'vec_chunks'",
+    ).get() as { count: number };
     checkDb.close();
+    expect(vecTable.count).toBe(0);
     expect(rows).toEqual([
       { chunk_id: "c1", provider: "local", model: "" },
       { chunk_id: "c2", provider: "openai", model: "old-model" },

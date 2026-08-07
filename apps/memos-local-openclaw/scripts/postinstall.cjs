@@ -4,7 +4,11 @@
 const { spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-const { quarantineNativeBinding, validateNativeBinding } = require("./native-binding.cjs");
+const {
+  quarantineNativeBinding,
+  validateNativeBinding,
+  validateSqliteVecExtension,
+} = require("./native-binding.cjs");
 
 const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
@@ -137,7 +141,7 @@ try {
 function ensureDependencies() {
   phase(0, "Check core dependencies / 检测核心依赖");
 
-  const coreDeps = ["@sinclair/typebox", "uuid", "@huggingface/transformers"];
+  const coreDeps = ["@sinclair/typebox", "uuid", "@huggingface/transformers", "sqlite-vec"];
   const missing = [];
   for (const dep of coreDeps) {
     try {
@@ -480,6 +484,21 @@ ${YELLOW}  ║${RESET}                                                          
 ${YELLOW}${BOLD}  ╚══════════════════════════════════════════════════════════════╝${RESET}
 `);
   }
+}
+
+try {
+  const SqliteDatabase = require("better-sqlite3");
+  const sqliteVec = require("sqlite-vec");
+  const status = validateSqliteVecExtension(sqliteVec, () => new SqliteDatabase(":memory:"));
+  if (status.ok) {
+    ok(`sqlite-vec is ready (v${status.version}).`);
+  } else {
+    warn(`sqlite-vec is unavailable (${status.reason}): ${status.message}`);
+    log("Vector search will use the built-in brute-force fallback.");
+  }
+} catch (e) {
+  warn(`sqlite-vec validation failed: ${e.message}`);
+  log("Vector search will use the built-in brute-force fallback.");
 }
 
 /* ═══════════════════════════════════════════════════════════

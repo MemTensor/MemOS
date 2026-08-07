@@ -146,6 +146,8 @@ export async function runReembed(opts: CliOpts): Promise<{ processed: number; fa
     return { processed: 0, failed: 0, planned: ids.length };
   }
 
+  store.configureVectorIndex(embedder.dimensions);
+
   let processed = 0;
   let failed = 0;
   for (let i = 0; i < ids.length; i += opts.batchSize) {

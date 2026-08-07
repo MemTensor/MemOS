@@ -60,11 +60,19 @@ export class RecallEngine {
     let vecCandidates: Array<{ chunkId: string; score: number }> = [];
     if (query) {
       try {
-        const queryVec = await this.embedder.embedQuery(query);
+        const queryVec = await this.embedQuery(query);
         const maxChunks = recallCfg.vectorSearchMaxChunks && recallCfg.vectorSearchMaxChunks > 0
           ? recallCfg.vectorSearchMaxChunks
           : undefined;
-        vecCandidates = vectorSearch(this.store, queryVec, candidatePool, maxChunks, ownerFilter, excludeSessionKey);
+        vecCandidates = vectorSearch(
+          this.store,
+          queryVec,
+          candidatePool,
+          maxChunks,
+          ownerFilter,
+          excludeSessionKey,
+          this.ctx.log,
+        );
       } catch (err) {
         this.ctx.log.warn(`Vector search failed, using FTS only: ${err}`);
       }
@@ -111,17 +119,12 @@ export class RecallEngine {
       }
 
       try {
-        const qv = await this.embedder.embedQuery(query).catch(() => null);
+        const qv = await this.embedQuery(query).catch(() => null);
         if (qv) {
           const memEmbs = this.store.getVisibleHubMemoryEmbeddings("__hub__");
           const scored: Array<{ id: string; score: number }> = [];
           for (const e of memEmbs) {
-            let dot = 0, nA = 0, nB = 0;
-            const len = Math.min(qv.length, e.vector.length);
-            for (let i = 0; i < len; i++) {
-              dot += qv[i] * e.vector[i]; nA += qv[i] * qv[i]; nB += e.vector[i] * e.vector[i];
-            }
-            const sim = nA > 0 && nB > 0 ? dot / (Math.sqrt(nA) * Math.sqrt(nB)) : 0;
+            const sim = cosineSimilarity(qv, e.vector);
             if (sim > 0.3) scored.push({ id: `hubmem:${e.memoryId}`, score: sim });
           }
           scored.sort((a, b) => b.score - a.score);
@@ -310,10 +313,10 @@ export class RecallEngine {
     // FTS on name + description
     const ftsCandidates = this.store.skillFtsSearch(query, TOP_CANDIDATES, scope, currentOwner);
 
-    // Vector search on description embedding
+    // Vector search on description embedding (with caching)
     let vecCandidates: Array<{ skillId: string; score: number }> = [];
     try {
-      const queryVec = await this.embedder.embedQuery(query);
+      const queryVec = await this.embedQuery(query);
       const allEmb = this.store.getSkillEmbeddings(scope, currentOwner);
       vecCandidates = allEmb.map((row) => ({
         skillId: row.skillId,
@@ -386,6 +389,13 @@ export class RecallEngine {
 
     // Fallback: return all candidates
     return candidates.map((_, i) => i);
+  }
+
+  private embedQuery(text: string): Promise<number[]> {
+    const cachedEmbed = (this.embedder as Partial<Embedder>).embedQueryWithCache;
+    return typeof cachedEmbed === "function"
+      ? cachedEmbed.call(this.embedder, text)
+      : this.embedder.embedQuery(text);
   }
 }
 

@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 const {
   quarantineNativeBinding,
   validateNativeBinding,
+  validateSqliteVecExtension,
 } = require("../scripts/native-binding.cjs");
 
 describe("postinstall native binding validation", () => {
@@ -133,5 +134,37 @@ describe("postinstall native binding validation", () => {
     expect(a.quarantinedPath).not.toBe(b.quarantinedPath);
     expect(renames).toHaveLength(2);
     expect(renames[0][1]).not.toBe(renames[1][1]);
+  });
+
+  it("accepts a loadable sqlite-vec platform extension", () => {
+    let closed = false;
+    const db = {
+      prepare: () => ({ get: () => ({ version: "0.1.9" }) }),
+      close: () => { closed = true; },
+    };
+    const sqliteVec = {
+      getLoadablePath: () => "/tmp/vec0.dylib",
+      load: (candidate: unknown) => expect(candidate).toBe(db),
+    };
+
+    const result = validateSqliteVecExtension(
+      sqliteVec,
+      () => db,
+      { existsSync: () => true },
+    );
+
+    expect(result).toEqual({ ok: true, reason: "ok", message: "", version: "0.1.9" });
+    expect(closed).toBe(true);
+  });
+
+  it("reports a missing sqlite-vec platform binary", () => {
+    const result = validateSqliteVecExtension(
+      { getLoadablePath: () => "/tmp/vec0.dylib", load: () => {} },
+      () => { throw new Error("database should not be opened"); },
+      { existsSync: () => false },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("missing-platform-binary");
   });
 });

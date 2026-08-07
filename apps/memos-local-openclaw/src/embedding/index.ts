@@ -4,17 +4,65 @@ import { embedGemini } from "./providers/gemini";
 import { embedCohere, embedCohereQuery } from "./providers/cohere";
 import { embedVoyage } from "./providers/voyage";
 import { embedMistral } from "./providers/mistral";
+import { embedOllama } from "./providers/ollama";
 import { embedLocal } from "./local";
 import { modelHealth } from "../ingest/providers";
+import { EmbeddingCache, getGlobalCache } from "./cache";
 
 type EmbeddingInputKind = "document" | "query";
 
 export class Embedder {
+  private cache: EmbeddingCache;
+
   constructor(
     private cfg: EmbeddingConfig | undefined,
     private log: Logger,
     private openclawAPI?: OpenClawAPI,
-  ) {}
+  ) {
+    // Use global cache singleton to share cache across instances
+    this.cache = getGlobalCache(log);
+  }
+
+  /**
+   * Get embedding for query with caching support
+   */
+  async embedQueryWithCache(text: string): Promise<number[]> {
+    const cached = await this.cache.get(this.signature, text);
+    if (cached) {
+      this.log.debug(`[Embedder] Cache hit for query: "${text.slice(0, 50)}..."`);
+      return cached;
+    }
+
+    // Generate embedding
+    const startTime = Date.now();
+    const vector = await this.embedQuery(text);
+    const duration = Date.now() - startTime;
+
+    if (vector.length === this.dimensions) {
+      await this.cache.set(this.signature, text, vector);
+      this.log.debug(`[Embedder] Cached embedding (${duration}ms) for query: "${text.slice(0, 50)}..."`);
+    } else {
+      this.log.debug(
+        `[Embedder] Skipped query cache because expected ${this.dimensions} dimensions but received ${vector.length}`,
+      );
+    }
+
+    return vector;
+  }
+
+  /**
+   * Clear embedding cache
+   */
+  clearCache(): void {
+    this.cache.clear();
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats(): { size: number; maxSize: number; ttlMs: number } {
+    return this.cache.getStats();
+  }
 
   get provider(): string {
     if (this.cfg?.provider === "openclaw" && this.cfg.capabilities?.hostEmbedding !== true) {
@@ -25,6 +73,7 @@ export class Embedder {
 
   get model(): string {
     if (this.provider === "local") return "";
+    if (this.provider === "ollama") return this.cfg?.model ?? "nomic-embed-text";
     return this.cfg?.model ?? "";
   }
 
@@ -92,6 +141,8 @@ export class Embedder {
           result = await embedMistral(texts, cfg!, this.log); break;
         case "voyage":
           result = await embedVoyage(texts, cfg!, this.log); break;
+        case "ollama":
+          result = await embedOllama(texts, cfg!, this.log); break;
         case "local":
         default:
           result = await embedLocal(texts, this.log); break;

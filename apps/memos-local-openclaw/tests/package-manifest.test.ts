@@ -14,6 +14,7 @@ describe("package manifest", () => {
       files: string[];
       openclaw: { extensions: string[] };
       scripts: Record<string, string>;
+      dependencies: Record<string, string>;
     };
     const pluginJson = JSON.parse(
       fs.readFileSync(path.join(root, "openclaw.plugin.json"), "utf-8"),
@@ -31,5 +32,6 @@ describe("package manifest", () => {
     expect(packageJson.files).toEqual(expect.arrayContaining(["dist", "tsconfig.json"]));
     expect(packageJson.files).not.toContain("index.ts");
     expect(packageJson.scripts.prepublishOnly).toBe("npm run build");
+    expect(packageJson.dependencies["sqlite-vec"]).toBe("^0.1.9");
   });
 });

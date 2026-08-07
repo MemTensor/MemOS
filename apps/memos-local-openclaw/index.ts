@@ -258,6 +258,7 @@ const memosLocalPlugin = {
 
     const store = new SqliteStore(ctx.config.storage!.dbPath!, ctx.log);
     const embedder = new Embedder(ctx.config.embedding, ctx.log, ctx.openclawAPI);
+    store.configureVectorIndex?.(embedder.dimensions);
     const worker = new IngestWorker(store, embedder, ctx);
     const engine = new RecallEngine(store, embedder, ctx);
     const evidenceTag = ctx.config.capture?.evidenceWrapperTag ?? DEFAULTS.evidenceWrapperTag;
