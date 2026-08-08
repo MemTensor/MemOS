@@ -1,11 +1,16 @@
 import json
 
+from pathlib import Path
+
 from memos.configs.mem_cube import BaseMemCubeConfig, GeneralMemCubeConfig
 from tests.utils import (
     check_config_base_class,
     check_config_instantiation_invalid,
     check_config_instantiation_valid,
 )
+
+
+MEM_CUBE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "examples/data/mem_cube_2/config.json"
 
 
 def test_base_mem_cube_config():
@@ -34,7 +39,7 @@ def test_general_mem_cube_config():
         reserved_fields=["model_schema"],
     )
 
-    with open("examples/data/mem_cube_2/config.json") as f:
+    with MEM_CUBE_CONFIG_PATH.open(encoding="utf-8") as f:
         config_data = json.load(f)
 
     check_config_instantiation_valid(
@@ -47,7 +52,7 @@ def test_general_mem_cube_config():
 
 
 def test_general_mem_cube_config_generates_unique_default_cube_ids():
-    with open("examples/data/mem_cube_2/config.json") as f:
+    with MEM_CUBE_CONFIG_PATH.open(encoding="utf-8") as f:
         config_data = json.load(f)
     config_data.pop("cube_id", None)
 
