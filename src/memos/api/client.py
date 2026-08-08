@@ -98,8 +98,15 @@ class MemOSClient:
         retry_count: int = MAX_RETRY_COUNT,
         **request_kwargs: Any,
     ) -> dict[str, Any] | requests.Response:
+        if retry_count < 1:
+            raise ValueError("retry_count must be >= 1")
+
         url = self._build_url(endpoint)
-        request_kwargs.setdefault("headers", self.headers)
+        provided_headers = request_kwargs.pop("headers", None) or {}
+        default_headers = self.headers.copy()
+        if "files" in request_kwargs:
+            default_headers.pop("Content-Type", None)
+        request_kwargs["headers"] = {**default_headers, **provided_headers}
         request_kwargs.setdefault("timeout", timeout)
         request_kwargs = {k: v for k, v in request_kwargs.items() if v is not None}
 
@@ -116,6 +123,7 @@ class MemOSClient:
         if "json" in request_kwargs and "data" not in request_kwargs and "files" not in request_kwargs:
             request_kwargs["data"] = json.dumps(request_kwargs.pop("json"))
 
+        last_error: Exception | None = None
         for retry in range(retry_count):
             try:
                 if request_callable_is_compat and method_name != "request":
@@ -130,6 +138,7 @@ class MemOSClient:
                 try:
                     return response.json()
                 except ValueError as e:
+                    last_error = e
                     logger.error(
                         "Failed to parse JSON response for %s (retry %s/%s): %s",
                         operation,
@@ -138,8 +147,10 @@ class MemOSClient:
                         e,
                     )
                     logger.debug("Response body preview: %s", response.text[:512])
-                    raise
+                    if retry == retry_count - 1:
+                        raise
             except requests_exceptions.RequestException as e:
+                last_error = e
                 logger.error(
                     "Failed to %s (retry %s/%s): %s",
                     operation,
@@ -149,6 +160,7 @@ class MemOSClient:
                 )
                 if retry == retry_count - 1:
                     raise
+        raise RuntimeError(f"Failed to {operation}") from last_error
 
     def _post_json_dict(self, endpoint: str, payload: dict[str, Any], operation: str) -> dict[str, Any]:
         return self._request_json(
