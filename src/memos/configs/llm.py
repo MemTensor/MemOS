@@ -28,6 +28,11 @@ class OpenAILLMConfig(BaseLLMConfig):
         default="https://api.openai.com/v1", description="Base URL for OpenAI API"
     )
     extra_body: Any = Field(default=None, description="extra body")
+    enable_thinking: bool | None = Field(
+        default=None,
+        description="Enable/disable thinking mode for models that support it (e.g. Qwen3, DeepSeek-R1). "
+        "When None (default), the provider's default behavior is preserved.",
+    )
     backup_client: bool = Field(
         default=False,
         description="Whether to enable backup client for fallback on primary failure",
