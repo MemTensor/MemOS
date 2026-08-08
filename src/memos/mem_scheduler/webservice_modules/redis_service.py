@@ -47,8 +47,16 @@ class RedisSchedulerModule(BaseSchedulerModule):
     @property
     def redis(self) -> Any:
         if self._redis_conn is None:
-            self.auto_initialize_redis()
+            if not self.auto_initialize_redis():
+                return None
         return self._redis_conn
+
+    def _require_redis_connection(self) -> Any:
+        """Return the active Redis connection or raise a clear error."""
+        redis_conn = self.redis
+        if redis_conn is None:
+            raise RuntimeError("Redis connection is not initialized")
+        return redis_conn
 
     @redis.setter
     def redis(self, value: Any) -> None:
@@ -92,11 +100,18 @@ class RedisSchedulerModule(BaseSchedulerModule):
             # test conn
             if not self._redis_conn.ping():
                 logger.error("Redis connection failed")
+                self._redis_conn = None
+                return None
+
+            try:
+                self._redis_conn.xtrim("user:queries:stream", self.query_list_capacity)
+            except Exception as exc:
+                logger.warning(f"Failed to trim redis stream: {exc}")
+            return self._redis_conn
         except redis.ConnectionError as e:
             self._redis_conn = None
             logger.error(f"Redis connection error: {e}")
-        self._redis_conn.xtrim("user:queries:stream", self.query_list_capacity)
-        return self._redis_conn
+            return None
 
     @require_python_package(
         import_name="redis",
@@ -216,45 +231,53 @@ class RedisSchedulerModule(BaseSchedulerModule):
             self._redis_conn = None
 
         # Strategy 3: Try to start local Redis server as fallback
-        try:
-            logger.warning(
-                "Attempting to start local Redis server as fallback (not recommended for production)"
-            )
+        if os.getenv("MEMOS_ALLOW_LOCAL_REDIS", "").lower() == "true":
+            try:
+                logger.warning(
+                    "Attempting to start local Redis server as fallback (not recommended for production)"
+                )
 
-            # Try to start Redis server locally
-            self._local_redis_process = subprocess.Popen(
-                ["redis-server", "--port", "6379", "--daemonize", "no"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                preexec_fn=os.setsid if hasattr(os, "setsid") else None,
-            )
+                # Ensure any previous fallback process is cleaned before starting again
+                self._cleanup_local_redis()
 
-            # Wait a moment for Redis to start
-            time.sleep(0.5)
+                # Try to start Redis server locally
+                self._local_redis_process = subprocess.Popen(
+                    ["redis-server", "--port", "6379", "--daemonize", "no"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+                )
 
-            # Try to connect to local Redis
-            self._redis_conn = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+                # Wait a moment for Redis to start
+                time.sleep(0.5)
 
-            # Test connection
-            if self._redis_conn.ping():
-                logger.warning("Local Redis server started and connected successfully")
-                logger.warning("WARNING: Using local Redis server - not suitable for production!")
-                self.redis_host = "localhost"
-                self.redis_port = 6379
-                self.redis_db = 0
-                self.redis_password = None
-                self.socket_timeout = None
-                self.socket_connect_timeout = None
-                return True
-            else:
-                logger.error("Local Redis server connection test failed")
+                # Try to connect to local Redis
+                self._redis_conn = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+
+                # Test connection
+                if self._redis_conn.ping():
+                    logger.warning("Local Redis server started and connected successfully")
+                    logger.warning("WARNING: Using local Redis server - not suitable for production!")
+                    self.redis_host = "localhost"
+                    self.redis_port = 6379
+                    self.redis_db = 0
+                    self.redis_password = None
+                    self.socket_timeout = None
+                    self.socket_connect_timeout = None
+                    return True
+                else:
+                    logger.error("Local Redis server connection test failed")
+                    self._cleanup_local_redis()
+                    return False
+            except Exception as e:
+                logger.error(f"Failed to start local Redis server: {e}")
                 self._cleanup_local_redis()
                 return False
 
-        except Exception as e:
-            logger.error(f"Failed to start local Redis server: {e}")
-            self._cleanup_local_redis()
-            return False
+        logger.warning(
+            "Skipping local Redis fallback because MEMOS_ALLOW_LOCAL_REDIS is not set to true"
+        )
+        return False
 
     def _cleanup_local_redis(self):
         """Clean up local Redis process if it exists"""
@@ -287,7 +310,8 @@ class RedisSchedulerModule(BaseSchedulerModule):
 
     def redis_add_message_stream(self, message: dict):
         logger.debug(f"add_message_stream: {message}")
-        return self._redis_conn.xadd("user:queries:stream", message)
+        redis_conn = self._require_redis_connection()
+        return redis_conn.xadd("user:queries:stream", message)
 
     async def redis_consume_message_stream(self, message: dict):
         logger.debug(f"consume_message_stream: {message}")
@@ -313,11 +337,15 @@ class RedisSchedulerModule(BaseSchedulerModule):
         """Internal async stream listener"""
         import redis
 
+        if handler is None:
+            handler = self.redis_consume_message_stream
+
         self._redis_listener_running = True
         while self._redis_listener_running:
             try:
+                redis_conn = self._require_redis_connection()
                 # Blocking read for new messages
-                messages = self.redis.xread(
+                messages = redis_conn.xread(
                     {"user:queries:stream": last_id}, count=1, block=block_time
                 )
 
@@ -331,6 +359,9 @@ class RedisSchedulerModule(BaseSchedulerModule):
                             except Exception as e:
                                 logger.error(f"Error processing message {message_id}: {e}")
 
+            except RuntimeError as e:
+                logger.error(f"Redis connection unavailable: {e}")
+                await asyncio.sleep(5)
             except redis.ConnectionError as e:
                 logger.error(f"Redis connection error: {e}")
                 await asyncio.sleep(5)  # Wait before reconnecting
