@@ -26,6 +26,13 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
+def _validate_schema_name(schema_name: str) -> str:
+    """Validate PostgreSQL schema identifiers before quoting into SQL."""
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", schema_name):
+        raise ValueError("Invalid schema name; only letters, numbers, and underscores are allowed")
+    return schema_name
+
+
 def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Ensure metadata has proper datetime fields and normalized types."""
     now = datetime.utcnow().isoformat()
@@ -54,7 +61,8 @@ class PostgresGraphDB(BaseGraphDB):
         import psycopg2.pool
 
         self.config = config
-        self.schema = config.schema_name
+        self.schema = _validate_schema_name(config.schema_name)
+        self.schema_quoted = f'"{self.schema}"'
         self.user_name = config.user_name
         self._pool_closed = False
 
@@ -119,7 +127,7 @@ class PostgresGraphDB(BaseGraphDB):
         try:
             with conn.cursor() as cur:
                 # Create schema
-                cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
+                cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema_quoted}")
 
                 # Enable pgvector
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -127,7 +135,7 @@ class PostgresGraphDB(BaseGraphDB):
                 # Create memories table
                 dim = self.config.embedding_dimension
                 cur.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {self.schema}.memories (
+                    CREATE TABLE IF NOT EXISTS {self.schema_quoted}.memories (
                         id TEXT PRIMARY KEY,
                         memory TEXT NOT NULL DEFAULT '',
                         properties JSONB NOT NULL DEFAULT '{{}}',
@@ -140,7 +148,7 @@ class PostgresGraphDB(BaseGraphDB):
 
                 # Create edges table
                 cur.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {self.schema}.edges (
+                    CREATE TABLE IF NOT EXISTS {self.schema_quoted}.edges (
                         id SERIAL PRIMARY KEY,
                         source_id TEXT NOT NULL,
                         target_id TEXT NOT NULL,
@@ -153,24 +161,24 @@ class PostgresGraphDB(BaseGraphDB):
                 # Create indexes
                 cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_memories_user
-                    ON {self.schema}.memories(user_name)
+                    ON {self.schema_quoted}.memories(user_name)
                 """)
                 cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_memories_props
-                    ON {self.schema}.memories USING GIN(properties)
+                    ON {self.schema_quoted}.memories USING GIN(properties)
                 """)
                 cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_memories_embedding
-                    ON {self.schema}.memories USING ivfflat(embedding vector_cosine_ops)
+                    ON {self.schema_quoted}.memories USING ivfflat(embedding vector_cosine_ops)
                     WITH (lists = 100)
                 """)
                 cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_edges_source
-                    ON {self.schema}.edges(source_id)
+                    ON {self.schema_quoted}.edges(source_id)
                 """)
                 cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_edges_target
-                    ON {self.schema}.edges(target_id)
+                    ON {self.schema_quoted}.edges(target_id)
                 """)
 
                 logger.info(f"Schema {self.schema} initialized successfully")
@@ -206,7 +214,7 @@ class PostgresGraphDB(BaseGraphDB):
                     f"""
                     WITH ranked AS (
                         SELECT id, ROW_NUMBER() OVER (ORDER BY updated_at DESC) as rn
-                        FROM {self.schema}.memories
+                        FROM {self.schema_quoted}.memories
                         WHERE user_name = %s
                         AND properties->>'memory_type' = %s
                     )
@@ -221,7 +229,7 @@ class PostgresGraphDB(BaseGraphDB):
                     # Delete edges first
                     cur.execute(
                         f"""
-                        DELETE FROM {self.schema}.edges
+                        DELETE FROM {self.schema_quoted}.edges
                         WHERE source_id = ANY(%s) OR target_id = ANY(%s)
                     """,
                         (ids_to_delete, ids_to_delete),
@@ -230,7 +238,7 @@ class PostgresGraphDB(BaseGraphDB):
                     # Delete nodes
                     cur.execute(
                         f"""
-                        DELETE FROM {self.schema}.memories
+                        DELETE FROM {self.schema_quoted}.memories
                         WHERE id = ANY(%s)
                     """,
                         (ids_to_delete,),
@@ -266,7 +274,7 @@ class PostgresGraphDB(BaseGraphDB):
                 if embedding:
                     cur.execute(
                         f"""
-                        INSERT INTO {self.schema}.memories
+                        INSERT INTO {self.schema_quoted}.memories
                         (id, memory, properties, embedding, user_name, created_at, updated_at)
                         VALUES (%s, %s, %s, %s::vector, %s, %s, %s)
                         ON CONFLICT (id) DO UPDATE SET
@@ -288,7 +296,7 @@ class PostgresGraphDB(BaseGraphDB):
                 else:
                     cur.execute(
                         f"""
-                        INSERT INTO {self.schema}.memories
+                        INSERT INTO {self.schema_quoted}.memories
                         (id, memory, properties, user_name, created_at, updated_at)
                         VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO UPDATE SET
@@ -335,7 +343,7 @@ class PostgresGraphDB(BaseGraphDB):
                 if embedding:
                     cur.execute(
                         f"""
-                        UPDATE {self.schema}.memories
+                        UPDATE {self.schema_quoted}.memories
                         SET memory = %s, properties = %s, embedding = %s::vector, updated_at = NOW()
                         WHERE id = %s AND user_name = %s
                     """,
@@ -344,7 +352,7 @@ class PostgresGraphDB(BaseGraphDB):
                 else:
                     cur.execute(
                         f"""
-                        UPDATE {self.schema}.memories
+                        UPDATE {self.schema_quoted}.memories
                         SET memory = %s, properties = %s, updated_at = NOW()
                         WHERE id = %s AND user_name = %s
                     """,
@@ -362,7 +370,7 @@ class PostgresGraphDB(BaseGraphDB):
                 # Delete edges
                 cur.execute(
                     f"""
-                    DELETE FROM {self.schema}.edges
+                    DELETE FROM {self.schema_quoted}.edges
                     WHERE source_id = %s OR target_id = %s
                 """,
                     (id, id),
@@ -370,7 +378,7 @@ class PostgresGraphDB(BaseGraphDB):
                 # Delete node
                 cur.execute(
                     f"""
-                    DELETE FROM {self.schema}.memories
+                    DELETE FROM {self.schema_quoted}.memories
                     WHERE id = %s AND user_name = %s
                 """,
                     (id, user_name),
@@ -389,7 +397,7 @@ class PostgresGraphDB(BaseGraphDB):
                     cols += ", embedding"
                 cur.execute(
                     f"""
-                    SELECT {cols} FROM {self.schema}.memories
+                    SELECT {cols} FROM {self.schema_quoted}.memories
                     WHERE id = %s AND user_name = %s
                 """,
                     (id, user_name),
@@ -416,7 +424,7 @@ class PostgresGraphDB(BaseGraphDB):
                     cols += ", embedding"
                 cur.execute(
                     f"""
-                    SELECT {cols} FROM {self.schema}.memories
+                    SELECT {cols} FROM {self.schema_quoted}.memories
                     WHERE id = ANY(%s) AND user_name = %s
                 """,
                     (ids, user_name),
@@ -616,15 +624,15 @@ class PostgresGraphDB(BaseGraphDB):
                 query = f"""
                     WITH to_delete AS (
                         SELECT id
-                        FROM {self.schema}.memories
+                        FROM {self.schema_quoted}.memories
                         WHERE {where_clause}
                     ),
                     deleted_edges AS (
-                        DELETE FROM {self.schema}.edges e
+                        DELETE FROM {self.schema_quoted}.edges e
                         USING to_delete d
                         WHERE e.source_id = d.id OR e.target_id = d.id
                     )
-                    DELETE FROM {self.schema}.memories m
+                    DELETE FROM {self.schema_quoted}.memories m
                     USING to_delete d
                     WHERE m.id = d.id
                 """
@@ -648,7 +656,7 @@ class PostgresGraphDB(BaseGraphDB):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    INSERT INTO {self.schema}.edges (source_id, target_id, edge_type)
+                    INSERT INTO {self.schema_quoted}.edges (source_id, target_id, edge_type)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
                 """,
@@ -666,7 +674,7 @@ class PostgresGraphDB(BaseGraphDB):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    DELETE FROM {self.schema}.edges
+                    DELETE FROM {self.schema_quoted}.edges
                     WHERE source_id = %s AND target_id = %s AND edge_type = %s
                 """,
                     (source_id, target_id, type),
@@ -681,7 +689,7 @@ class PostgresGraphDB(BaseGraphDB):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT 1 FROM {self.schema}.edges
+                    SELECT 1 FROM {self.schema_quoted}.edges
                     WHERE source_id = %s AND target_id = %s AND edge_type = %s
                     LIMIT 1
                 """,
@@ -705,7 +713,7 @@ class PostgresGraphDB(BaseGraphDB):
                 if direction == "out":
                     cur.execute(
                         f"""
-                        SELECT target_id FROM {self.schema}.edges
+                        SELECT target_id FROM {self.schema_quoted}.edges
                         WHERE source_id = %s AND edge_type = %s
                     """,
                         (id, type),
@@ -713,7 +721,7 @@ class PostgresGraphDB(BaseGraphDB):
                 elif direction == "in":
                     cur.execute(
                         f"""
-                        SELECT source_id FROM {self.schema}.edges
+                        SELECT source_id FROM {self.schema_quoted}.edges
                         WHERE target_id = %s AND edge_type = %s
                     """,
                         (id, type),
@@ -721,9 +729,9 @@ class PostgresGraphDB(BaseGraphDB):
                 else:  # both
                     cur.execute(
                         f"""
-                        SELECT target_id FROM {self.schema}.edges WHERE source_id = %s AND edge_type = %s
+                        SELECT target_id FROM {self.schema_quoted}.edges WHERE source_id = %s AND edge_type = %s
                         UNION
-                        SELECT source_id FROM {self.schema}.edges WHERE target_id = %s AND edge_type = %s
+                        SELECT source_id FROM {self.schema_quoted}.edges WHERE target_id = %s AND edge_type = %s
                     """,
                         (id, type, id, type),
                     )
@@ -740,11 +748,11 @@ class PostgresGraphDB(BaseGraphDB):
                     f"""
                     WITH RECURSIVE path AS (
                         SELECT source_id, target_id, ARRAY[source_id] as nodes, 1 as depth
-                        FROM {self.schema}.edges
+                        FROM {self.schema_quoted}.edges
                         WHERE source_id = %s
                         UNION ALL
                         SELECT e.source_id, e.target_id, p.nodes || e.source_id, p.depth + 1
-                        FROM {self.schema}.edges e
+                        FROM {self.schema_quoted}.edges e
                         JOIN path p ON e.source_id = p.target_id
                         WHERE p.depth < %s AND NOT e.source_id = ANY(p.nodes)
                     )
@@ -773,7 +781,7 @@ class PostgresGraphDB(BaseGraphDB):
                         UNION
                         SELECT CASE WHEN e.source_id = s.node_id THEN e.target_id ELSE e.source_id END,
                                s.level + 1
-                        FROM {self.schema}.edges e
+                        FROM {self.schema_quoted}.edges e
                         JOIN subgraph s ON (e.source_id = s.node_id OR e.target_id = s.node_id)
                         WHERE s.level < %s
                     )
@@ -843,7 +851,7 @@ class PostgresGraphDB(BaseGraphDB):
                 cur.execute(
                     f"""
                     SELECT id, 1 - (embedding <=> %s::vector) as score
-                    FROM {self.schema}.memories
+                    FROM {self.schema_quoted}.memories
                     WHERE {where_clause}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
@@ -909,7 +917,7 @@ class PostgresGraphDB(BaseGraphDB):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id FROM {self.schema}.memories
+                    SELECT id FROM {self.schema_quoted}.memories
                     WHERE {where_clause}
                 """,
                     params,
@@ -947,7 +955,7 @@ class PostgresGraphDB(BaseGraphDB):
                     cols += ", embedding"
                 cur.execute(
                     f"""
-                    SELECT {cols} FROM {self.schema}.memories
+                    SELECT {cols} FROM {self.schema_quoted}.memories
                     WHERE {where_clause}
                 """,
                     params,
@@ -968,9 +976,9 @@ class PostgresGraphDB(BaseGraphDB):
                 cur.execute(
                     f"""
                     SELECT {cols}
-                    FROM {self.schema}.memories m
-                    LEFT JOIN {self.schema}.edges e1 ON m.id = e1.source_id
-                    LEFT JOIN {self.schema}.edges e2 ON m.id = e2.target_id
+                    FROM {self.schema_quoted}.memories m
+                    LEFT JOIN {self.schema_quoted}.edges e1 ON m.id = e1.source_id
+                    LEFT JOIN {self.schema_quoted}.edges e2 ON m.id = e2.target_id
                     WHERE m.properties->>'memory_type' = %s
                       AND m.user_name = %s
                       AND m.properties->>'status' = 'activated'
@@ -1036,7 +1044,7 @@ class PostgresGraphDB(BaseGraphDB):
 
         query = f"""
             SELECT {select_fields}, COUNT(*) AS count
-            FROM {self.schema}.memories
+            FROM {self.schema_quoted}.memories
             WHERE {where_sql}
             GROUP BY {group_by}
         """
@@ -1073,7 +1081,7 @@ class PostgresGraphDB(BaseGraphDB):
                 # Get all node IDs for user
                 cur.execute(
                     f"""
-                    SELECT id FROM {self.schema}.memories WHERE user_name = %s
+                    SELECT id FROM {self.schema_quoted}.memories WHERE user_name = %s
                 """,
                     (user_name,),
                 )
@@ -1083,7 +1091,7 @@ class PostgresGraphDB(BaseGraphDB):
                     # Delete edges
                     cur.execute(
                         f"""
-                        DELETE FROM {self.schema}.edges
+                        DELETE FROM {self.schema_quoted}.edges
                         WHERE source_id = ANY(%s) OR target_id = ANY(%s)
                     """,
                         (ids, ids),
@@ -1092,7 +1100,7 @@ class PostgresGraphDB(BaseGraphDB):
                 # Delete nodes
                 cur.execute(
                     f"""
-                    DELETE FROM {self.schema}.memories WHERE user_name = %s
+                    DELETE FROM {self.schema_quoted}.memories WHERE user_name = %s
                 """,
                     (user_name,),
                 )
@@ -1112,7 +1120,7 @@ class PostgresGraphDB(BaseGraphDB):
                     cols += ", embedding"
                 cur.execute(
                     f"""
-                    SELECT {cols} FROM {self.schema}.memories
+                    SELECT {cols} FROM {self.schema_quoted}.memories
                     WHERE user_name = %s
                     ORDER BY created_at DESC
                 """,
@@ -1126,7 +1134,7 @@ class PostgresGraphDB(BaseGraphDB):
                     cur.execute(
                         f"""
                         SELECT source_id, target_id, edge_type
-                        FROM {self.schema}.edges
+                        FROM {self.schema_quoted}.edges
                         WHERE source_id = ANY(%s) OR target_id = ANY(%s)
                     """,
                         (node_ids, node_ids),

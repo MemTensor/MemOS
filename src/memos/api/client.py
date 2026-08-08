@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import quote
 
 import requests
+from requests import exceptions as requests_exceptions
 
 from memos.api.product_models import (
     MemOSAddFeedBackResponse,
@@ -52,7 +53,7 @@ class MemOSClient:
             else "https://memos.memtensor.cn/api/openmem/v1"
         )
 
-        self.base_url = base_url or os.getenv("MEMOS_BASE_URL") or default_url
+        self.base_url = (base_url or os.getenv("MEMOS_BASE_URL") or default_url).rstrip("/")
 
         api_key = api_key or os.getenv("MEMOS_API_KEY")
 
@@ -83,27 +84,98 @@ class MemOSClient:
         normalized_data.setdefault("task_id", task_id)
         return {**response_data, "data": normalized_data}
 
-    def _post_json_dict(
-        self, endpoint: str, payload: dict[str, Any], operation: str
-    ) -> dict[str, Any] | None:
-        url = f"{self.base_url}/{endpoint}"
-        for retry in range(MAX_RETRY_COUNT):
+    def _build_url(self, endpoint: str) -> str:
+        return f"{self.base_url}/{endpoint.lstrip('/')}"
+
+    def _request_json(
+        self,
+        method: str,
+        endpoint: str,
+        operation: str,
+        *,
+        expect_json: bool = True,
+        timeout: int = 30,
+        retry_count: int = MAX_RETRY_COUNT,
+        **request_kwargs: Any,
+    ) -> dict[str, Any] | requests.Response:
+        url = self._build_url(endpoint)
+        request_kwargs.setdefault("headers", self.headers)
+        request_kwargs.setdefault("timeout", timeout)
+        request_kwargs = {k: v for k, v in request_kwargs.items() if v is not None}
+
+        method_name = method.lower()
+        request_callable = getattr(requests, method_name, None)
+        request_callable_is_compat = (
+            callable(request_callable)
+            and method_name
+            in {"get", "post", "put", "delete", "patch", "head", "options", "request"}
+        )
+
+        # Keep legacy compatibility with tests that monkeypatch requests.get/requests.post and
+        # assert request kwargs by inspecting `data` payloads.
+        if "json" in request_kwargs and "data" not in request_kwargs and "files" not in request_kwargs:
+            request_kwargs["data"] = json.dumps(request_kwargs.pop("json"))
+
+        for retry in range(retry_count):
             try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
+                if request_callable_is_compat and method_name != "request":
+                    response = request_callable(url=url, **request_kwargs)
+                else:
+                    response = requests.request(method=method, url=url, **request_kwargs)
+
                 response.raise_for_status()
-                return response.json()
-            except Exception as e:
+                if not expect_json:
+                    return response
+
+                try:
+                    return response.json()
+                except ValueError as e:
+                    logger.error(
+                        "Failed to parse JSON response for %s (retry %s/%s): %s",
+                        operation,
+                        retry + 1,
+                        retry_count,
+                        e,
+                    )
+                    logger.debug("Response body preview: %s", response.text[:512])
+                    raise
+            except requests_exceptions.RequestException as e:
                 logger.error(
                     "Failed to %s (retry %s/%s): %s",
                     operation,
                     retry + 1,
-                    MAX_RETRY_COUNT,
+                    retry_count,
                     e,
                 )
-                if retry == MAX_RETRY_COUNT - 1:
+                if retry == retry_count - 1:
                     raise
+
+    def _post_json_dict(self, endpoint: str, payload: dict[str, Any], operation: str) -> dict[str, Any]:
+        return self._request_json(
+            "post",
+            endpoint=endpoint,
+            operation=operation,
+            expect_json=True,
+            json=payload,
+            timeout=30,
+        )
+
+    def _get_json_dict(
+        self, endpoint: str, params: dict[str, Any] | None = None, operation: str = "get"
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        if params is not None:
+            kwargs["params"] = params
+
+        return self._request_json(
+            "get",
+            endpoint=endpoint,
+            operation=operation,
+            expect_json=True,
+            timeout=30,
+            **kwargs,
+        )
+
 
     def get_message(
         self,
@@ -125,19 +197,7 @@ class MemOSClient:
             "message_limit_number": message_limit_number,
             "source": source,
         }
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSGetMessagesResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to get messages (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSGetMessagesResponse(**self._post_json_dict("get/message", payload, "get messages"))
 
     def add_message(
         self,
@@ -175,19 +235,7 @@ class MemOSClient:
             "tags": tags,
             "async_mode": async_mode,
         }
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSAddResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to add message (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSAddResponse(**self._post_json_dict("add/message", payload, "add message"))
 
     def search_memory(
         self,
@@ -235,19 +283,7 @@ class MemOSClient:
             "include_tool_memory": include_tool_memory,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSSearchResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to search memory (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSSearchResponse(**self._post_json_dict("search/memory", payload, "search memory"))
 
     def get_memory(
         self,
@@ -278,19 +314,7 @@ class MemOSClient:
             "size": size,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSGetMemoryResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to get memory (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSGetMemoryResponse(**self._post_json_dict("get/memory", payload, "get memory"))
 
     @staticmethod
     def _iter_sse_data(response: requests.Response) -> Iterator[str]:
@@ -310,20 +334,10 @@ class MemOSClient:
         self._validate_required_params(memid=memid)
 
         url = f"{self.base_url}/get/memory/{quote(memid, safe='')}"
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.get(url, headers=self.headers, timeout=30)
-                response.raise_for_status()
-                return response.json()
-            except Exception as e:
-                logger.error(
-                    "Failed to get memory by ID (retry %s/%s): %s",
-                    retry + 1,
-                    MAX_RETRY_COUNT,
-                    e,
-                )
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        response_data = self._get_json_dict(
+            f"get/memory/{quote(memid, safe='')}", operation="get memory by ID"
+        )
+        return response_data
 
     def create_knowledgebase(
         self, knowledgebase_name: str, knowledgebase_description: str | None = None
@@ -340,19 +354,7 @@ class MemOSClient:
             "knowledgebase_description": knowledgebase_description,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSCreateKnowledgebaseResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to create knowledgebase (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSCreateKnowledgebaseResponse(**self._post_json_dict("create/knowledgebase", payload, "create knowledgebase"))
 
     def delete_knowledgebase(
         self, knowledgebase_id: str
@@ -368,19 +370,7 @@ class MemOSClient:
             "knowledgebase_id": knowledgebase_id,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSDeleteKnowledgebaseResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to delete knowledgebase (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSDeleteKnowledgebaseResponse(**self._post_json_dict("delete/knowledgebase", payload, "delete knowledgebase"))
 
     def add_knowledgebase_file_json(
         self, knowledgebase_id: str, file: list[dict[str, Any]]
@@ -397,19 +387,7 @@ class MemOSClient:
             "file": file,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSAddKnowledgebaseFileResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to add knowledgebase-file json (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSAddKnowledgebaseFileResponse(**self._post_json_dict("add/knowledgebase-file", payload, "add knowledgebase-file json"))
 
     def add_knowledgebase_file_form(
         self, knowledgebase_id: str, files: list[str], type: str | None = None
@@ -444,32 +422,42 @@ class MemOSClient:
                 raise ValueError("files must contain at least one valid file path")
             return file_params
 
-        url = f"{self.base_url}/add/knowledgebase-file"
         payload = {
             "knowledgebase_id": knowledgebase_id,
         }
         if type is not None:
             payload["type"] = type
+
         headers = {
             "Authorization": f"Token {self.api_key}",
         }
+
         for retry in range(MAX_RETRY_COUNT):
             file_params = []
             try:
                 file_params = build_file_form_params()
-                response = requests.post(
-                    url,
+                response_data = self._request_json(
+                    method="post",
+                    endpoint="add/knowledgebase-file",
+                    operation="add knowledgebase-file form",
+                    expect_json=True,
                     params=payload,
                     headers=headers,
-                    timeout=30,
                     files=file_params,
+                    retry_count=1,
+                    timeout=30,
                 )
-                response.raise_for_status()
-                response_data = response.json()
+                if isinstance(response_data, requests.Response):
+                    raise TypeError("Expected JSON response for knowledgebase-file form")
 
                 return MemOSAddKnowledgebaseFileResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to add knowledgebase-file form (retry {retry + 1}/3): {e}")
+            except requests_exceptions.RequestException as e:
+                logger.error(
+                    "Failed to add knowledgebase-file form (retry %s/%s): %s",
+                    retry + 1,
+                    MAX_RETRY_COUNT,
+                    e,
+                )
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
             finally:
@@ -490,19 +478,7 @@ class MemOSClient:
             "file_ids": file_ids,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSDeleteKnowledgebaseResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to delete knowledgebase-file (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSDeleteKnowledgebaseResponse(**self._post_json_dict("delete/knowledgebase-file", payload, "delete knowledgebase-file"))
 
     def get_knowledgebase_file(
         self,
@@ -528,19 +504,7 @@ class MemOSClient:
             "page_size": page_size,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSGetKnowledgebaseFileResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to get knowledgebase-file (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSGetKnowledgebaseFileResponse(**self._post_json_dict("get/knowledgebase-file", payload, "get knowledgebase-file"))
 
     def get_task_status(self, task_id: str) -> MemOSGetTaskStatusResponse | None:
         """
@@ -554,20 +518,9 @@ class MemOSClient:
             "task_id": task_id,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-                response_data = self._normalize_task_status_response(response_data, task_id)
-
-                return MemOSGetTaskStatusResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to get task status (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        response_data = self._post_json_dict("get/status", payload, "get task status")
+        response_data = self._normalize_task_status_response(response_data, task_id)
+        return MemOSGetTaskStatusResponse(**response_data)
 
     def add_feedback(
         self,
@@ -595,19 +548,7 @@ class MemOSClient:
             "allow_public": allow_public,
             "allow_knowledgebase_ids": allow_knowledgebase_ids,
         }
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSAddFeedBackResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to add feedback (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSAddFeedBackResponse(**self._post_json_dict("add/feedback", payload, "add feedback"))
 
     def delete_memory(
         self,
@@ -648,19 +589,7 @@ class MemOSClient:
         if memory_type is not None:
             payload["memory_type"] = memory_type
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30
-                )
-                response.raise_for_status()
-                response_data = response.json()
-
-                return MemOSDeleteMemoryResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to delete memory (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+        return MemOSDeleteMemoryResponse(**self._post_json_dict("delete/memory", payload, "delete memory"))
 
     def update_memory(
         self,
@@ -838,22 +767,27 @@ class MemOSClient:
             "relativity": relativity,
         }
 
-        for retry in range(MAX_RETRY_COUNT):
-            try:
-                response = requests.post(
-                    url,
-                    data=json.dumps(payload),
-                    headers=self.headers,
-                    timeout=30,
-                    stream=stream,
-                )
-                response.raise_for_status()
-                if stream:
-                    return self._iter_sse_data(response)
-                response_data = response.json()
+        response = self._request_json(
+            method="post",
+            endpoint="chat",
+            operation="chat",
+            expect_json=not stream,
+            json=payload,
+            stream=stream,
+            timeout=30,
+        )
+        if stream:
+            if hasattr(response, "iter_lines") and hasattr(response, "close"):
+                return self._iter_sse_data(response)
 
-                return MemOSChatResponse(**response_data)
-            except Exception as e:
-                logger.error(f"Failed to chat (retry {retry + 1}/3): {e}")
-                if retry == MAX_RETRY_COUNT - 1:
-                    raise
+            # For compatibility with lightweight request mocks used in unit tests, allow
+            # stream-mode clients that still return JSON-compatible objects.
+            if hasattr(response, "json"):
+                response_payload = response.json()
+                if isinstance(response_payload, dict):
+                    return MemOSChatResponse(**response_payload)
+
+            raise TypeError("Streamed chat response expected a stream-like response object")
+        if isinstance(response, dict):
+            return MemOSChatResponse(**response)
+        raise TypeError("Non-streamed chat response expected a JSON payload")

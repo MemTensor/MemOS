@@ -212,26 +212,35 @@ class QdrantVecDB(BaseVecDB):
             for point in response
         ]
 
-    def get_by_filter(self, filter: dict[str, Any], scroll_limit: int = 100) -> list[VecDBItem]:
+    def get_by_filter(
+        self, filter: dict[str, Any], scroll_limit: int = 100, max_items: int | None = None
+    ) -> list[VecDBItem]:
         """
-        Retrieve all items that match the given filter criteria.
+        Retrieve up to max_items that match the given filter criteria.
 
         Args:
             filter: Payload filters to match against stored items
             scroll_limit: Maximum number of items to retrieve per scroll request
+            max_items: Optional hard cap on total results returned. If provided,
+                retrieval stops once this many items are collected.
 
         Returns:
             List of items including vectors and payload that match the filter
         """
+        if max_items is not None and max_items <= 0:
+            raise ValueError("max_items must be greater than 0")
+
         qdrant_filter = self._dict_to_filter(filter) if filter else None
         all_points = []
         offset = None
+        remaining = max_items
 
-        # Use scroll to paginate through all matching points
+        # Use scroll to paginate through matching points
         while True:
+            current_limit = scroll_limit if remaining is None else min(scroll_limit, remaining)
             points, offset = self.client.scroll(
                 collection_name=self.config.collection_name,
-                limit=scroll_limit,
+                limit=current_limit,
                 scroll_filter=qdrant_filter,
                 offset=offset,
                 with_vectors=True,
@@ -242,6 +251,11 @@ class QdrantVecDB(BaseVecDB):
                 break
 
             all_points.extend(points)
+
+            if remaining is not None:
+                remaining -= len(points)
+                if remaining <= 0:
+                    break
 
             # Update offset for next iteration
             if offset is None:
