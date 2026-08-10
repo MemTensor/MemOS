@@ -1,4 +1,5 @@
 import type { CoreHealth } from "../../agent-contract/memory-core.js";
+import type { OpenClawRuntimeLockOwner } from "./runtime-lock.js";
 
 const REQUIRED_CAPABILITIES = [
   "openclaw.shared-runtime.v1",
@@ -56,6 +57,7 @@ export function openClawRuntimeHealth(pluginVersion: string): OpenClawRuntimeHea
 
 export function assertCompatibleOpenClawRuntime(
   health: Pick<CoreHealth, "runtime"> | Record<string, unknown>,
+  options: { expectedPluginVersion?: string } = {},
 ): asserts health is Pick<CoreHealth, "runtime"> {
   const runtime = health.runtime;
   if (!runtime || typeof runtime !== "object") {
@@ -71,6 +73,15 @@ export function assertCompatibleOpenClawRuntime(
         `client major ${OPENCLAW_RUNTIME_PROTOCOL.major}`,
     );
   }
+  if (
+    options.expectedPluginVersion !== undefined &&
+    candidate.pluginVersion !== options.expectedPluginVersion
+  ) {
+    throw new IncompatibleOpenClawRuntimeError(
+      `MemOS runtime plugin version ${String(candidate.pluginVersion)} does not match ` +
+        `client plugin version ${options.expectedPluginVersion}; restart the OpenClaw gateway`,
+    );
+  }
   const capabilities = new Set(
     Array.isArray(candidate.capabilities)
       ? candidate.capabilities.filter((value): value is string => typeof value === "string")
@@ -82,6 +93,33 @@ export function assertCompatibleOpenClawRuntime(
   if (missing.length > 0) {
     throw new IncompatibleOpenClawRuntimeError(
       `MemOS runtime is missing required capabilities: ${missing.join(", ")}`,
+    );
+  }
+}
+
+export function assertCompatibleOpenClawRuntimeOwner(
+  owner: Pick<OpenClawRuntimeLockOwner, "protocolMajor" | "version"> | null,
+  options: { expectedPluginVersion?: string } = {},
+): void {
+  if (owner?.protocolMajor === undefined) {
+    throw new IncompatibleOpenClawRuntimeError(
+      "A live legacy MemOS OpenClaw owner holds the runtime lock without a " +
+        "shared-runtime protocol marker; stop the old gateway before upgrading",
+    );
+  }
+  if (owner.protocolMajor !== OPENCLAW_RUNTIME_PROTOCOL.major) {
+    throw new IncompatibleOpenClawRuntimeError(
+      `MemOS lock owner protocol major ${owner.protocolMajor} is incompatible with ` +
+        `client major ${OPENCLAW_RUNTIME_PROTOCOL.major}`,
+    );
+  }
+  if (
+    options.expectedPluginVersion !== undefined &&
+    owner.version !== options.expectedPluginVersion
+  ) {
+    throw new IncompatibleOpenClawRuntimeError(
+      `MemOS lock owner plugin version ${owner.version} does not match ` +
+        `client plugin version ${options.expectedPluginVersion}; restart the OpenClaw gateway`,
     );
   }
 }

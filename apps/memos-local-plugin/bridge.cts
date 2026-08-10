@@ -147,6 +147,20 @@ function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
+  // Legacy Node callers historically used this generic bridge for OpenClaw.
+  // Route them through the shared owner so no compatibility entry can open a
+  // second writable MemoryCore against the same database.
+  if (args.agent === "openclaw") {
+    const source = args.daemon
+      ? "adapters/openclaw/runtime-daemon.ts"
+      : "adapters/openclaw/runtime-stdio-proxy.ts";
+    const built = args.daemon
+      ? "dist/adapters/openclaw/runtime-daemon.js"
+      : "dist/adapters/openclaw/runtime-stdio-proxy.js";
+    await importEsm(runtimeModule(source, built));
+    return;
+  }
+
   // ─── Singleton: kill previous bridge that owns the viewer port ───
   const pidPath = pidFilePath(args.agent);
   const stdioPidPath = pidFilePath(args.agent, STDIO_PID_FILENAME);

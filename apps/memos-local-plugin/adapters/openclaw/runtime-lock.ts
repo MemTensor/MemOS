@@ -11,6 +11,8 @@ const UNWRITTEN_OWNER_STALE_MS = 30_000;
 export interface OpenClawRuntimeLockOwner {
   pluginId: string;
   version: string;
+  /** Absent on pre-shared-runtime owners. */
+  protocolMajor?: number;
   pid: number;
   token: string;
   startedAt: number;
@@ -33,6 +35,7 @@ export interface AcquireOpenClawRuntimeLockOptions {
   home: ResolvedHome;
   pluginId: string;
   version: string;
+  protocolMajor?: number;
   viewerPort: number;
   pid?: number;
   now?: () => number;
@@ -87,6 +90,7 @@ export function acquireOpenClawRuntimeLock(
     const noopOwner: OpenClawRuntimeLockOwner = {
       pluginId: options.pluginId,
       version: options.version,
+      protocolMajor: options.protocolMajor,
       pid,
       token: "diagnostic-noop",
       startedAt: now(),
@@ -131,6 +135,7 @@ export function acquireOpenClawRuntimeLock(
   const owner: OpenClawRuntimeLockOwner = {
     pluginId: options.pluginId,
     version: options.version,
+    protocolMajor: options.protocolMajor,
     pid,
     token: randomUUID(),
     startedAt: now(),
@@ -172,6 +177,10 @@ function readOwner(ownerFile: string): OpenClawRuntimeLockOwner | null {
     if (
       typeof parsed.pluginId !== "string" ||
       typeof parsed.version !== "string" ||
+      (
+        parsed.protocolMajor !== undefined &&
+        typeof parsed.protocolMajor !== "number"
+      ) ||
       typeof parsed.pid !== "number" ||
       typeof parsed.token !== "string" ||
       typeof parsed.startedAt !== "number" ||

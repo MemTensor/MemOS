@@ -149,6 +149,18 @@ function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
+  // Keep the generic entry backward-compatible without allowing it to become
+  // a second OpenClaw database owner. Hermes still uses the in-process bridge
+  // because it needs the reverse host-LLM stdio channel.
+  if (args.agent === "openclaw") {
+    if (args.daemon) {
+      await import("./adapters/openclaw/runtime-daemon.js");
+    } else {
+      await import("./adapters/openclaw/runtime-stdio-proxy.js");
+    }
+    return;
+  }
+
   // ─── Singleton: kill previous bridge that owns the viewer port ───
   const pidPath = pidFilePath(args.agent);
   const ownsViewerPort = args.daemon || !args.noViewer;

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   backgroundDrainExitCode,
   failureCheckpointFromHealth,
+  finishBackgroundDrain,
   readDrainFailureCheckpoint,
   summarizeBackgroundWork,
   waitForBackgroundDrain,
@@ -175,5 +176,26 @@ describe("OpenClaw runtime background drain", () => {
     });
     expect(timedOut.status).toBe("timed_out");
     expect(backgroundDrainExitCode(timedOut, true)).toBeGreaterThan(0);
+  });
+
+  it("forces exit after a drain timeout without entering an unbounded core shutdown", async () => {
+    const shutdown = vi.fn(async () => {
+      await new Promise<void>(() => undefined);
+    });
+    const exit = vi.fn();
+    const result = {
+      status: "timed_out",
+      terminalFailures: 0,
+      failureCheckpoint: failureCheckpointFromHealth(health(1)),
+    } as const;
+
+    await finishBackgroundDrain(result, {
+      drainOnly: true,
+      shutdown,
+      exit,
+    });
+
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(4);
   });
 });

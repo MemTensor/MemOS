@@ -36,6 +36,11 @@ import {
 } from "../../../adapters/openclaw/runtime-protocol.js";
 
 const roots: string[] = [];
+const PACKAGE_VERSION = (
+  JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8")) as {
+    version: string;
+  }
+).version;
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -66,7 +71,7 @@ function compatibleHealth(home: ResolvedHome) {
     runtime: {
       protocolMajor: OPENCLAW_RUNTIME_PROTOCOL.major,
       protocolMinor: OPENCLAW_RUNTIME_PROTOCOL.minor,
-      pluginVersion: "test",
+      pluginVersion: PACKAGE_VERSION,
       capabilities: [...OPENCLAW_RUNTIME_PROTOCOL.requiredCapabilities],
     },
   };
@@ -179,6 +184,21 @@ describe("OpenClaw shared runtime client", () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
+  it("fails fast when a live legacy lock owner has no runtime socket", async () => {
+    const home = tmpHome();
+    mocks.connectSocketClient.mockRejectedValue(
+      Object.assign(new Error("missing"), { code: "ENOENT" }),
+    );
+    mocks.inspectOpenClawRuntimeLock.mockReturnValue({
+      owner: { version: "legacy", pid: 10 },
+      alive: true,
+    });
+
+    await expect(connectSharedOpenClawRuntime(home))
+      .rejects.toThrow(/legacy/i);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
   it("spawns a new owner after the previous live owner releases its lock", async () => {
     const home = tmpHome();
     const ready = socket(async (method) => {
@@ -190,7 +210,14 @@ describe("OpenClaw shared runtime client", () => {
       .mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }))
       .mockResolvedValueOnce(ready);
     mocks.inspectOpenClawRuntimeLock
-      .mockReturnValueOnce({ owner: { pid: 10 }, alive: true })
+      .mockReturnValueOnce({
+        owner: {
+          pid: 10,
+          protocolMajor: OPENCLAW_RUNTIME_PROTOCOL.major,
+          version: PACKAGE_VERSION,
+        },
+        alive: true,
+      })
       .mockReturnValueOnce({ owner: null, alive: false });
     mocks.spawn.mockImplementation(() => {
       const child = new EventEmitter() as EventEmitter & { unref(): void };

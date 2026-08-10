@@ -55,4 +55,17 @@ describe("bridge runtime mode", () => {
       );
     },
   );
+
+  it.each(["bridge.mts", "bridge.cts"])(
+    "routes legacy OpenClaw %s invocations to the shared owner before core bootstrap",
+    (entry) => {
+      const source = readFileSync(resolve(PLUGIN_ROOT, entry), "utf8");
+      const route = source.indexOf('if (args.agent === "openclaw")');
+      const bootstrap = source.indexOf("bootstrapMemoryCoreFull");
+      expect(route).toBeGreaterThan(0);
+      expect(route).toBeLessThan(bootstrap);
+      expect(source).toContain("runtime-stdio-proxy");
+      expect(source).toContain("runtime-daemon");
+    },
+  );
 });

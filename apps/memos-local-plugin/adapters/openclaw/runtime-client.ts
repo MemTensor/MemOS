@@ -14,12 +14,14 @@ import {
   IncompatibleOpenClawRuntimeError,
   RuntimeWriteOutcomeUnknownError,
   assertCompatibleOpenClawRuntime,
+  assertCompatibleOpenClawRuntimeOwner,
   isReplaySafeOpenClawRuntimeMethod,
 } from "./runtime-protocol.js";
 
 const START_TIMEOUT_MS = 180_000;
 const RETRY_INTERVAL_MS = 200;
 const SPAWN_RETRY_MS = 1_000;
+const CLIENT_PLUGIN_VERSION = readPackageVersion();
 
 export async function connectSharedOpenClawRuntime(
   home: ResolvedHome,
@@ -97,7 +99,14 @@ async function connectRuntimeOnce(home: ResolvedHome): Promise<SocketClient> {
     const at = Date.now();
     if (at >= nextSpawnAt) {
       const owner = inspectOpenClawRuntimeLock(home);
-      if (!owner.alive) {
+      if (owner.alive) {
+        // Pre-shared-runtime owners use the same lock directory but never
+        // create a socket. Waiting the full startup timeout cannot help and
+        // hides the required upgrade action from the operator.
+        assertCompatibleOpenClawRuntimeOwner(owner.owner, {
+          expectedPluginVersion: CLIENT_PLUGIN_VERSION,
+        });
+      } else {
         try {
           await spawnRuntimeDaemon(home);
         } catch (err) {
@@ -189,7 +198,9 @@ async function assertExpectedRuntime(
     );
   }
   try {
-    assertCompatibleOpenClawRuntime(health);
+    assertCompatibleOpenClawRuntime(health, {
+      expectedPluginVersion: CLIENT_PLUGIN_VERSION,
+    });
   } catch (err) {
     client.close();
     throw err;
@@ -243,4 +254,22 @@ export function resolveDaemonCommand(): { executable: string; args: string[] } {
     return { executable: process.execPath, args: [tsxCli, source] };
   }
   throw new Error(`MemOS OpenClaw runtime daemon entry not found under ${adapterDir}`);
+}
+
+function readPackageVersion(): string {
+  const adapterDir = path.dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [
+    path.resolve(adapterDir, "..", "..", "..", "package.json"),
+    path.resolve(adapterDir, "..", "..", "package.json"),
+  ]) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8")) as {
+        version?: unknown;
+      };
+      if (typeof parsed.version === "string") return parsed.version;
+    } catch {
+      /* try next layout */
+    }
+  }
+  return "dev";
 }

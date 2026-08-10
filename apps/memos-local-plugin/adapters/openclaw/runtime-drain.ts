@@ -42,6 +42,30 @@ export function backgroundDrainExitCode(
   }
 }
 
+/**
+ * Finish a daemon drain without defeating its timeout. A timed-out semantic
+ * job may be stuck forever inside an external model call, and the normal
+ * MemoryCore shutdown path waits for that same job. In that case the only
+ * bounded operation is process termination; SQLite/WAL and job leases make
+ * the unfinished work recoverable by the next owner.
+ */
+export async function finishBackgroundDrain(
+  result: BackgroundDrainResult,
+  options: {
+    drainOnly: boolean;
+    shutdown: () => Promise<void>;
+    exit: (code: number) => void;
+  },
+): Promise<void> {
+  const exitCode = backgroundDrainExitCode(result, options.drainOnly);
+  if (result.status === "timed_out") {
+    options.exit(exitCode);
+    return;
+  }
+  await options.shutdown();
+  options.exit(exitCode);
+}
+
 export function summarizeBackgroundWork(
   health: Pick<CoreHealth, "evolution" | "embeddingRetry">,
   failureBaseline: DrainFailureCheckpoint = emptyFailureCheckpoint(),

@@ -11,6 +11,7 @@ import { Telemetry } from "../../core/telemetry/index.js";
 import { startHttpServer } from "../../server/http.js";
 import {
   backgroundDrainExitCode,
+  finishBackgroundDrain,
   readDrainFailureCheckpoint,
   waitForBackgroundDrain,
   writeDrainFailureCheckpoint,
@@ -21,7 +22,10 @@ import {
 } from "./runtime-lock.js";
 import { connectSharedOpenClawRuntime } from "./runtime-client.js";
 import { openClawRuntimeSocketPath } from "./runtime-paths.js";
-import { openClawRuntimeHealth } from "./runtime-protocol.js";
+import {
+  OPENCLAW_RUNTIME_PROTOCOL,
+  openClawRuntimeHealth,
+} from "./runtime-protocol.js";
 import { startOptionalViewer } from "./runtime-viewer.js";
 
 const OPENCLAW_VIEWER_PORT = 18799;
@@ -93,6 +97,7 @@ async function main(): Promise<void> {
       home,
       pluginId: "memos-local-plugin",
       version,
+      protocolMajor: OPENCLAW_RUNTIME_PROTOCOL.major,
       viewerPort: OPENCLAW_VIEWER_PORT,
     });
   } catch (err) {
@@ -235,8 +240,11 @@ async function main(): Promise<void> {
         ) {
           writeDrainFailureCheckpoint(home, result.failureCheckpoint);
         }
-        const exitCode = backgroundDrainExitCode(result, drainOnly);
-        void shutdown(`idle_${result.status}:${reason}`).then(() => process.exit(exitCode));
+        void finishBackgroundDrain(result, {
+          drainOnly,
+          shutdown: () => shutdown(`idle_${result.status}:${reason}`),
+          exit: (code) => process.exit(code),
+        });
       })
       .catch((err) => {
         if (shuttingDown || generation !== drainGeneration) return;

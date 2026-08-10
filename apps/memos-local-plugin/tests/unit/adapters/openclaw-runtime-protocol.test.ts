@@ -4,6 +4,7 @@ import {
   IncompatibleOpenClawRuntimeError,
   OPENCLAW_RUNTIME_PROTOCOL,
   assertCompatibleOpenClawRuntime,
+  assertCompatibleOpenClawRuntimeOwner,
   isReplaySafeOpenClawRuntimeMethod,
 } from "../../../adapters/openclaw/runtime-protocol.js";
 
@@ -59,6 +60,35 @@ describe("OpenClaw runtime protocol", () => {
         }),
       ),
     ).toThrow(/capabilit/i);
+  });
+
+  it("rejects a live legacy lock owner and a different plugin build", () => {
+    expect(() =>
+      assertCompatibleOpenClawRuntimeOwner({
+        pluginId: "memos-local-plugin",
+        version: "2.0.9",
+        pid: 123,
+        token: "legacy",
+        startedAt: Date.now(),
+        dbFile: "/tmp/memos.db",
+        viewerPort: 18799,
+      }),
+    ).toThrow(/legacy/i);
+
+    expect(() =>
+      assertCompatibleOpenClawRuntime(health(), {
+        expectedPluginVersion: "different-build",
+      }),
+    ).toThrow(/plugin version/i);
+
+    expect(() =>
+      assertCompatibleOpenClawRuntimeOwner({
+        protocolMajor: OPENCLAW_RUNTIME_PROTOCOL.major,
+        version: "old-build",
+      }, {
+        expectedPluginVersion: "new-build",
+      }),
+    ).toThrow(/plugin version/i);
   });
 
   it("only permits automatic replay for read-only requests", () => {
