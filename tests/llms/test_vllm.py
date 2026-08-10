@@ -59,3 +59,20 @@ class TestVLLMLLMGenerateStream(unittest.TestCase):
             self.generate_chunks(stream_chunks),
             ["<think>", "First thought. ", "Second thought.", "</think>"],
         )
+
+    def test_remove_think_prefix_omits_tags(self):
+        self.llm.config.remove_think_prefix = True
+        streams = {
+            "reasoning_then_content": (
+                [self.make_chunk(reasoning="Thinking."), self.make_chunk(content="Answer")],
+                ["Thinking.", "Answer"],
+            ),
+            "reasoning_only": (
+                [self.make_chunk(reasoning="Thinking.")],
+                ["Thinking."],
+            ),
+        }
+
+        for name, (stream_chunks, expected) in streams.items():
+            with self.subTest(name=name):
+                self.assertEqual(self.generate_chunks(stream_chunks), expected)
