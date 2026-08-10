@@ -73,7 +73,12 @@ export function attachSkillSubscriber(
 
   let schedulerTail: Promise<void> = Promise.resolve();
   let scheduledCount = 0;
-  const scheduledByKey = new Map<string, Promise<RunSkillResult>>();
+  interface ScheduledRun {
+    promise: Promise<RunSkillResult>;
+    started: boolean;
+    replayInput: RunSkillInput | null;
+  }
+  const scheduledByKey = new Map<string, ScheduledRun>();
 
   function schedule(input: RunSkillInput): Promise<RunSkillResult> {
     const key = input.policyId
@@ -83,14 +88,37 @@ export function attachSkillSubscriber(
         : "global";
     const existing = scheduledByKey.get(key);
     if (existing) {
+      // A duplicate submitted before execution starts is the same request.
+      // Once runSkill is active it may already have snapshotted policies, so
+      // retain the latest trigger for one serialized compensating pass.
+      if (existing.started) existing.replayInput = input;
       log.debug("skill.run.coalesced", { trigger: input.trigger, key });
-      return existing;
+      return existing.promise;
     }
     scheduledCount += 1;
-    const result = schedulerTail.then(() => runSkill(input, runDeps));
-    scheduledByKey.set(key, result);
+    const scheduled: ScheduledRun = {
+      promise: Promise.resolve(undefined as unknown as RunSkillResult),
+      started: false,
+      replayInput: null,
+    };
+    const result = schedulerTail.then(async () => {
+      let next: RunSkillInput | null = input;
+      let latest!: RunSkillResult;
+      while (next) {
+        scheduled.started = true;
+        latest = await runSkill(next, runDeps);
+        next = scheduled.replayInput;
+        scheduled.replayInput = null;
+      }
+      // Delete synchronously with the final replay check so a later event
+      // creates a new scheduled run instead of attaching to a completed one.
+      if (scheduledByKey.get(key) === scheduled) scheduledByKey.delete(key);
+      return latest;
+    });
+    scheduled.promise = result;
+    scheduledByKey.set(key, scheduled);
     const clear = () => {
-      if (scheduledByKey.get(key) === result) scheduledByKey.delete(key);
+      if (scheduledByKey.get(key) === scheduled) scheduledByKey.delete(key);
     };
     void result.then(clear, clear);
     schedulerTail = result.then(

@@ -252,4 +252,66 @@ describe("skill/subscriber", () => {
     expect(h.repos.skills.list()).toHaveLength(1);
     sub.dispose();
   });
+
+  it("runs one compensating global pass when reward arrives during an active pass", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const { episodeId } = seedTracesForPolicy(
+      h,
+      "po_reward_replay" as PolicyId,
+    );
+    seedPolicy(h, {
+      id: "po_reward_replay" as PolicyId,
+      sourceEpisodeIds: [episodeId],
+    });
+    const rewardBus = createRewardEventBus();
+    const bus = createSkillEventBus();
+    let eligibilityPasses = 0;
+    bus.on("skill.eligibility.checked", () => {
+      eligibilityPasses += 1;
+    });
+    let releaseFirst!: () => void;
+    let markStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const sub = attachSkillSubscriber({
+      l2Bus: createL2EventBus(),
+      rewardBus,
+      bus,
+      repos: h.repos,
+      embedder: null,
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": async () => {
+            markStarted();
+            await firstBlocked;
+            return makeDraft();
+          },
+        },
+      }),
+      log: rootLogger.child({ channel: "core.skill.subscriber" }),
+      config: makeSkillConfig({ cooldownMs: 0 }),
+    });
+    const rewardEvent = {
+      kind: "reward.updated",
+      result: {
+        episodeId,
+        rHuman: 0,
+        completedAt: Date.now(),
+      },
+    } as never;
+
+    rewardBus.emit(rewardEvent);
+    await firstStarted;
+    rewardBus.emit(rewardEvent);
+    releaseFirst();
+    await sub.flush();
+
+    expect(eligibilityPasses).toBe(2);
+    sub.dispose();
+  });
 });
