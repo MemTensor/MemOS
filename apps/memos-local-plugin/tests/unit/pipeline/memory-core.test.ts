@@ -848,6 +848,94 @@ describe("MemoryCore façade", () => {
     ]);
   });
 
+  it("continues independent feedback stages when reward fails and clears checkpoints after retry", async () => {
+    db!.repos.sessions.upsert({
+      id: "s-feedback-partial",
+      agent: "openclaw",
+      startedAt: 1_000,
+      lastSeenAt: 2_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep-feedback-partial",
+      sessionId: "s-feedback-partial",
+      startedAt: 1_000,
+      endedAt: 2_000,
+      traceIds: ["tr-feedback-partial"] as never,
+      rTask: null,
+      status: "closed",
+      meta: {},
+    });
+    db!.repos.traces.insert({
+      id: "tr-feedback-partial",
+      episodeId: "ep-feedback-partial",
+      sessionId: "s-feedback-partial",
+      ts: 2_000,
+      userText: "original answer",
+      agentText: "wrong issuer",
+      summary: "wrong issuer",
+      reflection: null,
+      agentThinking: null,
+      toolCalls: [],
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      turnId: 1_000,
+      schemaVersion: 1,
+    } as never);
+    pipeline = createPipeline(buildDeps(db!));
+    const reward = vi.spyOn(pipeline.rewardRunner, "run");
+    reward.mockRejectedValueOnce(new Error("reward temporarily unavailable"));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const feedback = await core.submitFeedback({
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      episodeId: "ep-feedback-partial",
+      traceId: "tr-feedback-partial",
+      rationale:
+        "Verifier feedback: failed. Avoid extracting the issuer name from the wrong SEC 13F field next time.",
+    });
+    await pipeline.flush();
+
+    expect(db!.repos.evolutionJobs.list("failed")).toEqual([
+      expect.objectContaining({
+        jobType: "feedback_evolution",
+        lastError: expect.stringContaining("reward temporarily unavailable"),
+      }),
+    ]);
+    expect(db!.repos.policies.list()).toHaveLength(1);
+    expect(db!.repos.kv.get(
+      `feedback.evolution.state.${feedback.id}`,
+      null,
+    )).not.toBeNull();
+
+    const [failed] = db!.repos.evolutionJobs.list("failed");
+    db!.db.prepare<{ id: string; now: number }>(
+      `UPDATE evolution_jobs SET available_at=@now WHERE id=@id`,
+    ).run({ id: failed!.id, now: 1_700_000_000_000 });
+    await pipeline.flush();
+
+    expect(reward).toHaveBeenCalledTimes(2);
+    expect(db!.repos.policies.list()).toHaveLength(1);
+    expect(db!.repos.evolutionJobs.countByStatus("succeeded")).toBe(1);
+    expect(db!.repos.kv.get(
+      `feedback.evolution.state.${feedback.id}`,
+      null,
+    )).toBeNull();
+  });
+
   it("does not duplicate a policy when feedback retry follows a post-insert failure", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(

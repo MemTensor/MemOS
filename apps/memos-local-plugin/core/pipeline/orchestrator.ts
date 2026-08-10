@@ -433,54 +433,68 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       };
       deps.repos.kv.set(stateKey, state);
     };
-
-    if (!completed("reward") && episode && sessionId) {
-      const rewardFeedback: UserFeedback = {
-        id: row.id as UserFeedback["id"],
-        episodeId: episode.id,
-        sessionId,
-        traceId: row.traceId as CoreTraceId | null,
-        ts: row.ts,
-        channel: row.channel,
-        polarity: row.polarity,
-        magnitude: row.magnitude,
-        text: text || null,
-        rationale: row.rationale,
-      };
+    const failures: Array<{ stage: FeedbackStage; error: unknown }> = [];
+    const attempt = async (
+      stage: FeedbackStage,
+      operation: () => Promise<void>,
+      event: string,
+    ): Promise<boolean> => {
+      if (completed(stage)) return true;
       try {
-        await subs.rewardRunner.run({
-          episodeId: episode.id,
-          feedback: [rewardFeedback],
-          trigger: "explicit_feedback",
+        await operation();
+        complete(stage);
+        return true;
+      } catch (error) {
+        failures.push({ stage, error });
+        log.warn(event, {
+          episodeId: episode?.id,
+          err: error instanceof Error ? error.message : String(error),
         });
-      } catch (err) {
-        log.warn("feedback.reward_failed", {
-          episodeId: episode.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
-        throw err;
+        return false;
       }
-    }
-    if (!completed("reward")) complete("reward");
+    };
 
-    if (!completed("repair") && text && sessionId) {
-      try {
-        await subs.feedback.submitUserFeedback({
-          text,
+    if (!completed("reward")) {
+      if (episode && sessionId) {
+        const rewardFeedback: UserFeedback = {
+          id: row.id as UserFeedback["id"],
+          episodeId: episode.id,
           sessionId,
-          episodeId: episode?.id,
-          context: text.slice(0, 300),
-          repairId: `dr_feedback_${feedbackId}`,
-        });
-      } catch (err) {
-        log.warn("feedback.repair_failed", {
-          episodeId: episode?.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
-        throw err;
+          traceId: row.traceId as CoreTraceId | null,
+          ts: row.ts,
+          channel: row.channel,
+          polarity: row.polarity,
+          magnitude: row.magnitude,
+          text: text || null,
+          rationale: row.rationale,
+        };
+        await attempt("reward", async () => {
+          await subs.rewardRunner.run({
+            episodeId: episode.id,
+            feedback: [rewardFeedback],
+            trigger: "explicit_feedback",
+          });
+        }, "feedback.reward_failed");
+      } else {
+        complete("reward");
       }
     }
-    if (!completed("repair")) complete("repair");
+
+    if (!completed("repair")) {
+      if (text && sessionId) {
+        await attempt("repair", async () => {
+          await subs.feedback.submitUserFeedback({
+            text,
+            sessionId,
+            episodeId: episode?.id,
+            context: text.slice(0, 300),
+            repairId: `dr_feedback_${feedbackId}`,
+          });
+        }, "feedback.repair_failed");
+      } else {
+        complete("repair");
+      }
+    }
 
     let policyId = state.policyId
       ? state.policyId as PolicyId
@@ -504,37 +518,56 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
           episodeId: episode?.id,
           err: err instanceof Error ? err.message : String(err),
         });
-        throw err;
+        failures.push({ stage: "experience", error: err });
       }
     }
 
-    try {
-      if (!completed("l2")) {
+    if (!completed("l2")) {
+      await attempt("l2", async () => {
         await subs.l2.drain();
-        complete("l2");
+      }, "feedback.l2_failed");
+    }
+    // Skill depends on the experience stage producing (or definitively not
+    // producing) a policy. Do not checkpoint it while experience is pending,
+    // otherwise a retry could skip skill evolution after policy recovery.
+    if (!completed("skill") && completed("experience")) {
+      if (policyId) {
+        await attempt("skill", async () => {
+          await subs.skills.runOnce({ trigger: "manual", policyId });
+        }, "feedback.skill_failed");
+      } else {
+        complete("skill");
       }
-      if (!completed("skill") && policyId) {
-        await subs.skills.runOnce({ trigger: "manual", policyId });
-      }
-      if (!completed("skill")) complete("skill");
-      if (!completed("l3") && episode) {
+    }
+    if (!completed("l3") && episode) {
+      await attempt("l3", async () => {
         await subs.l3.runOnce({ trigger: "manual", episodeId: episode.id });
-      }
-      if (!completed("l3")) complete("l3");
-      if (!completed("flush")) {
+      }, "feedback.l3_failed");
+    }
+    if (!completed("l3") && !episode) complete("l3");
+    if (
+      !completed("flush") &&
+      completed("l2") &&
+      completed("skill") &&
+      completed("l3")
+    ) {
+      await attempt("flush", async () => {
         await subs.skills.flush();
         await subs.feedback.flush();
         await subs.l3.drain();
-        complete("flush");
-      }
-    } catch (err) {
-      log.warn("feedback.downstream_flush_failed", {
-        episodeId: episode?.id,
-        policyId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
+      }, "feedback.downstream_flush_failed");
     }
+
+    if (failures.length > 0) {
+      throw new Error(
+        failures.map(({ stage, error }) =>
+          `${stage}: ${error instanceof Error ? error.message : String(error)}`
+        ).join("; "),
+      );
+    }
+    // Successful jobs no longer need per-feedback checkpoint state. Failed
+    // jobs retain it so retries skip completed side effects.
+    deps.repos.kv.del(stateKey);
   }
 
   // Track the most-recently-closed episode per session so V7 §0.1
