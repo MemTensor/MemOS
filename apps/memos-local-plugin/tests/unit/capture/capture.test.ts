@@ -214,6 +214,7 @@ describe("capture/pipeline (end-to-end)", () => {
       reflectLlm: llm,
       bus,
       cfg: baseConfig(overrides),
+      transaction: (operation) => tmp.db.tx(operation),
     });
   }
 
@@ -253,6 +254,53 @@ describe("capture/pipeline (end-to-end)", () => {
     expect(after.tags).not.toContain("capture_pending_enrichment");
     expect(after.vecSummary).toBeInstanceOf(Float32Array);
     expect(after.vecAction).toBeInstanceOf(Float32Array);
+  });
+
+  it("keeps enrichment pending when any vector write fails", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "capture.summarize": { summary: "enriched summary" },
+      },
+    });
+    const runner = buildRunner({}, llm, fakeEmbedder({ dimensions: 8 }));
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "inspect the build", 1_000),
+        turn("assistant", "the build passed", 1_100),
+      ],
+    });
+    const persisted = await runner.runPersistOnly({ episode: ep });
+    const traceId = persisted.traceIds[0]!;
+    const before = tmp.repos.traces.getById(traceId)!;
+    const originalUpdateVector = tmp.repos.traces.updateVector;
+    let writes = 0;
+    tmp.repos.traces.updateVector = (...args) => {
+      writes += 1;
+      if (writes === 2) throw new Error("injected vector write failure");
+      return originalUpdateVector(...args);
+    };
+
+    await expect(runner.runEnrich({ episode: ep })).rejects.toThrow(
+      "injected vector write failure",
+    );
+
+    const afterFailure = tmp.repos.traces.getById(traceId)!;
+    expect(afterFailure.summary).toBe(before.summary);
+    expect(afterFailure.tags).toContain("capture_pending_enrichment");
+    expect(afterFailure.vecSummary).toBeNull();
+    expect(afterFailure.vecAction).toBeNull();
+
+    tmp.repos.traces.updateVector = originalUpdateVector;
+    await expect(runner.runEnrich({ episode: ep })).resolves.toMatchObject({
+      traceIds: [traceId],
+    });
+    const recovered = tmp.repos.traces.getById(traceId)!;
+    expect(recovered.summary).toBe("enriched summary");
+    expect(recovered.tags).not.toContain("capture_pending_enrichment");
+    expect(recovered.vecSummary).toBeInstanceOf(Float32Array);
+    expect(recovered.vecAction).toBeInstanceOf(Float32Array);
   });
 
   it("lightweight capture merges one turn into one memory with summary-only embedding", async () => {

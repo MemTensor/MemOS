@@ -268,25 +268,37 @@ export function createCaptureRunner(deps: CaptureDeps): CaptureRunner {
     const { vecs, embedMs } = await runEmbed(scored, summaries, warnings);
     const persistStart = now();
     const enrichedRows: TraceRow[] = [];
-    for (const [index, step] of scored.entries()) {
-      const row = rowByTs.get(step.ts);
-      if (!row) continue;
-      const updated: TraceRow = {
-        ...row,
-        summary: summaries[index] ?? row.summary,
-        tags: row.tags.filter((tag) => tag !== "capture_pending_enrichment"),
-        vecSummary: vecs[index]?.summary ?? row.vecSummary,
-        vecAction: vecs[index]?.action ?? row.vecAction,
-      };
-      deps.tracesRepo.updateBody(updated.id, {
-        summary: updated.summary,
-        tags: updated.tags,
-      });
-      if (updated.vecSummary) deps.tracesRepo.updateVector(updated.id, "vecSummary", updated.vecSummary);
-      if (updated.vecAction) deps.tracesRepo.updateVector(updated.id, "vecAction", updated.vecAction);
-      enqueueMissingTraceVectors([updated], warnings);
-      enrichedRows.push(updated);
-    }
+    const persistEnrichment = () => {
+      for (const [index, step] of scored.entries()) {
+        const row = rowByTs.get(step.ts);
+        if (!row) continue;
+        const updated: TraceRow = {
+          ...row,
+          summary: summaries[index] ?? row.summary,
+          tags: row.tags.filter((tag) => tag !== "capture_pending_enrichment"),
+          vecSummary: vecs[index]?.summary ?? row.vecSummary,
+          vecAction: vecs[index]?.action ?? row.vecAction,
+        };
+        // Keep the pending marker until every durable write succeeds. In
+        // production this whole block is one SQLite transaction, so a crash
+        // or write error cannot leave an apparently enriched row without its
+        // vectors (or the retry records that will create them).
+        if (updated.vecSummary) {
+          deps.tracesRepo.updateVector(updated.id, "vecSummary", updated.vecSummary);
+        }
+        if (updated.vecAction) {
+          deps.tracesRepo.updateVector(updated.id, "vecAction", updated.vecAction);
+        }
+        enqueueMissingTraceVectors([updated], warnings);
+        deps.tracesRepo.updateBody(updated.id, {
+          summary: updated.summary,
+          tags: updated.tags,
+        });
+        enrichedRows.push(updated);
+      }
+    };
+    if (deps.transaction) deps.transaction(persistEnrichment);
+    else persistEnrichment();
     const result = finalResult(
       input,
       startedAt,
