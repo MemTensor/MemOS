@@ -149,6 +149,8 @@ describe("admin lifecycle routes", () => {
       message: expect.not.stringContaining("Stop-Process"),
     });
     expect((result as { message: string }).message).toContain("20-30 seconds");
+    expect((result as { message: string }).message).toContain("Hermes itself");
+    expect((result as { message: string }).message).not.toContain("not the MemOS plugin");
     expect((result as { message: string }).message).toContain("Keep this page open");
     expect(spawnMock).not.toHaveBeenCalled();
     expect(shutdown).toHaveBeenCalledOnce();

@@ -189,7 +189,7 @@ const en = {
   "restart.manualHint.openclaw":
     "Run in PowerShell: openclaw gateway stop; then openclaw gateway start.",
   "restart.manualHint.hermes":
-    "Fully quit Hermes, then start it again. Initialization usually takes about 20–30 seconds. Keep this page open; Memory Viewer will reconnect and refresh automatically.",
+    "Fully quit Hermes, then start it again. Wait about 20–30 seconds for Hermes itself to finish initializing. Keep this page open; it will reconnect and refresh automatically when Memory Viewer is ready.",
   "restart.manualCloseHint": "Close this message, fully exit Hermes, then retry clearing data.",
   "restart.clearComplete": "Local memory data has been cleared.",
   "restart.clearCompleteHint.openclaw": "Start OpenClaw, then reopen the Memory Viewer.",
@@ -1106,7 +1106,7 @@ const zh: Record<TranslationKey, string> = {
   "restart.manualHint.openclaw":
     "请在 PowerShell 中依次执行：openclaw gateway stop；openclaw gateway start",
   "restart.manualHint.hermes":
-    "请完全退出并重新启动 Hermes。启动后通常需要约 20–30 秒完成初始化，请保持当前页面打开；Memory Viewer 会在初始化完成后自动重连并刷新。",
+    "请完全退出并重新启动 Hermes。重启后请等待 Hermes 自身完成初始化，通常约 20–30 秒。请保持当前页面打开，Memory Viewer 就绪后会自动重连并刷新。",
   "restart.manualCloseHint": "请关闭此提示并完全退出 Hermes，然后重新执行清空数据。",
   "restart.clearComplete": "本地记忆数据已清理。",
   "restart.clearCompleteHint.openclaw": "请启动 OpenClaw，然后重新打开 Memory Viewer。",

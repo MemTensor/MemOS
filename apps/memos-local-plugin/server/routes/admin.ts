@@ -158,8 +158,9 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
           instanceId: options.instanceId,
           message:
             "Configuration saved. Fully quit Hermes, then start it again. " +
-            "Initialization usually takes about 20-30 seconds. Keep this page open; " +
-            "Memory Viewer will reconnect and refresh automatically.",
+            "Wait about 20-30 seconds for Hermes itself to finish initializing. " +
+            "Keep this page open; " +
+            "it will reconnect and refresh automatically when Memory Viewer is ready.",
         };
       }
       const killed = await terminateHermesChat();
