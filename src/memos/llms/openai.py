@@ -2,6 +2,7 @@ import json
 import time
 
 from collections.abc import Generator
+from typing import Any
 
 import openai
 
@@ -17,6 +18,13 @@ from memos.utils import timed_with_status
 
 
 logger = get_logger(__name__)
+
+
+def _merge_enable_thinking(extra_body: Any, enable_thinking: bool | None) -> Any:
+    """Merge provider-specific thinking control into the SDK's extra request body."""
+    if enable_thinking is None:
+        return extra_body
+    return {**(extra_body or {}), "enable_thinking": enable_thinking}
 
 
 class OpenAILLM(BaseLLM):
@@ -62,18 +70,19 @@ class OpenAILLM(BaseLLM):
         return response_content or ""
 
     def _build_request_body(self, messages: MessageList, **kwargs) -> dict:
+        enable_thinking = kwargs.get("enable_thinking", self.config.enable_thinking)
+        extra_body = _merge_enable_thinking(
+            kwargs.get("extra_body", self.config.extra_body), enable_thinking
+        )
         request_body = {
             "model": kwargs.get("model_name_or_path", self.config.model_name_or_path),
             "messages": messages,
             "temperature": kwargs.get("temperature", self.config.temperature),
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
             "top_p": kwargs.get("top_p", self.config.top_p),
-            "extra_body": kwargs.get("extra_body", self.config.extra_body),
+            "extra_body": extra_body,
             "tools": kwargs.get("tools", NOT_GIVEN),
         }
-        enable_thinking = kwargs.get("enable_thinking", self.config.enable_thinking)
-        if enable_thinking is not None:
-            request_body["enable_thinking"] = enable_thinking
         return request_body
 
     @timed_with_status(
@@ -128,20 +137,8 @@ class OpenAILLM(BaseLLM):
             logger.info("stream api not support tools")
             return
 
-        request_body = {
-            "model": self.config.model_name_or_path,
-            "messages": messages,
-            "stream": True,
-            "temperature": kwargs.get("temperature", self.config.temperature),
-            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
-            "top_p": kwargs.get("top_p", self.config.top_p),
-            "extra_body": kwargs.get("extra_body", self.config.extra_body),
-            "tools": kwargs.get("tools", NOT_GIVEN),
-        }
-
-        enable_thinking = kwargs.get("enable_thinking", self.config.enable_thinking)
-        if enable_thinking is not None:
-            request_body["enable_thinking"] = enable_thinking
+        request_body = self._build_request_body(messages, **kwargs)
+        request_body["stream"] = True
 
         logger.info(f"OpenAI LLM Stream Request body: {request_body}")
         response = self.client.chat.completions.create(**request_body)
@@ -195,6 +192,7 @@ class AzureLLM(BaseLLM):
 
     def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from Azure OpenAI LLM."""
+        enable_thinking = kwargs.get("enable_thinking", self.config.enable_thinking)
         request_body = {
             "model": self.config.model_name_or_path,
             "messages": messages,
@@ -202,13 +200,10 @@ class AzureLLM(BaseLLM):
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
             "top_p": kwargs.get("top_p", self.config.top_p),
             "tools": kwargs.get("tools", NOT_GIVEN),
-            "extra_body": kwargs.get("extra_body", self.config.extra_body),
+            "extra_body": _merge_enable_thinking(
+                kwargs.get("extra_body", self.config.extra_body), enable_thinking
+            ),
         }
-        enable_thinking = kwargs.get(
-            "enable_thinking", getattr(self.config, "enable_thinking", None)
-        )
-        if enable_thinking is not None:
-            request_body["enable_thinking"] = enable_thinking
         response = self.client.chat.completions.create(**request_body)
         logger.info(f"Response from Azure OpenAI: {response.model_dump_json()}")
         if not response.choices:
@@ -229,6 +224,7 @@ class AzureLLM(BaseLLM):
             logger.info("stream api not support tools")
             return
 
+        enable_thinking = kwargs.get("enable_thinking", self.config.enable_thinking)
         request_body = {
             "model": self.config.model_name_or_path,
             "messages": messages,
@@ -236,13 +232,10 @@ class AzureLLM(BaseLLM):
             "temperature": kwargs.get("temperature", self.config.temperature),
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
             "top_p": kwargs.get("top_p", self.config.top_p),
-            "extra_body": kwargs.get("extra_body", self.config.extra_body),
+            "extra_body": _merge_enable_thinking(
+                kwargs.get("extra_body", self.config.extra_body), enable_thinking
+            ),
         }
-        enable_thinking = kwargs.get(
-            "enable_thinking", getattr(self.config, "enable_thinking", None)
-        )
-        if enable_thinking is not None:
-            request_body["enable_thinking"] = enable_thinking
         response = self.client.chat.completions.create(**request_body)
 
         reasoning_started = False

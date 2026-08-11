@@ -96,6 +96,12 @@ class AzureLLMConfig(BaseLLMConfig):
         description="API version for Azure OpenAI",
     )
     api_key: str = Field(..., description="API key for Azure OpenAI")
+    extra_body: Any = Field(default=None, description="Extra request body parameters")
+    enable_thinking: bool | None = Field(
+        default=None,
+        description="Enable/disable thinking mode for models that support it. "
+        "When None (default), the provider's default behavior is preserved.",
+    )
 
 
 class AzureResponsesLLMConfig(BaseLLMConfig):
