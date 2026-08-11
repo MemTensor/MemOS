@@ -148,6 +148,8 @@ describe("admin lifecycle routes", () => {
       instanceId: "viewer-old",
       message: expect.not.stringContaining("Stop-Process"),
     });
+    expect((result as { message: string }).message).toContain("20-30 seconds");
+    expect((result as { message: string }).message).toContain("Keep this page open");
     expect(spawnMock).not.toHaveBeenCalled();
     expect(shutdown).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(2_000);

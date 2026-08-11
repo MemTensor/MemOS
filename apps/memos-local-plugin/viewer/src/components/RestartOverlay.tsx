@@ -93,7 +93,7 @@ function overlayMessage(
       return t("restart.clearing");
     case "manualRestartRequired":
       return agentType === "hermes"
-        ? t("restart.manual")
+        ? t("restart.manual.hermes")
         : responseMessage ?? t("restart.manual");
     case "restartFailed":
       return t("restart.failed");
