@@ -6,6 +6,16 @@
 
 import type { ResolvedConfig } from "./schema.js";
 
+const FIXED_VIEWER_PORTS: Readonly<Record<string, number>> = Object.freeze({
+  openclaw: 18799,
+  hermes: 18800,
+});
+
+/** Runtime adapters own these well-known ports even for legacy YAML files. */
+export function effectiveViewerPort(agent?: string): number | undefined {
+  return agent ? FIXED_VIEWER_PORTS[agent] : undefined;
+}
+
 export const DEFAULT_CONFIG: ResolvedConfig = {
   version: 1,
   viewer: {

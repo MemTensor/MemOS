@@ -7,28 +7,21 @@
  * online. Both flows use this full-screen overlay so the user sees the
  * same blocking restart affordance instead of a passive success card.
  */
-import { restartState, dismissRestartBanner } from "../stores/restart";
-import { health } from "../stores/health";
+import {
+  restartState,
+  dismissRestartBanner,
+  resolveRestartAgent,
+  type RestartPhase,
+} from "../stores/restart";
 import { t } from "../stores/i18n";
 import { Icon } from "./Icon";
 
 function FullScreenSpinner() {
   const s = restartState.value;
-  const agentType = health.value?.agent === "openclaw" ? "openclaw" : "hermes";
-
-  const message =
-    s.phase === "restartFailed"
-      ? t("restart.failed")
-      : s.phase === "waitingUp"
-        ? t("restart.waitingUp")
-        : agentType === "hermes"
-          ? t("restart.restarting.hermes")
-          : t("restart.restarting");
-
-  const hint =
-    s.phase === "restartFailed"
-      ? t(`restart.failedHint.${agentType}` as any)
-      : t("restart.autoRefresh");
+  const agentType = resolveRestartAgent();
+  const message = overlayMessage(s.phase, agentType, s.message);
+  const hint = overlayHint(s.phase, agentType);
+  const terminal = isTerminalPhase(s.phase);
 
   return (
     <div
@@ -47,7 +40,7 @@ function FullScreenSpinner() {
           gap:16px;max-width:400px;text-align:center;
         `}
       >
-        {s.phase !== "restartFailed" ? (
+        {!terminal ? (
           <div
             style={`
               width:36px;height:36px;
@@ -62,7 +55,7 @@ function FullScreenSpinner() {
         )}
         <div style="font-size:15px;font-weight:600">{message}</div>
         <div style="font-size:12px;opacity:.6">{hint}</div>
-        {s.phase === "restartFailed" && (
+        {terminal && (
           <button
             class="btn btn--ghost btn--sm"
             onClick={dismissRestartBanner}
@@ -75,6 +68,67 @@ function FullScreenSpinner() {
       <style>{`@keyframes restartSpin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
+}
+
+type AgentType = "openclaw" | "hermes";
+
+function overlayMessage(
+  phase: RestartPhase,
+  agentType: AgentType,
+  responseMessage?: string,
+): string {
+  switch (phase) {
+    case "manualCloseRequired":
+      return t("restart.manualClose");
+    case "manualClearRestartRequired":
+      return t("restart.clearComplete");
+    case "clearFailed":
+      return t("restart.clearFailed");
+    case "clearResultUnknown":
+      return t("restart.clearResultUnknown");
+    case "clearing":
+      return t("restart.clearing");
+    case "manualRestartRequired":
+      return responseMessage ?? t("restart.manual");
+    case "restartFailed":
+      return t("restart.failed");
+    case "waitingUp":
+      return t("restart.waitingUp");
+    default:
+      return agentType === "hermes"
+        ? t("restart.restarting.hermes")
+        : t("restart.restarting");
+  }
+}
+
+function overlayHint(phase: RestartPhase, agentType: AgentType): string {
+  switch (phase) {
+    case "manualCloseRequired":
+      return t("restart.manualCloseHint");
+    case "manualClearRestartRequired":
+      return t(`restart.clearCompleteHint.${agentType}` as any);
+    case "clearFailed":
+      return t(`restart.clearFailedHint.${agentType}` as any);
+    case "clearResultUnknown":
+      return t(`restart.clearResultUnknownHint.${agentType}` as any);
+    case "manualRestartRequired":
+      return t(`restart.manualHint.${agentType}` as any);
+    case "restartFailed":
+      return t(`restart.failedHint.${agentType}` as any);
+    default:
+      return t("restart.autoRefresh");
+  }
+}
+
+function isTerminalPhase(phase: RestartPhase): boolean {
+  return [
+    "restartFailed",
+    "manualRestartRequired",
+    "manualClearRestartRequired",
+    "clearFailed",
+    "clearResultUnknown",
+    "manualCloseRequired",
+  ].includes(phase);
 }
 
 export function RestartOverlay() {

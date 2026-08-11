@@ -218,7 +218,7 @@ export async function bootstrapMemoryCoreFull(
   const home = options.home ?? resolveHome(options.agent);
   const configResult = options.config
     ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
-    : await loadConfig(home);
+    : await loadConfig(home, options.agent);
   const config = configResult.config;
 
   // Standalone daemon: wire the global logger from config (timezone, level,
@@ -588,6 +588,22 @@ export function createMemoryCore(
   let shutDown = false;
   /** Per-episode monotonic step counter for tool outcomes. */
   const toolStepByEpisode = new Map<string, number>();
+  // `handle.onTurnStart` is idempotent for a host-provided turnKey, but this
+  // facade still performs its own post-processing and api_logs write around
+  // that call. Keep only the latest successful/logged key per session so an
+  // adapter retry cannot create a second memos_search row for the same turn.
+  const turnStartApiLogBySession = new Map<
+    string,
+    { turnKey: string; userText: string }
+  >();
+  const disposeTurnStartApiLogSessionListener = handle.buses.session.on(
+    "session.closed",
+    (event) => {
+      if (event.kind === "session.closed") {
+        turnStartApiLogBySession.delete(event.sessionId);
+      }
+    },
+  );
   let hubRuntime: HubRuntime | null = null;
   let hubRuntimeConfig: ResolvedConfig = handle.config;
   const skillStartedAtByPolicy = new Map<string, number>();
@@ -1930,6 +1946,8 @@ export function createMemoryCore(
       }
       await handle.shutdown("memory-core.shutdown");
     } finally {
+      disposeTurnStartApiLogSessionListener();
+      turnStartApiLogBySession.clear();
       if (telemetry) {
         await telemetry.shutdown();
       }
@@ -1945,7 +1963,7 @@ export function createMemoryCore(
     let diskConfig: ResolvedConfig | null = null;
     try {
       const { loadConfig } = await import("../config/index.js");
-      const { config } = await loadConfig(handle.home);
+      const { config } = await loadConfig(handle.home, handle.agent);
       diskConfig = config;
     } catch {
       /* fall through to in-memory */
@@ -2050,6 +2068,7 @@ export function createMemoryCore(
       );
     }
     handle.sessionManager.closeSession(sessionId, "client");
+    turnStartApiLogBySession.delete(sessionId);
     try {
       await handle.flush();
     } catch (err) {
@@ -2115,8 +2134,23 @@ export function createMemoryCore(
     turn: Parameters<MemoryCore["onTurnStart"]>[0],
   ): Promise<RetrievalResultDTO> {
     ensureLive();
+    const turnKey = turn.turnKey?.trim();
+    let shouldWriteApiLog = true;
+    let apiLogClaim: { turnKey: string; userText: string } | null = null;
+    if (turnKey) {
+      const existing = turnStartApiLogBySession.get(turn.sessionId);
+      if (existing?.turnKey === turnKey) {
+        // The orchestrator will reject a reused key with different text. Keep
+        // that genuine conflict observable while suppressing exact replays.
+        shouldWriteApiLog = existing.userText !== turn.userText;
+      } else {
+        apiLogClaim = { turnKey, userText: turn.userText };
+        turnStartApiLogBySession.set(turn.sessionId, apiLogClaim);
+      }
+    }
     const startedAt = Date.now();
     let ok = true;
+    let apiLogWritten = false;
     let packet: Awaited<ReturnType<typeof handle.onTurnStart>> | null = null;
     let hubCandidates: Array<{
       tier: number;
@@ -2218,48 +2252,60 @@ export function createMemoryCore(
       // each real agent turn. Without this, `memos_search` rows
       // only showed up when the viewer's search box was used.
       try {
-        const localStages = buildLocalRetrievalLogStages(packet);
-        const filtered = hubCandidates.length > 0
-          ? finalFilteredCandidates
-          : localStages.filtered;
-        const dropped = hubCandidates.length > 0
-          ? [...localStages.dropped, ...finalDroppedCandidates]
-          : localStages.dropped;
-        const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
-        handle.repos.apiLogs.insert({
-          toolName: "memos_search",
-          input: {
-            type: "turn_start",
-            agent: turn.agent,
-            query: turn.userText.slice(0, 2_000),
-            sessionId: packet?.sessionId ?? turn.sessionId ?? null,
-            episodeId: packet?.episodeId ?? turn.episodeId ?? null,
-          },
-          output: ok
-            ? {
-                candidates: localStages.candidates,
-                hubCandidates,
-                filtered,
-                droppedByLlm: dropped,
-                stats: stats
-                  ? withHubStats(
-                      retrievalStatsPayload(stats),
-                      hubCandidates.length,
-                      filtered.length,
-                      finalHubKept,
-                      finalFilterStats,
-                    )
-                  : undefined,
-              }
-            : { error: "turn_start_retrieval_failed" },
-          durationMs: Date.now() - startedAt,
-          success: ok,
-          calledAt: startedAt,
-        });
+        if (shouldWriteApiLog) {
+          const localStages = buildLocalRetrievalLogStages(packet);
+          const filtered = hubCandidates.length > 0
+            ? finalFilteredCandidates
+            : localStages.filtered;
+          const dropped = hubCandidates.length > 0
+            ? [...localStages.dropped, ...finalDroppedCandidates]
+            : localStages.dropped;
+          const stats = packet ? handle.consumeRetrievalStats(packet.packetId) : null;
+          handle.repos.apiLogs.insert({
+            toolName: "memos_search",
+            input: {
+              type: "turn_start",
+              agent: turn.agent,
+              query: turn.userText.slice(0, 2_000),
+              sessionId: packet?.sessionId ?? turn.sessionId ?? null,
+              episodeId: packet?.episodeId ?? turn.episodeId ?? null,
+            },
+            output: ok
+              ? {
+                  candidates: localStages.candidates,
+                  hubCandidates,
+                  filtered,
+                  droppedByLlm: dropped,
+                  stats: stats
+                    ? withHubStats(
+                        retrievalStatsPayload(stats),
+                        hubCandidates.length,
+                        filtered.length,
+                        finalHubKept,
+                        finalFilterStats,
+                      )
+                    : undefined,
+                }
+              : { error: "turn_start_retrieval_failed" },
+            durationMs: Date.now() - startedAt,
+            success: ok,
+            calledAt: startedAt,
+          });
+          apiLogWritten = true;
+        }
       } catch (logErr) {
         log.debug("apiLogs.memos_search.turn_start.skipped", {
           err: logErr instanceof Error ? logErr.message : String(logErr),
         });
+      }
+      if (
+        apiLogClaim
+        && turnStartApiLogBySession.get(turn.sessionId) === apiLogClaim
+        && (!ok || !apiLogWritten)
+      ) {
+        // A terminal retrieval failure must remain retryable. Likewise, if
+        // persistence itself failed, let a later replay make another attempt.
+        turnStartApiLogBySession.delete(turn.sessionId);
       }
       if (telemetry && ok) {
         telemetry.trackTurnStart(
@@ -4804,7 +4850,7 @@ export function createMemoryCore(
     // the cached snapshot so settings never appear blank mid-edit.
     try {
       const { loadConfig } = await import("../config/index.js");
-      const { config } = await loadConfig(handle.home);
+      const { config } = await loadConfig(handle.home, handle.agent);
       return maskSecrets(config as unknown as Record<string, unknown>);
     } catch (err) {
       log.warn("config.read_from_disk_failed", {
@@ -4822,7 +4868,7 @@ export function createMemoryCore(
     // Drop blank strings on secret fields so the user can leave them
     // empty in the UI without wiping their existing value.
     const filtered = stripEmptySecrets(patch);
-    const result = await applyPatch(handle.home, filtered);
+    const result = await applyPatch(handle.home, filtered, handle.agent);
     if (patchTouchesHub(filtered)) {
       await restartHubRuntime(result.config);
     }
