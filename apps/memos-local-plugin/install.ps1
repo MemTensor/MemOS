@@ -60,6 +60,37 @@ function Test-BetterSqlite3 {
     }
 }
 
+function Resolve-HermesHostHome {
+    $ConfiguredHome = $env:HERMES_HOME
+    if ($ConfiguredHome -and $ConfiguredHome.Trim()) {
+        $Candidate = [Environment]::ExpandEnvironmentVariables($ConfiguredHome.Trim())
+        if ($Candidate -eq "~") {
+            if (-not $env:USERPROFILE -or -not $env:USERPROFILE.Trim()) {
+                Stop-Die "HERMES_HOME uses '~', but USERPROFILE is not set."
+            }
+            $UserProfile = $env:USERPROFILE.Trim()
+            $Candidate = $UserProfile
+        } elseif ($Candidate.StartsWith("~\") -or $Candidate.StartsWith("~/")) {
+            if (-not $env:USERPROFILE -or -not $env:USERPROFILE.Trim()) {
+                Stop-Die "HERMES_HOME uses '~', but USERPROFILE is not set."
+            }
+            $UserProfile = $env:USERPROFILE.Trim()
+            $RelativeHome = $Candidate.Substring(2)
+            $Candidate = Join-Path $UserProfile $RelativeHome
+        }
+        if (-not [IO.Path]::IsPathRooted($Candidate)) {
+            Stop-Die "HERMES_HOME must be an absolute path: $ConfiguredHome"
+        }
+        return [IO.Path]::GetFullPath($Candidate)
+    }
+
+    if (-not $env:LOCALAPPDATA -or -not $env:LOCALAPPDATA.Trim()) {
+        Stop-Die "LOCALAPPDATA is not set; set HERMES_HOME to the Hermes data directory."
+    }
+    $LocalAppData = $env:LOCALAPPDATA.Trim()
+    return [IO.Path]::GetFullPath((Join-Path $LocalAppData "hermes"))
+}
+
 $PluginId = "memos-local-plugin"
 $NpmPackage = "@memtensor/memos-local-plugin"
 $OpenClawPort = 18799
@@ -82,14 +113,18 @@ try {
 }
 
 # Agent detection
+$HermesHome = Resolve-HermesHostHome
+# Keep every child process on the same normalized host-data directory. This is
+# process-scoped and does not overwrite the user's persisted environment.
+$env:HERMES_HOME = $HermesHome
 $HasOpenClaw = Test-Path "$env:USERPROFILE\.openclaw"
-$HasHermes = Test-Path "$env:LOCALAPPDATA\hermes"
+$HasHermes = Test-Path $HermesHome
 
 Write-Host "`n  Detected agents:" -ForegroundColor White
 if ($HasOpenClaw) { Write-Host "    - OpenClaw   (~/.openclaw)" -ForegroundColor Green }
 else { Write-Host "    - OpenClaw   (not installed)" -ForegroundColor DarkGray }
 
-if ($HasHermes) { Write-Host "    - Hermes     (~/AppData/Local/hermes)" -ForegroundColor Green }
+if ($HasHermes) { Write-Host "    - Hermes     ($HermesHome)" -ForegroundColor Green }
 else { Write-Host "    - Hermes     (not installed)" -ForegroundColor DarkGray }
 
 Write-Host "`n  Install into which agent?"
@@ -113,7 +148,7 @@ switch ($Choice) {
 }
 
 if ($AgentSelection -eq "auto") {
-    if (-not $HasOpenClaw -and -not $HasHermes) { Stop-Die "Neither ~/.openclaw nor ~/AppData/Local/hermes exists. Install one first." }
+    if (-not $HasOpenClaw -and -not $HasHermes) { Stop-Die "Neither ~/.openclaw nor Hermes home ($HermesHome) exists. Install one first." }
     if ($HasOpenClaw -and $HasHermes) { $AgentSelection = "all" }
     elseif ($HasOpenClaw) { $AgentSelection = "openclaw" }
     else { $AgentSelection = "hermes" }
@@ -609,10 +644,12 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 
 function Install-Hermes {
     Write-Host "`n=== Hermes Install ===" -ForegroundColor Cyan
+    # MemOS package/runtime files remain in the canonical LocalAppData install
+    # root. Hermes host data below follows HERMES_HOME and may live elsewhere.
     $Prefix = Join-Path $env:LOCALAPPDATA "hermes\memos-plugin"
     $RuntimeSelection = Resolve-HermesRuntimeHome -InstallRoot $Prefix
     $HomeDir = $RuntimeSelection.Path
-    $ConfigFile = Join-Path $env:LOCALAPPDATA "hermes\config.yaml"
+    $ConfigFile = Join-Path $HermesHome "config.yaml"
     $AdapterDir = Join-Path $Prefix "adapters\hermes"
     
     Deploy-Tarball -Prefix $Prefix -BeforeSwap {
@@ -664,7 +701,7 @@ function Install-Hermes {
         Write-Warning "plugin.yaml copy may have failed; verify $AdapterDir\memos_provider\plugin.yaml exists."
     }
 
-    $UserPluginDir = Join-Path $env:LOCALAPPDATA "hermes\plugins\memory"
+    $UserPluginDir = Join-Path $HermesHome "plugins\memory"
     New-Item -ItemType Directory -Path $UserPluginDir -Force | Out-Null
     Write-Host "Ensuring user plugin dir: $UserPluginDir"
     $ProviderTargets = @(

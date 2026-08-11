@@ -779,7 +779,7 @@ const en = {
   "import.migrate.notFound": "No legacy database found.",
   "import.hermes.title": "Import Hermes native memories",
   "import.hermes.desc":
-    "Read ~/.hermes/memories/MEMORY.md and import each entry separated by a single § line into this memory plugin.",
+    "Read memories/MEMORY.md from the current Hermes home and import each entry separated by a single § line into this memory plugin.",
   "import.hermes.scan": "Scan native memory file",
   "import.hermes.run": "Import native memories",
   "import.hermes.stop": "Stop import",
@@ -1645,7 +1645,7 @@ const zh: Record<TranslationKey, string> = {
   "import.migrate.notFound": "没有找到旧数据库。",
   "import.hermes.title": "导入 Hermes 原生记忆",
   "import.hermes.desc":
-    "读取 ~/.hermes/memories/MEMORY.md，并把用单独一行 § 分隔的每条记忆导入当前记忆插件。",
+    "读取当前 Hermes 主目录下的 memories/MEMORY.md，并把用单独一行 § 分隔的每条记忆导入当前记忆插件。",
   "import.hermes.scan": "扫描原生记忆文件",
   "import.hermes.run": "导入原生记忆",
   "import.hermes.stop": "停止导入",
