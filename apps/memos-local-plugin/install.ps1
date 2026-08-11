@@ -237,6 +237,8 @@ function Deploy-Tarball {
         }
         Write-Success "Package extracted"
         Write-Success "Dependencies ready"
+        Write-Warn "Local MiniLM model weights are not bundled."
+        Write-Host "       If embedding.provider is local, the first Viewer test or use downloads about 23 MB from Hugging Face."
         $DeploySucceeded = $true
     } catch {
         $DeployError = $_

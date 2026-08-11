@@ -856,7 +856,7 @@ const en = {
   "settings.tab.general": "General",
   "settings.warn.title": "Model configuration",
   "settings.warn.emb":
-    "The bundled embedder is small. For better recall we recommend a dedicated model (e.g. bge-m3).",
+    "The default local embedder is small and downloads on first use. For better recall we recommend a dedicated model (e.g. bge-m3).",
   "settings.warn.sum":
     "Summarizer is required — without it, task summaries and scoring fall back to crude heuristics.",
   "settings.warn.skill":
@@ -869,7 +869,7 @@ const en = {
   "settings.embedding.title": "Embedding",
   "settings.embedding.desc": "Vector embedding model used by retrieval and deduplication.",
   "settings.embedding.localHint":
-    "Currently using built-in MiniLM-L6-v2 (384-dim, ~23 MB). Select another provider for better retrieval accuracy.",
+    "The local MiniLM-L6-v2 model runs on-device (384-dim); the first test or use downloads about 23 MB from Hugging Face. The Test button downloads and verifies it. Select another provider for better retrieval accuracy.",
   "settings.embedding.maintenance.title": "Embedding maintenance",
   "settings.embedding.maintenance.stats":
     "Ready {ready}/{total}; missing {missing}; dimension mismatch {mismatch}; current dim {dim}.",
@@ -1715,7 +1715,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.tab.hub": "团队分享",
   "settings.tab.general": "通用",
   "settings.warn.title": "模型配置提醒",
-  "settings.warn.emb": "插件内置嵌入模型较小。为获得更精准的记忆检索，建议配置 bge-m3 等专业嵌入模型。",
+  "settings.warn.emb": "默认本地嵌入模型较小，权重需在首次使用时下载。为获得更精准的记忆检索，建议配置 bge-m3 等专业嵌入模型。",
   "settings.warn.sum": "摘要模型为必填。若不配置，反思与奖励信号只能走粗糙启发式。",
   "settings.warn.skill": "技能诱导建议配置更强的推理模型以提升稳定性。",
   "settings.provider": "提供商",
@@ -1726,7 +1726,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.embedding.title": "嵌入模型",
   "settings.embedding.desc": "用于记忆检索与去重的向量嵌入模型。",
   "settings.embedding.localHint":
-    "当前使用内置 MiniLM-L6-v2（384 维，约 23 MB）。选择其他 Provider 可获得更精准的检索效果。",
+    "本地 MiniLM-L6-v2 在设备上运行（384 维）；首次测试或使用时需从 Hugging Face 下载约 23 MB。“测试”按钮会下载并验证模型。选择其他 Provider 可获得更精准的检索效果。",
   "settings.embedding.maintenance.title": "向量维护",
   "settings.embedding.maintenance.stats":
     "可用 {ready}/{total}；缺失 {missing}；维度不匹配 {mismatch}；当前维度 {dim}。",
