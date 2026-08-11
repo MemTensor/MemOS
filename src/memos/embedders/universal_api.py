@@ -1,7 +1,7 @@
-import asyncio
 import os
 
 from openai import AzureOpenAI as AzureClient
+from openai import BadRequestError
 from openai import OpenAI as OpenAIClient
 
 from memos.configs.embedder import UniversalAPIEmbedderConfig
@@ -63,6 +63,21 @@ class UniversalAPIEmbedder(BaseEmbedder):
             kwargs["dimensions"] = embedding_dims
         return kwargs
 
+    @staticmethod
+    def _is_dimensions_unsupported(error: BadRequestError) -> bool:
+        message = str(error).lower()
+        unsupported_markers = (
+            "dimensions is not supported",
+            "dimensions not supported",
+            "does not support dimensions",
+            "unsupported parameter: dimensions",
+            "unknown parameter: dimensions",
+            "does not support matryoshka",
+            "changing output dimensions is unsupported",
+            "changing output dimensions will lead",
+        )
+        return any(marker in message for marker in unsupported_markers)
+
     def _call_embeddings_api(
         self, client, model: str, texts: list[str], timeout: int
     ) -> list[list[float]]:
@@ -70,30 +85,19 @@ class UniversalAPIEmbedder(BaseEmbedder):
         kwargs = self._build_embedding_kwargs(model, texts, embedding_dims)
 
         try:
-            response = asyncio.run(
-                asyncio.wait_for(
-                    client.embeddings.create(**kwargs),
-                    timeout=timeout,
-                )
+            response = client.embeddings.create(**kwargs, timeout=timeout)
+        except BadRequestError as error:
+            if embedding_dims is None or not self._is_dimensions_unsupported(error):
+                raise
+
+            logger.warning(
+                "Embedding provider rejected dimensions=%d; retrying without dimensions",
+                embedding_dims,
             )
-            return [r.embedding for r in response.data]
-        except Exception as e:
-            if embedding_dims is not None:
-                logger.warning(
-                    "Embeddings request with dimensions=%d failed error_type=%s; "
-                    "retrying without dimensions",
-                    embedding_dims,
-                    type(e).__name__,
-                )
-                fallback_kwargs = self._build_embedding_kwargs(model, texts, None)
-                response = asyncio.run(
-                    asyncio.wait_for(
-                        client.embeddings.create(**fallback_kwargs),
-                        timeout=timeout,
-                    )
-                )
-                return [r.embedding for r in response.data]
-            raise
+            fallback_kwargs = self._build_embedding_kwargs(model, texts, None)
+            response = client.embeddings.create(**fallback_kwargs, timeout=timeout)
+
+        return [item.embedding for item in response.data]
 
     @log_embedding_call
     def embed(self, texts: list[str]) -> list[list[float]]:
