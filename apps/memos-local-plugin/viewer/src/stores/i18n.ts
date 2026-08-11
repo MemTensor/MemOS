@@ -187,7 +187,8 @@ const en = {
   "restart.manualClose": "Hermes is still connected.",
   "restart.manualHint.openclaw":
     "Run in PowerShell: openclaw gateway stop; then openclaw gateway start.",
-  "restart.manualHint.hermes": "Close Hermes, start it again, then reopen the Memory Viewer.",
+  "restart.manualHint.hermes":
+    "Fully quit Hermes, then start it again. Memory Viewer will reconnect and refresh this page automatically.",
   "restart.manualCloseHint": "Close this message, fully exit Hermes, then retry clearing data.",
   "restart.clearComplete": "Local memory data has been cleared.",
   "restart.clearCompleteHint.openclaw": "Start OpenClaw, then reopen the Memory Viewer.",
@@ -1102,7 +1103,8 @@ const zh: Record<TranslationKey, string> = {
   "restart.manualClose": "Hermes 仍处于连接状态。",
   "restart.manualHint.openclaw":
     "请在 PowerShell 中依次执行：openclaw gateway stop；openclaw gateway start",
-  "restart.manualHint.hermes": "请关闭 Hermes，重新启动后再打开 Memory Viewer。",
+  "restart.manualHint.hermes":
+    "请完全退出 Hermes，然后重新启动。Memory Viewer 会自动重连并刷新当前页面。",
   "restart.manualCloseHint": "请关闭此提示并完全退出 Hermes，然后重新执行清空数据。",
   "restart.clearComplete": "本地记忆数据已清理。",
   "restart.clearCompleteHint.openclaw": "请启动 OpenClaw，然后重新打开 Memory Viewer。",

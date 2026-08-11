@@ -30,6 +30,7 @@ interface RestartResponse {
   restarting?: boolean;
   manualRestartRequired?: boolean;
   platform?: string;
+  instanceId?: string;
   message?: string;
 }
 
@@ -105,6 +106,34 @@ async function quickPollUp(maxAttempts = 30): Promise<boolean> {
   return false;
 }
 
+/** Wait for a different Viewer process, not merely another 200 response. */
+async function pollHealthUntilReplaced(
+  previousInstanceId: string | undefined,
+  maxAttempts = 120,
+): Promise<boolean> {
+  let observedDown = false;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise((r) => setTimeout(r, 1_000));
+    try {
+      const payload = await api.get<{ instanceId?: string }>("/api/v1/health");
+      if (
+        previousInstanceId &&
+        payload.instanceId &&
+        payload.instanceId !== previousInstanceId
+      ) {
+        return true;
+      }
+      // Compatibility with an older replacement daemon that does not yet
+      // expose instanceId: require a witnessed outage before accepting it.
+      if (!previousInstanceId && observedDown) return true;
+    } catch {
+      observedDown = true;
+      restartState.value = { phase: "waitingUp" };
+    }
+  }
+  return false;
+}
+
 /**
  * Config saved. OpenClaw gets an in-place gateway restart. Hermes
  * replaces its viewer daemon and terminates the active chat process.
@@ -124,7 +153,14 @@ export async function triggerRestart(): Promise<void> {
           phase: "manualRestartRequired",
           message: response.message,
         };
-        return;
+        const replaced = await pollHealthUntilReplaced(response.instanceId);
+        if (replaced) {
+          window.location.href =
+            window.location.pathname + "?_t=" + Date.now();
+          return;
+        }
+        restartState.value = { phase: "restartFailed" };
+        throw new Error("restart did not complete");
       }
     } catch {
       restartState.value = { phase: "restartFailed" };

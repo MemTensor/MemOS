@@ -115,7 +115,7 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     return { ok: true, restarting: true, killedHermes };
   });
 
-  routes.set("POST /api/v1/admin/restart", async (_ctx) => {
+  routes.set("POST /api/v1/admin/restart", async (ctx) => {
     const agent = options.agent ?? "unknown";
     if (agent === "openclaw") {
       const platform = options.lifecycle?.platform ?? process.platform;
@@ -137,14 +137,28 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
     if (agent === "hermes") {
       const platform = options.lifecycle?.platform ?? process.platform;
       if (platform === "win32") {
+        // Drain SQLite/background work before the process exits. Windows does
+        // not deliver POSIX SIGTERM semantics reliably, so do not depend on a
+        // signal handler for graceful core shutdown here.
+        try {
+          await deps.core.shutdown();
+        } catch {
+          // The process still needs to exit so the next Hermes launch can
+          // replace it with a config-fresh Viewer.
+        }
+        // The browser already has the manual handoff instructions by the time
+        // this response flushes. Stop the old Viewer afterwards so starting
+        // Hermes creates a genuinely fresh daemon with the saved config.
+        scheduleWindowsShutdownAfterResponse(ctx.res, options);
         return {
           ok: true,
           restarting: false,
           manualRestartRequired: true,
           platform,
+          instanceId: options.instanceId,
           message:
-            `Configuration saved. Close Hermes, run Stop-Process -Id ${process.pid} ` +
-            "in PowerShell to stop Memory Viewer, then start Hermes again.",
+            "Configuration saved. Close Hermes completely, then start Hermes again. " +
+            "Memory Viewer will reconnect automatically.",
         };
       }
       const killed = await terminateHermesChat();

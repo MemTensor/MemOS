@@ -122,30 +122,43 @@ describe("admin lifecycle routes", () => {
     expect(requestShutdown).toHaveBeenCalledOnce();
   });
 
-  it("keeps an unsupervised Windows Hermes viewer alive for manual restart", async () => {
+  it("shuts down a Windows Hermes viewer after returning restart instructions", async () => {
     const requestShutdown = vi.fn();
+    const shutdown = vi.fn().mockResolvedValue(undefined);
     const routes = new Routes();
+    const res = makeResponse();
     registerAdminRoutes(
       routes,
-      { core: {} as MemoryCore },
+      { core: { shutdown } as unknown as MemoryCore },
       {
         agent: "hermes",
+        instanceId: "viewer-old",
         lifecycle: { supervised: false, platform: "win32", requestShutdown },
       },
     );
 
     const restart = routes.getExact("POST /api/v1/admin/restart");
-    const result = await restart!({} as never);
+    const result = await restart!({ res } as never);
 
     expect(result).toMatchObject({
       ok: true,
       restarting: false,
       manualRestartRequired: true,
       platform: "win32",
+      instanceId: "viewer-old",
+      message: expect.not.stringContaining("Stop-Process"),
     });
     expect(spawnMock).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(500);
+    expect(shutdown).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(requestShutdown).not.toHaveBeenCalled();
+
+    res.writableFinished = true;
+    res.emit("finish");
+    await vi.advanceTimersByTimeAsync(299);
+    expect(requestShutdown).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestShutdown).toHaveBeenCalledOnce();
   });
 
   it("keeps Windows OpenClaw alive and returns manual gateway restart instructions", async () => {

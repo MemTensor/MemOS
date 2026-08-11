@@ -235,7 +235,11 @@ describe("HTTP server — REST routes", () => {
     const r = await fetch(`${handle.url}/api/v1/health`);
     expect(r.status).toBe(200);
     const body = await r.json();
-    expect(body).toMatchObject({ ok: true, version: "test" });
+    expect(body).toMatchObject({
+      ok: true,
+      version: "test",
+      instanceId: expect.any(String),
+    });
     expect(core.health).toHaveBeenCalled();
   });
 
