@@ -314,6 +314,105 @@ describe("storage/repos — happy paths", () => {
     }
   });
 
+  it("skills: selects idle archive candidates and excludes a skill after recorded use", () => {
+    const { db, repos, cleanup } = makeTmpDb();
+    try {
+      const insertSkill = (
+        id: string,
+        status: "active" | "archived",
+        eta: number,
+        createdAt: number,
+        lastUsedAt: number | null,
+      ) => {
+        repos.skills.insert({
+          id,
+          name: id,
+          status,
+          invocationGuide: "fixture",
+          procedureJson: null,
+          eta,
+          support: 1,
+          gain: 0,
+          trialsAttempted: 0,
+          trialsPassed: 0,
+          sourcePolicyIds: [],
+          sourceWorldModelIds: [],
+          evidenceAnchors: [],
+          vec: null,
+          createdAt,
+          updatedAt: 10_000,
+          lastUsedAt,
+          version: 1,
+        });
+      };
+      insertSkill("never_used", "active", 0.05, 50, null);
+      insertSkill("old_used", "active", 0.05, 1, 100);
+      insertSkill("recent", "active", 0.05, 1, 9_500);
+      insertSkill("retrievable", "active", 0.1, 1, 100);
+      insertSkill("already_archived", "archived", 0.05, 1, 100);
+
+      const candidates = repos.skills.listIdleArchiveCandidates({
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        limit: 500,
+      });
+      expect(candidates.map((skill) => skill.id)).toEqual(["never_used", "old_used"]);
+      expect(repos.skills.listIdleArchiveCandidates({
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        limit: 1,
+      }).map((skill) => skill.id)).toEqual(["never_used"]);
+
+      expect(repos.skills.recordUse("old_used", 9_500)).toBe(true);
+      expect(repos.skills.getById("old_used")?.lastUsedAt).toBe(9_500);
+      expect(
+        repos.skills.archiveIdleBatch(["old_used"], {
+          minEtaForRetrieval: 0.1,
+          cutoff: 9_000,
+          updatedAt: 10_000,
+        }),
+      ).toEqual([]);
+      expect(repos.skills.getById("old_used")?.status).toBe("active");
+      expect(repos.skills.listIdleArchiveCandidates({
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        limit: 500,
+      }).map((skill) => skill.id)).toEqual(["never_used"]);
+      expect(
+        repos.skills.archiveIdleBatch(["never_used"], {
+          minEtaForRetrieval: 0.1,
+          cutoff: 9_000,
+          updatedAt: 10_000,
+        }),
+      ).toEqual(["never_used"]);
+      expect(repos.skills.getById("never_used")?.status).toBe("archived");
+
+      insertSkill("rollback_first", "active", 0.05, 1, 100);
+      insertSkill("rollback_fail", "active", 0.05, 1, 100);
+      db.exec(`
+        CREATE TRIGGER reject_idle_archive
+        BEFORE UPDATE OF status ON skills
+        WHEN OLD.id = 'rollback_fail' AND NEW.status = 'archived'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced archive failure');
+        END`);
+      expect(() =>
+        repos.skills.archiveIdleBatch(
+          ["rollback_first", "rollback_fail"],
+          {
+            minEtaForRetrieval: 0.1,
+            cutoff: 9_000,
+            updatedAt: 10_000,
+          },
+        ),
+      ).toThrow(/forced archive failure/);
+      expect(repos.skills.getById("rollback_first")?.status).toBe("active");
+      expect(repos.skills.getById("rollback_fail")?.status).toBe("active");
+    } finally {
+      cleanup();
+    }
+  });
+
   it("feedback: insert, scoped list, polarity filter", () => {
     const { repos, cleanup } = makeTmpDb();
     try {

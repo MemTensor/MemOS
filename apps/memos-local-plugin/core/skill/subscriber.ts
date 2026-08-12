@@ -35,6 +35,10 @@ import type {
 } from "./types.js";
 import type { SkillId } from "../types.js";
 import { now as nowMs } from "../time.js";
+import { IDLE_ARCHIVE_BATCH_LIMIT } from "../storage/repos/skills.js";
+
+/** Bound one lifecycle pass to 5,000 archival writes. */
+const IDLE_ARCHIVE_MAX_BATCHES_PER_TICK = 10;
 
 export interface SkillSubscriberDeps
   extends Omit<RunSkillDeps, "log" | "bus"> {
@@ -210,12 +214,12 @@ export function attachSkillSubscriber(
     }
   }
 
-  /** Periodic lifecycle pass: promote eligible candidate skills to active. */
+  /** Promote eligible candidates and archive stale low-η active skills. */
   async function lifecycleTick(): Promise<void> {
+    const at = nowMs();
     const candidates = deps.repos.skills.list({ status: "candidate", limit: 500 });
     for (const s of candidates) {
       if (!shouldPromoteCandidate(s, deps.config)) continue;
-      const at = nowMs();
       deps.repos.skills.setStatus(s.id, "active", at);
       log.info("skill.auto_promoted", { skillId: s.id, name: s.name, eta: s.eta });
       deps.bus.emit({
@@ -226,6 +230,67 @@ export function attachSkillSubscriber(
         next: "active",
         transition: "promoted",
       });
+    }
+
+    const cutoff = at - deps.config.idleArchiveMs;
+    let batchesProcessed = 0;
+    let archivedTotal = 0;
+    while (batchesProcessed < IDLE_ARCHIVE_MAX_BATCHES_PER_TICK) {
+      const archiveCandidates = deps.repos.skills.listIdleArchiveCandidates({
+        minEtaForRetrieval: deps.config.minEtaForRetrieval,
+        cutoff,
+        limit: IDLE_ARCHIVE_BATCH_LIMIT,
+      });
+      batchesProcessed += 1;
+      const archivedIds = new Set(
+        deps.repos.skills.archiveIdleBatch(
+          archiveCandidates.map((skill) => skill.id),
+          {
+            minEtaForRetrieval: deps.config.minEtaForRetrieval,
+            cutoff,
+            updatedAt: at,
+          },
+        ),
+      );
+      const archivedThisBatch = archivedIds.size;
+      archivedTotal += archivedThisBatch;
+      for (const s of archiveCandidates) {
+        if (!archivedIds.has(s.id)) continue;
+        log.info("skill.idle_archived", {
+          skillId: s.id,
+          name: s.name,
+          eta: s.eta,
+          lastUsedAt: s.lastUsedAt ?? null,
+          idleArchiveMs: deps.config.idleArchiveMs,
+        });
+        deps.bus.emit({
+          kind: "skill.status.changed",
+          at,
+          skillId: s.id,
+          previous: "active",
+          next: "archived",
+          transition: "archived",
+        });
+      }
+      if (archiveCandidates.length > 0 && archivedThisBatch === 0) {
+        // A full zero-change batch was invalidated by concurrent writers.
+        // Re-query so later eligible rows are not abandoned for this tick.
+        log.warn("skill.idle_archive_stalled", {
+          candidateCount: archiveCandidates.length,
+          cutoff,
+          minEtaForRetrieval: deps.config.minEtaForRetrieval,
+        });
+        if (archiveCandidates.length < IDLE_ARCHIVE_BATCH_LIMIT) break;
+        continue;
+      }
+      if (archiveCandidates.length < IDLE_ARCHIVE_BATCH_LIMIT) break;
+      if (batchesProcessed === IDLE_ARCHIVE_MAX_BATCHES_PER_TICK) {
+        log.warn("skill.idle_archive_batch_limit_reached", {
+          batchCount: batchesProcessed,
+          archivedCount: archivedTotal,
+          batchSize: IDLE_ARCHIVE_BATCH_LIMIT,
+        });
+      }
     }
   }
 
