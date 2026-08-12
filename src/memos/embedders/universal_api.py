@@ -65,7 +65,20 @@ class UniversalAPIEmbedder(BaseEmbedder):
 
     @staticmethod
     def _is_dimensions_unsupported(error: BadRequestError) -> bool:
-        message = str(error).lower()
+        body = getattr(error, "body", None)
+        details = body.get("error", body) if isinstance(body, dict) else {}
+        if isinstance(details, dict):
+            param = str(details.get("param") or "").lower()
+            code = str(details.get("code") or "").lower()
+            if param == "dimensions" and any(
+                marker in code for marker in ("unsupported", "unknown", "unrecognized")
+            ):
+                return True
+
+        messages = [str(error)]
+        if isinstance(details, dict) and isinstance(details.get("message"), str):
+            messages.append(details["message"])
+        message = " ".join(messages).lower()
         unsupported_markers = (
             "dimensions is not supported",
             "dimensions not supported",

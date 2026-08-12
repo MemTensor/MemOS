@@ -33,10 +33,17 @@ def _mock_embedding_response(vectors_per_text=1, dims=2):
     return response
 
 
-def _bad_request_error(message: str) -> BadRequestError:
+def _bad_request_error(
+    message: str, *, param: str | None = None, code: str | None = None
+) -> BadRequestError:
     request = httpx.Request("POST", "https://api.example.com/v1/embeddings")
     response = httpx.Response(400, request=request)
-    return BadRequestError(message, response=response, body={"error": {"message": message}})
+    details = {"message": message}
+    if param is not None:
+        details["param"] = param
+    if code is not None:
+        details["code"] = code
+    return BadRequestError(message, response=response, body={"error": details})
 
 
 class TestUniversalAPIEmbedderDimensions:
@@ -62,6 +69,16 @@ class TestUniversalAPIEmbedderDimensions:
             "text-embedding-3-large", ["hello"], 0
         )
         assert kwargs["dimensions"] == 0
+
+    def test_api_config_maps_embedding_dimension(self, monkeypatch):
+        from memos.api.config import APIConfig
+
+        monkeypatch.setenv("MOS_EMBEDDER_BACKEND", "universal_api")
+        monkeypatch.setenv("EMBEDDING_DIMENSION", "1536")
+
+        config = APIConfig.get_embedder_config()
+
+        assert config["config"]["embedding_dims"] == 1536
 
     @patch("memos.embedders.universal_api.OpenAIClient")
     def test_embed_passes_embedding_dims_to_api(self, mock_openai_client):
@@ -157,6 +174,28 @@ class TestUniversalAPIEmbedderFallback:
         assert all(call.kwargs["timeout"] == 5 for call in mock_create.call_args_list)
         assert result == [[0.1, 0.2]]
 
+    def test_call_embeddings_api_falls_back_on_structured_dimensions_error(self):
+        config = _make_config(embedding_dims=256)
+        embedder = UniversalAPIEmbedder(config)
+        ok_response = SimpleNamespace(data=[SimpleNamespace(embedding=[0.1, 0.2])])
+        mock_create = MagicMock(
+            side_effect=[
+                _bad_request_error(
+                    "Bad request",
+                    param="dimensions",
+                    code="unsupported_parameter",
+                ),
+                ok_response,
+            ]
+        )
+        mock_client = SimpleNamespace(embeddings=SimpleNamespace(create=mock_create))
+
+        result = embedder._call_embeddings_api(mock_client, "text-embedding-3-large", ["hello"], 5)
+
+        assert mock_create.call_count == 2
+        assert "dimensions" not in mock_create.call_args_list[1].kwargs
+        assert result == [[0.1, 0.2]]
+
     def test_call_embeddings_api_does_not_fallback_on_timeout(self):
         config = _make_config(embedding_dims=256)
         embedder = UniversalAPIEmbedder(config)
@@ -184,7 +223,11 @@ class TestUniversalAPIEmbedderFallback:
         config = _make_config(embedding_dims=0)
         embedder = UniversalAPIEmbedder(config)
         mock_create = MagicMock(
-            side_effect=_bad_request_error("dimensions must be greater than zero")
+            side_effect=_bad_request_error(
+                "dimensions must be greater than zero",
+                param="dimensions",
+                code="invalid_value",
+            )
         )
         mock_client = SimpleNamespace(embeddings=SimpleNamespace(create=mock_create))
 
