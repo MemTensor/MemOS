@@ -163,10 +163,11 @@ class CompositeCubeView(MemCubeView):
                     memories = cube_result.get(key, [])
                     memories_with_provenance = []
                     for memory in memories:
+                        result_memory = memory
                         if isinstance(memory, dict):
-                            memory = memory.copy()
-                            memory.setdefault("cube_id", view.cube_id)
-                        memories_with_provenance.append(memory)
+                            result_memory = memory.copy()
+                            result_memory.setdefault("cube_id", view.cube_id)
+                        memories_with_provenance.append(result_memory)
                     merged_results[key].extend(memories_with_provenance)
                 note = cube_result.get("pref_note")
                 if note:

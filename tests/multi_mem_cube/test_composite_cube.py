@@ -3,6 +3,7 @@ import logging
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -46,10 +47,10 @@ def test_add_handler_routes_to_explicit_target_cube(monkeypatch):
 
     handler = AddHandler(
         HandlerDependencies(
-            naive_mem_cube=object(),
-            mem_reader=object(),
-            mem_scheduler=object(),
-            feedback_server=object(),
+            naive_mem_cube=MagicMock(),
+            mem_reader=MagicMock(),
+            mem_scheduler=MagicMock(),
+            feedback_server=MagicMock(),
         )
     )
     request = APIADDRequest(
@@ -203,7 +204,9 @@ def test_composite_raises_memcube_error_when_all_cubes_fail(operation):
         else:
             composite.feedback_memories(request)
 
-    assert exc_info.value.causes == causes
+    assert [(type(cause), str(cause)) for cause in exc_info.value.causes] == [
+        (type(cause), str(cause)) for cause in causes
+    ]
 
 
 def test_memcube_error_exposes_causes_in_constructor():
