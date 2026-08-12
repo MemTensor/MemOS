@@ -60,6 +60,37 @@ function Test-BetterSqlite3 {
     }
 }
 
+function Resolve-HermesHostHome {
+    $ConfiguredHome = $env:HERMES_HOME
+    if ($ConfiguredHome -and $ConfiguredHome.Trim()) {
+        $Candidate = [Environment]::ExpandEnvironmentVariables($ConfiguredHome.Trim())
+        if ($Candidate -eq "~") {
+            if (-not $env:USERPROFILE -or -not $env:USERPROFILE.Trim()) {
+                Stop-Die "HERMES_HOME uses '~', but USERPROFILE is not set."
+            }
+            $UserProfile = $env:USERPROFILE.Trim()
+            $Candidate = $UserProfile
+        } elseif ($Candidate.StartsWith("~\") -or $Candidate.StartsWith("~/")) {
+            if (-not $env:USERPROFILE -or -not $env:USERPROFILE.Trim()) {
+                Stop-Die "HERMES_HOME uses '~', but USERPROFILE is not set."
+            }
+            $UserProfile = $env:USERPROFILE.Trim()
+            $RelativeHome = $Candidate.Substring(2)
+            $Candidate = Join-Path $UserProfile $RelativeHome
+        }
+        if (-not [IO.Path]::IsPathRooted($Candidate)) {
+            Stop-Die "HERMES_HOME must be an absolute path: $ConfiguredHome"
+        }
+        return [IO.Path]::GetFullPath($Candidate)
+    }
+
+    if (-not $env:LOCALAPPDATA -or -not $env:LOCALAPPDATA.Trim()) {
+        Stop-Die "LOCALAPPDATA is not set; set HERMES_HOME to the Hermes data directory."
+    }
+    $LocalAppData = $env:LOCALAPPDATA.Trim()
+    return [IO.Path]::GetFullPath((Join-Path $LocalAppData "hermes"))
+}
+
 $PluginId = "memos-local-plugin"
 $NpmPackage = "@memtensor/memos-local-plugin"
 $OpenClawPort = 18799
@@ -82,14 +113,18 @@ try {
 }
 
 # Agent detection
+$HermesHome = Resolve-HermesHostHome
+# Keep every child process on the same normalized host-data directory. This is
+# process-scoped and does not overwrite the user's persisted environment.
+$env:HERMES_HOME = $HermesHome
 $HasOpenClaw = Test-Path "$env:USERPROFILE\.openclaw"
-$HasHermes = Test-Path "$env:LOCALAPPDATA\hermes"
+$HasHermes = Test-Path $HermesHome
 
 Write-Host "`n  Detected agents:" -ForegroundColor White
 if ($HasOpenClaw) { Write-Host "    - OpenClaw   (~/.openclaw)" -ForegroundColor Green }
 else { Write-Host "    - OpenClaw   (not installed)" -ForegroundColor DarkGray }
 
-if ($HasHermes) { Write-Host "    - Hermes     (~/AppData/Local/hermes)" -ForegroundColor Green }
+if ($HasHermes) { Write-Host "    - Hermes     ($HermesHome)" -ForegroundColor Green }
 else { Write-Host "    - Hermes     (not installed)" -ForegroundColor DarkGray }
 
 Write-Host "`n  Install into which agent?"
@@ -113,7 +148,7 @@ switch ($Choice) {
 }
 
 if ($AgentSelection -eq "auto") {
-    if (-not $HasOpenClaw -and -not $HasHermes) { Stop-Die "Neither ~/.openclaw nor ~/AppData/Local/hermes exists. Install one first." }
+    if (-not $HasOpenClaw -and -not $HasHermes) { Stop-Die "Neither ~/.openclaw nor Hermes home ($HermesHome) exists. Install one first." }
     if ($HasOpenClaw -and $HasHermes) { $AgentSelection = "all" }
     elseif ($HasOpenClaw) { $AgentSelection = "openclaw" }
     else { $AgentSelection = "hermes" }
@@ -202,6 +237,8 @@ function Deploy-Tarball {
         }
         Write-Success "Package extracted"
         Write-Success "Dependencies ready"
+        Write-Warn "Local MiniLM model weights are not bundled."
+        Write-Host "       If embedding.provider is local, the first Viewer test or use downloads about 23 MB from Hugging Face."
         $DeploySucceeded = $true
     } catch {
         $DeployError = $_
@@ -326,19 +363,19 @@ function Stop-WindowsPluginBridges {
 
 function Ensure-RuntimeHome {
     param([string]$Agent, [string]$HomeDir, [string]$Prefix)
-    
+
     foreach ($Sub in @("data", "skills", "logs", "daemon")) {
         New-Item -ItemType Directory -Force -Path (Join-Path $HomeDir $Sub) -ErrorAction SilentlyContinue | Out-Null
     }
-    
+
     $Template = Join-Path $Prefix "templates\config.$Agent.yaml"
     if (-not (Test-Path $Template)) { $Template = Join-Path $ScriptDir "templates\config.$Agent.yaml" }
-    
+
     if (-not (Test-Path $Template)) {
         Write-Warn "Template missing: config.$Agent.yaml"
         return
     }
-    
+
     $Target = Join-Path $HomeDir "config.yaml"
     if (-not (Test-Path $Target)) {
         Copy-Item -Path $Template -Destination $Target
@@ -441,26 +478,26 @@ function Install-OpenClaw {
     $Prefix = Join-Path $env:USERPROFILE ".openclaw\extensions\$PluginId"
     $HomeDir = Join-Path $env:USERPROFILE ".openclaw\memos-plugin"
     $ConfigPath = Join-Path $env:USERPROFILE ".openclaw\openclaw.json"
-    
+
     $OcBin = Get-Command "openclaw" -ErrorAction SilentlyContinue
     if ($OcBin) {
         Write-Info "Stopping OpenClaw gateway"
         cmd /c "openclaw gateway stop"
         Start-Sleep -Seconds 1
     }
-    
+
     Deploy-Tarball -Prefix $Prefix
-    
+
     $RuntimeEntry = "./dist/adapters/openclaw/index.js"
     if (-not (Test-Path (Join-Path $Prefix "dist\adapters\openclaw\index.js"))) {
         Stop-Die "OpenClaw runtime entry missing."
     }
-    
+
     Ensure-RuntimeHome -Agent "openclaw" -HomeDir $HomeDir -Prefix $Prefix
-    
+
     $PackageJson = Get-Content (Join-Path $Prefix "package.json") -Raw | ConvertFrom-Json
     $PluginVersion = $PackageJson.version
-    
+
     $PluginJsonContent = @"
 {
   "id": "$PluginId",
@@ -483,7 +520,7 @@ function Install-OpenClaw {
 }
 "@
     Set-Content -Path (Join-Path $Prefix "openclaw.plugin.json") -Value $PluginJsonContent -Encoding UTF8
-    
+
     Write-Info "Patching openclaw.json"
     $LegacyIds = @("memos-local-openclaw-plugin")
     $LegacyJson = ($LegacyIds -join ',')
@@ -593,7 +630,7 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
     Set-Content -Path $NodeScriptPath -Value $NodeScript -Encoding UTF8
     node $NodeScriptPath
     Write-Success "openclaw.json patched"
-    
+
     if ($OcBin) {
         Write-Info "Starting OpenClaw gateway"
         cmd /c "openclaw gateway start"
@@ -609,12 +646,14 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 
 function Install-Hermes {
     Write-Host "`n=== Hermes Install ===" -ForegroundColor Cyan
+    # MemOS package/runtime files remain in the canonical LocalAppData install
+    # root. Hermes host data below follows HERMES_HOME and may live elsewhere.
     $Prefix = Join-Path $env:LOCALAPPDATA "hermes\memos-plugin"
     $RuntimeSelection = Resolve-HermesRuntimeHome -InstallRoot $Prefix
     $HomeDir = $RuntimeSelection.Path
-    $ConfigFile = Join-Path $env:LOCALAPPDATA "hermes\config.yaml"
+    $ConfigFile = Join-Path $HermesHome "config.yaml"
     $AdapterDir = Join-Path $Prefix "adapters\hermes"
-    
+
     Deploy-Tarball -Prefix $Prefix -BeforeSwap {
         Get-Process -Name "hermes" -ErrorAction SilentlyContinue |
             Stop-Process -Force -ErrorAction SilentlyContinue
@@ -624,19 +663,19 @@ function Install-Hermes {
     }
     Write-Success "Runtime home: $HomeDir ($($RuntimeSelection.Source))"
     Ensure-RuntimeHome -Agent "hermes" -HomeDir $HomeDir -Prefix $Prefix
-    
+
     $BridgeEntry = Join-Path $Prefix "dist\bridge.cjs"
     if (-not (Test-Path $BridgeEntry)) { $BridgeEntry = Join-Path $Prefix "bridge.cts" }
     Set-Content -Path (Join-Path $AdapterDir "bridge_path.txt") -Value $BridgeEntry -Encoding UTF8
-    
+
     $PythonBin = ""
     $VenvPy = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\venv\Scripts\python.exe"
     if (Test-Path $VenvPy) { $PythonBin = $VenvPy }
     else { $PythonBin = (Get-Command "python.exe" -ErrorAction SilentlyContinue).Source }
-    
+
     if (-not $PythonBin) { Stop-Die "Cannot locate Python for Hermes." }
     Write-Success "Python: $PythonBin"
-    
+
     $PluginDir = ""
     $DefaultPluginDir = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\plugins\memory"
     if (Test-Path $DefaultPluginDir) { $PluginDir = $DefaultPluginDir }
@@ -647,7 +686,7 @@ function Install-Hermes {
             $PluginDir = & $PythonBin -c $PyCmd 2>$null
         } catch {}
     }
-    
+
     if (-not $PluginDir -or -not (Test-Path $PluginDir)) { Stop-Die "plugins\memory not found" }
 
     $VersionSyncScript = Join-Path $Prefix "scripts\sync-hermes-version.cjs"
@@ -664,7 +703,7 @@ function Install-Hermes {
         Write-Warning "plugin.yaml copy may have failed; verify $AdapterDir\memos_provider\plugin.yaml exists."
     }
 
-    $UserPluginDir = Join-Path $env:LOCALAPPDATA "hermes\plugins\memory"
+    $UserPluginDir = Join-Path $HermesHome "plugins\memory"
     New-Item -ItemType Directory -Path $UserPluginDir -Force | Out-Null
     Write-Host "Ensuring user plugin dir: $UserPluginDir"
     $ProviderTargets = @(
@@ -708,7 +747,7 @@ memory:
         Set-Content -Path $ConfigFile -Value $ConfigContent -Encoding UTF8
         Write-Success "Created $ConfigFile"
     }
-    
+
     Write-Info "Starting Memory Viewer daemon"
     $NodeBin = Get-Content -Path (Join-Path $Prefix ".memos-node-bin") -ErrorAction SilentlyContinue
     if (-not $NodeBin) { $NodeBin = (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source }
@@ -717,7 +756,7 @@ memory:
     $BridgeCjs = Join-Path $Prefix "dist\bridge.cjs"
     $BridgeEntry = $BridgeCjs
     if (-not (Test-Path $BridgeEntry)) { $BridgeEntry = $BridgeCts }
-    
+
     if ($NodeBin -and (Test-Path $BridgeEntry) -and ($BridgeEntry.EndsWith(".cjs") -or (Test-Path $TsxBin))) {
         $DaemonLog = Join-Path $Prefix "logs\daemon-start.log"
         $DaemonLogErr = Join-Path $Prefix "logs\daemon-start-err.log"
@@ -728,7 +767,7 @@ memory:
             $DaemonArgs = "`"$TsxBin`" `"$BridgeEntry`" --agent=hermes --daemon --home=`"$HomeDir`""
             Start-Process -FilePath $NodeBin -ArgumentList $DaemonArgs -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
         }
-        
+
         if (Wait-ForViewer -Port $HermesPort -Timeout 120) {
             Write-Success "Memory Viewer daemon running"
         } else {

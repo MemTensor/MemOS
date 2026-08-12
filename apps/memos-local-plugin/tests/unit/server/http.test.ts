@@ -235,7 +235,11 @@ describe("HTTP server — REST routes", () => {
     const r = await fetch(`${handle.url}/api/v1/health`);
     expect(r.status).toBe(200);
     const body = await r.json();
-    expect(body).toMatchObject({ ok: true, version: "test" });
+    expect(body).toMatchObject({
+      ok: true,
+      version: "test",
+      instanceId: expect.any(String),
+    });
     expect(core.health).toHaveBeenCalled();
   });
 
@@ -664,8 +668,10 @@ describe("HTTP server — REST routes", () => {
 
   it("imports Hermes native MEMORY.md in batches", async () => {
     const oldHome = process.env.HOME;
+    const oldHermesHome = process.env.HERMES_HOME;
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hermes-native-"));
-    const nativeDir = path.join(tmpHome, ".hermes", "memories");
+    const hermesHome = path.join(tmpHome, "configured-hermes-home");
+    const nativeDir = path.join(hermesHome, "memories");
     fs.mkdirSync(nativeDir, { recursive: true });
     fs.writeFileSync(
       path.join(nativeDir, "MEMORY.md"),
@@ -673,6 +679,7 @@ describe("HTTP server — REST routes", () => {
       "utf8",
     );
     process.env.HOME = tmpHome;
+    process.env.HERMES_HOME = hermesHome;
 
     const importBundle = core.importBundle as unknown as ReturnType<typeof vi.fn>;
     importBundle.mockImplementation(async (bundle: { traces?: unknown[] }) => ({
@@ -687,7 +694,7 @@ describe("HTTP server — REST routes", () => {
       const scanBody = (await scan.json()) as { found: boolean; total: number; path: string };
       expect(scanBody.found).toBe(true);
       expect(scanBody.total).toBe(2);
-      expect(scanBody.path).toMatch(/\.hermes\/memories\/MEMORY\.md$/);
+      expect(scanBody.path).toBe(path.join(hermesHome, "memories", "MEMORY.md"));
 
       const run = await fetch(`${local.url}/api/v1/import/hermes-native/run`, {
         method: "POST",
@@ -725,6 +732,11 @@ describe("HTTP server — REST routes", () => {
         delete process.env.HOME;
       } else {
         process.env.HOME = oldHome;
+      }
+      if (oldHermesHome === undefined) {
+        delete process.env.HERMES_HOME;
+      } else {
+        process.env.HERMES_HOME = oldHermesHome;
       }
       fs.rmSync(tmpHome, { recursive: true, force: true });
     }
