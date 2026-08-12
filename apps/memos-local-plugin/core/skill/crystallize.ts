@@ -35,6 +35,8 @@ import type {
   SkillStepDraft,
 } from "./types.js";
 
+const MAX_SUMMARY_LENGTH = 200;
+
 export interface CrystallizeInput {
   policy: PolicyRow;
   evidence: TraceRow[];
@@ -364,7 +366,7 @@ function normaliseDraft(
     sanitizeDerivedText(steps[0]?.body) ||
     sanitizeDerivedText(steps[0]?.title) ||
     displayTitle;
-  const summary = summarySource.slice(0, 200);
+  const summary = summarySource.slice(0, MAX_SUMMARY_LENGTH);
   const examples = asArray(raw.examples).map(coerceExample).filter(Boolean) as SkillExampleDraft[];
   const tags = dedupeLc(sanitizeDerivedList(asStringArray(raw.tags)));
   // V7 §2.4.6 — coerce both `decision_guidance` (preferred LLM key)

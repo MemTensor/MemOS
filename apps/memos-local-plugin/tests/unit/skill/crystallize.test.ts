@@ -178,6 +178,24 @@ describe("skill/crystallize", () => {
     expect(r.draft.summary).toBe("x".repeat(200));
   });
 
+  it("caps a derived retrieval blurb at 200 characters", async () => {
+    const draft = makeDraft() as unknown as Record<string, unknown>;
+    delete draft.summary;
+    draft.retrieval_blurb = "y".repeat(250);
+    const llm = fakeLlm({
+      completeJson: { "skill.crystallize": draft },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.summary).toBe("y".repeat(200));
+  });
+
   it("cleans unsafe markup from LLM-derived skill fields", async () => {
     const policy = mkPolicy();
     const llm = fakeLlm({
