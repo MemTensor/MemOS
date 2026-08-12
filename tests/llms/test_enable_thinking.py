@@ -199,3 +199,39 @@ class TestEnableThinkingWithRealSDK:
 
         assert llm.generate([{"role": "user", "content": "hi"}]) == "ok"
         assert captured_body["enable_thinking"] is False
+
+    def test_azure_generate_stream_serializes_override_in_http_body(self):
+        captured_body = {}
+
+        def handler(request):
+            captured_body.update(json.loads(request.content))
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b"data: [DONE]\n\n",
+            )
+
+        llm = AzureLLM.__new__(AzureLLM)
+        llm.config = AzureLLMConfig(
+            api_key="test-key",
+            model_name_or_path="test-model",
+            enable_thinking=True,
+        )
+        llm.client = openai.Client(
+            api_key="test-key",
+            base_url="http://test.local/v1",
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+        assert (
+            list(
+                llm.generate_stream(
+                    [{"role": "user", "content": "hi"}],
+                    enable_thinking=False,
+                    extra_body={"vendor_option": "keep"},
+                )
+            )
+            == []
+        )
+        assert captured_body["enable_thinking"] is False
+        assert captured_body["vendor_option"] == "keep"
