@@ -144,6 +144,7 @@ export interface RankedCandidate {
 export type SummaryProvider =
   | "openai"
   | "openai_compatible"
+  | "orcarouter"
   | "anthropic"
   | "gemini"
   | "azure_openai"

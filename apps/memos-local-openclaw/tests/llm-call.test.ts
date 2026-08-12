@@ -107,4 +107,33 @@ describe("shared/llm-call", () => {
     const body = JSON.parse(cap.init!.body as string);
     expect("provider" in body).toBe(false);
   });
+
+  it("calls OrcaRouter for the orcarouter provider", async () => {
+    const cap: { url?: string; init?: RequestInit } = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: unknown) => {
+        cap.url = String(url);
+        cap.init = init as RequestInit;
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const cfg: SummarizerConfig = {
+      provider: "orcarouter",
+      endpoint: "https://api.orcarouter.ai/v1",
+      apiKey: "sk-orca-test",
+      model: "anthropic/claude-haiku-4.5",
+    };
+
+    const result = await callLLMOnce(cfg, "summarize this");
+
+    expect(result).toBe("ok");
+    expect(cap.url).toBe("https://api.orcarouter.ai/v1/chat/completions");
+    const body = JSON.parse(cap.init!.body as string);
+    expect(body.model).toBe("anthropic/claude-haiku-4.5");
+  });
 });

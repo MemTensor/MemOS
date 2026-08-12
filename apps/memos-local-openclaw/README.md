@@ -192,6 +192,9 @@ Add the plugin config to `~/.openclaw/openclaw.json`:
 | Anthropic | `anthropic` | `claude-3-haiku-20240307` |
 | Gemini | `gemini` | `gemini-1.5-flash` |
 | AWS Bedrock | `bedrock` | `anthropic.claude-3-haiku-20240307-v1:0` |
+| OrcaRouter | `orcarouter` | `anthropic/claude-haiku-4.5` |
+
+For [OrcaRouter](https://www.orcarouter.ai), use `provider: "orcarouter"` with `endpoint: "https://api.orcarouter.ai/v1"` and an `sk-orca-`-prefixed API key.
 
 > **No summarizer config?** The plugin automatically falls back to the OpenClaw native model (auto-detected from `~/.openclaw/openclaw.json`). If that is also unavailable, a rule-based fallback generates summaries from the first sentence + key entities. Good enough to start.
 

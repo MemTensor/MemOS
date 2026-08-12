@@ -36,6 +36,7 @@ function detectProvider(
     return "gemini";
   }
   if (key.includes("bedrock") || url.includes("bedrock")) return "bedrock";
+  if (key.includes("orcarouter") || url.includes("orcarouter.ai")) return "orcarouter";
   return "openai_compatible";
 }
 
@@ -553,6 +554,7 @@ function callSummarize(cfg: SummarizerConfig, text: string, log: Logger): Promis
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
+    case "orcarouter":
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
@@ -578,6 +580,7 @@ function callSummarizeTask(cfg: SummarizerConfig, text: string, log: Logger): Pr
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
+    case "orcarouter":
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
@@ -603,6 +606,7 @@ function callGenerateTaskTitle(cfg: SummarizerConfig, text: string, log: Logger)
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
+    case "orcarouter":
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
@@ -628,6 +632,7 @@ function callTopicJudge(cfg: SummarizerConfig, currentContext: string, newMessag
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
+    case "orcarouter":
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
@@ -653,6 +658,7 @@ function callFilterRelevant(cfg: SummarizerConfig, query: string, candidates: Ar
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
+    case "orcarouter":
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
@@ -678,6 +684,7 @@ function callJudgeDedup(cfg: SummarizerConfig, newSummary: string, candidates: A
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
+    case "orcarouter":
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
@@ -703,6 +710,7 @@ function callTopicClassifier(cfg: SummarizerConfig, taskState: string, newMessag
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
+    case "orcarouter":
     case "azure_openai":
     case "zhipu":
     case "siliconflow":
@@ -728,6 +736,7 @@ function callTopicArbitration(cfg: SummarizerConfig, taskState: string, newMessa
   switch (cfg.provider) {
     case "openai":
     case "openai_compatible":
+    case "orcarouter":
     case "azure_openai":
     case "zhipu":
     case "siliconflow":

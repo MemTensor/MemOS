@@ -28,6 +28,7 @@ function detectProvider(providerKey: string | undefined, baseUrl: string): Summa
     return "gemini";
   }
   if (key.includes("bedrock") || url.includes("bedrock")) return "bedrock";
+  if (key.includes("orcarouter") || url.includes("orcarouter.ai")) return "orcarouter";
   return "openai_compatible";
 }
 
