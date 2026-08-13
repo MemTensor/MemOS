@@ -18,7 +18,7 @@ import { MemosError } from "../../agent-contract/errors.js";
 import type { ResolvedHome } from "./paths.js";
 import { resolveHome } from "./paths.js";
 import { ConfigSchema, type ResolvedConfig } from "./schema.js";
-import { DEFAULT_CONFIG, effectiveViewerPort } from "./defaults.js";
+import { DEFAULT_CONFIG, SECRET_FIELD_PATHS, effectiveViewerPort } from "./defaults.js";
 import { migrateHermesViewerPort } from "./migrations.js";
 import { parseYaml } from "./yaml.js";
 
@@ -72,9 +72,40 @@ export async function loadConfig(home: ResolvedHome, agent?: string): Promise<Lo
 /**
  * Merge an arbitrary raw object over `DEFAULT_CONFIG` and validate. Used in
  * tests and by `writer.ts`. `warnings` is mutated in place if provided.
+ *
+ * The `raw` argument is never mutated — the secret resolution below runs on a
+ * freshly built copy, so callers may pass shared or cached objects safely.
  */
 export function resolveConfig(raw: unknown, warnings?: string[], agent?: string): ResolvedConfig {
   const cleaned = pruneUnknown(raw, DEFAULT_CONFIG, "", warnings);
+  // Resolve masked/placeholder secret values from the environment before
+  // merging. `maskSecrets()` (pipeline/memory-core.ts) rewrites every
+  // SECRET_FIELD_PATHS leaf to `__memos_secret__` before the config is
+  // persisted or surfaced, and `stripEmptySecrets()` drops empty leaves
+  // from patches. But nothing re-reads the real value back: when the
+  // daemon restarts and `loadConfig()` parses the YAML, the placeholder
+  // is treated as the literal API key, so every LLM call fails auth and
+  // the bridge loops on restart with `lastOkAt: null` and crystallize
+  // stuck. Same problem if a user writes `apiKey: ""` or an explicit
+  // `${ENV_VAR}` reference and expects expansion (the writer's
+  // `resolveConfig` is the single choke point for both disk and
+  // in-memory patch paths, so resolving here covers both).
+  //
+  // Resolution rules (first match wins):
+  //   1. Value is `${NAME}`  -> use process.env[NAME]. Only allowlisted
+  //      names are expanded (`^[A-Z][A-Z0-9_]*_(API_KEY|TOKEN)$`);
+  //      anything else emits a warning and is left untouched.
+  //   2. Value is the mask sentinel `__memos_secret__` or empty string
+  //      -> use the env var inferred from the field path
+  //      (llm.apiKey -> LLM_API_KEY, then OPENCODE_GO_API_KEY /
+  //      OPENCODE_ZEN_API_KEY fallbacks for the opencode-go/zen
+  //      providers). The generic fallbacks only apply to LLM-class
+  //      fields — embedding.apiKey is never handed an LLM provider's key.
+  //   3. Otherwise leave the value untouched.
+  //
+  // The mask itself is never used as a credential, and the on-disk write
+  // stays masked (security preserved); this is read-side only.
+  resolveSecretEnv(cleaned, warnings);
   const merged = deepMerge(DEFAULT_CONFIG as Record<string, unknown>, cleaned);
   stripUnsupportedEmbeddingDimensions(merged);
   const viewerPort = effectiveViewerPort(agent);
@@ -103,6 +134,56 @@ export function resolveConfig(raw: unknown, warnings?: string[], agent?: string)
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
+
+/** Env var names accepted in `${NAME}` config references. */
+const ENV_REF_ALLOWLIST = /^[A-Z][A-Z0-9_]*_(API_KEY|TOKEN)$/;
+
+/**
+ * Replace masked / empty / `${VAR}` secret leaves in `cleaned` (a freshly
+ * built, non-shared object — see `pruneUnknown`) with values from the
+ * environment. The caller's raw config object is never written to.
+ */
+function resolveSecretEnv(cleaned: Record<string, unknown>, warnings?: string[]): void {
+  for (const dotted of SECRET_FIELD_PATHS) {
+    const keys = dotted.split(".");
+    let cursor: unknown = cleaned;
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (!isPlainObject(cursor)) break;
+      cursor = (cursor as Record<string, unknown>)[keys[i]!];
+    }
+    if (!isPlainObject(cursor)) continue;
+    const leaf = keys[keys.length - 1]!;
+    const val = (cursor as Record<string, unknown>)[leaf];
+    if (typeof val !== "string") continue;
+
+    let envName: string | null = null;
+    let genericFallbacks = false;
+    if (val.startsWith("${") && val.endsWith("}")) {
+      const name = val.slice(2, -1);
+      if (!ENV_REF_ALLOWLIST.test(name)) {
+        warnings?.push(
+          `config: leaving '${dotted}' as '${val}' — env name '${name}' is not allowlisted ` +
+            `(expected ^[A-Z][A-Z0-9_]*_(API_KEY|TOKEN)$)`
+        );
+        continue;
+      }
+      envName = name;
+    } else if (val === "__memos_secret__" || val === "") {
+      if (leaf !== "apiKey") continue;
+      const isEmbedding = keys[keys.length - 2] === "embedding";
+      envName = isEmbedding ? "EMBEDDING_API_KEY" : "LLM_API_KEY";
+      genericFallbacks = !isEmbedding;
+    }
+    if (!envName) continue;
+
+    const envVal =
+      process.env[envName] ??
+      (genericFallbacks
+        ? (process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_ZEN_API_KEY)
+        : undefined);
+    if (envVal) (cursor as Record<string, unknown>)[leaf] = envVal;
+  }
+}
 
 function formatErr(e: ValueError): string {
   return `${e.path || "<root>"}: ${e.message}`;
