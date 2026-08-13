@@ -1,12 +1,13 @@
 /**
  * Config-save restart state manager.
  *
- * OpenClaw can be restarted from the viewer because the plugin lives
- * inside the gateway process and launchd brings it back.
+ * Supervised Unix OpenClaw can be restarted from the viewer because the
+ * plugin lives inside the gateway process and its supervisor brings it back.
+ * Windows OpenClaw returns a manual gateway handoff instead.
  *
- * Hermes has separate chat and viewer bridge processes. The backend
- * terminates the active chat and replaces the viewer daemon so both
- * processes load the saved config.
+ * Hermes has separate chat and viewer bridge processes. Unix can replace
+ * both automatically; Windows returns exact manual handoff instructions
+ * because no supervisor currently owns the portable viewer daemon.
  */
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
@@ -14,16 +15,50 @@ import { health } from "./health";
 
 export type RestartPhase =
   | "idle"
+  | "clearing"
   | "restarting"
   | "waitingUp"
+  | "manualCloseRequired"
+  | "manualRestartRequired"
+  | "manualClearRestartRequired"
+  | "clearFailed"
+  | "clearResultUnknown"
   | "restartFailed";
+
+interface RestartResponse {
+  ok: boolean;
+  restarting?: boolean;
+  manualRestartRequired?: boolean;
+  platform?: string;
+  instanceId?: string;
+  message?: string;
+}
+
+export interface ClearDataResponse extends RestartResponse {
+  cleared?: boolean;
+  manualCloseRequired?: boolean;
+}
 
 export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
 
-function isOpenClaw(): boolean {
-  return health.value?.agent === "openclaw";
+export type RestartAgent = "openclaw" | "hermes";
+
+let lockedRestartAgent: RestartAgent | null = null;
+
+function agentFromHealth(): RestartAgent {
+  return health.value?.agent === "openclaw" ? "openclaw" : "hermes";
+}
+
+function lockRestartAgent(): RestartAgent {
+  lockedRestartAgent = agentFromHealth();
+  return lockedRestartAgent;
+}
+
+/** Keep restart copy tied to the initiating agent while health is offline. */
+export function resolveRestartAgent(): RestartAgent {
+  return lockedRestartAgent ?? agentFromHealth();
 }
 
 async function pollHealthUntilUp(maxAttempts = 60): Promise<boolean> {
@@ -71,6 +106,34 @@ async function quickPollUp(maxAttempts = 30): Promise<boolean> {
   return false;
 }
 
+/** Wait for a different Viewer process, not merely another 200 response. */
+async function pollHealthUntilReplaced(
+  previousInstanceId: string | undefined,
+  maxAttempts = 120,
+): Promise<boolean> {
+  let observedDown = false;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise((r) => setTimeout(r, 1_000));
+    try {
+      const payload = await api.get<{ instanceId?: string }>("/api/v1/health");
+      if (
+        previousInstanceId &&
+        payload.instanceId &&
+        payload.instanceId !== previousInstanceId
+      ) {
+        return true;
+      }
+      // Compatibility with an older replacement daemon that does not yet
+      // expose instanceId: require a witnessed outage before accepting it.
+      if (!previousInstanceId && observedDown) return true;
+    } catch {
+      observedDown = true;
+      restartState.value = { phase: "waitingUp" };
+    }
+  }
+  return false;
+}
+
 /**
  * Config saved. OpenClaw gets an in-place gateway restart. Hermes
  * replaces its viewer daemon and terminates the active chat process.
@@ -80,10 +143,25 @@ async function quickPollUp(maxAttempts = 30): Promise<boolean> {
  * sees Hermes' active chat window being closed before the viewer returns.
  */
 export async function triggerRestart(): Promise<void> {
+  const agent = lockRestartAgent();
   restartState.value = { phase: "restarting" };
-  if (!isOpenClaw()) {
+  if (agent !== "openclaw") {
     try {
-      await api.post("/api/v1/admin/restart");
+      const response = await api.post<RestartResponse>("/api/v1/admin/restart");
+      if (response.manualRestartRequired) {
+        restartState.value = {
+          phase: "manualRestartRequired",
+          message: response.message,
+        };
+        const replaced = await pollHealthUntilReplaced(response.instanceId);
+        if (replaced) {
+          window.location.href =
+            window.location.pathname + "?_t=" + Date.now();
+          return;
+        }
+        restartState.value = { phase: "restartFailed" };
+        throw new Error("restart did not complete");
+      }
     } catch {
       restartState.value = { phase: "restartFailed" };
       throw new Error("restart failed");
@@ -100,10 +178,18 @@ export async function triggerRestart(): Promise<void> {
     return;
   }
 
+  let response: RestartResponse | undefined;
   try {
-    await api.post("/api/v1/admin/restart");
+    response = await api.post<RestartResponse>("/api/v1/admin/restart");
   } catch {
     // Server might already be going down
+  }
+  if (response?.manualRestartRequired) {
+    restartState.value = {
+      phase: "manualRestartRequired",
+      message: response.message,
+    };
+    return;
   }
 
   const ok = await pollHealthUntilUp(60);
@@ -116,12 +202,23 @@ export async function triggerRestart(): Promise<void> {
   }
 }
 
-/**
- * Data cleared. Both agents self-respawn via the daemon mechanism.
- */
-export async function triggerCleared(): Promise<void> {
+/** Handle the agent/platform-specific result of a destructive clear request. */
+export async function triggerCleared(response?: ClearDataResponse): Promise<void> {
+  if (restartState.value.phase !== "clearing") lockRestartAgent();
   restartState.value = { phase: "restarting" };
-  if (isOpenClaw()) {
+  if (response?.manualCloseRequired) {
+    restartState.value = { phase: "manualCloseRequired" };
+    return;
+  }
+  if (response && !response.ok) {
+    restartState.value = { phase: "clearFailed" };
+    return;
+  }
+  if (response?.manualRestartRequired) {
+    restartState.value = { phase: "manualClearRestartRequired" };
+    return;
+  }
+  if (resolveRestartAgent() === "openclaw") {
     const ok = await pollHealthUntilUp(60);
     if (ok) {
       window.location.href =
@@ -142,7 +239,19 @@ export async function triggerCleared(): Promise<void> {
   }
 }
 
+/** Clear stale manual-close state before issuing another destructive request. */
+export function beginClearData(): void {
+  lockRestartAgent();
+  restartState.value = { phase: "clearing" };
+}
+
+/** The connection dropped before the client could confirm the clear result. */
+export function markClearResultUnknown(): void {
+  restartState.value = { phase: "clearResultUnknown" };
+}
+
 /** Dismiss the banner immediately (e.g. user clicked the close button). */
 export function dismissRestartBanner(): void {
+  lockedRestartAgent = null;
   restartState.value = { phase: "idle" };
 }

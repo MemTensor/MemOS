@@ -1,4 +1,5 @@
 import re
+import uuid
 
 from abc import ABC, abstractmethod
 
@@ -17,6 +18,12 @@ class Chunk:
 class BaseChunker(ABC):
     """Base class for all text chunkers."""
 
+    _URL_PATTERN = r'https?://[^\s<>"{}|\\^`\[\]]+'
+    _URL_PLACEHOLDER_PREFIX = "__URL_"
+    _URL_PLACEHOLDER_PATTERN = re.compile(
+        rf"{re.escape(_URL_PLACEHOLDER_PREFIX)}(?:[0-9a-f]+_)?\d+__"
+    )
+
     @abstractmethod
     def __init__(self, config: BaseChunkerConfig):
         """Initialize the chunker with the given configuration."""
@@ -24,6 +31,17 @@ class BaseChunker(ABC):
     @abstractmethod
     def chunk(self, text: str) -> list[Chunk]:
         """Chunk the given text into smaller chunks."""
+
+    @classmethod
+    def _new_url_placeholder_prefix(cls, text: str) -> str:
+        """Return a placeholder namespace that cannot collide with the input."""
+        if cls._URL_PLACEHOLDER_PREFIX not in text:
+            return cls._URL_PLACEHOLDER_PREFIX
+
+        while True:
+            placeholder_prefix = f"{cls._URL_PLACEHOLDER_PREFIX}{uuid.uuid4().hex[:8]}_"
+            if placeholder_prefix not in text:
+                return placeholder_prefix
 
     def protect_urls(self, text: str) -> tuple[str, dict[str, str]]:
         """
@@ -35,16 +53,16 @@ class BaseChunker(ABC):
         Returns:
             tuple: (Text with URLs replaced by placeholders, URL mapping dictionary)
         """
-        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-        url_map = {}
+        url_map: dict[str, str] = {}
+        placeholder_prefix = self._new_url_placeholder_prefix(text)
 
         def replace_url(match):
             url = match.group(0)
-            placeholder = f"__URL_{len(url_map)}__"
+            placeholder = f"{placeholder_prefix}{len(url_map)}__"
             url_map[placeholder] = url
             return placeholder
 
-        protected_text = re.sub(url_pattern, replace_url, text)
+        protected_text = re.sub(self._URL_PATTERN, replace_url, text)
         return protected_text, url_map
 
     def restore_urls(self, text: str, url_map: dict[str, str]) -> str:
@@ -58,8 +76,6 @@ class BaseChunker(ABC):
         Returns:
             str: Text with URLs restored
         """
-        restored_text = text
-        for placeholder, url in url_map.items():
-            restored_text = restored_text.replace(placeholder, url)
-
-        return restored_text
+        return self._URL_PLACEHOLDER_PATTERN.sub(
+            lambda match: url_map.get(match.group(0), match.group(0)), text
+        )

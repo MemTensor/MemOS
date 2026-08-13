@@ -71,6 +71,7 @@ from daemon_manager import (  # noqa: E402
     ensure_viewer_daemon,
     kill_zombie_bridges,
 )
+from runtime_home import resolve_runtime_home  # noqa: E402
 from shared_bridge_runtime import (  # noqa: E402
     HERMES_HOOK_DISPATCHER,
     SHARED_BRIDGE_REGISTRY,
@@ -123,13 +124,7 @@ def _shared_bridge_enabled() -> bool:
 
 def _resolved_memos_runtime_home() -> Path:
     """Mirror the Node resolver closely enough to isolate distinct databases."""
-    memos_home = os.environ.get("MEMOS_HOME", "").strip()
-    if memos_home:
-        return Path(memos_home).expanduser().resolve()
-    config_file = os.environ.get("MEMOS_CONFIG_FILE", "").strip()
-    if config_file:
-        return Path(config_file).expanduser().resolve().parent
-    return (Path.home() / ".hermes" / "memos-plugin").resolve()
+    return resolve_runtime_home(plugin_root=_PLUGIN_DIR.parents[2])
 
 
 def _memos_runtime_env_snapshot(runtime_home: Path | None = None) -> dict[str, str]:
@@ -144,11 +139,8 @@ def _memos_runtime_env_snapshot(runtime_home: Path | None = None) -> dict[str, s
             "MEMOS_HOME": "",
             "MEMOS_CONFIG_FILE": str(Path(config_file).expanduser().resolve()),
         }
-    return {
-        "MEMOS_HOME": "",
-        "MEMOS_CONFIG_FILE": "",
-        "HOME": os.environ.get("HOME", "").strip() or str(Path.home()),
-    }
+    resolved_home = runtime_home or _resolved_memos_runtime_home()
+    return {"MEMOS_HOME": str(resolved_home)}
 
 
 def _shared_bridge_runtime_key(runtime_home: Path | None = None) -> tuple[str, ...]:
@@ -157,7 +149,11 @@ def _shared_bridge_runtime_key(runtime_home: Path | None = None) -> tuple[str, .
     return (str(resolved_home), "hermes", "stdio")
 
 
-def _prepare_shared_bridge(*, cleanup_legacy_zombies: bool = False) -> None:
+def _prepare_shared_bridge(
+    runtime_home: Path | None = None,
+    *,
+    cleanup_legacy_zombies: bool = False,
+) -> None:
     """Prepare bridge/viewer state without crossing data-home boundaries."""
     ensure_bridge_running()
     if cleanup_legacy_zombies:
@@ -169,7 +165,7 @@ def _prepare_shared_bridge(*, cleanup_legacy_zombies: bool = False) -> None:
             if zombies:
                 logger.info("MemOS: killed %d zombie bridge(s)", zombies)
     try:
-        ensure_viewer_daemon()
+        ensure_viewer_daemon(runtime_home=runtime_home)
     except Exception as err:
         logger.warning("MemOS: viewer daemon check failed — %s", err)
 
@@ -520,13 +516,13 @@ class MemTensorProvider(MemoryProvider):
                             extra_env=env,
                         )
                     ),
-                    before_spawn=_prepare_shared_bridge,
+                    before_spawn=lambda home=runtime_home: _prepare_shared_bridge(home),
                     host_handlers={
                         "host.llm.complete": self._handle_host_llm_complete,
                     },
                 )
             else:
-                _prepare_shared_bridge(cleanup_legacy_zombies=True)
+                _prepare_shared_bridge(runtime_home, cleanup_legacy_zombies=True)
                 new_bridge = MemosBridgeClient(
                     runtime_home=str(runtime_home),
                     extra_env=runtime_env,
@@ -1687,8 +1683,8 @@ class MemTensorProvider(MemoryProvider):
         return [
             {
                 "key": "viewer_port",
-                "description": "Local HTTP port for the MemOS viewer.",
-                "default": 18910,
+                "description": "Fixed local HTTP port for the MemOS Hermes viewer.",
+                "default": 18800,
                 "required": False,
             },
             {
@@ -1727,13 +1723,21 @@ class MemTensorProvider(MemoryProvider):
             return
         import yaml  # lazy import — hermes already ships pyyaml
 
-        target_dir = Path(hermes_home) / "memos-plugin"
+        if self._runtime_home is not None:
+            target_dir = self._runtime_home
+        elif os.name == "nt":
+            target_dir = resolve_runtime_home(plugin_root=_PLUGIN_DIR.parents[2])
+        else:
+            target_dir = Path(hermes_home) / "memos-plugin"
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / "config.yaml"
 
         payload: dict[str, Any] = {"version": 1}
         if "viewer_port" in values:
-            payload["viewer"] = {"port": int(values["viewer_port"])}
+            # Keep the legacy setup field for host compatibility, but the
+            # Hermes adapter owns :18800. Persist the effective value so the
+            # YAML file never advertises a port the runtime will not bind.
+            payload["viewer"] = {"port": 18800}
         if "llm_provider" in values:
             llm: dict[str, Any] = {"provider": values["llm_provider"]}
             if values.get("llm_provider") != "local_only":
@@ -2193,7 +2197,7 @@ class MemTensorProvider(MemoryProvider):
                                 extra_env=env,
                             )
                         ),
-                        before_spawn=_prepare_shared_bridge,
+                        before_spawn=lambda home=runtime_home: _prepare_shared_bridge(home),
                         host_handlers={
                             "host.llm.complete": self._handle_host_llm_complete,
                         },
@@ -2248,7 +2252,8 @@ class MemTensorProvider(MemoryProvider):
                     old_bridge.close()
                 logger.info("MemOS: old bridge closed (pid=%s)", old_pid)
 
-            _prepare_shared_bridge(cleanup_legacy_zombies=True)
+            runtime_home = self._runtime_home or _resolved_memos_runtime_home()
+            _prepare_shared_bridge(runtime_home, cleanup_legacy_zombies=True)
             new_bridge: MemosBridgeClient | None = None
             try:
                 runtime_home = self._runtime_home or _resolved_memos_runtime_home()

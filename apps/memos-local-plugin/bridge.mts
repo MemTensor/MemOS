@@ -21,8 +21,8 @@
  *   - openclaw → :18799
  *   - hermes   → :18800
  *
- * The viewer port is read from the agent's `~/.<agent>/memos-plugin/
- * config.yaml::viewer.port`. We just call `startHttpServer` once;
+ * The viewer port is adapter-owned (OpenClaw 18799, Hermes 18800).
+ * We just call `startHttpServer` once;
  * if the port is already in use we surface the EADDRINUSE error to
  * stderr and keep running stdio-RPC headless (capture / retrieval
  * still work). There's no port-sharing or auto-promotion logic —
@@ -78,7 +78,13 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 
 const PID_FILENAME = "bridge.pid";
 
-function pidFilePath(agent: string): string {
+function pidFilePath(agent: string, explicitHome?: string): string {
+  const configuredHome = explicitHome?.trim()
+    || process.env.MEMOS_HOME?.trim()
+    || (process.env.MEMOS_CONFIG_FILE?.trim()
+      ? path.dirname(process.env.MEMOS_CONFIG_FILE.trim())
+      : "");
+  if (configuredHome) return path.join(path.resolve(configuredHome), "daemon", PID_FILENAME);
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
     process.env.HOME ?? "/tmp",
@@ -135,7 +141,7 @@ function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
     } catch {
       return; // gone
     }
-    childProcess.spawnSync("sleep", ["0.5"]);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
   try {
     process.kill(existingPid, "SIGKILL");
@@ -148,7 +154,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
-  const pidPath = pidFilePath(args.agent);
+  const pidPath = pidFilePath(args.agent, args.home);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
