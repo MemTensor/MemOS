@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "2.0.27"
+version = "2.0.29"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -48,6 +48,7 @@ dependencies = [
     "python-dateutil (>=2.9.0.post0,<3.0.0)",
     "prometheus-client (>=0.23.1,<0.24.0)",
     "concurrent-log-handler (>=0.9.28,<1.0.0)",  # Process-safe rotating file handler
+    "cachetools (>=6.0.0)",  # Embedding request caching
 ]
 
 [project.urls]
@@ -128,7 +129,6 @@ all = [
     "datasketch (>=1.6.5,<2.0.0)",
     "jieba (>=0.38.1,<0.42.1)",
     "rank-bm25 (>=0.2.2)",
-    "cachetools (>=6.0.0)",
     # NOT exist in the above optional groups
     # Because they are either huge-size dependencies or infrequently used dependencies.
     # We kindof don't want users to install them.

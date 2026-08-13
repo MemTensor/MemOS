@@ -28,6 +28,50 @@ describe("config/patchConfig", () => {
     }
   });
 
+  it("seeds a missing Hermes config from the Hermes defaults", async () => {
+    const ctx = await makeTmpHome({ agent: "hermes" });
+    cleanup = ctx.cleanup;
+    await fs.rm(ctx.home.configFile, { force: true });
+
+    const result = await patchConfig(ctx.home, { llm: { temperature: 0.3 } }, "hermes");
+
+    expect(result.config.viewer.port).toBe(18800);
+    expect(await fs.readFile(ctx.home.configFile, "utf8")).toMatch(/port:\s*18800/);
+  });
+
+  it("preserves an unedited Hermes port on disk while returning the effective runtime port", async () => {
+    const ctx = await makeTmpHome({
+      agent: "hermes",
+      configYaml:
+        "viewer:\n  port: 19000\n" +
+        "embedding:\n  endpoint: https://old.example/v1\n" +
+        "llm:\n  temperature: 0\n",
+    });
+    cleanup = ctx.cleanup;
+
+    const result = await patchConfig(ctx.home, { llm: { temperature: 0.4 } }, "hermes");
+
+    expect(result.config.viewer.port).toBe(18800);
+    const text = await fs.readFile(ctx.home.configFile, "utf8");
+    expect(text).toMatch(/port:\s*19000/);
+    expect(text).toMatch(/endpoint:\s*https:\/\/old\.example\/v1/);
+  });
+
+  it("compatibly normalizes an explicitly patched Hermes port", async () => {
+    const ctx = await makeTmpHome({ agent: "hermes" });
+    cleanup = ctx.cleanup;
+
+    const result = await patchConfig(ctx.home, {
+      viewer: { port: 18799 },
+      llm: { temperature: 0.4 },
+    }, "hermes");
+
+    expect(result.config.viewer.port).toBe(18800);
+    const text = await fs.readFile(ctx.home.configFile, "utf8");
+    expect(text).toMatch(/port:\s*18800/);
+    expect(text).toMatch(/temperature:\s*0\.4/);
+  });
+
   it("preserves user comments and field ordering when patching", async () => {
     const original = `# my notes
 viewer:
