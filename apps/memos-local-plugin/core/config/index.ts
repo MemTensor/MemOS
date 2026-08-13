@@ -96,12 +96,19 @@ export function resolveConfig(raw: unknown, warnings?: string[], agent?: string)
   //      names are expanded (`^[A-Z][A-Z0-9_]*_(API_KEY|TOKEN)$`);
   //      anything else emits a warning and is left untouched.
   //   2. Value is the mask sentinel `__memos_secret__` or empty string
-  //      -> use the env var inferred from the field path
-  //      (llm.apiKey -> LLM_API_KEY, then OPENCODE_GO_API_KEY /
-  //      OPENCODE_ZEN_API_KEY fallbacks for the opencode-go/zen
-  //      providers). The generic fallbacks only apply to LLM-class
-  //      fields — embedding.apiKey is never handed an LLM provider's key.
+  //      -> derive the env var from the field path itself
+  //      (llm.apiKey -> LLM_API_KEY, hub.teamToken -> HUB_TEAM_TOKEN,
+  //      skillEvolver.apiKey -> SKILL_EVOLVER_API_KEY, …). The generic
+  //      OPENCODE_GO/ZEN fallback is applied ONLY to the primary
+  //      `llm.apiKey`; per-component overrides (l3Llm, skillEvolver)
+  //      and non-LLM secrets (embedding, hub tokens) never borrow an
+  //      unrelated provider's key — that would cause cross-provider
+  //      auth failures or unexpected billing on the wrong account.
   //   3. Otherwise leave the value untouched.
+  //
+  // Any secret leaf that references an env var that is not set emits a
+  // warning so the operator gets an actionable log message instead of
+  // silent auth failures on the next LLM call.
   //
   // The mask itself is never used as a credential, and the on-disk write
   // stays masked (security preserved); this is read-side only.
@@ -147,11 +154,21 @@ function resolveSecretEnv(cleaned: Record<string, unknown>, warnings?: string[])
   for (const dotted of SECRET_FIELD_PATHS) {
     const keys = dotted.split(".");
     let cursor: unknown = cleaned;
+    // Explicit flag: `break` alone leaves `cursor` pointing at the last
+    // valid value, which for paths deeper than 2 levels could accidentally
+    // pass the `isPlainObject(cursor)` check below and index `leaf` on the
+    // wrong node. Today every SECRET_FIELD_PATHS entry is only 2 levels
+    // deep, but keeping the flag makes the intent explicit and future-
+    // proofs against deeper paths being added.
+    let traversalOk = true;
     for (let i = 0; i < keys.length - 1; i++) {
-      if (!isPlainObject(cursor)) break;
+      if (!isPlainObject(cursor)) {
+        traversalOk = false;
+        break;
+      }
       cursor = (cursor as Record<string, unknown>)[keys[i]!];
     }
-    if (!isPlainObject(cursor)) continue;
+    if (!traversalOk || !isPlainObject(cursor)) continue;
     const leaf = keys[keys.length - 1]!;
     const val = (cursor as Record<string, unknown>)[leaf];
     if (typeof val !== "string") continue;
@@ -169,10 +186,25 @@ function resolveSecretEnv(cleaned: Record<string, unknown>, warnings?: string[])
       }
       envName = name;
     } else if (val === "__memos_secret__" || val === "") {
-      if (leaf !== "apiKey") continue;
-      const isEmbedding = keys[keys.length - 2] === "embedding";
-      envName = isEmbedding ? "EMBEDDING_API_KEY" : "LLM_API_KEY";
-      genericFallbacks = !isEmbedding;
+      // Derive env var name from the field path itself so every entry
+      // in SECRET_FIELD_PATHS is resolvable, not just the ones whose
+      // leaf is `apiKey`:
+      //   embedding.apiKey    → EMBEDDING_API_KEY
+      //   llm.apiKey          → LLM_API_KEY
+      //   l3Llm.apiKey        → L3_LLM_API_KEY
+      //   skillEvolver.apiKey → SKILL_EVOLVER_API_KEY
+      //   hub.teamToken       → HUB_TEAM_TOKEN
+      //   hub.userToken       → HUB_USER_TOKEN
+      const parent = keys[keys.length - 2] ?? "";
+      envName = `${camelToUpperSnake(parent)}_${camelToUpperSnake(leaf)}`;
+      // OPENCODE_GO_API_KEY / OPENCODE_ZEN_API_KEY are only meaningful
+      // for the primary `llm.apiKey`. Per-component overrides
+      // (l3Llm.apiKey, skillEvolver.apiKey) and non-LLM secrets
+      // (embedding.apiKey, hub.*Token) must not silently borrow an
+      // unrelated provider's key — doing so causes cross-provider auth
+      // failures and unexpected billing on the wrong account when the
+      // component is configured for a different provider entirely.
+      genericFallbacks = parent === "llm" && leaf === "apiKey";
     }
     if (!envName) continue;
 
@@ -181,8 +213,33 @@ function resolveSecretEnv(cleaned: Record<string, unknown>, warnings?: string[])
       (genericFallbacks
         ? (process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_ZEN_API_KEY)
         : undefined);
-    if (envVal) (cursor as Record<string, unknown>)[leaf] = envVal;
+    if (envVal) {
+      (cursor as Record<string, unknown>)[leaf] = envVal;
+    } else {
+      // Explicit-reference case: the user asked for env expansion but
+      // the target is unset. Mask/empty case: we walked the path-based
+      // convention and nothing was set. Both perpetuate the original
+      // bug (silent auth failure on next LLM call) unless we log it.
+      warnings?.push(
+        `config: '${dotted}' references env var '${envName}' but it is not set — ` +
+          `field left as placeholder and auth will fail on the next call`
+      );
+    }
   }
+}
+
+/**
+ * camelCase → UPPER_SNAKE_CASE for deriving env var names from config
+ * field paths. Only inserts an underscore at a lowercase/digit → uppercase
+ * boundary so acronyms and digit runs stay intact:
+ *   apiKey        → API_KEY
+ *   teamToken     → TEAM_TOKEN
+ *   userToken     → USER_TOKEN
+ *   l3Llm         → L3_LLM
+ *   skillEvolver  → SKILL_EVOLVER
+ */
+function camelToUpperSnake(s: string): string {
+  return s.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
 }
 
 function formatErr(e: ValueError): string {
