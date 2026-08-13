@@ -15,6 +15,7 @@ import {
   compareSemver,
   cleanLocalPluginVersion,
   cleanVersion,
+  deriveReleaseVersionFromMergedPrHead,
   docsPreviewMarkdown,
   existingReleaseTagState,
   fallbackTopicForText,
@@ -24,13 +25,24 @@ import {
   incrementPatchVersion,
   localPluginTagForVersion,
   npmVersionLookupResult,
+  prependRepositoryReleaseNotes,
   requestDocAgentDraft,
+  repositoryReleaseNotesPath,
+  resolveRef,
   sourceRefsFromText,
   validateDraft,
   validateLocalPluginVersionPlan,
+  validatePublishedStableLocalPluginBaseline,
+  validateStableLocalPluginSourceLineage,
+  validateWeeklyStagedLocalPluginRetry,
   validatePublishConfirmation,
   validateReleaseTarget,
+  validateRepositoryReleaseNotes,
 } from "./prepare-memos-release.mjs";
+import {
+  appendLocalPluginReleaseBinding,
+  buildLocalPluginReleaseBinding,
+} from "./local-plugin-release-contract.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -162,6 +174,27 @@ test("compares prerelease versions with SemVer precedence", () => {
   assert.equal(compareSemver("1.0.0+build.2", "1.0.0+build.1"), 0);
 });
 
+test("adds optional repository-authored notes without replacing generated notes", () => {
+  assert.equal(repositoryReleaseNotesPath("2.0.30"), ".github/release-notes/v2.0.30.md");
+  assert.equal(
+    prependRepositoryReleaseNotes("## What's Changed\n\n- generated", "## Highlights\n\n- authored"),
+    "## Highlights\n\n- authored\n\n## What's Changed\n\n- generated",
+  );
+  assert.equal(prependRepositoryReleaseNotes("## What's Changed", ""), "## What's Changed");
+});
+
+test("rejects unsafe repository-authored release notes", () => {
+  assert.throws(
+    () => validateRepositoryReleaseNotes("<!-- doc-agent-local-plugin-release-intent\n{}\n-->"),
+    /must not contain Doc Agent/,
+  );
+  assert.throws(
+    () => validateRepositoryReleaseNotes("token: github_pat_secretvalue"),
+    /credential-like value/,
+  );
+  assert.throws(() => repositoryReleaseNotesPath("v2.0.30"), /must not include a leading v/);
+});
+
 test("selects the previous MemOS stable tag for release evidence", () => {
   assert.equal(
     findPreviousMemOSTag("2.0.25", "v2.0.25", ["v2.0.24", "v2.0.25", "v2.0.25-beta.1", "memos-local-plugin-v2.0.10"]),
@@ -193,18 +226,73 @@ test("rejects leading v in manual version input", () => {
   assert.throws(() => incrementPatchVersion("2.0.12-beta.1"), /Cannot auto-increment prerelease/);
 });
 
-test("leaves local-plugin publishing disabled when local_plugin_version is blank", () => {
+test("derives automatic weekly release versions from supported merged release branches", () => {
+  assert.equal(deriveReleaseVersionFromMergedPrHead("release/v2.0.29"), "2.0.29");
+  assert.equal(deriveReleaseVersionFromMergedPrHead("dev-v2.0.29"), "2.0.29");
+  assert.equal(deriveReleaseVersionFromMergedPrHead("dev-2.0.29"), "2.0.29");
+  assert.equal(deriveReleaseVersionFromMergedPrHead("dev-v12.34.56"), "12.34.56");
+  assert.equal(deriveReleaseVersionFromMergedPrHead("dev-12.34.56"), "12.34.56");
+  assert.throws(() => deriveReleaseVersionFromMergedPrHead("feature/foo"), /release\/vX\.Y\.Z/);
+  assert.throws(() => deriveReleaseVersionFromMergedPrHead("v2.0.29"), /release\/vX\.Y\.Z/);
+  assert.throws(() => deriveReleaseVersionFromMergedPrHead("dev-feature"), /release\/vX\.Y\.Z/);
+  assert.throws(() => deriveReleaseVersionFromMergedPrHead("dev-v2.0"), /release\/vX\.Y\.Z/);
+  assert.throws(() => deriveReleaseVersionFromMergedPrHead("release/v2.0"), /release\/vX\.Y\.Z/);
+  assert.throws(() => deriveReleaseVersionFromMergedPrHead("dev-v2.0.29-hotfix"), /release\/vX\.Y\.Z/);
+  assert.throws(() => deriveReleaseVersionFromMergedPrHead("dev-v02.0.29"), /release\/vX\.Y\.Z/);
+});
+
+test("quality report exposes the validated MemOS project version", () => {
+  const source = readFileSync(join(scriptsDir, "prepare-memos-release.mjs"), "utf8");
+  assert.match(source, /memos_project_version:\s*evidence\.memos_project_version/);
+});
+
+test("auto mode publishes the next local-plugin patch when the version guard is blank", () => {
   const plan = validateLocalPluginVersionPlan(evidence, "");
+  assert.equal(plan.release_requested, true);
+  assert.equal(plan.release_mode, "auto");
+  assert.equal(plan.pending_local_plugin_changes, false);
+  assert.equal(plan.version, "v2.0.11");
+  assert.equal(plan.next_patch_version, "v2.0.11");
+  assert.equal(plan.local_plugin_tag, "memos-local-plugin-v2.0.11");
+  assert.equal(plan.version_source, "auto_next_patch_from_latest_stable_local_plugin_tag");
+  assert.equal(plan.auto_incremented, true);
+});
+
+test("auto mode treats local_plugin_version as a strict guard", () => {
+  const guarded = validateLocalPluginVersionPlan(evidence, "2.0.11");
+  assert.equal(guarded.release_requested, true);
+  assert.equal(guarded.version, "v2.0.11");
+  assert.equal(guarded.version_source, "auto_detected_with_manual_guard");
+  assert.equal(guarded.auto_incremented, false);
+  assert.throws(() => validateLocalPluginVersionPlan(evidence, "2.0.12"), /next stable patch/);
+  assert.throws(
+    () =>
+      validateLocalPluginVersionPlan(
+        { ...evidence, has_product_changes: false, has_user_facing_product_changes: false },
+        "2.0.11",
+      ),
+    /auto-mode guard.*no unpublished apps\/memos-local-plugin/,
+  );
+  assert.throws(
+    () => validateLocalPluginVersionPlan({ ...evidence, has_user_facing_product_changes: false }, "2.0.11"),
+    /auto-mode guard.*no unpublished user-facing/,
+  );
+});
+
+test("skip mode leaves local-plugin publishing disabled even when changes exist", () => {
+  const plan = validateLocalPluginVersionPlan(evidence, "", { releaseMode: "skip" });
   assert.equal(plan.release_requested, false);
+  assert.equal(plan.release_mode, "skip");
   assert.equal(plan.pending_local_plugin_changes, true);
   assert.equal(plan.version, "v2.0.10");
   assert.equal(plan.next_patch_version, "v2.0.11");
   assert.equal(plan.local_plugin_tag, "");
-  assert.match(plan.input_ignored_reason, /left blank/);
+  assert.match(plan.input_ignored_reason, /local_plugin_release_mode=skip/);
+  assert.throws(() => validateLocalPluginVersionPlan(evidence, "2.0.11", { releaseMode: "skip" }), /requires local_plugin_version to be blank/);
 });
 
 test("accepts only the next unused stable patch for a weekly local-plugin release", () => {
-  const plan = validateLocalPluginVersionPlan(evidence, "2.0.11");
+  const plan = validateLocalPluginVersionPlan(evidence, "2.0.11", { releaseMode: "manual" });
   assert.equal(plan.release_requested, true);
   assert.equal(plan.input_raw, "2.0.11");
   assert.equal(plan.expected_version, "v2.0.11");
@@ -213,18 +301,19 @@ test("accepts only the next unused stable patch for a weekly local-plugin releas
   assert.equal(plan.version_source, "manual_weekly_release_opt_in");
   assert.equal(plan.local_plugin_tag, "memos-local-plugin-v2.0.11");
   assert.equal(plan.package_version, "v2.0.11");
-  assert.throws(() => validateLocalPluginVersionPlan(evidence, "2.0.12"), /next stable patch/);
-  assert.throws(() => validateLocalPluginVersionPlan(evidence, "3.0.0"), /next stable patch/);
-  assert.throws(() => validateLocalPluginVersionPlan(evidence, "2.0.11-beta.1"), /stable SemVer/);
+  assert.throws(() => validateLocalPluginVersionPlan(evidence, "", { releaseMode: "manual" }), /requires local_plugin_version/);
+  assert.throws(() => validateLocalPluginVersionPlan(evidence, "2.0.12", { releaseMode: "manual" }), /next stable patch/);
+  assert.throws(() => validateLocalPluginVersionPlan(evidence, "3.0.0", { releaseMode: "manual" }), /next stable patch/);
+  assert.throws(() => validateLocalPluginVersionPlan(evidence, "2.0.11-beta.1", { releaseMode: "manual" }), /stable SemVer/);
 });
 
 test("fails when a weekly local-plugin version is supplied without publishable evidence", () => {
   assert.throws(
-    () => validateLocalPluginVersionPlan({ ...evidence, has_product_changes: false, has_user_facing_product_changes: false }, "2.0.11"),
+    () => validateLocalPluginVersionPlan({ ...evidence, has_product_changes: false, has_user_facing_product_changes: false }, "2.0.11", { releaseMode: "manual" }),
     /no unpublished apps\/memos-local-plugin/,
   );
   assert.throws(
-    () => validateLocalPluginVersionPlan({ ...evidence, has_user_facing_product_changes: false }, "2.0.11"),
+    () => validateLocalPluginVersionPlan({ ...evidence, has_user_facing_product_changes: false }, "2.0.11", { releaseMode: "manual" }),
     /no unpublished user-facing/,
   );
   const skipped = validateLocalPluginVersionPlan(
@@ -275,6 +364,93 @@ test("used npm/tag versions fail closed unless npm-backed recovery is explicit",
   });
   assert.equal(recovered.recovery_enabled, true);
   assert.equal(recovered.release_requested, true);
+
+  const stagedRetry = validateLocalPluginVersionPlan(evidence, "2.0.11", {
+    requestedTagExists: true,
+    npmVersionExists: false,
+    stagedReleaseRetryVerified: true,
+  });
+  assert.equal(stagedRetry.staged_release_retry_verified, true);
+  assert.equal(stagedRetry.release_requested, true);
+  assert.throws(
+    () => validateLocalPluginVersionPlan(evidence, "2.0.11", {
+      requestedTagExists: false,
+      npmVersionExists: false,
+      stagedReleaseRetryVerified: true,
+    }),
+    /requires an existing release tag/,
+  );
+  assert.throws(
+    () => validateLocalPluginVersionPlan(evidence, "2.0.11", {
+      requestedTagExists: true,
+      npmVersionExists: true,
+      stagedReleaseRetryVerified: true,
+    }),
+    /npm version that is not published yet/,
+  );
+});
+
+test("only reuses an exact unpublished weekly local-plugin Draft on automatic retry", () => {
+  const sourceSha = "a".repeat(40);
+  const binding = buildLocalPluginReleaseBinding({
+    version: "2.0.11",
+    tag: "memos-local-plugin-v2.0.11",
+    sourceSha,
+    evidenceDigest: "b".repeat(64),
+    originMode: "memos_weekly",
+    memosReleaseTag: "v2.0.25",
+  });
+  const release = {
+    exists: true,
+    tag_name: "memos-local-plugin-v2.0.11",
+    name: "MemOS Local Plugin v2.0.11",
+    body: appendLocalPluginReleaseBinding("## Changelog\n\n### Fixed\n- Retry-safe staging.", binding),
+    draft: true,
+    prerelease: false,
+    published_at: "",
+    html_url: "https://github.com/MemTensor/MemOS/releases/tag/memos-local-plugin-v2.0.11",
+  };
+  const source = {
+    accepted: true,
+    relationship: "release_metadata_child",
+    tag_commit: sourceSha,
+  };
+  const result = validateWeeklyStagedLocalPluginRetry({
+    candidate: { tag: "memos-local-plugin-v2.0.11", version: "2.0.11" },
+    memosReleaseTag: "v2.0.25",
+    release,
+    source,
+  });
+  assert.equal(result.verified, true);
+  assert.equal(result.source_sha, sourceSha);
+
+  assert.throws(
+    () => validateWeeklyStagedLocalPluginRetry({
+      candidate: { tag: "memos-local-plugin-v2.0.11", version: "2.0.11" },
+      memosReleaseTag: "v2.0.26",
+      release,
+      source,
+    }),
+    /memos_release_tag/,
+  );
+  assert.throws(
+    () => validateWeeklyStagedLocalPluginRetry({
+      candidate: { tag: "memos-local-plugin-v2.0.11", version: "2.0.11" },
+      memosReleaseTag: "v2.0.25",
+      release: { ...release, draft: false, published_at: "2026-08-13T00:00:00Z" },
+      source,
+    }),
+    /not an unpublished stable Draft/,
+  );
+  assert.throws(
+    () => validateWeeklyStagedLocalPluginRetry({
+      candidate: { tag: "memos-local-plugin-v2.0.11", version: "2.0.11" },
+      memosReleaseTag: "v2.0.25",
+      release: { ...release, body: "## Changelog" },
+      source,
+    }),
+    /exactly one binding marker/,
+  );
 });
 
 test("resolves stable local-plugin tag baselines independently from MemOS tags", () => {
@@ -287,12 +463,188 @@ test("resolves stable local-plugin tag baselines independently from MemOS tags",
   const previous = findPreviousStableLocalPluginTag(tags);
   assert.equal(previous.tag, "memos-local-plugin-v2.0.11");
   assert.equal(previous.version, "2.0.11");
+  const previousBeforeStagedRetry = findPreviousStableLocalPluginTag(tags, { requestedVersion: "v2.0.11" });
+  assert.equal(previousBeforeStagedRetry.tag, "memos-local-plugin-v2.0.10");
   assert.equal(localPluginTagForVersion("2.0.12"), "memos-local-plugin-v2.0.12");
   assert.equal(npmVersionLookupResult({ status: 0, output: '"2.0.12"' }), true);
   assert.equal(npmVersionLookupResult({ status: 1, output: "E404 Not Found" }), false);
   assert.throws(
     () => npmVersionLookupResult({ status: 1, output: "ECONNRESET" }),
     /npm version lookup was inconclusive: ECONNRESET/,
+  );
+});
+
+test("accepts only a fully published stable local-plugin baseline", () => {
+  const candidate = {
+    tag: "memos-local-plugin-v2.0.13",
+    version: "2.0.13",
+    parsed: { major: 2, minor: 0, patch: 13, prerelease: [] },
+  };
+  const baseline = validatePublishedStableLocalPluginBaseline({
+    candidate,
+    npmExists: true,
+    sourceIsAncestor: true,
+    release: {
+      exists: true,
+      tag_name: candidate.tag,
+      draft: false,
+      prerelease: false,
+      published_at: "2026-08-07T03:24:54Z",
+      html_url: `https://github.com/MemTensor/MemOS/releases/tag/${candidate.tag}`,
+    },
+  });
+  assert.equal(baseline.tag, candidate.tag);
+  assert.equal(baseline.npm_verified, true);
+  assert.equal(baseline.release_verified, true);
+});
+
+test("accepts stable local-plugin tags on target history or a direct metadata-only release child", () => {
+  const candidate = { tag: "memos-local-plugin-v2.0.13", version: "2.0.13" };
+  const common = {
+    candidate,
+    tagCommit: "a".repeat(40),
+    packageVersion: "2.0.13",
+    manifestVersion: "2.0.13",
+  };
+  assert.deepEqual(
+    validateStableLocalPluginSourceLineage({ ...common, tagIsTargetAncestor: true }),
+    { accepted: true, relationship: "target_history" },
+  );
+  assert.deepEqual(
+    validateStableLocalPluginSourceLineage({
+      ...common,
+      tagIsTargetAncestor: false,
+      parentCommits: ["b".repeat(40)],
+      parentIsTargetAncestor: true,
+      changedFiles: [
+        "apps/memos-local-plugin/package.json",
+        "apps/memos-local-plugin/package-lock.json",
+        "apps/memos-local-plugin/adapters/hermes/plugin.yaml",
+      ],
+    }),
+    { accepted: true, relationship: "release_metadata_child" },
+  );
+});
+
+test("rejects detached or mismatched stable local-plugin release tags", () => {
+  const common = {
+    candidate: { tag: "memos-local-plugin-v2.0.13", version: "2.0.13" },
+    tagCommit: "a".repeat(40),
+    tagIsTargetAncestor: false,
+    parentCommits: ["b".repeat(40)],
+    parentIsTargetAncestor: true,
+    packageVersion: "2.0.13",
+    manifestVersion: "2.0.13",
+  };
+  assert.throws(
+    () => validateStableLocalPluginSourceLineage({
+      ...common,
+      changedFiles: [
+        "apps/memos-local-plugin/package.json",
+        "apps/memos-local-plugin/adapters/hermes/plugin.yaml",
+        "apps/memos-local-plugin/src/index.ts",
+      ],
+    }),
+    /changes non-metadata file.*src\/index\.ts/,
+  );
+  assert.throws(
+    () => validateStableLocalPluginSourceLineage({
+      ...common,
+      parentIsTargetAncestor: false,
+      changedFiles: [
+        "apps/memos-local-plugin/package.json",
+        "apps/memos-local-plugin/adapters/hermes/plugin.yaml",
+      ],
+    }),
+    /parent is not in the current MemOS release target history/,
+  );
+  assert.throws(
+    () => validateStableLocalPluginSourceLineage({
+      ...common,
+      packageVersion: "2.0.12",
+      changedFiles: [
+        "apps/memos-local-plugin/package.json",
+        "apps/memos-local-plugin/adapters/hermes/plugin.yaml",
+      ],
+    }),
+    /contains package version 2\.0\.12, expected 2\.0\.13/,
+  );
+});
+
+test("rejects incomplete or inconsistent stable local-plugin baselines", () => {
+  const candidate = {
+    tag: "memos-local-plugin-v2.0.14",
+    version: "2.0.14",
+    parsed: { major: 2, minor: 0, patch: 14, prerelease: [] },
+  };
+  assert.throws(
+    () => validatePublishedStableLocalPluginBaseline({
+      candidate,
+      npmExists: false,
+      sourceIsAncestor: true,
+      release: {
+        exists: true,
+        tag_name: candidate.tag,
+        draft: true,
+        prerelease: false,
+        published_at: "",
+      },
+    }),
+    /npm package.*is missing.*still Draft.*no published_at.*Finish or explicitly recover/,
+  );
+  assert.throws(
+    () => validatePublishedStableLocalPluginBaseline({
+      candidate,
+      npmExists: true,
+      sourceIsAncestor: true,
+      release: { exists: false },
+    }),
+    /GitHub Release memos-local-plugin-v2\.0\.14 is missing/,
+  );
+  assert.throws(
+    () => validatePublishedStableLocalPluginBaseline({
+      candidate,
+      npmExists: true,
+      sourceIsAncestor: true,
+      release: {
+        exists: true,
+        tag_name: "memos-local-plugin-v2.0.15",
+        draft: false,
+        prerelease: false,
+        published_at: "2026-08-07T03:24:54Z",
+      },
+    }),
+    /bound to memos-local-plugin-v2\.0\.15 instead of memos-local-plugin-v2\.0\.14/,
+  );
+  assert.throws(
+    () => validatePublishedStableLocalPluginBaseline({
+      candidate,
+      npmExists: true,
+      sourceIsAncestor: true,
+      release: {
+        exists: true,
+        tag_name: candidate.tag,
+        draft: false,
+        prerelease: true,
+        published_at: "2026-08-07T03:24:54Z",
+      },
+    }),
+    /marked as a prerelease/,
+  );
+  assert.throws(
+    () => validatePublishedStableLocalPluginBaseline({
+      candidate,
+      npmExists: true,
+      sourceIsAncestor: false,
+      release: {
+        exists: true,
+        tag_name: candidate.tag,
+        draft: false,
+        prerelease: false,
+        published_at: "2026-08-07T03:24:54Z",
+      },
+    }),
+    /is not an ancestor of the current MemOS release target/,
   );
 });
 
@@ -320,16 +672,43 @@ test("requires an exact publish confirmation for non-dry-run releases", () => {
     localPluginVersion: "2.0.11",
     confirmation: "PUBLISH v2.0.25 WITH LOCAL PLUGIN v2.0.11",
   }));
+  assert.doesNotThrow(() =>
+    validatePublishConfirmation({
+      dryRun: "false",
+      version: "2.0.25",
+      localPluginVersion: "2.0.11",
+      confirmation: "",
+      autoPostMergeRelease: "true",
+    }),
+  );
 });
 
 test("publish workflow defaults real releases to draft before release.published", () => {
   const workflow = readFileSync(join(workflowsDir, "memos-release-publish-main.yml"), "utf8");
+  assert.match(workflow, /permissions:\n  contents: read/);
+  assert.match(workflow, /publish-local-plugin:[\s\S]*?permissions:\n      contents: write/);
+  assert.match(workflow, /release:[\s\S]*?permissions:\n      contents: write/);
   assert.match(workflow, /create_draft_release:/);
   assert.match(workflow, /default:\s+true/);
   assert.match(workflow, /CREATE_DRAFT_RELEASE/);
   assert.match(workflow, /timeout-minutes:\s+30/);
-  assert.match(workflow, /Validate publish confirmation/);
-  assert.match(workflow, /publish_confirmation must exactly equal/);
+  assert.doesNotMatch(workflow, /Validate publish confirmation/);
+  assert.match(workflow, /pull_request:\n\s+types: \[closed\]\n\s+branches:\n\s+- main/);
+  assert.match(workflow, /classify_release_trigger:/);
+  assert.match(workflow, /\^\(release\/v\|dev-v\?\)/);
+  assert.match(workflow, /dev-v\?/);
+  assert.match(workflow, /needs\.classify_release_trigger\.outputs\.is_release_trigger == 'true'/);
+  assert.match(workflow, /PR_HEAD_REPO: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \|\| '' \}\}/);
+  assert.match(workflow, /\[\[ "\$PR_HEAD_REPO" != "\$REPOSITORY" \]\]/);
+  assert.match(workflow, /\[\[ "\$WORKFLOW_REF_NAME" != "\$DEFAULT_BRANCH" \]\]/);
+  assert.match(
+    workflow,
+    /name: Require the default-branch workflow\n\s+if: \$\{\{ github\.event_name == 'workflow_dispatch' \}\}/,
+  );
+  assert.match(workflow, /Run MemOS Release — Publish from \$\{DEFAULT_BRANCH\}/);
+  assert.doesNotMatch(workflow, /startsWith\(github\.event\.pull_request\.head\.ref, 'dev-'/);
+  assert.match(workflow, /AUTO_POST_MERGE_RELEASE/);
+  assert.match(workflow, /MERGED_PR_HEAD_REF/);
   assert.match(workflow, /flags\+=\(--draft\)/);
   assert.match(workflow, /wait_for_remote_tag\(\)/);
   assert.match(workflow, /wait_for_release_visibility\(\)/);
@@ -341,11 +720,15 @@ test("publish workflow defaults real releases to draft before release.published"
   assert.match(workflow, /exists after a failed create response; treating it as success/);
   assert.match(workflow, /did not become visible in time/);
   assert.match(workflow, /local-plugin Release is always staged as a Draft/);
+  assert.match(workflow, /local_plugin_release_mode:/);
+  assert.match(workflow, /options:\n\s+- auto\n\s+- skip\n\s+- manual/);
   assert.match(workflow, /local_plugin_version:/);
-  assert.match(workflow, /Leave blank to skip local-plugin npm\/tag\/docs/);
+  assert.match(workflow, /Optional stable local-plugin version guard/);
   assert.match(workflow, /uses: \.\/\.github\/workflows\/memos-local-plugin-publish\.yml/);
   assert.match(workflow, /docs_sync_mode: paired_with_memos_release/);
-  assert.match(workflow, /memos_release_tag: v\$\{\{ inputs\.version \}\}/);
+  assert.match(workflow, /memos_release_tag: \$\{\{ needs\.prepare\.outputs\.current_tag \}\}/);
+  assert.match(workflow, /publish_phase: stage_release/);
+  assert.match(workflow, /publish_phase: publish_npm_only/);
   assert.match(workflow, /create_draft_release: true/);
   assert.doesNotMatch(workflow, /create_draft_release: \$\{\{ inputs\.create_draft_release \}\}/);
   assert.match(workflow, /needs\.prepare\.outputs\.local_plugin_release_requested == 'true'/);
@@ -361,7 +744,7 @@ test("publish workflow defaults real releases to draft before release.published"
   assert.match(workflow, /version: \$\{\{ needs\.prepare\.outputs\.local_plugin_publish_version \}\}/);
   assert.match(
     workflow,
-    /LOCAL_PLUGIN_VERSION: \$\{\{ needs\.prepare\.outputs\.local_plugin_publish_version \}\}/,
+    /local_plugin_publish_version: \$\{\{ steps\.prepare\.outputs\.local_plugin_publish_version \}\}/,
   );
   assert.doesNotMatch(workflow, /version: \$\{\{ needs\.prepare\.outputs\.local_plugin_version \}\}/);
   assert.doesNotMatch(workflow, /version: \$\{\{ needs\.prepare\.outputs\.local_plugin_expected_version \}\}/);
@@ -370,11 +753,13 @@ test("publish workflow defaults real releases to draft before release.published"
   assert.match(workflow, /append-local-plugin-release-intent\.mjs/);
   assert.match(workflow, /LOCAL_PLUGIN_RELEASE_URL/);
   assert.match(workflow, /local_plugin_evidence_digest/);
-  assert.match(workflow, /WITH LOCAL PLUGIN v\$\{LOCAL_PLUGIN_VERSION\}/);
-  assert.match(workflow, /Publish paired local-plugin Release after immediate MemOS publish/);
+  assert.match(workflow, /WITH LOCAL PLUGIN v<local version>/);
+  assert.match(workflow, /caller_publish_confirmation/);
+  assert.match(workflow, /publish-local-plugin-npm-after-immediate-release:/);
+  assert.match(workflow, /publish-paired-local-plugin-after-immediate-release:/);
   assert.match(workflow, /id: memos_release/);
   assert.match(workflow, /release_is_draft=\$\{is_draft\}/);
-  assert.match(workflow, /steps\.memos_release\.outputs\.release_is_draft == 'false'/);
+  assert.match(workflow, /needs\.release\.outputs\.release_is_draft == 'false'/);
   assert.match(workflow, /MEMOS_RELEASE_TAG_OVERRIDE: \$\{\{ needs\.prepare\.outputs\.current_tag \}\}/);
   assert.match(workflow, /run: node \.github\/scripts\/publish-paired-local-plugin-release\.mjs/);
 });
@@ -389,7 +774,19 @@ test("paired local-plugin publisher is release-triggered, idempotent, and has ex
   assert.match(workflow, /PUBLISH PAIRED LOCAL PLUGIN FOR/);
   assert.match(workflow, /github\.repository == 'MemTensor\/MemOS'/);
   assert.match(workflow, /startsWith\(github\.event\.release\.tag_name, 'v'\)/);
-  assert.match(workflow, /permissions:\n\s+contents: write/);
+  assert.match(workflow, /permissions:\n  contents: read/);
+  assert.match(workflow, /resolve-paired-local-plugin:/);
+  assert.match(
+    workflow,
+    /publish-local-plugin-npm:[\s\S]*?permissions:\n      contents: write/,
+  );
+  assert.match(
+    workflow,
+    /publish-paired-local-plugin:[\s\S]*?permissions:\n      contents: write/,
+  );
+  assert.match(workflow, /publish-local-plugin-npm:/);
+  assert.match(workflow, /publish_phase: publish_npm_only/);
+  assert.match(workflow, /VALIDATE_ONLY: "true"/);
   assert.match(workflow, /publish-paired-local-plugin-release\.mjs/);
   assert.doesNotMatch(workflow, /NPM_TOKEN|DOC_AGENT_RELEASE_SYNC|pull-requests:\s*write/);
 });
@@ -402,6 +799,9 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /guard-legacy-publish:/);
   assert.match(workflow, /guard-legacy-publish:\n\s+runs-on: ubuntu-latest\n\s+timeout-minutes: 5/);
   assert.match(workflow, /expected="LEGACY PUBLISH memos-local-plugin-v\$\{RELEASE_VERSION\}"/);
+  assert.match(workflow, /npm run release:validate/);
+  assert.doesNotMatch(workflow, /--label "npm run lint" -- npm run lint/);
+  assert.doesNotMatch(workflow, /--label "npm test" -- npm test/);
   assert.match(workflow, /standalone local-plugin npm publisher for beta or latest package releases/);
   assert.match(workflow, /MemOS Release — Publish remains the weekly whole-repo release path/);
   assert.match(workflow, /needs: guard-legacy-publish/);
@@ -417,8 +817,16 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /Formal publish source .* is not in .* history/);
   assert.match(workflow, /Formal publishing must use the latest release automation from/);
   assert.match(workflow, /Select \$\{DEFAULT_BRANCH\} in Run workflow and retry/);
+  assert.match(workflow, /PUBLISH_PHASE: \$\{\{ inputs\.publish_phase \|\| 'full' \}\}/);
+  assert.match(workflow, /MEMOS_RELEASE_TAG: \$\{\{ inputs\.memos_release_tag \}\}/);
+  assert.match(workflow, /paired weekly release may stage the local-plugin tag on a direct/);
+  assert.match(workflow, /must equal \$\{MEMOS_RELEASE_TAG\} .* or be its direct single-parent metadata child/);
+  assert.match(workflow, /apps\/memos-local-plugin\/package\.json\|/);
+  assert.match(workflow, /apps\/memos-local-plugin\/package-lock\.json\|/);
+  assert.match(workflow, /apps\/memos-local-plugin\/adapters\/hermes\/plugin\.yaml\)/);
+  assert.match(workflow, /Paired local-plugin metadata commit changes forbidden file/);
   assert.match(workflow, /Validate npm authentication before platform builds/);
-  assert.match(workflow, /if: \$\{\{ inputs\.dry_run != true \}\}/);
+  assert.match(workflow, /inputs\.dry_run != true && \(inputs\.publish_phase \|\| 'full'\) != 'stage_release'/);
   assert.match(workflow, /npm whoami/);
   assert.match(workflow, /NPM_TOKEN authentication failed; stopping before platform builds/);
   assert.match(workflow, /cp -R \.release-workflow\/\.github\/scripts \.github\/scripts/);
@@ -428,6 +836,8 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /inspect-local-plugin-release-state\.mjs/);
   assert.match(workflow, /EXPECTED_PACKAGE_SOURCE_SHA/);
   assert.match(workflow, /RELEASE_METADATA_STATE/);
+  assert.match(workflow, /Require staged local-plugin metadata before npm-only publish/);
+  assert.match(workflow, /ALLOW_STAGED_TAG_BEFORE_NPM/);
   assert.match(workflow, /audit-local-plugin-package\.mjs/);
   assert.match(workflow, /wait-for-local-plugin-npm-release\.test\.mjs/);
   assert.match(workflow, /NPM_VISIBILITY_TIMEOUT_SECONDS: "150"/);
@@ -545,6 +955,31 @@ test("validates both MemOS package versions at the exact release target", () => 
   });
 });
 
+test("local dry runs prefer the fetched origin branch over a stale local branch", () => {
+  const root = mkdtempSync(join(tmpdir(), "memos-resolve-ref-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+  writeFileSync(join(root, "state.txt"), "old\n");
+  execFileSync("git", ["add", "state.txt"], { cwd: root });
+  execFileSync("git", ["commit", "-m", "old"], { cwd: root, stdio: "ignore" });
+  const localSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  writeFileSync(join(root, "state.txt"), "new\n");
+  execFileSync("git", ["commit", "-am", "new"], { cwd: root, stdio: "ignore" });
+  const remoteSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", remoteSha], { cwd: root });
+  execFileSync("git", ["reset", "--hard", localSha], { cwd: root, stdio: "ignore" });
+
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(root);
+    assert.deepEqual(resolveRef("main"), { ref: "origin/main", sha: remoteSha });
+    assert.deepEqual(resolveRef(localSha), { ref: localSha, sha: localSha });
+  } finally {
+    process.chdir(originalCwd);
+  }
+});
+
 test("reports absent, matching, and conflicting manual release tags", () => {
   withFixtureRepo(() => {
     const firstTarget = git(["rev-parse", "HEAD"]).trim();
@@ -644,7 +1079,7 @@ test("filters mixed MemOS release evidence down to local-plugin paths", () => {
 
 test("filters standalone local-plugin release metadata from docs evidence", () => {
   withFixtureRepo(() => {
-    writeRepoFile("apps/memos-local-plugin/tests/e2e/v7-full-chain.e2e.test.ts", "export const v7Defaults = true;\n");
+    writeRepoFile("apps/memos-local-plugin/src/session-defaults.ts", "export const v7Defaults = true;\n");
     commitAll("fix(plugin): preserve V7 session defaults (#11)");
 
     writeRepoFile(
@@ -1085,7 +1520,7 @@ test("allows the draft service one initial response plus three repair attempts",
   }
 });
 
-test("real weekly release skips Doc Agent drafting when local_plugin_version is blank", async () => {
+test("real weekly release skips Doc Agent drafting when local-plugin publishing is not requested", async () => {
   const originalFetch = globalThis.fetch;
   let callCount = 0;
   try {
@@ -1103,7 +1538,7 @@ test("real weekly release skips Doc Agent drafting when local_plugin_version is 
     assert.equal(callCount, 0);
     assert.equal(draft.ok, true);
     assert.deepEqual(draft.release_items, []);
-    assert.match(draft.warnings[0], /left local_plugin_version blank/);
+    assert.match(draft.warnings[0], /did not request a local-plugin release/);
     const validation = validateDraft(draft, {
       ...evidence,
       dry_run: false,
@@ -1113,6 +1548,7 @@ test("real weekly release skips Doc Agent drafting when local_plugin_version is 
     });
     assert.equal(validation.ok, true);
     assert.equal(validation.skipped_by_operator, true);
+    assert.equal(validation.local_plugin_release_not_requested, true);
     assert.equal(validation.coverage.required_count, 0);
   } finally {
     globalThis.fetch = originalFetch;
@@ -1231,7 +1667,7 @@ test("skips Plugin tab docs when local-plugin changes are maintenance-only", () 
 
     assert.equal(result.has_product_changes, true);
     assert.equal(result.has_user_facing_product_changes, false);
-    assert.match(result.skip_reason, /no user-facing/);
+    assert.match(result.skip_reason, /only tests\/docs\/package metadata\/release files changed/);
     assert.deepEqual(result.important_commits, []);
 
     const emptyDraft = { ok: true, needs_review: false, release_items: [] };
@@ -1242,6 +1678,127 @@ test("skips Plugin tab docs when local-plugin changes are maintenance-only", () 
     assert.equal(preview.docs_action, "skip_plugin_tab_entry");
     assert.deepEqual(preview.cn.products.plugin, {});
     assert.deepEqual(preview.en.products.plugin, {});
-    assert.match(docsPreviewMarkdown(preview, emptyDraft, result), /no user-facing/);
+    assert.match(docsPreviewMarkdown(preview, emptyDraft, result), /only tests\/docs\/package metadata\/release files changed/);
+  });
+});
+
+test("skips feat-labeled commits when the final diff only changes local-plugin tests", () => {
+  withFixtureRepo(() => {
+    writeRepoFile("apps/memos-local-plugin/tests/unit/new-capability.test.ts", "export const exercisesNewCapability = true;\n");
+    commitAll("feat(plugin): cover the new capability contract (#10)");
+
+    const result = collectLocalPluginEvidence({
+      previousTag: "v9.9.0",
+      currentTag: "v9.9.1",
+      currentRef: "HEAD",
+      targetVersion: "9.9.1",
+      repo: "MemTensor/MemOS",
+    });
+
+    assert.equal(result.has_product_changes, true);
+    assert.equal(result.has_user_facing_product_file_changes, false);
+    assert.equal(result.has_user_facing_product_changes, false);
+    assert.match(result.skip_reason, /only tests\/docs\/package metadata\/release files changed/);
+    assert.deepEqual(result.important_commits, []);
+  });
+});
+
+test("does not combine a test-only feat with unrelated runtime maintenance into a release", () => {
+  withFixtureRepo(() => {
+    writeRepoFile(
+      "apps/memos-local-plugin/tests/unit/provider-routing.test.ts",
+      "export const coversProviderRouting = true;\n",
+    );
+    commitAll("feat(plugin): cover provider routing behavior (#10)");
+    writeRepoFile("apps/memos-local-plugin/src/internal-layout.js", "export const layout = 'reorganized';\n");
+    commitAll("chore(plugin): reorganize internal runtime modules (#11)");
+
+    const result = collectLocalPluginEvidence({
+      previousTag: "v9.9.0",
+      currentTag: "v9.9.1",
+      currentRef: "HEAD",
+      targetVersion: "9.9.1",
+      repo: "MemTensor/MemOS",
+    });
+
+    assert.equal(result.has_product_changes, true);
+    assert.equal(result.has_user_facing_product_file_changes, true);
+    assert.equal(result.has_user_facing_product_changes, false);
+    assert.match(result.skip_reason, /no user-facing/);
+    assert.deepEqual(result.important_commits, []);
+    assert.equal(
+      result.commits.find((commit) => commit.subject.includes("provider routing"))?.has_user_facing_file_changes,
+      false,
+    );
+  });
+});
+
+test("skips local-plugin package metadata only changes even when package version changes", () => {
+  withFixtureRepo(() => {
+    writeRepoFile(
+      "apps/memos-local-plugin/package.json",
+      `${JSON.stringify({ name: "@memtensor/memos-local-plugin", version: "9.9.1" }, null, 2)}\n`,
+    );
+    commitAll("chore(plugin): bump package metadata (#10)");
+
+    const result = collectLocalPluginEvidence({
+      previousTag: "v9.9.0",
+      currentTag: "v9.9.1",
+      currentRef: "HEAD",
+      targetVersion: "9.9.1",
+      repo: "MemTensor/MemOS",
+    });
+
+    assert.equal(result.has_product_changes, true);
+    assert.equal(result.has_user_facing_product_file_changes, false);
+    assert.equal(result.has_user_facing_product_changes, false);
+    assert.match(result.skip_reason, /only tests\/docs\/package metadata\/release files changed/);
+    assert.deepEqual(result.important_commits, []);
+  });
+});
+
+test("skips broad build and refactor noise inside local-plugin runtime paths", () => {
+  withFixtureRepo(() => {
+    writeRepoFile("apps/memos-local-plugin/src/build-info.js", "export const buildInfo = 'metadata';\n");
+    commitAll("build(plugin): update local plugin packaging helpers (#10)");
+    writeRepoFile("apps/memos-local-plugin/src/internal-layout.js", "export const layout = 'reorganized';\n");
+    commitAll("refactor(plugin): reorganize local plugin internals (#11)");
+
+    const result = collectLocalPluginEvidence({
+      previousTag: "v9.9.0",
+      currentTag: "v9.9.1",
+      currentRef: "HEAD",
+      targetVersion: "9.9.1",
+      repo: "MemTensor/MemOS",
+    });
+
+    assert.equal(result.has_product_changes, true);
+    assert.equal(result.has_user_facing_product_file_changes, true);
+    assert.equal(result.has_user_facing_product_changes, false);
+    assert.match(result.skip_reason, /no user-facing/);
+    assert.deepEqual(result.important_commits, []);
+  });
+});
+
+test("keeps refactors that state a concrete local-plugin user impact", () => {
+  withFixtureRepo(() => {
+    writeRepoFile("apps/memos-local-plugin/src/hermes-bridge.js", "export const bridge = 'shared runtime';\n");
+    commitAll("refactor(plugin): reduce Hermes bridge restarts during provider switching (#10)");
+
+    const result = collectLocalPluginEvidence({
+      previousTag: "v9.9.0",
+      currentTag: "v9.9.1",
+      currentRef: "HEAD",
+      targetVersion: "9.9.1",
+      repo: "MemTensor/MemOS",
+    });
+
+    assert.equal(result.has_product_changes, true);
+    assert.equal(result.has_user_facing_product_file_changes, true);
+    assert.equal(result.has_user_facing_product_changes, true);
+    assert.deepEqual(
+      result.important_commits.map((commit) => commit.subject),
+      ["refactor(plugin): reduce Hermes bridge restarts during provider switching (#10)"],
+    );
   });
 });

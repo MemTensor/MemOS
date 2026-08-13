@@ -18,6 +18,7 @@ npm_visibility_interval_seconds="${NPM_VISIBILITY_INTERVAL_SECONDS:-10}"
 npm_visibility_request_timeout_seconds="${NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS:-8}"
 npm_registry_url="https://registry.npmjs.org"
 release_metadata_state="${RELEASE_METADATA_STATE:-fresh}"
+allow_staged_tag_before_npm="${ALLOW_STAGED_TAG_BEFORE_NPM:-false}"
 
 validate_positive_integer() {
   local name="$1"
@@ -36,6 +37,14 @@ case "${release_metadata_state}" in
   fresh|complete) ;;
   *)
     echo "::error::RELEASE_METADATA_STATE must be fresh or complete; received ${release_metadata_state}."
+    exit 2
+    ;;
+esac
+
+case "${allow_staged_tag_before_npm}" in
+  true|false) ;;
+  *)
+    echo "::error::ALLOW_STAGED_TAG_BEFORE_NPM must be true or false; received ${allow_staged_tag_before_npm}."
     exit 2
     ;;
 esac
@@ -107,6 +116,123 @@ npm_dist_tag_matches() {
     const tags = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     if (tags[process.argv[2]] !== process.argv[3]) process.exit(1);
   ' "${output_file}" "${NPM_DIST_TAG}" "${RELEASE_VERSION}"
+}
+
+read_current_npm_dist_tag() {
+  local output_file="${RUNNER_TEMP}/memos-local-plugin-npm-dist-tags-preflight.json"
+  local attempt
+  local status
+
+  for attempt in 1 2 3; do
+    set +e
+    npm view "${PACKAGE_NAME}" dist-tags \
+      --json \
+      --prefer-online \
+      --fetch-retries=0 \
+      --fetch-timeout=8000 \
+      --registry="${npm_registry_url}" \
+      >"${output_file}" 2>&1
+    status=$?
+    set -e
+    if [ "${status}" = 0 ]; then
+      node -e '
+        const fs = require("node:fs");
+        const tags = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        const value = tags[process.argv[2]];
+        if (value !== undefined && typeof value !== "string") {
+          throw new Error(`npm dist-tag ${process.argv[2]} is not a string`);
+        }
+        process.stdout.write(value || "");
+      ' "${output_file}" "${NPM_DIST_TAG}"
+      return 0
+    fi
+    if grep -Eiq "E404|404 Not Found|is not in this registry" "${output_file}"; then
+      return 0
+    fi
+    sed -n '1,120p' "${output_file}" >&2
+    if [ "${attempt}" = 3 ]; then
+      echo "::error::Failed to inspect npm dist-tag ${NPM_DIST_TAG} after three attempts; refusing to publish without a channel monotonicity check." >&2
+      exit "${status}"
+    fi
+    sleep "$((attempt * 5))"
+  done
+}
+
+ensure_npm_dist_tag_will_not_regress() {
+  local current_version
+  local comparison
+  local comparison_status
+
+  current_version="$(read_current_npm_dist_tag)"
+  if [ -z "${current_version}" ]; then
+    echo "npm dist-tag ${NPM_DIST_TAG} is not set; the new release may initialize it."
+    return 0
+  fi
+
+  set +e
+  comparison="$(node -e '
+    const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+    function parse(value) {
+      const match = SEMVER.exec(value);
+      if (!match) throw new Error(`invalid SemVer: ${value}`);
+      return {
+        core: match.slice(1, 4).map(Number),
+        pre: match[4] === undefined ? null : match[4].split("."),
+      };
+    }
+    function compareIdentifier(left, right) {
+      const leftNumeric = /^\d+$/.test(left);
+      const rightNumeric = /^\d+$/.test(right);
+      if (leftNumeric && rightNumeric) return Number(left) - Number(right);
+      if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+      return left === right ? 0 : left < right ? -1 : 1;
+    }
+    function compare(leftValue, rightValue) {
+      const left = parse(leftValue);
+      const right = parse(rightValue);
+      for (let index = 0; index < 3; index += 1) {
+        if (left.core[index] !== right.core[index]) return left.core[index] - right.core[index];
+      }
+      if (left.pre === null || right.pre === null) {
+        if (left.pre === right.pre) return 0;
+        return left.pre === null ? 1 : -1;
+      }
+      const length = Math.max(left.pre.length, right.pre.length);
+      for (let index = 0; index < length; index += 1) {
+        if (left.pre[index] === undefined) return -1;
+        if (right.pre[index] === undefined) return 1;
+        const result = compareIdentifier(left.pre[index], right.pre[index]);
+        if (result !== 0) return result;
+      }
+      return 0;
+    }
+    process.stdout.write(String(Math.sign(compare(process.argv[1], process.argv[2]))));
+  ' "${current_version}" "${RELEASE_VERSION}" 2>&1)"
+  comparison_status=$?
+  set -e
+  if [ "${comparison_status}" != 0 ]; then
+    echo "${comparison}" >&2
+    echo "::error::Could not compare npm dist-tag ${NPM_DIST_TAG} value ${current_version} with ${RELEASE_VERSION}; refusing to publish."
+    exit 1
+  fi
+
+  case "${comparison}" in
+    1)
+      echo "::error::Refusing to move npm dist-tag ${NPM_DIST_TAG} backwards from ${current_version} to ${RELEASE_VERSION}. Another release has already advanced this channel."
+      exit 1
+      ;;
+    0)
+      echo "::error::npm dist-tag ${NPM_DIST_TAG} already points to ${RELEASE_VERSION}, but npm reports that version as absent. Refusing to publish against inconsistent registry metadata."
+      exit 1
+      ;;
+    -1)
+      echo "npm dist-tag ${NPM_DIST_TAG} currently points to ${current_version}; advancing it to ${RELEASE_VERSION} is allowed."
+      ;;
+    *)
+      echo "::error::Unexpected SemVer comparison result: ${comparison}."
+      exit 1
+      ;;
+  esac
 }
 
 remote_tag_exists() {
@@ -220,9 +346,14 @@ if npm_version_exists; then
   fi
 else
   if [ "${release_metadata_state}" != "fresh" ]; then
-    echo "::error::Tag state is ${release_metadata_state}, but ${PACKAGE_NAME}@${RELEASE_VERSION} is absent from npm. Refusing to publish after tag metadata already exists."
-    exit 1
+    if [ "${allow_staged_tag_before_npm}" != "true" ]; then
+      echo "::error::Tag state is ${release_metadata_state}, but ${PACKAGE_NAME}@${RELEASE_VERSION} is absent from npm. Refusing to publish after tag metadata already exists."
+      exit 1
+    fi
+    echo "::notice::Tag state is ${release_metadata_state}; publishing npm after a staged paired local-plugin Draft Release."
   fi
+
+  ensure_npm_dist_tag_will_not_regress
 
   if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
     echo "::error::NPM_TOKEN is missing; refusing a real npm publish."
