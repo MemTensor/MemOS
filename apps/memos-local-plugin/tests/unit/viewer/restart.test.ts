@@ -59,23 +59,37 @@ describe("viewer restart flow", () => {
     expect(fakeWindow.location.href).toMatch(/^\/\?_t=\d+$/);
   });
 
-  it("stops polling when Windows requires a manual restart", async () => {
-    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      restarting: false,
-      manualRestartRequired: true,
-      platform: "win32",
-      message: "Close Hermes and start it again.",
-    }), { status: 200 })) as typeof fetch;
+  it("waits for a replacement instance after Windows requests a manual restart", async () => {
+    let healthChecks = 0;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return new Response(JSON.stringify({
+          ok: true,
+          restarting: false,
+          manualRestartRequired: true,
+          platform: "win32",
+          instanceId: "viewer-old",
+          message: "Close Hermes and start it again.",
+        }), { status: 200 });
+      }
+      healthChecks += 1;
+      if (healthChecks === 1) {
+        return new Response(JSON.stringify({ ok: true, instanceId: "viewer-old" }), {
+          status: 200,
+        });
+      }
+      if (healthChecks === 2) throw new TypeError("viewer is down");
+      return new Response(JSON.stringify({ ok: true, instanceId: "viewer-new" }), {
+        status: 200,
+      });
+    }) as typeof fetch;
 
-    await triggerRestart();
+    const restarting = triggerRestart();
+    await vi.runAllTimersAsync();
+    await restarting;
 
-    expect(globalThis.fetch).toHaveBeenCalledOnce();
-    expect(restartState.value).toEqual({
-      phase: "manualRestartRequired",
-      message: "Close Hermes and start it again.",
-    });
-    expect(fakeWindow.location.href).toBe("");
+    expect(healthChecks).toBe(3);
+    expect(fakeWindow.location.href).toMatch(/^\/?\?_t=\d+$/);
   });
 
   it("shows manual restart instructions returned by Windows OpenClaw", async () => {

@@ -26,9 +26,37 @@ describe("Hermes provider install links", () => {
   it("PowerShell installer links both checkout-local and user-level provider paths", () => {
     const source = readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
 
-    expect(source).toContain('hermes\\plugins\\memory');
+    expect(source).toContain('$UserPluginDir = Join-Path $HermesHome "plugins\\memory"');
     expect(source).toContain('(Join-Path $PluginDir "memtensor")');
     expect(source).toContain('(Join-Path $UserPluginDir "memtensor")');
+  });
+
+  it("PowerShell installer resolves Hermes host data from HERMES_HOME", () => {
+    const source = readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
+
+    expect(source).toContain("function Resolve-HermesHostHome");
+    expect(source).toContain('$ConfiguredHome = $env:HERMES_HOME');
+    expect(source).toContain("[Environment]::ExpandEnvironmentVariables");
+    expect(source).toContain("[IO.Path]::IsPathRooted");
+    expect(source).toContain('$HermesHome = Resolve-HermesHostHome');
+    expect(source).toContain('$env:HERMES_HOME = $HermesHome');
+    expect(source).toContain('$HasHermes = Test-Path $HermesHome');
+    expect(source).toContain('$ConfigFile = Join-Path $HermesHome "config.yaml"');
+    expect(source).toContain('$UserPluginDir = Join-Path $HermesHome "plugins\\memory"');
+    expect(source).not.toContain('$ConfigFile = Join-Path $env:LOCALAPPDATA "hermes\\config.yaml"');
+    expect(source).not.toContain('$UserPluginDir = Join-Path $env:LOCALAPPDATA "hermes\\plugins\\memory"');
+  });
+
+  it("PowerShell installer keeps code and MemOS package paths under LocalAppData", () => {
+    const source = readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
+
+    expect(source).toContain('$Prefix = Join-Path $env:LOCALAPPDATA "hermes\\memos-plugin"');
+    expect(source).toContain(
+      '$VenvPy = Join-Path $env:LOCALAPPDATA "hermes\\hermes-agent\\venv\\Scripts\\python.exe"',
+    );
+    expect(source).toContain(
+      '$DefaultPluginDir = Join-Path $env:LOCALAPPDATA "hermes\\hermes-agent\\plugins\\memory"',
+    );
   });
 
   it("PowerShell installer surfaces junction failures instead of swallowing them", () => {
