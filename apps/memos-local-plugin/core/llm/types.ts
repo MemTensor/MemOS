@@ -28,6 +28,8 @@ export interface LlmConfig {
   apiKey?: string;
   timeoutMs: number;
   maxRetries: number;
+  /** OpenAI-compatible reasoning toggle; omitted to preserve provider defaults. */
+  enableThinking?: boolean;
   /** Optional per-call default. Default: 1024. */
   maxTokens?: number;
   /** Extra HTTP headers for outgoing requests. */

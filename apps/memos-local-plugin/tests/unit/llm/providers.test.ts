@@ -95,6 +95,14 @@ describe("llm/providers", () => {
       expect(body.response_format).toEqual({ type: "json_object" });
     });
 
+    it("forwards an explicit thinking toggle to OpenAI-compatible providers", async () => {
+      const cap = captureFetch({ choices: [{ message: { content: "{}" } }] });
+      const p = new OpenAiLlmProvider();
+      await p.complete(msgs, call(), ctxFor(cfg({ enableThinking: false })));
+      const body = JSON.parse(cap.init!.body as string);
+      expect(body.enable_thinking).toBe(false);
+    });
+
     it("requires apiKey", async () => {
       const p = new OpenAiLlmProvider();
       await expect(p.complete(msgs, call(), ctxFor(cfg({ apiKey: "" })))).rejects.toBeInstanceOf(MemosError);

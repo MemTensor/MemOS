@@ -73,6 +73,9 @@ export class OpenAiLlmProvider implements LlmProvider {
     };
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
+    if (typeof config.enableThinking === "boolean") {
+      body.enable_thinking = config.enableThinking;
+    }
 
     const headers: Record<string, string> = {};
     if (config.apiKey) {
@@ -137,6 +140,9 @@ export class OpenAiLlmProvider implements LlmProvider {
     };
     if (opts.jsonMode) body.response_format = { type: "json_object" };
     if (opts.stop && opts.stop.length > 0) body.stop = opts.stop;
+    if (typeof config.enableThinking === "boolean") {
+      body.enable_thinking = config.enableThinking;
+    }
 
     const headers: Record<string, string> = {};
     if (config.apiKey) {

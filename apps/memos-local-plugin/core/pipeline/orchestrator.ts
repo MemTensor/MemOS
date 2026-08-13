@@ -76,6 +76,7 @@ import type {
   SubAgentCtx,
 } from "../retrieval/types.js";
 import type { CoreEvent, CoreEventType } from "../../agent-contract/events.js";
+import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LogRecord } from "../../agent-contract/log-record.js";
 import { memoryBuffer } from "../logger/index.js";
 import { onBroadcastLog } from "../logger/transports/sse-broadcast.js";
@@ -1461,9 +1462,32 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       result.sessionId,
       result.contextHints,
     );
-    const explicitEpisode = result.episodeId
+    let explicitEpisode = result.episodeId
       ? session.sessionManager.getEpisode(result.episodeId)
       : null;
+    if (!explicitEpisode && result.episodeId) {
+      const persisted = deps.repos.episodes.getById(result.episodeId);
+      if (persisted) {
+        explicitEpisode = session.sessionManager.hydrateEpisode(
+          snapshotFromOpenEpisodeRow(persisted),
+        );
+        if (explicitEpisode.status === "open") {
+          openEpisodeBySession.set(sessionId, explicitEpisode.id as EpisodeId);
+        }
+      }
+    }
+    if (explicitEpisode && explicitEpisode.sessionId !== sessionId) {
+      throw new MemosError(
+        ERROR_CODES.CONFLICT,
+        `pipeline.onTurnEnd: episode ${result.episodeId} belongs to session ` +
+          `${explicitEpisode.sessionId}, not ${sessionId}`,
+        {
+          episodeId: result.episodeId,
+          episodeSessionId: explicitEpisode.sessionId,
+          requestedSessionId: sessionId,
+        },
+      );
+    }
     const episodeId = explicitEpisode
       ? result.episodeId
       : openEpisodeBySession.get(sessionId) ?? result.episodeId;

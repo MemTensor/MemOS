@@ -65,6 +65,8 @@ const LlmSchema = Type.Object({
   timeoutMs: NumberInRange(45_000, 1_000),
   /** Max retries on transient errors. */
   maxRetries: NumberInRange(3, 0, 10),
+  /** OpenAI-compatible reasoning toggle; omitted unless explicitly configured. */
+  enableThinking: Type.Optional(Type.Boolean()),
 }, { default: {} });
 
 /**
@@ -89,6 +91,10 @@ const SkillEvolverSchema = Type.Object({
   apiKey: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
   timeoutMs: NumberInRange(60_000, 1_000),
+  fallbackToHost: Bool(true),
+  maxRetries: NumberInRange(3, 0, 10),
+  /** OpenAI-compatible reasoning toggle; omitted unless explicitly configured. */
+  enableThinking: Type.Optional(Type.Boolean()),
 }, { default: {} });
 
 const StorageSchema = Type.Object({

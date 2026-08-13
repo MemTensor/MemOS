@@ -1,9 +1,10 @@
-/** Dedicated single-owner OpenClaw MemoryCore process. */
+/** Dedicated single-owner, multi-client MemoryCore process. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startSocketServer } from "../../bridge/socket.js";
+import type { AgentKind } from "../../agent-contract/dto.js";
 import { resolveHome } from "../../core/config/index.js";
 import { memoryBuffer, rootLogger } from "../../core/logger/index.js";
 import { bootstrapMemoryCoreFull } from "../../core/pipeline/index.js";
@@ -20,11 +21,11 @@ import {
   acquireOpenClawRuntimeLock,
   DuplicateOpenClawRuntimeError,
 } from "./runtime-lock.js";
-import { connectSharedOpenClawRuntime } from "./runtime-client.js";
-import { openClawRuntimeSocketPath } from "./runtime-paths.js";
+import { connectSharedRuntime } from "./runtime-client.js";
+import { sharedRuntimeSocketPath } from "./runtime-paths.js";
 import {
   OPENCLAW_RUNTIME_PROTOCOL,
-  openClawRuntimeHealth,
+  sharedRuntimeHealth,
 } from "./runtime-protocol.js";
 import { startOptionalViewer } from "./runtime-viewer.js";
 
@@ -77,6 +78,12 @@ function hasArg(name: string): boolean {
   return process.argv.includes(name);
 }
 
+function explicitAgent(): AgentKind {
+  const value = process.argv.find((arg) => arg.startsWith("--agent="))?.slice("--agent=".length);
+  if (value === "openclaw" || value === "hermes") return value;
+  return "openclaw";
+}
+
 function drainTimeoutMs(): number {
   const configured = Number(process.env.MEMOS_RUNTIME_DRAIN_TIMEOUT_MS);
   return Number.isFinite(configured) && configured > 0
@@ -85,16 +92,18 @@ function drainTimeoutMs(): number {
 }
 
 async function main(): Promise<void> {
+  const agent = explicitAgent();
   const drainOnly = hasArg("--drain");
-  const noViewer = hasArg("--no-viewer") || drainOnly;
+  const noViewer = agent === "hermes" || hasArg("--no-viewer") || drainOnly;
   const version = readPackageVersion();
-  const home = resolveHome("openclaw", explicitHome());
-  const log = rootLogger.child({ channel: "adapters.openclaw.daemon" });
+  const home = resolveHome(agent, explicitHome());
+  const log = rootLogger.child({ channel: `adapters.${agent}.shared_runtime` });
 
   let runtimeLock;
   try {
     runtimeLock = acquireOpenClawRuntimeLock({
       home,
+      agent,
       pluginId: "memos-local-plugin",
       version,
       protocolMajor: OPENCLAW_RUNTIME_PROTOCOL.major,
@@ -106,7 +115,7 @@ async function main(): Promise<void> {
         // A drain command may race an already-running owner. Join that owner
         // and inspect its durable queues instead of treating election loss as
         // a successful drain.
-        const client = await connectSharedOpenClawRuntime(home);
+        const client = await connectSharedRuntime(home, agent);
         try {
           const failureBaseline = readDrainFailureCheckpoint(home);
           const result = await waitForBackgroundDrain({
@@ -140,8 +149,8 @@ async function main(): Promise<void> {
   let boot: Awaited<ReturnType<typeof bootstrapMemoryCoreFull>>;
   try {
     boot = await bootstrapMemoryCoreFull({
-      agent: "openclaw",
-      namespace: { agentKind: "openclaw", profileId: "main" },
+      agent,
+      namespace: { agentKind: agent, profileId: agent === "openclaw" ? "main" : "default" },
       pkgVersion: version,
       home,
     });
@@ -154,7 +163,7 @@ async function main(): Promise<void> {
   const socketCore = Object.create(core) as typeof core;
   socketCore.health = async () => ({
     ...(await core.health()),
-    runtime: openClawRuntimeHealth(version),
+    runtime: sharedRuntimeHealth(agent, version),
   });
   const telemetry = new Telemetry(
     boot.config.telemetry ?? {},
@@ -164,7 +173,7 @@ async function main(): Promise<void> {
     pluginRoot(),
   );
   core.bindTelemetry?.(telemetry);
-  telemetry.trackPluginStarted("openclaw");
+  telemetry.trackPluginStarted(agent);
 
   let viewer: Awaited<ReturnType<typeof startHttpServer>> | null = null;
   let socketServer: Awaited<ReturnType<typeof startSocketServer>> | null = null;
@@ -206,7 +215,9 @@ async function main(): Promise<void> {
       shouldContinue: () =>
         !shuttingDown &&
         generation === drainGeneration &&
-        (drainOnly || (socketServer?.connectionCount ?? 0) === 0),
+        (drainOnly ||
+          ((socketServer?.connectionCount ?? 0) === 0 &&
+            (socketServer?.inFlightRequestCount ?? 0) === 0)),
       failureBaseline,
       pollMs: BACKGROUND_POLL_MS,
       quietMs: IDLE_QUIET_MS,
@@ -262,9 +273,10 @@ async function main(): Promise<void> {
     await core.init();
     socketServer = await startSocketServer({
       core: socketCore,
-      socketPath: openClawRuntimeSocketPath(home),
-      onConnectionCountChanged(count) {
-        if (count > 0) {
+      socketPath: sharedRuntimeSocketPath(home, agent),
+      strict: true,
+      onActivityChanged({ connectionCount, inFlightRequestCount }) {
+        if (connectionCount > 0 || inFlightRequestCount > 0) {
           hadClient = true;
           drainGeneration += 1;
           if (initialIdleTimer) clearTimeout(initialIdleTimer);
@@ -276,7 +288,7 @@ async function main(): Promise<void> {
       },
     });
 
-    if (!noViewer) {
+    if (!noViewer && agent === "openclaw") {
       viewer = await startOptionalViewer(
         () =>
           startHttpServer(
@@ -290,7 +302,7 @@ async function main(): Promise<void> {
               port: OPENCLAW_VIEWER_PORT,
               host: boot.config.viewer.bindHost,
               staticRoot: viewerStaticRoot(),
-              agent: "openclaw",
+              agent,
             },
           ),
         () => {
@@ -327,7 +339,7 @@ async function main(): Promise<void> {
 
 void main().catch((err) => {
   process.stderr.write(
-    `memos-local OpenClaw runtime daemon failed: ${
+    `memos-local shared runtime daemon failed: ${
       err instanceof Error ? (err.stack ?? err.message) : String(err)
     }\n`,
   );

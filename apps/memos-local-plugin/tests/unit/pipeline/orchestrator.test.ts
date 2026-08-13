@@ -152,6 +152,70 @@ describe("pipeline/orchestrator", () => {
     await pipeline.flush();
   });
 
+  it("rejects a turn.end episode owned by another session", async () => {
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      evolutionWorkerEnabled: false,
+    });
+    const first = await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-owner-a",
+      userText: "content owned by session A",
+      ts: 1_700_000_000_000,
+    });
+    await pipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-owner-b",
+      userText: "content owned by session B",
+      ts: 1_700_000_000_001,
+    });
+
+    await expect(pipeline.onTurnEnd({
+      agent: "openclaw",
+      sessionId: "s-owner-b",
+      episodeId: first.episodeId!,
+      agentText: "must not be written into session A",
+      toolCalls: [],
+      ts: 1_700_000_000_100,
+    })).rejects.toThrow(/episode.*session/i);
+
+    expect(dbHandle!.repos.traces.list({ sessionId: "s-owner-a" })).toHaveLength(0);
+    expect(dbHandle!.repos.traces.list({ sessionId: "s-owner-b" })).toHaveLength(0);
+  });
+
+  it("hydrates an explicit persisted episode when turn.end is replayed after restart", async () => {
+    const firstPipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      evolutionWorkerEnabled: false,
+    });
+    const packet = await firstPipeline.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-restart-replay",
+      userText: "persist this once",
+      ts: 1_700_000_000_000,
+    });
+    const turnEnd: TurnResultDTO = {
+      agent: "openclaw",
+      sessionId: "s-restart-replay",
+      episodeId: packet.episodeId!,
+      requestId: "turn-restart-replay",
+      agentText: "persisted once",
+      toolCalls: [],
+      ts: 1_700_000_000_100,
+    };
+    await firstPipeline.onTurnEnd(turnEnd);
+    await firstPipeline.shutdown("simulated_restart");
+
+    pipeline = createPipeline({
+      ...buildDeps(dbHandle!),
+      evolutionWorkerEnabled: false,
+    });
+    await expect(pipeline.onTurnEnd(turnEnd)).resolves.toMatchObject({
+      episodeId: packet.episodeId,
+    });
+    expect(dbHandle!.repos.traces.list({ sessionId: "s-restart-replay" })).toHaveLength(1);
+  });
+
   it("acknowledges turn end after durable L1 capture without waiting for enrichment", async () => {
     let releaseSummary!: () => void;
     const summaryBlocked = new Promise<void>((resolve) => {

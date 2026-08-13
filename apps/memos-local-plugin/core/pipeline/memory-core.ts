@@ -382,7 +382,7 @@ export async function bootstrapMemoryCoreFull(
   // back to the main `llm` when skillEvolver.model is blank.
   let reflectLlm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const evolver = (config as { skillEvolver?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).skillEvolver;
+    const evolver = (config as { skillEvolver?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number; maxRetries?: number; fallbackToHost?: boolean; enableThinking?: boolean } }).skillEvolver;
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
@@ -393,14 +393,15 @@ export async function bootstrapMemoryCoreFull(
         apiKey: evolver?.apiKey ?? "",
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
-        maxRetries: 3,
+        maxRetries: evolver?.maxRetries ?? 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
         // back to the host agent's main LLM via the stdio host
         // bridge instead of hard-failing the skill pipeline. The
         // viewer paints the slot yellow + surfaces the upstream error
         // so the operator still notices.
-        fallbackToHost: true,
+        fallbackToHost: evolver?.fallbackToHost ?? true,
+        enableThinking: evolver?.enableThinking,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
           recordSystemError("skillEvolver", d),
         onStatus: (d: {
@@ -440,7 +441,7 @@ export async function bootstrapMemoryCoreFull(
   // impact on companion latency. Blank → falls back to the main `llm`.
   let l3Llm: ReturnType<typeof createLlmClient> | null = null;
   try {
-    const l3c = (config as { l3Llm?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number } }).l3Llm;
+    const l3c = (config as { l3Llm?: { provider?: string; model?: string; endpoint?: string; apiKey?: string; temperature?: number; timeoutMs?: number; maxRetries?: number; fallbackToHost?: boolean; enableThinking?: boolean } }).l3Llm;
     const l3Model = (l3c?.model ?? "").trim();
     const l3Provider = (l3c?.provider ?? "").trim();
     if (l3Model && l3Provider) {
@@ -451,8 +452,9 @@ export async function bootstrapMemoryCoreFull(
         apiKey: l3c?.apiKey ?? "",
         temperature: l3c?.temperature ?? 0,
         timeoutMs: l3c?.timeoutMs ?? 60_000,
-        maxRetries: 3,
-        fallbackToHost: true,
+        maxRetries: l3c?.maxRetries ?? 3,
+        fallbackToHost: l3c?.fallbackToHost ?? true,
+        enableThinking: l3c?.enableThinking,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
           log.warn("l3Llm.llm_error", d),
       } as never);

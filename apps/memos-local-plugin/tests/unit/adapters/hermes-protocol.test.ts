@@ -133,6 +133,57 @@ describe("hermes protocol surface", () => {
     );
   });
 
+  it("coalesces concurrent and repeated turn.end requests by requestId", async () => {
+    const core = stubCore();
+    let release!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(core.onTurnEnd).mockImplementation(async () => await pending as never);
+    const dispatch = makeDispatcher(core);
+    const payload = {
+      agent: "hermes",
+      sessionId: "s-1",
+      episodeId: "e-1",
+      requestId: "hermes-turn-abc",
+      agentText: "OK",
+      toolCalls: [],
+      ts: 456,
+    };
+
+    const first = dispatch("turn.end", payload);
+    const second = dispatch("turn.end", { ...payload });
+    await vi.waitFor(() => expect(core.onTurnEnd).toHaveBeenCalledTimes(1));
+    release({ traceIds: ["t-1"], episodeId: "e-1" });
+
+    await expect(first).resolves.toEqual({ traceIds: ["t-1"], episodeId: "e-1" });
+    await expect(second).resolves.toEqual({ traceIds: ["t-1"], episodeId: "e-1" });
+    await expect(dispatch("turn.end", { ...payload })).resolves.toEqual({
+      traceIds: ["t-1"],
+      episodeId: "e-1",
+    });
+    expect(core.onTurnEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects requestId reuse for a different turn.end payload", async () => {
+    const core = stubCore();
+    const dispatch = makeDispatcher(core);
+    const payload = {
+      agent: "hermes",
+      sessionId: "s-1",
+      episodeId: "e-1",
+      requestId: "hermes-turn-abc",
+      agentText: "OK",
+      toolCalls: [],
+      ts: 456,
+    };
+
+    await dispatch("turn.end", payload);
+    await expect(dispatch("turn.end", { ...payload, agentText: "different" }))
+      .rejects.toMatchObject({ code: "conflict" });
+    expect(core.onTurnEnd).toHaveBeenCalledTimes(1);
+  });
+
   it("memos_search tool: memory.search routes agent, session and topK to searchMemory", async () => {
     const core = stubCore();
     const dispatch = makeDispatcher(core);

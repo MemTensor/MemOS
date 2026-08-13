@@ -33,6 +33,56 @@ function stubCore(): MemoryCore {
 }
 
 describe("local runtime socket", () => {
+  it("keeps disconnected requests active until their handlers settle", async () => {
+    let finishOpen: ((value: string) => void) | undefined;
+    const core = stubCore();
+    core.openSession = vi.fn(
+      async () =>
+        await new Promise<string>((resolve) => {
+          finishOpen = resolve;
+        }),
+    );
+    const endpoint = socketPath();
+    const activity: Array<{ connectionCount: number; inFlightRequestCount: number }> = [];
+    const server = await startSocketServer({
+      core,
+      socketPath: endpoint,
+      onActivityChanged: (state) => activity.push(state),
+    });
+    const client = await connectSocketClient(endpoint);
+
+    const request = client.request("session.open", {
+      agent: "hermes",
+      sessionId: "slow",
+    });
+    const closedRequest = request.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await vi.waitFor(() => expect(core.openSession).toHaveBeenCalledTimes(1));
+    client.close();
+
+    await vi.waitFor(() => {
+      expect(server.connectionCount).toBe(0);
+      expect(server.inFlightRequestCount).toBe(1);
+    });
+    expect(activity.at(-1)).toEqual({
+      connectionCount: 0,
+      inFlightRequestCount: 1,
+    });
+
+    finishOpen?.("slow");
+    const closeError = await closedRequest;
+    expect(closeError).toBeInstanceOf(Error);
+    expect((closeError as Error).message).toMatch(/closed by client/i);
+    await vi.waitFor(() => expect(server.inFlightRequestCount).toBe(0));
+    expect(activity.at(-1)).toEqual({
+      connectionCount: 0,
+      inFlightRequestCount: 0,
+    });
+    await server.close();
+  });
+
   it("serves multiple concurrent clients from one MemoryCore", async () => {
     const core = stubCore();
     const endpoint = socketPath();

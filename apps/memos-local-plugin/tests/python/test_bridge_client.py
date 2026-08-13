@@ -13,10 +13,12 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 
 from pathlib import Path
@@ -370,6 +372,33 @@ class BridgeClientTests(unittest.TestCase):
         self.assertIn("--no-viewer", cmd)
         client.close()
 
+    def test_hermes_defaults_to_shared_runtime_proxy(self) -> None:
+        """Independent Hermes processes must not each own a MemoryCore."""
+        with patch.object(
+            bridge_client_mod,
+            "_bridge_script_for_agent",
+            wraps=bridge_client_mod._bridge_script_for_agent,
+        ):
+            client = MemosBridgeClient(agent="hermes")
+        assert self._fake is not None
+        cmd = getattr(self._fake, "cmd", [])
+        self.assertTrue(
+            any("runtime-stdio-proxy" in part for part in cmd),
+            f"Hermes did not select shared runtime proxy: {cmd}",
+        )
+        self.assertIn("--agent=hermes", cmd)
+        client.close()
+
+    def test_hermes_legacy_mode_keeps_direct_bridge_escape_hatch(self) -> None:
+        """Operators can temporarily opt out while diagnosing upgrades."""
+        with patch.dict(os.environ, {"MEMOS_HERMES_RUNTIME_MODE": "legacy"}):
+            client = MemosBridgeClient(agent="hermes")
+        assert self._fake is not None
+        cmd = getattr(self._fake, "cmd", [])
+        self.assertFalse(any("runtime-stdio-proxy" in part for part in cmd))
+        self.assertTrue(any("bridge." in part for part in cmd))
+        client.close()
+
     def test_reverse_request_waits_for_late_host_handler_registration(self) -> None:
         client = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
         assert self._fake is not None
@@ -493,6 +522,48 @@ class MemTensorProviderTests(unittest.TestCase):
     def test_is_available_returns_true_when_bridge_ok(self) -> None:
         p = self._provider_mod.MemTensorProvider()
         self.assertTrue(p.is_available())
+
+    def test_configures_hermes_sync_drain_for_long_memos_rpc(self) -> None:
+        memory_manager = types.ModuleType("agent.memory_manager")
+        memory_manager._SYNC_DRAIN_TIMEOUT_S = 5.0
+        agent = types.ModuleType("agent")
+        agent.memory_manager = memory_manager
+
+        with (
+            patch.dict(
+                sys.modules,
+                {"agent": agent, "agent.memory_manager": memory_manager},
+            ),
+            patch.dict(
+                os.environ,
+                {"MEMOS_HERMES_SYNC_DRAIN_TIMEOUT": "90"},
+                clear=False,
+            ),
+        ):
+            self._provider_mod._configure_hermes_sync_drain_timeout()
+
+        self.assertEqual(memory_manager._SYNC_DRAIN_TIMEOUT_S, 90.0)
+
+    def test_never_reduces_a_larger_hermes_sync_drain(self) -> None:
+        memory_manager = types.ModuleType("agent.memory_manager")
+        memory_manager._SYNC_DRAIN_TIMEOUT_S = 120.0
+        agent = types.ModuleType("agent")
+        agent.memory_manager = memory_manager
+
+        with (
+            patch.dict(
+                sys.modules,
+                {"agent": agent, "agent.memory_manager": memory_manager},
+            ),
+            patch.dict(
+                os.environ,
+                {"MEMOS_HERMES_SYNC_DRAIN_TIMEOUT": "90"},
+                clear=False,
+            ),
+        ):
+            self._provider_mod._configure_hermes_sync_drain_timeout()
+
+        self.assertEqual(memory_manager._SYNC_DRAIN_TIMEOUT_S, 120.0)
 
     def test_system_prompt_block_mentions_memory(self) -> None:
         p = self._provider_mod.MemTensorProvider()
@@ -779,9 +850,9 @@ class MemTensorProviderTests(unittest.TestCase):
             )
 
         methods = [method for method, _params in replacement.calls]
-        self.assertEqual(methods, ["session.open", "turn.start", "turn.end"])
+        self.assertEqual(methods, ["session.open", "turn.end"])
         self.assertTrue(broken.closed)
-        self.assertEqual(p._episode_id, "ep_after_reconnect")
+        self.assertEqual(p._episode_id, "ep_tui_long_running")
 
         session_params = replacement.calls[0][1]
         self.assertEqual(session_params["sessionId"], "sess_tui_long_running")
@@ -790,7 +861,7 @@ class MemTensorProviderTests(unittest.TestCase):
 
         retry_payload = replacement.calls[-1][1]
         self.assertEqual(retry_payload["sessionId"], "sess_tui_long_running")
-        self.assertEqual(retry_payload["episodeId"], "ep_after_reconnect")
+        self.assertEqual(retry_payload["episodeId"], "ep_tui_long_running")
         self.assertIn("中东", retry_payload["userText"])
         self.assertIn("局势", retry_payload["agentText"])
         self.assertEqual(retry_payload["toolCalls"][0]["name"], "search_files")
@@ -1055,6 +1126,24 @@ class MemTensorProviderTests(unittest.TestCase):
             "the V7 capture/reflection pipeline grows past 30s in long "
             "sessions (issue #2028).",
         )
+
+    def test_turn_end_stamps_a_stable_content_bound_request_id(self) -> None:
+        p = self._provider_mod.MemTensorProvider()
+        bridge = RecordingBridge()
+        p._bridge = bridge
+        p._session_id = "hermes:session:1"
+        p._episode_id = "ep-1"
+
+        p._turn_end("question", "answer", [], 1_700_000_000_000)
+        p._turn_end("question", "answer", [], 1_700_000_000_000)
+        first = bridge.calls[-2][1]["requestId"]
+        second = bridge.calls[-1][1]["requestId"]
+
+        self.assertEqual(first, second)
+        self.assertRegex(first, r"^hermes-turn-[0-9a-f]{64}$")
+
+        p._turn_end("question", "different", [], 1_700_000_000_000)
+        self.assertNotEqual(first, bridge.calls[-1][1]["requestId"])
 
     def test_prefetch_uses_long_rpc_timeout_for_turn_start(self) -> None:
         p = self._provider_mod.MemTensorProvider()

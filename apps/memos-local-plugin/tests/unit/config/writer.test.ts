@@ -76,6 +76,28 @@ llm:
     expect(reloaded.config.algorithm.skill.minSupport).toBeGreaterThan(0);
   });
 
+  it("loads retry, fallback, and thinking controls for dedicated model slots", async () => {
+    const configYaml = `llm:
+  provider: openai_compatible
+  model: qwen3.8-max
+  enableThinking: false
+skillEvolver:
+  provider: openai_compatible
+  model: qwen3.8-max
+  enableThinking: false
+  fallbackToHost: false
+  maxRetries: 0
+`;
+    const ctx = await makeTmpHome({ agent: "hermes", configYaml });
+    cleanup = ctx.cleanup;
+    const loaded = await loadConfig(ctx.home);
+    expect(loaded.warnings).toEqual([]);
+    expect(loaded.config.llm.enableThinking).toBe(false);
+    expect(loaded.config.skillEvolver.enableThinking).toBe(false);
+    expect(loaded.config.skillEvolver.fallbackToHost).toBe(false);
+    expect(loaded.config.skillEvolver.maxRetries).toBe(0);
+  });
+
   /**
    * Regression: before commit <yaml-map-fix>, patching a nested map slot
    * whose existing value was a bare-null scalar (`skillEvolver:`), an

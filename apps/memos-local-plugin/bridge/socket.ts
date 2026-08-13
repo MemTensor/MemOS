@@ -17,6 +17,7 @@ import { errorCodeOf, makeDispatcher } from "./methods.js";
 
 export interface SocketServerHandle {
   readonly connectionCount: number;
+  readonly inFlightRequestCount: number;
   close(): Promise<void>;
 }
 
@@ -48,15 +49,27 @@ export async function startSocketServer(options: {
   socketPath: string;
   strict?: boolean;
   onConnectionCountChanged?: (count: number) => void;
+  onActivityChanged?: (state: {
+    connectionCount: number;
+    inFlightRequestCount: number;
+  }) => void;
 }): Promise<SocketServerHandle> {
   const dispatch = makeDispatcher(options.core, { strict: options.strict });
   const sockets = new Set<net.Socket>();
   const inFlight = new Set<Promise<void>>();
   cleanupUnixSocket(options.socketPath);
 
+  const notifyActivity = () => {
+    options.onActivityChanged?.({
+      connectionCount: sockets.size,
+      inFlightRequestCount: inFlight.size,
+    });
+  };
+
   const server = net.createServer((socket) => {
     sockets.add(socket);
     options.onConnectionCountChanged?.(sockets.size);
+    notifyActivity();
     socket.setEncoding("utf8");
     let buffer = "";
 
@@ -109,9 +122,16 @@ export async function startSocketServer(options: {
         if (line) {
           const task = handleLine(line);
           inFlight.add(task);
+          notifyActivity();
           void task.then(
-            () => inFlight.delete(task),
-            () => inFlight.delete(task),
+            () => {
+              inFlight.delete(task);
+              notifyActivity();
+            },
+            () => {
+              inFlight.delete(task);
+              notifyActivity();
+            },
           );
         }
         newline = buffer.indexOf("\n");
@@ -120,6 +140,7 @@ export async function startSocketServer(options: {
     const remove = () => {
       if (!sockets.delete(socket)) return;
       options.onConnectionCountChanged?.(sockets.size);
+      notifyActivity();
     };
     socket.once("close", remove);
     socket.once("error", remove);
@@ -143,6 +164,9 @@ export async function startSocketServer(options: {
   return {
     get connectionCount() {
       return sockets.size;
+    },
+    get inFlightRequestCount() {
+      return inFlight.size;
     },
     async close() {
       for (const socket of sockets) socket.destroy();

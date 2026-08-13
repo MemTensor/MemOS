@@ -82,8 +82,12 @@ def _bridge_script(plugin_root: Path) -> Path:
 
 
 def _bridge_script_for_agent(plugin_root: Path, agent: str) -> Path:
-    """OpenClaw stdio callers must proxy the one shared runtime owner."""
-    if agent != "openclaw":
+    """Shared-runtime agents proxy one process that owns MemoryCore."""
+    hermes_mode = os.environ.get("MEMOS_HERMES_RUNTIME_MODE", "shared").strip().lower()
+    shared = agent == "openclaw" or (
+        agent == "hermes" and hermes_mode not in {"legacy", "direct", "disabled", "false", "0"}
+    )
+    if not shared:
         return _bridge_script(plugin_root)
     candidates = (
         plugin_root / "dist" / "adapters" / "openclaw" / "runtime-stdio-proxy.js",
@@ -93,7 +97,7 @@ def _bridge_script_for_agent(plugin_root: Path, agent: str) -> Path:
         if candidate.exists():
             return candidate
     # Keep the failure deterministic and explicit. Falling back to bridge.mjs
-    # would create a second MemoryCore against the same OpenClaw database.
+    # would create a second MemoryCore against the same database.
     return candidates[0]
 
 

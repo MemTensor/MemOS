@@ -146,11 +146,19 @@ function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const hermesRuntimeMode = (process.env.MEMOS_HERMES_RUNTIME_MODE ?? "shared")
+    .trim()
+    .toLowerCase();
+  const sharedHermes =
+    args.agent === "hermes" &&
+    args.noViewer &&
+    !["legacy", "direct", "disabled", "false", "0"].includes(hermesRuntimeMode);
 
   // Legacy Node callers historically used this generic bridge for OpenClaw.
   // Route them through the shared owner so no compatibility entry can open a
-  // second writable MemoryCore against the same database.
-  if (args.agent === "openclaw") {
+  // second writable MemoryCore against the same database. Headless Hermes
+  // callers use the same proxy while the legacy viewer daemon stays separate.
+  if (args.agent === "openclaw" || sharedHermes) {
     const source = args.daemon
       ? "adapters/openclaw/runtime-daemon.ts"
       : "adapters/openclaw/runtime-stdio-proxy.ts";

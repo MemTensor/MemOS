@@ -1,4 +1,5 @@
 import type { CoreHealth } from "../../agent-contract/memory-core.js";
+import type { AgentKind } from "../../agent-contract/dto.js";
 import type { OpenClawRuntimeLockOwner } from "./runtime-lock.js";
 
 const REQUIRED_CAPABILITIES = [
@@ -20,6 +21,12 @@ export interface OpenClawRuntimeHealth {
   protocolMinor: number;
   pluginVersion: string;
   capabilities: string[];
+}
+
+export interface SharedRuntimeHealth extends OpenClawRuntimeHealth {
+  agent: AgentKind;
+  runtimeMode: "shared-ipc";
+  multiProcess: true;
 }
 
 export class IncompatibleOpenClawRuntimeError extends Error {
@@ -53,6 +60,85 @@ export function openClawRuntimeHealth(pluginVersion: string): OpenClawRuntimeHea
     pluginVersion,
     capabilities: [...OPENCLAW_RUNTIME_PROTOCOL.requiredCapabilities],
   };
+}
+
+export function sharedRuntimeHealth(
+  agent: AgentKind,
+  pluginVersion: string,
+): SharedRuntimeHealth {
+  const capabilities = new Set<string>(REQUIRED_CAPABILITIES);
+  capabilities.delete("openclaw.shared-runtime.v1");
+  capabilities.add(`${agent}.shared-runtime.v1`);
+  if (agent === "hermes") capabilities.add("hermes.turn-end-idempotency.v1");
+  return {
+    protocolMajor: OPENCLAW_RUNTIME_PROTOCOL.major,
+    protocolMinor: OPENCLAW_RUNTIME_PROTOCOL.minor,
+    pluginVersion,
+    capabilities: [...capabilities],
+    agent,
+    runtimeMode: "shared-ipc",
+    multiProcess: true,
+  };
+}
+
+export function assertCompatibleSharedRuntime(
+  health: Pick<CoreHealth, "runtime" | "agent"> | Record<string, unknown>,
+  options: {
+    expectedAgent: AgentKind;
+    expectedPluginVersion?: string;
+  },
+): asserts health is Pick<CoreHealth, "runtime" | "agent"> {
+  const runtime = health.runtime;
+  if (!runtime || typeof runtime !== "object") {
+    throw new IncompatibleOpenClawRuntimeError(
+      "MemOS shared runtime does not advertise a protocol version",
+    );
+  }
+  const candidate = runtime as Partial<SharedRuntimeHealth>;
+  if (candidate.protocolMajor !== OPENCLAW_RUNTIME_PROTOCOL.major) {
+    throw new IncompatibleOpenClawRuntimeError(
+      `MemOS runtime protocol major ${String(candidate.protocolMajor)} is incompatible with ` +
+        `client major ${OPENCLAW_RUNTIME_PROTOCOL.major}`,
+    );
+  }
+  if (
+    options.expectedPluginVersion !== undefined &&
+    candidate.pluginVersion !== options.expectedPluginVersion
+  ) {
+    throw new IncompatibleOpenClawRuntimeError(
+      `MemOS runtime plugin version ${String(candidate.pluginVersion)} does not match ` +
+        `client plugin version ${options.expectedPluginVersion}`,
+    );
+  }
+  const runtimeAgent = candidate.agent ?? health.agent;
+  if (runtimeAgent !== options.expectedAgent) {
+    throw new IncompatibleOpenClawRuntimeError(
+      `MemOS runtime agent ${String(runtimeAgent)} does not match client agent ` +
+        options.expectedAgent,
+    );
+  }
+  if (candidate.runtimeMode !== "shared-ipc" || candidate.multiProcess !== true) {
+    throw new IncompatibleOpenClawRuntimeError(
+      "MemOS runtime does not advertise multi-process shared IPC support",
+    );
+  }
+  const capabilities = new Set(
+    Array.isArray(candidate.capabilities)
+      ? candidate.capabilities.filter((value): value is string => typeof value === "string")
+      : [],
+  );
+  const required = [
+    `${options.expectedAgent}.shared-runtime.v1`,
+    "openclaw.durable-evolution.v1",
+    "openclaw.drain-status.v1",
+    "openclaw.safe-reconnect.v1",
+  ];
+  const missing = required.filter((capability) => !capabilities.has(capability));
+  if (missing.length > 0) {
+    throw new IncompatibleOpenClawRuntimeError(
+      `MemOS runtime is missing required capabilities: ${missing.join(", ")}`,
+    );
+  }
 }
 
 export function assertCompatibleOpenClawRuntime(
@@ -98,8 +184,8 @@ export function assertCompatibleOpenClawRuntime(
 }
 
 export function assertCompatibleOpenClawRuntimeOwner(
-  owner: Pick<OpenClawRuntimeLockOwner, "protocolMajor" | "version"> | null,
-  options: { expectedPluginVersion?: string } = {},
+  owner: Pick<OpenClawRuntimeLockOwner, "agent" | "protocolMajor" | "version"> | null,
+  options: { expectedPluginVersion?: string; expectedAgent?: AgentKind } = {},
 ): void {
   if (owner?.protocolMajor === undefined) {
     throw new IncompatibleOpenClawRuntimeError(
@@ -111,6 +197,15 @@ export function assertCompatibleOpenClawRuntimeOwner(
     throw new IncompatibleOpenClawRuntimeError(
       `MemOS lock owner protocol major ${owner.protocolMajor} is incompatible with ` +
         `client major ${OPENCLAW_RUNTIME_PROTOCOL.major}`,
+    );
+  }
+  if (
+    options.expectedAgent !== undefined &&
+    (owner.agent ?? "openclaw") !== options.expectedAgent
+  ) {
+    throw new IncompatibleOpenClawRuntimeError(
+      `MemOS lock owner agent ${String(owner.agent ?? "openclaw")} does not match ` +
+        `client agent ${options.expectedAgent}`,
     );
   }
   if (

@@ -92,6 +92,54 @@ export function makeDispatcher(
   options: DispatcherOptions = {},
 ): Dispatcher {
   const strict = options.strict ?? false;
+  const turnEndRequests = new Map<string, {
+    signature: string;
+    promise: Promise<unknown>;
+    settled: boolean;
+  }>();
+  const maxTurnEndReceipts = 4_096;
+
+  const dispatchTurnEnd = (
+    p: Record<string, unknown>,
+  ): Promise<unknown> => {
+    const requestId = typeof p.requestId === "string" && p.requestId.length > 0
+      ? p.requestId
+      : null;
+    if (!requestId) {
+      return core.onTurnEnd(p as unknown as TurnResultDTO);
+    }
+    const key = `${String(p.agent)}\u0000${String(p.sessionId)}\u0000${requestId}`;
+    const signature = stableJson(p);
+    const existing = turnEndRequests.get(key);
+    if (existing) {
+      if (existing.signature !== signature) {
+        return Promise.reject(new MemosError(
+          "conflict",
+          "turn.end requestId was reused with a different payload",
+          { requestId, sessionId: p.sessionId },
+        ));
+      }
+      return existing.promise;
+    }
+
+    const entry = {
+      signature,
+      promise: Promise.resolve<unknown>(undefined),
+      settled: false,
+    };
+    entry.promise = core.onTurnEnd(p as unknown as TurnResultDTO)
+      .then((result) => {
+        entry.settled = true;
+        trimSettledTurnEndReceipts(turnEndRequests, maxTurnEndReceipts);
+        return result;
+      })
+      .catch((err) => {
+        turnEndRequests.delete(key);
+        throw err;
+      });
+    turnEndRequests.set(key, entry);
+    return entry.promise;
+  };
 
   return async function dispatch(
     method: string,
@@ -167,7 +215,7 @@ export function makeDispatcher(
       case RPC_METHODS.TURN_END: {
         const p = asRecord(params, method);
         if (strict) validateTurnResult(p);
-        return await core.onTurnEnd(p as unknown as TurnResultDTO);
+        return await dispatchTurnEnd(p);
       }
       case RPC_METHODS.FEEDBACK_SUBMIT: {
         const p = asRecord(params, method);
@@ -407,6 +455,34 @@ function validateTurnResult(p: Record<string, unknown>): void {
     );
   }
   requireKey(p, "ts", "number", "turn.end");
+  if (p.requestId !== undefined && (typeof p.requestId !== "string" || p.requestId.length === 0)) {
+    throw new MemosError(
+      "invalid_argument",
+      "turn.end: 'requestId' must be a non-empty string when provided",
+    );
+  }
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson(value[key])}`
+    ).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function trimSettledTurnEndReceipts(
+  receipts: Map<string, { settled: boolean }>,
+  max: number,
+): void {
+  if (receipts.size <= max) return;
+  for (const [key, entry] of receipts) {
+    if (!entry.settled) continue;
+    receipts.delete(key);
+    if (receipts.size <= max) return;
+  }
 }
 
 function requireKey(

@@ -148,11 +148,18 @@ function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const hermesRuntimeMode = (process.env.MEMOS_HERMES_RUNTIME_MODE ?? "shared")
+    .trim()
+    .toLowerCase();
+  const sharedHermes =
+    args.agent === "hermes" &&
+    args.noViewer &&
+    !["legacy", "direct", "disabled", "false", "0"].includes(hermesRuntimeMode);
 
   // Keep the generic entry backward-compatible without allowing it to become
   // a second OpenClaw database owner. Hermes still uses the in-process bridge
   // because it needs the reverse host-LLM stdio channel.
-  if (args.agent === "openclaw") {
+  if (args.agent === "openclaw" || sharedHermes) {
     if (args.daemon) {
       await import("./adapters/openclaw/runtime-daemon.js");
     } else {

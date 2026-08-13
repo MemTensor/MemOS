@@ -1,4 +1,4 @@
-/** Stdio JSON-RPC compatibility proxy for the shared OpenClaw owner. */
+/** Stdio JSON-RPC compatibility proxy for the shared local owner. */
 import {
   JSONRPC_INTERNAL_ERROR,
   JSONRPC_INVALID_REQUEST,
@@ -7,16 +7,25 @@ import {
   type JsonRpcRequest,
 } from "../../agent-contract/jsonrpc.js";
 import { resolveHome } from "../../core/config/index.js";
-import { connectSharedOpenClawRuntime } from "./runtime-client.js";
+import type { AgentKind } from "../../agent-contract/dto.js";
+import { connectSharedRuntime } from "./runtime-client.js";
 
 function explicitHome(): string | undefined {
   const value = process.argv.slice(2).find((arg) => arg.startsWith("--home="));
   return value?.slice("--home=".length);
 }
 
+function explicitAgent(): AgentKind {
+  const value = process.argv.slice(2).find((arg) => arg.startsWith("--agent="))
+    ?.slice("--agent=".length);
+  if (value === "openclaw" || value === "hermes") return value;
+  return "openclaw";
+}
+
 async function main(): Promise<void> {
-  const home = resolveHome("openclaw", explicitHome());
-  const client = await connectSharedOpenClawRuntime(home);
+  const agent = explicitAgent();
+  const home = resolveHome(agent, explicitHome());
+  const client = await connectSharedRuntime(home, agent);
   process.stdin.setEncoding("utf8");
   let buffer = "";
   let ended = false;
@@ -129,7 +138,7 @@ async function main(): Promise<void> {
 
 void main().catch((err) => {
   process.stderr.write(
-    `memos-local OpenClaw runtime stdio proxy failed: ${
+    `memos-local shared runtime stdio proxy failed: ${
       err instanceof Error ? err.stack ?? err.message : String(err)
     }\n`,
   );

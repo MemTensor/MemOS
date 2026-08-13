@@ -4,17 +4,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ResolvedHome } from "../../core/config/index.js";
+import type { AgentKind } from "../../agent-contract/dto.js";
 import {
   connectSocketClient,
   type SocketClient,
 } from "../../bridge/socket.js";
 import { inspectOpenClawRuntimeLock } from "./runtime-lock.js";
-import { openClawRuntimeSocketPath } from "./runtime-paths.js";
+import { sharedRuntimeSocketPath } from "./runtime-paths.js";
 import {
   IncompatibleOpenClawRuntimeError,
   RuntimeWriteOutcomeUnknownError,
   assertCompatibleOpenClawRuntime,
   assertCompatibleOpenClawRuntimeOwner,
+  assertCompatibleSharedRuntime,
   isReplaySafeOpenClawRuntimeMethod,
 } from "./runtime-protocol.js";
 
@@ -26,7 +28,14 @@ const CLIENT_PLUGIN_VERSION = readPackageVersion();
 export async function connectSharedOpenClawRuntime(
   home: ResolvedHome,
 ): Promise<SocketClient> {
-  let active = await connectRuntimeOnce(home);
+  return connectSharedRuntime(home, "openclaw");
+}
+
+export async function connectSharedRuntime(
+  home: ResolvedHome,
+  agent: AgentKind,
+): Promise<SocketClient> {
+  let active = await connectRuntimeOnce(home, agent);
   let reconnecting: Promise<SocketClient> | null = null;
   let closed = false;
 
@@ -35,7 +44,7 @@ export async function connectSharedOpenClawRuntime(
     if (active !== failed && active.connected) return active;
     if (!reconnecting) {
       failed.close();
-      reconnecting = connectRuntimeOnce(home)
+      reconnecting = connectRuntimeOnce(home, agent)
         .then((client) => {
           if (closed) {
             client.close();
@@ -87,9 +96,9 @@ export async function connectSharedOpenClawRuntime(
   };
 }
 
-async function connectRuntimeOnce(home: ResolvedHome): Promise<SocketClient> {
-  const socketPath = openClawRuntimeSocketPath(home);
-  const existing = await tryConnect(socketPath, home);
+async function connectRuntimeOnce(home: ResolvedHome, agent: AgentKind): Promise<SocketClient> {
+  const socketPath = sharedRuntimeSocketPath(home, agent);
+  const existing = await tryConnect(socketPath, home, agent);
   if (existing) return existing;
 
   const deadline = Date.now() + START_TIMEOUT_MS;
@@ -105,10 +114,11 @@ async function connectRuntimeOnce(home: ResolvedHome): Promise<SocketClient> {
         // hides the required upgrade action from the operator.
         assertCompatibleOpenClawRuntimeOwner(owner.owner, {
           expectedPluginVersion: CLIENT_PLUGIN_VERSION,
+          expectedAgent: agent,
         });
       } else {
         try {
-          await spawnRuntimeDaemon(home);
+          await spawnRuntimeDaemon(home, agent);
         } catch (err) {
           lastError = err;
         }
@@ -122,7 +132,7 @@ async function connectRuntimeOnce(home: ResolvedHome): Promise<SocketClient> {
         connectTimeoutMs: 1_000,
         requestTimeoutMs: 180_000,
       });
-      await assertExpectedRuntime(candidate, home);
+      await assertExpectedRuntime(candidate, home, agent);
       return candidate;
     } catch (err) {
       candidate?.close();
@@ -158,6 +168,7 @@ function isTransportFailure(err: unknown): boolean {
 async function tryConnect(
   socketPath: string,
   home: ResolvedHome,
+  agent: AgentKind,
 ): Promise<SocketClient | null> {
   let client: SocketClient | null = null;
   try {
@@ -165,7 +176,7 @@ async function tryConnect(
       connectTimeoutMs: 500,
       requestTimeoutMs: 5_000,
     });
-    await assertExpectedRuntime(client, home);
+    await assertExpectedRuntime(client, home, agent);
     return client;
   } catch (err) {
     if (client) {
@@ -179,6 +190,7 @@ async function tryConnect(
 async function assertExpectedRuntime(
   client: SocketClient,
   home: ResolvedHome,
+  agent: AgentKind,
 ): Promise<void> {
   const health = await client.request<{
     ok?: unknown;
@@ -188,33 +200,45 @@ async function assertExpectedRuntime(
   }>("core.health", undefined, { timeoutMs: 5_000 });
   if (
     health.ok !== true ||
-    health.agent !== "openclaw" ||
+    health.agent !== agent ||
     path.resolve(String(health.paths?.db ?? "")) !== path.resolve(home.dbFile)
   ) {
     client?.close();
     throw new Error(
       `MemOS runtime identity mismatch at ${home.root}: ` +
-        `agent=${String(health.agent)} db=${String(health.paths?.db)}`,
+        `agent=${String(health.agent)} expectedAgent=${agent} db=${String(health.paths?.db)}`,
     );
   }
   try {
-    assertCompatibleOpenClawRuntime(health, {
-      expectedPluginVersion: CLIENT_PLUGIN_VERSION,
-    });
+    if (agent === "openclaw") {
+      assertCompatibleOpenClawRuntime(health, {
+        expectedPluginVersion: CLIENT_PLUGIN_VERSION,
+      });
+    } else {
+      assertCompatibleSharedRuntime(health, {
+        expectedAgent: agent,
+        expectedPluginVersion: CLIENT_PLUGIN_VERSION,
+      });
+    }
   } catch (err) {
     client.close();
     throw err;
   }
 }
 
-async function spawnRuntimeDaemon(home: ResolvedHome): Promise<void> {
+async function spawnRuntimeDaemon(home: ResolvedHome, agent: AgentKind): Promise<void> {
   fs.mkdirSync(home.daemonDir, { recursive: true });
   fs.mkdirSync(home.logsDir, { recursive: true });
   const logPath = path.join(home.logsDir, "openclaw-runtime-daemon.log");
   const logFd = fs.openSync(logPath, "a", 0o600);
   const command = resolveDaemonCommand();
   try {
-    const child = spawn(command.executable, [...command.args, `--home=${home.root}`], {
+    const child = spawn(command.executable, [
+      ...command.args,
+      `--home=${home.root}`,
+      `--agent=${agent}`,
+      ...(agent === "hermes" ? ["--no-viewer"] : []),
+    ], {
       detached: true,
       windowsHide: true,
       stdio: ["ignore", logFd, logFd],

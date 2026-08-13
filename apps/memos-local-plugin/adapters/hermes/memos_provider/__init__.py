@@ -46,6 +46,7 @@ a daemon thread the provider owns.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -88,6 +89,13 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "memos-local-hermes"
+
+
+def _shared_runtime_enabled() -> bool:
+    mode = os.environ.get("MEMOS_HERMES_RUNTIME_MODE", "shared").strip().lower()
+    return mode not in {"legacy", "direct", "disabled", "false", "0"}
+
+
 PLUGIN_VERSION = "2.0.0-beta.1"
 _TOOL_FAILURE_REPAIR_HINT = (
     "This tool has failed multiple times in a row. You may want to call "
@@ -122,6 +130,40 @@ def _long_rpc_timeout_default() -> float:
 
 
 _LONG_RPC_TIMEOUT = _long_rpc_timeout_default()
+
+
+def _configure_hermes_sync_drain_timeout() -> None:
+    """Keep Hermes alive long enough for its asynchronous MemOS write.
+
+    Hermes deliberately runs ``MemoryProvider.sync_turn`` on a daemon worker
+    and normally waits only five seconds for it during CLI shutdown.  MemOS
+    ``turn.start`` may legitimately spend longer than that on intent/relation
+    classification, so the interpreter could otherwise exit midway through a
+    durable write.  Hermes does not currently expose this host timeout as
+    configuration; adjust its module setting only while this provider is
+    active.  Never reduce a site-specific larger value.
+    """
+    raw = os.environ.get("MEMOS_HERMES_SYNC_DRAIN_TIMEOUT", "")
+    try:
+        configured = float(raw)
+    except (TypeError, ValueError):
+        configured = _LONG_RPC_TIMEOUT + 15.0
+    if configured <= 0:
+        configured = _LONG_RPC_TIMEOUT + 15.0
+    try:
+        from agent import memory_manager as hermes_memory_manager
+
+        current = float(getattr(hermes_memory_manager, "_SYNC_DRAIN_TIMEOUT_S", 0.0))
+        if configured > current:
+            hermes_memory_manager._SYNC_DRAIN_TIMEOUT_S = configured
+            logger.info(
+                "MemOS: Hermes sync drain timeout raised from %.1fs to %.1fs",
+                current,
+                configured,
+            )
+    except (ImportError, TypeError, ValueError, AttributeError) as err:
+        logger.debug("MemOS: unable to configure Hermes sync drain timeout — %s", err)
+
 
 _HERMES_INTERNAL_REVIEW_PREFIXES = (
     "review the conversation above and consider saving to memory if appropriate.",
@@ -346,6 +388,8 @@ class MemTensorProvider(MemoryProvider):
         only, orphaning the previous Node subprocess and accumulating
         a fresh ``bridge.cjs`` per turn.
         """
+        _configure_hermes_sync_drain_timeout()
+
         # Hermes can call `initialize()` multiple times across a single
         # parent process (e.g. on reconnect or a new session). Each call
         # spawns a fresh `MemosBridgeClient` (and therefore a new
@@ -386,14 +430,16 @@ class MemTensorProvider(MemoryProvider):
             logger.warning("MemOS: failed to start bridge — %s", err)
             return
 
-        # Kill zombie bridges from previous sessions before deciding
-        # how to connect.
-        try:
-            zombies = kill_zombie_bridges()
-            if zombies:
-                logger.info("MemOS: killed %d zombie bridge(s)", zombies)
-        except Exception:
-            pass
+        # Legacy process-name cleanup cannot distinguish independent Hermes
+        # clients. Shared-runtime clients rely on the data-home lock instead
+        # and must never terminate sibling processes.
+        if not _shared_runtime_enabled():
+            try:
+                zombies = kill_zombie_bridges()
+                if zombies:
+                    logger.info("MemOS: killed %d zombie bridge(s)", zombies)
+            except Exception:
+                pass
 
         # NOTE: An HTTP bridge path used to live here that connected to a
         # running viewer daemon over HTTP instead of spawning a stdio
@@ -404,10 +450,11 @@ class MemTensorProvider(MemoryProvider):
         # complete change.
 
         if self._bridge is None:
-            try:
-                ensure_viewer_daemon()
-            except Exception as err:
-                logger.warning("MemOS: viewer daemon check failed — %s", err)
+            if not _shared_runtime_enabled():
+                try:
+                    ensure_viewer_daemon()
+                except Exception as err:
+                    logger.warning("MemOS: viewer daemon check failed — %s", err)
             new_bridge: MemosBridgeClient | None = None
             try:
                 new_bridge = MemosBridgeClient()
@@ -1042,7 +1089,12 @@ class MemTensorProvider(MemoryProvider):
                 )
                 try:
                     self._reconnect_bridge(session_id or self._session_id, timeout=75.0)
-                    if user:
+                    # The shared owner may have completed turn.end after the
+                    # proxy pipe disappeared. Re-running turn.start first
+                    # would mutate the session a second time and could route
+                    # the retry into another episode. The stable requestId on
+                    # turn.end lets the owner coalesce the direct replay.
+                    if user and not _shared_runtime_enabled():
                         self._turn_start(user, session_id=session_id or self._session_id)
                     current_trace_id = self._turn_end(
                         user,
@@ -2051,11 +2103,28 @@ class MemTensorProvider(MemoryProvider):
         clean_tool_calls = [
             {k: v for k, v in tc.items() if k not in {"_id", "_ids"}} for tc in tool_calls
         ]
+        request_material = {
+            "sessionId": self._session_id,
+            "userText": user_content,
+            "agentText": assistant_content,
+            "toolCalls": clean_tool_calls,
+            "agentThinking": agent_thinking,
+            "ts": ts_ms,
+        }
+        request_digest = hashlib.sha256(
+            json.dumps(
+                request_material,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         payload: dict[str, Any] = {
             "agent": "hermes",
             "namespace": self._runtime_namespace(),
             "sessionId": self._session_id,
             "episodeId": self._episode_id,
+            "requestId": f"hermes-turn-{request_digest}",
             "agentText": assistant_content,
             "userText": user_content,
             "toolCalls": clean_tool_calls,

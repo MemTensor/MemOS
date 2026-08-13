@@ -41,6 +41,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     timeoutMs: 45_000,
     maxRetries: 3,
+    enableThinking: undefined,
   },
   l3Llm: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -54,6 +55,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     temperature: 0,
     timeoutMs: 60_000,
+    fallbackToHost: true,
+    maxRetries: 3,
+    enableThinking: undefined,
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -65,6 +69,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     apiKey: "",
     temperature: 0,
     timeoutMs: 60_000,
+    fallbackToHost: true,
+    maxRetries: 3,
+    enableThinking: undefined,
   },
   storage: {
     ftsTokenizer: "trigram",

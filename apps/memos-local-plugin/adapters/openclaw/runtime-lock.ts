@@ -3,12 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { ResolvedHome } from "../../core/config/index.js";
+import type { AgentKind } from "../../agent-contract/dto.js";
 
-const LOCK_DIRNAME = "openclaw-runtime.lock";
+const LOCK_DIRNAME = "shared-runtime.lock";
 const OWNER_FILENAME = "owner.json";
 const UNWRITTEN_OWNER_STALE_MS = 30_000;
 
 export interface OpenClawRuntimeLockOwner {
+  /** Runtime identity. Missing only on pre-generalized OpenClaw owners. */
+  agent?: AgentKind;
   pluginId: string;
   version: string;
   /** Absent on pre-shared-runtime owners. */
@@ -33,6 +36,7 @@ export interface OpenClawRuntimeLockInspection {
 
 export interface AcquireOpenClawRuntimeLockOptions {
   home: ResolvedHome;
+  agent?: AgentKind;
   pluginId: string;
   version: string;
   protocolMajor?: number;
@@ -88,6 +92,7 @@ export function acquireOpenClawRuntimeLock(
   // Skip lock acquisition for diagnostic processes (e.g., openclaw doctor)
   if (options.skipLock) {
     const noopOwner: OpenClawRuntimeLockOwner = {
+      agent: options.agent ?? "openclaw",
       pluginId: options.pluginId,
       version: options.version,
       protocolMajor: options.protocolMajor,
@@ -133,6 +138,7 @@ export function acquireOpenClawRuntimeLock(
   }
 
   const owner: OpenClawRuntimeLockOwner = {
+    agent: options.agent ?? "openclaw",
     pluginId: options.pluginId,
     version: options.version,
     protocolMajor: options.protocolMajor,
@@ -176,6 +182,7 @@ function readOwner(ownerFile: string): OpenClawRuntimeLockOwner | null {
     const parsed = JSON.parse(fs.readFileSync(ownerFile, "utf8")) as Partial<OpenClawRuntimeLockOwner>;
     if (
       typeof parsed.pluginId !== "string" ||
+      (parsed.agent !== undefined && parsed.agent !== "openclaw" && parsed.agent !== "hermes") ||
       typeof parsed.version !== "string" ||
       (
         parsed.protocolMajor !== undefined &&

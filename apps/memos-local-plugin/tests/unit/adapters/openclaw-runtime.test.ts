@@ -166,7 +166,7 @@ describe("OpenClaw adapter runtime lifecycle", () => {
     expect(api.registerTool).not.toHaveBeenCalled();
     expect(api.on).not.toHaveBeenCalled();
     expect(api.registerService).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
+    expect(fs.existsSync(path.join(home.daemonDir, "shared-runtime.lock"))).toBe(false);
   });
 
   it("lets concurrent gateways connect to the same shared runtime boundary", async () => {
@@ -201,7 +201,7 @@ describe("OpenClaw adapter runtime lifecycle", () => {
     expect(connectSharedOpenClawRuntime).toHaveBeenNthCalledWith(2, home);
     expect(bootstrapMemoryCoreFull).not.toHaveBeenCalled();
     expect(startHttpServer).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
+    expect(fs.existsSync(path.join(home.daemonDir, "shared-runtime.lock"))).toBe(false);
 
     await Promise.all([
       api1.services[0]!.stop?.(),

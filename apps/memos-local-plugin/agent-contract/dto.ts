@@ -108,6 +108,8 @@ export interface TurnResultDTO {
   agent: AgentKind;
   sessionId: SessionId;
   episodeId: EpisodeId;
+  /** Stable adapter-generated key used to coalesce write retries. */
+  requestId?: string;
   namespace?: RuntimeNamespace;
   /** Free-form text the agent emitted. */
   agentText: string;
