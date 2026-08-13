@@ -360,6 +360,8 @@ deploy_tarball_to_prefix() {
     fi
   fi
   success "Dependencies ready"
+  warn "Local MiniLM model weights are not bundled."
+  printf "       ${DIM}If embedding.provider is local, the first Viewer test or use downloads about 23 MB from Hugging Face.${NC}\n"
 }
 
 # ─── Generate runtime config.yaml ─────────────────────────────────────────

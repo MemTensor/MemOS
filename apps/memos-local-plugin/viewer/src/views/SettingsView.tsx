@@ -15,6 +15,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { classifyModelTestFailure } from "../model-test-error";
+import { saveSettingsAndRestart } from "../settings-save";
 import { t, locale, setLocale } from "../stores/i18n";
 import { theme, setTheme } from "../stores/theme";
 import { Icon } from "../components/Icon";
@@ -143,9 +144,18 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
     setSaving("saving");
     setError(null);
     try {
-      await api.patch<ResolvedConfig>("/api/v1/config", dirty);
-      setDirty({});
-      await triggerRestart();
+      await saveSettingsAndRestart(
+        dirty,
+        (patch) => api.patch<ResolvedConfig>("/api/v1/config", patch),
+        (saved) => {
+          // PATCH returns the fully resolved, secret-masked config. Publish it
+          // before clearing dirty state so the form never falls back to the
+          // stale snapshot captured when this SPA first mounted.
+          setConfig(saved);
+          setDirty({});
+        },
+        triggerRestart,
+      );
       // For Hermes/generic the page stays; reset the button state.
       setSaving("idle");
     } catch (err) {
