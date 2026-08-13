@@ -1,3 +1,6 @@
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 
@@ -183,3 +186,42 @@ def test_factory_wraps_remote_embedder_when_enabled(monkeypatch):
 
     assert isinstance(embedder, CachingEmbedder)
     assert embedder.config is backend.config
+
+
+def test_core_import_does_not_require_optional_cachetools():
+    """Core imports must work before optional extras are installed."""
+    script = textwrap.dedent(
+        """
+        import builtins
+
+        real_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "cachetools" or name.startswith("cachetools."):
+                raise ModuleNotFoundError("No module named 'cachetools'", name="cachetools")
+            return real_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        from memos.embedders.cache import CachingEmbedder
+        from memos.embedders.factory import EmbedderFactory
+
+        assert EmbedderFactory is not None
+
+        try:
+            CachingEmbedder(object())
+        except ImportError as exc:
+            assert "cachetools" in str(exc)
+        else:
+            raise AssertionError("CachingEmbedder should require cachetools when instantiated")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
