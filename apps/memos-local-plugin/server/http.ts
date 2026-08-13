@@ -22,6 +22,7 @@
  * no reverse proxy, no peer cores).
  */
 
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { rootLogger } from "../core/logger/index.js";
@@ -54,19 +55,23 @@ export async function startHttpServer(
   deps: ServerDeps,
   options: ServerOptions = {},
 ): Promise<ServerHandle> {
+  const runtimeOptions: ServerOptions = {
+    ...options,
+    instanceId: options.instanceId?.trim() || randomUUID(),
+  };
   const log = rootLogger.child({ channel: "server.http" });
-  const host = options.host ?? "127.0.0.1";
-  const port = options.port ?? 0;
-  const extraHeaders = options.extraHeaders ?? {};
+  const host = runtimeOptions.host ?? "127.0.0.1";
+  const port = runtimeOptions.port ?? 0;
+  const extraHeaders = runtimeOptions.extraHeaders ?? {};
 
-  const routes = buildRoutes(deps, options);
+  const routes = buildRoutes(deps, runtimeOptions);
 
   const server = createServer(async (req, res) => {
     for (const [k, v] of Object.entries(extraHeaders)) {
       res.setHeader(k, v);
     }
     try {
-      await dispatch(req, res, routes, deps, options, log);
+      await dispatch(req, res, routes, deps, runtimeOptions, log);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error("request.unhandled", { path: req.url, err: msg });

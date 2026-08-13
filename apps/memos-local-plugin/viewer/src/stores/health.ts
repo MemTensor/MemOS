@@ -42,6 +42,8 @@ export interface ModelCallStatus {
 
 export interface HealthPayload {
   ok: boolean;
+  /** Changes whenever the Viewer backend process is replaced. */
+  instanceId?: string;
   version?: string;
   uptimeMs?: number;
   agent?: string;
