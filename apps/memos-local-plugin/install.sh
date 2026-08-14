@@ -264,10 +264,28 @@ BUILT_TARBALL=""
 STAGE_DIR=""
 SOURCE_KIND=""   # "path" for a local file, "npm" otherwise
 SOURCE_SPEC=""
+GATEWAY_RECOVERY_BIN=""
+GATEWAY_RECOVERY_STATE="inactive"
+
+cleanup_on_exit() {
+  if [[ "${GATEWAY_RECOVERY_STATE:-inactive}" == "needs_recovery" && -n "${GATEWAY_RECOVERY_BIN:-}" ]]; then
+    local recovery_out=""
+    if ! recovery_out="$("${GATEWAY_RECOVERY_BIN}" gateway start 2>&1)"; then
+      warn "OpenClaw gateway recovery failed; the gateway may still be stopped."
+      if [[ -n "${recovery_out}" ]]; then
+        printf '%s\n' "${recovery_out}" | sed 's/^/       /' >&2
+      fi
+    fi
+  fi
+  if [[ -n "${STAGE_DIR:-}" ]]; then
+    rm -rf "${STAGE_DIR}"
+  fi
+}
+
+trap cleanup_on_exit EXIT
 
 resolve_tarball() {
   STAGE_DIR="$(mktemp -d)"
-  trap 'rm -rf "${STAGE_DIR}"' EXIT
 
   if [[ -n "${VERSION_ARG}" && -f "${VERSION_ARG}" ]]; then
     BUILT_TARBALL="$(cd "$(dirname "${VERSION_ARG}")" && pwd)/$(basename "${VERSION_ARG}")"
@@ -431,11 +449,17 @@ install_openclaw() {
   mkdir -p "${HOME}/.openclaw"
 
   local oc_bin=""
+  # These remain global because the EXIT trap reads them after this function returns.
+  # The top-level agent dispatch invokes this installer at most once.
+  GATEWAY_RECOVERY_BIN=""
+  GATEWAY_RECOVERY_STATE="inactive"
   if oc_bin="$(find_openclaw_cli)"; then
     step "Stopping OpenClaw gateway"
     "${oc_bin}" gateway stop >/dev/null 2>&1 || true
     sleep 1
     success "Gateway stopped"
+    GATEWAY_RECOVERY_BIN="${oc_bin}"
+    GATEWAY_RECOVERY_STATE="needs_recovery"
   fi
 
   deploy_tarball_to_prefix "${prefix}"
@@ -610,6 +634,8 @@ NODE
        || (command -v lsof >/dev/null 2>&1 && lsof -i ":18789" -t >/dev/null 2>&1); then
       success "OpenClaw gateway already running"
     else
+      # Do not repeat the same failed final start from the EXIT cleanup.
+      GATEWAY_RECOVERY_STATE="final_failed"
       error "openclaw gateway start failed:"
       echo "${start_out}" | sed 's/^/       /' >&2
       warn "Inspect ~/.openclaw/logs/gateway.err.log for the full reason."
@@ -618,6 +644,10 @@ NODE
   else
     success "OpenClaw gateway started"
   fi
+  # The service started (or was already running), so the viewer fallback must not
+  # trigger another service start from the EXIT trap.
+  GATEWAY_RECOVERY_STATE="inactive"
+  GATEWAY_RECOVERY_BIN=""
 
   step "Waiting for Memory Viewer"
   if wait_for_viewer "${OPENCLAW_PORT}"; then
