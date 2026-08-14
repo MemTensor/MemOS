@@ -165,6 +165,13 @@ function pruneUnknown(
       continue;
     }
     if (isPlainObject(v) && isPlainObject((defaults as Record<string, unknown>)[k])) {
+      if (Object.keys((defaults as Record<string, unknown>)[k] as Record<string, unknown>).length === 0) {
+        // Empty-object default slot = free-form map (e.g. llm.headers, a
+        // Record<string,string>). Keep the whole user object as-is; recursing
+        // would warn on every user key.
+        out[k] = v;
+        continue;
+      }
       out[k] = pruneUnknown(v, (defaults as Record<string, unknown>)[k], path, warnings);
     } else {
       out[k] = v;
