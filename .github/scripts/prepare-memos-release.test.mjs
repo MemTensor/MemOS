@@ -189,7 +189,7 @@ test("rejects unsafe repository-authored release notes", () => {
     /must not contain Doc Agent/,
   );
   assert.throws(
-    () => validateRepositoryReleaseNotes("token: github_pat_secretvalue"),
+    () => validateRepositoryReleaseNotes(`token: ${["github", "pat", "test_only"].join("_")}`),
     /credential-like value/,
   );
   assert.throws(() => repositoryReleaseNotesPath("v2.0.30"), /must not include a leading v/);
