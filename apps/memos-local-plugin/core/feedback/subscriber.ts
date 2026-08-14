@@ -17,6 +17,8 @@
  * and `dispose` for cleanup.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { Logger } from "../logger/types.js";
 import { rootLogger } from "../logger/index.js";
 import type { EpisodeId, EpochMs, SessionId } from "../types.js";
@@ -80,10 +82,24 @@ export function attachFeedbackSubscriber(
   const queue: Array<() => Promise<void>> = [];
 
   function enqueue(job: () => Promise<void>): void {
-    queue.push(job);
-    if (inflight) return;
+    // The queue is global to this subscriber, while host-LLM routing can be
+    // session-local AsyncLocalStorage. Capture the enqueueing context now so a
+    // job waiting behind another session's repair does not inherit the drain
+    // loop's route when it is eventually invoked.
+    const runInEnqueueContext = AsyncLocalStorage.snapshot();
+    queue.push(() => runInEnqueueContext(job));
+    pump();
+  }
+
+  function pump(): void {
+    if (inflight || queue.length === 0) return;
     const promise = drain().finally(() => {
-      if (inflight === promise) inflight = null;
+      if (inflight !== promise) return;
+      inflight = null;
+      // An enqueue can land after drain() observes an empty queue but before
+      // this finally handler runs. Hand ownership directly to a successor so
+      // that job cannot remain stranded while the subscriber appears idle.
+      pump();
     });
     inflight = promise;
   }
@@ -168,8 +184,10 @@ export function attachFeedbackSubscriber(
     },
 
     async flush(): Promise<void> {
-      while (inflight) {
-        await inflight;
+      while (inflight || queue.length > 0) {
+        pump();
+        const pending = inflight;
+        if (pending) await pending;
       }
     },
 

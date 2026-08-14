@@ -4,8 +4,8 @@
  * IMPORTANT: config saves must never fall back to a "settings saved"
  * toast/card. OpenClaw restarts the gateway; Hermes terminates the
  * active `hermes chat` process while keeping the Memory Viewer daemon
- * online. Both flows use this full-screen overlay so the user sees the
- * same blocking restart affordance instead of a passive success card.
+ * online. DeepSeek Harness returns a manual profile-restart handoff. All
+ * flows use this full-screen overlay instead of a passive success card.
  */
 import {
   restartState,
@@ -70,7 +70,7 @@ function FullScreenSpinner() {
   );
 }
 
-type AgentType = "openclaw" | "hermes";
+type AgentType = "openclaw" | "hermes" | "deepseek-harness";
 
 function overlayMessage(
   phase: RestartPhase,

@@ -239,6 +239,34 @@ describe("HTTP server — REST routes", () => {
     expect(core.health).toHaveBeenCalled();
   });
 
+  it("close drains an in-flight ordinary HTTP handler", async () => {
+    let markStarted!: () => void;
+    let resolveHealth!: (value: unknown) => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const pendingHealth = new Promise<unknown>((resolve) => { resolveHealth = resolve; });
+    (core.health as any).mockImplementationOnce(() => {
+      markStarted();
+      return pendingHealth;
+    });
+
+    const responsePromise = fetch(`${handle.url}/api/v1/health`);
+    await started;
+
+    const closePromise = handle.close();
+    const earlyClose = await Promise.race([
+      closePromise.then(() => "closed" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 50)),
+    ]);
+    expect(earlyClose).toBe("pending");
+
+    resolveHealth({ ok: true, version: "delayed", agent: "openclaw" });
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, version: "delayed" });
+    await closePromise;
+    expect(handle.closed).toBe(true);
+  });
+
   it("strips /memos reverse-proxy prefix before route dispatch", async () => {
     const r = await fetch(`${handle.url}/memos/api/v1/health`);
     expect(r.status).toBe(200);

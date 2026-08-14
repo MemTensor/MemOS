@@ -99,6 +99,26 @@ describe("viewer restart flow", () => {
     expect(fakeWindow.location.href).toBe("");
   });
 
+  it("keeps DSH in-process and shows the manual profile restart handoff", async () => {
+    health.value = { ok: true, agent: "deepseek-harness" };
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      restarting: false,
+      manualRestartRequired: true,
+      message: "Stop and restart the active DeepSeek Harness profile.",
+    }), { status: 200 })) as typeof fetch;
+
+    await triggerRestart();
+
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+    expect(restartState.value).toEqual({
+      phase: "manualRestartRequired",
+      message: "Stop and restart the active DeepSeek Harness profile.",
+    });
+    expect(resolveRestartAgent()).toBe("deepseek-harness");
+    expect(fakeWindow.location.href).toBe("");
+  });
+
   it("asks the user to close Hermes before retrying Windows clear-data", async () => {
     await triggerCleared({
       ok: false,

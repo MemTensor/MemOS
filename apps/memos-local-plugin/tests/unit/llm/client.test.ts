@@ -139,6 +139,19 @@ describe("llm/client", () => {
     expect(fake.invocations).toBe(2);
   });
 
+  it("completeJson makes only one request when malformedRetries is zero", async () => {
+    const fake = new FakeProvider(
+      "openai_compatible",
+      () => ({ text: "still bad", durationMs: 1 }),
+    );
+    const client = createLlmClientWithProvider(cfg(), fake);
+
+    await expect(client.completeJson("ask", { malformedRetries: 0 }))
+      .rejects.toMatchObject({ code: ERROR_CODES.LLM_OUTPUT_MALFORMED });
+    expect(fake.invocations).toBe(1);
+    expect(client.stats().retries).toBe(0);
+  });
+
   it("completeJson throws LLM_OUTPUT_MALFORMED when retries exhausted", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: "still bad", durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);

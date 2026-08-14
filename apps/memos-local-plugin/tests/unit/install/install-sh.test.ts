@@ -1,8 +1,8 @@
 /**
  * install.sh smoke tests.
  *
- * The new install.sh is minimal: only `--version`, plus an
- * interactive picker (ENTER = auto-detect). It patches real host files
+ * The installer exposes a small target/version/profile CLI plus an
+ * interactive picker (ENTER = legacy auto-detect). It patches real host files
  * (~/.openclaw/openclaw.json etc.) and stops / starts the agent gateway,
  * so we deliberately keep unit tests narrow — they only exercise what
  * can be checked without side effects on the developer's machine:
@@ -11,14 +11,24 @@
  *   2. An unknown flag exits non-zero.
  *   3. Removed legacy flags report an error cleanly.
  *
- * End-to-end behaviour is verified manually (the script is driven
- * against real ~/.openclaw / ~/.hermes hosts during release testing).
+ * OpenClaw/Hermes end-to-end behaviour is verified manually. DSH's package
+ * manager boundary is covered here with an isolated HOME and fake executables,
+ * including the exact `curl | bash` stdin shape used by the public installer.
  */
 
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SCRIPT = path.join(REPO_ROOT, "install.sh");
@@ -33,12 +43,130 @@ function run(args: string[], env: Record<string, string> = {}) {
   return { code: r.status ?? -1, stdout: r.stdout, stderr: r.stderr };
 }
 
+function runViaStdin(args: string[], env: Record<string, string> = {}) {
+  const r = spawnSync("bash", ["-s", "--", ...args], {
+    env: { ...process.env, ...env },
+    input: readFileSync(SCRIPT, "utf8"),
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  return { code: r.status ?? -1, stdout: r.stdout, stderr: r.stderr };
+}
+
+function writeExecutable(file: string, source: string): void {
+  writeFileSync(file, source, "utf8");
+  chmodSync(file, 0o755);
+}
+
+function makeDshFixture(options: {
+  firstAdd?: "success" | "ignored-builds" | "unknown-build" | "error";
+  approval?: "success" | "error";
+  secondAdd?: "success" | "error";
+  dump?: "success" | "missing-bundle";
+} = {}) {
+  const root = mkdtempSync(path.join(tmpdir(), "memos-dsh-installer-"));
+  const home = path.join(root, "home");
+  const bin = path.join(root, "bin");
+  const dshHome = path.join(home, ".dsh");
+  const log = path.join(root, "dsh.log");
+  const addCount = path.join(root, "add-count");
+  const scratch = path.join(root, "scratch");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(scratch, { recursive: true });
+
+  writeExecutable(
+    path.join(bin, "pnpm"),
+    "#!/usr/bin/env bash\nexit 0\n",
+  );
+
+  const firstAdd = options.firstAdd ?? "ignored-builds";
+  const approval = options.approval ?? "success";
+  const secondAdd = options.secondAdd ?? "success";
+  const dump = options.dump ?? "success";
+  writeExecutable(
+    path.join(bin, "dsh"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${log}"
+
+if [[ "$*" == "--profile web --dump-config" ]]; then
+  if [[ "${dump}" == "missing-bundle" ]]; then
+    printf '%s\\n' '# no external bundle'
+    exit 0
+  fi
+  printf '%s\\n' '# bundle: @memtensor/memos-local-plugin' '  - id: memos-local-memory'
+  exit 0
+fi
+
+if [[ "$1" == "plugin" && "$4" == "add" ]]; then
+  count=0
+  [[ -f "${addCount}" ]] && count="$(cat "${addCount}")"
+  count=$((count + 1))
+  printf '%s\\n' "$count" > "${addCount}"
+  if [[ "$count" == "1" && "${firstAdd}" == "error" ]]; then
+    printf '%s\\n' '[E_NETWORK] registry unavailable' >&2
+    exit 42
+  fi
+  if [[ "$count" == "1" && "${firstAdd}" != "success" ]]; then
+    profile="${dshHome}/profiles/web"
+    mkdir -p "$profile"
+    if [[ "${firstAdd}" == "unknown-build" ]]; then
+      pending="  unexpected-native-addon: set this to true or false"
+    else
+      pending="  '@memtensor/memos-local-plugin': set this to true or false
+  better-sqlite3: set this to true or false
+  esbuild: set this to true or false
+  onnxruntime-node: set this to true or false
+  protobufjs: set this to true or false
+  sharp: set this to true or false"
+    fi
+    printf '%s\\n' 'packages:' '  - .' 'allowBuilds:' "$pending" > "$profile/pnpm-workspace.yaml"
+    printf '%s\\n' '[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts' >&2
+    exit 1
+  fi
+  if [[ "$count" == "2" && "${secondAdd}" == "error" ]]; then
+    printf '%s\\n' '[E_SECOND_ADD] retry failed' >&2
+    exit 43
+  fi
+  exit 0
+fi
+
+if [[ "$1" == "plugin" && "$4" == "approve-builds" ]]; then
+  [[ "${approval}" == "success" ]] || exit 44
+  exit 0
+fi
+
+exit 64
+`,
+  );
+
+  return {
+    root,
+    home,
+    bin,
+    dshHome,
+    log,
+    env: {
+      HOME: home,
+      DSH_HOME: dshHome,
+      TMPDIR: scratch,
+      XDG_CACHE_HOME: path.join(scratch, "xdg-cache"),
+      XDG_CONFIG_HOME: path.join(scratch, "xdg-config"),
+      npm_config_cache: path.join(scratch, "npm-cache"),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    },
+  };
+}
+
 describe("install.sh — CLI surface", () => {
   it("prints usage on --help and exits 0", () => {
     const r = run(["--help"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("Usage:");
     expect(r.stdout).toContain("--version");
+    expect(r.stdout).toContain("--agent dsh");
+    expect(r.stdout).toContain("--profile");
     expect(r.stdout).not.toContain("bash install.sh --port");
   });
 
@@ -69,6 +197,133 @@ describe("install.sh — CLI surface", () => {
     expect(r.code).not.toBe(0);
     const combined = `${r.stdout}\n${r.stderr}`;
     expect(combined).toContain("--port is no longer supported");
+  });
+
+  it("installs DSH from one command with a reviewed, fail-closed build approval", () => {
+    const fixture = makeDshFixture();
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+
+      const r = run(
+        ["--agent", "dsh", "--profile", "web", "--version", tarball],
+        fixture.env,
+      );
+
+      expect(r.code).toBe(0);
+      const calls = readFileSync(fixture.log, "utf8").trim().split("\n");
+      expect(calls).toEqual([
+        `plugin --profile web add ${tarball}`,
+        "plugin --profile web approve-builds better-sqlite3 esbuild onnxruntime-node sharp !protobufjs !@memtensor/memos-local-plugin",
+        `plugin --profile web add ${tarball}`,
+        "--profile web --dump-config",
+      ]);
+      expect(r.stdout).toContain("DeepSeek Harness install complete");
+      expect(r.stdout).toContain("http://127.0.0.1:18801");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when pnpm reports an unreviewed build script", () => {
+    const fixture = makeDshFixture({ firstAdd: "unknown-build" });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+
+      const r = run(
+        ["--agent", "dsh", "--profile", "web", "--version", tarball],
+        fixture.env,
+      );
+
+      expect(r.code).not.toBe(0);
+      expect(`${r.stdout}\n${r.stderr}`).toContain("unexpected-native-addon");
+      const calls = readFileSync(fixture.log, "utf8").trim().split("\n");
+      expect(calls).toEqual([`plugin --profile web add ${tarball}`]);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes a registry version straight to DSH without staging it through npm pack", () => {
+    const fixture = makeDshFixture({ firstAdd: "success" });
+    try {
+      const npmLog = path.join(fixture.root, "npm.log");
+      writeExecutable(
+        path.join(fixture.bin, "npm"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${npmLog}"
+exit 90
+`,
+      );
+
+      const r = run(
+        ["--agent", "dsh", "--version", "2.0.16-beta.1"],
+        fixture.env,
+      );
+
+      expect(r.code).toBe(0);
+      expect(existsSync(npmLog)).toBe(false);
+      const calls = readFileSync(fixture.log, "utf8").trim().split("\n");
+      expect(calls[0]).toBe(
+        "plugin --profile web add @memtensor/memos-local-plugin@2.0.16-beta.1",
+      );
+      expect(calls).toHaveLength(2);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not approve builds after an unrelated DSH add failure", () => {
+    const fixture = makeDshFixture({ firstAdd: "error" });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
+
+      expect(r.code).not.toBe(0);
+      expect(readFileSync(fixture.log, "utf8").trim()).toBe(
+        `plugin --profile web add ${tarball}`,
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry installation when reviewed build approval fails", () => {
+    const fixture = makeDshFixture({ approval: "error" });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
+
+      expect(r.code).not.toBe(0);
+      const calls = readFileSync(fixture.log, "utf8").trim().split("\n");
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toContain("approve-builds");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("supports the curl-pipe bash stdin invocation for DSH", () => {
+    const fixture = makeDshFixture({ firstAdd: "success" });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+      const r = runViaStdin(
+        ["--agent", "dsh", "--profile", "web", "--version", tarball],
+        fixture.env,
+      );
+
+      expect(r.code).toBe(0);
+      expect(readFileSync(fixture.log, "utf8")).toContain(
+        `plugin --profile web add ${tarball}`,
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("generates an OpenClaw manifest that points at compiled runtime output", () => {

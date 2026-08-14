@@ -32,6 +32,7 @@ import type {
   EpisodeId,
   EpisodeListItemDTO,
   FeedbackDTO,
+  InjectionPacket,
   PolicyDTO,
   RetrievalHitDTO,
   RetrievalQueryDTO,
@@ -52,6 +53,7 @@ import type {
   EmbeddingMaintenanceRunResult,
   EmbeddingMaintenanceStats,
   MemoryCore,
+  MemorySearchExecutionOptions,
   Unsubscribe,
 } from "../../agent-contract/memory-core.js";
 import type {
@@ -114,9 +116,11 @@ import {
 } from "../runtime/namespace.js";
 import { createHubRuntime, type HubMemorySearchHit, type HubRuntime } from "../hub/runtime.js";
 import { llmFilterCandidates } from "../retrieval/llm-filter.js";
+import { createRequestDeadline } from "../util/request-deadline.js";
 import type { RankedCandidate } from "../retrieval/ranker.js";
 import type {
   RetrievalConfig,
+  RetrievalResult,
   TraceCandidate,
 } from "../retrieval/types.js";
 import type { UserFeedback } from "../reward/types.js";
@@ -124,6 +128,7 @@ import type { UserFeedback } from "../reward/types.js";
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
+const DEADLINE_FILTER_SAFE_CUTOFF_MS = 2_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
 
 type DedicatedLlmConfig = {
@@ -807,12 +812,19 @@ export function createMemoryCore(
   async function searchHubMemoryHits(
     query: string,
     limit = 5,
+    deadlineAt?: number,
   ): Promise<RetrievalHitDTO[]> {
     if (!hubRuntimeConfig.hub.enabled || !hubRuntime || !query.trim()) return [];
+    let timeoutMs = 1_500;
+    if (deadlineAt !== undefined) {
+      const remainingMs = deadlineAt - Date.now();
+      if (!Number.isFinite(remainingMs) || remainingMs <= 0) return [];
+      timeoutMs = Math.min(timeoutMs, remainingMs);
+    }
     try {
       const hits = await withTimeout(
         hubRuntime.searchMemories(query, limit),
-        1_500,
+        timeoutMs,
         "hub_search_timeout",
       );
       return hits.map(hubMemoryToRetrievalHit);
@@ -853,6 +865,9 @@ export function createMemoryCore(
     localAlreadyFiltered: boolean;
     config: RetrievalConfig;
     episodeId?: string;
+    deadlineAt?: number;
+    signal?: AbortSignal;
+    llmFilterMalformedRetries?: number;
   }): Promise<{
     hits: RetrievalHitDTO[];
     dropped: RetrievalHitDTO[];
@@ -890,7 +905,18 @@ export function createMemoryCore(
       {
         llm: handle.retrievalDeps().llm ?? null,
         log,
-        timeoutMs: FINAL_HUB_LLM_FILTER_TIMEOUT_MS,
+        timeoutMs: input.deadlineAt === undefined
+          ? FINAL_HUB_LLM_FILTER_TIMEOUT_MS
+          : Math.max(
+              1,
+              Math.min(
+                DEADLINE_FILTER_SAFE_CUTOFF_MS,
+                input.deadlineAt - Date.now(),
+              ),
+            ),
+        deadlineAt: input.deadlineAt,
+        signal: input.signal,
+        malformedRetries: input.llmFilterMalformedRetries,
         config: input.config,
       },
     );
@@ -2167,7 +2193,7 @@ export function createMemoryCore(
     const ns = namespaceFor(turn.agent, turn);
     activeNamespace = ns;
     try {
-      hubHits = await searchHubMemoryHits(turn.userText, 5);
+      hubHits = await searchHubMemoryHits(turn.userText, 5, turn.deadlineAt);
       hubCandidates = logCandidatesFromHits(hubHits);
       const namespacedTurn = {
         ...turn,
@@ -2212,6 +2238,7 @@ export function createMemoryCore(
         localAlreadyFiltered: hubHits.length === 0,
         config: handle.retrievalDeps().config,
         episodeId: packet.episodeId,
+        deadlineAt: turn.deadlineAt,
       });
       finalFilteredCandidates = logCandidatesFromHits(final.hits);
       finalDroppedCandidates = logCandidatesFromHits(final.dropped);
@@ -2315,6 +2342,22 @@ export function createMemoryCore(
         );
       }
     }
+  }
+
+  async function prepareTurn(
+    turn: Parameters<NonNullable<MemoryCore["prepareTurn"]>>[0],
+  ): Promise<{ sessionId: SessionId; episodeId: EpisodeId }> {
+    ensureLive();
+    const ns = namespaceFor(turn.agent, turn);
+    activeNamespace = ns;
+    return handle.prepareTurn({
+      ...turn,
+      namespace: ns,
+      contextHints: {
+        ...(turn.contextHints ?? {}),
+        ...namespaceMeta(ns),
+      },
+    });
   }
 
   async function onTurnEnd(
@@ -2845,6 +2888,7 @@ export function createMemoryCore(
   // ─── Memory queries ──
   async function searchMemory(
     query: RetrievalQueryDTO,
+    execution: MemorySearchExecutionOptions = {},
   ): Promise<RetrievalResultDTO> {
     ensureLive();
     const ns = query.namespace ?? activeNamespace;
@@ -2862,6 +2906,15 @@ export function createMemoryCore(
       ("adhoc-session-" + randomUUID().slice(0, 8) as SessionId);
     const ts = Date.now();
     const startedAt = Date.now();
+    const foregroundDeadline = query.deadlineAt !== undefined
+      ? createRequestDeadline(query.deadlineAt)
+      : null;
+    const requestSignal = foregroundDeadline && execution.signal
+      ? AbortSignal.any([foregroundDeadline.signal, execution.signal])
+      : foregroundDeadline?.signal ?? execution.signal;
+    const leaveForeground = execution.foreground
+      ? handle.enterForeground()
+      : null;
     let ok = true;
     let candidates: RetrievalLogCandidate[] = [];
     let filtered: typeof candidates = [];
@@ -2870,18 +2923,52 @@ export function createMemoryCore(
     let retrievalStats: RetrievalStatsLogPayload | undefined;
     let finalHubKept = 0;
     try {
-      const hubHits = await searchHubMemoryHits(query.query, query.topK?.tier2 ?? 5);
+      const hubHits = await searchHubMemoryHits(
+        query.query,
+        query.topK?.tier2 ?? 5,
+        query.deadlineAt,
+      );
       hubCandidates = logCandidatesFromHits(hubHits);
-      const result = await toolDrivenRetrieve(deps, {
-        reason: "tool_driven",
-        agent: query.agent,
-        namespace: ns,
-        sessionId,
-        episodeId: query.episodeId,
-        tool: "memos_search",
-        args: { ...(query.filters ?? {}), query: query.query },
-        ts,
-      }, { skipLlmFilter: hubHits.length > 0 });
+      let result: {
+        packet: InjectionPacket;
+        stats: RetrievalResult["stats"] | null;
+      };
+      if (query.reason === "turn_start") {
+        const packet = await handle.recallTurn({
+          agent: query.agent,
+          namespace: ns,
+          sessionId,
+          episodeId: query.episodeId,
+          userText: query.query,
+          contextHints: {
+            ...(query.contextHints ?? {}),
+            ...(hubHits.length > 0 ? { __memosDeferLlmFilterToCaller: true } : {}),
+          },
+          ts,
+          deadlineAt: query.deadlineAt,
+          llmFilterMalformedRetries: query.llmFilterMalformedRetries,
+        }, requestSignal);
+        result = {
+          packet,
+          stats: handle.consumeRetrievalStats(packet.packetId),
+        };
+      } else {
+        result = await toolDrivenRetrieve(deps, {
+          reason: "tool_driven",
+          agent: query.agent,
+          namespace: ns,
+          sessionId,
+          episodeId: query.episodeId,
+          tool: "memos_search",
+          args: { ...(query.filters ?? {}), query: query.query },
+          ts,
+        }, {
+          skipLlmFilter: hubHits.length > 0,
+          signal: requestSignal,
+          deadlineAt: query.deadlineAt,
+          llmFilterMalformedRetries: query.llmFilterMalformedRetries,
+        });
+      }
       const localLogStages = buildLocalRetrievalLogStages(result.packet);
       candidates = localLogStages.candidates;
       let hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
@@ -2922,6 +3009,9 @@ export function createMemoryCore(
         localAlreadyFiltered: hubHits.length === 0,
         config: deps.config,
         episodeId: query.episodeId,
+        deadlineAt: query.deadlineAt,
+        signal: requestSignal,
+        llmFilterMalformedRetries: query.llmFilterMalformedRetries,
       });
       const returnedHits = final.hits;
       const finalFilterStats: RetrievalStatsLogPayload["finalFilter"] | undefined =
@@ -2952,14 +3042,16 @@ export function createMemoryCore(
       // funnels. All fields are optional on the producer side so older
       // consumers keep working.
       const s = result.stats;
-      retrievalStats = withHubStats(
-        retrievalStatsPayload(s),
-        hubCandidates.length,
-        filtered.length,
-        finalHubKept,
-        finalFilterStats,
-      );
-      if (s.embedding?.degraded) {
+      retrievalStats = s
+        ? withHubStats(
+            retrievalStatsPayload(s),
+            hubCandidates.length,
+            filtered.length,
+            finalHubKept,
+            finalFilterStats,
+          )
+        : undefined;
+      if (s?.embedding?.degraded) {
         handle.repos.apiLogs.insert({
           toolName: "system_error",
           input: { role: "embedding" },
@@ -2998,7 +3090,7 @@ export function createMemoryCore(
         handle.repos.apiLogs.insert({
           toolName: "memos_search",
           input: {
-            type: "tool_call",
+            type: query.reason === "turn_start" ? "turn_start" : "tool_call",
             agent: query.agent,
             query: query.query,
             sessionId,
@@ -3030,6 +3122,8 @@ export function createMemoryCore(
           candidates.length,
         );
       }
+      foregroundDeadline?.dispose();
+      leaveForeground?.();
     }
   }
 
@@ -5071,6 +5165,7 @@ export function createMemoryCore(
     openEpisode,
     closeEpisode,
     onTurnStart,
+    prepareTurn,
     onTurnEnd,
     submitFeedback,
     recordToolOutcome,

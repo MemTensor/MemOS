@@ -8,6 +8,8 @@
  * Hermes has separate chat and viewer bridge processes. Unix can replace
  * both automatically; Windows returns exact manual handoff instructions
  * because no supervisor currently owns the portable viewer daemon.
+ * DeepSeek Harness hosts MemOS in-process and currently requires a manual
+ * profile restart after configuration changes.
  */
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
@@ -42,12 +44,14 @@ export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
 
-export type RestartAgent = "openclaw" | "hermes";
+export type RestartAgent = "openclaw" | "hermes" | "deepseek-harness";
 
 let lockedRestartAgent: RestartAgent | null = null;
 
 function agentFromHealth(): RestartAgent {
-  return health.value?.agent === "openclaw" ? "openclaw" : "hermes";
+  if (health.value?.agent === "openclaw") return "openclaw";
+  if (health.value?.agent === "deepseek-harness") return "deepseek-harness";
+  return "hermes";
 }
 
 function lockRestartAgent(): RestartAgent {

@@ -18,6 +18,8 @@
  *       supervised; portable viewers retain the detached fallback. Windows
  *       returns an explicit manual handoff and keeps the responding process
  *       alive so the route cannot self-destruct before a replacement exists.
+ *       DeepSeek Harness is in-process: restart is a manual host handoff and
+ *       clear-data is disabled while the profile owns the SQLite connection.
  */
 import { spawn } from "node:child_process";
 import type { ServerResponse } from "node:http";
@@ -31,6 +33,16 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       return { ok: false, error: "database path not configured" };
     }
     const agent = options.agent ?? "unknown";
+    if (agent === "deepseek-harness") {
+      return {
+        ok: false,
+        cleared: false,
+        restarting: false,
+        error:
+          "Clear data is disabled while MemOS is running inside DeepSeek Harness. " +
+          "Stop the DSH profile before removing its memory database.",
+      };
+    }
     const platform = options.lifecycle?.platform ?? process.platform;
 
     if (platform === "win32") {
@@ -153,6 +165,17 @@ export function registerAdminRoutes(routes: Routes, deps: ServerDeps, options: S
       }
       scheduleHermesShutdown(options, 200);
       return { ok: true, restarting: true, killed };
+    }
+
+    if (agent === "deepseek-harness") {
+      return {
+        ok: true,
+        restarting: false,
+        manualRestartRequired: true,
+        message:
+          "Configuration saved. Stop and restart the active DeepSeek Harness profile " +
+          "to reload MemOS Local.",
+      };
     }
 
     return { ok: false, error: `restart unsupported for agent: ${agent}` };

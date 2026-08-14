@@ -92,6 +92,10 @@ describe("retrieval/llm-filter", () => {
     expect(result.outcome).toBe("llm_kept_all");
     expect(result.kept.map((r) => String(r.candidate.refId))).toEqual(["solo"]);
     expect(result.sufficient).toBe(true);
+    expect(llm.completeJson).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ malformedRetries: 1 }),
+    );
   });
 
   it("LLM returns selected indices → filters precisely and surfaces sufficient", async () => {
@@ -241,6 +245,52 @@ describe("retrieval/llm-filter", () => {
     const ids = result.kept.map((r) => String(r.candidate.refId));
     expect(ids).toContain("strong");
     expect(ids).not.toContain("weak");
+  });
+
+  it("honors a caller-specific zero malformed retry policy and returns safeCutoff", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockRejectedValue(new Error("malformed JSON")),
+    };
+    const ranked = [trace("strong", 0.9), trace("weak", 0.05)];
+
+    const result = await llmFilterCandidates(
+      { query: "q", ranked },
+      { llm, log, config: cfg, malformedRetries: 0 },
+    );
+
+    expect(llm.completeJson).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ malformedRetries: 0 }),
+    );
+    expect(result.outcome).toBe("llm_failed_safe_cutoff");
+    expect(result.kept.map((item) => String(item.candidate.refId))).toEqual(["strong"]);
+  });
+
+  it("hard-cuts off a non-cancellable filter call and returns safeCutoff", async () => {
+    let resolveLate!: (value: unknown) => void;
+    const late = new Promise((resolve) => {
+      resolveLate = resolve;
+    });
+    const llm: any = { completeJson: vi.fn(() => late) };
+    const ranked = [trace("strong", 0.9), trace("weak", 0.05)];
+    const startedAt = Date.now();
+
+    const result = await llmFilterCandidates(
+      { query: "q", ranked },
+      {
+        llm,
+        log,
+        config: cfg,
+        timeoutMs: 5,
+        deadlineAt: Date.now() + 50,
+        malformedRetries: 0,
+      },
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(100);
+    expect(result.outcome).toBe("llm_failed_safe_cutoff");
+    expect(result.kept.map((item) => String(item.candidate.refId))).toEqual(["strong"]);
+    resolveLate({ value: { ranked: [1], sufficient: true }, servedBy: "late" });
   });
 
   it("safe-cutoff still keeps at least 1 candidate even if all are weak", async () => {

@@ -391,6 +391,167 @@ describe("MemoryCore façade", () => {
     expect(res.query.query).toBe("how do I build this project?");
   });
 
+  it("uses pure turn-start retrieval for eventually consistent adapters", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    const recallTurn = vi.spyOn(pipeline, "recallTurn");
+    const prepareTurn = vi.spyOn(pipeline, "prepareTurn");
+    const onTurnStart = vi.spyOn(pipeline, "onTurnStart");
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const recalled = await core.searchMemory({
+      agent: "deepseek-harness",
+      namespace: {
+        agentKind: "deepseek-harness",
+        profileId: "web",
+      },
+      sessionId: "s-eventual-recall",
+      query: "find the previous repository build decision",
+      reason: "turn_start",
+      contextHints: { dshTurn: 7 },
+      deadlineAt: Date.now() + 5_000,
+    });
+
+    expect(recalled.query.reason).toBe("turn_start");
+    expect(recallTurn).toHaveBeenCalledTimes(1);
+    expect(recallTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s-eventual-recall",
+        userText: "find the previous repository build decision",
+        contextHints: expect.objectContaining({ dshTurn: 7 }),
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(prepareTurn).not.toHaveBeenCalled();
+    expect(onTurnStart).not.toHaveBeenCalled();
+    expect(pipeline.sessionManager.getSession("s-eventual-recall")).toBeNull();
+
+    const prepared = await core.prepareTurn({
+      agent: "deepseek-harness",
+      namespace: {
+        agentKind: "deepseek-harness",
+        profileId: "web",
+      },
+      sessionId: "s-eventual-recall",
+      userText: "find the previous repository build decision",
+      ts: 1_700_000_000_000,
+    });
+    expect(prepared.sessionId).toBe("s-eventual-recall");
+    expect(prepareTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a DSH tool-driven deadline and returns mechanical safeCutoff hits", async () => {
+    const baseConfig = configWithLightweightMemory(true);
+    const config = {
+      ...baseConfig,
+      algorithm: {
+        ...baseConfig.algorithm,
+        retrieval: {
+          ...baseConfig.algorithm.retrieval,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+    };
+    let filterCalls = 0;
+    let seenMalformedRetries: number | undefined;
+    let resolveLateFilter!: (value: unknown) => void;
+    const lateFilter = new Promise((resolve) => {
+      resolveLateFilter = resolve;
+    });
+    const hangingFilterLlm = {
+      completeJson: vi.fn(async (_messages: unknown, options: {
+        signal?: AbortSignal;
+        malformedRetries?: number;
+      }) => {
+        filterCalls += 1;
+        seenMalformedRetries = options.malformedRetries;
+        return await lateFilter;
+      }),
+    };
+    pipeline = createPipeline({
+      ...buildDeps(db!, config),
+      llm: hangingFilterLlm as never,
+    });
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    db!.repos.sessions.upsert({
+      id: "se_dsh_deadline",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_dsh_deadline",
+      sessionId: "se_dsh_deadline",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      endedAt: 1_700_000_000_001,
+      traceIds: ["tr_dsh_deadline"] as never,
+      rTask: null,
+      status: "closed",
+      meta: { lightweightMemory: true },
+    });
+    db!.repos.traces.insert({
+      id: "tr_dsh_deadline",
+      episodeId: "ep_dsh_deadline",
+      sessionId: "se_dsh_deadline",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: 1_700_000_000_000,
+      userText: "Where is the DSH retrieval deadline decision?",
+      agentText: "The DSH retrieval deadline decision is stored in the adapter.",
+      summary: "DSH retrieval deadline decision",
+      share: null,
+      toolCalls: [],
+      agentThinking: null,
+      reflection: null,
+      value: 0.8,
+      alpha: 0.5,
+      rHuman: null,
+      priority: 0.8,
+      tags: ["dsh_deadline"],
+      errorSignatures: [],
+      vecSummary: new Float32Array(TEST_EMBED_DIMENSIONS),
+      vecAction: null,
+      turnId: 1_700_000_000_000,
+      schemaVersion: 1,
+    } as TraceRow);
+
+    const startedAt = Date.now();
+    const result = await core.searchMemory({
+      agent: "deepseek-harness",
+      namespace: { agentKind: "openclaw", profileId: "main" },
+      query: "DSH retrieval deadline decision",
+      reason: "tool_driven",
+      deadlineAt: Date.now() + 25,
+      llmFilterMalformedRetries: 0,
+      topK: { tier1: 0, tier2: 5, tier3: 0 },
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(filterCalls).toBe(1);
+    expect(seenMalformedRetries).toBe(0);
+    expect(result.hits.map((hit) => hit.refId)).toContain("tr_dsh_deadline");
+    resolveLateFilter({ value: { ranked: [1], sufficient: true }, servedBy: "late" });
+  });
+
   it("writes one memos_search api log when turn.start reuses the same turn key", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
