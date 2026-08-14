@@ -75,6 +75,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     providerIgnore: [],
     providerOrder: [],
     openRouter: false,
+    maxTokens: 1024,
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
