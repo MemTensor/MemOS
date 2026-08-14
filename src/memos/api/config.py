@@ -622,6 +622,7 @@ class APIConfig:
                     "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
                     "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+                    "embedding_dims": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
                     "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
                     "backup_client": os.getenv("MOS_EMBEDDER_BACKUP_CLIENT", "false").lower()

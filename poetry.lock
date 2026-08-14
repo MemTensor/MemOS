@@ -174,10 +174,9 @@ transformers = ">=3.0.0"
 name = "cachetools"
 version = "6.2.1"
 description = "Extensible memoizing collections and decorators"
-optional = true
+optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"all\""
 files = [
     {file = "cachetools-6.2.1-py3-none-any.whl", hash = "sha256:09868944b6dde876dfd44e1d47e18484541eaf12f26f29b7af91b26cc892d701"},
     {file = "cachetools-6.2.1.tar.gz", hash = "sha256:3f391e4bd8f8bf0931169baf7456cc822705f4e2a31f840d218f445b9a854201"},
@@ -6636,7 +6635,7 @@ cffi = {version = ">=1.11", markers = "platform_python_implementation == \"PyPy\
 cffi = ["cffi (>=1.11)"]
 
 [extras]
-all = ["alibabacloud-oss-v2", "cachetools", "chonkie", "datasketch", "jieba", "langchain-text-splitters", "markitdown", "neo4j", "nltk", "pika", "pymilvus", "pymysql", "qdrant-client", "rake-nltk", "rank-bm25", "redis", "schedule", "sentence-transformers", "tavily-python", "torch", "volcengine-python-sdk"]
+all = ["alibabacloud-oss-v2", "chonkie", "datasketch", "jieba", "langchain-text-splitters", "markitdown", "neo4j", "nltk", "pika", "pymilvus", "pymysql", "qdrant-client", "rake-nltk", "rank-bm25", "redis", "schedule", "sentence-transformers", "tavily-python", "torch", "volcengine-python-sdk"]
 mem-reader = ["chonkie", "langchain-text-splitters", "markitdown"]
 mem-scheduler = ["pika", "redis"]
 mem-user = ["pymysql"]
@@ -6648,4 +6647,4 @@ tree-mem = ["neo4j", "schedule"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "cfab703c19f5f87caf537b68d30174695c44c6fc228e42c2c8e71b00b81f5790"
+content-hash = "0e134b24ee590115ac3270590a002fa7d54f4e4d83a9eabf53715ec03716e081"
