@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   PRODUCT_ID,
   RELEASE_NOTE_METHODS,
+  assertMemOSVersionAtRef,
   buildDocsPreview,
   collectLocalPluginEvidence,
   compareSemver,
@@ -322,7 +323,7 @@ test("requires an exact publish confirmation for non-dry-run releases", () => {
 });
 
 test("publish workflow defaults real releases to draft before release.published", () => {
-  const workflow = readFileSync(join(workflowsDir, "memos-release-publish.yml"), "utf8");
+  const workflow = readFileSync(join(workflowsDir, "memos-release-publish-main.yml"), "utf8");
   assert.match(workflow, /create_draft_release:/);
   assert.match(workflow, /default:\s+true/);
   assert.match(workflow, /CREATE_DRAFT_RELEASE/);
@@ -494,6 +495,9 @@ test("read-only dry-run workflows declare bounded fallback behavior", () => {
     assert.match(workflow, /ALLOW_OFFLINE_DOCS_PREVIEW: true/);
     assert.match(workflow, /offline_docs_preview: true/);
     assert.match(workflow, /production publish does not set ALLOW_OFFLINE_DOCS_PREVIEW/);
+    assert.match(workflow, /TARGET_REF: \$\{\{ github\.sha \}\}/);
+    assert.match(workflow, /\.github\/workflows\/memos-release-publish\.yml/);
+    assert.doesNotMatch(workflow, /TARGET_REF: origin\/main|TARGET_REF: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
   }
 });
 
@@ -522,6 +526,23 @@ test("allows flexible target refs only for dry runs", () => {
   assert.doesNotThrow(() => validateReleaseTarget({ dryRun: "false", targetRef: "main" }));
   assert.throws(() => validateReleaseTarget({ dryRun: "false", targetRef: "origin/main" }), /exactly main/);
   assert.throws(() => validateReleaseTarget({ dryRun: "false", targetRef: "feature/test" }), /exactly main/);
+});
+
+test("validates both MemOS package versions at the exact release target", () => {
+  withFixtureRepo(() => {
+    writeRepoFile("pyproject.toml", `[project]\nname = "MemoryOS"\nversion = "9.9.1"\n`);
+    writeRepoFile("src/memos/__init__.py", `__version__ = "9.9.1"\n`);
+    commitAll("chore: prepare package version");
+    const target = git(["rev-parse", "HEAD"]).trim();
+
+    assert.equal(assertMemOSVersionAtRef("9.9.1", target).version, "9.9.1");
+    assert.throws(() => assertMemOSVersionAtRef("9.9.2", target), /expected 9\.9\.2/);
+
+    writeRepoFile("src/memos/__init__.py", `__version__ = "9.9.0"\n`);
+    commitAll("test: create mismatched package version");
+    const mismatchedTarget = git(["rev-parse", "HEAD"]).trim();
+    assert.throws(() => assertMemOSVersionAtRef("9.9.1", mismatchedTarget), /do not match/);
+  });
 });
 
 test("reports absent, matching, and conflicting manual release tags", () => {
