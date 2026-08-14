@@ -32,10 +32,26 @@ describe("resolveConfig llm.maxTokens + llm.headers", () => {
     expect(cfg.llm.headers).toEqual({});
   });
 
-  it("declares skillEvolver.maxTokens (default 1024) for the crystallizer LLM slot", () => {
-    expect(DEFAULT_CONFIG.skillEvolver.maxTokens).toBe(1024);
-    const cfg = resolveConfig({ skillEvolver: { maxTokens: 4096 } });
-    expect(cfg.skillEvolver.maxTokens).toBe(4096);
+  it("declares skillEvolver.maxTokens (default 4096) for the crystallizer LLM slot", () => {
+    expect(DEFAULT_CONFIG.skillEvolver.maxTokens).toBe(4096);
+    const cfg = resolveConfig({ skillEvolver: { maxTokens: 8192 } });
+    expect(cfg.skillEvolver.maxTokens).toBe(8192);
+  });
+
+  it("declares l3Llm.maxTokens (default 4096) sharing the SkillEvolver schema", () => {
+    expect(DEFAULT_CONFIG.l3Llm.maxTokens).toBe(4096);
+    const cfg = resolveConfig({ l3Llm: { maxTokens: 8192 } });
+    expect(cfg.l3Llm.maxTokens).toBe(8192);
+  });
+
+  it("accepts headers on skillEvolver/l3Llm slots (shared SkillEvolverSchema)", () => {
+    const cfg = resolveConfig({
+      skillEvolver: { headers: { "X-Evolver": "v1" } },
+      l3Llm: { headers: { "X-L3": "v2" } },
+    });
+    expect(cfg.skillEvolver.headers).toEqual({ "X-Evolver": "v1" });
+    expect(cfg.l3Llm.headers).toEqual({ "X-L3": "v2" });
+    expect(cfg.l3Llm.maxTokens).toBe(4096);
   });
 
   it("rejects out-of-range maxTokens with config_invalid", () => {

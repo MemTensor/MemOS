@@ -137,6 +137,10 @@ type DedicatedLlmConfig = {
   providerOrder?: string[];
   openRouter?: boolean;
   reasoning?: ReasoningConfig;
+  /** Max output tokens per completion. */
+  maxTokens?: number;
+  /** Extra HTTP headers for the provider request. */
+  headers?: Record<string, string>;
 };
 
 export interface BootstrapOptions {
@@ -437,6 +441,8 @@ export async function bootstrapMemoryCoreFull(
         providerOrder: evolver?.providerOrder,
         openRouter: evolver?.openRouter ?? false,
         reasoning: evolver?.reasoning,
+        maxTokens: evolver?.maxTokens,
+        headers: evolver?.headers,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -499,6 +505,8 @@ export async function bootstrapMemoryCoreFull(
         providerOrder: l3c?.providerOrder,
         openRouter: l3c?.openRouter ?? false,
         reasoning: l3c?.reasoning,
+        maxTokens: l3c?.maxTokens,
+        headers: l3c?.headers,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
