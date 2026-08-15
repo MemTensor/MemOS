@@ -5,7 +5,7 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
-- `2.0.14-beta.1` (unreleased) — Add the out-of-tree DeepSeek Harness Cordis
+- `2.0.16` (unreleased) — Add the out-of-tree DeepSeek Harness Cordis
   bundle with capture, six memory tools, DSH profile-aware storage, and one
   automatic recall for every accepted, non-empty direct-user turn. Same-turn
   re-entry is de-duplicated, while greetings and restored-session turns receive

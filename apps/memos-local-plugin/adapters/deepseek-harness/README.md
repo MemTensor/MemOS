@@ -122,23 +122,14 @@ Prerequisites:
 - A provider, model, and API credential already configured and verified with a
   normal DSH prompt. Host delegation avoids configuring that credential again
   in MemOS; it does not make an unconfigured DSH model route usable.
-- The `agent-mem-dsh` branch of the MemOS repository while this integration is
-  under review.
+- `@memtensor/memos-local-plugin` version `2.0.16` or newer.
 
 For a published package, the recommended macOS/Linux path is the one-command
 installer. It delegates to DSH rather than copying files into the profile:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh \
-  | bash -s -- --agent dsh --profile web
-```
-
-Before the installer change reaches `main`, validate the published beta from
-the integration branch:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/agent-mem-dsh/apps/memos-local-plugin/install.sh \
-  | bash -s -- --agent dsh --profile web --version 2.0.16-beta.1
+  | bash -s -- --agent dsh --profile web --version 2.0.16
 ```
 
 The installer handles only the reviewed pnpm build-script set described below,

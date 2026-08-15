@@ -132,14 +132,7 @@ build policy non-interactively:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh \
-  | bash -s -- --agent dsh --profile web
-```
-
-For the `2.0.16-beta.1` branch validation before merge to `main`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/agent-mem-dsh/apps/memos-local-plugin/install.sh \
-  | bash -s -- --agent dsh --profile web --version 2.0.16-beta.1
+  | bash -s -- --agent dsh --profile web --version 2.0.16
 ```
 
 The installer delegates package ownership and bundle reconciliation to

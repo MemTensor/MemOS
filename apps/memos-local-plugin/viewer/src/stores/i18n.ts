@@ -183,11 +183,13 @@ const en = {
   "restart.waitingUp": "Waiting for the service to come back online…",
   "restart.autoRefresh": "The page will refresh automatically once the service is ready.",
   "restart.manual": "A manual restart is required.",
+  "restart.manual.hermes": "Configuration saved. Restart Hermes to apply the changes.",
   "restart.clearing": "Clearing local memory data…",
   "restart.manualClose": "Hermes is still connected.",
   "restart.manualHint.openclaw":
     "Run in PowerShell: openclaw gateway stop; then openclaw gateway start.",
-  "restart.manualHint.hermes": "Close Hermes, start it again, then reopen the Memory Viewer.",
+  "restart.manualHint.hermes":
+    "Fully quit Hermes, then start it again. Wait about 20–30 seconds for Hermes itself to finish initializing. Keep this page open; it will reconnect and refresh automatically when Memory Viewer is ready.",
   "restart.manualHint.deepseek-harness":
     "Stop and restart the active DSH profile, then reopen the Memory Viewer.",
   "restart.manualCloseHint": "Close this message, fully exit Hermes, then retry clearing data.",
@@ -789,7 +791,7 @@ const en = {
   "import.migrate.notFound": "No legacy database found.",
   "import.hermes.title": "Import Hermes native memories",
   "import.hermes.desc":
-    "Read ~/.hermes/memories/MEMORY.md and import each entry separated by a single § line into this memory plugin.",
+    "Read memories/MEMORY.md from the current Hermes home and import each entry separated by a single § line into this memory plugin.",
   "import.hermes.scan": "Scan native memory file",
   "import.hermes.run": "Import native memories",
   "import.hermes.stop": "Stop import",
@@ -866,7 +868,7 @@ const en = {
   "settings.tab.general": "General",
   "settings.warn.title": "Model configuration",
   "settings.warn.emb":
-    "The bundled embedder is small. For better recall we recommend a dedicated model (e.g. bge-m3).",
+    "The default local embedder is small and downloads on first use. For better recall we recommend a dedicated model (e.g. bge-m3).",
   "settings.warn.sum":
     "Summarizer is required — without it, task summaries and scoring fall back to crude heuristics.",
   "settings.warn.skill":
@@ -879,7 +881,7 @@ const en = {
   "settings.embedding.title": "Embedding",
   "settings.embedding.desc": "Vector embedding model used by retrieval and deduplication.",
   "settings.embedding.localHint":
-    "Currently using built-in MiniLM-L6-v2 (384-dim, ~23 MB). Select another provider for better retrieval accuracy.",
+    "The local MiniLM-L6-v2 model runs on-device (384-dim); the first test or use downloads about 23 MB from Hugging Face. The Test button downloads and verifies it. Select another provider for better retrieval accuracy.",
   "settings.embedding.maintenance.title": "Embedding maintenance",
   "settings.embedding.maintenance.stats":
     "Ready {ready}/{total}; missing {missing}; dimension mismatch {mismatch}; current dim {dim}.",
@@ -1108,11 +1110,13 @@ const zh: Record<TranslationKey, string> = {
   "restart.waitingUp": "正在等待服务重新上线…",
   "restart.autoRefresh": "服务就绪后页面将自动刷新。",
   "restart.manual": "需要手动重启。",
+  "restart.manual.hermes": "配置已保存，请重启 Hermes 以应用更改。",
   "restart.clearing": "正在清理本地记忆数据…",
   "restart.manualClose": "Hermes 仍处于连接状态。",
   "restart.manualHint.openclaw":
     "请在 PowerShell 中依次执行：openclaw gateway stop；openclaw gateway start",
-  "restart.manualHint.hermes": "请关闭 Hermes，重新启动后再打开 Memory Viewer。",
+  "restart.manualHint.hermes":
+    "请完全退出并重新启动 Hermes。重启后请等待 Hermes 自身完成初始化，通常约 20–30 秒。请保持当前页面打开，Memory Viewer 就绪后会自动重连并刷新。",
   "restart.manualHint.deepseek-harness": "请停止并重新启动当前 DSH profile，然后重新打开 Memory Viewer。",
   "restart.manualCloseHint": "请关闭此提示并完全退出 Hermes，然后重新执行清空数据。",
   "restart.clearComplete": "本地记忆数据已清理。",
@@ -1660,7 +1664,7 @@ const zh: Record<TranslationKey, string> = {
   "import.migrate.notFound": "没有找到旧数据库。",
   "import.hermes.title": "导入 Hermes 原生记忆",
   "import.hermes.desc":
-    "读取 ~/.hermes/memories/MEMORY.md，并把用单独一行 § 分隔的每条记忆导入当前记忆插件。",
+    "读取当前 Hermes 主目录下的 memories/MEMORY.md，并把用单独一行 § 分隔的每条记忆导入当前记忆插件。",
   "import.hermes.scan": "扫描原生记忆文件",
   "import.hermes.run": "导入原生记忆",
   "import.hermes.stop": "停止导入",
@@ -1730,7 +1734,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.tab.hub": "团队分享",
   "settings.tab.general": "通用",
   "settings.warn.title": "模型配置提醒",
-  "settings.warn.emb": "插件内置嵌入模型较小。为获得更精准的记忆检索，建议配置 bge-m3 等专业嵌入模型。",
+  "settings.warn.emb": "默认本地嵌入模型较小，权重需在首次使用时下载。为获得更精准的记忆检索，建议配置 bge-m3 等专业嵌入模型。",
   "settings.warn.sum": "摘要模型为必填。若不配置，反思与奖励信号只能走粗糙启发式。",
   "settings.warn.skill": "技能诱导建议配置更强的推理模型以提升稳定性。",
   "settings.provider": "提供商",
@@ -1741,7 +1745,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.embedding.title": "嵌入模型",
   "settings.embedding.desc": "用于记忆检索与去重的向量嵌入模型。",
   "settings.embedding.localHint":
-    "当前使用内置 MiniLM-L6-v2（384 维，约 23 MB）。选择其他 Provider 可获得更精准的检索效果。",
+    "本地 MiniLM-L6-v2 在设备上运行（384 维）；首次测试或使用时需从 Hugging Face 下载约 23 MB。“测试”按钮会下载并验证模型。选择其他 Provider 可获得更精准的检索效果。",
   "settings.embedding.maintenance.title": "向量维护",
   "settings.embedding.maintenance.stats":
     "可用 {ready}/{total}；缺失 {missing}；维度不匹配 {mismatch}；当前维度 {dim}。",

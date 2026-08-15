@@ -6,6 +6,11 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { buildLocalPluginReleaseIntent } from "./append-local-plugin-release-intent.mjs";
+import {
+  MEMOS_PACKAGE_INIT_PATH,
+  MEMOS_PYPROJECT_PATH,
+  assertMemOSVersionTexts,
+} from "./memos-version.mjs";
 
 export const PRODUCT_ID = "openclaw-local-plugin";
 export const PRODUCT_PATH = "apps/memos-local-plugin";
@@ -277,6 +282,20 @@ function resolveRef(ref) {
     if (sha) return { ref: candidate, sha };
   }
   fail(`Cannot resolve target ref to a commit: ${value}`);
+}
+
+export function assertMemOSVersionAtRef(expectedVersion, targetRef) {
+  const ref = String(targetRef || "").trim();
+  if (!ref) fail("A target ref is required to validate the MemOS package version.");
+  let pyprojectText;
+  let packageInitText;
+  try {
+    pyprojectText = sh(["show", `${ref}:${MEMOS_PYPROJECT_PATH}`]);
+    packageInitText = sh(["show", `${ref}:${MEMOS_PACKAGE_INIT_PATH}`]);
+  } catch {
+    fail(`Cannot read both MemOS package version files from release target ${ref}.`);
+  }
+  return assertMemOSVersionTexts({ expectedVersion, pyprojectText, packageInitText });
 }
 
 export function existingReleaseTagState(currentTag, targetSha) {
@@ -1521,7 +1540,8 @@ export async function run() {
   const repo = process.env.GITHUB_REPOSITORY || "MemTensor/MemOS";
   const targetRefInput = process.env.TARGET_REF || "main";
   validateReleaseTarget({ dryRun, targetRef: targetRefInput });
-  const target = resolveRef(targetRefInput);
+  const target = resolveRef(dryRun === "true" ? targetRefInput : "refs/remotes/origin/main");
+  const memosPackageVersion = assertMemOSVersionAtRef(version, target.sha);
   const allTags = listTags();
   const previousTag = process.env.PREVIOUS_TAG || findPreviousMemOSTag(version, currentTag, allTags);
   if (!previousTag) fail(`Cannot find previous MemOS v* tag before ${currentTag}.`);
@@ -1819,6 +1839,7 @@ export async function run() {
   appendOutput("publish_block_reason", existingTag.publish_blocked ? existingTag.message : "");
   appendOutput("target_ref", target.ref);
   appendOutput("target_sha", target.sha);
+  appendOutput("memos_package_version", memosPackageVersion.version);
   appendOutput("has_product_changes", String(evidence.has_product_changes));
   appendOutput("has_user_facing_product_changes", String(evidence.has_user_facing_product_changes));
   appendOutput("docs_action", preview.docs_action);

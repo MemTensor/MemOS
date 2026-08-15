@@ -22,6 +22,9 @@ function FullScreenSpinner() {
   const message = overlayMessage(s.phase, agentType, s.message);
   const hint = overlayHint(s.phase, agentType);
   const terminal = isTerminalPhase(s.phase);
+  const dismissible = terminal && !(
+    s.phase === "manualRestartRequired" && agentType === "hermes"
+  );
 
   return (
     <div
@@ -55,7 +58,7 @@ function FullScreenSpinner() {
         )}
         <div style="font-size:15px;font-weight:600">{message}</div>
         <div style="font-size:12px;opacity:.6">{hint}</div>
-        {terminal && (
+        {dismissible && (
           <button
             class="btn btn--ghost btn--sm"
             onClick={dismissRestartBanner}
@@ -89,7 +92,9 @@ function overlayMessage(
     case "clearing":
       return t("restart.clearing");
     case "manualRestartRequired":
-      return responseMessage ?? t("restart.manual");
+      return agentType === "hermes"
+        ? t("restart.manual.hermes")
+        : responseMessage ?? t("restart.manual");
     case "restartFailed":
       return t("restart.failed");
     case "waitingUp":
