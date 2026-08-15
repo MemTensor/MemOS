@@ -37,6 +37,8 @@ for the full per-commit history use `git log` or the GitHub releases page.
   binding, fail-open Viewer startup with bounded recovery from a transient busy
   port, DSH-opted-in bounded Viewer SSE shutdown,
   Transformers.js 4.2 / ONNX Runtime 1.24.3 for crash-free macOS process exit,
+  one-command temporary bootstrap of DSH's pinned `pnpm@11.7.0` when pnpm is
+  absent without modifying the user's global package-manager installation,
   and [local installation guidance](./adapters/deepseek-harness/README.md).
 - `2.0.6` (unreleased) — Documentation fix: clarify install path and stale
   directory names (#1540).

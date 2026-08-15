@@ -87,6 +87,7 @@ NPM_PACKAGE="@memtensor/memos-local-plugin"
 OPENCLAW_PORT="18799"
 HERMES_PORT="18800"
 DSH_PORT="18801"
+DSH_PNPM_VERSION="11.7.0"
 REQUIRED_NODE_MAJOR=20
 OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"
 # Older plugin IDs disabled on install so they don't fight for the
@@ -295,8 +296,19 @@ pick_agents_interactively() {
 # ─── Resolve tarball ──────────────────────────────────────────────────────
 BUILT_TARBALL=""
 STAGE_DIR=""
+DSH_PNPM_TEMP_DIR=""
 SOURCE_KIND=""   # "path" for a local file, "npm" otherwise
 SOURCE_SPEC=""
+
+cleanup_install_temp_dirs() {
+  if [[ -n "${STAGE_DIR}" && -d "${STAGE_DIR}" ]]; then
+    rm -rf -- "${STAGE_DIR}"
+  fi
+  if [[ -n "${DSH_PNPM_TEMP_DIR}" && -d "${DSH_PNPM_TEMP_DIR}" ]]; then
+    rm -rf -- "${DSH_PNPM_TEMP_DIR}"
+  fi
+}
+trap cleanup_install_temp_dirs EXIT
 
 resolve_source_spec() {
   if [[ -n "${VERSION_ARG}" && -f "${VERSION_ARG}" ]]; then
@@ -318,7 +330,6 @@ resolve_source_spec() {
 resolve_tarball() {
   resolve_source_spec
   STAGE_DIR="$(mktemp -d)"
-  trap 'rm -rf "${STAGE_DIR}"' EXIT
 
   if [[ "${SOURCE_KIND}" == "path" ]]; then
     BUILT_TARBALL="${SOURCE_SPEC}"
@@ -1097,6 +1108,45 @@ read_pending_dsh_builds() {
   ' "${workspace}" | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'
 }
 
+ensure_dsh_pnpm() {
+  local pnpm_bin pnpm_version
+  if pnpm_bin="$(command -v pnpm 2>/dev/null)"; then
+    if ! pnpm_version="$(pnpm --version 2>/dev/null)" || [[ -z "${pnpm_version}" ]]; then
+      die "pnpm exists at ${pnpm_bin}, but it cannot run. Repair that installation and re-run."
+    fi
+    success "pnpm ${pnpm_version}"
+    return 0
+  fi
+
+  command -v npm >/dev/null 2>&1 \
+    || die "pnpm is missing and npm is unavailable. Install pnpm@${DSH_PNPM_VERSION} and re-run."
+
+  warn "pnpm not found on PATH. Preparing pnpm@${DSH_PNPM_VERSION} for this DSH install..."
+  DSH_PNPM_TEMP_DIR="$(mktemp -d)" \
+    || die "Unable to create a temporary directory for pnpm."
+  if ! npm install \
+    --prefix "${DSH_PNPM_TEMP_DIR}" \
+    --no-save \
+    --ignore-scripts \
+    --no-audit \
+    --no-fund \
+    --package-lock=false \
+    --loglevel=error \
+    "pnpm@${DSH_PNPM_VERSION}"; then
+    die "Unable to prepare pnpm@${DSH_PNPM_VERSION}. Install it manually with: npm install -g pnpm@${DSH_PNPM_VERSION}"
+  fi
+
+  export PATH="${DSH_PNPM_TEMP_DIR}/node_modules/.bin:${PATH}"
+  hash -r
+  if ! pnpm_version="$(pnpm --version 2>/dev/null)" \
+    || [[ "${pnpm_version}" != "${DSH_PNPM_VERSION}" ]]; then
+    die "Temporary pnpm verification failed. Install it manually with: npm install -g pnpm@${DSH_PNPM_VERSION}"
+  fi
+
+  success "Temporary pnpm ${pnpm_version} ready"
+  info "It is removed after this installer exits; normal dsh runtime does not need it."
+}
+
 install_dsh() {
   STEP_CURRENT=0
   header "DeepSeek Harness Install"
@@ -1104,8 +1154,6 @@ install_dsh() {
   local dsh_bin
   dsh_bin="$(find_dsh_cli)" \
     || die "dsh CLI not found. Install DeepSeek Harness first: npm install -g @deepseek-ai/dsh"
-  command -v pnpm >/dev/null 2>&1 \
-    || die "pnpm not found on PATH. DSH requires pnpm for plugin management."
 
   local node_version node_major_version node_minor_version
   node_version="$(node -p 'process.versions.node')"
@@ -1115,6 +1163,7 @@ install_dsh() {
   if ! (( node_major_version >= 24 || (node_major_version == 22 && node_minor_version >= 19) )); then
     die "DSH requires Node.js ^22.19.0 or >=24.0.0 (have v${node_version})."
   fi
+  ensure_dsh_pnpm
 
   local spec="${SOURCE_SPEC}"
   [[ -n "${spec}" ]] || die "Unable to resolve the DSH package source."

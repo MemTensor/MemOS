@@ -20,12 +20,15 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  accessSync,
   chmodSync,
+  constants,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -58,11 +61,60 @@ function writeExecutable(file: string, source: string): void {
   chmodSync(file, 0o755);
 }
 
+function findHostExecutable(name: string): string {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching the host PATH.
+    }
+  }
+  throw new Error(`Required test executable not found: ${name}`);
+}
+
+function isolateFixturePath(bin: string): void {
+  for (const name of [
+    "awk",
+    "bash",
+    "basename",
+    "cat",
+    "chmod",
+    "cut",
+    "dirname",
+    "grep",
+    "mkdir",
+    "mktemp",
+    "rm",
+    "sed",
+    "tee",
+    "uname",
+  ]) {
+    symlinkSync(findHostExecutable(name), path.join(bin, name));
+  }
+  writeExecutable(
+    path.join(bin, "node"),
+    `#!/usr/bin/env bash
+if [[ "$1" == "-v" ]]; then
+  printf '%s\n' 'v22.19.0'
+elif [[ "$1" == "-p" ]]; then
+  printf '%s\n' '22.19.0'
+else
+  exit 64
+fi
+`,
+  );
+}
+
 function makeDshFixture(options: {
   firstAdd?: "success" | "ignored-builds" | "unknown-build" | "error";
   approval?: "success" | "error";
   secondAdd?: "success" | "error";
   dump?: "success" | "missing-bundle";
+  pnpm?: "present" | "missing";
+  npmBootstrap?: "success" | "error";
 } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "memos-dsh-installer-"));
   const home = path.join(root, "home");
@@ -70,15 +122,46 @@ function makeDshFixture(options: {
   const dshHome = path.join(home, ".dsh");
   const log = path.join(root, "dsh.log");
   const addCount = path.join(root, "add-count");
+  const npmLog = path.join(root, "npm.log");
+  const npmPrefixLog = path.join(root, "npm-prefix.log");
   const scratch = path.join(root, "scratch");
   mkdirSync(home, { recursive: true });
   mkdirSync(bin, { recursive: true });
   mkdirSync(scratch, { recursive: true });
 
-  writeExecutable(
-    path.join(bin, "pnpm"),
-    "#!/usr/bin/env bash\nexit 0\n",
-  );
+  const pnpm = options.pnpm ?? "present";
+  if (pnpm === "present") {
+    writeExecutable(
+      path.join(bin, "pnpm"),
+      "#!/usr/bin/env bash\nprintf '%s\\n' '11.7.0'\n",
+    );
+  } else {
+    isolateFixturePath(bin);
+    const npmBootstrap = options.npmBootstrap ?? "success";
+    writeExecutable(
+      path.join(bin, "npm"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${npmLog}"
+[[ "${npmBootstrap}" == "success" ]] || exit 90
+
+prefix=""
+while [[ "$#" -gt 0 ]]; do
+  if [[ "$1" == "--prefix" ]]; then
+    shift
+    prefix="$1"
+    break
+  fi
+  shift
+done
+[[ -n "$prefix" ]] || exit 91
+printf '%s\n' "$prefix" > "${npmPrefixLog}"
+mkdir -p "$prefix/node_modules/.bin"
+printf '%s\n' '#!/usr/bin/env bash' "printf '%s\\n' '11.7.0'" > "$prefix/node_modules/.bin/pnpm"
+chmod +x "$prefix/node_modules/.bin/pnpm"
+`,
+    );
+  }
 
   const firstAdd = options.firstAdd ?? "ignored-builds";
   const approval = options.approval ?? "success";
@@ -147,6 +230,8 @@ exit 64
     bin,
     dshHome,
     log,
+    npmLog,
+    npmPrefixLog,
     env: {
       HOME: home,
       DSH_HOME: dshHome,
@@ -154,7 +239,7 @@ exit 64
       XDG_CACHE_HOME: path.join(scratch, "xdg-cache"),
       XDG_CONFIG_HOME: path.join(scratch, "xdg-config"),
       npm_config_cache: path.join(scratch, "npm-cache"),
-      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      PATH: pnpm === "missing" ? bin : `${bin}:${process.env.PATH ?? ""}`,
     },
   };
 }
@@ -275,6 +360,57 @@ exit 90
     }
   });
 
+  it("prepares pinned temporary pnpm when it is missing", () => {
+    const fixture = makeDshFixture({ firstAdd: "success", pnpm: "missing" });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+
+      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
+
+      expect(r.code).toBe(0);
+      expect(readFileSync(fixture.npmLog, "utf8")).toContain(
+        "install --prefix ",
+      );
+      expect(readFileSync(fixture.npmLog, "utf8")).toContain(
+        "--no-save --ignore-scripts --no-audit --no-fund --package-lock=false --loglevel=error pnpm@11.7.0",
+      );
+      const temporaryPrefix = readFileSync(
+        fixture.npmPrefixLog,
+        "utf8",
+      ).trim();
+      expect(existsSync(temporaryPrefix)).toBe(false);
+      expect(r.stdout).toContain("Temporary pnpm 11.7.0 ready");
+      expect(readFileSync(fixture.log, "utf8")).toContain(
+        `plugin --profile web add ${tarball}`,
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails before calling DSH when temporary pnpm cannot be prepared", () => {
+    const fixture = makeDshFixture({
+      firstAdd: "success",
+      pnpm: "missing",
+      npmBootstrap: "error",
+    });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+
+      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
+
+      expect(r.code).not.toBe(0);
+      expect(`${r.stdout}\n${r.stderr}`).toContain(
+        "npm install -g pnpm@11.7.0",
+      );
+      expect(existsSync(fixture.log)).toBe(false);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("does not approve builds after an unrelated DSH add failure", () => {
     const fixture = makeDshFixture({ firstAdd: "error" });
     try {
@@ -308,7 +444,7 @@ exit 90
   });
 
   it("supports the curl-pipe bash stdin invocation for DSH", () => {
-    const fixture = makeDshFixture({ firstAdd: "success" });
+    const fixture = makeDshFixture({ firstAdd: "success", pnpm: "missing" });
     try {
       const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
       writeFileSync(tarball, "fixture", "utf8");

@@ -128,7 +128,9 @@ Windows users can use DSH's lower-level `dsh plugin` flow.
 
 DSH support is an out-of-tree Cordis bundle. The one-command installer keeps
 DSH in control of its profile while handling pnpm's reviewed native dependency
-build policy non-interactively:
+build policy non-interactively. If `pnpm` is not already on `PATH`, it prepares
+an isolated `pnpm@11.7.0` for that installer run without changing the user's
+global package-manager setup:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh \
@@ -142,6 +144,11 @@ disables the unnecessary `protobufjs` and MemOS hint scripts, retries the same
 package spec, and verifies the composed `memos-local-memory` row. Any unknown
 build-script package fails closed for manual review; the installer never uses
 `approve-builds --all`.
+
+The temporary pnpm is removed when the installer exits. It is not needed for
+normal `dsh --profile ...` runtime use. Users who later run lower-level
+`dsh plugin` commands directly still need pnpm on `PATH`; install the DSH-pinned
+version persistently with `npm install -g pnpm@11.7.0` if desired.
 
 To develop from a local checkout instead, build it and add it to the desired
 DSH profile directly:

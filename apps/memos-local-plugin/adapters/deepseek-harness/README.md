@@ -118,7 +118,9 @@ Prerequisites:
 - A Node.js version accepted by the DSH release. DSH `0.1.0-rc.5` requires
   Node.js `^22.19.0 || >=24.0.0`; this stricter host requirement takes
   precedence over the MemOS package's standalone `>=20` engine.
-- A working DSH installation and `pnpm` on `PATH`.
+- A working DSH installation. The recommended one-command installer prepares
+  an isolated `pnpm@11.7.0` for the install when pnpm is absent. Lower-level
+  direct `dsh plugin` commands still require pnpm on `PATH`.
 - A provider, model, and API credential already configured and verified with a
   normal DSH prompt. Host delegation avoids configuring that credential again
   in MemOS; it does not make an unconfigured DSH model route usable.
@@ -132,10 +134,13 @@ curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-loc
   | bash -s -- --agent dsh --profile web --version 2.0.16
 ```
 
-The installer handles only the reviewed pnpm build-script set described below,
-retries the same registry or local-tarball spec, and verifies that DSH composed
-the bundle. It fails closed when the dependency graph introduces an unreviewed
-script. Restart the selected DSH profile after installation.
+The installer prepares an isolated `pnpm@11.7.0` when pnpm is absent, handles
+only the reviewed pnpm build-script set described below, retries the same
+registry or local-tarball spec, and verifies that DSH composed the bundle. The
+temporary pnpm is removed when the installer exits and does not change the
+user's global package-manager setup. It fails closed when the dependency graph
+introduces an unreviewed script. Restart the selected DSH profile after
+installation.
 
 ### Install from a local checkout
 
@@ -174,6 +179,14 @@ The lower-level registry form is:
 
 ```bash
 dsh plugin --profile web add @memtensor/memos-local-plugin@<version>
+```
+
+Because lower-level `dsh plugin` calls do not pass through the MemOS installer,
+they require pnpm on `PATH`. To keep DSH's tested version available for those
+commands, install it persistently if needed:
+
+```bash
+npm install -g pnpm@11.7.0
 ```
 
 ### Review dependency build scripts
