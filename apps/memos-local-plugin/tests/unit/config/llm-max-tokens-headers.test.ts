@@ -44,18 +44,28 @@ describe("resolveConfig llm.maxTokens + llm.headers", () => {
     expect(cfg.l3Llm.maxTokens).toBe(8192);
   });
 
-  it("accepts headers on skillEvolver/l3Llm slots (shared SkillEvolverSchema)", () => {
-    const cfg = resolveConfig({
-      skillEvolver: { headers: { "X-Evolver": "v1" } },
-      l3Llm: { headers: { "X-L3": "v2" } },
-    });
+  it("accepts headers on skillEvolver/l3Llm slots without unknown-key warnings", () => {
+    const warnings: string[] = [];
+    const cfg = resolveConfig(
+      {
+        skillEvolver: { headers: { "X-Evolver": "v1" } },
+        l3Llm: { headers: { "X-L3": "v2" } },
+      },
+      warnings,
+    );
     expect(cfg.skillEvolver.headers).toEqual({ "X-Evolver": "v1" });
     expect(cfg.l3Llm.headers).toEqual({ "X-L3": "v2" });
     expect(cfg.l3Llm.maxTokens).toBe(4096);
+    expect(warnings).toEqual([]);
+  });
+
+  it("declares headers defaulting to empty on the dedicated slots", () => {
+    expect(DEFAULT_CONFIG.skillEvolver.headers).toEqual({});
+    expect(DEFAULT_CONFIG.l3Llm.headers).toEqual({});
   });
 
   it("rejects out-of-range maxTokens with config_invalid", () => {
-    expect(() => resolveConfig({ llm: { maxTokens: 8 } })).toThrow(/config failed schema validation/);
+    expect(() => resolveConfig({ llm: { maxTokens: 50 } })).toThrow(/config failed schema validation/);
   });
 
   it("rejects non-string header values", () => {

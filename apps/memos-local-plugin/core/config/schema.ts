@@ -100,7 +100,7 @@ const LlmSchema = Type.Object({
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
   /** Max output tokens per completion (deepseek-v4-flash needs >= 100). */
-  maxTokens: NumberInRange(1024, 16, 131072),
+  maxTokens: NumberInRange(1024, 100, 131072),
   /** Extra HTTP headers for the provider request. */
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
 }, { default: {} });
@@ -136,7 +136,7 @@ const SkillEvolverSchema = Type.Object({
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
   /** Max output tokens per completion. */
-  maxTokens: NumberInRange(1024, 16, 131072),
+  maxTokens: NumberInRange(1024, 100, 131072),
   /** Extra HTTP headers for the provider request. */
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
 }, { default: {} });
