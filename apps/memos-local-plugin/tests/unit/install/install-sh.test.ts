@@ -115,25 +115,59 @@ function makeDshFixture(options: {
   dump?: "success" | "missing-bundle";
   pnpm?: "present" | "missing";
   npmBootstrap?: "success" | "error";
+  sqliteProbe?: "success" | "repairable" | "error";
+  onnxProbe?: "success" | "error";
+  rebuild?: "success" | "error";
 } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "memos-dsh-installer-"));
   const home = path.join(root, "home");
   const bin = path.join(root, "bin");
   const dshHome = path.join(home, ".dsh");
+  const profileWorkspace = path.join(
+    dshHome,
+    "profiles",
+    "web",
+    "pnpm-workspace.yaml",
+  );
   const log = path.join(root, "dsh.log");
+  const dshEnvLog = path.join(root, "dsh-env.log");
   const addCount = path.join(root, "add-count");
   const npmLog = path.join(root, "npm.log");
   const npmPrefixLog = path.join(root, "npm-prefix.log");
+  const pnpmActionLog = path.join(root, "pnpm-actions.log");
+  const nativeProbeLog = path.join(root, "native-probes.log");
+  const rebuildMarker = path.join(root, "better-sqlite3-rebuilt");
   const scratch = path.join(root, "scratch");
   mkdirSync(home, { recursive: true });
   mkdirSync(bin, { recursive: true });
   mkdirSync(scratch, { recursive: true });
+  mkdirSync(path.dirname(profileWorkspace), { recursive: true });
+  writeFileSync(
+    profileWorkspace,
+    "packages:\n  - .\nallowBuilds:\n  onnxruntime-node: true\n",
+    "utf8",
+  );
+  const hostNode = findHostExecutable("node");
 
   const pnpm = options.pnpm ?? "present";
   if (pnpm === "present") {
+    const rebuild = options.rebuild ?? "success";
     writeExecutable(
       path.join(bin, "pnpm"),
-      "#!/usr/bin/env bash\nprintf '%s\\n' '11.7.0'\n",
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then
+  printf '%s\n' '11.7.0'
+  exit 0
+fi
+printf '%s\n' "$*" >> "${pnpmActionLog}"
+if [[ "$*" == "rebuild better-sqlite3" ]]; then
+  [[ "${rebuild}" == "success" ]] || exit 92
+  : > "${rebuildMarker}"
+  exit 0
+fi
+exit 64
+`,
     );
   } else {
     isolateFixturePath(bin);
@@ -163,6 +197,41 @@ chmod +x "$prefix/node_modules/.bin/pnpm"
     );
   }
 
+  const sqliteProbe = options.sqliteProbe ?? "success";
+  const onnxProbe = options.onnxProbe ?? "success";
+  writeExecutable(
+    path.join(bin, "node"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "-v" ]]; then
+  printf '%s\n' 'v22.19.0'
+  exit 0
+fi
+if [[ "\${1:-}" == "-p" ]]; then
+  printf '%s\n' '22.19.0'
+  exit 0
+fi
+if [[ "\${1:-}" == "-e" ]]; then
+  source="\${2:-}"
+  if [[ "$source" == *"MEMOS_DSH_POLICY"* || "$source" == *"MEMOS_DSH_HOME"* ]]; then
+    exec "${hostNode}" "$@"
+  fi
+  if [[ "$source" == *"better-sqlite3"* ]]; then
+    printf '%s\n' 'better-sqlite3' >> "${nativeProbeLog}"
+    if [[ "${sqliteProbe}" == "error" ]]; then exit 81; fi
+    if [[ "${sqliteProbe}" == "repairable" && ! -f "${rebuildMarker}" ]]; then exit 81; fi
+    exit 0
+  fi
+  if [[ "$source" == *"onnxruntime-node"* ]]; then
+    printf '%s\n' 'onnxruntime-node' >> "${nativeProbeLog}"
+    [[ "${onnxProbe}" == "success" ]] || exit 82
+    exit 0
+  fi
+fi
+exit 64
+`,
+  );
+
   const firstAdd = options.firstAdd ?? "ignored-builds";
   const approval = options.approval ?? "success";
   const secondAdd = options.secondAdd ?? "success";
@@ -172,6 +241,9 @@ chmod +x "$prefix/node_modules/.bin/pnpm"
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "${log}"
+if [[ "\${1:-}" == "plugin" ]]; then
+  printf '%s\\n' "\${ONNXRUNTIME_NODE_INSTALL:-}" >> "${dshEnvLog}"
+fi
 
 if [[ "$*" == "--profile web --dump-config" ]]; then
   if [[ "${dump}" == "missing-bundle" ]]; then
@@ -183,6 +255,8 @@ if [[ "$*" == "--profile web --dump-config" ]]; then
 fi
 
 if [[ "$1" == "plugin" && "$4" == "add" ]]; then
+  profile="${dshHome}/profiles/web"
+  mkdir -p "$profile"
   count=0
   [[ -f "${addCount}" ]] && count="$(cat "${addCount}")"
   count=$((count + 1))
@@ -192,8 +266,6 @@ if [[ "$1" == "plugin" && "$4" == "add" ]]; then
     exit 42
   fi
   if [[ "$count" == "1" && "${firstAdd}" != "success" ]]; then
-    profile="${dshHome}/profiles/web"
-    mkdir -p "$profile"
     if [[ "${firstAdd}" == "unknown-build" ]]; then
       pending="  unexpected-native-addon: set this to true or false"
     else
@@ -230,8 +302,12 @@ exit 64
     bin,
     dshHome,
     log,
+    dshEnvLog,
     npmLog,
     npmPrefixLog,
+    pnpmActionLog,
+    nativeProbeLog,
+    profileWorkspace,
     env: {
       HOME: home,
       DSH_HOME: dshHome,
@@ -299,12 +375,25 @@ describe("install.sh — CLI surface", () => {
       const calls = readFileSync(fixture.log, "utf8").trim().split("\n");
       expect(calls).toEqual([
         `plugin --profile web add ${tarball}`,
-        "plugin --profile web approve-builds better-sqlite3 esbuild onnxruntime-node sharp !protobufjs !@memtensor/memos-local-plugin",
+        "plugin --profile web approve-builds better-sqlite3 esbuild sharp !onnxruntime-node !protobufjs !@memtensor/memos-local-plugin",
         `plugin --profile web add ${tarball}`,
         "--profile web --dump-config",
       ]);
+      expect(readFileSync(fixture.nativeProbeLog, "utf8").trim().split("\n")).toEqual([
+        "better-sqlite3",
+        "onnxruntime-node",
+      ]);
+      expect(readFileSync(fixture.dshEnvLog, "utf8").trim().split("\n")).toEqual([
+        "skip",
+        "skip",
+        "skip",
+      ]);
+      expect(readFileSync(fixture.profileWorkspace, "utf8")).toContain(
+        "onnxruntime-node: false",
+      );
       expect(r.stdout).toContain("DeepSeek Harness install complete");
       expect(r.stdout).toContain("http://127.0.0.1:18801");
+      expect(r.stdout).toContain("Viewer after restart:");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -345,7 +434,7 @@ exit 90
 
       const r = run(
         ["--agent", "dsh", "--version", "2.0.16-beta.1"],
-        fixture.env,
+        { ...fixture.env, DSH_HOME: "~/.dsh" },
       );
 
       expect(r.code).toBe(0);
@@ -355,6 +444,10 @@ exit 90
         "plugin --profile web add @memtensor/memos-local-plugin@2.0.16-beta.1",
       );
       expect(calls).toHaveLength(2);
+      expect(readFileSync(fixture.dshEnvLog, "utf8").trim()).toBe("skip");
+      expect(readFileSync(fixture.profileWorkspace, "utf8")).toContain(
+        "onnxruntime-node: false",
+      );
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -438,6 +531,112 @@ exit 90
       const calls = readFileSync(fixture.log, "utf8").trim().split("\n");
       expect(calls).toHaveLength(2);
       expect(calls[1]).toContain("approve-builds");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs a missing DSH better-sqlite3 binding before reporting success", () => {
+    const fixture = makeDshFixture({
+      firstAdd: "success",
+      sqliteProbe: "repairable",
+    });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+
+      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
+
+      expect(r.code).toBe(0);
+      expect(readFileSync(fixture.pnpmActionLog, "utf8").trim()).toBe(
+        "rebuild better-sqlite3",
+      );
+      expect(readFileSync(fixture.nativeProbeLog, "utf8").trim().split("\n")).toEqual([
+        "better-sqlite3",
+        "better-sqlite3",
+        "onnxruntime-node",
+      ]);
+      expect(r.stdout).toContain("better-sqlite3 native binding repaired");
+      expect(r.stdout).toContain("DeepSeek Harness install complete");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails DSH installation when the targeted better-sqlite3 rebuild fails", () => {
+    const fixture = makeDshFixture({
+      firstAdd: "success",
+      sqliteProbe: "repairable",
+      rebuild: "error",
+    });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+
+      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
+
+      expect(r.code).not.toBe(0);
+      expect(readFileSync(fixture.pnpmActionLog, "utf8").trim()).toBe(
+        "rebuild better-sqlite3",
+      );
+      expect(`${r.stdout}\n${r.stderr}`).toContain(
+        "better-sqlite3 rebuild failed",
+      );
+      expect(r.stdout).not.toContain("DeepSeek Harness install complete");
+      expect(r.stdout).not.toContain("MemOS Local installed successfully");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails DSH installation when better-sqlite3 remains unusable after rebuild", () => {
+    const fixture = makeDshFixture({
+      firstAdd: "success",
+      sqliteProbe: "error",
+    });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+
+      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
+
+      expect(r.code).not.toBe(0);
+      expect(readFileSync(fixture.pnpmActionLog, "utf8").trim()).toBe(
+        "rebuild better-sqlite3",
+      );
+      expect(readFileSync(fixture.nativeProbeLog, "utf8").trim().split("\n")).toEqual([
+        "better-sqlite3",
+        "better-sqlite3",
+      ]);
+      expect(`${r.stdout}\n${r.stderr}`).toContain(
+        "better-sqlite3 native binding is not loadable",
+      );
+      expect(r.stdout).not.toContain("DeepSeek Harness install complete");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails DSH installation when the bundled ONNX CPU backend cannot load", () => {
+    const fixture = makeDshFixture({
+      firstAdd: "success",
+      onnxProbe: "error",
+    });
+    try {
+      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
+      writeFileSync(tarball, "fixture", "utf8");
+
+      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
+
+      expect(r.code).not.toBe(0);
+      expect(readFileSync(fixture.nativeProbeLog, "utf8").trim().split("\n")).toEqual([
+        "better-sqlite3",
+        "onnxruntime-node",
+      ]);
+      expect(`${r.stdout}\n${r.stderr}`).toContain(
+        "onnxruntime-node CPU binding is not loadable",
+      );
+      expect(r.stdout).not.toContain("DeepSeek Harness install complete");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

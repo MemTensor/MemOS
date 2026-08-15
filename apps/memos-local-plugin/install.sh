@@ -1091,8 +1091,9 @@ CFGEOF
 # unpack into the profile or edit package.json/cordis.patch.yml ourselves.
 # pnpm 11 deliberately blocks unreviewed lifecycle scripts. On that one
 # expected failure we approve only the exact dependency names reviewed for
-# this package, deny the two unnecessary scripts, and repeat the same add so
-# DSH can reconcile the bundle after pnpm exits successfully.
+# this package, deny unnecessary scripts (including ONNX Runtime's optional
+# Linux CUDA download), and repeat the same add so DSH can reconcile the
+# bundle after pnpm exits successfully.
 read_pending_dsh_builds() {
   local workspace="$1"
   [[ -f "${workspace}" ]] || return 0
@@ -1147,6 +1148,36 @@ ensure_dsh_pnpm() {
   info "It is removed after this installer exits; normal dsh runtime does not need it."
 }
 
+resolve_dsh_home_for_installer() {
+  node -e 'const path = require("node:path"); const os = require("node:os"); const MEMOS_DSH_HOME = true; const configured = process.env.DSH_HOME; const selected = configured !== undefined && configured.trim().length > 0 ? configured : path.join(os.homedir(), ".dsh"); const expanded = selected === "~" ? os.homedir() : selected.startsWith("~/") || selected.startsWith("~\\") ? path.join(os.homedir(), selected.slice(2)) : selected; process.stdout.write(path.resolve(expanded));'
+}
+
+deny_existing_dsh_onnx_build() {
+  local workspace="$1"
+  [[ -f "${workspace}" ]] || return 0
+  node -e 'const fs = require("node:fs"); const MEMOS_DSH_POLICY = true; const file = process.argv[1]; const raw = fs.readFileSync(file, "utf8"); const eol = raw.includes("\r\n") ? "\r\n" : "\n"; const hadFinalEol = raw.endsWith(eol); const lines = raw.split(/\r?\n/); if (hadFinalEol) lines.pop(); let inAllowBuilds = false; let changed = false; const key = /^(\s+)(["\x27]?)onnxruntime-node\2:\s*(?:true|false|set this to true or false)(\s*(?:#.*)?)$/; for (let i = 0; i < lines.length; i += 1) { if (/^allowBuilds:\s*(?:#.*)?$/.test(lines[i])) { inAllowBuilds = true; continue; } if (inAllowBuilds && /^[^\s#]/.test(lines[i])) break; if (!inAllowBuilds) continue; const match = key.exec(lines[i]); if (!match) continue; const replacement = `${match[1]}${match[2]}onnxruntime-node${match[2]}: false${match[3]}`; if (replacement !== lines[i]) { lines[i] = replacement; changed = true; } break; } if (changed) fs.writeFileSync(file, `${lines.join(eol)}${hadFinalEol ? eol : ""}`, "utf8");' "${workspace}"
+}
+
+run_dsh_plugin_without_onnx_cuda() {
+  ONNXRUNTIME_NODE_INSTALL=skip "$@"
+}
+
+verify_dsh_better_sqlite3() {
+  local profile_dir="$1"
+  (
+    cd "${profile_dir}"
+    node -e 'const Database = require("better-sqlite3"); const db = new Database(":memory:"); try { db.prepare("SELECT 1").get(); } finally { db.close(); }'
+  )
+}
+
+verify_dsh_onnx_cpu() {
+  local profile_dir="$1"
+  (
+    cd "${profile_dir}"
+    node -e 'const ort = require("onnxruntime-node"); const cpu = ort.listSupportedBackends().find((backend) => backend.name === "cpu"); if (!cpu || cpu.bundled !== true) throw new Error("onnxruntime-node CPU backend is unavailable");'
+  )
+}
+
 install_dsh() {
   STEP_CURRENT=0
   header "DeepSeek Harness Install"
@@ -1168,10 +1199,23 @@ install_dsh() {
   local spec="${SOURCE_SPEC}"
   [[ -n "${spec}" ]] || die "Unable to resolve the DSH package source."
 
+  local dsh_home profile_dir profile_workspace
+  if ! dsh_home="$(resolve_dsh_home_for_installer)"; then
+    error "Unable to resolve the DSH home directory."
+    return 1
+  fi
+  profile_dir="${dsh_home}/profiles/${DSH_PROFILE}"
+  profile_workspace="${profile_dir}/pnpm-workspace.yaml"
+
+  if ! deny_existing_dsh_onnx_build "${profile_workspace}"; then
+    error "Unable to disable the unnecessary onnxruntime-node CUDA installer in ${profile_workspace}."
+    return 1
+  fi
+
   step "Installing ${spec} into DSH profile ${DSH_PROFILE}"
   local add_log add_status=0
   add_log="$(mktemp)"
-  "${dsh_bin}" plugin --profile "${DSH_PROFILE}" add "${spec}" 2>&1 \
+  run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" add "${spec}" 2>&1 \
     | tee "${add_log}" || add_status="${PIPESTATUS[0]}"
 
   if (( add_status != 0 )); then
@@ -1181,9 +1225,7 @@ install_dsh() {
       return "${add_status}"
     fi
 
-    local dsh_home profile_workspace pending package
-    dsh_home="${DSH_HOME:-${HOME}/.dsh}"
-    profile_workspace="${dsh_home}/profiles/${DSH_PROFILE}/pnpm-workspace.yaml"
+    local pending package
     pending="$(read_pending_dsh_builds "${profile_workspace}")"
     if [[ -z "${pending}" ]]; then
       rm -f "${add_log}"
@@ -1207,30 +1249,35 @@ install_dsh() {
     fi
 
     local -a approval_args=()
-    for package in better-sqlite3 esbuild onnxruntime-node sharp; do
+    for package in better-sqlite3 esbuild sharp; do
       if grep -Fxq "${package}" <<< "${pending}"; then approval_args+=("${package}"); fi
     done
-    for package in protobufjs "${NPM_PACKAGE}"; do
+    for package in onnxruntime-node protobufjs "${NPM_PACKAGE}"; do
       if grep -Fxq "${package}" <<< "${pending}"; then approval_args+=("!${package}"); fi
     done
 
     info "pnpm requested build-script review for this fresh DSH profile."
-    info "Allowing reviewed native installers: better-sqlite3, esbuild, onnxruntime-node, sharp"
-    info "Denying unnecessary scripts: protobufjs, ${NPM_PACKAGE}"
-    if ! "${dsh_bin}" plugin --profile "${DSH_PROFILE}" approve-builds "${approval_args[@]}"; then
+    info "Allowing reviewed native installers: better-sqlite3, esbuild, sharp"
+    info "Denying unnecessary scripts: onnxruntime-node CUDA download, protobufjs, ${NPM_PACKAGE}"
+    if ! run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" approve-builds "${approval_args[@]}"; then
       rm -f "${add_log}"
       error "DSH dependency build approval failed."
       return 1
     fi
 
     step "Completing DSH bundle activation"
-    if ! "${dsh_bin}" plugin --profile "${DSH_PROFILE}" add "${spec}"; then
+    if ! run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" add "${spec}"; then
       rm -f "${add_log}"
       error "DSH plugin installation still failed after reviewed build approval."
       return 1
     fi
   fi
   rm -f "${add_log}"
+
+  if ! deny_existing_dsh_onnx_build "${profile_workspace}"; then
+    error "Unable to persist the onnxruntime-node CUDA build denial in ${profile_workspace}."
+    return 1
+  fi
 
   step "Verifying the composed DSH profile"
   local composed
@@ -1245,10 +1292,37 @@ install_dsh() {
     return 1
   fi
 
+  step "Verifying DSH native runtime"
+  if [[ ! -d "${profile_dir}" ]]; then
+    error "DSH profile directory is missing after installation: ${profile_dir}"
+    return 1
+  fi
+
+  if verify_dsh_better_sqlite3 "${profile_dir}"; then
+    success "better-sqlite3 native binding OK"
+  else
+    warn "better-sqlite3 native binding is not loadable; rebuilding it in the DSH profile."
+    if ! (cd "${profile_dir}" && pnpm rebuild better-sqlite3); then
+      error "better-sqlite3 rebuild failed in ${profile_dir}."
+      return 1
+    fi
+    if ! verify_dsh_better_sqlite3 "${profile_dir}"; then
+      error "better-sqlite3 native binding is not loadable after rebuild."
+      return 1
+    fi
+    success "better-sqlite3 native binding repaired"
+  fi
+
+  if ! verify_dsh_onnx_cpu "${profile_dir}"; then
+    error "onnxruntime-node CPU binding is not loadable."
+    return 1
+  fi
+  success "onnxruntime-node CPU binding OK"
+
   echo
   success "DeepSeek Harness install complete"
   printf "       ${DIM}Profile:${NC}   %s\n" "${DSH_PROFILE}"
-  printf "       ${DIM}Viewer:${NC}    ${CYAN}http://127.0.0.1:${DSH_PORT}/${NC}\n"
+  printf "       ${DIM}Viewer after restart:${NC} ${CYAN}http://127.0.0.1:${DSH_PORT}/${NC}\n"
   printf "       ${DIM}Next:${NC}      restart with ${BOLD}dsh --profile %s${NC}\n" "${DSH_PROFILE}"
   return 0
 }
@@ -1322,7 +1396,7 @@ if (( STATUS == 0 )); then
       ;;
     dsh)
       printf "  ${BOLD}Quick links:${NC}\n"
-      printf "    ${GREEN}●${NC}  Memory Viewer   ${CYAN}http://127.0.0.1:${DSH_PORT}${NC}  ${DIM}(dsh)${NC}\n"
+      printf "    ${DIM}○  Memory Viewer   ${CYAN}http://127.0.0.1:${DSH_PORT}${NC}  (after DSH restart)${NC}\n"
       printf "    ${GREEN}●${NC}  DSH Web UI      ${CYAN}http://127.0.0.1:3080${NC}\n"
       ;;
     all)
