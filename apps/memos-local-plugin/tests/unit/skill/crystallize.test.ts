@@ -230,7 +230,10 @@ describe("skill/crystallize", () => {
     expect(r.modelRefusal?.content).toContain("I cannot process this request");
   });
 
-  it("rejects drafts that the validator flags as invalid", async () => {
+  it("repairs drafts the strict validator would have rejected (issue #2143)", async () => {
+    // A draft with an empty summary AND no steps used to be rejected with
+    // skill.crystallize.invalid: missing summary / missing steps. The lenient
+    // validator auto-generates both, so the same draft now crystallizes.
     const llm = fakeLlm({
       completeJson: {
         "skill.crystallize": makeDraft({ steps: [], summary: "" }) as unknown,
@@ -240,6 +243,10 @@ describe("skill/crystallize", () => {
       { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
       { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
     );
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.draft.summary).not.toBe("");
+      expect(r.draft.steps.length).toBeGreaterThan(0);
+    }
   });
 });
