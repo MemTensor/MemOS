@@ -26,6 +26,7 @@ API_KEY_HEADER = APIKeyHeader(name="Authorization", auto_error=False)
 # Environment configuration
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
 MASTER_KEY_HASH = os.getenv("MASTER_KEY_HASH")  # SHA-256 hash of master key
+INTERNAL_SERVICE_SECRET = os.getenv("INTERNAL_SERVICE_SECRET")  # shared secret for X-Internal-Service header
 INTERNAL_SERVICE_IPS = {"127.0.0.1", "::1", "memos-mcp", "moltbot", "clawdbot"}
 
 # Connection pool for auth queries (lazy init)
@@ -167,7 +168,7 @@ def is_internal_request(request: Request) -> bool:
 
     # Check internal header (for container-to-container). Treat an unset /
     # empty secret or missing / empty header as "disabled" and fail closed.
-    secret = os.getenv("INTERNAL_SERVICE_SECRET")
+    secret = INTERNAL_SERVICE_SECRET
     internal_header = request.headers.get("X-Internal-Service")
     if not secret or not internal_header:
         return False
@@ -200,7 +201,8 @@ async def verify_api_key(
 
     # Allow internal services
     if is_internal_request(request):
-        logger.debug(f"Internal request from {request.client.host}")
+        client_host = request.client.host if request.client else "<unknown>"
+        logger.debug(f"Internal request from {client_host}")
         return {
             "user_name": "internal",
             "scopes": ["all"],
