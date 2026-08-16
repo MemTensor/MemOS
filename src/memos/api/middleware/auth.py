@@ -6,6 +6,7 @@ Keys are validated against SHA-256 hashes stored in PostgreSQL.
 """
 
 import hashlib
+import hmac
 import os
 import time
 
@@ -142,16 +143,35 @@ async def lookup_api_key(key_hash: str) -> dict[str, Any] | None:
 
 
 def is_internal_request(request: Request) -> bool:
-    """Check if request is from internal service."""
+    """Check if request is from internal service.
+
+    Two authorised paths:
+
+    1. The client host address is a well-known trusted host in
+       ``INTERNAL_SERVICE_IPS``.
+    2. The request carries an ``X-Internal-Service`` header whose value matches
+       the operator-configured ``INTERNAL_SERVICE_SECRET`` env var. Comparison
+       is constant-time (``hmac.compare_digest``) to avoid timing side channels.
+
+    The header branch is **disabled** whenever either the environment secret or
+    the request header is missing or empty. This closes GHSA-9pw6-vmgx-qgwx /
+    issue #2259, where an unset secret combined with an absent header caused
+    ``None == None`` to be treated as a match and grant the ``internal``
+    principal to unauthenticated remote callers.
+    """
     client_host = request.client.host if request.client else None
 
     # Check internal IPs
     if client_host in INTERNAL_SERVICE_IPS:
         return True
 
-    # Check internal header (for container-to-container)
+    # Check internal header (for container-to-container). Treat an unset /
+    # empty secret or missing / empty header as "disabled" and fail closed.
+    secret = os.getenv("INTERNAL_SERVICE_SECRET")
     internal_header = request.headers.get("X-Internal-Service")
-    return internal_header == os.getenv("INTERNAL_SERVICE_SECRET")
+    if not secret or not internal_header:
+        return False
+    return hmac.compare_digest(internal_header, secret)
 
 
 async def verify_api_key(
