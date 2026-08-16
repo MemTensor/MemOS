@@ -23,6 +23,7 @@ describe("Telemetry", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

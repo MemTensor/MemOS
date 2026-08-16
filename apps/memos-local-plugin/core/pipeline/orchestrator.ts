@@ -1115,6 +1115,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         skipLlmFilter: input.contextHints?.__memosDeferLlmFilterToCaller === true,
         signal,
         deadlineAt: input.deadlineAt,
+        llmFilterMalformedRetries: input.llmFilterMalformedRetries,
         plan: plan
           ? {
               scenarioId: plan.scenarioId,
@@ -1242,11 +1243,52 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     }
   }
 
-  async function onTurnStartForeground(
+  /**
+   * Prompt-time retrieval for hosts that keep lifecycle enrichment eventually
+   * consistent. This deliberately performs no session/episode writes and no
+   * relation or intent classification.
+   */
+  async function recallTurn(
+    input: TurnInputDTO,
+    externalSignal?: AbortSignal,
+  ): Promise<InjectionPacket> {
+    const leaveForeground = foregroundResources.enterForeground();
+    const deadline =
+      input.deadlineAt === undefined
+        ? null
+        : createRequestDeadline(input.deadlineAt);
+    const startedAt = Date.now();
+    try {
+      const requestSignal = deadline && externalSignal
+        ? AbortSignal.any([deadline.signal, externalSignal])
+        : deadline?.signal ?? externalSignal;
+      return await retrieveTurnStart(input, undefined, requestSignal);
+    } finally {
+      if (deadline?.signal.aborted) {
+        log.warn("turn.recall.deadline_exceeded", {
+          sessionId: input.sessionId,
+          deadlineAt: input.deadlineAt,
+          elapsedMs: Date.now() - startedAt,
+        });
+      }
+      deadline?.dispose();
+      leaveForeground();
+    }
+  }
+
+  interface PreparedTurn {
+    t0: number;
+    sessionId: SessionId;
+    episode: EpisodeSnapshot;
+    normalized: TurnInputDTO;
+    retrievePlan: RetrievePlan;
+  }
+
+  async function prepareTurnInternal(
     input: TurnInputDTO,
     signal?: AbortSignal,
     setStage: (stage: string) => void = () => {},
-  ): Promise<InjectionPacket> {
+  ): Promise<PreparedTurn> {
     const t0 = now();
     setStage("ensure_session");
     const initialSessionId = await ensureSession(
@@ -1292,6 +1334,27 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       intent: schedulerIntent,
       relation: schedulerRelation(routing.relation),
     });
+    return { t0, sessionId, episode, normalized, retrievePlan };
+  }
+
+  /** Resolve turn routing in the caller's background queue, without retrieval. */
+  async function prepareTurn(
+    input: TurnInputDTO,
+  ): Promise<{ sessionId: SessionId; episodeId: EpisodeId }> {
+    const prepared = await prepareTurnInternal(input);
+    return {
+      sessionId: prepared.sessionId,
+      episodeId: prepared.episode.id as EpisodeId,
+    };
+  }
+
+  async function onTurnStartForeground(
+    input: TurnInputDTO,
+    signal?: AbortSignal,
+    setStage: (stage: string) => void = () => {},
+  ): Promise<InjectionPacket> {
+    const prepared = await prepareTurnInternal(input, signal, setStage);
+    const { t0, sessionId, episode, normalized, retrievePlan } = prepared;
 
     try {
       if (retrievePlan.entry === "turn_start_skip") {
@@ -1783,6 +1846,9 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     getRecentEvents,
     subscribeLogs,
     onTurnStart,
+    recallTurn,
+    enterForeground: () => foregroundResources.enterForeground(),
+    prepareTurn,
     consumeRetrievalStats,
     onTurnEnd,
     recordToolOutcome,

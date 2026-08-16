@@ -13,13 +13,14 @@
  *
  *   - openclaw → :18799
  *   - hermes   → :18800
+ *   - deepseek-harness → :18801
  *
  * The server hosts the SPA at `/`, the JSON REST API at `/api/v1/*`,
  * and the static viewer assets. There are no `/openclaw/*` /
  * `/hermes/*` URL prefixes — clients always talk to the agent's own
- * port. If both agents are installed, the root path renders a small
- * picker page that links to the *other* agent's URL (external link,
- * no reverse proxy, no peer cores).
+ * port. If both OpenClaw and Hermes are installed, their root path renders a
+ * small picker page that links to the *other* agent's URL (external link, no
+ * reverse proxy, no peer cores).
  */
 
 import { randomUUID } from "node:crypto";
@@ -65,13 +66,36 @@ export async function startHttpServer(
   const extraHeaders = runtimeOptions.extraHeaders ?? {};
 
   const routes = buildRoutes(deps, runtimeOptions);
+  const closeActiveSseOnShutdown = runtimeOptions.closeActiveSseOnShutdown ?? false;
+  const activeSseResponses = new Set<ServerResponse>();
+  let closing = false;
 
+  const trackSseResponse = (req: IncomingMessage, res: ServerResponse): void => {
+    if (!closeActiveSseOnShutdown) return;
+    if (!isSseResponse(req, res, runtimeOptions.agent) || res.destroyed || res.writableEnded) {
+      return;
+    }
+    if (closing) {
+      res.destroy();
+      return;
+    }
+    activeSseResponses.add(res);
+    const forget = () => activeSseResponses.delete(res);
+    res.once("close", forget);
+    res.once("finish", forget);
+  };
   const server = createServer(async (req, res) => {
+    res.once("finish", () => {
+      // A request that was active when close() began has just become idle.
+      // Drop only that keep-alive state; never terminate the handler early.
+      if (closing) server.closeIdleConnections();
+    });
     for (const [k, v] of Object.entries(extraHeaders)) {
       res.setHeader(k, v);
     }
     try {
       await dispatch(req, res, routes, deps, runtimeOptions, log);
+      trackSseResponse(req, res);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error("request.unhandled", { path: req.url, err: msg });
@@ -101,6 +125,7 @@ export async function startHttpServer(
   const actualPort = typeof addr === "object" && addr ? addr.port : port;
   const url = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${actualPort}`;
   let closed = false;
+  let closePromise: Promise<void> | null = null;
 
   log.info("server.started", { url, port: actualPort });
 
@@ -110,16 +135,45 @@ export async function startHttpServer(
     get closed() {
       return closed;
     },
-    async close() {
-      if (closed) return;
-      closed = true;
-      // Drop any idle keep-alive sockets so server.close() doesn't hang
-      // on pooled connections (e.g. from vitest's fetch).
-      try { (server as any).closeIdleConnections?.(); } catch { /* noop */ }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      log.info("server.stopped", {});
+    close() {
+      if (closePromise) return closePromise;
+      closePromise = (async () => {
+        closing = true;
+        // Stop accepting first, then, when opted in, terminate only
+        // long-lived SSE responses.
+        // Ordinary in-flight HTTP handlers are allowed to finish before the
+        // server closes so they cannot race memory-core/SQLite shutdown.
+        const stopped = new Promise<void>((resolve) => server.close(() => resolve()));
+        server.closeIdleConnections();
+        if (closeActiveSseOnShutdown) {
+          for (const response of activeSseResponses) response.destroy();
+        }
+        await stopped;
+        closed = true;
+        log.info("server.stopped", {});
+      })();
+      return closePromise;
     },
   };
+}
+
+function isSseResponse(
+  req: IncomingMessage,
+  res: ServerResponse,
+  selfAgent: ServerOptions["agent"],
+): boolean {
+  if ((req.method ?? "GET").toUpperCase() !== "GET" || res.statusCode !== 200) {
+    return false;
+  }
+  let pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+  for (const name of AGENT_PREFIXES) {
+    const prefix = `/${name}`;
+    if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) continue;
+    if (name !== "memos" && name !== selfAgent) return false;
+    pathname = pathname.slice(prefix.length) || "/";
+    break;
+  }
+  return pathname === "/api/v1/events" || pathname === "/api/v1/logs";
 }
 
 async function dispatch(
@@ -134,7 +188,7 @@ async function dispatch(
   const method = (req.method ?? "GET").toUpperCase();
   let pathname = url.pathname;
 
-  const selfAgent = (options.agent ?? null) as AgentName | null;
+  const selfAgent = options.agent ?? null;
 
   // Backwards-compat for the old single-port "hub/peer" layout, where
   // every URL was prefixed (`/openclaw/api/v1/...` or

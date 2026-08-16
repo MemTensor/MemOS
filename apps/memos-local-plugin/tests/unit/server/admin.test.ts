@@ -205,6 +205,56 @@ describe("admin lifecycle routes", () => {
     expect(result).toEqual({ ok: true, restarting: true });
   });
 
+  it("requires a manual DSH profile restart without terminating the host", async () => {
+    const requestShutdown = vi.fn();
+    const routes = new Routes();
+    registerAdminRoutes(
+      routes,
+      { core: {} as MemoryCore },
+      {
+        agent: "deepseek-harness",
+        lifecycle: { platform: "darwin", requestShutdown },
+      },
+    );
+
+    const restart = routes.getExact("POST /api/v1/admin/restart");
+    const result = await restart!({} as never);
+
+    expect(result).toMatchObject({
+      ok: true,
+      restarting: false,
+      manualRestartRequired: true,
+      message: expect.stringContaining("DeepSeek Harness"),
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requestShutdown).not.toHaveBeenCalled();
+  });
+
+  it("refuses in-process DSH clear-data without shutting down or spawning a daemon", async () => {
+    const shutdown = vi.fn();
+    const { root, dbFile } = makeDbFixture();
+    const routes = new Routes();
+    registerAdminRoutes(
+      routes,
+      { core: { shutdown } as unknown as MemoryCore, home: { root, dbFile } },
+      { agent: "deepseek-harness", lifecycle: { platform: "darwin" } },
+    );
+
+    const clearData = routes.getExact("POST /api/v1/admin/clear-data");
+    const result = await clearData!({} as never);
+
+    expect(result).toMatchObject({
+      ok: false,
+      cleared: false,
+      restarting: false,
+      error: expect.stringContaining("disabled"),
+    });
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(existsSync(dbFile)).toBe(true);
+  });
+
   it("refuses Windows clear-data while the Hermes bridge is still connected", async () => {
     const shutdown = vi.fn();
     const requestShutdown = vi.fn();

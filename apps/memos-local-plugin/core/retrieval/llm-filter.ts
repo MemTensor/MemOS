@@ -52,6 +52,8 @@ export interface FilterDeps {
   timeoutMs?: number;
   deadlineAt?: number;
   signal?: AbortSignal;
+  /** Override the LLM client's default malformed-JSON retry count. */
+  malformedRetries?: number;
   config: Pick<
     RetrievalConfig,
     | "llmFilterEnabled"
@@ -133,7 +135,7 @@ export async function llmFilterCandidates(
   const list = items.map((x) => `${x.index + 1}. ${x.label}`).join("\n");
 
   try {
-    const rsp = await deps.llm.completeJson<{
+    const completion = deps.llm.completeJson<{
       ranked?: unknown;
       selected?: unknown;
       sufficient?: unknown;
@@ -159,9 +161,12 @@ ${list}`,
         // Output is only ordered indices + one bool, but the list can
         // legitimately be as long as the ranked candidates.
         maxTokens: filterOutputTokenBudget(ranked.length),
-        malformedRetries: 1,
+        malformedRetries: deps.malformedRetries ?? 1,
       },
     );
+    const rsp = deps.deadlineAt === undefined
+      ? await completion
+      : await waitForFilterDeadline(completion, deps);
     const raw = (rsp.value?.ranked ?? rsp.value?.selected ?? []) as unknown;
     const sufficient = coerceBool(rsp.value?.sufficient);
     if (!Array.isArray(raw)) {
@@ -208,6 +213,45 @@ ${list}`,
       candidateCount: ranked.length,
     });
     return safeCutoff(ranked, deps);
+  }
+}
+
+async function waitForFilterDeadline<T>(
+  operation: Promise<T>,
+  deps: Pick<FilterDeps, "deadlineAt" | "timeoutMs" | "signal">,
+): Promise<T> {
+  const remainingMs = Math.max(0, (deps.deadlineAt ?? Date.now()) - Date.now());
+  const timeoutMs = Math.max(
+    0,
+    Math.min(remainingMs, deps.timeoutMs ?? remainingMs),
+  );
+  if (deps.signal?.aborted) {
+    throw deps.signal.reason ?? new DOMException("retrieval deadline exceeded", "TimeoutError");
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const cutoff = new Promise<never>((_resolve, reject) => {
+    const finish = (error: unknown): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      deps.signal?.removeEventListener("abort", onAbort!);
+      reject(error);
+    };
+    onAbort = () => finish(
+      deps.signal?.reason ?? new DOMException("retrieval deadline exceeded", "TimeoutError"),
+    );
+    deps.signal?.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(
+      () => finish(new DOMException("retrieval filter deadline exceeded", "TimeoutError")),
+      timeoutMs,
+    );
+  });
+
+  try {
+    return await Promise.race([operation, cutoff]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort) deps.signal?.removeEventListener("abort", onAbort);
   }
 }
 
