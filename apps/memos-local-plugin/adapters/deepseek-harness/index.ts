@@ -132,14 +132,15 @@ export function deepSeekHarnessAutoRecoveryEnabled(config: ResolvedConfig): bool
     config.algorithm.lightweightMemory.enabled;
 }
 
-/** Locate the prebuilt Viewer assets in source and packed-package layouts. */
-export function resolveDeepSeekHarnessViewerStaticRoot(): string {
-  const adapterDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(adapterDir, "..", "..", "..", "viewer", "dist"),
-    resolve(adapterDir, "..", "..", "viewer", "dist"),
-  ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
+/** Locate Viewer assets without depending on whether they are built yet. */
+export function resolveDeepSeekHarnessViewerStaticRoot(
+  adapterDir: string = dirname(fileURLToPath(import.meta.url)),
+): string {
+  const runtimeRoot = resolve(adapterDir, "..", "..");
+  const pluginRoot = existsSync(resolve(runtimeRoot, "package.json"))
+    ? runtimeRoot
+    : dirname(runtimeRoot);
+  return resolve(pluginRoot, "viewer", "dist");
 }
 
 /** Keep the unauthenticated first-run Viewer strictly on local interfaces. */
