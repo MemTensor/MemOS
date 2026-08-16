@@ -1,3 +1,5 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -231,6 +233,36 @@ describe("DeepSeek Harness Viewer lifecycle", () => {
     expect(runtime.isDeepSeekHarnessViewerLoopbackHost("localhost")).toBe(true);
     expect(runtime.isDeepSeekHarnessViewerLoopbackHost("0.0.0.0")).toBe(false);
     expect(runtime.isDeepSeekHarnessViewerLoopbackHost("192.168.1.20")).toBe(false);
+  });
+
+  it("resolves Viewer assets deterministically in source and packed layouts", async () => {
+    const runtime = await loadAdapter();
+    const fixtureRoot = mkdtempSync(resolve(tmpdir(), "memos-dsh-viewer-layout-"));
+    // A package root may itself be named `dist`; package.json is the stable
+    // layout marker. Deliberately leave viewer/dist unbuilt, as in clean CI.
+    const packageRoot = resolve(fixtureRoot, "dist");
+    mkdirSync(resolve(packageRoot, "adapters/deepseek-harness"), {
+      recursive: true,
+    });
+    mkdirSync(resolve(packageRoot, "dist/adapters/deepseek-harness"), {
+      recursive: true,
+    });
+    writeFileSync(resolve(packageRoot, "package.json"), "{}\n", "utf8");
+
+    try {
+      expect(
+        runtime.resolveDeepSeekHarnessViewerStaticRoot(
+          resolve(packageRoot, "adapters/deepseek-harness"),
+        ),
+      ).toBe(resolve(packageRoot, "viewer/dist"));
+      expect(
+        runtime.resolveDeepSeekHarnessViewerStaticRoot(
+          resolve(packageRoot, "dist/adapters/deepseek-harness"),
+        ),
+      ).toBe(resolve(packageRoot, "viewer/dist"));
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   it("starts the bundled Viewer on the DSH-owned loopback endpoint", async () => {
