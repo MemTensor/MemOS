@@ -1093,6 +1093,16 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
         return provider
 
     # -- individual tools -------------------------------------------------
+    #
+    # Each test proves ``ensure_ascii=False`` by asserting that the raw
+    # serialized string contains the Chinese literal verbatim. That
+    # guarantee is stronger than searching for the two-character sequence
+    # ``\\u`` in the output: with ``ensure_ascii=True`` Python would emit
+    # ``\uXXXX`` escapes and the raw Chinese literal would NOT appear, so
+    # ``assertIn(_CH_..., raw)`` alone catches the regression while
+    # avoiding false positives on legitimate values that just happen to
+    # contain a backslash followed by ``u`` (e.g. Windows paths, regex
+    # patterns, or unrelated escape sequences in future fields).
 
     def test_memos_search_returns_utf8_chinese(self) -> None:
         bridge = ChineseToolResultBridge()
@@ -1100,7 +1110,6 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
 
         raw = provider.handle_tool_call("memos_search", {"query": "中文摘要"})
 
-        self.assertNotIn("\\u", raw, "memos_search must not \\uXXXX-escape Chinese")
         self.assertIn(ChineseToolResultBridge._CH_REFLECTION, raw)
         parsed = json.loads(raw)
         self.assertEqual(
@@ -1114,7 +1123,6 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
 
         raw = provider.handle_tool_call("memos_get", {"id": "trace-cn-1", "kind": "trace"})
 
-        self.assertNotIn("\\u", raw)
         self.assertIn(ChineseToolResultBridge._CH_REFLECTION, raw)
         parsed = json.loads(raw)
         self.assertTrue(parsed["found"])
@@ -1126,10 +1134,32 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
 
         raw = provider.handle_tool_call("memos_get", {"id": "policy-cn-1", "kind": "policy"})
 
-        self.assertNotIn("\\u", raw)
         self.assertIn(ChineseToolResultBridge._CH_POLICY_TITLE, raw)
         parsed = json.loads(raw)
         self.assertIn(ChineseToolResultBridge._CH_POLICY_BODY, parsed["body"])
+
+    def test_memos_get_world_model_returns_utf8_chinese(self) -> None:
+        """Regression guard for the ``world_model`` branch of ``memos_get``.
+
+        Without this case a future accidental removal of
+        ``ensure_ascii=False`` from the ``world_model`` branch of
+        ``memos_get`` (routed via ``memory.get_world``) would go
+        undetected — the other ``memos_get`` tests only exercise the
+        ``trace`` and ``policy`` kinds.
+        """
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call(
+            "memos_get", {"id": "world-cn-1", "kind": "world_model"}
+        )
+
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["found"])
+        self.assertEqual(parsed["kind"], "world_model")
+        self.assertEqual(parsed["meta"]["title"], ChineseToolResultBridge._CH_WORLD_TITLE)
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_BODY, parsed["body"])
 
     def test_memos_timeline_returns_utf8_chinese(self) -> None:
         bridge = ChineseToolResultBridge()
@@ -1137,7 +1167,6 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
 
         raw = provider.handle_tool_call("memos_timeline", {"episodeId": "ep-cn-1"})
 
-        self.assertNotIn("\\u", raw)
         self.assertIn(ChineseToolResultBridge._CH_SNIPPET, raw)
         parsed = json.loads(raw)
         self.assertEqual(parsed["traces"][0]["snippet"], ChineseToolResultBridge._CH_SNIPPET)
@@ -1148,8 +1177,12 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
 
         raw = provider.handle_tool_call("memos_skill_list", {"limit": 5})
 
-        self.assertNotIn("\\u", raw)
         self.assertIn(ChineseToolResultBridge._CH_SKILL_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertEqual(
+            parsed["skills"][0]["title"],
+            ChineseToolResultBridge._CH_SKILL_TITLE,
+        )
 
     def test_memos_environment_list_returns_utf8_chinese(self) -> None:
         bridge = ChineseToolResultBridge()
@@ -1157,7 +1190,6 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
 
         raw = provider.handle_tool_call("memos_environment", {"limit": 5})
 
-        self.assertNotIn("\\u", raw)
         self.assertIn(ChineseToolResultBridge._CH_WORLD_BODY, raw)
         parsed = json.loads(raw)
         self.assertFalse(parsed["queried"])
@@ -1172,10 +1204,9 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
 
         raw = provider.handle_tool_call("memos_environment", {"query": "晚高峰", "limit": 5})
 
-        self.assertNotIn("\\u", raw)
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_TITLE, raw)
         parsed = json.loads(raw)
         self.assertTrue(parsed["queried"])
-        self.assertIn(ChineseToolResultBridge._CH_WORLD_TITLE, raw)
 
     def test_memos_skill_get_returns_utf8_chinese(self) -> None:
         bridge = ChineseToolResultBridge()
@@ -1183,7 +1214,6 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
 
         raw = provider.handle_tool_call("memos_skill_get", {"id": "skill-cn-1"})
 
-        self.assertNotIn("\\u", raw)
         self.assertIn(ChineseToolResultBridge._CH_SKILL_PROCEDURE, raw)
         parsed = json.loads(raw)
         self.assertTrue(parsed["found"])
