@@ -167,6 +167,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
 
             info = dict(info or {})
             is_upload_skill = info.pop("is_upload_skill", False)
+            transfer_succeeded = False
 
             try:
                 processed_memories = mem_reader.fine_transfer_simple_mem(
@@ -178,6 +179,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     user_context=user_context,
                     is_upload_skill=is_upload_skill,
                 )
+                transfer_succeeded = True
             except Exception as e:
                 logger.warning("%s: Fail to transfer mem: %s", e, memory_items)
                 processed_memories = []
@@ -402,7 +404,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
             if bindings_to_delete:
                 delete_ids.extend(list(bindings_to_delete))
             delete_ids = list(dict.fromkeys(delete_ids))
-            if delete_ids:
+            if delete_ids and transfer_succeeded:
                 try:
                     if getattr(mem_reader, "memory_version_switch", "off") != "on":
                         text_mem.delete(delete_ids, user_name=user_name)
@@ -434,6 +436,11 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                         )
                 except Exception as e:
                     logger.warning("Failed to delete some mem_ids %s: %s", delete_ids, e)
+            elif delete_ids:
+                logger.info(
+                    "Skip deleting raw/working mem_ids after failed transfer: %s",
+                    delete_ids,
+                )
             else:
                 logger.info("No mem_ids to delete (nothing to cleanup)")
 
