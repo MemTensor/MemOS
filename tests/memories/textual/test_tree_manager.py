@@ -142,3 +142,40 @@ def test_add_returns_written_node_ids(memory_manager):
     assert isinstance(ids, list)
     assert all(isinstance(i, str) for i in ids)
     assert len(ids) > 0
+
+
+def test_add_in_reorganize_mode_skips_working_memory_cleanup(
+    mock_graph_store, mock_embedder, mock_llm
+):
+    """In reorganize mode we must not evict working-memory nodes."""
+    mgr = MemoryManager(
+        graph_store=mock_graph_store,
+        embedder=mock_embedder,
+        llm=mock_llm,
+        is_reorganize=True,
+    )
+    memory = TextualMemoryItem(
+        memory="keep me during reorg",
+        metadata=TreeNodeTextualMemoryMetadata(embedding=[0.1] * 5, memory_type="WorkingMemory"),
+    )
+    before_calls = mock_graph_store.remove_oldest_memory.call_count
+    mgr.add([memory], mode="sync")
+    # remove_oldest_memory must NOT have been called for WorkingMemory cleanup
+    assert mock_graph_store.remove_oldest_memory.call_count == before_calls
+
+
+def test_add_normal_mode_still_cleans_up_working_memory(mock_graph_store, mock_embedder, mock_llm):
+    """Non-reorganize mode preserves the original cleanup behavior."""
+    mgr = MemoryManager(
+        graph_store=mock_graph_store,
+        embedder=mock_embedder,
+        llm=mock_llm,
+        is_reorganize=False,
+    )
+    memory = TextualMemoryItem(
+        memory="normal add",
+        metadata=TreeNodeTextualMemoryMetadata(embedding=[0.1] * 5, memory_type="WorkingMemory"),
+    )
+    before_calls = mock_graph_store.remove_oldest_memory.call_count
+    mgr.add([memory], mode="sync")
+    assert mock_graph_store.remove_oldest_memory.call_count > before_calls
