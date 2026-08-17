@@ -35,6 +35,8 @@ import type {
   SkillStepDraft,
 } from "./types.js";
 
+const MAX_SUMMARY_LENGTH = 200;
+
 export interface CrystallizeInput {
   policy: PolicyRow;
   evidence: TraceRow[];
@@ -353,11 +355,18 @@ function normaliseDraft(
   const displayTitle =
     sanitizeDerivedText(raw.display_title ?? raw.displayTitle ?? input.policy.title ?? name) ||
     name;
-  const summary = sanitizeDerivedText(raw.summary);
 
   const parameters = asArray(raw.parameters).map(coerceParameter).filter(Boolean) as SkillParameterDraft[];
   const preconditions = sanitizeDerivedMarkdownList(asStringArray(raw.preconditions));
   const steps = asArray(raw.steps).map(coerceStep).filter(Boolean) as SkillStepDraft[];
+  const summarySource =
+    sanitizeDerivedText(raw.summary) ||
+    sanitizeDerivedText(raw.retrieval_blurb) ||
+    sanitizeDerivedText(raw.retrievalBlurb) ||
+    sanitizeDerivedText(steps[0]?.body) ||
+    sanitizeDerivedText(steps[0]?.title) ||
+    displayTitle;
+  const summary = summarySource.slice(0, MAX_SUMMARY_LENGTH);
   const examples = asArray(raw.examples).map(coerceExample).filter(Boolean) as SkillExampleDraft[];
   const tags = dedupeLc(sanitizeDerivedList(asStringArray(raw.tags)));
   // V7 §2.4.6 — coerce both `decision_guidance` (preferred LLM key)
