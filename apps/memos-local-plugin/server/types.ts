@@ -34,13 +34,19 @@ export interface ServerOptions {
   /** Buffer size for the SSE log tail on first connection. Default 200. */
   logTailSize?: number;
   /**
-   * Which agent this viewer is attached to. Each agent runs on its
-   * own well-known port (openclaw=:18799, hermes=:18800); the field
-   * surfaces in `/api/v1/health` and drives the optional root-path
-   * picker that links to the *other* agent's port when both are
-   * installed on disk.
+   * End active SSE streams when `ServerHandle.close()` begins. Defaults to
+   * false so existing OpenClaw/Hermes shutdown semantics remain unchanged;
+   * embedded hosts with a short disposal budget can opt in explicitly.
    */
-  agent?: "openclaw" | "hermes";
+  closeActiveSseOnShutdown?: boolean;
+  /**
+   * Which agent this viewer is attached to. Each agent runs on its
+   * own well-known port (openclaw=:18799, hermes=:18800,
+   * deepseek-harness=:18801); the field
+   * surfaces in `/api/v1/health` and selects agent-aware API,
+   * authentication, migration, and lifecycle behaviour.
+   */
+  agent?: "openclaw" | "hermes" | "deepseek-harness";
   /**
    * Process lifecycle hooks used by the admin restart route.
    *
@@ -64,7 +70,7 @@ export interface ServerHandle {
   url: string;
   /** Actual bound port (useful when `options.port === 0`). */
   port: number;
-  /** Stop accepting new requests and drain existing ones. */
+  /** Stop accepting and drain requests per the configured SSE close policy. */
   close(): Promise<void>;
   /** True once `close` has resolved. */
   readonly closed: boolean;

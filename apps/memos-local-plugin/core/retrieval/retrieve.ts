@@ -79,6 +79,8 @@ export interface RetrieveOptions {
   signal?: AbortSignal;
   /** Absolute request deadline used to cap optional LLM filtering. */
   deadlineAt?: number;
+  /** Per-request malformed-JSON retry policy for the LLM relevance filter. */
+  llmFilterMalformedRetries?: number;
 }
 
 export interface RetrievePlanOverride {
@@ -428,6 +430,7 @@ async function runAll(
             signal: opts.signal,
             deadlineAt: opts.deadlineAt,
             timeoutMs: filterTimeoutMs(opts.deadlineAt),
+            malformedRetries: opts.llmFilterMalformedRetries,
           },
         );
 
@@ -488,6 +491,7 @@ async function runAll(
           signal: opts.signal,
           deadlineAt: opts.deadlineAt,
           timeoutMs: filterTimeoutMs(opts.deadlineAt),
+          malformedRetries: opts.llmFilterMalformedRetries,
         },
       );
 

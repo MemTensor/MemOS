@@ -103,7 +103,9 @@ export function ImportView() {
         <ImportCard />
         {health.value?.agent === "hermes" && <NativeImportCard kind="hermes" />}
         {health.value?.agent === "openclaw" && <NativeImportCard kind="openclaw" />}
-        <MigrateCard />
+        {(health.value?.agent === "openclaw" || health.value?.agent === "hermes") && (
+          <MigrateCard />
+        )}
       </div>
     </>
   );

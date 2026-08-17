@@ -57,6 +57,10 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
       injectedContext: "",
       tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
     })),
+    prepareTurn: vi.fn(async (turn) => ({
+      sessionId: turn.sessionId,
+      episodeId: turn.episodeId ?? "e-prepared",
+    })),
     onTurnEnd: vi.fn(async () => ({ traceId: "tr-1", episodeId: "e-1" })),
     submitFeedback: vi.fn(async (fb) => ({
       id: "fb-1",

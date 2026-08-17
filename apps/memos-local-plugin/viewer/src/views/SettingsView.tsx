@@ -18,6 +18,7 @@ import { classifyModelTestFailure } from "../model-test-error";
 import { saveSettingsAndRestart } from "../settings-save";
 import { t, locale, setLocale } from "../stores/i18n";
 import { theme, setTheme } from "../stores/theme";
+import { health } from "../stores/health";
 import { Icon } from "../components/Icon";
 import { HubAdminPanel } from "../components/HubAdminPanel";
 import {
@@ -1002,7 +1003,9 @@ function GeneralTab({
 
       <AccountSection />
 
-      <DangerZoneSection />
+      {(health.value?.agent === "openclaw" || health.value?.agent === "hermes") && (
+        <DangerZoneSection />
+      )}
     </div>
   );
 }

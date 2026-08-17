@@ -73,6 +73,10 @@ export async function discoverPeers(): Promise<void> {
     peers.value = [];
     return;
   }
+  if (selfAgent !== "openclaw" && selfAgent !== "hermes") {
+    peers.value = [];
+    return;
+  }
   const peerAgent: "openclaw" | "hermes" =
     selfAgent === "openclaw" ? "hermes" : "openclaw";
   const found = await probe(peerAgent, PEER_PORTS[peerAgent]);
