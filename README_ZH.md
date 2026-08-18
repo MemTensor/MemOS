@@ -26,8 +26,15 @@
 
 
 <div align="center">
-  <img width="1660" height="664" alt="MemOS Plugin Banner" src="https://github.com/user-attachments/assets/9d15dde2-196e-4f71-a364-dd5a33062117" />
+  <img width="1660" alt="MemOS Agent 生态：OpenClaw、Hermes 与 DeepSeek Harness" src="./assets/readme/memos-agent-ecosystem.png" />
 </div>
+
+> [!TIP]
+> **新支持：为 DeepSeek Harness（dsh）接入 MemOS**
+>
+> 在 DeepSeek Harness 中使用自动召回、后台记忆沉淀、混合检索和本地记忆查看器；它们均由同一套 MemOS 核心驱动，并可复用于不同 Agent 生态。
+>
+> **[开始接入 →](#memos-plugin)**
 
 ---
 
@@ -96,12 +103,12 @@ MemOS 为 AI agent 提供长期记忆能力，典型场景：
 MemOS 提供四种使用方式，按你的场景选择。
 
 
-|      | Cloud API    | 本地部署              | OpenClaw 云插件             | 本地插件                    |
-| ---- | ------------ | ----------------- | ------------------------ | ----------------------- |
-| 适合谁  | 自建应用，全托管      | 自建基础设施的团队         | OpenClaw 用户，零运维          | Hermes/OpenClaw，100% 端侧 |
-| 启动方式 | 申请 API Key   | docker compose up | openclaw plugins install | npm install + 配置        |
-| 依赖设施 | 无（托管）        | Neo4j + Qdrant    | 无（使用 MemOS Cloud）        | 无（本地 SQLite）            |
-| 数据存放 | MemOS Cloud  | 你的服务器             | MemOS Cloud              | 你的机器                    |
+|      | Cloud API    | 本地部署              | MemOS 云插件                | 本地插件                                      |
+| ---- | ------------ | ----------------- | ------------------------ | --------------------------------------------- |
+| 适合谁  | 自建应用，全托管      | 自建基础设施的团队         | OpenClaw 用户，零运维          | DeepSeek Harness、Hermes 或 OpenClaw，100% 端侧 |
+| 启动方式 | 申请 API Key   | docker compose up | openclaw plugins install | npm install + 按 Agent 配置                    |
+| 依赖设施 | 无（托管）        | Neo4j + Qdrant    | 无（使用 MemOS Cloud）        | 无（本地 SQLite）                              |
+| 数据存放 | MemOS Cloud  | 你的服务器             | MemOS Cloud              | 你的机器                                       |
 
 ### ☁️ 使用 Cloud API（托管）
 
@@ -204,22 +211,24 @@ print(res.json())
 
 
 
+<a id="memos-plugin"></a>
+
 ### 🧠 MemOS 插件：为你的 AI agent 提供持久记忆 ✨
 
-你的 OpenClaw 和 Hermes Agent 现在拥有**最佳**记忆系统——选择***云服务***或***自部署***即可开始 🏃🏻
+OpenClaw、Hermes 与 DeepSeek Harness 均可接入同一套 MemOS 本地记忆核心；OpenClaw 与 DeepSeek Harness 还可选择托管的 ***MemOS 云插件*** 🏃🏻
 
 
 | 🔌 插件                                                                                                 | 💡 核心特性 | 🧩 资源                                                                                                                                                                                                                                                                   |
 | ----------------------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 🧠 **[memos-local-plugin 2.0](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin)** |         | 🌐 [官网](https://memos-claw.openmem.net/) · 📖 [文档](https://memos-docs.openmem.net/cn/openclaw/local_plugin) · 🐙 [GitHub](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-plugin) |
-| ☁️ **[OpenClaw 云插件](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin)**  |         | 🖥️ [MemOS 控制台](https://memos-dashboard.openmem.net/login/) · 📖 [完整教程](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin)                                                                                                                                 |
+| ☁️ **[MemOS 云插件](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin)**     |         | 🖥️ [MemOS 控制台](https://memos-dashboard.openmem.net/login/) · 📖 [完整教程](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin)                                                                                                                                 |
 
 
 
 
-#### 1. OpenClaw 云插件
+#### 1. MemOS 云插件
 
-使用 OpenClaw，想通过 MemOS Cloud 获得持久记忆——无需自建基础设施。
+使用 OpenClaw 或 DeepSeek Harness，想通过 MemOS Cloud 获得持久记忆——无需自建基础设施。
 
 - **仓库：** [MemTensor/MemOS ·](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin) `apps/MemOS-Cloud-OpenClaw-Plugin`
 - **NPM：** `[@memtensor/memos-cloud-openclaw-plugin](https://www.npmjs.com/package/@memtensor/memos-cloud-openclaw-plugin)`
@@ -235,16 +244,55 @@ openclaw gateway restart
 
 插件在每次 agent 运行前从 MemOS Cloud 召回记忆，运行结束后把新消息写回。
 
-#### 2. 本地插件（memos-local-plugin 2.0）
+##### DeepSeek Harness
 
-使用 Hermes Agent 或 OpenClaw，想要 100% 端侧记忆——数据不离开本机。
+通过 DSH 原生插件机制为 DeepSeek Harness 接入 MemOS Cloud。每次用户请求的第一个模型步骤开始前，插件会自动召回相关云端记忆；当前回合成功结束后，再把新的用户与助手消息写回 MemOS Cloud。
+
+1. 在 [MemOS 控制台创建 API Key](https://memos-dashboard.openmem.net/cn/apikeys/)。
+2. 将云插件安装到 DSH 默认的 `web` profile：
+
+   ```bash
+   npx @deepseek-ai/dsh plugin --profile web add @memtensor/memos-cloud-dsh-plugin@latest
+   ```
+
+3. 在 `~/.dsh/.credentials.yaml` 中写入 API Key：
+
+   ```yaml
+   MEMOS_API_KEY: mpg-your-key
+   ```
+
+4. 在 `~/.dsh/settings.yaml` 中加入最小配置：
+
+   ```yaml
+   memos-cloud:
+     apiKeyEnv: MEMOS_API_KEY
+   ```
+
+5. 重启 DSH Web profile：
+
+   ```bash
+   npx @deepseek-ai/dsh web
+   ```
+
+云插件采用 Fail-open 机制：MemOS Cloud 临时不可用时，不会中断当前 DSH 任务。
+
+#### 2. 本地插件（OpenClaw、Hermes 与 DeepSeek Harness）
+
+使用 DeepSeek Harness、Hermes Agent 或 OpenClaw，想要 100% 端侧记忆——数据不离开本机。
 
 - **仓库：** [MemTensor/MemOS ·](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) `apps/memos-local-plugin`
 - **NPM：** `[@memtensor/memos-local-plugin](https://www.npmjs.com/package/@memtensor/memos-local-plugin)`
 - **文档：** [https://memos-docs.openmem.net/cn/openclaw/local_plugin](https://memos-docs.openmem.net/cn/openclaw/local_plugin)
+- **DeepSeek Harness：** [接入说明](./apps/memos-local-plugin/adapters/deepseek-harness/README.md)
 - **查看器面板：** 见 `apps/memos-local-plugin/viewer/`
 
-安装（macOS / Linux）：
+接入 DeepSeek Harness（macOS / Linux）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash -s -- --agent dsh --profile web
+```
+
+安装 OpenClaw 或 Hermes（macOS / Linux）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash
@@ -256,7 +304,7 @@ curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-loc
 irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 -OutFile "$env:TEMP\memos-install.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\memos-install.ps1"
 ```
 
-需先安装 Node.js，且已安装 OpenClaw 或 Hermes。安装器会自动识别 OpenClaw 与 Hermes，将插件部署到对应的 agent 主目录（`~/.hermes/plugins/` 或 `~/.openclaw/plugins/`），写入初始 `config.yaml`，并按需重启 agent 运行时。
+需先安装 Node.js，且已安装 DeepSeek Harness、OpenClaw 或 Hermes。安装器会将 MemOS 部署到所选 Agent 运行时：DeepSeek Harness 以独立 DSH bundle 方式接入；OpenClaw 与 Hermes 则在各自的 Agent 主目录中写入初始 `config.yaml`。
 
 特性：混合检索（FTS5 + 向量）、智能去重、分层技能演化（L1 轨迹 / L2 策略 / L3 世界模型）、多 agent 协作、本地优先 SQLite 存储。
 
