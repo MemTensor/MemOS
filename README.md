@@ -210,7 +210,7 @@ print(res.json())
 
 ### 🧠 MemOS Plugin: Persistent Memory for Your AI Agents ✨
 
-MemOS gives OpenClaw, Hermes, and DeepSeek Harness a shared local memory core; OpenClaw also has a managed ***Cloud Service*** option 🏃🏻
+MemOS gives OpenClaw, Hermes, and DeepSeek Harness a shared local memory core; the managed ***MemOS Cloud Plugin*** is available for OpenClaw and DeepSeek Harness 🏃🏻
 
 | 🔌 Plugin                                                                                                     | 💡 Core Features | 🧩 Resources                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -219,7 +219,7 @@ MemOS gives OpenClaw, Hermes, and DeepSeek Harness a shared local memory core; O
 
 #### 1. MemOS Cloud Plugin
 
-You use OpenClaw and want persistent memory via MemOS Cloud — no infrastructure to run.
+Use MemOS Cloud for persistent memory in OpenClaw or DeepSeek Harness — no infrastructure to run.
 
 - **Repo:** [MemTensor/MemOS ·](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin) `apps/MemOS-Cloud-OpenClaw-Plugin`
 - **NPM:** `[@memtensor/memos-cloud-openclaw-plugin](https://www.npmjs.com/package/@memtensor/memos-cloud-openclaw-plugin)`
@@ -234,6 +234,38 @@ openclaw gateway restart
 ```
 
 The plugin recalls memories from MemOS Cloud before each agent run and saves new messages back after the run ends.
+
+##### DeepSeek Harness
+
+Connect DeepSeek Harness to MemOS Cloud through its native plugin mechanism. Before the first model step of each user request, the plugin recalls relevant cloud memories; after a successful turn, it saves the new user and assistant messages back to MemOS Cloud.
+
+1. [Create a MemOS API Key](https://memos-dashboard.openmem.net/cn/apikeys/).
+2. Install the cloud plugin into the default DSH `web` profile:
+
+   ```bash
+   npx @deepseek-ai/dsh plugin --profile web add @memtensor/memos-cloud-dsh-plugin@latest
+   ```
+
+3. Add the API Key to `~/.dsh/.credentials.yaml`:
+
+   ```yaml
+   MEMOS_API_KEY: mpg-your-key
+   ```
+
+4. Add the minimal plugin configuration to `~/.dsh/settings.yaml`:
+
+   ```yaml
+   memos-cloud:
+     apiKeyEnv: MEMOS_API_KEY
+   ```
+
+5. Restart the DSH Web profile:
+
+   ```bash
+   npx @deepseek-ai/dsh web
+   ```
+
+The cloud plugin is fail-open: a temporary MemOS Cloud outage does not interrupt the current DSH task.
 
 #### 2. Local Plugin (OpenClaw, Hermes, and DeepSeek Harness)
 

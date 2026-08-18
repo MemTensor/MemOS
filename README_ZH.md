@@ -215,7 +215,7 @@ print(res.json())
 
 ### 🧠 MemOS 插件：为你的 AI agent 提供持久记忆 ✨
 
-OpenClaw、Hermes 与 DeepSeek Harness 均可接入同一套 MemOS 本地记忆核心；OpenClaw 还可选择托管***云服务*** 🏃🏻
+OpenClaw、Hermes 与 DeepSeek Harness 均可接入同一套 MemOS 本地记忆核心；OpenClaw 与 DeepSeek Harness 还可选择托管的 ***MemOS 云插件*** 🏃🏻
 
 
 | 🔌 插件                                                                                                 | 💡 核心特性 | 🧩 资源                                                                                                                                                                                                                                                                   |
@@ -228,7 +228,7 @@ OpenClaw、Hermes 与 DeepSeek Harness 均可接入同一套 MemOS 本地记忆�
 
 #### 1. MemOS 云插件
 
-使用 OpenClaw，想通过 MemOS Cloud 获得持久记忆——无需自建基础设施。
+使用 OpenClaw 或 DeepSeek Harness，想通过 MemOS Cloud 获得持久记忆——无需自建基础设施。
 
 - **仓库：** [MemTensor/MemOS ·](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin) `apps/MemOS-Cloud-OpenClaw-Plugin`
 - **NPM：** `[@memtensor/memos-cloud-openclaw-plugin](https://www.npmjs.com/package/@memtensor/memos-cloud-openclaw-plugin)`
@@ -243,6 +243,38 @@ openclaw gateway restart
 ```
 
 插件在每次 agent 运行前从 MemOS Cloud 召回记忆，运行结束后把新消息写回。
+
+##### DeepSeek Harness
+
+通过 DSH 原生插件机制为 DeepSeek Harness 接入 MemOS Cloud。每次用户请求的第一个模型步骤开始前，插件会自动召回相关云端记忆；当前回合成功结束后，再把新的用户与助手消息写回 MemOS Cloud。
+
+1. 在 [MemOS 控制台创建 API Key](https://memos-dashboard.openmem.net/cn/apikeys/)。
+2. 将云插件安装到 DSH 默认的 `web` profile：
+
+   ```bash
+   npx @deepseek-ai/dsh plugin --profile web add @memtensor/memos-cloud-dsh-plugin@latest
+   ```
+
+3. 在 `~/.dsh/.credentials.yaml` 中写入 API Key：
+
+   ```yaml
+   MEMOS_API_KEY: mpg-your-key
+   ```
+
+4. 在 `~/.dsh/settings.yaml` 中加入最小配置：
+
+   ```yaml
+   memos-cloud:
+     apiKeyEnv: MEMOS_API_KEY
+   ```
+
+5. 重启 DSH Web profile：
+
+   ```bash
+   npx @deepseek-ai/dsh web
+   ```
+
+云插件采用 Fail-open 机制：MemOS Cloud 临时不可用时，不会中断当前 DSH 任务。
 
 #### 2. 本地插件（OpenClaw、Hermes 与 DeepSeek Harness）
 
