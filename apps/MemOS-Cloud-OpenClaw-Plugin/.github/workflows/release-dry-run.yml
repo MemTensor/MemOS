@@ -1,0 +1,344 @@
+name: OpenClaw Cloud Plugin — Reusable Release Dry Run
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to inspect (e.g. 0.1.19 or 0.1.20-beta.1)."
+        required: true
+        type: string
+      tag:
+        description: "npm dist-tag paired with the inspected version."
+        required: false
+        type: string
+        default: "latest"
+      git_ref:
+        description: "Git ref containing the workflow and package code. Leave blank to use the caller ref."
+        required: false
+        type: string
+        default: ""
+      release_notes:
+        description: "Optional evidence-backed Markdown. Leave blank to request a Doc Agent draft."
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Compatibility guard. Reusable callers may only pass true."
+        required: false
+        type: boolean
+        default: true
+      recover_existing_npm_release:
+        description: "Compatibility guard. Reusable dry runs may only pass false."
+        required: false
+        type: boolean
+        default: false
+      enforce_source_version:
+        description: "Require the committed release source to already contain the requested version. Historical evidence replays may disable this."
+        required: false
+        type: boolean
+        default: true
+      fault_case:
+        description: "Release-note fault injection used by dry-run validation."
+        required: false
+        type: string
+        default: "none"
+      artifact_name:
+        description: "Inspection artifact name."
+        required: false
+        type: string
+        default: "openclaw-cloud-plugin-release-inspection"
+      expected_previous_tag:
+        description: "Optional assertion for a known historical range."
+        required: false
+        type: string
+        default: ""
+      expected_current_ref:
+        description: "Optional immutable evidence ref; defaults to v<version>."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      DOC_AGENT_RELEASE_NOTES_DRAFT_URL:
+        description: "Doc Agent release-note draft endpoint."
+        required: false
+      DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN:
+        description: "Bearer token for the Doc Agent draft endpoint."
+        required: false
+      DOC_AGENT_RELEASE_FAILURE_URL:
+        description: "Optional exhausted-failure reporting endpoint."
+        required: false
+      MEMOS_ARMS_ENDPOINT:
+        description: "Optional telemetry endpoint injected into the inspection package."
+        required: false
+      MEMOS_ARMS_PID:
+        description: "Optional telemetry project identifier."
+        required: false
+      MEMOS_ARMS_ENV:
+        description: "Optional telemetry environment."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate immutable dry-run inputs
+        id: release_policy
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RECOVER_EXISTING_NPM_RELEASE: ${{ inputs.recover_existing_npm_release }}
+          RELEASE_FAULT_CASE: ${{ inputs.fault_case }}
+          MANUAL_RELEASE_NOTES: ${{ inputs.release_notes }}
+          PUBLISH_CONFIRMATION: ""
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" != "true" ]; then
+            echo "::error::The reusable inspection workflow only accepts dry_run=true."
+            exit 1
+          fi
+          if [ "${RECOVER_EXISTING_NPM_RELEASE}" != "false" ]; then
+            echo "::error::The reusable inspection workflow never performs npm recovery."
+            exit 1
+          fi
+          if [[ "${RELEASE_VERSION}" == [vV]* ]]; then
+            echo "::error::version must not include a leading v."
+            exit 1
+          fi
+          if ! [[ "${RELEASE_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::version must be a valid SemVer value."
+            exit 1
+          fi
+          if ! [[ "${NPM_DIST_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::tag must be a valid npm dist-tag."
+            exit 1
+          fi
+          if [ "${RELEASE_FAULT_CASE}" = "manual_notes_missing_payload" ] && [ -z "${MANUAL_RELEASE_NOTES}" ]; then
+            echo "::error::manual_notes_missing_payload requires a manual release_notes fixture."
+            exit 1
+          fi
+          node .github/scripts/validate-release-confirmation.mjs
+
+      - name: Resolve immutable evidence ref
+        id: release_source
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          EXPECTED_CURRENT_REF: ${{ inputs.expected_current_ref }}
+        run: |
+          set -euo pipefail
+          evidence_ref="${EXPECTED_CURRENT_REF:-v${RELEASE_VERSION}}"
+          if ! git rev-parse --verify --quiet "${evidence_ref}^{commit}" >/dev/null; then
+            echo "::error::Evidence ref ${evidence_ref} is not an available commit."
+            exit 1
+          fi
+          {
+            echo "evidence_ref=${evidence_ref}"
+            echo "source_commit=$(git rev-parse "${evidence_ref}^{commit}")"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Install dependencies
+        shell: bash
+        run: bash .github/scripts/retry.sh --label "npm install" -- npm install
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/retry.sh --attempts 2 --label "release workflow script tests" -- node --test .github/scripts/*.test.mjs
+          if compgen -G "test/*.test.mjs" >/dev/null; then
+            bash .github/scripts/retry.sh --attempts 2 --label "plugin tests" -- node --test test/*.test.mjs
+          else
+            echo "No plugin tests found; skipping."
+          fi
+
+      - name: Validate committed release source version
+        if: ${{ inputs.enforce_source_version }}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_SOURCE_REF: ${{ steps.release_source.outputs.evidence_ref }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/validate-release-source-version.mjs
+
+      - name: Generate telemetry credentials
+        shell: bash
+        env:
+          MEMOS_ARMS_ENDPOINT: ${{ secrets.MEMOS_ARMS_ENDPOINT }}
+          MEMOS_ARMS_PID: ${{ secrets.MEMOS_ARMS_PID }}
+          MEMOS_ARMS_ENV: ${{ secrets.MEMOS_ARMS_ENV }}
+        run: bash .github/scripts/retry.sh --label "generate telemetry credentials" -- node scripts/generate-telemetry-credentials.cjs
+
+      - name: Verify package contents
+        if: ${{ inputs.enforce_source_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/retry.sh --label "npm pack dry-run" -- bash -euo pipefail -c 'npm pack --dry-run --json > "${RUNNER_TEMP}/openclaw-cloud-plugin-pack.json"'
+
+      - name: Draft and validate GitHub Release notes
+        id: release_notes
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: v${{ inputs.version }}
+          RELEASE_EVIDENCE_REF: ${{ steps.release_source.outputs.evidence_ref }}
+          MANUAL_RELEASE_NOTES: ${{ inputs.release_notes }}
+          RELEASE_FAULT_CASE: ${{ inputs.fault_case }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL }}
+          DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
+        run: node .github/scripts/draft-cloud-plugin-release-notes.mjs
+
+      - name: Prepare release inspection artifact
+        if: ${{ always() }}
+        shell: bash
+        env:
+          DRAFT_STEP_OUTCOME: ${{ steps.release_notes.outcome }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          FAULT_CASE: ${{ inputs.fault_case }}
+          RELEASE_NOTES_FILE: ${{ steps.release_notes.outputs.release_notes_file }}
+          EVIDENCE_FILE: ${{ steps.release_notes.outputs.evidence_file }}
+          DRAFT_FILE: ${{ steps.release_notes.outputs.draft_file }}
+          DOCS_PREVIEW_FILE: ${{ steps.release_notes.outputs.docs_preview_file }}
+          DOCS_PREVIEW_MARKDOWN_FILE: ${{ steps.release_notes.outputs.docs_preview_markdown_file }}
+          QUALITY_REPORT_FILE: ${{ steps.release_notes.outputs.quality_report_file }}
+          DRAFT_USED: ${{ steps.release_notes.outputs.draft_used }}
+          PREVIOUS_TAG: ${{ steps.release_notes.outputs.previous_tag }}
+          CURRENT_REF: ${{ steps.release_notes.outputs.current_ref }}
+          SOURCE_COMMIT: ${{ steps.release_source.outputs.source_commit }}
+          RELEASE_CHANNEL: ${{ steps.release_policy.outputs.release_channel }}
+          NPM_DIST_TAG: ${{ steps.release_policy.outputs.npm_dist_tag }}
+          GITHUB_RELEASE_PRERELEASE: ${{ steps.release_policy.outputs.github_release_prerelease }}
+          DOCS_SYNC_EXPECTED: ${{ steps.release_policy.outputs.docs_sync_expected }}
+          VALIDATION_ATTEMPT_COUNT: ${{ steps.release_notes.outputs.validation_attempt_count }}
+          REPAIR_ATTEMPT_COUNT: ${{ steps.release_notes.outputs.repair_attempt_count }}
+          EXPECTED_PREVIOUS_TAG: ${{ inputs.expected_previous_tag }}
+          EXPECTED_CURRENT_REF: ${{ inputs.expected_current_ref }}
+          SOURCE_VERSION_GATE: ${{ inputs.enforce_source_version }}
+        run: |
+          set -euo pipefail
+          inspection_dir="${RUNNER_TEMP}/openclaw-cloud-plugin-release-inspection"
+          mkdir -p "${inspection_dir}"
+
+          copy_if_present() {
+            local source_file="$1"
+            local target_name="$2"
+            if [ -n "${source_file}" ] && [ -s "${source_file}" ]; then
+              cp "${source_file}" "${inspection_dir}/${target_name}"
+            fi
+          }
+          copy_if_present "${RELEASE_NOTES_FILE}" "release-notes.md"
+          copy_if_present "${EVIDENCE_FILE}" "evidence.json"
+          copy_if_present "${DRAFT_FILE}" "release-notes-draft.json"
+          copy_if_present "${DOCS_PREVIEW_FILE}" "docs-preview.json"
+          copy_if_present "${DOCS_PREVIEW_MARKDOWN_FILE}" "docs-preview.md"
+          copy_if_present "${QUALITY_REPORT_FILE}" "quality-report.json"
+          copy_if_present "${RUNNER_TEMP}/openclaw-cloud-plugin-pack.json" "npm-pack.json"
+
+          if [ "${DRAFT_STEP_OUTCOME}" = "success" ] && [ ! -s "${inspection_dir}/release-notes.md" ]; then
+            echo "::error::release-notes.md was not generated."
+            exit 1
+          fi
+          if [ "${DRAFT_STEP_OUTCOME}" = "success" ] && [ ! -s "${inspection_dir}/quality-report.json" ]; then
+            echo "::error::quality-report.json was not generated."
+            exit 1
+          fi
+          if [ "${DRAFT_STEP_OUTCOME}" = "success" ] && [ -n "${EXPECTED_PREVIOUS_TAG}" ] && [ "${PREVIOUS_TAG}" != "${EXPECTED_PREVIOUS_TAG}" ]; then
+            echo "::error::Expected previous_tag=${EXPECTED_PREVIOUS_TAG}, got ${PREVIOUS_TAG:-n/a}."
+            exit 1
+          fi
+          if [ "${DRAFT_STEP_OUTCOME}" = "success" ] && [ -n "${EXPECTED_CURRENT_REF}" ] && [ "${CURRENT_REF}" != "${EXPECTED_CURRENT_REF}" ]; then
+            echo "::error::Expected current_ref=${EXPECTED_CURRENT_REF}, got ${CURRENT_REF:-n/a}."
+            exit 1
+          fi
+          github_release_prerelease_json="${GITHUB_RELEASE_PRERELEASE:-null}"
+          docs_sync_expected_json="${DOCS_SYNC_EXPECTED:-null}"
+          if [[ "${github_release_prerelease_json}" != "true" && "${github_release_prerelease_json}" != "false" ]]; then
+            github_release_prerelease_json=null
+          fi
+          if [[ "${docs_sync_expected_json}" != "true" && "${docs_sync_expected_json}" != "false" ]]; then
+            docs_sync_expected_json=null
+          fi
+          jq -n \
+            --arg version "${RELEASE_VERSION}" \
+            --arg source_commit "${SOURCE_COMMIT}" \
+            --arg evidence_ref "${CURRENT_REF:-}" \
+            --arg release_channel "${RELEASE_CHANNEL}" \
+            --arg npm_dist_tag "${NPM_DIST_TAG}" \
+            --argjson github_release_prerelease "${github_release_prerelease_json}" \
+            --argjson docs_sync_expected "${docs_sync_expected_json}" \
+            '{
+              version: $version,
+              source_commit: $source_commit,
+              evidence_ref: $evidence_ref,
+              release_channel: $release_channel,
+              npm_dist_tag: $npm_dist_tag,
+              github_release_prerelease: $github_release_prerelease,
+              docs_sync_expected: $docs_sync_expected
+            }' \
+            > "${inspection_dir}/release-source.json"
+
+          {
+            echo "# OpenClaw cloud plugin release inspection"
+            echo
+            echo "- draft_step_outcome: ${DRAFT_STEP_OUTCOME}"
+            echo "- version: ${RELEASE_VERSION}"
+            echo "- release_channel: ${RELEASE_CHANNEL}"
+            echo "- npm_dist_tag: ${NPM_DIST_TAG}"
+            echo "- github_release_prerelease: ${GITHUB_RELEASE_PRERELEASE}"
+            echo "- docs_sync_expected: ${DOCS_SYNC_EXPECTED}"
+            echo "- fault_case: ${FAULT_CASE}"
+            echo "- draft_used: ${DRAFT_USED:-unknown}"
+            echo "- previous_tag: ${PREVIOUS_TAG:-n/a}"
+            echo "- current_ref: ${CURRENT_REF:-n/a}"
+            echo "- source_commit: ${SOURCE_COMMIT:-n/a}"
+            echo "- source_version_gate: ${SOURCE_VERSION_GATE}"
+            echo "- validation_attempt_count: ${VALIDATION_ATTEMPT_COUNT:-n/a}"
+            echo "- repair_attempt_count: ${REPAIR_ATTEMPT_COUNT:-n/a}"
+            echo "- token_permissions: contents:read"
+            echo "- repository_credentials_persisted: false"
+          } > "${inspection_dir}/README.md"
+
+          {
+            echo "### OpenClaw cloud plugin release dry run"
+            echo
+            echo "- outcome: \`${DRAFT_STEP_OUTCOME}\`"
+            echo "- version: \`${RELEASE_VERSION}\`"
+            echo "- release_channel: \`${RELEASE_CHANNEL}\`"
+            echo "- npm_dist_tag: \`${NPM_DIST_TAG}\`"
+            echo "- github_release_prerelease: \`${GITHUB_RELEASE_PRERELEASE}\`"
+            echo "- docs_sync_expected: \`${DOCS_SYNC_EXPECTED}\`"
+            echo "- previous_tag: \`${PREVIOUS_TAG:-n/a}\`"
+            echo "- current_ref: \`${CURRENT_REF:-n/a}\`"
+            echo "- source_commit: \`${SOURCE_COMMIT:-n/a}\`"
+            echo "- validation_attempt_count: \`${VALIDATION_ATTEMPT_COUNT:-n/a}\`"
+            echo "- repair_attempt_count: \`${REPAIR_ATTEMPT_COUNT:-n/a}\`"
+            echo "- permissions: \`contents: read\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload release inspection artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/openclaw-cloud-plugin-release-inspection
+          if-no-files-found: error
