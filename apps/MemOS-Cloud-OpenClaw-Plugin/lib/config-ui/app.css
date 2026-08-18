@@ -337,6 +337,99 @@ h1 {
   color: var(--warn);
 }
 
+.update-notice {
+  display: none;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(181, 71, 8, 0.2);
+  border-radius: 18px;
+  background: rgba(181, 71, 8, 0.08);
+  color: var(--warn);
+}
+
+.update-notice.show {
+  display: block;
+}
+
+.update-notice.error {
+  border-color: rgba(180, 35, 24, 0.18);
+  background: rgba(180, 35, 24, 0.08);
+  color: var(--danger);
+}
+
+.update-notice.ok,
+.update-notice.info {
+  border-color: rgba(15, 118, 110, 0.18);
+  background: rgba(15, 118, 110, 0.08);
+  color: var(--accent2);
+}
+
+.update-check-button {
+  appearance: none;
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--strong);
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.update-check-button:hover {
+  border-color: rgba(15, 118, 110, 0.2);
+  color: var(--accent2);
+  transform: translateY(-1px);
+}
+
+.update-check-button:focus {
+  outline: none;
+  border-color: rgba(15, 118, 110, 0.34);
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+}
+
+.update-check-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+  transform: none;
+}
+
+.update-copy {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.update-title {
+  margin-bottom: 4px;
+  color: var(--strong);
+  font-weight: 800;
+}
+
+.update-body {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.update-command {
+  display: block;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--strong);
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-x: auto;
+}
+
+.update-copy-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .hero-actions {
   display: grid;
   gap: 12px;
@@ -609,6 +702,11 @@ h1 {
   cursor: pointer;
 }
 
+.inline-btn:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
 .error {
   color: var(--danger);
   font-size: 12px;
@@ -866,6 +964,10 @@ body.nav-collapsed .floating-nav {
 
   .hero {
     padding: 18px;
+  }
+
+  .update-copy {
+    display: grid;
   }
 
   .card,
