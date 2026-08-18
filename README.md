@@ -53,6 +53,9 @@
 
 ### News
 
+- **2026-08-17** · 🐋 **MemOS Connects with DeepSeek Harness**
+  MemOS now brings persistent memory to **DeepSeek Harness** through both local and cloud plugins. DSH can automatically recall relevant context before a task and retain new experience after a successful turn, without modifying its core.
+
 - **2026-07-02** · 🏆 **MemOS Advances Agent and User Memory Benchmarks**
   With MemOS, **OpenClaw** improves average task completion from **36.63% to 50.87%** across five agent tasks. MemOS also achieves **88.83 on LoCoMo** and **89.20 on LongMemEval**, and leads in **OmniMemEval**, a unified evaluation of 14 commercial memory products across ten datasets.
 
