@@ -35,6 +35,62 @@ function Write-Success($msg) { Write-Host "  [OK] $msg" -ForegroundColor Green }
 function Write-Warn($msg)    { Write-Host "  [WARN] $msg" -ForegroundColor Yellow }
 function Stop-Die($msg)      { Write-Host "  [ERROR] $msg" -ForegroundColor Red; exit 1 }
 
+function Invoke-NativeChecked {
+    param(
+        [string]$Command,
+        [string[]]$Arguments,
+        [string]$FailureMessage
+    )
+    & $Command @Arguments | Out-Host
+    $ExitCode = $LASTEXITCODE
+    if ($ExitCode -ne 0) {
+        throw "$FailureMessage (exit code $ExitCode)"
+    }
+}
+
+function Test-BetterSqlite3 {
+    param([string]$NodeBin, [string]$Prefix)
+    $SmokeScript = "const Database=require('better-sqlite3');const db=new Database(':memory:');db.exec('SELECT 1');db.close();"
+    Push-Location $Prefix
+    try {
+        & $NodeBin -e $SmokeScript *> $null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        Pop-Location
+    }
+}
+
+function Resolve-HermesHostHome {
+    $ConfiguredHome = $env:HERMES_HOME
+    if ($ConfiguredHome -and $ConfiguredHome.Trim()) {
+        $Candidate = [Environment]::ExpandEnvironmentVariables($ConfiguredHome.Trim())
+        if ($Candidate -eq "~") {
+            if (-not $env:USERPROFILE -or -not $env:USERPROFILE.Trim()) {
+                Stop-Die "HERMES_HOME uses '~', but USERPROFILE is not set."
+            }
+            $UserProfile = $env:USERPROFILE.Trim()
+            $Candidate = $UserProfile
+        } elseif ($Candidate.StartsWith("~\") -or $Candidate.StartsWith("~/")) {
+            if (-not $env:USERPROFILE -or -not $env:USERPROFILE.Trim()) {
+                Stop-Die "HERMES_HOME uses '~', but USERPROFILE is not set."
+            }
+            $UserProfile = $env:USERPROFILE.Trim()
+            $RelativeHome = $Candidate.Substring(2)
+            $Candidate = Join-Path $UserProfile $RelativeHome
+        }
+        if (-not [IO.Path]::IsPathRooted($Candidate)) {
+            Stop-Die "HERMES_HOME must be an absolute path: $ConfiguredHome"
+        }
+        return [IO.Path]::GetFullPath($Candidate)
+    }
+
+    if (-not $env:LOCALAPPDATA -or -not $env:LOCALAPPDATA.Trim()) {
+        Stop-Die "LOCALAPPDATA is not set; set HERMES_HOME to the Hermes data directory."
+    }
+    $LocalAppData = $env:LOCALAPPDATA.Trim()
+    return [IO.Path]::GetFullPath((Join-Path $LocalAppData "hermes"))
+}
+
 $PluginId = "memos-local-plugin"
 $NpmPackage = "@memtensor/memos-local-plugin"
 $OpenClawPort = 18799
@@ -57,14 +113,18 @@ try {
 }
 
 # Agent detection
+$HermesHome = Resolve-HermesHostHome
+# Keep every child process on the same normalized host-data directory. This is
+# process-scoped and does not overwrite the user's persisted environment.
+$env:HERMES_HOME = $HermesHome
 $HasOpenClaw = Test-Path "$env:USERPROFILE\.openclaw"
-$HasHermes = Test-Path "$env:LOCALAPPDATA\hermes"
+$HasHermes = Test-Path $HermesHome
 
 Write-Host "`n  Detected agents:" -ForegroundColor White
 if ($HasOpenClaw) { Write-Host "    - OpenClaw   (~/.openclaw)" -ForegroundColor Green }
 else { Write-Host "    - OpenClaw   (not installed)" -ForegroundColor DarkGray }
 
-if ($HasHermes) { Write-Host "    - Hermes     (~/AppData/Local/hermes)" -ForegroundColor Green }
+if ($HasHermes) { Write-Host "    - Hermes     ($HermesHome)" -ForegroundColor Green }
 else { Write-Host "    - Hermes     (not installed)" -ForegroundColor DarkGray }
 
 Write-Host "`n  Install into which agent?"
@@ -88,7 +148,7 @@ switch ($Choice) {
 }
 
 if ($AgentSelection -eq "auto") {
-    if (-not $HasOpenClaw -and -not $HasHermes) { Stop-Die "Neither ~/.openclaw nor ~/AppData/Local/hermes exists. Install one first." }
+    if (-not $HasOpenClaw -and -not $HasHermes) { Stop-Die "Neither ~/.openclaw nor Hermes home ($HermesHome) exists. Install one first." }
     if ($HasOpenClaw -and $HasHermes) { $AgentSelection = "all" }
     elseif ($HasOpenClaw) { $AgentSelection = "openclaw" }
     else { $AgentSelection = "hermes" }
@@ -118,7 +178,12 @@ if ($Version) {
 if (-not $BuiltTarball) {
     Push-Location $StageDir
     try {
-        cmd /c "npm pack $SourceSpec --loglevel=error"
+        $NpmPackCommand = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
+        if (-not $NpmPackCommand) { $NpmPackCommand = (Get-Command "npm" -ErrorAction SilentlyContinue).Source }
+        if (-not $NpmPackCommand) { throw "npm executable not found" }
+        Invoke-NativeChecked -Command $NpmPackCommand -Arguments @(
+            "pack", $SourceSpec, "--loglevel=error"
+        ) -FailureMessage "npm pack failed"
         $BuiltTarball = (Get-ChildItem -Filter *.tgz | Select-Object -First 1).FullName
     } finally {
         Pop-Location
@@ -128,80 +193,189 @@ if (-not $BuiltTarball) {
 }
 
 function Deploy-Tarball {
-    param([string]$Prefix)
+    param(
+        [string]$Prefix,
+        [scriptblock]$BeforeSwap
+    )
     Write-Info "Deploying to $Prefix"
-    
-    $Preserve = @("node_modules", "data", "logs", "skills", "daemon", "config.yaml", ".auth.json")
-    
-    if (Test-Path $Prefix) {
-        $SavedDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString())) -Force
-        foreach ($Item in $Preserve) {
-            $Src = Join-Path $Prefix $Item
-            if (Test-Path $Src) {
-                $Dst = Join-Path $SavedDir $Item
-                New-Item -ItemType Directory -Force -Path (Split-Path $Dst -Parent) -ErrorAction SilentlyContinue | Out-Null
-                Move-Item -Path $Src -Destination $Dst -Force
-            }
-        }
-        Remove-Item -Recurse -Force $Prefix -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-        
-        tar xzf $BuiltTarball -C $Prefix --strip-components=1
-        
-        foreach ($Item in $Preserve) {
-            $SavedItem = Join-Path $SavedDir $Item
-            if (Test-Path $SavedItem) {
-                $Dst = Join-Path $Prefix $Item
-                if (Test-Path $Dst) { Remove-Item -Recurse -Force $Dst }
-                Move-Item -Path $SavedItem -Destination $Dst -Force
-            }
-        }
-        Remove-Item -Recurse -Force $SavedDir -ErrorAction SilentlyContinue
-    } else {
-        New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-        tar xzf $BuiltTarball -C $Prefix --strip-components=1
-    }
-    
-    if (-not (Test-Path (Join-Path $Prefix "package.json"))) { Stop-Die "Extraction failed" }
-    Write-Success "Package extracted"
-    
-    Write-Info "Installing npm dependencies"
-    Push-Location $Prefix
+    $Preserve = @("data", "logs", "skills", "daemon", ".migrations", "config.yaml", ".auth.json", ".memos-runtime-home")
+    $StagedPrefix = Prepare-StagedPackage
+    $BackupDir = "$Prefix.memos-backup-$([guid]::NewGuid().ToString('N'))"
+    $HadExisting = Test-Path $Prefix
+    $LiveMovedToBackup = $false
+    $StagedMovedLive = $false
+    $DeploySucceeded = $false
+
     try {
-        $env:MEMOS_SKIP_SETUP = "1"
-        cmd /c "npm install --omit=dev --no-fund --no-audit --loglevel=error"
-        
-        if (Test-Path "node_modules\better-sqlite3") {
-            Write-Info "Rebuilding better-sqlite3..."
-            cmd /c "npm rebuild better-sqlite3 --loglevel=error"
+        # Staging can take minutes. Re-check immediately before swapping the
+        # live tree so an active Hermes session cannot re-lock native modules.
+        if ($BeforeSwap) {
+            & $BeforeSwap
         }
+        Stop-WindowsPluginBridges -Prefix $Prefix
+        if ($HadExisting) {
+            Move-Item -Path $Prefix -Destination $BackupDir -Force
+            $LiveMovedToBackup = $true
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path $Prefix -Parent) | Out-Null
+        Move-Item -Path $StagedPrefix -Destination $Prefix -Force
+        $StagedMovedLive = $true
+
+        if ($HadExisting) {
+            foreach ($Item in $Preserve) {
+                $SavedItem = Join-Path $BackupDir $Item
+                if (Test-Path $SavedItem) {
+                    $Dst = Join-Path $Prefix $Item
+                    if (Test-Path $Dst) { Remove-Item -Recurse -Force $Dst }
+                    Copy-Item -Path $SavedItem -Destination $Dst -Recurse -Force
+                }
+            }
+        }
+
+        if (-not (Test-Path (Join-Path $Prefix "package.json"))) {
+            throw "Extraction failed: package.json missing after staged deploy"
+        }
+        Write-Success "Package extracted"
+        Write-Success "Dependencies ready"
+        Write-Warn "Local MiniLM model weights are not bundled."
+        Write-Host "       If embedding.provider is local, the first Viewer test or use downloads about 23 MB from Hugging Face."
+        $DeploySucceeded = $true
+    } catch {
+        $DeployError = $_
+        if ($StagedMovedLive -and (Test-Path $Prefix)) {
+            Remove-Item -Recurse -Force $Prefix -ErrorAction SilentlyContinue
+        }
+        if ($LiveMovedToBackup -and (Test-Path $BackupDir)) {
+            Move-Item -Path $BackupDir -Destination $Prefix -Force
+        }
+        if (Test-Path $StagedPrefix) {
+            Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
+        }
+        throw $DeployError
     } finally {
-        Pop-Location
+        if ($DeploySucceeded -and (Test-Path $BackupDir)) {
+            Remove-Item -Recurse -Force $BackupDir -ErrorAction SilentlyContinue
+        }
     }
-    
+}
+
+function Prepare-StagedPackage {
+    $StagedPrefix = Join-Path $env:TEMP ("memos-package-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $StagedPrefix | Out-Null
     $SystemNode = Join-Path $env:ProgramFiles "nodejs\node.exe"
-    $NodeForBridge = if (Test-Path $SystemNode) { $SystemNode } else { (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source }
-    if ($NodeForBridge) {
-        Set-Content -Path (Join-Path $Prefix ".memos-node-bin") -Value $NodeForBridge -Encoding UTF8
+    $NodeForBridge = if (Test-Path $SystemNode) {
+        $SystemNode
+    } else {
+        (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source
     }
-    Write-Success "Dependencies ready"
+    if (-not $NodeForBridge) {
+        Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
+        throw "Node.js executable not found for staged install"
+    }
+    $NpmCommand = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
+    if (-not $NpmCommand) { $NpmCommand = (Get-Command "npm" -ErrorAction SilentlyContinue).Source }
+    if (-not $NpmCommand) {
+        Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
+        throw "npm executable not found for staged install"
+    }
+
+    try {
+        Invoke-NativeChecked -Command "tar" -Arguments @(
+            "xzf", $BuiltTarball, "-C", $StagedPrefix, "--strip-components=1"
+        ) -FailureMessage "Package extraction failed"
+        if (-not (Test-Path (Join-Path $StagedPrefix "package.json"))) {
+            throw "Package extraction failed: package.json missing"
+        }
+
+        Write-Info "Installing npm dependencies in staging"
+        $PreviousSkipSetup = $env:MEMOS_SKIP_SETUP
+        Push-Location $StagedPrefix
+        try {
+            $env:MEMOS_SKIP_SETUP = "1"
+            Invoke-NativeChecked -Command $NpmCommand -Arguments @(
+                "install", "--omit=dev", "--no-fund", "--no-audit", "--loglevel=error"
+            ) -FailureMessage "npm install failed"
+        } finally {
+            if ($null -eq $PreviousSkipSetup) {
+                Remove-Item Env:MEMOS_SKIP_SETUP -ErrorAction SilentlyContinue
+            } else {
+                $env:MEMOS_SKIP_SETUP = $PreviousSkipSetup
+            }
+            Pop-Location
+        }
+
+        if (-not (Test-BetterSqlite3 -NodeBin $NodeForBridge -Prefix $StagedPrefix)) {
+            Write-Info "Rebuilding better-sqlite3 in staging..."
+            Push-Location $StagedPrefix
+            try {
+                Invoke-NativeChecked -Command $NpmCommand -Arguments @(
+                    "rebuild", "better-sqlite3", "--loglevel=error"
+                ) -FailureMessage "better-sqlite3 rebuild failed"
+            } finally {
+                Pop-Location
+            }
+            if (-not (Test-BetterSqlite3 -NodeBin $NodeForBridge -Prefix $StagedPrefix)) {
+                throw "better-sqlite3 is not loadable after rebuild"
+            }
+        }
+
+        Set-Content -Path (Join-Path $StagedPrefix ".memos-node-bin") -Value $NodeForBridge -Encoding UTF8
+        return $StagedPrefix
+    } catch {
+        Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+function Stop-WindowsPluginBridges {
+    param([string]$Prefix)
+    $ResolvedPrefix = [IO.Path]::GetFullPath($Prefix)
+    $BridgePattern = 'bridge\.(cts|cjs|mts|mjs)'
+    $Deadline = [DateTime]::UtcNow.AddSeconds(15)
+    $QuietSince = $null
+
+    do {
+        $BridgeProcesses = @(
+            Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.CommandLine -and
+                    $_.CommandLine.IndexOf($ResolvedPrefix, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                    $_.CommandLine -match $BridgePattern
+                }
+        )
+        foreach ($Process in $BridgeProcesses) {
+            Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        if ($BridgeProcesses.Count -eq 0) {
+            if ($null -eq $QuietSince) {
+                $QuietSince = [DateTime]::UtcNow
+            } elseif (([DateTime]::UtcNow - $QuietSince).TotalSeconds -ge 1) {
+                return
+            }
+        } else {
+            $QuietSince = $null
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw "MemOS bridge processes are still running. Close Hermes completely and run the installer again."
 }
 
 function Ensure-RuntimeHome {
     param([string]$Agent, [string]$HomeDir, [string]$Prefix)
-    
+
     foreach ($Sub in @("data", "skills", "logs", "daemon")) {
         New-Item -ItemType Directory -Force -Path (Join-Path $HomeDir $Sub) -ErrorAction SilentlyContinue | Out-Null
     }
-    
+
     $Template = Join-Path $Prefix "templates\config.$Agent.yaml"
     if (-not (Test-Path $Template)) { $Template = Join-Path $ScriptDir "templates\config.$Agent.yaml" }
-    
+
     if (-not (Test-Path $Template)) {
         Write-Warn "Template missing: config.$Agent.yaml"
         return
     }
-    
+
     $Target = Join-Path $HomeDir "config.yaml"
     if (-not (Test-Path $Target)) {
         Copy-Item -Path $Template -Destination $Target
@@ -209,6 +383,73 @@ function Ensure-RuntimeHome {
     } else {
         Write-Success "config.yaml exists — kept as-is"
     }
+}
+
+function Test-HermesRuntimeData {
+    param([string]$HomeDir)
+    if (Test-Path (Join-Path $HomeDir "config.yaml") -PathType Leaf) { return $true }
+    if (Test-Path (Join-Path $HomeDir ".auth.json") -PathType Leaf) { return $true }
+    $SkillsDir = Join-Path $HomeDir "skills"
+    if (Test-Path $SkillsDir -PathType Container) {
+        return $null -ne (Get-ChildItem -Path $SkillsDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
+    }
+    return $false
+}
+
+function Resolve-HermesRuntimeHome {
+    param([string]$InstallRoot)
+
+    if ($env:MEMOS_HOME -and $env:MEMOS_HOME.Trim()) {
+        return [PSCustomObject]@{ Path = [IO.Path]::GetFullPath($env:MEMOS_HOME); Source = "environment"; Persist = $true }
+    }
+    if ($env:MEMOS_CONFIG_FILE -and $env:MEMOS_CONFIG_FILE.Trim()) {
+        $ConfigParent = Split-Path -Parent ([IO.Path]::GetFullPath($env:MEMOS_CONFIG_FILE))
+        return [PSCustomObject]@{ Path = $ConfigParent; Source = "config-environment"; Persist = $true }
+    }
+
+    $MarkerFile = Join-Path $InstallRoot ".memos-runtime-home"
+    if (Test-Path $MarkerFile -PathType Leaf) {
+        try {
+            $Marker = Get-Content -Path $MarkerFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($Marker.version -eq 1 -and $Marker.path -and $Marker.path.Trim()) {
+                return [PSCustomObject]@{ Path = [IO.Path]::GetFullPath($Marker.path); Source = "marker"; Persist = $false }
+            }
+        } catch {
+            Write-Warn "Ignoring invalid runtime-home marker: $MarkerFile"
+        }
+    }
+
+    $LegacyHome = Join-Path $env:USERPROFILE ".hermes\memos-plugin"
+    $LegacyDb = Join-Path $LegacyHome "data\memos.db"
+    $CanonicalDb = Join-Path $InstallRoot "data\memos.db"
+    $HasLegacyDb = Test-Path $LegacyDb -PathType Leaf
+    $HasCanonicalDb = Test-Path $CanonicalDb -PathType Leaf
+    if ($HasLegacyDb -and $HasCanonicalDb) {
+        Stop-Die "both Windows Hermes runtime homes contain a database. Set MEMOS_HOME to '$LegacyHome' or '$InstallRoot', then run the installer again."
+    }
+
+    if ($HasLegacyDb) {
+        return [PSCustomObject]@{ Path = $LegacyHome; Source = "legacy-database"; Persist = $true }
+    }
+    if ($HasCanonicalDb) {
+        return [PSCustomObject]@{ Path = $InstallRoot; Source = "canonical-database"; Persist = $true }
+    }
+    if (Test-HermesRuntimeData -HomeDir $LegacyHome) {
+        return [PSCustomObject]@{ Path = $LegacyHome; Source = "legacy-data"; Persist = $true }
+    }
+    return [PSCustomObject]@{ Path = $InstallRoot; Source = "new-install"; Persist = $true }
+}
+
+function Write-RuntimeHomeMarker {
+    param([string]$InstallRoot, [string]$RuntimeHome, [string]$Source)
+    New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+    $MarkerFile = Join-Path $InstallRoot ".memos-runtime-home"
+    $TempFile = "$MarkerFile.$PID.tmp"
+    $Payload = [ordered]@{ version = 1; path = [IO.Path]::GetFullPath($RuntimeHome); source = $Source }
+    $Json = ($Payload | ConvertTo-Json) + "`n"
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($TempFile, $Json, $Utf8NoBom)
+    Move-Item -Path $TempFile -Destination $MarkerFile -Force
 }
 
 function Wait-ForViewer {
@@ -237,26 +478,26 @@ function Install-OpenClaw {
     $Prefix = Join-Path $env:USERPROFILE ".openclaw\extensions\$PluginId"
     $HomeDir = Join-Path $env:USERPROFILE ".openclaw\memos-plugin"
     $ConfigPath = Join-Path $env:USERPROFILE ".openclaw\openclaw.json"
-    
+
     $OcBin = Get-Command "openclaw" -ErrorAction SilentlyContinue
     if ($OcBin) {
         Write-Info "Stopping OpenClaw gateway"
         cmd /c "openclaw gateway stop"
         Start-Sleep -Seconds 1
     }
-    
+
     Deploy-Tarball -Prefix $Prefix
-    
+
     $RuntimeEntry = "./dist/adapters/openclaw/index.js"
     if (-not (Test-Path (Join-Path $Prefix "dist\adapters\openclaw\index.js"))) {
         Stop-Die "OpenClaw runtime entry missing."
     }
-    
+
     Ensure-RuntimeHome -Agent "openclaw" -HomeDir $HomeDir -Prefix $Prefix
-    
+
     $PackageJson = Get-Content (Join-Path $Prefix "package.json") -Raw | ConvertFrom-Json
     $PluginVersion = $PackageJson.version
-    
+
     $PluginJsonContent = @"
 {
   "id": "$PluginId",
@@ -279,27 +520,17 @@ function Install-OpenClaw {
 }
 "@
     Set-Content -Path (Join-Path $Prefix "openclaw.plugin.json") -Value $PluginJsonContent -Encoding UTF8
-    
+
     Write-Info "Patching openclaw.json"
     $LegacyIds = @("memos-local-openclaw-plugin")
     $LegacyJson = ($LegacyIds -join ',')
-    $SourceKindStr = if ($SourceKind -eq 'path') { 'path' } else { 'npm' }
-    
     $env:PLUGIN_ID = $PluginId
-    $env:INSTALL_PATH = $Prefix
-    $env:SOURCE_KIND = $SourceKindStr
-    $env:SOURCE_SPEC = $SourceSpec
-    $env:PLUGIN_VERSION = $PluginVersion
     $env:LEGACY_JSON = $LegacyJson
     $env:CONFIG_PATH = $ConfigPath
 
     $NodeScript = @"
 const fs = require('fs');
-const {
-  CONFIG_PATH: configPath, PLUGIN_ID: pluginId, INSTALL_PATH: installPath,
-  SOURCE_KIND: sourceKind, SOURCE_SPEC: sourceSpec,
-  PLUGIN_VERSION: pluginVersion, LEGACY_JSON: legacyCsv,
-} = process.env;
+const { CONFIG_PATH: configPath, PLUGIN_ID: pluginId, LEGACY_JSON: legacyCsv } = process.env;
 const legacyIds = (legacyCsv || '').split(',').filter(Boolean);
 const MEMOS_TOOL_NAMES = [
   'memos_search',
@@ -342,7 +573,6 @@ if (!config.plugins.allow.includes(pluginId)) config.plugins.allow.push(pluginId
 
 for (const legacyId of legacyIds) {
   if (config.plugins.entries?.[legacyId]) delete config.plugins.entries[legacyId];
-  if (config.plugins.installs?.[legacyId]) delete config.plugins.installs[legacyId];
   if (Array.isArray(config.plugins.allow)) {
     config.plugins.allow = config.plugins.allow.filter((x) => x !== legacyId);
   }
@@ -353,6 +583,25 @@ for (const legacyId of legacyIds) {
   }
 }
 
+// `plugins.installs` was optional through OpenClaw 2026.4.24 and moved to
+// machine-managed plugin index state in 2026.4.25. The extension already lives
+// in OpenClaw's standard discovery directory, so neither generation requires a
+// hand-written MemOS install record. Remove only records owned by this installer
+// so older OpenClaw releases retain metadata for unrelated plugins.
+if (
+  config.plugins.installs &&
+  typeof config.plugins.installs === 'object' &&
+  !Array.isArray(config.plugins.installs)
+) {
+  delete config.plugins.installs[pluginId];
+  for (const legacyId of legacyIds) delete config.plugins.installs[legacyId];
+  if (Object.keys(config.plugins.installs).length === 0) delete config.plugins.installs;
+} else if (Object.prototype.hasOwnProperty.call(config.plugins, 'installs')) {
+  // A malformed legacy value is invalid on old hosts and cannot carry records
+  // worth preserving.
+  delete config.plugins.installs;
+}
+
 if (!config.plugins.slots || typeof config.plugins.slots !== 'object') config.plugins.slots = {};
 config.plugins.slots.memory = pluginId;
 
@@ -361,22 +610,18 @@ if (!config.plugins.entries[pluginId] || typeof config.plugins.entries[pluginId]
   config.plugins.entries[pluginId] = {};
 }
 config.plugins.entries[pluginId].enabled = true;
-if (config.plugins.entries[pluginId].hooks) delete config.plugins.entries[pluginId].hooks;
-
-if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
-const installsEntry = {
-  source: sourceKind === 'path' ? 'path' : 'npm',
-  installPath,
-  version: pluginVersion,
-  resolvedVersion: pluginVersion,
-  installedAt: new Date().toISOString(),
-};
-if (sourceKind !== 'path') {
-  installsEntry.spec = sourceSpec;
-  installsEntry.resolvedName = '@memtensor/memos-local-plugin';
-  installsEntry.resolvedSpec = sourceSpec;
+// OpenClaw requires an explicit opt-in before conversation-bearing hooks can
+// inject memories at prompt time or capture completed turns at agent_end.
+// Preserve any existing hook settings while enforcing the permission MemOS
+// needs; replacing the object would silently discard user/host configuration.
+if (
+  !config.plugins.entries[pluginId].hooks ||
+  typeof config.plugins.entries[pluginId].hooks !== 'object' ||
+  Array.isArray(config.plugins.entries[pluginId].hooks)
+) {
+  config.plugins.entries[pluginId].hooks = {};
 }
-config.plugins.installs[pluginId] = installsEntry;
+config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 "@
@@ -385,7 +630,7 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
     Set-Content -Path $NodeScriptPath -Value $NodeScript -Encoding UTF8
     node $NodeScriptPath
     Write-Success "openclaw.json patched"
-    
+
     if ($OcBin) {
         Write-Info "Starting OpenClaw gateway"
         cmd /c "openclaw gateway start"
@@ -401,29 +646,36 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 
 function Install-Hermes {
     Write-Host "`n=== Hermes Install ===" -ForegroundColor Cyan
+    # MemOS package/runtime files remain in the canonical LocalAppData install
+    # root. Hermes host data below follows HERMES_HOME and may live elsewhere.
     $Prefix = Join-Path $env:LOCALAPPDATA "hermes\memos-plugin"
-    $HomeDir = $Prefix
-    $ConfigFile = Join-Path $env:LOCALAPPDATA "hermes\config.yaml"
+    $RuntimeSelection = Resolve-HermesRuntimeHome -InstallRoot $Prefix
+    $HomeDir = $RuntimeSelection.Path
+    $ConfigFile = Join-Path $HermesHome "config.yaml"
     $AdapterDir = Join-Path $Prefix "adapters\hermes"
-    
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match "bridge\.(cts|cjs)" } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Get-Process -Name "hermes" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    
-    Deploy-Tarball -Prefix $Prefix
+
+    Deploy-Tarball -Prefix $Prefix -BeforeSwap {
+        Get-Process -Name "hermes" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    if ($RuntimeSelection.Persist) {
+        Write-RuntimeHomeMarker -InstallRoot $Prefix -RuntimeHome $HomeDir -Source $RuntimeSelection.Source
+    }
+    Write-Success "Runtime home: $HomeDir ($($RuntimeSelection.Source))"
     Ensure-RuntimeHome -Agent "hermes" -HomeDir $HomeDir -Prefix $Prefix
-    
+
     $BridgeEntry = Join-Path $Prefix "dist\bridge.cjs"
     if (-not (Test-Path $BridgeEntry)) { $BridgeEntry = Join-Path $Prefix "bridge.cts" }
     Set-Content -Path (Join-Path $AdapterDir "bridge_path.txt") -Value $BridgeEntry -Encoding UTF8
-    
+
     $PythonBin = ""
     $VenvPy = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\venv\Scripts\python.exe"
     if (Test-Path $VenvPy) { $PythonBin = $VenvPy }
     else { $PythonBin = (Get-Command "python.exe" -ErrorAction SilentlyContinue).Source }
-    
+
     if (-not $PythonBin) { Stop-Die "Cannot locate Python for Hermes." }
     Write-Success "Python: $PythonBin"
-    
+
     $PluginDir = ""
     $DefaultPluginDir = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\plugins\memory"
     if (Test-Path $DefaultPluginDir) { $PluginDir = $DefaultPluginDir }
@@ -434,7 +686,7 @@ function Install-Hermes {
             $PluginDir = & $PythonBin -c $PyCmd 2>$null
         } catch {}
     }
-    
+
     if (-not $PluginDir -or -not (Test-Path $PluginDir)) { Stop-Die "plugins\memory not found" }
 
     $VersionSyncScript = Join-Path $Prefix "scripts\sync-hermes-version.cjs"
@@ -451,7 +703,7 @@ function Install-Hermes {
         Write-Warning "plugin.yaml copy may have failed; verify $AdapterDir\memos_provider\plugin.yaml exists."
     }
 
-    $UserPluginDir = Join-Path $env:LOCALAPPDATA "hermes\plugins\memory"
+    $UserPluginDir = Join-Path $HermesHome "plugins\memory"
     New-Item -ItemType Directory -Path $UserPluginDir -Force | Out-Null
     Write-Host "Ensuring user plugin dir: $UserPluginDir"
     $ProviderTargets = @(
@@ -495,7 +747,7 @@ memory:
         Set-Content -Path $ConfigFile -Value $ConfigContent -Encoding UTF8
         Write-Success "Created $ConfigFile"
     }
-    
+
     Write-Info "Starting Memory Viewer daemon"
     $NodeBin = Get-Content -Path (Join-Path $Prefix ".memos-node-bin") -ErrorAction SilentlyContinue
     if (-not $NodeBin) { $NodeBin = (Get-Command "node.exe" -ErrorAction SilentlyContinue).Source }
@@ -504,16 +756,18 @@ memory:
     $BridgeCjs = Join-Path $Prefix "dist\bridge.cjs"
     $BridgeEntry = $BridgeCjs
     if (-not (Test-Path $BridgeEntry)) { $BridgeEntry = $BridgeCts }
-    
+
     if ($NodeBin -and (Test-Path $BridgeEntry) -and ($BridgeEntry.EndsWith(".cjs") -or (Test-Path $TsxBin))) {
         $DaemonLog = Join-Path $Prefix "logs\daemon-start.log"
         $DaemonLogErr = Join-Path $Prefix "logs\daemon-start-err.log"
         if ($BridgeEntry.EndsWith(".cjs")) {
-            Start-Process -FilePath $NodeBin -ArgumentList "$BridgeEntry --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
+            $DaemonArgs = "`"$BridgeEntry`" --agent=hermes --daemon --home=`"$HomeDir`""
+            Start-Process -FilePath $NodeBin -ArgumentList $DaemonArgs -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
         } else {
-            Start-Process -FilePath $NodeBin -ArgumentList "$TsxBin $BridgeEntry --agent=hermes --daemon" -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
+            $DaemonArgs = "`"$TsxBin`" `"$BridgeEntry`" --agent=hermes --daemon --home=`"$HomeDir`""
+            Start-Process -FilePath $NodeBin -ArgumentList $DaemonArgs -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
         }
-        
+
         if (Wait-ForViewer -Port $HermesPort -Timeout 120) {
             Write-Success "Memory Viewer daemon running"
         } else {

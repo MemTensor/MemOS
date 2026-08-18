@@ -1,16 +1,21 @@
+from __future__ import annotations
+
 import os
 import threading
 
 from collections import Counter
 from concurrent.futures import Future
-from typing import Any
-
-from cachetools import LRUCache, TTLCache
+from typing import TYPE_CHECKING, Any
 
 from memos.context.context import get_current_trace_id
+from memos.dependency import require_python_package
 from memos.embedders.base import BaseEmbedder
 from memos.exceptions import EmbedderError
 from memos.log import get_logger
+
+
+if TYPE_CHECKING:
+    from cachetools import LRUCache, TTLCache
 
 
 logger = get_logger(__name__)
@@ -68,9 +73,16 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
 class CachingEmbedder(BaseEmbedder):
     """Add exact caches and singleflight coordination to an embedder."""
 
+    @require_python_package(
+        import_name="cachetools",
+        install_command="pip install 'cachetools>=6.0.0'",
+    )
     def __init__(self, backend: BaseEmbedder):
+        from cachetools import LRUCache, TTLCache
+
         self._backend = backend
         self.config = backend.config
+        self._lru_cache_cls: type[LRUCache] = LRUCache
         self._lock = threading.RLock()
         self._inflight: dict[str, Future[CachedVector]] = {}
         self._stats: Counter[str] = Counter()
@@ -196,7 +208,7 @@ class CachingEmbedder(BaseEmbedder):
             return None
         request_cache = self._request_caches.get(request_id)
         if request_cache is None:
-            request_cache = LRUCache(maxsize=self._request_cache_text_limit)
+            request_cache = self._lru_cache_cls(maxsize=self._request_cache_text_limit)
             self._request_caches[request_id] = request_cache
         return request_cache
 

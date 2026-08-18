@@ -8,7 +8,7 @@
 
 import net from "node:net";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMemoryCore,
@@ -389,6 +389,69 @@ describe("MemoryCore façade", () => {
     expect(res.tierLatencyMs).toBeDefined();
     expect(typeof res.injectedContext).toBe("string");
     expect(res.query.query).toBe("how do I build this project?");
+  });
+
+  it("writes one memos_search api log when turn.start reuses the same turn key", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const turn = {
+      agent: "openclaw" as const,
+      sessionId: "s-turn-start-log-idempotency",
+      userText: "你知道快乐星球吗",
+      ts: 1_700_000_000_000,
+      turnKey: "s-turn-start-log-idempotency:1",
+    };
+    const first = await core.onTurnStart(turn);
+    const replay = await core.onTurnStart({ ...turn, ts: turn.ts + 1 });
+
+    expect(replay.query.episodeId).toBe(first.query.episodeId);
+    const { logs } = await core.listApiLogs({
+      toolName: "memos_search",
+      limit: 10,
+    });
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!.inputJson)).toMatchObject({
+      type: "turn_start",
+      sessionId: first.query.sessionId,
+      episodeId: first.query.episodeId,
+    });
+  });
+
+  it("allows a failed turn.start with a turn key to be retried and logged", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    const originalOnTurnStart = pipeline.onTurnStart.bind(pipeline);
+    vi.spyOn(pipeline, "onTurnStart")
+      .mockRejectedValueOnce(new Error("simulated retrieval failure"))
+      .mockImplementation(originalOnTurnStart);
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const turn = {
+      agent: "openclaw" as const,
+      sessionId: "s-turn-start-log-retry",
+      userText: "retry this retrieval",
+      ts: 1_700_000_000_000,
+      turnKey: "s-turn-start-log-retry:1",
+    };
+    await expect(core.onTurnStart(turn)).rejects.toThrow("simulated retrieval failure");
+    await expect(core.onTurnStart({ ...turn, ts: turn.ts + 1 })).resolves.toBeDefined();
+
+    const { logs } = await core.listApiLogs({
+      toolName: "memos_search",
+      limit: 10,
+    });
+    expect(logs).toHaveLength(2);
+    expect(logs.map((log) => log.success).sort()).toEqual([false, true]);
   });
 
   it("scopes shared traces to creator, same framework, or hub team", async () => {
