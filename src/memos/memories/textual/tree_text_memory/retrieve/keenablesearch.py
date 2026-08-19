@@ -199,11 +199,15 @@ class InternetKeenableRetriever:
             return []
 
         # Normalize Keenable results into the shape _process_result expects.
+        # Keenable returns both `snippet` and `description`: `snippet` carries the
+        # page text and `description` is frequently empty, so prefer whichever has
+        # content. Reading `description` alone produced memories with a title and
+        # a URL but no text.
         search_results = [
             {
                 "title": r.get("title", ""),
                 "url": r.get("url", ""),
-                "content": r.get("description", ""),
+                "content": " ".join(str(r.get("snippet") or r.get("description") or "").split()),
                 "published_date": r.get("published_at", ""),
             }
             for r in raw_results
