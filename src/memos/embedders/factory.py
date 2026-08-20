@@ -29,6 +29,8 @@ class EmbedderFactory(BaseEmbedder):
             raise ValueError(f"Invalid backend: {backend}")
         embedder_class = cls.backend_to_class[backend]
         embedder = embedder_class(config_factory.config)
+        if not hasattr(embedder, "config"):
+            embedder.config = config_factory.config
         if backend in cls.cacheable_backends and embedding_optimization_enabled():
             return CachingEmbedder(embedder)
         return embedder
