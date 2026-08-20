@@ -54,21 +54,21 @@ class TestDownloadExamples:
         return zip_buffer.getvalue()
 
     @patch("requests.get")
-    @patch("os.makedirs")
-    @patch("builtins.open", new_callable=mock_open)
-    def test_download_examples_success(self, mock_file, mock_makedirs, mock_requests):
+    def test_download_examples_success(self, mock_requests, tmp_path):
         """Test successful examples download."""
         mock_response = MagicMock()
         mock_response.content = self.create_mock_zip_content()
         mock_requests.return_value = mock_response
 
-        result = download_examples("/test/dest")
+        result = download_examples(str(tmp_path))
 
         assert result is True
         mock_requests.assert_called_once_with(
-            "https://github.com/MemTensor/MemOS/archive/refs/heads/main.zip"
+            "https://github.com/MemTensor/MemOS/archive/refs/heads/main.zip", timeout=30
         )
         mock_response.raise_for_status.assert_called_once()
+        assert (tmp_path / "test_example.py").read_text() == "# Test example content"
+        assert (tmp_path / "subfolder" / "another_example.py").read_text() == "# Another example"
 
     @patch("requests.get")
     def test_download_examples_error(self, mock_requests):

@@ -1,4 +1,6 @@
 import os
+import shutil
+from pathlib import Path
 
 import yaml
 
@@ -6,8 +8,13 @@ from tqdm import tqdm
 
 
 def get_mirix_client(config_path, load_from=None):
-    if os.path.exists(os.path.expanduser("~/.mirix")):
-        os.system("rm -rf ~/.mirix/*")
+    mirix_dir = Path("~/.mirix").expanduser()
+    if mirix_dir.exists():
+        for entry in mirix_dir.iterdir():
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
 
     with open(config_path) as f:
         agent_config = yaml.safe_load(f)
