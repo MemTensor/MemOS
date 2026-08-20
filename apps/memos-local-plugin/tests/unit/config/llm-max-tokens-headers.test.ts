@@ -1,0 +1,62 @@
+import { describe, expect, it } from "vitest";
+
+import { DEFAULT_CONFIG, resolveConfig } from "../../../core/config/index.js";
+
+describe("resolveConfig llm.maxTokens + llm.headers", () => {
+  it("accepts llm.maxTokens and llm.headers without unknown-key warnings", () => {
+    const warnings: string[] = [];
+    const cfg = resolveConfig(
+      {
+        llm: {
+          maxTokens: 2048,
+          headers: { "User-Agent": "hermes-test", "X-Custom": "v1" },
+        },
+      },
+      warnings,
+    );
+    expect(cfg.llm.maxTokens).toBe(2048);
+    expect(cfg.llm.headers).toEqual({ "User-Agent": "hermes-test", "X-Custom": "v1" });
+    // The free-form-map special case must not warn per header key.
+    expect(warnings).toEqual([]);
+  });
+
+  it("declares llm.maxTokens with a sane default of 1024", () => {
+    expect(DEFAULT_CONFIG.llm.maxTokens).toBe(1024);
+    const cfg = resolveConfig({});
+    expect(cfg.llm.maxTokens).toBe(1024);
+  });
+
+  it("declares llm.headers defaulting to an empty map", () => {
+    expect(DEFAULT_CONFIG.llm.headers).toEqual({});
+    const cfg = resolveConfig({});
+    expect(cfg.llm.headers).toEqual({});
+  });
+
+  it("declares skillEvolver.maxTokens (default 1024) for the crystallizer LLM slot", () => {
+    expect(DEFAULT_CONFIG.skillEvolver.maxTokens).toBe(1024);
+    const cfg = resolveConfig({ skillEvolver: { maxTokens: 4096 } });
+    expect(cfg.skillEvolver.maxTokens).toBe(4096);
+  });
+
+  it("rejects out-of-range maxTokens with config_invalid", () => {
+    expect(() => resolveConfig({ llm: { maxTokens: 8 } })).toThrow(/config failed schema validation/);
+  });
+
+  it("rejects non-string header values", () => {
+    expect(() => resolveConfig({ llm: { headers: { "X-Bad": 42 } } })).toThrow(
+      /config failed schema validation/,
+    );
+  });
+
+  it("keeps unrelated llm fields untouched when maxTokens/headers are set", () => {
+    const cfg = resolveConfig({
+      llm: { provider: "openai_compatible", model: "deepseek-v4-flash", maxTokens: 2048 },
+    });
+    expect(cfg.llm.provider).toBe("openai_compatible");
+    expect(cfg.llm.model).toBe("deepseek-v4-flash");
+    expect(cfg.llm.temperature).toBe(0);
+    expect(cfg.llm.fallbackToHost).toBe(true);
+    expect(cfg.llm.timeoutMs).toBe(45_000);
+    expect(cfg.llm.maxRetries).toBe(3);
+  });
+});
