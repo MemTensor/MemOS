@@ -394,7 +394,8 @@ deploy_tarball_to_prefix() {
   node_dir="$(dirname "${node_bin}")"
   node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
   printf "%s\n" "${node_bin}" > "${prefix}/.memos-node-bin"
-  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
+  # Packed installs have no lockfile, so ignore omitted development-only peer conflicts.
+  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --legacy-peer-deps --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
   [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
 
   if [[ -d "${prefix}/node_modules/better-sqlite3" ]]; then

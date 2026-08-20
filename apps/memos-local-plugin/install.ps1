@@ -292,8 +292,9 @@ function Prepare-StagedPackage {
         Push-Location $StagedPrefix
         try {
             $env:MEMOS_SKIP_SETUP = "1"
+            # Packed installs have no lockfile, so ignore omitted development-only peer conflicts.
             Invoke-NativeChecked -Command $NpmCommand -Arguments @(
-                "install", "--omit=dev", "--no-fund", "--no-audit", "--loglevel=error"
+                "install", "--omit=dev", "--legacy-peer-deps", "--no-fund", "--no-audit", "--loglevel=error"
             ) -FailureMessage "npm install failed"
         } finally {
             if ($null -eq $PreviousSkipSetup) {
