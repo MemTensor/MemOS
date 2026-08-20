@@ -94,11 +94,14 @@ describe("Hermes version synchronization", () => {
     );
   });
 
-  it("synchronizes before tests and publishes the validated tarball", () => {
+  it("synchronizes before release validation and publishes the validated tarball", () => {
     const workflow = readFileSync(
       path.resolve(repoRoot, "../../.github/workflows/memos-local-plugin-publish.yml"),
       "utf8",
     );
+    const packageJson = JSON.parse(
+      readFileSync(path.join(repoRoot, "package.json"), "utf8"),
+    ) as { scripts: Record<string, string> };
     const publishHelper = readFileSync(
       path.resolve(repoRoot, "../../.github/scripts/publish-local-plugin.sh"),
       "utf8",
@@ -106,13 +109,14 @@ describe("Hermes version synchronization", () => {
 
     const bumpPosition = workflow.indexOf('npm version "${RELEASE_VERSION}"');
     const syncPosition = workflow.indexOf("npm run sync:hermes-version");
-    const checkPosition = workflow.indexOf("npm run check:hermes-version");
-    const testPosition = workflow.indexOf('"npm test"');
+    const validationPosition = workflow.indexOf('"npm run release:validate"');
 
     expect(bumpPosition).toBeGreaterThan(-1);
     expect(syncPosition).toBeGreaterThan(bumpPosition);
-    expect(checkPosition).toBeGreaterThan(syncPosition);
-    expect(testPosition).toBeGreaterThan(checkPosition);
+    expect(validationPosition).toBeGreaterThan(syncPosition);
+    expect(packageJson.scripts["release:validate"]).toBe(
+      "npm run check:hermes-version && npm run lint && npm test",
+    );
     expect(workflow).toContain("npm pack --json --silent --pack-destination");
     expect(workflow).toContain("raw.match(/^\\[/m)");
     expect(workflow).toContain(
