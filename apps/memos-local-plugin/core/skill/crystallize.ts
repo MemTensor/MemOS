@@ -470,11 +470,34 @@ function capString(s: string, cap: number): string {
 
 /**
  * A sensible default validator used both in production and in tests.
- * Throws if the draft is structurally unusable (no name, no steps, no summary).
+ * Throws only when the draft is structurally unusable (no name). Missing
+ * summary/steps are repaired from the remaining fields instead — LLMs (e.g.
+ * deepseek-v4-flash) routinely return valid JSON drafts that omit `summary`
+ * or the `steps` array, and rejecting those stalls the crystallizer queue
+ * (see issue #2143).
  */
 export function defaultDraftValidator(draft: SkillCrystallizationDraft): void {
   if (!draft.name) throw new Error("skill.crystallize.invalid: missing name");
-  if (!draft.summary) throw new Error("skill.crystallize.invalid: missing summary");
-  if (draft.steps.length === 0)
-    throw new Error("skill.crystallize.invalid: missing steps");
+  if (!draft.summary) {
+    // Auto-generate a summary from the richest available field. Use `||` not
+    // `??`: LLM JSON emits empty strings, and `??` only falls through on
+    // null/undefined.
+    const autoSummary =
+      draft.steps?.[0]?.body ||
+      draft.steps?.[0]?.title ||
+      draft.displayTitle ||
+      draft.name ||
+      "skill procedure";
+    draft.summary = autoSummary.slice(0, 200);
+  }
+  if (!draft.steps || draft.steps.length === 0) {
+    // Auto-generate a single step when the LLM omits the steps array
+    // (mirror of the summary fallback chain above).
+    const autoBody = draft.summary || draft.displayTitle || draft.name || "";
+    if (autoBody) {
+      draft.steps = [{ title: "Execute the fix", body: autoBody.slice(0, 2000) }];
+    } else {
+      throw new Error("skill.crystallize.invalid: missing steps");
+    }
+  }
 }
