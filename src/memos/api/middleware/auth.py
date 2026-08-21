@@ -6,6 +6,7 @@ Keys are validated against SHA-256 hashes stored in PostgreSQL.
 """
 
 import hashlib
+import hmac
 import os
 import time
 
@@ -23,9 +24,14 @@ logger = memos.log.get_logger(__name__)
 API_KEY_HEADER = APIKeyHeader(name="Authorization", auto_error=False)
 
 # Environment configuration
-AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
 MASTER_KEY_HASH = os.getenv("MASTER_KEY_HASH")  # SHA-256 hash of master key
-INTERNAL_SERVICE_IPS = {"127.0.0.1", "::1", "memos-mcp", "moltbot", "clawdbot"}
+
+if AUTH_ENABLED and not MASTER_KEY_HASH:
+    logger.warning(
+        "Authentication is enabled but MASTER_KEY_HASH is unset; requests without a valid "
+        "API key from the api_keys table will be rejected with 401"
+    )
 
 # Connection pool for auth queries (lazy init)
 _auth_pool = None
@@ -142,16 +148,16 @@ async def lookup_api_key(key_hash: str) -> dict[str, Any] | None:
 
 
 def is_internal_request(request: Request) -> bool:
-    """Check if request is from internal service."""
-    client_host = request.client.host if request.client else None
+    """Check if request carries the internal service secret.
 
-    # Check internal IPs
-    if client_host in INTERNAL_SERVICE_IPS:
-        return True
-
-    # Check internal header (for container-to-container)
-    internal_header = request.headers.get("X-Internal-Service")
-    return internal_header == os.getenv("INTERNAL_SERVICE_SECRET")
+    Source IP is not evidence of an internal caller, and an unset secret must not
+    match an absent header.
+    """
+    expected = os.getenv("INTERNAL_SERVICE_SECRET")
+    provided = request.headers.get("X-Internal-Service")
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(provided.encode(), expected.encode())
 
 
 async def verify_api_key(
@@ -169,11 +175,12 @@ async def verify_api_key(
     Raises:
         HTTPException 401 if authentication fails
     """
-    # Skip auth if disabled
+    # Skip auth if disabled. The identity is pinned to the configured tenant so that
+    # a request cannot declare which user it acts as via X-User-Name.
     if not AUTH_ENABLED:
         return {
-            "user_name": request.headers.get("X-User-Name", "default"),
-            "scopes": ["all"],
+            "user_name": os.getenv("MOS_USER_ID", "root"),
+            "scopes": ["read", "write"],
             "is_master_key": False,
             "auth_bypassed": True,
         }
@@ -204,7 +211,7 @@ async def verify_api_key(
 
     # Check against master key first (has different format: mk_*)
     key_hash = hash_api_key(api_key)
-    if MASTER_KEY_HASH and key_hash == MASTER_KEY_HASH:
+    if MASTER_KEY_HASH and hmac.compare_digest(key_hash.encode(), MASTER_KEY_HASH.encode()):
         logger.info("Master key authentication")
         return {
             "user_name": "admin",
@@ -260,6 +267,32 @@ def require_scope(required_scope: str):
         )
 
     return scope_checker
+
+
+def resolve_authorized_user_id(
+    auth: dict[str, Any],
+    requested_user_id: str | None,
+) -> str | None:
+    """Bind a tenant-scoped request to the authenticated principal.
+
+    An API key's ``user_name`` is the Product API user ID it may act as, so a
+    non-privileged caller can only address its own user ID. Master key, internal
+    service and admin-scoped principals stay free to act for any user.
+    """
+    scopes = auth.get("scopes", [])
+    privileged = not auth.get("auth_bypassed") and (
+        auth.get("is_master_key") or auth.get("is_internal") or "admin" in scopes or "all" in scopes
+    )
+    if privileged:
+        return requested_user_id
+
+    principal_user_id = auth.get("user_name")
+    if not principal_user_id:
+        raise HTTPException(status_code=403, detail="Authenticated principal has no user identity")
+    if requested_user_id is None or requested_user_id == principal_user_id:
+        return principal_user_id
+
+    raise HTTPException(status_code=403, detail="Cannot access another user's resources")
 
 
 # Convenience dependencies

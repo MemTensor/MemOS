@@ -124,7 +124,7 @@ async def health_check():
     return {
         "status": "healthy",
         "version": "2.0.3-krolik",
-        "auth_enabled": os.getenv("AUTH_ENABLED", "false").lower() == "true",
+        "auth_enabled": os.getenv("AUTH_ENABLED", "true").lower() == "true",
         "rate_limit_enabled": RATE_LIMIT_ENABLED,
     }
 
