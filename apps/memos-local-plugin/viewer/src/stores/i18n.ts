@@ -887,10 +887,12 @@ const en = {
     "Ready {ready}/{total}; missing {missing}; dimension mismatch {mismatch}; current dim {dim}.",
   "settings.embedding.maintenance.unavailable":
     "Configure an embedding provider before repairing or rebuilding vectors.",
-  "settings.embedding.batchSize.label": "Items per request",
-  "settings.embedding.batchSize.option": "{n} items per request",
-  "settings.embedding.batchSize.hint":
-    "Larger batches usually rebuild faster, but may hit provider limits or timeouts.",
+  "settings.embedding.maxInputTokens.label": "Maximum input tokens",
+  "settings.embedding.maxInputTokens.hint":
+    "Defaults to 1024; use 0 for no client-side limit. Longer inputs are sampled into chunks and pooled; rebuild vectors after changing it.",
+  "settings.embedding.providerBatchSize.label": "Embedding API batch size",
+  "settings.embedding.providerBatchSize.hint":
+    "Maximum texts per provider request. Rejected oversized batches are split automatically.",
   "settings.embedding.repair": "Repair missing/mismatched",
   "settings.embedding.rebuild": "Rebuild all vectors",
   "settings.embedding.rebuild.running": "Rebuilding embeddings…",
@@ -1750,9 +1752,10 @@ const zh: Record<TranslationKey, string> = {
   "settings.embedding.maintenance.stats":
     "可用 {ready}/{total}；缺失 {missing}；维度不匹配 {mismatch}；当前维度 {dim}。",
   "settings.embedding.maintenance.unavailable": "请先配置嵌入模型，再修复或重建向量。",
-  "settings.embedding.batchSize.label": "每次请求条数",
-  "settings.embedding.batchSize.option": "每次请求 {n} 条",
-  "settings.embedding.batchSize.hint": "每次请求条数越大通常重建越快，但可能触发模型服务限流或超时。",
+  "settings.embedding.maxInputTokens.label": "单条输入最大 Token 数",
+  "settings.embedding.maxInputTokens.hint": "默认 1024；设为 0 表示不启用客户端限制。超长输入会分块采样并聚合向量，修改后请重建向量。",
+  "settings.embedding.providerBatchSize.label": "Embedding API 批量大小",
+  "settings.embedding.providerBatchSize.hint": "单次模型请求最多发送的文本数；超限失败时会自动拆批。",
   "settings.embedding.repair": "修复缺失/错维",
   "settings.embedding.rebuild": "全量重建向量",
   "settings.embedding.rebuild.running": "正在重建向量…",

@@ -45,6 +45,13 @@ const EmbeddingSchema = Type.Object({
   providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
   /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
   openRouter: Type.Optional(Bool(false)),
+  /**
+   * Maximum estimated tokens in one provider input. `0` explicitly disables
+   * client-side chunking. New installations default to a conservative 1024.
+   */
+  maxInputTokens: NumberInRange(1_024, 0, 1_000_000),
+  /** Maximum physical texts sent in one embedding-provider HTTP request. */
+  batchSize: NumberInRange(32, 1, 256),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),

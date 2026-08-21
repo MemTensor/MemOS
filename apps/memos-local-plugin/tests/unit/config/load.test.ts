@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { parse } from "yaml";
 
 import { MemosError } from "../../../agent-contract/errors.js";
 import { DEFAULT_CONFIG, loadConfig, resolveConfig, resolveHome } from "../../../core/config/index.js";
@@ -54,6 +55,43 @@ describe("config/loadConfig", () => {
     expect(cfg.skillEvolver.openRouter).toBe(false);
     expect(cfg.l3Llm.openRouter).toBe(false);
     expect(cfg.embedding.openRouter).toBe(false);
+    expect(cfg.embedding.maxInputTokens).toBe(1_024);
+    expect(cfg.embedding.batchSize).toBe(32);
+  });
+
+  it("accepts operator-controlled embedding input and provider batch limits", () => {
+    const cfg = resolveConfig({
+      embedding: {
+        maxInputTokens: 3_072,
+        batchSize: 4,
+      },
+    });
+
+    expect(cfg.embedding.maxInputTokens).toBe(3_072);
+    expect(cfg.embedding.batchSize).toBe(4);
+  });
+
+  it("ships new agent installations with a safe embedding input limit", async () => {
+    for (const template of ["config.openclaw.yaml", "config.hermes.yaml"]) {
+      const raw = await fs.readFile(join(__dirname, "../../../templates", template), "utf8");
+      const cfg = resolveConfig(parse(raw));
+      expect(cfg.embedding.maxInputTokens, template).toBe(1_024);
+    }
+  });
+
+  it("keeps long-input chunking disabled for existing configs that predate the setting", async () => {
+    const ctx = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: "version: 1\nembedding:\n  provider: local\n",
+    });
+    cleanup = ctx.cleanup;
+
+    expect(ctx.config.embedding.maxInputTokens).toBe(0);
+  });
+
+  it("rejects invalid embedding input and provider batch limits", () => {
+    expect(() => resolveConfig({ embedding: { maxInputTokens: -1 } })).toThrow(MemosError);
+    expect(() => resolveConfig({ embedding: { batchSize: 0 } })).toThrow(MemosError);
   });
 
   it("merges YAML over defaults and preserves unspecified branches", async () => {

@@ -102,6 +102,26 @@ describe("foreground resources", () => {
     expect(batchSizes).toEqual([2, 2, 1]);
   });
 
+  it("preserves settled-result isolation through the priority wrapper", async () => {
+    const resources = createForegroundResources({ embeddingConcurrency: 1 });
+    const base = fakeEmbedder({ dimensions: 4 });
+    const inner = {
+      ...base,
+      async embedManySettled(inputs: Parameters<typeof base.embedMany>[0]) {
+        return inputs.map(() => ({
+          ok: true as const,
+          vector: new Float32Array([1, 2, 3, 4]),
+        }));
+      },
+    };
+    const background = prioritizeEmbedder(inner, resources, "background", 2)!;
+
+    const settled = await background.embedManySettled?.(["a", "b", "c"]);
+
+    expect(settled).toHaveLength(3);
+    expect(settled?.every((result) => result.ok)).toBe(true);
+  });
+
   it("aborts queued and in-flight provider work during shutdown", async () => {
     const resources = createForegroundResources({ embeddingConcurrency: 1 });
     const base = fakeEmbedder({ dimensions: 4 });

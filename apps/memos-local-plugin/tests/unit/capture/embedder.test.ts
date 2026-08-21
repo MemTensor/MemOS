@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { MemosError } from "../../../agent-contract/errors.js";
 import { embedSteps } from "../../../core/capture/embedder.js";
 import type { NormalizedStep } from "../../../core/capture/types.js";
+import type { Embedder } from "../../../core/embedding/types.js";
 import { initTestLogger } from "../../../core/logger/index.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 
@@ -108,6 +110,23 @@ describe("capture/embedder", () => {
     const out = await embedSteps(e, [step({ userText: "a", agentText: "b" })]);
     expect(out).toHaveLength(1);
     expect(out[0]!.summary).toBeNull();
+    expect(out[0]!.action).toBeNull();
+  });
+
+  it("preserves successful vectors when a neighboring input is rejected", async () => {
+    const base = fakeEmbedder({ dimensions: 3 });
+    const e: Embedder = {
+      ...base,
+      async embedManySettled(inputs) {
+        return inputs.map((_, index) => index === 1
+          ? { ok: false, error: new MemosError("embedding_unavailable", "bad action") }
+          : { ok: true, vector: new Float32Array([1, 2, 3]) });
+      },
+    };
+
+    const out = await embedSteps(e, [step({ userText: "good summary", agentText: "bad action" })]);
+
+    expect(out[0]!.summary).toEqual(new Float32Array([1, 2, 3]));
     expect(out[0]!.action).toBeNull();
   });
 

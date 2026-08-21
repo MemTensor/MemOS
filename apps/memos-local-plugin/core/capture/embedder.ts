@@ -46,9 +46,18 @@ export async function embedSteps(
   const actionTexts = steps.map(actionText);
   if (opts.summaryOnly) {
     try {
-      const vecs = await embedder.embedMany(
-        summaryTexts.map((t) => ({ text: t || "(empty)", role: "document" as const })),
-      );
+      const inputs = summaryTexts.map((t) => ({
+        text: t || "(empty)",
+        role: "document" as const,
+      }));
+      if (embedder.embedManySettled) {
+        const settled = await embedder.embedManySettled(inputs);
+        return steps.map((_, i) => ({
+          summary: settled[i]?.ok ? settled[i].vector : null,
+          action: null,
+        }));
+      }
+      const vecs = await embedder.embedMany(inputs);
       return steps.map((_, i) => ({ summary: vecs[i] ?? null, action: null }));
     } catch (err) {
       log.warn("embed.failed_all", { err: errDetail(err), stepCount: steps.length });
@@ -63,6 +72,19 @@ export async function embedSteps(
   ];
 
   try {
+    if (embedder.embedManySettled) {
+      const settled = await embedder.embedManySettled(inputs);
+      const out: VecPair[] = new Array(steps.length);
+      for (let i = 0; i < steps.length; i++) {
+        const summary = settled[i];
+        const action = settled[i + steps.length];
+        out[i] = {
+          summary: summary?.ok ? summary.vector : null,
+          action: action?.ok ? action.vector : null,
+        };
+      }
+      return out;
+    }
     const vecs = await embedder.embedMany(inputs);
     const out: VecPair[] = new Array(steps.length);
     for (let i = 0; i < steps.length; i++) {
