@@ -1,7 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { MemosError } from "../../../agent-contract/errors.js";
-import { createEmbedderWithProvider } from "../../../core/embedding/embedder.js";
+import {
+  createEmbedderWithProvider,
+  estimateEmbeddingTokens,
+} from "../../../core/embedding/embedder.js";
 import { initTestLogger } from "../../../core/logger/index.js";
 import type {
   EmbedRole,
@@ -122,6 +125,83 @@ describe("embedder facade", () => {
     expect(Array.from(out[0]!)).toEqual([1, 97, 0]);
     expect(Array.from(out[3]!)).toEqual([4, 100, 0]);
     expect(p.calls.map((c) => c.texts)).toEqual([["a", "bb"], ["ccc", "dddd"]]);
+  });
+
+  it("chunks an over-limit input before calling the provider and pools one logical vector", async () => {
+    const p = new FakeProvider();
+    const e = createEmbedderWithProvider(cfg({ maxInputTokens: 3, batchSize: 10 }), p);
+
+    const out = await e.embedMany(["甲乙丙丁戊己庚辛"]);
+
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBeInstanceOf(Float32Array);
+    const chunks = p.calls.flatMap((call) => call.texts);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.length).toBeLessThanOrEqual(4);
+    expect(chunks.every((text) => estimateEmbeddingTokens(text) <= 3)).toBe(true);
+  });
+
+  it("automatically splits a provider batch rejected for request size", async () => {
+    const calls: string[][] = [];
+    const provider: EmbeddingProvider = {
+      name: "openai_compatible",
+      async embed(texts) {
+        calls.push([...texts]);
+        if (texts.length > 2) {
+          throw new MemosError("embedding_unavailable", "batch too large", { status: 400 });
+        }
+        return texts.map((text) => [text.length, text.charCodeAt(0), 0]);
+      },
+    };
+    const e = createEmbedderWithProvider(cfg({ batchSize: 4 }), provider);
+
+    const out = await e.embedMany(["a", "bb", "ccc", "dddd"]);
+
+    expect(out).toHaveLength(4);
+    expect(calls).toEqual([
+      ["a", "bb", "ccc", "dddd"],
+      ["a", "bb"],
+      ["ccc", "dddd"],
+    ]);
+  });
+
+  it("isolates a permanently rejected input while preserving valid neighbors", async () => {
+    const provider: EmbeddingProvider = {
+      name: "openai_compatible",
+      async embed(texts) {
+        if (texts.includes("bad")) {
+          throw new MemosError("embedding_unavailable", "invalid input", { status: 400 });
+        }
+        return texts.map((text) => [text.length, text.charCodeAt(0), 0]);
+      },
+    };
+    const e = createEmbedderWithProvider(cfg({ batchSize: 3 }), provider);
+
+    const settled = await e.embedManySettled?.(["good-a", "bad", "good-b"]);
+
+    expect(settled).toBeDefined();
+    expect(settled?.[0]?.ok).toBe(true);
+    expect(settled?.[1]?.ok).toBe(false);
+    expect(settled?.[2]?.ok).toBe(true);
+    if (settled?.[0]?.ok) expect(Array.from(settled[0].vector)).toEqual([6, 103, 0]);
+    if (settled?.[2]?.ok) expect(Array.from(settled[2].vector)).toEqual([6, 103, 0]);
+  });
+
+  it("does not recursively split authentication failures", async () => {
+    let calls = 0;
+    const provider: EmbeddingProvider = {
+      name: "openai_compatible",
+      async embed() {
+        calls++;
+        throw new MemosError("embedding_unavailable", "unauthorized", { status: 401 });
+      },
+    };
+    const e = createEmbedderWithProvider(cfg({ batchSize: 3 }), provider);
+
+    const settled = await e.embedManySettled?.(["a", "b", "c"]);
+
+    expect(calls).toBe(1);
+    expect(settled?.every((result) => !result.ok)).toBe(true);
   });
 
   it("splits by role before batching", async () => {

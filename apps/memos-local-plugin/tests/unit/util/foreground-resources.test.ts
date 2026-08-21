@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { MemosError } from "../../../agent-contract/errors.js";
+import type { Embedder } from "../../../core/embedding/types.js";
 import {
   createForegroundResources,
   prioritizeEmbedder,
@@ -100,6 +102,48 @@ describe("foreground resources", () => {
     await background.embedMany(["a", "b", "c", "d", "e"]);
 
     expect(batchSizes).toEqual([2, 2, 1]);
+  });
+
+  it("preserves settled-result isolation through the priority wrapper", async () => {
+    const resources = createForegroundResources({ embeddingConcurrency: 1 });
+    const base = fakeEmbedder({ dimensions: 4 });
+    const inner = {
+      ...base,
+      async embedManySettled(inputs: Parameters<typeof base.embedMany>[0]) {
+        return inputs.map(() => ({
+          ok: true as const,
+          vector: new Float32Array([1, 2, 3, 4]),
+        }));
+      },
+    };
+    const background = prioritizeEmbedder(inner, resources, "background", 2)!;
+
+    const settled = await background.embedManySettled?.(["a", "b", "c"]);
+
+    expect(settled).toHaveLength(3);
+    expect(settled?.every((result) => result.ok)).toBe(true);
+  });
+
+  it("settles legacy embedMany failures instead of rejecting the wrapper call", async () => {
+    const resources = createForegroundResources({ embeddingConcurrency: 1 });
+    const legacy: Embedder = { ...fakeEmbedder({ dimensions: 4 }) };
+    delete legacy.embedManySettled;
+    legacy.embedMany = async () => {
+      throw new Error("legacy batch failed");
+    };
+    const background = prioritizeEmbedder(legacy, resources, "background", 2)!;
+
+    const settled = await background.embedManySettled?.(["a", "b"]);
+
+    expect(settled).toHaveLength(2);
+    expect(settled?.every((result) => !result.ok)).toBe(true);
+    for (const result of settled ?? []) {
+      if (!result.ok) {
+        expect(result.error).toBeInstanceOf(MemosError);
+        expect(result.error.code).toBe("embedding_unavailable");
+        expect(result.error.message).toContain("legacy batch failed");
+      }
+    }
   });
 
   it("aborts queued and in-flight provider work during shutdown", async () => {
