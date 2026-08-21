@@ -1,3 +1,4 @@
+import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type {
   EmbedCallOptions,
   Embedder,
@@ -264,10 +265,20 @@ export function prioritizeEmbedder(
     const callOptions = { ...options, signal };
     const run = async (slice: Array<string | EmbedInput>): Promise<EmbeddingSettledResult[]> => {
       if (inner!.embedManySettled) return await inner!.embedManySettled(slice, callOptions);
-      return (await inner!.embedMany(slice, callOptions)).map((vector) => ({
-        ok: true as const,
-        vector,
-      }));
+      try {
+        return (await inner!.embedMany(slice, callOptions)).map((vector) => ({
+          ok: true as const,
+          vector,
+        }));
+      } catch (err) {
+        const error = err instanceof MemosError
+          ? err
+          : new MemosError(
+              ERROR_CODES.EMBEDDING_UNAVAILABLE,
+              `legacy embedMany failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+        return slice.map(() => ({ ok: false as const, error }));
+      }
     };
     if (priority === "foreground" || inputs.length <= backgroundChunkSize) {
       if (priority === "background") await resources.waitForBackground(signal);

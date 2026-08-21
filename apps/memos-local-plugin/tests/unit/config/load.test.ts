@@ -5,6 +5,7 @@ import { parse } from "yaml";
 
 import { MemosError } from "../../../agent-contract/errors.js";
 import { DEFAULT_CONFIG, loadConfig, resolveConfig, resolveHome } from "../../../core/config/index.js";
+import { ConfigSchema } from "../../../core/config/schema.js";
 import { makeTmpHome } from "../../helpers/tmp-home.js";
 
 describe("config/loadConfig", () => {
@@ -69,6 +70,21 @@ describe("config/loadConfig", () => {
 
     expect(cfg.embedding.maxInputTokens).toBe(3_072);
     expect(cfg.embedding.batchSize).toBe(4);
+  });
+
+  it("documents the zero-value maxInputTokens sentinel in JSON Schema", () => {
+    const schema = ConfigSchema as unknown as {
+      properties: {
+        embedding: {
+          properties: { maxInputTokens: { description?: string } };
+        };
+      };
+    };
+
+    expect(schema.properties.embedding.properties.maxInputTokens.description).toContain("0");
+    expect(schema.properties.embedding.properties.maxInputTokens.description).toContain(
+      "client-side chunking",
+    );
   });
 
   it("ships new agent installations with a safe embedding input limit", async () => {

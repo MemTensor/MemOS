@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { MemosError } from "../../../agent-contract/errors.js";
+import type { Embedder } from "../../../core/embedding/types.js";
 import {
   createForegroundResources,
   prioritizeEmbedder,
@@ -120,6 +122,28 @@ describe("foreground resources", () => {
 
     expect(settled).toHaveLength(3);
     expect(settled?.every((result) => result.ok)).toBe(true);
+  });
+
+  it("settles legacy embedMany failures instead of rejecting the wrapper call", async () => {
+    const resources = createForegroundResources({ embeddingConcurrency: 1 });
+    const legacy: Embedder = { ...fakeEmbedder({ dimensions: 4 }) };
+    delete legacy.embedManySettled;
+    legacy.embedMany = async () => {
+      throw new Error("legacy batch failed");
+    };
+    const background = prioritizeEmbedder(legacy, resources, "background", 2)!;
+
+    const settled = await background.embedManySettled?.(["a", "b"]);
+
+    expect(settled).toHaveLength(2);
+    expect(settled?.every((result) => !result.ok)).toBe(true);
+    for (const result of settled ?? []) {
+      if (!result.ok) {
+        expect(result.error).toBeInstanceOf(MemosError);
+        expect(result.error.code).toBe("embedding_unavailable");
+        expect(result.error.message).toContain("legacy batch failed");
+      }
+    }
   });
 
   it("aborts queued and in-flight provider work during shutdown", async () => {
