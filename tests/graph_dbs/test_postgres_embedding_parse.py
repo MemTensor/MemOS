@@ -8,7 +8,13 @@ from datetime import datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from memos.graph_dbs.postgres import PostgresGraphDB, _normalize_embedding_value, _prepare_node_metadata
+import pytest
+
+from memos.graph_dbs.postgres import (
+    PostgresGraphDB,
+    _normalize_embedding_value,
+    _prepare_node_metadata,
+)
 
 
 def test_normalize_embedding_value_parses_json_string() -> None:
@@ -23,9 +29,12 @@ def test_normalize_embedding_value_rejects_invalid_string() -> None:
     assert _normalize_embedding_value("not-json") is None
 
 
-def test_normalize_embedding_value_rejects_non_numeric_elements() -> None:
-    assert _normalize_embedding_value(["a", 0.5]) is None
-    assert _normalize_embedding_value('["a", 0.5]') is None
+@pytest.mark.parametrize(
+    "embedding",
+    [["a", 0.5], '["a", 0.5]'],
+)
+def test_normalize_embedding_value_rejects_non_numeric_elements(embedding) -> None:
+    assert _normalize_embedding_value(embedding) is None
 
 
 def test_prepare_node_metadata_normalizes_string_embedding() -> None:
@@ -35,7 +44,7 @@ def test_prepare_node_metadata_normalizes_string_embedding() -> None:
 
 def _build_db() -> PostgresGraphDB:
     with (
-        patch("memos.graph_dbs.postgres.require_python_package", lambda **kwargs: lambda fn: fn),
+        patch("memos.graph_dbs.postgres.require_python_package", lambda *args, **kwargs: lambda fn: fn),
         patch("psycopg2.pool.ThreadedConnectionPool", MagicMock()),
         patch.object(PostgresGraphDB, "_init_schema", lambda self: None),
     ):

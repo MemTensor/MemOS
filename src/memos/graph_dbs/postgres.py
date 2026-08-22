@@ -504,11 +504,10 @@ class PostgresGraphDB(BaseGraphDB):
         }
         if include_embedding and len(row) > 5:
             result["metadata"]["embedding"] = row[5]
-        if include_embedding:
             normalized = _normalize_embedding_value(result["metadata"].get("embedding"))
             if normalized is not None:
                 result["metadata"]["embedding"] = normalized
-            elif "embedding" in result["metadata"]:
+            else:
                 del result["metadata"]["embedding"]
         return result
 

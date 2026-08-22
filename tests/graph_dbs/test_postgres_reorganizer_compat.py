@@ -9,7 +9,7 @@ from memos.graph_dbs.postgres import PostgresGraphDB
 
 def _build_db() -> PostgresGraphDB:
     with (
-        patch("memos.graph_dbs.postgres.require_python_package", lambda **kwargs: lambda fn: fn),
+        patch("memos.graph_dbs.postgres.require_python_package", lambda *args, **kwargs: lambda fn: fn),
         patch("psycopg2.pool.ThreadedConnectionPool", MagicMock()),
         patch.object(PostgresGraphDB, "_init_schema", lambda self: None),
     ):
@@ -22,7 +22,7 @@ def _build_db() -> PostgresGraphDB:
 def _mock_cursor(fetchone=None, fetchall=None):
     cursor = MagicMock()
     cursor.fetchone.return_value = fetchone
-    cursor.fetchall.return_value = fetchall or []
+    cursor.fetchall.return_value = [] if fetchall is None else fetchall
     return cursor
 
 
