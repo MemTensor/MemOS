@@ -80,6 +80,7 @@ class BaseGraphDB(ABC):
             type: Relationship type to remove.
         """
 
+    @abstractmethod
     def get_edges(
         self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str | None = None
     ) -> list[dict[str, str]]:
@@ -99,7 +100,6 @@ class BaseGraphDB(ABC):
               ...
             ]
         """
-        raise NotImplementedError
 
     @abstractmethod
     def edge_exists(self, source_id: str, target_id: str, type: str) -> bool:

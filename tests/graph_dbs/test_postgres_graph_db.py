@@ -259,7 +259,9 @@ def test_get_structure_optimization_candidates_respects_user_name(graph_db):
     assert nodes[0]["metadata"]["memory_type"] == "LongTermMemory"
     # per-user scope must be honored, not the config default
     params = cursor.execute.call_args[0][1]
-    assert "bob" in params
+    # params layout: (scope, user_name) — pin both the positive and negative
+    # expectations so a config-default leak (alice) cannot slip through
+    assert params[1] == "bob"
     assert "alice" not in params
 
 
@@ -306,7 +308,10 @@ def test_search_by_fulltext_quotes_words_for_tsquery(graph_db):
     db.search_by_fulltext(query_words=["it's", "foo"], top_k=10, user_name="alice")
 
     # single quotes inside the term must be escaped to avoid breaking to_tsquery
-    tsquery_param = str(cursor.execute.call_args[0][1][-2])
+    # execute params layout: (user_name, [scope, status, ...filters], tsquery_string,
+    # tsquery_string, top_k) — the two tsquery_string slots feed the SELECT ts_rank()
+    # and the WHERE @@ to_tsquery(); pick the first one via [-3]
+    tsquery_param = str(cursor.execute.call_args[0][1][-3])
     assert "it''s" in tsquery_param
     assert "'foo'" in tsquery_param
     assert "|" in tsquery_param

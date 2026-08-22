@@ -741,12 +741,18 @@ class PostgresGraphDB(BaseGraphDB):
         params: list[Any] = []
 
         if direction in ("OUTGOING", "OUT"):
-            conditions = ["source_id = %s", "target_id = %s", "edge_type = %s"]
-            params = [source_id, target_id, type]
+            conditions = ["source_id = %s", "target_id = %s"]
+            params = [source_id, target_id]
+            if type != "ANY":
+                conditions.append("edge_type = %s")
+                params.append(type)
         elif direction in ("INCOMING", "IN"):
             # Incoming edge: source_id is the edge's target, and vice versa.
-            conditions = ["source_id = %s", "target_id = %s", "edge_type = %s"]
-            params = [target_id, source_id, type]
+            conditions = ["source_id = %s", "target_id = %s"]
+            params = [target_id, source_id]
+            if type != "ANY":
+                conditions.append("edge_type = %s")
+                params.append(type)
         elif direction == "ANY":
             # Match the pair in either orientation.
             conditions = [
@@ -818,7 +824,7 @@ class PostgresGraphDB(BaseGraphDB):
         if user_name:
             where_clause += (
                 f" AND (source_id IN (SELECT id FROM {self.schema}.memories WHERE user_name = %s)"
-                f" OR target_id IN (SELECT id FROM {self.schema}.memories WHERE user_name = %s))"
+                f" AND target_id IN (SELECT id FROM {self.schema}.memories WHERE user_name = %s))"
             )
             params.extend([user_name, user_name])
 
