@@ -1153,12 +1153,16 @@ class PostgresGraphDB(BaseGraphDB):
             where_conditions.append("properties->>'memory_type' = ANY(%s)")
             params.append([str(mt) for mt in memory_type])
 
-        if status is None:
-            # Default: exclude soft-deleted nodes (aligned with Neo4j backend).
+        if status is None or (isinstance(status, list) and len(status) == 0):
+            # Default (status=None) and status=[] both fall back to "exclude
+            # soft-deleted nodes" (aligned with Neo4j backend). Treating an
+            # empty list the same as None avoids the surprising behavior where
+            # callers passing an empty list would otherwise receive soft-deleted
+            # nodes because no status predicate was applied at all.
             where_conditions.append(
                 "(properties->>'status' IS NULL OR properties->>'status' <> 'deleted')"
             )
-        elif isinstance(status, list) and len(status) > 0:
+        elif isinstance(status, list):
             where_conditions.append("properties->>'status' = ANY(%s)")
             params.append([str(s) for s in status])
 
@@ -1203,17 +1207,19 @@ class PostgresGraphDB(BaseGraphDB):
                 cur.execute(data_sql, params + limit_params)
                 nodes = [self._parse_row(row, include_embedding) for row in cur.fetchall()]
 
-                # 3) Edges relevant to the returned nodes only. `total_edges`
-                #    mirrors the returned edge count; the caller treats
-                #    ``export_graph`` as "give me this page of nodes plus the
-                #    edges that connect them" (see TreeTextMemory.get_all).
+                # 3) Edges incident to the returned page of nodes. ``OR`` here
+                #    preserves the pre-existing "any edge touching a returned
+                #    node" semantics from before pagination was wired up, and
+                #    keeps edges whose other endpoint lands on a different page
+                #    (which the caller can render if it has the neighbor node
+                #    context). ``total_edges`` mirrors the returned edge count.
                 node_ids = [n["id"] for n in nodes]
                 if node_ids:
                     cur.execute(
                         f"""
                         SELECT source_id, target_id, edge_type
                         FROM {self.schema}.edges
-                        WHERE source_id = ANY(%s) AND target_id = ANY(%s)
+                        WHERE source_id = ANY(%s) OR target_id = ANY(%s)
                     """,
                         (node_ids, node_ids),
                     )

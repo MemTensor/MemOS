@@ -7,29 +7,19 @@ These tests exercise SQL construction only (they don't require a live Postgres).
 Postgres connection pool and cursor are mocked out; the tests assert on the SQL
 fragments and parameters that the implementation passes to `cursor.execute`, plus the
 shape of the returned dict.
+
+The ``psycopg2`` stub required to import ``memos.graph_dbs.postgres`` without the
+real driver installed lives in ``tests/graph_dbs/conftest.py`` as a scoped
+autouse fixture.
 """
 
 from __future__ import annotations
-
-import sys
-import types
 
 from datetime import datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-
-# Make `import psycopg2` inside `memos.graph_dbs.postgres` a no-op so this test
-# module can run without the real driver installed.
-if "psycopg2" not in sys.modules:
-    _fake_psycopg2 = types.ModuleType("psycopg2")
-    _fake_pool = types.ModuleType("psycopg2.pool")
-    _fake_pool.ThreadedConnectionPool = MagicMock()
-    _fake_psycopg2.pool = _fake_pool
-    sys.modules["psycopg2"] = _fake_psycopg2
-    sys.modules["psycopg2.pool"] = _fake_pool
 
 
 # --------------------------------------------------------------------------- #
@@ -41,7 +31,12 @@ class _FakeCursor:
     """Minimal cursor stand-in that records executed SQL and returns canned rows.
 
     - `execute(sql, params=None)` appends `(sql, params)` to `calls` and stores the
-      next canned response in `self._next_rows` (popped from `responses`).
+      next canned response in `self._next_rows` (popped from `responses`). If
+      `responses` is empty when `execute` is called, we raise ``AssertionError``
+      instead of silently returning `[]`: an unexpected extra ``execute`` call
+      almost always means the implementation under test issued a query the test
+      author did not anticipate, and silently returning empty rows would let a
+      later assertion pass against wrong data.
     - `fetchall()` returns `self._next_rows` (list of tuples).
     - `fetchone()` returns `self._next_rows[0]` if present.
     """
@@ -59,10 +54,12 @@ class _FakeCursor:
 
     def execute(self, sql: str, params: Any = None):
         self.calls.append((sql, params))
-        if self._responses:
-            self._next_rows = self._responses.pop(0)
-        else:
-            self._next_rows = []
+        if not self._responses:
+            raise AssertionError(
+                "_FakeCursor received an unexpected execute() call (no more "
+                f"canned responses). SQL: {sql!r}, params: {params!r}"
+            )
+        self._next_rows = self._responses.pop(0)
 
     def fetchall(self):
         rows = self._next_rows
@@ -171,12 +168,14 @@ class TestPostgresExportGraphPagination:
         assert result["total_nodes"] == 5
         assert len(result["nodes"]) == 5
 
-        data_sql = " ".join(sql for sql, _ in cursor.calls)
-        # Without page/page_size, no LIMIT/OFFSET must appear on the node query.
-        # (Count query never has LIMIT, so absence across all calls is a strong
-        # signal.)
-        assert "LIMIT" not in data_sql.upper()
-        assert "OFFSET" not in data_sql.upper()
+        # Without page/page_size, no LIMIT/OFFSET must appear on the data
+        # query (index 1: count is at index 0, edges at index 2). Isolating the
+        # data query by index avoids false positives from column aliases,
+        # comments or string literals containing "LIMIT" in the other queries.
+        assert len(cursor.calls) >= 2
+        data_query_sql = cursor.calls[1][0].upper()
+        assert "LIMIT" not in data_query_sql
+        assert "OFFSET" not in data_query_sql
 
 
 class TestPostgresExportGraphFilters:
@@ -219,10 +218,14 @@ class TestPostgresExportGraphFilters:
 
         postgres_db.export_graph()
 
-        # Default (status=None) must add a "not deleted" predicate to align with
-        # neo4j.export_graph.
+        # Default (status=None) must add a "not deleted" exclusion predicate to
+        # align with neo4j.export_graph. Check the exact SQL fragment so a
+        # bug that flipped the polarity (e.g. rendering `= 'deleted'` and
+        # thereby *including* soft-deleted rows) would still fail the test.
+        # The implementation renders:
+        #   (properties->>'status' IS NULL OR properties->>'status' <> 'deleted')
         combined_sql = " ".join(sql for sql, _ in cursor.calls).lower()
-        assert "deleted" in combined_sql
+        assert "<> 'deleted'" in combined_sql or "!= 'deleted'" in combined_sql
 
     def test_status_explicit_list(self, postgres_db):
         cursor = _install_cursor(
@@ -246,6 +249,30 @@ class TestPostgresExportGraphFilters:
                 else:
                     flat.append(p)
         assert "activated" in flat
+
+    def test_status_empty_list_falls_back_to_default(self, postgres_db):
+        """Regression: status=[] must behave like status=None (exclude deleted).
+
+        Without this, an empty-list caller would receive soft-deleted nodes
+        because no status predicate was applied at all — the exact opposite of
+        the default behavior.
+        """
+        cursor = _install_cursor(
+            postgres_db,
+            responses=[
+                [(1,)],
+                [_mk_row("n1")],
+                [],
+            ],
+        )
+
+        postgres_db.export_graph(status=[])
+
+        combined_sql = " ".join(sql for sql, _ in cursor.calls).lower()
+        assert "<> 'deleted'" in combined_sql or "!= 'deleted'" in combined_sql
+        # And crucially: no `status = ANY(...)` predicate was added (would
+        # have empty ANY() semantics that always false).
+        assert "status' = any" not in combined_sql
 
     def test_filter_tags_reach_sql(self, postgres_db):
         cursor = _install_cursor(
