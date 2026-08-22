@@ -184,6 +184,48 @@ class PostgresGraphDB(BaseGraphDB):
     # Node Management
     # =========================================================================
 
+    def node_not_exist(self, scope: str, user_name: str | None = None) -> bool:
+        """Return True when no memory of the given scope exists for the user.
+
+        Used by the tree text memory reorganizer to skip optimization when a
+        scope has no nodes yet.
+        """
+        user_name = user_name or self.user_name
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT 1 FROM {self.schema}.memories
+                    WHERE properties->>'memory_type' = %s
+                      AND user_name = %s
+                    LIMIT 1
+                """,
+                    (scope, user_name),
+                )
+                return cur.fetchone() is None
+        finally:
+            self._put_conn(conn)
+
+    def get_memory_count(self, memory_type: str, user_name: str | None = None) -> int:
+        """Count memory nodes of a given type for the user."""
+        user_name = user_name or self.user_name
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*) FROM {self.schema}.memories
+                    WHERE properties->>'memory_type' = %s
+                      AND user_name = %s
+                """,
+                    (memory_type, user_name),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+        finally:
+            self._put_conn(conn)
+
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int, user_name: str | None = None
     ) -> None:
@@ -674,20 +716,130 @@ class PostgresGraphDB(BaseGraphDB):
         finally:
             self._put_conn(conn)
 
-    def edge_exists(self, source_id: str, target_id: str, type: str) -> bool:
-        """Check if edge exists."""
+    def edge_exists(
+        self,
+        source_id: str,
+        target_id: str,
+        type: str = "ANY",
+        direction: str = "ANY",
+        user_name: str | None = None,
+    ) -> bool:
+        """Check if an edge exists between two nodes.
+
+        Args:
+            source_id: ID of the source node.
+            target_id: ID of the target node.
+            type: Relationship type. Use "ANY" to match any relationship type.
+            direction: "OUTGOING"/"OUT", "INCOMING"/"IN", or "ANY".
+                Defaults to "ANY" so existing two-node checks match either way.
+            user_name: Optional user/tenant scope filter (unused by this backend).
+
+        Returns:
+            True if the edge exists, otherwise False.
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        if direction in ("OUTGOING", "OUT"):
+            conditions = ["source_id = %s", "target_id = %s"]
+            params = [source_id, target_id]
+            if type != "ANY":
+                conditions.append("edge_type = %s")
+                params.append(type)
+        elif direction in ("INCOMING", "IN"):
+            # Incoming edge: source_id is the edge's target, and vice versa.
+            conditions = ["source_id = %s", "target_id = %s"]
+            params = [target_id, source_id]
+            if type != "ANY":
+                conditions.append("edge_type = %s")
+                params.append(type)
+        elif direction == "ANY":
+            # Match the pair in either orientation.
+            conditions = [
+                "(source_id = %s AND target_id = %s) OR (source_id = %s AND target_id = %s)"
+            ]
+            params = [source_id, target_id, target_id, source_id]
+            if type != "ANY":
+                conditions[0] = f"({conditions[0]})"
+                conditions.append("edge_type = %s")
+                params.append(type)
+        else:
+            raise ValueError(
+                f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
+            )
+
+        where_clause = " AND ".join(conditions)
+
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
                     SELECT 1 FROM {self.schema}.edges
-                    WHERE source_id = %s AND target_id = %s AND edge_type = %s
+                    WHERE {where_clause}
                     LIMIT 1
                 """,
-                    (source_id, target_id, type),
+                    params,
                 )
                 return cur.fetchone() is not None
+        finally:
+            self._put_conn(conn)
+
+    def get_edges(
+        self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str | None = None
+    ) -> list[dict[str, str]]:
+        """Get edges connected to a node, with optional type and direction filter.
+
+        Args:
+            id: Node ID to retrieve edges for.
+            type: Relationship type to match, or 'ANY' to match all.
+            direction: 'OUT'/'OUTGOING', 'IN'/'INCOMING', or 'ANY'.
+            user_name: Optional user/tenant scope filter.
+
+        Returns:
+            List of edges:
+            [
+              {"from": "source_id", "to": "target_id", "type": "RELATE"},
+              ...
+            ]
+        """
+        if direction in ("OUT", "OUTGOING"):
+            where_clause = "source_id = %s"
+            params: list[Any] = [id]
+        elif direction in ("IN", "INCOMING"):
+            where_clause = "target_id = %s"
+            params = [id]
+        elif direction == "ANY":
+            where_clause = "(source_id = %s OR target_id = %s)"
+            params = [id, id]
+        else:
+            raise ValueError(
+                f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
+            )
+
+        if type != "ANY":
+            where_clause += " AND edge_type = %s"
+            params.append(type)
+
+        if user_name:
+            where_clause += (
+                f" AND (source_id IN (SELECT id FROM {self.schema}.memories WHERE user_name = %s)"
+                f" AND target_id IN (SELECT id FROM {self.schema}.memories WHERE user_name = %s))"
+            )
+            params.extend([user_name, user_name])
+
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT source_id, target_id, edge_type
+                    FROM {self.schema}.edges
+                    WHERE {where_clause}
+                """,
+                    params,
+                )
+                return [{"from": row[0], "to": row[1], "type": row[2]} for row in cur.fetchall()]
         finally:
             self._put_conn(conn)
 
@@ -957,10 +1109,10 @@ class PostgresGraphDB(BaseGraphDB):
             self._put_conn(conn)
 
     def get_structure_optimization_candidates(
-        self, scope: str, include_embedding: bool = False
+        self, scope: str, include_embedding: bool = False, **kwargs
     ) -> list[dict]:
-        """Find isolated nodes (no edges)."""
-        user_name = self.user_name
+        """Find isolated nodes (no edges) for a given scope and user."""
+        user_name = kwargs.get("user_name") or self.user_name
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
@@ -980,6 +1132,117 @@ class PostgresGraphDB(BaseGraphDB):
                     (scope, user_name),
                 )
                 return [self._parse_row(row, False) for row in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
+
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsquery_config: str = "simple",
+        **kwargs,
+    ) -> list[dict]:
+        """Fulltext search over memory content using PostgreSQL text search.
+
+        Compatible with the graph-store interface used by the tree text memory
+        keyword/fulltext recall path.  Words are safely quoted and OR-joined
+        into a ``to_tsquery`` expression; the query is scored with ``ts_rank``.
+
+        Args:
+            query_words: List of query words (already-quoted terms are handled).
+            top_k: Max number of results.
+            scope: Filter by ``properties->>'memory_type'``.
+            status: Filter by ``properties->>'status'``; defaults to 'activated'.
+            threshold: Minimum score to keep a result.
+            search_filter: Simple dict of property equality filters.
+            user_name: User/tenant scope.
+            filter: Rich filter dict (and/or) built via ``_build_filter_where_clause``.
+            knowledgebase_ids: Accepted for interface compatibility.
+            tsquery_config: PostgreSQL text-search configuration name.
+                Defaults to 'simple', which is always available; callers with the
+                jiebacfg extension may pass their own config.
+
+        Returns:
+            list of {"id": ..., "score": ...} dicts ordered by descending score.
+        """
+        user_name = user_name or self.user_name
+
+        # Build the tsquery from quoted, OR-joined terms so that user input can
+        # never inject operators into to_tsquery(...).
+        def _quote_term(word: str) -> str:
+            word = str(word).strip().strip("'\"")
+            return "'" + word.replace("'", "''") + "'"
+
+        terms = [
+            _quote_term(w)
+            for w in query_words
+            if w and str(w).strip() and str(w).strip().strip("'\"")
+        ]
+        if not terms:
+            return []
+        tsquery_string = " | ".join(terms)
+
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", tsquery_config):
+            raise ValueError(f"Invalid tsquery_config: {tsquery_config}")
+
+        conditions = ["user_name = %s", "memory IS NOT NULL"]
+        params: list[Any] = [user_name]
+
+        if scope:
+            conditions.append("properties->>'memory_type' = %s")
+            params.append(scope)
+
+        if status:
+            conditions.append("properties->>'status' = %s")
+            params.append(status)
+        else:
+            conditions.append(
+                "(properties->>'status' = 'activated' OR properties->>'status' IS NULL)"
+            )
+
+        if search_filter:
+            for key, value in search_filter.items():
+                if not self._is_safe_field_name(str(key)):
+                    raise ValueError(f"Invalid search_filter key: {key}")
+                conditions.append(f"properties->>'{key}' = %s")
+                params.append(str(value))
+
+        if filter:
+            filter_where = self._build_filter_where_clause(filter, params)
+            if filter_where:
+                conditions.append(f"({filter_where})")
+
+        where_clause = " AND ".join(conditions)
+
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, ts_rank(to_tsvector('{tsquery_config}', memory),
+                                      to_tsquery('{tsquery_config}', %s)) AS score
+                    FROM {self.schema}.memories
+                    WHERE {where_clause}
+                      AND to_tsvector('{tsquery_config}', memory) @@ to_tsquery('{tsquery_config}', %s)
+                    ORDER BY score DESC
+                    LIMIT %s
+                """,
+                    (*params, tsquery_string, tsquery_string, top_k),
+                )
+
+                results = []
+                for row in cur.fetchall():
+                    score = float(row[1])
+                    if threshold is None or score >= threshold:
+                        results.append({"id": row[0], "score": score})
+                return results
         finally:
             self._put_conn(conn)
 

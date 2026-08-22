@@ -81,6 +81,27 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
+    def get_edges(
+        self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str | None = None
+    ) -> list[dict[str, str]]:
+        """
+        Get edges connected to a node, with optional type and direction filter.
+
+        Args:
+            id: Node ID to retrieve edges for.
+            type: Relationship type to match, or 'ANY' to match all.
+            direction: 'OUT'/'OUTGOING', 'IN'/'INCOMING', or 'ANY'.
+            user_name: Optional user/tenant scope filter.
+
+        Returns:
+            List of edges:
+            [
+              {"from": "source_id", "to": "target_id", "type": "RELATE"},
+              ...
+            ]
+        """
+
+    @abstractmethod
     def edge_exists(self, source_id: str, target_id: str, type: str) -> bool:
         """
         Check if an edge exists between two nodes.
