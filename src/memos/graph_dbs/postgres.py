@@ -41,7 +41,7 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_embedding(value: Any) -> list[float] | None:
-    """Normalise a pgvector column value to ``list[float] | None``.
+    """Normalize a pgvector column value to ``list[float] | None``.
 
     psycopg2 returns the pgvector ``vector`` column as its Postgres text
     representation (e.g. ``"[0.1, 0.2, 0.3]"``) unless a specific type
@@ -86,7 +86,7 @@ def _normalize_embedding(value: Any) -> list[float] | None:
                 return None
         # Fallback: strip surrounding brackets/parens and split on commas
         # so we also cover paren-style vectors like "(0.1, 0.2)".
-        if len(text) >= 2 and text[0] in "[(" and text[-1] in "])":
+        if len(text) >= 2 and (text[0], text[-1]) in (("[", "]"), ("(", ")")):
             inner = text[1:-1].strip()
             if not inner:
                 return None

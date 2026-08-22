@@ -79,16 +79,52 @@ class TestNormalizeEmbeddingHelper:
     def test_invalid_string_returns_none_and_warns(self, caplog):
         from memos.graph_dbs.postgres import _normalize_embedding
 
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("WARNING", logger="memos.graph_dbs.postgres"):
             result = _normalize_embedding("not-a-vector")
         assert result is None
+        assert any(
+            r.levelname == "WARNING" and r.name == "memos.graph_dbs.postgres"
+            for r in caplog.records
+        ), (
+            "Expected a WARNING record from memos.graph_dbs.postgres so silent"
+            " no-log regressions get caught."
+        )
 
     def test_unexpected_type_returns_none(self, caplog):
         from memos.graph_dbs.postgres import _normalize_embedding
 
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("WARNING", logger="memos.graph_dbs.postgres"):
             result = _normalize_embedding(12345)
         assert result is None
+        assert any(
+            r.levelname == "WARNING" and r.name == "memos.graph_dbs.postgres"
+            for r in caplog.records
+        ), (
+            "Expected a WARNING record from memos.graph_dbs.postgres so silent"
+            " no-log regressions get caught."
+        )
+
+    @pytest.mark.parametrize("bad_input", ["[0.1, 0.2)", "(0.1, 0.2]"])
+    def test_mismatched_bracket_delimiters_return_none_and_warn(
+        self, caplog, bad_input
+    ):
+        """
+        pgvector never emits mismatched delimiters, but if any subtly
+        malformed data reaches the helper it must be flagged rather than
+        silently coerced into a numeric list.
+        """
+        from memos.graph_dbs.postgres import _normalize_embedding
+
+        with caplog.at_level("WARNING", logger="memos.graph_dbs.postgres"):
+            result = _normalize_embedding(bad_input)
+        assert result is None
+        assert any(
+            r.levelname == "WARNING" and r.name == "memos.graph_dbs.postgres"
+            for r in caplog.records
+        ), (
+            "Mismatched bracket delimiters must produce a WARNING record so"
+            " malformed input never silently succeeds."
+        )
 
 
 class TestParseRowEmbedding:
