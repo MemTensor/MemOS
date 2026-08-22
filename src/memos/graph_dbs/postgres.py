@@ -26,16 +26,37 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
+def _normalize_embedding_value(embedding: Any) -> list[float] | None:
+    """Coerce pgvector/psycopg2 embedding values into list[float] for GraphDBNode."""
+    if embedding is None:
+        return None
+    if isinstance(embedding, list):
+        return [float(x) for x in embedding]
+    if isinstance(embedding, tuple):
+        return [float(x) for x in embedding]
+    if isinstance(embedding, str):
+        stripped = embedding.strip()
+        if not stripped:
+            return None
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, list):
+            return [float(x) for x in parsed]
+        return None
+    return None
+
+
 def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Ensure metadata has proper datetime fields and normalized types."""
     now = datetime.utcnow().isoformat()
     metadata.setdefault("created_at", now)
     metadata.setdefault("updated_at", now)
 
-    # Normalize embedding type
-    embedding = metadata.get("embedding")
-    if embedding and isinstance(embedding, list):
-        metadata["embedding"] = [float(x) for x in embedding]
+    normalized = _normalize_embedding_value(metadata.get("embedding"))
+    if normalized is not None:
+        metadata["embedding"] = normalized
 
     return metadata
 
@@ -437,6 +458,11 @@ class PostgresGraphDB(BaseGraphDB):
         }
         if include_embedding and len(row) > 5:
             result["metadata"]["embedding"] = row[5]
+        normalized = _normalize_embedding_value(result["metadata"].get("embedding"))
+        if normalized is not None:
+            result["metadata"]["embedding"] = normalized
+        elif "embedding" in result["metadata"]:
+            del result["metadata"]["embedding"]
         return result
 
     @staticmethod
