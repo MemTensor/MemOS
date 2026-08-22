@@ -40,6 +40,69 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def _normalize_embedding(value: Any) -> list[float] | None:
+    """Normalize a pgvector column value to ``list[float] | None``.
+
+    psycopg2 returns the pgvector ``vector`` column as its Postgres text
+    representation (e.g. ``"[0.1, 0.2, 0.3]"``) unless a specific type
+    adapter is registered. Downstream models such as ``GraphDBNode``
+    require ``list[float]`` and reject the string form. This helper
+    accepts every shape we may see in practice and produces a numeric
+    list without raising, so reads degrade gracefully on unexpected
+    input.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, list):
+        try:
+            return [float(x) for x in value]
+        except (TypeError, ValueError):
+            logger.warning("Failed to coerce embedding list to float; returning None")
+            return None
+
+    if isinstance(value, tuple):
+        try:
+            return [float(x) for x in value]
+        except (TypeError, ValueError):
+            logger.warning("Failed to coerce embedding tuple to float; returning None")
+            return None
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        # pgvector text form is a JSON-compatible array literal like
+        # "[0.1, 0.2, 0.3]"; try that first for the fast path.
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            try:
+                return [float(x) for x in parsed]
+            except (TypeError, ValueError):
+                logger.warning("Failed to coerce parsed embedding to float; returning None")
+                return None
+        # Fallback: strip surrounding brackets/parens and split on commas
+        # so we also cover paren-style vectors like "(0.1, 0.2)".
+        if len(text) >= 2 and (text[0], text[-1]) in (("[", "]"), ("(", ")")):
+            inner = text[1:-1].strip()
+            if not inner:
+                return None
+            parts = [p.strip() for p in inner.split(",") if p.strip()]
+            try:
+                return [float(p) for p in parts]
+            except ValueError:
+                logger.warning("Failed to parse pgvector text form %r; returning None", value)
+                return None
+        logger.warning("Unexpected embedding string format %r; returning None", value)
+        return None
+
+    logger.warning("Unexpected embedding value type %s; returning None", type(value).__name__)
+    return None
+
+
 class PostgresGraphDB(BaseGraphDB):
     """PostgreSQL + pgvector implementation of a graph memory store."""
 
@@ -436,7 +499,7 @@ class PostgresGraphDB(BaseGraphDB):
             "metadata": props,
         }
         if include_embedding and len(row) > 5:
-            result["metadata"]["embedding"] = row[5]
+            result["metadata"]["embedding"] = _normalize_embedding(row[5])
         return result
 
     @staticmethod
