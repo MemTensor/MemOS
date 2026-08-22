@@ -1100,27 +1100,119 @@ class PostgresGraphDB(BaseGraphDB):
         finally:
             self._put_conn(conn)
 
-    def export_graph(self, include_embedding: bool = False, **kwargs) -> dict[str, Any]:
-        """Export all data."""
+    def export_graph(
+        self,
+        include_embedding: bool = False,
+        page: int | None = None,
+        page_size: int | None = None,
+        memory_type: list[str] | None = None,
+        status: list[str] | None = None,
+        filter: dict | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Export all graph nodes and edges in a structured form.
+
+        Args:
+            include_embedding: Whether to include the ``embedding`` column in each
+                node's metadata.
+            page: 1-based page number. When both ``page`` and ``page_size`` are
+                provided, results are paginated; otherwise all matching rows are
+                returned.
+            page_size: Page size. See ``page``.
+            memory_type: If provided, restrict nodes to those whose
+                ``properties->>'memory_type'`` is in the list.
+            status: If ``None`` (default), nodes with status ``'deleted'`` are
+                excluded to match Neo4j's ``export_graph`` semantics. If a list is
+                provided, only nodes whose status is in the list are returned.
+            filter: Optional structured filter (``{"and": [...]}`` / ``{"or": [...]}``
+                / single-condition dict), matching :meth:`_build_filter_where_clause`.
+            **kwargs: Accepts ``user_name`` for multi-tenant isolation; other keys
+                are ignored (kept for cross-backend compatibility).
+
+        Returns:
+            Dict with ``nodes``, ``edges``, ``total_nodes`` (the filtered total,
+            **not** the size of the returned page) and ``total_edges``.
+        """
         user_name = kwargs.get("user_name") or self.user_name
+        logger.info(
+            "export_graph include_embedding=%s page=%s page_size=%s "
+            "memory_type=%s status=%s filter=%s",
+            include_embedding,
+            page,
+            page_size,
+            memory_type,
+            status,
+            filter,
+        )
+
+        # Build WHERE conditions + parameter list.
+        where_conditions: list[str] = ["user_name = %s"]
+        params: list[Any] = [user_name]
+
+        if memory_type and isinstance(memory_type, list) and len(memory_type) > 0:
+            where_conditions.append("properties->>'memory_type' = ANY(%s)")
+            params.append([str(mt) for mt in memory_type])
+
+        if status is None or (isinstance(status, list) and len(status) == 0):
+            # Default (status=None) and status=[] both fall back to "exclude
+            # soft-deleted nodes" (aligned with Neo4j backend). Treating an
+            # empty list the same as None avoids the surprising behavior where
+            # callers passing an empty list would otherwise receive soft-deleted
+            # nodes because no status predicate was applied at all.
+            where_conditions.append(
+                "(properties->>'status' IS NULL OR properties->>'status' <> 'deleted')"
+            )
+        elif isinstance(status, list):
+            where_conditions.append("properties->>'status' = ANY(%s)")
+            params.append([str(s) for s in status])
+
+        if filter:
+            filter_where = self._build_filter_where_clause(filter, params)
+            if filter_where:
+                where_conditions.append(f"({filter_where})")
+
+        where_clause = " AND ".join(where_conditions)
+
+        # Decide pagination.
+        use_pagination = page is not None and page_size is not None
+        if use_pagination:
+            page = max(page, 1)
+            page_size = max(page_size, 1)
+            offset = (page - 1) * page_size
+            limit_clause = " LIMIT %s OFFSET %s"
+            limit_params: list[Any] = [page_size, offset]
+        else:
+            limit_clause = ""
+            limit_params = []
+
+        cols = "id, memory, properties, created_at, updated_at"
+        if include_embedding:
+            cols += ", embedding"
+
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                # Get nodes
-                cols = "id, memory, properties, created_at, updated_at"
-                if include_embedding:
-                    cols += ", embedding"
-                cur.execute(
-                    f"""
-                    SELECT {cols} FROM {self.schema}.memories
-                    WHERE user_name = %s
-                    ORDER BY created_at DESC
-                """,
-                    (user_name,),
+                # 1) Total count of matching nodes (independent of pagination).
+                count_sql = f"SELECT COUNT(*) FROM {self.schema}.memories WHERE {where_clause}"
+                cur.execute(count_sql, params)
+                row = cur.fetchone()
+                total_nodes = int(row[0]) if row and row[0] is not None else 0
+
+                # 2) Page of nodes.
+                data_sql = (
+                    f"SELECT {cols} FROM {self.schema}.memories "
+                    f"WHERE {where_clause} "
+                    f"ORDER BY created_at DESC, id DESC{limit_clause}"
                 )
+                cur.execute(data_sql, params + limit_params)
                 nodes = [self._parse_row(row, include_embedding) for row in cur.fetchall()]
 
-                # Get edges
+                # 3) Edges incident to the returned page of nodes. ``OR`` here
+                #    preserves the pre-existing "any edge touching a returned
+                #    node" semantics from before pagination was wired up, and
+                #    keeps edges whose other endpoint lands on a different page
+                #    (which the caller can render if it has the neighbor node
+                #    context). ``total_edges`` mirrors the returned edge count.
                 node_ids = [n["id"] for n in nodes]
                 if node_ids:
                     cur.execute(
@@ -1141,7 +1233,7 @@ class PostgresGraphDB(BaseGraphDB):
                 return {
                     "nodes": nodes,
                     "edges": edges,
-                    "total_nodes": len(nodes),
+                    "total_nodes": total_nodes,
                     "total_edges": len(edges),
                 }
         finally:
