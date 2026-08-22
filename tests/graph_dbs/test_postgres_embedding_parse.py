@@ -23,6 +23,11 @@ def test_normalize_embedding_value_rejects_invalid_string() -> None:
     assert _normalize_embedding_value("not-json") is None
 
 
+def test_normalize_embedding_value_rejects_non_numeric_elements() -> None:
+    assert _normalize_embedding_value(["a", 0.5]) is None
+    assert _normalize_embedding_value('["a", 0.5]') is None
+
+
 def test_prepare_node_metadata_normalizes_string_embedding() -> None:
     metadata = _prepare_node_metadata({"embedding": "[0.25, 0.75]"})
     assert metadata["embedding"] == [0.25, 0.75]
@@ -54,3 +59,18 @@ def test_parse_row_normalizes_string_embedding_from_vector_column() -> None:
     parsed = db._parse_row(row, include_embedding=True)
 
     assert parsed["metadata"]["embedding"] == [0.25, 0.75]
+
+
+def test_parse_row_preserves_props_embedding_when_not_requested() -> None:
+    db = _build_db()
+    row: tuple[Any, ...] = (
+        "node-1",
+        "memory text",
+        json.dumps({"memory_type": "UserMemory", "embedding": "[0.1, 0.2]"}),
+        datetime(2026, 8, 22, 12, 0, 0),
+        datetime(2026, 8, 22, 12, 0, 0),
+    )
+
+    parsed = db._parse_row(row, include_embedding=False)
+
+    assert parsed["metadata"]["embedding"] == "[0.1, 0.2]"

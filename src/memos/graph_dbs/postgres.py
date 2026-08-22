@@ -30,20 +30,23 @@ def _normalize_embedding_value(embedding: Any) -> list[float] | None:
     """Coerce pgvector/psycopg2 embedding values into list[float] for GraphDBNode."""
     if embedding is None:
         return None
-    if isinstance(embedding, list):
-        return [float(x) for x in embedding]
-    if isinstance(embedding, tuple):
-        return [float(x) for x in embedding]
-    if isinstance(embedding, str):
-        stripped = embedding.strip()
-        if not stripped:
+    try:
+        if isinstance(embedding, list):
+            return [float(x) for x in embedding]
+        if isinstance(embedding, tuple):
+            return [float(x) for x in embedding]
+        if isinstance(embedding, str):
+            stripped = embedding.strip()
+            if not stripped:
+                return None
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(parsed, list):
+                return [float(x) for x in parsed]
             return None
-        try:
-            parsed = json.loads(stripped)
-        except json.JSONDecodeError:
-            return None
-        if isinstance(parsed, list):
-            return [float(x) for x in parsed]
+    except (ValueError, TypeError):
         return None
     return None
 
@@ -458,11 +461,12 @@ class PostgresGraphDB(BaseGraphDB):
         }
         if include_embedding and len(row) > 5:
             result["metadata"]["embedding"] = row[5]
-        normalized = _normalize_embedding_value(result["metadata"].get("embedding"))
-        if normalized is not None:
-            result["metadata"]["embedding"] = normalized
-        elif "embedding" in result["metadata"]:
-            del result["metadata"]["embedding"]
+        if include_embedding:
+            normalized = _normalize_embedding_value(result["metadata"].get("embedding"))
+            if normalized is not None:
+                result["metadata"]["embedding"] = normalized
+            elif "embedding" in result["metadata"]:
+                del result["metadata"]["embedding"]
         return result
 
     @staticmethod
