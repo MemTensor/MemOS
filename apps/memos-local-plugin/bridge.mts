@@ -410,6 +410,14 @@ async function main(): Promise<void> {
       }
     }
 
+    // Port bound successfully — start reporting. Mirrors the legacy
+    // bridge.cts daemon path: without these calls the daemon never
+    // refreshes bridge-status.json and every reader applies the 20s
+    // staleness rule to a fossilized snapshot ("Hermes bridge heartbeat
+    // is stale") while RPC traffic keeps working.
+    bridgeStatus?.markConnected();
+    bridgeHeartbeat = bridgeStatus?.startHeartbeat();
+
     const shutdownDaemon = async (sig: string) => {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
       removeOwnedPidFile();
