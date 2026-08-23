@@ -385,6 +385,11 @@ async function main(): Promise<void> {
         process.stderr.write(
           `bridge: daemon viewer live at ${viewer.url} (agent=${args.agent})\n`,
         );
+        // Daemon is the standalone viewer process: it owns the Hermes
+        // status heartbeat (issue #2278). stdio mode starts the same
+        // heartbeat in its own branch above.
+        bridgeStatus?.markConnected();
+        bridgeHeartbeat = bridgeStatus?.startHeartbeat();
         break;
       } catch (err) {
         const e = err as NodeJS.ErrnoException;
@@ -412,6 +417,7 @@ async function main(): Promise<void> {
 
     const shutdownDaemon = async (sig: string) => {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
+      bridgeHeartbeat?.stop();
       removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
       try {
