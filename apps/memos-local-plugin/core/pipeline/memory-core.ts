@@ -4628,23 +4628,36 @@ export function createMemoryCore(
     let error: string | undefined;
     if (batch.length > 0) {
       try {
-        const vecs = await handle.embedder.embedMany(
-          batch.map((slot) => ({ text: slot.sourceText || "(empty)", role: "document" as const })),
-        );
+        const inputs = batch.map((slot) => ({
+          text: slot.sourceText || "(empty)",
+          role: "document" as const,
+        }));
+        const settled = handle.embedder.embedManySettled
+          ? await handle.embedder.embedManySettled(inputs)
+          : (await handle.embedder.embedMany(inputs)).map((vector) => ({
+              ok: true as const,
+              vector,
+            }));
+        let firstSlotError: string | undefined;
         for (let i = 0; i < batch.length; i++) {
           const slot = batch[i]!;
-          const vec = vecs[i];
-          if (!vec) {
+          const result = settled[i];
+          if (!result?.ok) {
             failed++;
+            firstSlotError ??= result?.error.message ?? `missing vector for ${slot.id}`;
             continue;
           }
           try {
-            if (slot.update(vec)) updated++;
+            if (slot.update(result.vector)) updated++;
             else failed++;
           } catch {
             failed++;
           }
         }
+        // In repair mode successful slots disappear from the next query, so
+        // partial failures do not block progress. Stop only when a pass makes
+        // no progress and the remaining slots are terminally rejected.
+        if (mode === "repair" && updated === 0 && failed > 0) error = firstSlotError;
       } catch (err) {
         failed = batch.length;
         error = err instanceof Error ? err.message : String(err);
@@ -4655,7 +4668,7 @@ export function createMemoryCore(
     const nextOffset = mode === "rebuild" ? offset + batch.length : 0;
     const done = mode === "rebuild"
       ? nextOffset >= targetSlots.length || batch.length === 0
-      : statsAfter.needsRepair === 0 || batch.length === 0;
+      : statsAfter.needsRepair === 0 || batch.length === 0 || (updated === 0 && failed > 0);
     return {
       mode,
       processed: batch.length,

@@ -94,6 +94,31 @@ llm:
     expect(idxViewer).toBeLessThan(idxLlm);
   });
 
+  it("materializes the legacy disabled input limit when patching an older config", async () => {
+    const ctx = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: "version: 1\nembedding:\n  provider: local\nllm:\n  temperature: 0\n",
+    });
+    cleanup = ctx.cleanup;
+
+    const result = await patchConfig(ctx.home, { llm: { temperature: 0.2 } });
+
+    expect(result.config.embedding.maxInputTokens).toBe(0);
+    expect(await fs.readFile(ctx.home.configFile, "utf8")).toMatch(/maxInputTokens:\s*0/);
+  });
+
+  it("materializes the legacy input limit when the old embedding block is null", async () => {
+    const ctx = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: "version: 1\nembedding:\nllm:\n  temperature: 0\n",
+    });
+    cleanup = ctx.cleanup;
+
+    const result = await patchConfig(ctx.home, { llm: { temperature: 0.2 } });
+
+    expect(result.config.embedding.maxInputTokens).toBe(0);
+  });
+
   it("validates after merge — invalid patches are rejected", async () => {
     const ctx = await makeTmpHome({ agent: "openclaw" });
     cleanup = ctx.cleanup;

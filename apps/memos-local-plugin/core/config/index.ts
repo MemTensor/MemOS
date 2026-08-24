@@ -65,6 +65,11 @@ export async function loadConfig(home: ResolvedHome, agent?: string): Promise<Lo
     }
   }
 
+  // `maxInputTokens` was introduced with a disabled (`0`) fallback. Keep
+  // that behaviour for an existing on-disk config that predates the field,
+  // while config-less/new installations receive the safer 1024 default.
+  if (fromDisk) raw = withLegacyEmbeddingInputLimit(raw);
+
   const config = resolveConfig(raw, warnings, agent);
   return { config, fromDisk, warnings, source: home.configFile };
 }
@@ -175,6 +180,19 @@ function pruneUnknown(
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function withLegacyEmbeddingInputLimit(raw: unknown): unknown {
+  if (!isPlainObject(raw)) return raw;
+  const embedding = isPlainObject(raw.embedding) ? raw.embedding : {};
+  if (Object.hasOwn(embedding, "maxInputTokens")) return raw;
+  return {
+    ...raw,
+    embedding: {
+      ...embedding,
+      maxInputTokens: 0,
+    },
+  };
 }
 
 function stripUnsupportedEmbeddingDimensions(merged: Record<string, unknown>): void {

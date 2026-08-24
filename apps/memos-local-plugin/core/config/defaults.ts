@@ -40,6 +40,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     providerIgnore: [],
     providerOrder: [],
     openRouter: false,
+    maxInputTokens: 1_024,
+    batchSize: 32,
     cache: {
       enabled: true,
       maxItems: 20_000,

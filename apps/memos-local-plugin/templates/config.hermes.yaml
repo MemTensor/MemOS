@@ -20,6 +20,8 @@ viewer:
 embedding:
   provider: local         # local | openai_compatible | gemini | cohere | voyage | mistral
   apiKey: ""
+  maxInputTokens: 1024    # conservative per-input limit; 0 disables client-side chunking
+  batchSize: 32           # maximum texts sent in one embedding-provider request
 
 llm:
   # Hermes has no "host LLM", so pick a real provider.
