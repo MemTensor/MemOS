@@ -55,7 +55,7 @@ import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { fakeLlm, type FakeLlmScript } from "../../helpers/fake-llm.js";
 import type { LlmClient } from "../../../core/llm/types.js";
 import type { EmbedInput, EmbedStats, Embedder } from "../../../core/embedding/types.js";
-import type { EmbeddingVector } from "../../../core/types.js";
+import type { EmbeddingVector, SkillId, SkillRow } from "../../../core/types.js";
 import type { AgentKind } from "../../../agent-contract/dto.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -640,5 +640,51 @@ describe("OpenClaw adapter integration — multi-session full V7 chain", () => {
       "\n=== OpenClaw adapter integration snapshot ===\n" +
         JSON.stringify(snapshot, null, 2),
     );
+  });
+
+  it("archives a stale low-η skill when OpenClaw closes its session", async () => {
+    const thirtyOneDaysMs = 31 * 24 * 60 * 60 * 1_000;
+    const stale: SkillRow = {
+      id: "sk_openclaw_idle_archive" as SkillId,
+      name: "openclaw_idle_archive",
+      status: "active",
+      invocationGuide: "# OpenClaw idle archive integration fixture",
+      procedureJson: null,
+      eta: 0.05,
+      support: 3,
+      gain: 0.05,
+      trialsAttempted: 0,
+      trialsPassed: 0,
+      sourcePolicyIds: [],
+      sourceWorldModelIds: [],
+      evidenceAnchors: [],
+      vec: unitFromSeed("skill:openclaw_idle_archive") as unknown as EmbeddingVector,
+      createdAt: (NOW - thirtyOneDaysMs) as SkillRow["createdAt"],
+      updatedAt: NOW as SkillRow["updatedAt"],
+      lastUsedAt: (NOW - thirtyOneDaysMs) as SkillRow["lastUsedAt"],
+      version: 1,
+    };
+    db!.repos.skills.upsert(stale);
+    const bridge = createOpenClawBridge({
+      agent: AGENT,
+      core: core!,
+      log: {
+        trace: (_m: string, _c?: unknown) => undefined,
+        info: (_m: string, _c?: unknown) => undefined,
+        warn: (_m: string, _c?: unknown) => undefined,
+        error: (_m: string, _c?: unknown) => undefined,
+        debug: (_m: string, _c?: unknown) => undefined,
+      },
+      now: () => NOW,
+    });
+    const session = new OpenClawSimulator({ bridge, sessionKey: "s-idle-archive" });
+
+    await session.turn(
+      "用 Python 返回字符串 hello",
+      '```python\ndef hello() -> str:\n    return "hello"\n```',
+    );
+    await session.close();
+
+    expect(db!.repos.skills.getById(stale.id)?.status).toBe("archived");
   });
 });

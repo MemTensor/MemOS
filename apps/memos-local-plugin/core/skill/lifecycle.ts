@@ -196,7 +196,8 @@ export function shouldArchiveIdle(
   now: number,
 ): boolean {
   if (skill.status !== "active") return false;
-  const age = now - skill.updatedAt;
+  const idleSince = skill.lastUsedAt ?? skill.createdAt;
+  const age = now - idleSince;
   if (age < idleMs) return false;
   return skill.eta < cfg.minEtaForRetrieval;
 }

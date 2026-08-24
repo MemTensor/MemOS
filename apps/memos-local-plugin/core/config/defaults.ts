@@ -252,6 +252,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       etaDelta: 0.1,
       archiveEta: 0.1,
       minEtaForRetrieval: 0.1,
+      idleArchiveMs: 30 * 24 * 60 * 60 * 1000,
     },
     feedback: {
       failureThreshold: 3,
