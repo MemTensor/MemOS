@@ -31,6 +31,8 @@ import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import type { MemosError } from "../../../agent-contract/errors.js";
+import { MemosError as EmbeddingFailure } from "../../../agent-contract/errors.js";
+import type { Embedder } from "../../../core/embedding/types.js";
 import type { SkillId, SkillRow, TraceRow } from "../../../core/types.js";
 
 let db: TmpDbHandle | null = null;
@@ -60,6 +62,7 @@ function configWithLightweightMemory(enabled: boolean): typeof DEFAULT_CONFIG {
 function buildDeps(
   h: TmpDbHandle,
   config: typeof DEFAULT_CONFIG = configWithLightweightMemory(false),
+  embedder: Embedder = fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }),
 ): PipelineDeps {
   return {
     agent: "openclaw",
@@ -69,7 +72,7 @@ function buildDeps(
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }),
+    embedder,
     log: rootLogger.child({ channel: "test.memory-core" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
@@ -278,6 +281,61 @@ describe("MemoryCore façade", () => {
     expect(fixed.statsAfter.dimMismatch).toBe(0);
     row = db!.repos.traces.getById("tr_imported" as never);
     expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+  });
+
+  it("repairs valid embedding slots while isolating a rejected neighbor", async () => {
+    const base = fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS });
+    const settledEmbedder: Embedder = {
+      ...base,
+      async embedManySettled(inputs) {
+        return inputs.map((input) => {
+          const text = typeof input === "string" ? input : input.text;
+          return text.includes("rejected action")
+            ? { ok: false, error: new EmbeddingFailure("embedding_unavailable", "bad action") }
+            : { ok: true, vector: new Float32Array(TEST_EMBED_DIMENSIONS).fill(1) };
+        });
+      },
+    };
+    pipeline = createPipeline(buildDeps(db!, configWithLightweightMemory(false), settledEmbedder));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    await core.importBundle({
+      version: 1,
+      traces: [{
+        id: "tr_partial_embedding",
+        episodeId: "ep_partial_embedding",
+        sessionId: "se_partial_embedding",
+        ts: 1_700_000_000_000,
+        userText: "valid summary source",
+        agentText: "rejected action source",
+        summary: "valid summary",
+        toolCalls: [],
+        value: 0,
+        alpha: 0,
+        priority: 0,
+        turnId: 1_700_000_000_000,
+      }],
+    });
+
+    const repaired = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+
+    expect(repaired.updated).toBe(1);
+    expect(repaired.failed).toBe(1);
+    expect(repaired.done).toBe(false);
+    expect(repaired.error).toBeUndefined();
+    const row = db!.repos.traces.getById("tr_partial_embedding" as never);
+    expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+    expect(row?.vecAction).toBeNull();
+
+    const terminal = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+    expect(terminal.updated).toBe(0);
+    expect(terminal.failed).toBe(1);
+    expect(terminal.done).toBe(true);
+    expect(terminal.error).toBe("bad action");
   });
 
   it("does not require action vectors for lightweight memory traces", async () => {

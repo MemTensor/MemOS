@@ -14,8 +14,13 @@ import { Type, type Static } from "@sinclair/typebox";
 
 const StringWithDefault = (def = "") => Type.String({ default: def });
 const Bool = (def: boolean) => Type.Boolean({ default: def });
-const NumberInRange = (def: number, min?: number, max?: number) =>
-  Type.Number({ default: def, ...(min != null ? { minimum: min } : {}), ...(max != null ? { maximum: max } : {}) });
+const NumberInRange = (def: number, min?: number, max?: number, description?: string) =>
+  Type.Number({
+    default: def,
+    ...(min != null ? { minimum: min } : {}),
+    ...(max != null ? { maximum: max } : {}),
+    ...(description ? { description } : {}),
+  });
 
 // ─── Sub-schemas ────────────────────────────────────────────────────────────
 
@@ -45,6 +50,18 @@ const EmbeddingSchema = Type.Object({
   providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
   /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
   openRouter: Type.Optional(Bool(false)),
+  /**
+   * Maximum estimated tokens in one provider input. `0` explicitly disables
+   * client-side chunking. New installations default to a conservative 1024.
+   */
+  maxInputTokens: NumberInRange(
+    1_024,
+    0,
+    1_000_000,
+    "Maximum estimated tokens per embedding input. Set to 0 to disable client-side chunking.",
+  ),
+  /** Maximum physical texts sent in one embedding-provider HTTP request. */
+  batchSize: NumberInRange(32, 1, 256),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),

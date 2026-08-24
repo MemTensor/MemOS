@@ -61,6 +61,14 @@ export async function patchConfig(
   if (!existingText) {
     const initialPort = effectiveViewerPort(agent);
     if (initialPort !== undefined) doc.setIn(["viewer", "port"], initialPort);
+  } else if (
+    doc.getIn(["embedding", "maxInputTokens"]) === undefined &&
+    !patchSetsEmbeddingInputLimit(patch)
+  ) {
+    // Editing an older config must not silently opt it into the new-install
+    // 1024 default. Persist its prior disabled behaviour before applying the
+    // unrelated patch so subsequent loads remain stable.
+    applyPatch(doc, { embedding: { maxInputTokens: 0 } });
   }
   applyPatch(doc, patch);
   if (
@@ -95,6 +103,11 @@ export async function patchConfig(
 
   const bytes = Buffer.byteLength(text, "utf8");
   return { config, bytes, source: home.configFile, created };
+}
+
+function patchSetsEmbeddingInputLimit(patch: Record<string, unknown>): boolean {
+  const embedding = patch.embedding;
+  return isPlainObject(embedding) && Object.hasOwn(embedding, "maxInputTokens");
 }
 
 /**
