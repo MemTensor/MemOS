@@ -1531,6 +1531,44 @@ describe("MemoryCore façade", () => {
       name: "local skill",
     });
   });
+
+  it("gives a manually reactivated skill a fresh idle-archive grace period", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    seedCoreSkill("skill-reactivate", "reactivated skill");
+    db!.repos.skills.setStatus("skill-reactivate" as SkillId, "archived", 1);
+    const before = Date.now();
+
+    await expect(core.reactivateSkill("skill-reactivate" as SkillId)).resolves.toMatchObject({
+      status: "active",
+    });
+    expect(db!.repos.skills.getById("skill-reactivate" as SkillId)?.lastUsedAt).toBeGreaterThanOrEqual(
+      before,
+    );
+  });
+
+  it("archives idle low-eta skills while the pipeline stays running", async () => {
+    seedCoreSkill("skill-idle-running", "idle running skill");
+    const stale = db!.repos.skills.getById("skill-idle-running" as SkillId)!;
+    db!.repos.skills.upsert({
+      ...stale,
+      eta: 0.05,
+      createdAt: 1 as SkillRow["createdAt"],
+      updatedAt: 1 as SkillRow["updatedAt"],
+      lastUsedAt: null,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(db!.repos.skills.getById("skill-idle-running" as SkillId)?.status).toBe("archived");
+  });
 });
 
 describe("bootstrapMemoryCore", () => {

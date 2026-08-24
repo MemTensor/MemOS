@@ -37,8 +37,12 @@ import type { SkillId } from "../types.js";
 import { now as nowMs } from "../time.js";
 import { IDLE_ARCHIVE_BATCH_LIMIT } from "../storage/repos/skills.js";
 
-/** Bound one lifecycle pass to 5,000 archival writes. */
+/** Bound one lifecycle pass to ten repository-sized archival batches. */
 const IDLE_ARCHIVE_MAX_BATCHES_PER_TICK = 10;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 export interface SkillSubscriberDeps
   extends Omit<RunSkillDeps, "log" | "bus"> {
@@ -236,27 +240,17 @@ export function attachSkillSubscriber(
     let batchesProcessed = 0;
     let archivedTotal = 0;
     while (batchesProcessed < IDLE_ARCHIVE_MAX_BATCHES_PER_TICK) {
-      const archiveCandidates = deps.repos.skills.listIdleArchiveCandidates({
+      const archivedSkills = deps.repos.skills.archiveNextIdleBatch({
         minEtaForRetrieval: deps.config.minEtaForRetrieval,
         cutoff,
+        updatedAt: at,
         limit: IDLE_ARCHIVE_BATCH_LIMIT,
       });
       batchesProcessed += 1;
-      const archivedIds = new Set(
-        deps.repos.skills.archiveIdleBatch(
-          archiveCandidates.map((skill) => skill.id),
-          {
-            minEtaForRetrieval: deps.config.minEtaForRetrieval,
-            cutoff,
-            updatedAt: at,
-          },
-        ),
-      );
-      const archivedThisBatch = archivedIds.size;
+      const archivedThisBatch = archivedSkills.length;
       archivedTotal += archivedThisBatch;
-      for (const s of archiveCandidates) {
-        if (!archivedIds.has(s.id)) continue;
-        log.info("skill.idle_archived", {
+      for (const s of archivedSkills) {
+        log.debug("skill.idle_archived", {
           skillId: s.id,
           name: s.name,
           eta: s.eta,
@@ -272,24 +266,23 @@ export function attachSkillSubscriber(
           transition: "archived",
         });
       }
-      if (archiveCandidates.length > 0 && archivedThisBatch === 0) {
-        // A full zero-change batch was invalidated by concurrent writers.
-        // Re-query so later eligible rows are not abandoned for this tick.
-        log.warn("skill.idle_archive_stalled", {
-          candidateCount: archiveCandidates.length,
+      if (archivedThisBatch > 0) {
+        log.info("skill.idle_archive_batch", {
+          batchCount: batchesProcessed,
+          archivedCount: archivedThisBatch,
           cutoff,
           minEtaForRetrieval: deps.config.minEtaForRetrieval,
         });
-        if (archiveCandidates.length < IDLE_ARCHIVE_BATCH_LIMIT) break;
-        continue;
       }
-      if (archiveCandidates.length < IDLE_ARCHIVE_BATCH_LIMIT) break;
+      if (archivedThisBatch < IDLE_ARCHIVE_BATCH_LIMIT) break;
       if (batchesProcessed === IDLE_ARCHIVE_MAX_BATCHES_PER_TICK) {
         log.warn("skill.idle_archive_batch_limit_reached", {
           batchCount: batchesProcessed,
           archivedCount: archivedTotal,
           batchSize: IDLE_ARCHIVE_BATCH_LIMIT,
         });
+      } else {
+        await yieldToEventLoop();
       }
     }
   }

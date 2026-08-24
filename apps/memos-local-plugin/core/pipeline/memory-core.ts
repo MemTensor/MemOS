@@ -5026,7 +5026,10 @@ export function createMemoryCore(
     const existing = handle.repos.skills.getById(id);
     if (!existing || !ownedByCurrent(existing)) return null;
     const now = Date.now();
-    handle.repos.skills.setStatus(id, "active", now);
+    handle.db.tx(() => {
+      handle.repos.skills.setStatus(id, "active", now);
+      handle.repos.skills.recordUse(id, now);
+    });
     if (existing.status !== "active") {
       handle.buses.skill.emit({
         kind: "skill.status.changed",

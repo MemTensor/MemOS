@@ -351,41 +351,26 @@ describe("storage/repos — happy paths", () => {
       insertSkill("retrievable", "active", 0.1, 1, 100);
       insertSkill("already_archived", "archived", 0.05, 1, 100);
 
-      const candidates = repos.skills.listIdleArchiveCandidates({
+      const archived = repos.skills.archiveNextIdleBatch({
         minEtaForRetrieval: 0.1,
         cutoff: 9_000,
+        updatedAt: 10_000,
         limit: 500,
       });
-      expect(candidates.map((skill) => skill.id)).toEqual(["never_used", "old_used"]);
-      expect(repos.skills.listIdleArchiveCandidates({
-        minEtaForRetrieval: 0.1,
-        cutoff: 9_000,
-        limit: 1,
-      }).map((skill) => skill.id)).toEqual(["never_used"]);
+      expect(archived.map((skill) => skill.id).sort()).toEqual(["never_used", "old_used"]);
+      expect(repos.skills.getById("never_used")?.status).toBe("archived");
+      expect(repos.skills.getById("old_used")?.status).toBe("archived");
 
+      repos.skills.setStatus("old_used" as never, "active", 10_100);
       expect(repos.skills.recordUse("old_used", 9_500)).toBe(true);
       expect(repos.skills.getById("old_used")?.lastUsedAt).toBe(9_500);
-      expect(
-        repos.skills.archiveIdleBatch(["old_used"], {
-          minEtaForRetrieval: 0.1,
-          cutoff: 9_000,
-          updatedAt: 10_000,
-        }),
-      ).toEqual([]);
-      expect(repos.skills.getById("old_used")?.status).toBe("active");
-      expect(repos.skills.listIdleArchiveCandidates({
+      expect(repos.skills.archiveNextIdleBatch({
         minEtaForRetrieval: 0.1,
         cutoff: 9_000,
+        updatedAt: 10_200,
         limit: 500,
-      }).map((skill) => skill.id)).toEqual(["never_used"]);
-      expect(
-        repos.skills.archiveIdleBatch(["never_used"], {
-          minEtaForRetrieval: 0.1,
-          cutoff: 9_000,
-          updatedAt: 10_000,
-        }),
-      ).toEqual(["never_used"]);
-      expect(repos.skills.getById("never_used")?.status).toBe("archived");
+      })).toEqual([]);
+      expect(repos.skills.getById("old_used")?.status).toBe("active");
 
       insertSkill("rollback_first", "active", 0.05, 1, 100);
       insertSkill("rollback_fail", "active", 0.05, 1, 100);
@@ -397,14 +382,12 @@ describe("storage/repos — happy paths", () => {
           SELECT RAISE(ABORT, 'forced archive failure');
         END`);
       expect(() =>
-        repos.skills.archiveIdleBatch(
-          ["rollback_first", "rollback_fail"],
-          {
-            minEtaForRetrieval: 0.1,
-            cutoff: 9_000,
-            updatedAt: 10_000,
-          },
-        ),
+        repos.skills.archiveNextIdleBatch({
+          minEtaForRetrieval: 0.1,
+          cutoff: 9_000,
+          updatedAt: 10_300,
+          limit: 500,
+        }),
       ).toThrow(/forced archive failure/);
       expect(repos.skills.getById("rollback_first")?.status).toBe("active");
       expect(repos.skills.getById("rollback_fail")?.status).toBe("active");

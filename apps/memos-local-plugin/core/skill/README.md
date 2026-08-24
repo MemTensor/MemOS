@@ -210,6 +210,10 @@ See `algorithm.skill` in
 | `minEtaForRetrieval`        | `0.5`   | η gate for Tier-1 retrieval + auto-promotion.         |
 | `idleArchiveMs`             | `2592000000` | Archive low-η active skills after 30 days without use (minimum 1 hour). |
 
+Idle archival is maintained by a single-flight background worker that runs
+at startup and at most hourly. Manually reactivating a Skill starts a fresh
+idle grace period.
+
 ## Logging
 
 All skill work logs on dedicated channels (see

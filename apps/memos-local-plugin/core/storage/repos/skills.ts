@@ -66,17 +66,6 @@ export function makeSkillsRepo(db: StorageDb) {
   const updateStatus = db.prepare(
     buildUpdate({ table: "skills", columns: ["id", "status", "updated_at"] }),
   );
-  const archiveIdle = db.prepare<{
-    id: string;
-    min_eta: number;
-    cutoff: number;
-    updated_at: number;
-  }>(
-    `UPDATE skills
-        SET status = 'archived', updated_at = @updated_at
-      WHERE id = @id
-        AND ${IDLE_ARCHIVE_PREDICATE}`,
-  );
   const updateTrials = db.prepare(
     buildUpdate({
       table: "skills",
@@ -103,24 +92,40 @@ export function makeSkillsRepo(db: StorageDb) {
       updateStatus.run({ id, status, updated_at: updatedAt });
     },
 
-    archiveIdleBatch(
-      ids: readonly SkillId[],
-      input: { minEtaForRetrieval: number; cutoff: number; updatedAt: number },
-    ): SkillId[] {
-      if (ids.length === 0) return [];
-      return db.tx(() => {
-        const archived: SkillId[] = [];
-        for (const id of ids) {
-          const res = archiveIdle.run({
-            id,
-            min_eta: input.minEtaForRetrieval,
-            cutoff: input.cutoff,
-            updated_at: input.updatedAt,
-          });
-          if (res.changes > 0) archived.push(id);
-        }
-        return archived;
-      });
+    /**
+     * Atomically select and archive one oldest-first batch. Keeping candidate
+     * selection and the conditional transition in one SQLite statement
+     * removes the read/update race and avoids hundreds of UPDATE round-trips.
+     */
+    archiveNextIdleBatch(input: {
+      minEtaForRetrieval: number;
+      cutoff: number;
+      updatedAt: number;
+      limit?: number;
+    }): SkillRow[] {
+      const requestedLimit = Number.isFinite(input.limit)
+        ? Math.floor(input.limit!)
+        : IDLE_ARCHIVE_BATCH_LIMIT;
+      const params = {
+        min_eta: input.minEtaForRetrieval,
+        cutoff: input.cutoff,
+        updated_at: input.updatedAt,
+        limit: Math.max(1, Math.min(IDLE_ARCHIVE_BATCH_LIMIT, requestedLimit)),
+      };
+      const sql = `
+        WITH candidates AS (
+          SELECT id
+            FROM skills
+           WHERE ${IDLE_ARCHIVE_PREDICATE}
+           ORDER BY COALESCE(last_used_at, created_at) ASC
+           LIMIT @limit
+        )
+        UPDATE skills
+           SET status = 'archived', updated_at = @updated_at
+         WHERE id IN (SELECT id FROM candidates)
+           AND ${IDLE_ARCHIVE_PREDICATE}
+        RETURNING ${COLUMNS.join(", ")}`;
+      return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
     },
 
     bumpTrial(
@@ -173,36 +178,6 @@ export function makeSkillsRepo(db: StorageDb) {
       const where = joinWhere(fragments);
       const page = buildPageClauses(filter, "updated_at");
       const sql = `SELECT ${COLUMNS.join(", ")} FROM skills ${where} ${page}`;
-      return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
-    },
-
-    /**
-     * Return one oldest-first batch of active skills that already satisfy
-     * the idle-archive predicate. Filtering in SQLite prevents unrelated
-     * recently-updated skills from starving older candidates.
-     */
-    listIdleArchiveCandidates(input: {
-      minEtaForRetrieval: number;
-      cutoff: number;
-      limit?: number;
-    }): SkillRow[] {
-      const params = {
-        min_eta: input.minEtaForRetrieval,
-        cutoff: input.cutoff,
-        limit: Math.max(
-          1,
-          Math.min(
-            IDLE_ARCHIVE_BATCH_LIMIT,
-            Math.floor(input.limit ?? IDLE_ARCHIVE_BATCH_LIMIT),
-          ),
-        ),
-      };
-      const sql = `
-        SELECT ${COLUMNS.join(", ")}
-          FROM skills
-         WHERE ${IDLE_ARCHIVE_PREDICATE}
-         ORDER BY COALESCE(last_used_at, created_at) ASC
-         LIMIT @limit`;
       return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
     },
 

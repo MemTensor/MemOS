@@ -88,6 +88,7 @@ import {
   prioritizeEmbedder,
 } from "../util/foreground-resources.js";
 import { createRequestDeadline } from "../util/request-deadline.js";
+import { createSkillLifecycleWorker } from "../skill/lifecycle-worker.js";
 
 function classifyWithTimeout(
   classifyFn: () => Promise<RelationDecision>,
@@ -307,6 +308,12 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     log,
     emit: emitCore,
   });
+  const skillLifecycleWorker = createSkillLifecycleWorker({
+    runLifecycle: () => subs.skills.lifecycleTick(),
+    log: log.child({ channel: "core.skill.lifecycle-worker" }),
+    now: deps.now,
+  });
+  if (!lightweightMode) skillLifecycleWorker.start();
 
   // In-memory index of the open episode per session so we can route
   // `addTurn` calls without a repo round-trip.
@@ -1566,6 +1573,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       toolCalls: result.toolCalls.length,
       agentChars: result.agentText.length,
     });
+    skillLifecycleWorker.trigger();
 
     // The episode stays OPEN — finalize is deferred to topic end.
     return {
@@ -1638,7 +1646,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     await subs.l3.drain();
     await nextTick();
     await subs.skills.flush();
-    await subs.skills.lifecycleTick();
+    await skillLifecycleWorker.runNow();
     await subs.feedback.flush();
     await embeddingRetryWorker.flush();
   }
@@ -1649,6 +1657,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // capture and downstream enrichment. Hermes' bridge owns a 20s outer
     // shutdown ceiling, so abort before that rather than either hanging or
     // discarding every single-shot session's enrichment immediately.
+    skillLifecycleWorker.stop();
     embeddingRetryWorker.stop();
     const flushPromise = flush();
     try {

@@ -252,10 +252,15 @@ the next lifecycle tick.
 
 `lastUsedAt` is updated by the existing recorded-use path. A never-used
 skill falls back to `createdAt`; unrelated metadata updates therefore do
-not reset its idle clock. The scan runs through the orchestrator's normal
-flush lifecycle and does not introduce a separate timer. Each tick processes
-at most ten 500-row batches; any remaining backlog is deferred to a later tick
-so a large archive queue cannot monopolize the event loop.
+not reset its idle clock. Manual reactivation records a fresh use timestamp,
+giving the skill a complete grace period before it can be archived again.
+
+A single-flight lifecycle worker runs once at startup, at most hourly while
+the process remains alive, and opportunistically after turn completion. It
+does not drain the capture/reward/L2/L3 chain. Each tick atomically selects
+and updates at most ten 500-row batches, yielding between full batches; any
+remaining backlog is deferred so a large archive queue cannot monopolize the
+event loop.
 
 ---
 
