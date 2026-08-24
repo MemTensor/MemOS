@@ -86,12 +86,14 @@ describe("bootstrapMemoryCore dedicated LLM config", () => {
 llm:
   provider: local_only
   model: main
+  maxTokens: 5000
 skillEvolver:
   provider: openai_compatible
   endpoint: https://openrouter.ai/api/v1
   openRouter: true
   model: skill-model
   apiKey: sk-test
+  maxTokens: 6000
   providerIgnore:
     - together
   providerOrder:
@@ -102,6 +104,7 @@ l3Llm:
   openRouter: true
   model: l3-model
   apiKey: sk-test
+  maxTokens: 7000
   providerIgnore:
     - novita
   providerOrder:
@@ -120,15 +123,20 @@ l3Llm:
     });
 
     expect(capturedLlmConfigs.find((cfg) => cfg.model === "skill-model")).toMatchObject({
+      maxTokens: 6_000,
       providerIgnore: ["together"],
       providerOrder: ["anthropic"],
       openRouter: true,
     });
     expect(capturedLlmConfigs.find((cfg) => cfg.model === "l3-model")).toMatchObject({
+      maxTokens: 7_000,
       providerIgnore: ["novita"],
       providerOrder: ["openai"],
       openRouter: true,
       reasoning: { enabled: true, maxTokens: 4_000 },
+    });
+    expect(capturedLlmConfigs.find((cfg) => cfg.model === "main")).toMatchObject({
+      maxTokens: 5_000,
     });
   });
 

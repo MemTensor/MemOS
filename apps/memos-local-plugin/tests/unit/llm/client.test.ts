@@ -96,6 +96,17 @@ describe("llm/client", () => {
     expect(fake.lastMessages).toEqual([{ role: "user", content: "hi there" }]);
   });
 
+  it("uses the configured maxTokens unless the call overrides it", async () => {
+    const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+    const client = createLlmClientWithProvider(cfg({ maxTokens: 4_000 }), fake);
+
+    await client.complete("configured budget");
+    expect(fake.lastInput?.maxTokens).toBe(4_000);
+
+    await client.complete("call override", { maxTokens: 6_000 });
+    expect(fake.lastInput?.maxTokens).toBe(6_000);
+  });
+
   it("injects json hints into system and user messages when jsonMode=true", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: '{"ok":1}', durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);

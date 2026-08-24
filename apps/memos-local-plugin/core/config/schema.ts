@@ -108,6 +108,11 @@ const LlmSchema = Type.Object({
   timeoutMs: NumberInRange(45_000, 1_000),
   /** Max retries on transient errors. */
   maxRetries: NumberInRange(3, 0, 10),
+  /**
+   * Default output-token budget for LLM calls. A larger default prevents
+   * reasoning models from truncating structured JSON responses.
+   */
+  maxTokens: NumberInRange(4_000, 1_024, 32_768),
   /** OpenRouter provider routing — providers to skip. */
   providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
   /** OpenRouter provider routing — preferred order. */
@@ -140,6 +145,11 @@ const SkillEvolverSchema = Type.Object({
   apiKey: StringWithDefault(""),
   temperature: NumberInRange(0, 0, 2),
   timeoutMs: NumberInRange(60_000, 1_000),
+  /**
+   * Default output-token budget for dedicated skill-evolver and L3 calls.
+   * These calls commonly return larger structured JSON documents.
+   */
+  maxTokens: NumberInRange(4_000, 1_024, 32_768),
   /** OpenRouter provider routing — providers to skip. */
   providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
   /** OpenRouter provider routing — preferred order. */
