@@ -59,6 +59,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     providerIgnore: [],
     providerOrder: [],
     openRouter: false,
+    maxTokens: 1024,
+    headers: {},
   },
   l3Llm: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -75,6 +77,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     providerIgnore: [],
     providerOrder: [],
     openRouter: false,
+    maxTokens: 4096,
+    headers: {},
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -89,6 +93,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     providerIgnore: [],
     providerOrder: [],
     openRouter: false,
+    maxTokens: 4096,
+    headers: {},
   },
   storage: {
     ftsTokenizer: "trigram",
