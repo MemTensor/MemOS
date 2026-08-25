@@ -1,8 +1,29 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CONFIG, resolveConfig } from "../../../core/config/index.js";
+import { FREE_FORM_CONFIG_PATHS } from "../../../core/config/defaults.js";
 
 describe("resolveConfig llm.maxTokens + llm.headers", () => {
+  it("uses an explicit allowlist for free-form config maps", () => {
+    expect(FREE_FORM_CONFIG_PATHS).toEqual([
+      "llm.headers",
+      "l3Llm.headers",
+      "skillEvolver.headers",
+      "logging.channels",
+    ]);
+    expect(Object.isFrozen(FREE_FORM_CONFIG_PATHS)).toBe(true);
+
+    const warnings: string[] = [];
+    const cfg = resolveConfig(
+      {
+        logging: { channels: { "core.l2.cross-task": "debug" } },
+      },
+      warnings,
+    );
+    expect(cfg.logging.channels).toEqual({ "core.l2.cross-task": "debug" });
+    expect(warnings).toEqual([]);
+  });
+
   it("accepts llm.maxTokens and llm.headers without unknown-key warnings", () => {
     const warnings: string[] = [];
     const cfg = resolveConfig(

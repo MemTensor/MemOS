@@ -363,6 +363,19 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
 };
 
 /**
+ * Object-valued config slots whose child keys are user-defined rather than
+ * fields in `DEFAULT_CONFIG`. Keep this list explicit: treating every empty
+ * default object as a free-form map would silently disable unknown-key
+ * warnings for any future structured config section that starts out empty.
+ */
+export const FREE_FORM_CONFIG_PATHS: readonly string[] = Object.freeze([
+  "llm.headers",
+  "l3Llm.headers",
+  "skillEvolver.headers",
+  "logging.channels",
+]);
+
+/**
  * Set of dotted-path field names whose values must never be sent to the
  * viewer or any non-localhost surface. Used by `server/routes/config.ts`.
  */

@@ -18,7 +18,12 @@ import { MemosError } from "../../agent-contract/errors.js";
 import type { ResolvedHome } from "./paths.js";
 import { resolveHome } from "./paths.js";
 import { ConfigSchema, type ResolvedConfig } from "./schema.js";
-import { DEFAULT_CONFIG, SECRET_FIELD_PATHS, effectiveViewerPort } from "./defaults.js";
+import {
+  DEFAULT_CONFIG,
+  FREE_FORM_CONFIG_PATHS,
+  SECRET_FIELD_PATHS,
+  effectiveViewerPort,
+} from "./defaults.js";
 import { migrateHermesViewerPort } from "./migrations.js";
 import { parseYaml } from "./yaml.js";
 
@@ -323,10 +328,10 @@ function pruneUnknown(
       continue;
     }
     if (isPlainObject(v) && isPlainObject((defaults as Record<string, unknown>)[k])) {
-      if (Object.keys((defaults as Record<string, unknown>)[k] as Record<string, unknown>).length === 0) {
-        // Empty-object default slot = free-form map (e.g. llm.headers, a
-        // Record<string,string>). Keep the whole user object as-is; recursing
-        // would warn on every user key.
+      if (FREE_FORM_CONFIG_PATHS.includes(path)) {
+        // Explicitly declared free-form maps keep user-defined child keys.
+        // Other empty default objects remain structured config sections and
+        // continue to report unknown nested keys.
         out[k] = v;
         continue;
       }
