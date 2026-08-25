@@ -159,7 +159,13 @@ class TestSchedulerConfig(unittest.TestCase):
                 del os.environ[key]
 
     def _clear_unified_openai_env_vars(self):
-        for key in ["OPENAI_API_KEY", "OPENAI_API_BASE", "QWEN_API_KEY", "QWEN_API_BASE"]:
+        for key in [
+            "OPENAI_API_KEY",
+            "OPENAI_API_BASE",
+            "QWEN_API_KEY",
+            "QWEN_API_BASE",
+            "MEMREADER_GENERAL_MODEL",
+        ]:
             os.environ.pop(key, None)
 
     def test_loads_all_configs_from_env(self):
@@ -197,6 +203,7 @@ class TestSchedulerConfig(unittest.TestCase):
 
     def test_openai_config_does_not_fall_back_to_chat_model(self):
         os.environ.pop("MEMREADER_GENERAL_MODEL", None)
+        os.environ.pop("MEMRADER_MODEL", None)
         os.environ.update(
             {
                 "MOS_CHAT_MODEL": "gpt-chat",

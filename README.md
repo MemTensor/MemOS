@@ -64,7 +64,7 @@
 
 - **2026-04-10** · 👧🏻 **MemOS Hermes Agent Local Plugin**
   Official Hermes Agent memory plugins launched: Hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution, multi-agent collaboration. 100% local, zero cloud dependency.
-  
+
 - **2026-03-08** · 🦞 **MemOS OpenClaw Plugin — Cloud & Local**
   Official OpenClaw memory plugins launched. **Cloud Plugin**: hosted memory service with 72% lower token usage and multi-agent memory sharing ([MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)). **Local Plugin** (`v1.0.0`): 100% on-device memory with persistent SQLite, hybrid search (FTS5 + vector), task summarization & skill evolution, multi-agent collaboration, and a full Memory Viewer dashboard.
 
@@ -175,7 +175,7 @@ cd src
 uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-See `[docker/.env.example](./docker/.env.example)` for all configuration options (LLM provider, embedder, vector DB, graph DB, scheduler). The full deployment guide is at [https://memos-docs.openmem.net/open_source/getting_started/rest_api_server/](https://memos-docs.openmem.net/open_source/getting_started/rest_api_server/).
+See [`docker/.env.example-full`](./docker/.env.example-full) for all configuration options (LLM provider, embedder, vector DB, graph DB, scheduler). The full deployment guide is at [https://memos-docs.openmem.net/open_source/getting_started/rest_api_server/](https://memos-docs.openmem.net/open_source/getting_started/rest_api_server/).
 
 **Try the API:**
 
