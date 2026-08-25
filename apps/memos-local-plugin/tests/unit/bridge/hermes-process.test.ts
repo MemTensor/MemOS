@@ -7,9 +7,11 @@
  * subcommand (`hermes --skills memory-routing chat`) was silently
  * missed and the viewer was stuck on `"disconnected"`.
  *
- * The pattern under test is `hermes(?:\s+\S+)*\s+chat\b` — these cases
- * lock in the exact shape of the fix.
+ * The pgrep pattern uses POSIX character classes while the JS helper
+ * uses equivalent `\s` / `\S` tokens. These cases lock in both the
+ * shared command grammar and the exact wire format passed to pgrep.
  */
+import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,8 +25,23 @@ describe("HERMES_CHAT_PROCESS_PATTERN", () => {
     // If this string ever changes, audit `bridge.cts` callers and the
     // issue description before adjusting — the constant is the only
     // surface that fixes the substring-detection bug.
-    expect(HERMES_CHAT_PROCESS_PATTERN).toBe("hermes(?:\\s+\\S+)*\\s+chat\\b");
+    expect(HERMES_CHAT_PROCESS_PATTERN).toBe(
+      "hermes([[:space:]]+[^[:space:]]+)*[[:space:]]+chat([[:space:]]|$)",
+    );
   });
+
+  it.skipIf(process.platform !== "linux")(
+    "compiles under the glibc ERE engine used by pgrep",
+    () => {
+      const result = spawnSync("pgrep", ["-f", HERMES_CHAT_PROCESS_PATTERN], {
+        encoding: "utf8",
+        timeout: 2000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect([0, 1]).toContain(result.status);
+    },
+  );
 });
 
 describe("matchesHermesChatCommandLine", () => {
@@ -53,7 +70,9 @@ describe("matchesHermesChatCommandLine", () => {
 
   it("matches `hermes -m gpt-4 chat` (global short flag before subcommand) — #1915", () => {
     expect(
-      matchesHermesChatCommandLine("/usr/local/bin/hermes -m gpt-4 chat"),
+      matchesHermesChatCommandLine(
+        "/usr/local/lib/hermes-agent/venv/bin/hermes -m gpt-4 chat",
+      ),
     ).toBe(true);
   });
 
@@ -75,6 +94,12 @@ describe("matchesHermesChatCommandLine", () => {
   it("does not match `hermes chatter` (chat must end at a word boundary)", () => {
     expect(
       matchesHermesChatCommandLine("/usr/local/bin/hermes chatter"),
+    ).toBe(false);
+  });
+
+  it("does not match `hermes chat-server` (chat must be a complete token)", () => {
+    expect(
+      matchesHermesChatCommandLine("/usr/local/bin/hermes chat-server"),
     ).toBe(false);
   });
 
