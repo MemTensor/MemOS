@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveConfig } from "../../../core/config/index.js";
+import { loadConfig, resolveConfig } from "../../../core/config/index.js";
 import { SECRET_FIELD_PATHS } from "../../../core/config/defaults.js";
+import { makeTmpHome } from "../../helpers/tmp-home.js";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -18,21 +19,116 @@ describe("resolveConfig secret env fallback", () => {
 
   it("resolves the __memos_secret__ mask sentinel from env", () => {
     process.env.OPENCODE_GO_API_KEY = "sk-mask-resolved";
-    const cfg = resolveConfig({ llm: { apiKey: "__memos_secret__" } });
+    const cfg = resolveConfig({
+      llm: {
+        provider: "openai_compatible",
+        endpoint: "https://opencode.ai/zen/go/v1",
+        apiKey: "__memos_secret__",
+      },
+    });
     expect(cfg.llm.apiKey).toBe("sk-mask-resolved");
   });
 
   it("resolves empty string secret fields from env", () => {
     process.env.OPENCODE_ZEN_API_KEY = "sk-empty-resolved";
-    const cfg = resolveConfig({ llm: { apiKey: "" } });
+    const cfg = resolveConfig({
+      llm: {
+        provider: "openai_compatible",
+        endpoint: "https://opencode.ai/zen/v1",
+        apiKey: "",
+      },
+    });
     expect(cfg.llm.apiKey).toBe("sk-empty-resolved");
   });
 
+  it("does not send an OpenCode key to a different LLM provider", () => {
+    delete process.env.LLM_API_KEY;
+    process.env.OPENCODE_GO_API_KEY = "sk-opencode-only";
+    process.env.OPENCODE_ZEN_API_KEY = "sk-opencode-zen-only";
+
+    const cfg = resolveConfig({
+      llm: {
+        provider: "anthropic",
+        endpoint: "https://api.anthropic.com",
+        apiKey: "__memos_secret__",
+      },
+    });
+
+    expect(cfg.llm.apiKey).toBe("__memos_secret__");
+  });
+
+  it("keeps OpenCode Go and Zen endpoint keys isolated", () => {
+    delete process.env.LLM_API_KEY;
+    process.env.OPENCODE_GO_API_KEY = "sk-go-only";
+    delete process.env.OPENCODE_ZEN_API_KEY;
+
+    const zenConfig = resolveConfig({
+      llm: {
+        provider: "openai_compatible",
+        endpoint: "https://opencode.ai/zen/v1",
+        apiKey: "__memos_secret__",
+      },
+    });
+    expect(zenConfig.llm.apiKey).toBe("__memos_secret__");
+
+    delete process.env.OPENCODE_GO_API_KEY;
+    process.env.OPENCODE_ZEN_API_KEY = "sk-zen-only";
+    const goConfig = resolveConfig({
+      llm: {
+        provider: "openai_compatible",
+        endpoint: "https://opencode.ai/zen/go/v1",
+        apiKey: "__memos_secret__",
+      },
+    });
+    expect(goConfig.llm.apiKey).toBe("__memos_secret__");
+  });
+
+  it("does not warn for intentionally empty optional secrets", () => {
+    delete process.env.EMBEDDING_API_KEY;
+    delete process.env.LLM_API_KEY;
+    delete process.env.OPENCODE_GO_API_KEY;
+    delete process.env.OPENCODE_ZEN_API_KEY;
+    delete process.env.HUB_TEAM_TOKEN;
+    const warnings: string[] = [];
+
+    resolveConfig(
+      {
+        embedding: { provider: "local", apiKey: "" },
+        llm: { provider: "host", apiKey: "" },
+        hub: { enabled: false, teamToken: "" },
+      },
+      warnings,
+    );
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("restores a masked disk secret when config is loaded again", async () => {
+    process.env.LLM_API_KEY = "sk-restart-restored";
+    const ctx = await makeTmpHome({
+      agent: "hermes",
+      configYaml: [
+        "version: 1",
+        "llm:",
+        "  provider: openai_compatible",
+        "  endpoint: https://example.com/v1",
+        "  apiKey: __memos_secret__",
+      ].join("\n"),
+    });
+
+    try {
+      const restarted = await loadConfig(ctx.home, "hermes");
+      expect(restarted.fromDisk).toBe(true);
+      expect(restarted.config.llm.apiKey).toBe("sk-restart-restored");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
   it("uses per-path env conventions — every secret path resolves from its own env var", () => {
-    // OPENCODE_GO_API_KEY is only the generic fallback for the *primary*
-    // llm.apiKey — l3Llm / skillEvolver / hub / embedding all get their
-    // own path-derived env var and never silently borrow the LLM key.
-    process.env.OPENCODE_GO_API_KEY = "sk-llm";
+    // Every path has its own environment variable and never silently borrows
+    // a provider-specific key intended for another config slot.
+    process.env.LLM_API_KEY = "sk-llm";
     process.env.EMBEDDING_API_KEY = "sk-embed";
     process.env.L3_LLM_API_KEY = "sk-l3";
     process.env.SKILL_EVOLVER_API_KEY = "sk-skill";
@@ -159,7 +255,7 @@ describe("resolveConfig secret env fallback", () => {
   });
 
   it("never mutates the caller's raw config object", () => {
-    process.env.OPENCODE_GO_API_KEY = "sk-llm";
+    process.env.LLM_API_KEY = "sk-llm";
     const raw = { llm: { apiKey: "__memos_secret__" } };
     const cfg = resolveConfig(raw);
     expect(cfg.llm.apiKey).toBe("sk-llm");

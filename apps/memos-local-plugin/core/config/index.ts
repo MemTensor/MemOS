@@ -103,17 +103,15 @@ export function resolveConfig(raw: unknown, warnings?: string[], agent?: string)
   //   2. Value is the mask sentinel `__memos_secret__` or empty string
   //      -> derive the env var from the field path itself
   //      (llm.apiKey -> LLM_API_KEY, hub.teamToken -> HUB_TEAM_TOKEN,
-  //      skillEvolver.apiKey -> SKILL_EVOLVER_API_KEY, …). The generic
-  //      OPENCODE_GO/ZEN fallback is applied ONLY to the primary
-  //      `llm.apiKey`; per-component overrides (l3Llm, skillEvolver)
-  //      and non-LLM secrets (embedding, hub tokens) never borrow an
-  //      unrelated provider's key — that would cause cross-provider
-  //      auth failures or unexpected billing on the wrong account.
+  //      skillEvolver.apiKey -> SKILL_EVOLVER_API_KEY, …). Provider-specific
+  //      OpenCode fallbacks only apply when the primary LLM points at the
+  //      matching opencode.ai endpoint; unrelated providers and dedicated
+  //      config slots never borrow those keys.
   //   3. Otherwise leave the value untouched.
   //
-  // Any secret leaf that references an env var that is not set emits a
-  // warning so the operator gets an actionable log message instead of
-  // silent auth failures on the next LLM call.
+  // A masked sentinel or explicit env reference with no backing variable
+  // emits a warning. A plain empty string does not: empty keys are valid for
+  // local/host providers and disabled optional integrations.
   //
   // The mask itself is never used as a credential, and the on-disk write
   // stays masked (security preserved); this is read-side only.
@@ -179,7 +177,7 @@ function resolveSecretEnv(cleaned: Record<string, unknown>, warnings?: string[])
     if (typeof val !== "string") continue;
 
     let envName: string | null = null;
-    let genericFallbacks = false;
+    let warnIfMissing = false;
     if (val.startsWith("${") && val.endsWith("}")) {
       const name = val.slice(2, -1);
       if (!ENV_REF_ALLOWLIST.test(name)) {
@@ -190,6 +188,7 @@ function resolveSecretEnv(cleaned: Record<string, unknown>, warnings?: string[])
         continue;
       }
       envName = name;
+      warnIfMissing = true;
     } else if (val === "__memos_secret__" || val === "") {
       // Derive env var name from the field path itself so every entry
       // in SECRET_FIELD_PATHS is resolvable, not just the ones whose
@@ -202,35 +201,51 @@ function resolveSecretEnv(cleaned: Record<string, unknown>, warnings?: string[])
       //   hub.userToken       → HUB_USER_TOKEN
       const parent = keys[keys.length - 2] ?? "";
       envName = `${camelToUpperSnake(parent)}_${camelToUpperSnake(leaf)}`;
-      // OPENCODE_GO_API_KEY / OPENCODE_ZEN_API_KEY are only meaningful
-      // for the primary `llm.apiKey`. Per-component overrides
-      // (l3Llm.apiKey, skillEvolver.apiKey) and non-LLM secrets
-      // (embedding.apiKey, hub.*Token) must not silently borrow an
-      // unrelated provider's key — doing so causes cross-provider auth
-      // failures and unexpected billing on the wrong account when the
-      // component is configured for a different provider entirely.
-      genericFallbacks = parent === "llm" && leaf === "apiKey";
+      warnIfMissing = val === "__memos_secret__";
     }
     if (!envName) continue;
 
-    const envVal =
-      process.env[envName] ??
-      (genericFallbacks
-        ? (process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_ZEN_API_KEY)
-        : undefined);
+    const envVal = process.env[envName] ?? resolveOpenCodeApiKey(cleaned, dotted);
     if (envVal) {
       (cursor as Record<string, unknown>)[leaf] = envVal;
-    } else {
-      // Explicit-reference case: the user asked for env expansion but
-      // the target is unset. Mask/empty case: we walked the path-based
-      // convention and nothing was set. Both perpetuate the original
-      // bug (silent auth failure on next LLM call) unless we log it.
+    } else if (warnIfMissing) {
       warnings?.push(
         `config: '${dotted}' references env var '${envName}' but it is not set — ` +
           `field left as placeholder and auth will fail on the next call`
       );
     }
   }
+}
+
+/**
+ * Resolve the provider-specific OpenCode fallback for the primary LLM only.
+ * The hostname, provider and endpoint tier must all match so an OpenCode key
+ * can never be sent to Anthropic, Gemini or another OpenAI-compatible host.
+ */
+function resolveOpenCodeApiKey(
+  cleaned: Record<string, unknown>,
+  dotted: string,
+): string | undefined {
+  if (dotted !== "llm.apiKey" || !isPlainObject(cleaned.llm)) return undefined;
+  if (cleaned.llm.provider !== "openai_compatible") return undefined;
+
+  const endpoint = cleaned.llm.endpoint;
+  if (typeof endpoint !== "string" || endpoint.length === 0) return undefined;
+
+  try {
+    const url = new URL(endpoint);
+    if (url.hostname !== "opencode.ai") return undefined;
+    if (/^\/zen\/go(?:\/|$)/.test(url.pathname)) {
+      return process.env.OPENCODE_GO_API_KEY;
+    }
+    if (/^\/zen(?:\/|$)/.test(url.pathname)) {
+      return process.env.OPENCODE_ZEN_API_KEY;
+    }
+  } catch {
+    // Schema validation reports malformed endpoints later. Secret resolution
+    // must not broaden fallback scope just because parsing failed here.
+  }
+  return undefined;
 }
 
 /**
