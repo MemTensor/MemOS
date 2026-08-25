@@ -214,10 +214,21 @@ class OpenAIConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
 
     @classmethod
     def from_env(cls) -> "OpenAIConfig":
+        default_model = (
+            os.getenv("MEMSCHEDULER_MODEL") or os.getenv("MEMREADER_GENERAL_MODEL") or ""
+        )
+        is_qwen = default_model.strip().lower().startswith("qwen") or "/qwen" in default_model
+        api_key_env = "QWEN_API_KEY" if is_qwen else "OPENAI_API_KEY"
+        api_base_env = "QWEN_API_BASE" if is_qwen else "OPENAI_API_BASE"
+        default_base_url = (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            if is_qwen
+            else "https://api.openai.com/v1"
+        )
         return cls(
-            api_key=os.getenv("OPENAI_API_KEY", ""),
-            base_url=os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
-            default_model=os.getenv("MEMSCHEDULER_OPENAI_DEFAULT_MODEL", "gpt-4o-mini"),
+            api_key=os.getenv(api_key_env, ""),
+            base_url=os.getenv(api_base_env, default_base_url),
+            default_model=default_model,
         )
 
 
@@ -354,7 +365,9 @@ class AuthConfig(BaseConfig, DictConversionMixin):
                 for key in [
                     "OPENAI_API_KEY",
                     "OPENAI_API_BASE",
-                    "MEMSCHEDULER_OPENAI_DEFAULT_MODEL",
+                    "QWEN_API_KEY",
+                    "QWEN_API_BASE",
+                    "MEMSCHEDULER_MODEL",
                 ]
             )
             if has_openai_env:
@@ -391,6 +404,7 @@ class AuthConfig(BaseConfig, DictConversionMixin):
             os.environ["OPENAI_API_KEY"] = self.openai.api_key
             os.environ["OPENAI_API_BASE"] = self.openai.base_url
             os.environ["MODEL"] = self.openai.default_model
+            os.environ["MEMSCHEDULER_MODEL"] = self.openai.default_model
         else:
             logger = logging.getLogger(__name__)
             logger.warning("OpenAI config is not available, skipping environment variable setup")

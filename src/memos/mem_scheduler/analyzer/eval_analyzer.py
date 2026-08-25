@@ -14,6 +14,7 @@ from typing import Any
 
 from openai import OpenAI
 
+from memos.api.config import APIConfig
 from memos.log import get_logger
 
 
@@ -51,13 +52,18 @@ class EvalAnalyzer:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize OpenAI client
-        self.openai_client = OpenAI(
-            api_key=openai_api_key or os.getenv("OPENAI_API_KEY"),
-            base_url=openai_base_url or os.getenv("OPENAI_API_BASE"),
+        scheduler_config = APIConfig.get_scheduler_llm_config()["config"]
+        self.openai_model = openai_model or scheduler_config["model_name_or_path"]
+        provider_config = (
+            APIConfig._build_provider_llm_config(self.openai_model)["config"]
+            if openai_model
+            else scheduler_config
         )
-        self.openai_model = openai_model or os.getenv(
-            "MEMSCHEDULER_OPENAI_DEFAULT_MODEL", "gpt-4o-mini"
+
+        # Initialize OpenAI-compatible client
+        self.openai_client = OpenAI(
+            api_key=openai_api_key or provider_config["api_key"],
+            base_url=openai_base_url or provider_config["api_base"],
         )
 
         logger.info(f"EvalAnalyzer initialized with model: {self.openai_model}")
