@@ -30,6 +30,7 @@
  */
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -87,7 +88,7 @@ function pidFilePath(agent: string, explicitHome?: string): string {
   if (configuredHome) return path.join(path.resolve(configuredHome), "daemon", PID_FILENAME);
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
-    process.env.HOME ?? "/tmp",
+    homedir(),
     agentHome,
     "memos-plugin",
     "daemon",

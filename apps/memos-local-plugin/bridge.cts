@@ -29,6 +29,7 @@ const path = require("node:path") as typeof import("node:path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require("node:fs") as typeof import("node:fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const { homedir } = require("node:os") as typeof import("node:os");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const url = require("node:url") as typeof import("node:url");
 
@@ -104,7 +105,7 @@ function pidFilePath(
   if (configuredHome) return path.join(path.resolve(configuredHome), "daemon", filename);
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
-    process.env.HOME ?? "/tmp",
+    homedir(),
     agentHome,
     "memos-plugin",
     "daemon",
