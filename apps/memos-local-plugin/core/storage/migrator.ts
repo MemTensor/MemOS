@@ -215,6 +215,9 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     }
     return;
   }
+  // Keep REPAIRABLE_UNDER_NAME_COLLISION (bottom of file) in sync when
+  // adding guarded cases here — a guarded case missing from that set
+  // silently loses repair-under-name-collision (the file is just skipped).
   if (file.version === 13 && file.name === "traces-ts-index") {
     // Same guard as 012: some test harnesses build partial schemas without a
     // `traces` table; the index is meaningless there and must not fail boot.
@@ -450,7 +453,14 @@ function getAppliedMigrationNames(db: StorageDb): Map<number, string> {
  * the conservative behaviour: a version-number collision skips the file.
  */
 const REPAIRABLE_UNDER_NAME_COLLISION = new Set([
-  3, 4, 5, 6, 7, 8, 9, 10, 12, 13,
+  3, 4, 5, 6, 7, 8, 9, 10,
+  // 11 (hub-sharing) intentionally omitted: it has no guarded apply path in
+  // applyMigration(), and hub runtime tables are opt-in team-sharing state a
+  // collision heal must never create implicitly. Its SQL is idempotent (all
+  // CREATE ... IF NOT EXISTS), but policy keeps the conservative skip; pinned
+  // by the "keeps skipping a version recorded under a foreign name when that
+  // migration is not repairable" test. Give 011 a guarded path before adding.
+  12, 13,
 ]);
 
 /**
