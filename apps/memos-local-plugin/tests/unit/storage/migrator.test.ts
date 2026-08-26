@@ -205,4 +205,109 @@ describe("storage/migrator", () => {
       db.close();
     }
   });
+
+  it("013-traces-ts-index creates the bare-ts index and repairs train-collision bookkeeping", () => {
+    // Regression test for the Aug 2026 restart storm: `latestTraceTs()` runs
+    // an unfiltered newest-first trace read several times per /api/v1/health
+    // request. No existing index leads with bare `ts`, so every call was a
+    // full scan + temp B-tree sort; on a large traces table that blocked the
+    // synchronous better-sqlite3 event loop long enough that health probes
+    // timed out and a liveness watchdog restart-looped the daemon forever.
+    //
+    // This test also exercises the release-train heal: databases migrated by
+    // the other train carry schema_migrations rows whose VERSION numbers
+    // collide with different NAMES (observed: rows 13/14 named
+    // skill-repair-origin / episode-outcome). Repairable additive migrations
+    // must still apply and repair their bookkeeping row.
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      // Simulate a database previously migrated by the OTHER release train:
+      // versions 13/14 exist under foreign names before this build runs.
+      db.exec(`
+        CREATE TABLE schema_migrations (
+          version    INTEGER PRIMARY KEY,
+          name       TEXT    NOT NULL,
+          applied_at INTEGER NOT NULL
+        ) STRICT;
+      `);
+      db.exec(
+        `INSERT INTO schema_migrations (version, name, applied_at) VALUES (13, 'skill-repair-origin', 1), (14, 'episode-outcome', 1)`,
+      );
+
+      const result = runMigrations(db);
+      expect(result.applied.map((m) => m.name)).toContain("traces-ts-index");
+
+      // The index exists...
+      const index = db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_traces_ts'`,
+        )
+        .get();
+      expect(index?.name).toBe("idx_traces_ts");
+
+      // ...the plan for newest-first reads uses it instead of a table scan,
+      // and the foreign bookkeeping row was repaired to THIS train's name.
+      const detail = db
+        .prepare<unknown, { sql: string }>(
+          `SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_traces_ts'`,
+        )
+        .get();
+      expect(detail?.sql).toContain("ts DESC");
+      const repaired = db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM schema_migrations WHERE version = 13`,
+        )
+        .get();
+      expect(repaired?.name).toBe("traces-ts-index");
+
+      // Re-running is idempotent: everything counts as skipped.
+      const again = runMigrations(db);
+      expect(again.applied).toHaveLength(0);
+      expect(again.skipped).toBe(again.total);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps skipping a version recorded under a foreign name when that migration is not repairable", () => {
+    // Conservative path: only migrations in the repairable allowlist may run
+    // under a version/name collision. Everything else keeps the historical
+    // behaviour -- the foreign record wins and the file is skipped untouched.
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      db.exec(`
+        CREATE TABLE schema_migrations (
+          version    INTEGER PRIMARY KEY,
+          name       TEXT    NOT NULL,
+          applied_at INTEGER NOT NULL
+        ) STRICT;
+      `);
+      db.exec(
+        `INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'their-hub-sharing-renamed', 1)`,
+      );
+
+      const result = runMigrations(db);
+      expect(result.applied.map((m) => m.version)).not.toContain(11);
+      // The hub-sharing objects were NOT created because 011 was skipped...
+      const hubTable = db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM sqlite_master WHERE type='table' AND name='hub_shared_skills'`,
+        )
+        .get();
+      expect(hubTable).toBeUndefined();
+      // ...and the foreign bookkeeping row is preserved verbatim.
+      const row = db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM schema_migrations WHERE version = 11`,
+        )
+        .get();
+      expect(row?.name).toBe("their-hub-sharing-renamed");
+    } finally {
+      db.close();
+    }
+  });
 });
