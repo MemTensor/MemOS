@@ -24,7 +24,7 @@ describe("defaultDraftValidator", () => {
 
   it("falls back through step title, displayTitle, then name for the summary", () => {
     const draft = makeDraft({ summary: "", steps: [] });
-    defaultDraftValidator(draft);
+    expect(() => defaultDraftValidator(draft)).toThrow(/missing steps/);
     expect(draft.summary).toBe("Alpine pip install with system deps");
   });
 
@@ -40,19 +40,14 @@ describe("defaultDraftValidator", () => {
 
   it("uses || not ?? — an empty-string summary still triggers the fallback", () => {
     const draft = makeDraft({ summary: "", steps: [] });
-    defaultDraftValidator(draft);
+    expect(() => defaultDraftValidator(draft)).toThrow(/missing steps/);
     expect(draft.summary).not.toBe("");
   });
 
-  it("auto-generates a single step when the steps array is empty", () => {
+  it("rejects missing steps instead of inventing a generic procedure", () => {
     const draft = makeDraft({ steps: [] });
-    defaultDraftValidator(draft);
-    expect(draft.steps).toEqual([
-      {
-        title: "Execute the fix",
-        body: "Ensure system libs exist before pip install on alpine.",
-      },
-    ]);
+    expect(() => defaultDraftValidator(draft)).toThrow(/missing steps/);
+    expect(draft.steps).toEqual([]);
   });
 
   it("still rejects a draft with no name", () => {
