@@ -480,8 +480,10 @@ class APIConfig:
 
         Fallback chain: MEMSCHEDULER_MODEL -> MEMREADER_GENERAL_MODEL.
         """
-        scheduler_model = os.getenv("MEMSCHEDULER_MODEL") or os.getenv("MEMREADER_GENERAL_MODEL")
-        return APIConfig._build_provider_llm_config(scheduler_model or "")
+        scheduler_model = os.getenv("MEMSCHEDULER_MODEL")
+        if scheduler_model:
+            return APIConfig._build_provider_llm_config(scheduler_model)
+        return APIConfig.get_memreader_general_llm_config()
 
     @staticmethod
     def get_image_parser_llm_config() -> dict[str, Any]:

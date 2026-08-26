@@ -154,7 +154,7 @@ def test_task_specific_model_uses_provider_env(monkeypatch, env_name, getter):
     ],
 )
 def test_task_specific_model_falls_back_to_general_model(monkeypatch, env_name, getter):
-    monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.delenv("SUGGESTION_MODEL", raising=False)
     monkeypatch.delenv("MEMSCHEDULER_MODEL", raising=False)
     monkeypatch.setenv("MEMREADER_GENERAL_MODEL", "qwen3.6-flash")
     monkeypatch.setenv("QWEN_API_KEY", "qwen-key")

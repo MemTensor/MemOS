@@ -54,11 +54,12 @@ class EvalAnalyzer:
 
         scheduler_config = APIConfig.get_scheduler_llm_config()["config"]
         self.openai_model = openai_model or scheduler_config["model_name_or_path"]
-        provider_config = (
-            APIConfig._build_provider_llm_config(self.openai_model)["config"]
-            if openai_model
-            else scheduler_config
-        )
+        if not self.openai_model:
+            raise ValueError(
+                "No model configured. Set MEMSCHEDULER_MODEL, MEMREADER_GENERAL_MODEL, "
+                "or pass openai_model explicitly."
+            )
+        provider_config = APIConfig._build_provider_llm_config(self.openai_model)["config"]
 
         # Initialize OpenAI-compatible client
         self.openai_client = OpenAI(

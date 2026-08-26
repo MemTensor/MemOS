@@ -217,7 +217,8 @@ class OpenAIConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
         default_model = (
             os.getenv("MEMSCHEDULER_MODEL") or os.getenv("MEMREADER_GENERAL_MODEL") or ""
         )
-        is_qwen = default_model.strip().lower().startswith("qwen") or "/qwen" in default_model
+        normalized = default_model.strip().lower()
+        is_qwen = normalized.startswith("qwen") or "/qwen" in normalized
         api_key_env = "QWEN_API_KEY" if is_qwen else "OPENAI_API_KEY"
         api_base_env = "QWEN_API_BASE" if is_qwen else "OPENAI_API_BASE"
         default_base_url = (
