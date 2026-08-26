@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { MemosError } from "../../../agent-contract/errors.js";
 import { embedSteps } from "../../../core/capture/embedder.js";
 import type { NormalizedStep } from "../../../core/capture/types.js";
-import { initTestLogger } from "../../../core/logger/index.js";
+import type { Embedder } from "../../../core/embedding/types.js";
+import { initTestLogger, memoryBuffer } from "../../../core/logger/index.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 
 function step(partial: Partial<NormalizedStep>): NormalizedStep {
@@ -109,6 +111,84 @@ describe("capture/embedder", () => {
     expect(out).toHaveLength(1);
     expect(out[0]!.summary).toBeNull();
     expect(out[0]!.action).toBeNull();
+  });
+
+  it("preserves successful vectors when a neighboring input is rejected", async () => {
+    const base = fakeEmbedder({ dimensions: 3 });
+    const e: Embedder = {
+      ...base,
+      async embedManySettled(inputs) {
+        return inputs.map((_, index) => index === 1
+          ? { ok: false, error: new MemosError("embedding_unavailable", "bad action") }
+          : { ok: true, vector: new Float32Array([1, 2, 3]) });
+      },
+    };
+
+    const out = await embedSteps(e, [step({ userText: "good summary", agentText: "bad action" })]);
+
+    expect(out[0]!.summary).toEqual(new Float32Array([1, 2, 3]));
+    expect(out[0]!.action).toBeNull();
+    expect(memoryBuffer().tail({ channel: "core.capture.embed", limit: 20 })).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        msg: "embed.partial_failed",
+        data: expect.objectContaining({ failedCount: 1, inputCount: 2, stepCount: 1 }),
+      }),
+    );
+  });
+
+  it("logs aggregate partial failures in summary-only mode", async () => {
+    const base = fakeEmbedder({ dimensions: 3 });
+    const e: Embedder = {
+      ...base,
+      async embedManySettled(inputs) {
+        return inputs.map((_, index) => index === 0
+          ? { ok: false, error: new MemosError("embedding_unavailable", "bad summary") }
+          : { ok: true, vector: new Float32Array([1, 2, 3]) });
+      },
+    };
+
+    const out = await embedSteps(
+      e,
+      [step({ userText: "bad" }), step({ userText: "good", key: "k2" })],
+      undefined,
+      { summaryOnly: true },
+    );
+
+    expect(out[0]!.summary).toBeNull();
+    expect(out[1]!.summary).toEqual(new Float32Array([1, 2, 3]));
+    expect(memoryBuffer().tail({ channel: "core.capture.embed", limit: 20 })).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        msg: "embed.partial_failed",
+        data: expect.objectContaining({ failedCount: 1, inputCount: 2, stepCount: 2 }),
+      }),
+    );
+  });
+
+  it("reports an all-failed settled batch without calling it a partial failure", async () => {
+    const base = fakeEmbedder({ dimensions: 3 });
+    const e: Embedder = {
+      ...base,
+      async embedManySettled(inputs) {
+        return inputs.map(() => ({
+          ok: false,
+          error: new MemosError("embedding_unavailable", "provider unavailable"),
+        }));
+      },
+    };
+
+    const out = await embedSteps(e, [step({ userText: "summary", agentText: "action" })]);
+
+    expect(out[0]!.summary).toBeNull();
+    expect(out[0]!.action).toBeNull();
+    expect(memoryBuffer().tail({ channel: "core.capture.embed", limit: 20 })).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        msg: "embed.failed_all",
+        data: expect.objectContaining({ failedCount: 2, inputCount: 2, stepCount: 1 }),
+      }),
+    );
   });
 
   it("empty text step still produces a vector (uses '(empty)' fallback)", async () => {

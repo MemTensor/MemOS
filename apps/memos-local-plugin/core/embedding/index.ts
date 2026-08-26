@@ -5,6 +5,7 @@
 export {
   createEmbedder,
   createEmbedderWithProvider,
+  estimateEmbeddingTokens,
   makeProviderFor,
 } from "./embedder.js";
 export {
@@ -27,6 +28,7 @@ export type {
   EmbeddingConfig,
   EmbeddingProvider,
   EmbeddingProviderName,
+  EmbeddingSettledResult,
   ProviderCallCtx,
   ProviderLogger,
 } from "./types.js";

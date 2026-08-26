@@ -94,6 +94,7 @@ export {
 export {
   createEmbedder,
   createEmbedderWithProvider,
+  estimateEmbeddingTokens,
   makeProviderFor,
   LruEmbedCache,
   NullEmbedCache,
@@ -118,6 +119,7 @@ export {
   type EmbeddingConfig,
   type EmbeddingProvider,
   type EmbeddingProviderName,
+  type EmbeddingSettledResult,
   type ProviderCallCtx,
   type ProviderLogger,
 } from "./embedding/index.js";

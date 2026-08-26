@@ -97,6 +97,16 @@ describe("Hermes provider install links", () => {
     expect(preserveLine).not.toContain('"node_modules"');
   });
 
+  it("legacy agent installers omit DSH peers without resolving their development peer tree", () => {
+    const unixSource = readFileSync(path.join(repoRoot, "install.sh"), "utf8");
+    const windowsSource = readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
+
+    expect(unixSource).toContain("npm install --omit=dev --legacy-peer-deps");
+    expect(windowsSource).toMatch(
+      /"install", "--omit=dev", "--legacy-peer-deps", "--no-fund"/,
+    );
+  });
+
   it("PowerShell installer stops Hermes only after staging succeeds", () => {
     const source = readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
     const deployStart = source.indexOf("function Deploy-Tarball");
