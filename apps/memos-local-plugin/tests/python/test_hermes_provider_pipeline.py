@@ -1150,9 +1150,7 @@ class HandleToolCallEnsureAsciiTests(unittest.TestCase):
         bridge = ChineseToolResultBridge()
         provider = self._make_provider(bridge)
 
-        raw = provider.handle_tool_call(
-            "memos_get", {"id": "world-cn-1", "kind": "world_model"}
-        )
+        raw = provider.handle_tool_call("memos_get", {"id": "world-cn-1", "kind": "world_model"})
 
         self.assertIn(ChineseToolResultBridge._CH_WORLD_TITLE, raw)
         parsed = json.loads(raw)
