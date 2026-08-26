@@ -227,6 +227,86 @@ describe("DeepSeek Harness host LLM bridge", () => {
     expect(result.text).toBe("ok");
   });
 
+  it("remembers an unsupported-effort route and probes it only once per bridge", async () => {
+    const preparations: LlmCallConfig[] = [];
+    const routes = new DeepSeekHarnessLlmRouteContext();
+    const bridge = createDeepSeekHarnessHostLlmBridge({
+      llm: streamFrom([
+        { type: "text-delta", index: 0, text: "ok" },
+        { type: "finish", reason: { kind: "stop" } },
+      ], undefined, [], (config) => {
+        preparations.push(config);
+      }),
+      routes,
+    });
+    const complete = () => bridge.complete({ messages: [{ role: "user", content: "hello" }] });
+
+    const first = await routes.run(
+      { provider: "openai", model: "gpt-test" },
+      complete,
+    );
+    const second = await routes.run(
+      { provider: "openai", model: "gpt-test" },
+      complete,
+    );
+
+    expect(first.text).toBe("ok");
+    expect(second.text).toBe("ok");
+    // The doomed probe runs once per route; later helper calls skip straight
+    // to the effort-less preparation instead of failing again.
+    expect(preparations).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-test",
+        reasoningEffort: ReasoningEffortId("off"),
+      },
+      { provider: "openai", model: "gpt-test" },
+      { provider: "openai", model: "gpt-test" },
+    ]);
+  });
+
+  it("keeps remembered effort routes scoped to a single bridge instance", async () => {
+    const firstPreparations: LlmCallConfig[] = [];
+    const secondPreparations: LlmCallConfig[] = [];
+    const routes = new DeepSeekHarnessLlmRouteContext();
+    const firstBridge = createDeepSeekHarnessHostLlmBridge({
+      llm: streamFrom([
+        { type: "text-delta", index: 0, text: "ok" },
+        { type: "finish", reason: { kind: "stop" } },
+      ], undefined, [], (config) => {
+        firstPreparations.push(config);
+      }),
+      routes,
+    });
+    const secondBridge = createDeepSeekHarnessHostLlmBridge({
+      llm: streamFrom([
+        { type: "text-delta", index: 0, text: "ok" },
+        { type: "finish", reason: { kind: "stop" } },
+      ], undefined, [], (config) => {
+        secondPreparations.push(config);
+      }),
+      routes,
+    });
+    const completeOn = (bridge: typeof firstBridge) => () => bridge.complete({
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    await routes.run(
+      { provider: "openai", model: "gpt-test" },
+      completeOn(firstBridge),
+    );
+    await routes.run(
+      { provider: "openai", model: "gpt-test" },
+      completeOn(secondBridge),
+    );
+
+    // A fresh bridge re-probes: route knowledge must not leak across runtimes.
+    expect(secondPreparations[0]).toHaveProperty(
+      "reasoningEffort",
+      ReasoningEffortId("off"),
+    );
+  });
+
   it("does not fall back for errors other than unsupported reasoning effort", async () => {
     const failure = new LlmError("invalid model metadata", "INVALID_MODEL_REASONING");
     const prepareCall = vi.fn<DeepSeekHarnessLlmLike["prepareCall"]>();

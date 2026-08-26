@@ -96,6 +96,9 @@ export interface CreateDeepSeekHarnessHostLlmBridgeOptions {
 export function createDeepSeekHarnessHostLlmBridge(
   options: CreateDeepSeekHarnessHostLlmBridgeOptions,
 ): HostLlmBridge {
+  // Per-bridge, not module-global: each runtime owns its route knowledge, so
+  // concurrent bridges stay independent and tests remain hermetic.
+  const effortUnsupportedRoutes: EffortUnsupportedRoutes = new Set();
   return {
     id: HOST_LLM_BRIDGE_ID,
     async complete(input: HostLlmCompleteInput): Promise<HostLlmCompletion> {
@@ -122,6 +125,7 @@ export function createDeepSeekHarnessHostLlmBridge(
           input,
           route,
           callDeadline.signal,
+          effortUnsupportedRoutes,
         );
         const request = createGenerateOptions(input, route, prepared.config);
         request.signal = callDeadline.signal;
@@ -212,6 +216,13 @@ function createGenerateOptions(
   };
 }
 
+/** Routes of one bridge that already rejected the branded `off` effort probe. */
+type EffortUnsupportedRoutes = Set<string>;
+
+function effortRouteKey(route: DeepSeekHarnessLlmRoute): string {
+  return `${route.provider}/${route.model}`;
+}
+
 /**
  * Prepare a registration-bound bounded MemOS helper call.
  *
@@ -223,14 +234,24 @@ function createGenerateOptions(
  * adapter/provider default. prepareCall performs no provider generation I/O
  * and binds that validation to the same registration used for dispatch, even
  * if HMR replaces the route before the returned stream starts.
+ *
+ * A model may advertise no efforts at all (a hand-declared OpenAI-completions
+ * entry, for example), so for such routes the probe itself always fails. Each
+ * bridge remembers the routes that rejected the probe and skips it on later
+ * calls: without that memory every summarize/filter pays one doomed attempt
+ * plus a logged UNSUPPORTED_REASONING_EFFORT error before its real request.
  */
 async function prepareAuxiliaryCall(
   llm: DeepSeekHarnessLlmLike,
   input: HostLlmCompleteInput,
   route: DeepSeekHarnessLlmRoute,
   signal: AbortSignal,
+  effortUnsupportedRoutes: EffortUnsupportedRoutes,
 ): Promise<PreparedLlmCall> {
   const config = createCallConfig(input, route);
+  if (effortUnsupportedRoutes.has(effortRouteKey(route))) {
+    return llm.prepareCall(config, signal);
+  }
   try {
     return await llm.prepareCall(
       { ...config, reasoningEffort: NO_REASONING_EFFORT },
@@ -243,6 +264,7 @@ async function prepareAuxiliaryCall(
     ) {
       throw error;
     }
+    effortUnsupportedRoutes.add(effortRouteKey(route));
     return llm.prepareCall(config, signal);
   }
 }
