@@ -1967,7 +1967,14 @@ export function createMemoryCore(
       // gateway reload would close SQLite while reflect / reward is
       // mid-flush, producing `SQLITE_MISUSE` noise on the way down.
       try {
-        await startupRecoveryPromise;
+        // Bound the wait: a slow / flaky LLM during startup recovery of a
+        // large dirty episode must not hold shutdown hostage until the
+        // systemd kill timer (15 Aug 2026 stop-sigterm wedge: SIGTERM at
+        // 08:00:23, SIGKILL at 08:10:23). Recovery is resumable — dirty
+        // episodes carry rewardDirty.failedAttempts and the periodic
+        // rescore re-runs them — so nothing is lost by proceeding after a
+        // short grace. Fast init→shutdown races still get their grace.
+        await withTimeout(startupRecoveryPromise, 15_000, "startup_recovery_shutdown_timeout");
       } catch {
         /* already logged inside the recovery promise */
       }
