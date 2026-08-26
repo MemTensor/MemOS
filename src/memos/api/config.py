@@ -464,6 +464,28 @@ class APIConfig:
         return APIConfig.get_memreader_config()
 
     @staticmethod
+    def get_suggestion_llm_config() -> dict[str, Any]:
+        """Get LLM configuration for suggestion query generation.
+
+        Fallback chain: SUGGESTION_MODEL -> MEMREADER_GENERAL_MODEL -> memreader config.
+        """
+        suggestion_model = os.getenv("SUGGESTION_MODEL")
+        if suggestion_model:
+            return APIConfig._build_provider_llm_config(suggestion_model)
+        return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
+    def get_scheduler_llm_config() -> dict[str, Any]:
+        """Get LLM configuration for scheduler-owned LLM tasks.
+
+        Fallback chain: MEMSCHEDULER_MODEL -> MEMREADER_GENERAL_MODEL.
+        """
+        scheduler_model = os.getenv("MEMSCHEDULER_MODEL")
+        if scheduler_model:
+            return APIConfig._build_provider_llm_config(scheduler_model)
+        return APIConfig.get_memreader_general_llm_config()
+
+    @staticmethod
     def get_image_parser_llm_config() -> dict[str, Any]:
         """Get LLM configuration for image parsing (requires vision model).
 

@@ -87,12 +87,7 @@ def build_llm_config() -> dict[str, Any]:
     Returns:
         Validated LLM configuration dictionary
     """
-    return LLMConfigFactory.model_validate(
-        {
-            "backend": "openai",
-            "config": APIConfig.get_openai_config(),
-        }
-    )
+    return LLMConfigFactory.model_validate(APIConfig.get_scheduler_llm_config())
 
 
 def build_feedback_llm_config() -> dict[str, Any]:

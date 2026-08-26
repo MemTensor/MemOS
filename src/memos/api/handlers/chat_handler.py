@@ -92,6 +92,7 @@ class ChatHandler(BaseHandler):
 
         self.chat_llms = chat_llms
         self.playground_chat_llms = playground_chat_llms or chat_llms
+        self.suggestion_llm = getattr(dependencies, "suggestion_llm", dependencies.llm)
         self.search_handler = search_handler
         self.add_handler = add_handler
         self.online_bot = online_bot
@@ -1232,7 +1233,7 @@ class ChatHandler(BaseHandler):
                 },
                 {"role": "user", "content": further_suggestion_prompt},
             ]
-            response = self.llm.generate(message_list)
+            response = self.suggestion_llm.generate(message_list)
             clean_response = clean_json_response(response)
             response_json = json.loads(clean_response)
             return response_json["query"]

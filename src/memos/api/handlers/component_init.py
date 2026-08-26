@@ -21,6 +21,8 @@ from memos.api.handlers.config_builders import (
     build_mem_reader_config,
     build_nli_client_config,
     build_reranker_config,
+    build_scheduler_llm_config,
+    build_suggestion_llm_config,
 )
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.embedders.factory import EmbedderFactory
@@ -158,6 +160,8 @@ def init_server() -> dict[str, Any]:
     graph_db_config = build_graph_db_config()
     llm_config = build_llm_config()
     feedback_llm_config = build_feedback_llm_config()
+    suggestion_llm_config = build_suggestion_llm_config()
+    scheduler_llm_config = build_scheduler_llm_config()
     chat_llm_config = build_chat_llm_config()
     playground_chat_llm_config = build_chat_llm_config("PLAYGROUND_CHAT_MODEL_LIST")
     embedder_config = build_embedder_config()
@@ -173,6 +177,8 @@ def init_server() -> dict[str, Any]:
     graph_db = GraphStoreFactory.from_config(graph_db_config)
     llm = LLMFactory.from_config(llm_config)
     feedback_llm = LLMFactory.from_config(feedback_llm_config)
+    suggestion_llm = LLMFactory.from_config(suggestion_llm_config)
+    scheduler_llm = LLMFactory.from_config(scheduler_llm_config)
     chat_llms = (
         _init_chat_llms(chat_llm_config)
         if os.getenv("ENABLE_CHAT_API", "false") == "true"
@@ -281,7 +287,7 @@ def init_server() -> dict[str, Any]:
     )
     mem_scheduler: OptimizedScheduler = SchedulerFactory.from_config(scheduler_config)
     mem_scheduler.initialize_modules(
-        chat_llm=llm,
+        chat_llm=scheduler_llm,
         process_llm=mem_reader.general_llm,
         db_engine=BaseDBManager.create_default_sqlite_engine(),
         mem_reader=mem_reader,
@@ -325,6 +331,8 @@ def init_server() -> dict[str, Any]:
         "graph_db": graph_db,
         "mem_reader": mem_reader,
         "llm": llm,
+        "suggestion_llm": suggestion_llm,
+        "scheduler_llm": scheduler_llm,
         "chat_llms": chat_llms,
         "playground_chat_llms": playground_chat_llms,
         "embedder": embedder,
