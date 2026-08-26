@@ -43,7 +43,13 @@ const BRIDGE_STATUS_FILE = "bridge-status.json";
 const SHUTDOWN_TIMEOUT_MS = 20_000;
 
 function withShutdownTimeout(p: Promise<void>): Promise<void> {
-  return Promise.race([p, new Promise<void>((r) => setTimeout(r, SHUTDOWN_TIMEOUT_MS))]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 interface BridgeArgs {

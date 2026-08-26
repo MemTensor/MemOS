@@ -56,6 +56,7 @@ import type {
   PipelineBuses,
   PipelineDeps,
   PipelineHandle,
+  PipelineShutdownOptions,
   RecordToolOutcomeInput,
   TurnEndResult,
 } from "./types.js";
@@ -1651,7 +1652,10 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     await embeddingRetryWorker.flush();
   }
 
-  async function shutdown(reason: string = "shutdown"): Promise<void> {
+  async function shutdown(
+    reason: string = "shutdown",
+    options: PipelineShutdownOptions = {},
+  ): Promise<void> {
     log.info("pipeline.shutdown.begin", { reason });
     // Stop admitting retry jobs, but preserve a bounded grace period for raw
     // capture and downstream enrichment. Hermes' bridge owns a 20s outer
@@ -1659,15 +1663,20 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     // discarding every single-shot session's enrichment immediately.
     skillLifecycleWorker.stop();
     embeddingRetryWorker.stop();
+    const flushGraceMs = Math.max(0, options.flushGraceMs ?? 15_000);
+    const abortWaitMs = Math.max(0, options.abortWaitMs ?? 4_000);
+    if (flushGraceMs === 0) {
+      foregroundResources.shutdown(reason);
+    }
     const flushPromise = flush();
     try {
-      const completed = await settlesWithin(flushPromise, 15_000);
+      const completed = await settlesWithin(flushPromise, flushGraceMs);
       if (!completed) {
-        log.warn("pipeline.flush_timeout", { reason, timeoutMs: 15_000 });
+        log.warn("pipeline.flush_timeout", { reason, timeoutMs: flushGraceMs });
         foregroundResources.shutdown(reason);
-        const aborted = await settlesWithin(flushPromise, 4_000);
+        const aborted = await settlesWithin(flushPromise, abortWaitMs);
         if (!aborted) {
-          log.warn("pipeline.flush_abandoned", { reason, abortWaitMs: 4_000 });
+          log.warn("pipeline.flush_abandoned", { reason, abortWaitMs });
         }
       }
     } catch (err) {

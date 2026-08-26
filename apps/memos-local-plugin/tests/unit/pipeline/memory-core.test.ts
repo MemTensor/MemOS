@@ -2680,6 +2680,59 @@ algorithm:
     await expect(fastCore.shutdown()).resolves.toBeUndefined();
   });
 
+  it("cancels stalled startup recovery before shutting down the pipeline (#2252)", async () => {
+    db!.repos.sessions.upsert({
+      id: "se_stalled_recovery",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_stalled_recovery",
+      sessionId: "se_stalled_recovery",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      endedAt: null,
+      traceIds: [],
+      rTask: null,
+      status: "open",
+      meta: {},
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    const originalShutdown = pipeline.shutdown.bind(pipeline);
+    pipeline.flush = vi.fn(() => new Promise<void>(() => {}));
+    const shutdownSpy = vi.fn(
+      async (
+        reason?: string,
+        options?: Parameters<PipelineHandle["shutdown"]>[1],
+      ) => originalShutdown(reason, { ...options, abortWaitMs: 0 }),
+    );
+    pipeline.shutdown = shutdownSpy;
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "issue2252-stalled-recovery",
+      { startupRecoveryShutdownGraceMs: 10 },
+    );
+
+    await core.init();
+    await expect(core.shutdown()).resolves.toBeUndefined();
+    expect(shutdownSpy).toHaveBeenCalledWith(
+      "memory-core.shutdown",
+      { flushGraceMs: 0 },
+    );
+
+    core = null;
+    pipeline = null;
+  });
+
   it("does not rescore a closed episode whose only mismatch is a ghost trace ID (#1966)", async () => {
     // Regression guard for https://github.com/MemTensor/MemOS/issues/1966.
     // A dangling ID in trace_ids_json must not make reward coverage look dirty

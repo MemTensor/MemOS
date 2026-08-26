@@ -40,6 +40,20 @@ const __dirname = path.dirname(__filename);
 const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
 const BRIDGE_STATUS_STALE_MS = 20_000;
 const BRIDGE_STATUS_FILE = "bridge-status.json";
+// Keep both executable bridge entries within the same process-level budget.
+// Core shutdown has its own cooperative recovery cancellation, while this
+// outer deadline guarantees a broken provider cannot orphan the bridge.
+const SHUTDOWN_TIMEOUT_MS = 20_000;
+
+function withShutdownTimeout(p: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 interface BridgeArgs {
   daemon: boolean;
@@ -400,13 +414,13 @@ async function main(): Promise<void> {
           process.stderr.write(
             `bridge: daemon port :${viewerPort} still in use after ${maxBindAttempts}s — exiting.\n`,
           );
-          await core.shutdown();
+          await withShutdownTimeout(core.shutdown());
           process.exit(1);
         }
         process.stderr.write(
           `bridge: daemon viewer failed: ${(err as Error)?.message ?? String(err)}\n`,
         );
-        await core.shutdown();
+        await withShutdownTimeout(core.shutdown());
         process.exit(1);
       }
     }
@@ -416,7 +430,7 @@ async function main(): Promise<void> {
       removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
       try {
-        await core.shutdown();
+        await withShutdownTimeout(core.shutdown());
       } catch {
         // clear-data already shuts the core down before removing SQLite.
         // The signal still has to terminate the daemon so the supervisor
@@ -493,7 +507,7 @@ async function main(): Promise<void> {
         /* best-effort */
       }
     }
-    await waitForShutdown(core, activeStdio);
+    await withShutdownTimeout(waitForShutdown(core, activeStdio));
     process.exit(0);
   };
 
@@ -514,7 +528,7 @@ async function main(): Promise<void> {
       if (viewer!.closed) {
         clearInterval(keepalive);
         removeOwnedPidFile();
-        void core.shutdown().then(() => process.exit(0));
+        void withShutdownTimeout(core.shutdown()).then(() => process.exit(0));
       }
     }, 5_000);
     (keepalive as unknown as { unref?: () => void }).unref?.();
@@ -523,7 +537,7 @@ async function main(): Promise<void> {
 
   // No viewer (headless bridge) — clean exit.
   removeOwnedPidFile();
-  await core.shutdown();
+  await withShutdownTimeout(core.shutdown());
   process.exit(0);
 }
 

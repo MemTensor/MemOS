@@ -577,6 +577,8 @@ export interface CreateMemoryCoreOptions {
   onShutdown?: () => void | Promise<void>;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /** Startup-recovery grace used by shutdown. Defaults to 15 seconds. */
+  startupRecoveryShutdownGraceMs?: number;
 }
 
 /**
@@ -596,6 +598,10 @@ export function createMemoryCore(
   const bootAt = Date.now();
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
   const autoRecoveryEnabled = options.autoRecovery ?? true;
+  const startupRecoveryShutdownGraceMs = Math.max(
+    0,
+    options.startupRecoveryShutdownGraceMs ?? 15_000,
+  );
   let telemetry = options.telemetry ?? null;
   let initialized = false;
   let shutDown = false;
@@ -718,6 +724,7 @@ export function createMemoryCore(
   // detach the slow recovery to this promise. `waitForStartupRecovery`
   // exposes it so tests can opt back into the deterministic semantics.
   let startupRecoveryPromise: Promise<void> = Promise.resolve();
+  let startupRecoveryCancelled = false;
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
@@ -1517,6 +1524,7 @@ export function createMemoryCore(
   async function recoverOpenEpisodesAsSessionEnd(
     orphans: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
+    if (startupRecoveryCancelled) return;
     const endedAt = Date.now();
     log.info("init.orphan_episodes.session_end_recover", { count: orphans.length });
     debugStartupRecovery("H1", "startup_recovery_scan", {
@@ -1547,6 +1555,7 @@ export function createMemoryCore(
     });
     try {
       for (const ep of orphans) {
+        if (startupRecoveryCancelled) break;
         if (isLightweightEpisode(ep)) continue;
         try {
           const episodeId = ep.id as EpisodeId;
@@ -1600,7 +1609,9 @@ export function createMemoryCore(
 
       try {
         await handle.flush();
+        if (startupRecoveryCancelled) return;
         for (const episodeId of needsRewardFallback) {
+          if (startupRecoveryCancelled) break;
           if (captureFailedInBatch.has(episodeId)) {
             log.warn("init.orphan_recovery.reward_fallback_skipped", {
               episodeId,
@@ -1617,6 +1628,7 @@ export function createMemoryCore(
             });
           }
         }
+        if (startupRecoveryCancelled) return;
         await handle.flush();
         debugStartupRecovery("H5", "startup_recovery_flush_done", {
           recoveredCount: orphans.length,
@@ -1649,11 +1661,13 @@ export function createMemoryCore(
   async function recoverDirtyClosedEpisodes(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
+    if (startupRecoveryCancelled) return;
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
     // Snapshot the prior failure counters so we can increment them later
     // (after the bus chain settles) without an extra DB read.
     const priorFailedAttempts = new Map<EpisodeId, number>();
     for (const ep of episodes) {
+      if (startupRecoveryCancelled) break;
       if (isLightweightEpisode(ep)) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
@@ -1680,6 +1694,7 @@ export function createMemoryCore(
       });
     }
     await handle.flush();
+    if (startupRecoveryCancelled) return;
     // After the reward / reflect chain has finished, account for the
     // outcome: clear `meta.rewardDirty` on episodes that are no longer
     // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
@@ -1966,6 +1981,7 @@ export function createMemoryCore(
       // wait, a fast `init → shutdown` race during tests or a quick
       // gateway reload would close SQLite while reflect / reward is
       // mid-flush, producing `SQLITE_MISUSE` noise on the way down.
+      let startupRecoveryTimedOut = false;
       try {
         // Bound the wait: a slow / flaky LLM during startup recovery of a
         // large dirty episode must not hold shutdown hostage until the
@@ -1974,9 +1990,23 @@ export function createMemoryCore(
         // episodes carry rewardDirty.failedAttempts and the periodic
         // rescore re-runs them — so nothing is lost by proceeding after a
         // short grace. Fast init→shutdown races still get their grace.
-        await withTimeout(startupRecoveryPromise, 15_000, "startup_recovery_shutdown_timeout");
-      } catch {
-        /* already logged inside the recovery promise */
+        await withTimeout(
+          startupRecoveryPromise,
+          startupRecoveryShutdownGraceMs,
+          "startup_recovery_shutdown_timeout",
+        );
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message === "startup_recovery_shutdown_timeout"
+        ) {
+          startupRecoveryTimedOut = true;
+          startupRecoveryCancelled = true;
+          log.warn("startup_recovery.shutdown_timeout", {
+            timeoutMs: startupRecoveryShutdownGraceMs,
+            action: "cancel_and_shutdown_pipeline",
+          });
+        }
       }
       try {
         await hubRuntime?.stop();
@@ -1985,7 +2015,10 @@ export function createMemoryCore(
           err: err instanceof Error ? err.message : String(err),
         });
       }
-      await handle.shutdown("memory-core.shutdown");
+      await handle.shutdown(
+        "memory-core.shutdown",
+        startupRecoveryTimedOut ? { flushGraceMs: 0 } : undefined,
+      );
     } finally {
       disposeTurnStartApiLogSessionListener();
       turnStartApiLogBySession.clear();
