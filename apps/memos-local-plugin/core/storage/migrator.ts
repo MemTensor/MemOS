@@ -90,7 +90,7 @@ function assertMonotonic(files: MigrationFile[]): void {
 export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir()): MigrationsResult {
   ensureSchemaMigrationsTable(db);
   const allFiles = discoverMigrations(dir);
-  const appliedVersions = getAppliedVersions(db);
+  const appliedNames = getAppliedMigrationNames(db);
 
   const applied: MigrationsResult["applied"] = [];
   let skipped = 0;
@@ -102,22 +102,35 @@ export function runMigrations(db: StorageDb, dir: string = defaultMigrationsDir(
   // input, so turning unsafe mode on for the migration phase is safe.
   // `.unsafeMode()` may not be toggled inside a transaction, so we flip it
   // at the outer boundary.
+  const isPending = (file: MigrationFile): boolean => {
+    const recordedName = appliedNames.get(file.version);
+    // Pending when never recorded, or recorded under a FOREIGN name (release-
+    // train collision) for a migration whose apply path is safe to re-run.
+    if (recordedName === undefined) return true;
+    return recordedName !== file.name && REPAIRABLE_UNDER_NAME_COLLISION.has(file.version);
+  };
   const needsUnsafe = allFiles.some(
-    (f) => !appliedVersions.has(f.version) && migrationNeedsUnsafeMode(f.fullPath),
+    (f) => isPending(f) && migrationNeedsUnsafeMode(f.fullPath),
   );
   if (needsUnsafe) db.raw.unsafeMode(true);
 
   try {
     for (const file of allFiles) {
-      if (appliedVersions.has(file.version)) {
+      if (!isPending(file)) {
         skipped++;
         continue;
       }
       const t0 = now();
       db.tx(() => {
         applyMigration(db, file);
+        // Upsert: when the version row existed under a foreign name (release-
+        // train collision), repair the bookkeeping to reflect what THIS train
+        // last ensured. When the row is fresh, this behaves like the plain
+        // INSERT it replaces.
         db.prepare(
-          `INSERT INTO schema_migrations (version, name, applied_at) VALUES (@version, @name, @applied_at)`,
+          `INSERT INTO schema_migrations (version, name, applied_at)
+           VALUES (@version, @name, @applied_at)
+           ON CONFLICT(version) DO UPDATE SET name = excluded.name, applied_at = excluded.applied_at`,
         ).run({ version: file.version, name: file.name, applied_at: now() });
       });
       const durationMs = now() - t0;
@@ -197,6 +210,17 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     return;
   }
   if (file.version === 12 && file.name === "trace-turn-pagination-index") {
+    if (tableExists(db, "traces")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
+  // Keep REPAIRABLE_UNDER_NAME_COLLISION (bottom of file) in sync when
+  // adding guarded cases here — a guarded case missing from that set
+  // silently loses repair-under-name-collision (the file is just skipped).
+  if (file.version === 13 && file.name === "traces-ts-index") {
+    // Same guard as 012: some test harnesses build partial schemas without a
+    // `traces` table; the index is meaningless there and must not fail boot.
     if (tableExists(db, "traces")) {
       db.exec(fs.readFileSync(file.fullPath, "utf8"));
     }
@@ -400,12 +424,44 @@ function ensureSchemaMigrationsTable(db: StorageDb): void {
   );
 }
 
-function getAppliedVersions(db: StorageDb): Set<number> {
+/**
+ * Applied migrations keyed by version number, valued by name.
+ *
+ * The npm plugin train and the monorepo train have historically reused
+ * version numbers for DIFFERENT migrations (e.g. a database migrated by the
+ * other train carries `(13, '<their-migration>')`). Version-only bookkeeping
+ * makes such databases silently skip any same-numbered migration shipped by
+ * this build -- including additive repair migrations that are safe to apply.
+ */
+function getAppliedMigrationNames(db: StorageDb): Map<number, string> {
   const rows = db
-    .prepare<unknown, { version: number }>(`SELECT version FROM schema_migrations`)
+    .prepare<unknown, { version: number; name: string }>(
+      `SELECT version, name FROM schema_migrations`,
+    )
     .all();
-  return new Set(rows.map((r) => r.version));
+  return new Map(rows.map((r) => [r.version, r.name]));
 }
+
+/**
+ * Migrations whose `applyMigration()` path is safe to execute even when the
+ * same version number was already recorded under a DIFFERENT name (see
+ * `getAppliedMigrationNames`). Every entry here is guarded: it either no-ops
+ * through existence checks (`ensureColumn`, `tableExists`, `CREATE ... IF NOT
+ * EXISTS`) or performs a strictly additive change, so running it against a
+ * database that already has the equivalent objects from another train is a
+ * cheap no-op rather than a corruption risk. Anything NOT listed here keeps
+ * the conservative behaviour: a version-number collision skips the file.
+ */
+const REPAIRABLE_UNDER_NAME_COLLISION = new Set([
+  3, 4, 5, 6, 7, 8, 9, 10,
+  // 11 (hub-sharing) intentionally omitted: it has no guarded apply path in
+  // applyMigration(), and hub runtime tables are opt-in team-sharing state a
+  // collision heal must never create implicitly. Its SQL is idempotent (all
+  // CREATE ... IF NOT EXISTS), but policy keeps the conservative skip; pinned
+  // by the "keeps skipping a version recorded under a foreign name when that
+  // migration is not repairable" test. Give 011 a guarded path before adding.
+  12, 13,
+]);
 
 /**
  * Convenience helper for tests / CLIs: open, migrate, return.
