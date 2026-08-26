@@ -206,7 +206,7 @@ describe("storage/migrator", () => {
     }
   });
 
-  it("013-traces-ts-index creates the bare-ts index and repairs train-collision bookkeeping", () => {
+  it("018-traces-ts-index creates the bare-ts index without rewriting historical migrations", () => {
     // Regression test for the Aug 2026 restart storm: `latestTraceTs()` runs
     // an unfiltered newest-first trace read several times per /api/v1/health
     // request. No existing index leads with bare `ts`, so every call was a
@@ -214,17 +214,14 @@ describe("storage/migrator", () => {
     // synchronous better-sqlite3 event loop long enough that health probes
     // timed out and a liveness watchdog restart-looped the daemon forever.
     //
-    // This test also exercises the release-train heal: databases migrated by
-    // the other train carry schema_migrations rows whose VERSION numbers
-    // collide with different NAMES (observed: rows 13/14 named
-    // skill-repair-origin / episode-outcome). Repairable additive migrations
-    // must still apply and repair their bookkeeping row.
+    // Published and development release trains have already used versions
+    // 13-17 for unrelated migrations. The new index must therefore use 018
+    // and preserve those historical bookkeeping rows verbatim.
     const { dbPath, cleanup } = tmpDb();
     cleanups.push(cleanup);
     const db = openDb({ filepath: dbPath, agent: "openclaw" });
     try {
-      // Simulate a database previously migrated by the OTHER release train:
-      // versions 13/14 exist under foreign names before this build runs.
+      // Simulate a database previously migrated by the other release trains.
       db.exec(`
         CREATE TABLE schema_migrations (
           version    INTEGER PRIMARY KEY,
@@ -233,11 +230,19 @@ describe("storage/migrator", () => {
         ) STRICT;
       `);
       db.exec(
-        `INSERT INTO schema_migrations (version, name, applied_at) VALUES (13, 'skill-repair-origin', 1), (14, 'episode-outcome', 1)`,
+        `INSERT INTO schema_migrations (version, name, applied_at) VALUES
+          (13, 'skill-repair-origin', 1),
+          (14, 'episode-outcome', 2),
+          (15, 'policy-merge-family', 3),
+          (16, 'episode-policy-injections', 4),
+          (17, 'evolution-jobs', 5)`,
       );
 
       const result = runMigrations(db);
-      expect(result.applied.map((m) => m.name)).toContain("traces-ts-index");
+      expect(result.applied).toContainEqual(expect.objectContaining({
+        version: 18,
+        name: "traces-ts-index",
+      }));
 
       // The index exists...
       const index = db
@@ -247,20 +252,37 @@ describe("storage/migrator", () => {
         .get();
       expect(index?.name).toBe("idx_traces_ts");
 
-      // ...the plan for newest-first reads uses it instead of a table scan,
-      // and the foreign bookkeeping row was repaired to THIS train's name.
+      // ...and the plan for newest-first reads uses it instead of a table
+      // scan plus a temporary sort.
       const detail = db
         .prepare<unknown, { sql: string }>(
           `SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_traces_ts'`,
         )
         .get();
       expect(detail?.sql).toContain("ts DESC");
-      const repaired = db
-        .prepare<unknown, { name: string }>(
-          `SELECT name FROM schema_migrations WHERE version = 13`,
+      const plan = db
+        .prepare<unknown, { detail: string }>(
+          `EXPLAIN QUERY PLAN SELECT ts FROM traces ORDER BY ts DESC, id DESC LIMIT 1`,
         )
-        .get();
-      expect(repaired?.name).toBe("traces-ts-index");
+        .all()
+        .map((row) => row.detail)
+        .join("\n");
+      expect(plan).toContain("USING COVERING INDEX idx_traces_ts");
+      expect(plan).not.toContain("USE TEMP B-TREE");
+
+      const historicalRows = db
+        .prepare<unknown, { version: number; name: string; applied_at: number }>(
+          `SELECT version, name, applied_at FROM schema_migrations
+           WHERE version BETWEEN 13 AND 17 ORDER BY version`,
+        )
+        .all();
+      expect(historicalRows).toEqual([
+        { version: 13, name: "skill-repair-origin", applied_at: 1 },
+        { version: 14, name: "episode-outcome", applied_at: 2 },
+        { version: 15, name: "policy-merge-family", applied_at: 3 },
+        { version: 16, name: "episode-policy-injections", applied_at: 4 },
+        { version: 17, name: "evolution-jobs", applied_at: 5 },
+      ]);
 
       // Re-running is idempotent: everything counts as skipped.
       const again = runMigrations(db);

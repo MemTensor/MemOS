@@ -144,6 +144,7 @@ describe("storage/repos — happy paths", () => {
       const all = repos.traces.list({ sessionId: "s" });
       expect(all.length).toBe(3);
       expect(all[0]!.ts).toBeGreaterThan(all[1]!.ts); // newest first by default
+      expect(repos.traces.latestTimestamp()).toBe(30);
 
       const highAbs = repos.traces.list({ minAbsValue: 0.8 });
       expect(highAbs.map((t) => t.id)).toEqual(["t0"]);

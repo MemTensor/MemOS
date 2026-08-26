@@ -2051,8 +2051,9 @@ export function createMemoryCore(
     // actually been able to talk to the configured upstream. See #1596.
     const effectiveConfig = diskConfig ?? handle.config;
 
-    const llmInfo = llmHealth(handle.llm, latestTraceTs());
-    const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    const latestTraceTimestamp = latestTraceTs();
+    const llmInfo = llmHealth(handle.llm, latestTraceTimestamp);
+    const embedderInfo = embedderHealth(handle.embedder, latestTraceTimestamp);
     applyConfiguredModelDisplay(effectiveConfig, llmInfo, embedderInfo);
 
     const skillEvolverInfo = resolveSkillEvolver(
@@ -2065,7 +2066,7 @@ export function createMemoryCore(
       // in that case anyway.
       handle.reflectLlm ?? handle.llm,
       llmInfo,
-      latestTraceTs(),
+      latestTraceTimestamp,
     );
 
     // NOTE: we deliberately do NOT fall back to `api_logs`-stored
@@ -2106,9 +2107,7 @@ export function createMemoryCore(
 
   function latestTraceTs(): number | null {
     try {
-      const rows = handle.repos.traces.list({ limit: 1 });
-      if (rows.length === 0) return null;
-      return rows[0]?.ts ?? null;
+      return handle.repos.traces.latestTimestamp();
     } catch {
       return null;
     }

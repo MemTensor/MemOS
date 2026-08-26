@@ -171,6 +171,22 @@ describe("MemoryCore façade", () => {
     expect(h.llm.available).toBe(false);
   });
 
+  it("reads the latest trace timestamp only once per health snapshot", async () => {
+    const latestTimestamp = vi.spyOn(db!.repos.traces, "latestTimestamp");
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test-1.0.0",
+    );
+    await core.init();
+    latestTimestamp.mockClear();
+
+    await core.health();
+
+    expect(latestTimestamp).toHaveBeenCalledTimes(1);
+  });
+
   it("reloads the hub runtime when hub config changes without a process restart", async () => {
     const home = await makeTmpHome({
       agent: "openclaw",
