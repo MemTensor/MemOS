@@ -8,7 +8,7 @@
 
 import net from "node:net";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMemoryCore,
@@ -31,6 +31,8 @@ import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import type { MemosError } from "../../../agent-contract/errors.js";
+import { MemosError as EmbeddingFailure } from "../../../agent-contract/errors.js";
+import type { Embedder } from "../../../core/embedding/types.js";
 import type { SkillId, SkillRow, TraceRow } from "../../../core/types.js";
 
 let db: TmpDbHandle | null = null;
@@ -60,6 +62,7 @@ function configWithLightweightMemory(enabled: boolean): typeof DEFAULT_CONFIG {
 function buildDeps(
   h: TmpDbHandle,
   config: typeof DEFAULT_CONFIG = configWithLightweightMemory(false),
+  embedder: Embedder = fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }),
 ): PipelineDeps {
   return {
     agent: "openclaw",
@@ -69,7 +72,7 @@ function buildDeps(
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }),
+    embedder,
     log: rootLogger.child({ channel: "test.memory-core" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
@@ -280,6 +283,61 @@ describe("MemoryCore façade", () => {
     expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
   });
 
+  it("repairs valid embedding slots while isolating a rejected neighbor", async () => {
+    const base = fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS });
+    const settledEmbedder: Embedder = {
+      ...base,
+      async embedManySettled(inputs) {
+        return inputs.map((input) => {
+          const text = typeof input === "string" ? input : input.text;
+          return text.includes("rejected action")
+            ? { ok: false, error: new EmbeddingFailure("embedding_unavailable", "bad action") }
+            : { ok: true, vector: new Float32Array(TEST_EMBED_DIMENSIONS).fill(1) };
+        });
+      },
+    };
+    pipeline = createPipeline(buildDeps(db!, configWithLightweightMemory(false), settledEmbedder));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    await core.importBundle({
+      version: 1,
+      traces: [{
+        id: "tr_partial_embedding",
+        episodeId: "ep_partial_embedding",
+        sessionId: "se_partial_embedding",
+        ts: 1_700_000_000_000,
+        userText: "valid summary source",
+        agentText: "rejected action source",
+        summary: "valid summary",
+        toolCalls: [],
+        value: 0,
+        alpha: 0,
+        priority: 0,
+        turnId: 1_700_000_000_000,
+      }],
+    });
+
+    const repaired = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+
+    expect(repaired.updated).toBe(1);
+    expect(repaired.failed).toBe(1);
+    expect(repaired.done).toBe(false);
+    expect(repaired.error).toBeUndefined();
+    const row = db!.repos.traces.getById("tr_partial_embedding" as never);
+    expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+    expect(row?.vecAction).toBeNull();
+
+    const terminal = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+    expect(terminal.updated).toBe(0);
+    expect(terminal.failed).toBe(1);
+    expect(terminal.done).toBe(true);
+    expect(terminal.error).toBe("bad action");
+  });
+
   it("does not require action vectors for lightweight memory traces", async () => {
     pipeline = createPipeline(buildDeps(db!, configWithLightweightMemory(true)));
     core = createMemoryCore(
@@ -389,6 +447,230 @@ describe("MemoryCore façade", () => {
     expect(res.tierLatencyMs).toBeDefined();
     expect(typeof res.injectedContext).toBe("string");
     expect(res.query.query).toBe("how do I build this project?");
+  });
+
+  it("uses pure turn-start retrieval for eventually consistent adapters", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    const recallTurn = vi.spyOn(pipeline, "recallTurn");
+    const prepareTurn = vi.spyOn(pipeline, "prepareTurn");
+    const onTurnStart = vi.spyOn(pipeline, "onTurnStart");
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const recalled = await core.searchMemory({
+      agent: "deepseek-harness",
+      namespace: {
+        agentKind: "deepseek-harness",
+        profileId: "web",
+      },
+      sessionId: "s-eventual-recall",
+      query: "find the previous repository build decision",
+      reason: "turn_start",
+      contextHints: { dshTurn: 7 },
+      deadlineAt: Date.now() + 5_000,
+    });
+
+    expect(recalled.query.reason).toBe("turn_start");
+    expect(recallTurn).toHaveBeenCalledTimes(1);
+    expect(recallTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s-eventual-recall",
+        userText: "find the previous repository build decision",
+        contextHints: expect.objectContaining({ dshTurn: 7 }),
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(prepareTurn).not.toHaveBeenCalled();
+    expect(onTurnStart).not.toHaveBeenCalled();
+    expect(pipeline.sessionManager.getSession("s-eventual-recall")).toBeNull();
+
+    const prepared = await core.prepareTurn({
+      agent: "deepseek-harness",
+      namespace: {
+        agentKind: "deepseek-harness",
+        profileId: "web",
+      },
+      sessionId: "s-eventual-recall",
+      userText: "find the previous repository build decision",
+      ts: 1_700_000_000_000,
+    });
+    expect(prepared.sessionId).toBe("s-eventual-recall");
+    expect(prepareTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a DSH tool-driven deadline and returns mechanical safeCutoff hits", async () => {
+    const baseConfig = configWithLightweightMemory(true);
+    const config = {
+      ...baseConfig,
+      algorithm: {
+        ...baseConfig.algorithm,
+        retrieval: {
+          ...baseConfig.algorithm.retrieval,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+    };
+    let filterCalls = 0;
+    let seenMalformedRetries: number | undefined;
+    let resolveLateFilter!: (value: unknown) => void;
+    const lateFilter = new Promise((resolve) => {
+      resolveLateFilter = resolve;
+    });
+    const hangingFilterLlm = {
+      completeJson: vi.fn(async (_messages: unknown, options: {
+        signal?: AbortSignal;
+        malformedRetries?: number;
+      }) => {
+        filterCalls += 1;
+        seenMalformedRetries = options.malformedRetries;
+        return await lateFilter;
+      }),
+    };
+    pipeline = createPipeline({
+      ...buildDeps(db!, config),
+      llm: hangingFilterLlm as never,
+    });
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    db!.repos.sessions.upsert({
+      id: "se_dsh_deadline",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_dsh_deadline",
+      sessionId: "se_dsh_deadline",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      endedAt: 1_700_000_000_001,
+      traceIds: ["tr_dsh_deadline"] as never,
+      rTask: null,
+      status: "closed",
+      meta: { lightweightMemory: true },
+    });
+    db!.repos.traces.insert({
+      id: "tr_dsh_deadline",
+      episodeId: "ep_dsh_deadline",
+      sessionId: "se_dsh_deadline",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: 1_700_000_000_000,
+      userText: "Where is the DSH retrieval deadline decision?",
+      agentText: "The DSH retrieval deadline decision is stored in the adapter.",
+      summary: "DSH retrieval deadline decision",
+      share: null,
+      toolCalls: [],
+      agentThinking: null,
+      reflection: null,
+      value: 0.8,
+      alpha: 0.5,
+      rHuman: null,
+      priority: 0.8,
+      tags: ["dsh_deadline"],
+      errorSignatures: [],
+      vecSummary: new Float32Array(TEST_EMBED_DIMENSIONS),
+      vecAction: null,
+      turnId: 1_700_000_000_000,
+      schemaVersion: 1,
+    } as TraceRow);
+
+    const startedAt = Date.now();
+    const result = await core.searchMemory({
+      agent: "deepseek-harness",
+      namespace: { agentKind: "openclaw", profileId: "main" },
+      query: "DSH retrieval deadline decision",
+      reason: "tool_driven",
+      deadlineAt: Date.now() + 25,
+      llmFilterMalformedRetries: 0,
+      topK: { tier1: 0, tier2: 5, tier3: 0 },
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(filterCalls).toBe(1);
+    expect(seenMalformedRetries).toBe(0);
+    expect(result.hits.map((hit) => hit.refId)).toContain("tr_dsh_deadline");
+    resolveLateFilter({ value: { ranked: [1], sufficient: true }, servedBy: "late" });
+  });
+
+  it("writes one memos_search api log when turn.start reuses the same turn key", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const turn = {
+      agent: "openclaw" as const,
+      sessionId: "s-turn-start-log-idempotency",
+      userText: "你知道快乐星球吗",
+      ts: 1_700_000_000_000,
+      turnKey: "s-turn-start-log-idempotency:1",
+    };
+    const first = await core.onTurnStart(turn);
+    const replay = await core.onTurnStart({ ...turn, ts: turn.ts + 1 });
+
+    expect(replay.query.episodeId).toBe(first.query.episodeId);
+    const { logs } = await core.listApiLogs({
+      toolName: "memos_search",
+      limit: 10,
+    });
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!.inputJson)).toMatchObject({
+      type: "turn_start",
+      sessionId: first.query.sessionId,
+      episodeId: first.query.episodeId,
+    });
+  });
+
+  it("allows a failed turn.start with a turn key to be retried and logged", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    const originalOnTurnStart = pipeline.onTurnStart.bind(pipeline);
+    vi.spyOn(pipeline, "onTurnStart")
+      .mockRejectedValueOnce(new Error("simulated retrieval failure"))
+      .mockImplementation(originalOnTurnStart);
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const turn = {
+      agent: "openclaw" as const,
+      sessionId: "s-turn-start-log-retry",
+      userText: "retry this retrieval",
+      ts: 1_700_000_000_000,
+      turnKey: "s-turn-start-log-retry:1",
+    };
+    await expect(core.onTurnStart(turn)).rejects.toThrow("simulated retrieval failure");
+    await expect(core.onTurnStart({ ...turn, ts: turn.ts + 1 })).resolves.toBeDefined();
+
+    const { logs } = await core.listApiLogs({
+      toolName: "memos_search",
+      limit: 10,
+    });
+    expect(logs).toHaveLength(2);
+    expect(logs.map((log) => log.success).sort()).toEqual([false, true]);
   });
 
   it("scopes shared traces to creator, same framework, or hub team", async () => {
@@ -896,6 +1178,53 @@ describe("MemoryCore façade", () => {
     expect(scored.value).toBe(1);
     expect(scored.rHuman).toBe(1);
     expect(scored.priority).toBe(1);
+  });
+
+  it("logs both user and assistant content with the matching role", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const userText = "今晚吃什么，推荐一下";
+    const agentText = "可以考虑清淡的汤面、盖饭或者附近评价不错的家常菜。";
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-memory-add-roles",
+      userText,
+      ts: 1_700_000_000_000,
+    });
+    await core.onTurnEnd({
+      agent: "openclaw",
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
+      agentText,
+      toolCalls: [],
+      ts: 1_700_000_000_500,
+    });
+
+    const { logs } = await core.listApiLogs({
+      toolName: "memory_add",
+      limit: 10,
+    });
+    const liteLog = logs.find((log) => {
+      const input = JSON.parse(log.inputJson) as { phase?: string };
+      return input.phase === "lite";
+    });
+    expect(liteLog).toBeDefined();
+
+    const output = JSON.parse(liteLog!.outputJson) as {
+      details?: Array<{ role?: string; content?: string }>;
+    };
+    expect(
+      output.details?.map(({ role, content }) => ({ role, content })),
+    ).toEqual([
+      { role: "user", content: userText },
+      { role: "assistant", content: agentText },
+    ]);
   });
 
   it("onTurnEnd preserves adapter-provided historical timestamps", async () => {
@@ -1549,7 +1878,7 @@ algorithm:
     expect(meta.reward?.traceIds).toEqual(["tr_dirty"]);
   });
 
-  it("rescoring finalized closed episodes that have traces but no reward metadata", async () => {
+  it("recovers a real SQLite dirty episode when trace ts differs from turnId", async () => {
     home = await makeTmpHome({
       agent: "openclaw",
       configYaml: FULL_MEMORY_CONFIG_YAML,
@@ -1567,6 +1896,7 @@ algorithm:
     const Sqlite = (await import("better-sqlite3")).default;
     const writeDb = new Sqlite(home.home.dbFile);
     const ts = Date.now() - 1_000;
+    const turnId = ts - 250;
     writeDb
       .prepare(
         `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
@@ -1611,7 +1941,7 @@ algorithm:
         0.5,
         "[]",
         "[]",
-        ts,
+        turnId,
         1,
       );
     writeDb.close();
@@ -1824,6 +2154,177 @@ algorithm:
     // The background promise is still in flight (or just finished);
     // either way `waitForStartupRecovery()` must resolve.
     await core.waitForStartupRecovery?.();
+  });
+
+  it("does not run the stale-open manual reward fallback after capture.failed", async () => {
+    const startedAt = 1_000;
+    db!.repos.sessions.upsert({
+      id: "se_capture_failed",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      lastSeenAt: startedAt,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_capture_failed",
+      sessionId: "se_capture_failed",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      endedAt: null,
+      traceIds: ["tr_capture_failed"] as never,
+      rTask: null,
+      status: "open",
+      meta: {},
+    });
+    db!.repos.traces.insert({
+      id: "tr_capture_failed",
+      episodeId: "ep_capture_failed",
+      sessionId: "se_capture_failed",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: startedAt + 100,
+      userText: "recover this stale episode",
+      agentText: "the capture stage will fail in this test",
+      summary: "stale capture failure",
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      share: null,
+      turnId: startedAt,
+      schemaVersion: 1,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    let captureCalls = 0;
+    let rewardCalls = 0;
+    pipeline.captureRunner.runReflect = async (input) => {
+      captureCalls++;
+      pipeline!.buses.capture.emit({
+        kind: "capture.failed",
+        episodeId: input.episode.id,
+        sessionId: input.episode.sessionId,
+        stage: "match",
+        error: { code: "conflict", message: "injected full replay mismatch" },
+      });
+      throw new Error("injected full replay mismatch");
+    };
+    const originalRewardRun = pipeline.rewardRunner.run.bind(pipeline.rewardRunner);
+    pipeline.rewardRunner.run = async (input) => {
+      rewardCalls++;
+      return originalRewardRun(input);
+    };
+
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "capture-failure-recovery",
+    );
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    expect(captureCalls).toBe(1);
+    expect(rewardCalls).toBe(0);
+    expect(db!.repos.episodes.getById("ep_capture_failed" as never)?.rTask).toBeNull();
+  });
+
+  it("cleans a legacy dirty marker when reward was intentionally skipped", async () => {
+    const startedAt = 1_000;
+    db!.repos.sessions.upsert({
+      id: "se_skipped_dirty",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      lastSeenAt: startedAt,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_skipped_dirty",
+      sessionId: "se_skipped_dirty",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      endedAt: startedAt + 100,
+      traceIds: ["tr_skipped_dirty"] as never,
+      rTask: null,
+      status: "closed",
+      meta: {
+        closeReason: "finalized",
+        reward: {
+          source: "heuristic",
+          reason: "对话内容过短",
+          scoredAt: startedAt + 100,
+          trigger: "implicit_fallback",
+          skipped: true,
+        },
+        rewardDirty: {
+          failedAttempts: 7,
+          lastFailureAt: startedAt + 100,
+        },
+      },
+    });
+    db!.repos.traces.insert({
+      id: "tr_skipped_dirty",
+      episodeId: "ep_skipped_dirty",
+      sessionId: "se_skipped_dirty",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: startedAt + 100,
+      userText: "我喜欢玩的游戏呢",
+      agentText: "你喜欢马里奥。",
+      summary: null,
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      share: null,
+      turnId: startedAt,
+      schemaVersion: 1,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    let captureCalls = 0;
+    pipeline.captureRunner.runReflect = async (input) => {
+      captureCalls++;
+      throw new Error(`unexpected recovery for ${input.episode.id}`);
+    };
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "skipped-dirty-cleanup",
+    );
+
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    expect(captureCalls).toBe(0);
+    const episode = db!.repos.episodes.getById("ep_skipped_dirty" as never);
+    expect(episode?.meta?.reward).toMatchObject({ skipped: true });
+    expect(episode?.meta?.rewardDirty).toBeUndefined();
   });
 
   it("dirty closed episodes hit a failure-count backoff so init() does not retry them every restart (issue #1808)", async () => {

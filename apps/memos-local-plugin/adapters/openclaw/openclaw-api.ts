@@ -92,6 +92,7 @@ export interface OpenClawPluginToolOptions {
 
 /** Hook names we actually subscribe to. */
 export type OpenClawHookName =
+  | "message_received"
   | "before_prompt_build"
   | "agent_end"
   | "before_tool_call"
@@ -113,6 +114,16 @@ export interface PluginHookAgentContext {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+}
+
+export interface PluginHookMessageContext {
+  channelId: string;
+  accountId?: string;
+  conversationId?: string;
+  sessionKey?: string;
+  runId?: string;
+  messageId?: string;
+  senderId?: string;
 }
 
 export interface PluginHookSessionContext {
@@ -139,6 +150,23 @@ export interface PluginHookSubagentContext {
 export interface BeforePromptBuildEvent {
   prompt: string;
   messages: unknown[]; // opaque AgentMessage[]
+}
+
+/**
+ * OpenClaw's channel-normalized inbound event. `content` comes from
+ * `BodyForCommands ?? RawBody ?? Body`, so unlike `BodyForAgent` it does
+ * not contain channel-specific sender/message-id prompt decoration.
+ */
+export interface MessageReceivedEvent {
+  from: string;
+  content: string;
+  timestamp?: number;
+  threadId?: string | number;
+  messageId?: string;
+  senderId?: string;
+  sessionKey?: string;
+  runId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 /** The only return shape OpenClaw reads back from `before_prompt_build`. */
@@ -228,6 +256,10 @@ export interface SubagentEndedEvent {
 
 /** Handler map — each hook has its own event + ctx shape. */
 export interface OpenClawHookHandlerMap {
+  message_received: (
+    event: MessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ) => void | Promise<void>;
   before_prompt_build: (
     event: BeforePromptBuildEvent,
     ctx: PluginHookAgentContext,

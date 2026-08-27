@@ -14,11 +14,20 @@
  */
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
+import { classifyModelTestFailure } from "../model-test-error";
+import { saveSettingsAndRestart } from "../settings-save";
 import { t, locale, setLocale } from "../stores/i18n";
 import { theme, setTheme } from "../stores/theme";
+import { health } from "../stores/health";
 import { Icon } from "../components/Icon";
 import { HubAdminPanel } from "../components/HubAdminPanel";
-import { triggerRestart, triggerCleared } from "../stores/restart";
+import {
+  triggerRestart,
+  triggerCleared,
+  beginClearData,
+  markClearResultUnknown,
+  type ClearDataResponse,
+} from "../stores/restart";
 
 type Tab = "models" | "hub" | "general";
 
@@ -28,6 +37,8 @@ interface ProviderBlock {
   model?: string;
   apiKey?: string;
   temperature?: number;
+  maxInputTokens?: number;
+  batchSize?: number;
 }
 
 interface AlgorithmBlock {
@@ -77,10 +88,6 @@ interface EmbeddingMaintenanceRunResult {
   statsAfter: EmbeddingMaintenanceStats;
   error?: string;
 }
-
-const EMBEDDING_REBUILD_BATCH_STORAGE_KEY = "memos.embeddingRebuildBatchSize";
-const EMBEDDING_REBUILD_BATCH_OPTIONS = [10, 20, 50, 100, 200, 500] as const;
-type EmbeddingRebuildBatchSize = typeof EMBEDDING_REBUILD_BATCH_OPTIONS[number];
 
 const SECRET_MASKED = (s: string | undefined | null): boolean =>
   !!s && (s === "__memos_secret__" || /^[\s•]+$/.test(s));
@@ -136,9 +143,18 @@ export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
     setSaving("saving");
     setError(null);
     try {
-      await api.patch<ResolvedConfig>("/api/v1/config", dirty);
-      setDirty({});
-      await triggerRestart();
+      await saveSettingsAndRestart(
+        dirty,
+        (patch) => api.patch<ResolvedConfig>("/api/v1/config", patch),
+        (saved) => {
+          // PATCH returns the fully resolved, secret-masked config. Publish it
+          // before clearing dirty state so the form never falls back to the
+          // stale snapshot captured when this SPA first mounted.
+          setConfig(saved);
+          setDirty({});
+        },
+        triggerRestart,
+      );
       // For Hermes/generic the page stays; reset the button state.
       setSaving("idle");
     } catch (err) {
@@ -396,7 +412,18 @@ function ModelCard({
       });
       setResult(r);
     } catch (err) {
-      setResult({ ok: false, error: (err as Error).message });
+      const failureKind = await classifyModelTestFailure(
+        err,
+        () => api.get(`/api/v1/health`),
+      );
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setResult({
+        ok: false,
+        error:
+          failureKind === "viewer_offline"
+            ? t("settings.test.viewerOffline")
+            : `${t("settings.test.modelFailed")}: ${errorMessage}`,
+      });
     } finally {
       setTesting(false);
     }
@@ -499,6 +526,53 @@ function ModelCard({
             onInput={(e) => onPatch({ apiKey: (e.target as HTMLInputElement).value })}
           />
         </Field>
+        {type === "embedding" && (
+          <Field label={t("settings.embedding.maxInputTokens.label")}>
+            <input
+              class="input"
+              type="number"
+              min={0}
+              max={1_000_000}
+              step={1}
+              value={block.maxInputTokens ?? 1_024}
+              onInput={(e) =>
+                onPatch({
+                  maxInputTokens: Math.max(
+                    0,
+                    Math.floor(Number((e.target as HTMLInputElement).value) || 0),
+                  ),
+                })}
+            />
+            <span class="muted" style="font-size:var(--fs-2xs)">
+              {t("settings.embedding.maxInputTokens.hint")}
+            </span>
+          </Field>
+        )}
+        {type === "embedding" && (
+          <Field label={t("settings.embedding.providerBatchSize.label")}>
+            <input
+              class="input"
+              type="number"
+              min={1}
+              max={256}
+              step={1}
+              value={block.batchSize ?? 32}
+              onInput={(e) =>
+                onPatch({
+                  batchSize: Math.max(
+                    1,
+                    Math.min(
+                      256,
+                      Math.floor(Number((e.target as HTMLInputElement).value) || 1),
+                    ),
+                  ),
+                })}
+            />
+            <span class="muted" style="font-size:var(--fs-2xs)">
+              {t("settings.embedding.providerBatchSize.hint")}
+            </span>
+          </Field>
+        )}
         {withTemperature && (
           <Field label={t("settings.temperature")}>
             <input
@@ -553,7 +627,6 @@ function EmbeddingMaintenancePanel() {
   const [stats, setStats] = useState<EmbeddingMaintenanceStats | null>(null);
   const [running, setRunning] = useState<"repair" | "rebuild" | null>(null);
   const [status, setStatus] = useState<{ kind: "ok" | "error" | "muted"; text: string } | null>(null);
-  const [batchSize, setBatchSize] = useState<EmbeddingRebuildBatchSize>(() => loadEmbeddingRebuildBatchSize());
 
   const refresh = async () => {
     try {
@@ -577,7 +650,7 @@ function EmbeddingMaintenancePanel() {
       for (;;) {
         const r = await api.post<EmbeddingMaintenanceRunResult>(
           "/api/v1/embeddings/rebuild",
-          { mode, offset, limit: batchSize },
+          { mode, offset },
         );
         updated += r.updated;
         failed += r.failed;
@@ -634,33 +707,6 @@ function EmbeddingMaintenancePanel() {
           <div class="muted" style="font-size:var(--fs-xs);margin-top:2px">
             {healthText}
           </div>
-          <label
-            class="hstack"
-            style="gap:var(--sp-2);align-items:center;margin-top:var(--sp-3);font-size:var(--fs-xs);color:var(--fg-muted);flex-wrap:wrap"
-          >
-            <span>{t("settings.embedding.batchSize.label")}</span>
-            <select
-              class="input"
-              value={batchSize}
-              disabled={!!running}
-              aria-label={t("settings.embedding.batchSize.label")}
-              style="width:auto;min-width:150px;height:32px;padding-top:0;padding-bottom:0;font-size:var(--fs-xs)"
-              onChange={(e) => {
-                const next = normalizeEmbeddingRebuildBatchSize((e.target as HTMLSelectElement).value);
-                setBatchSize(next);
-                localStorage.setItem(EMBEDDING_REBUILD_BATCH_STORAGE_KEY, String(next));
-              }}
-            >
-              {EMBEDDING_REBUILD_BATCH_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  {t("settings.embedding.batchSize.option", { n })}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div class="muted" style="font-size:var(--fs-2xs);margin-top:4px;max-width:560px">
-            {t("settings.embedding.batchSize.hint")}
-          </div>
         </div>
         <div class="hstack" style="gap:var(--sp-2);flex-wrap:wrap">
           <button class="btn btn--sm" onClick={() => void refresh()} disabled={!!running}>
@@ -698,17 +744,6 @@ function EmbeddingMaintenancePanel() {
       )}
     </div>
   );
-}
-
-function loadEmbeddingRebuildBatchSize(): EmbeddingRebuildBatchSize {
-  return normalizeEmbeddingRebuildBatchSize(localStorage.getItem(EMBEDDING_REBUILD_BATCH_STORAGE_KEY));
-}
-
-function normalizeEmbeddingRebuildBatchSize(value: unknown): EmbeddingRebuildBatchSize {
-  const n = Number(value);
-  return EMBEDDING_REBUILD_BATCH_OPTIONS.includes(n as EmbeddingRebuildBatchSize)
-    ? n as EmbeddingRebuildBatchSize
-    : 100;
 }
 
 // ─── Hub tab ─────────────────────────────────────────────────────────────
@@ -974,7 +1009,9 @@ function GeneralTab({
 
       <AccountSection />
 
-      <DangerZoneSection />
+      {(health.value?.agent === "openclaw" || health.value?.agent === "hermes") && (
+        <DangerZoneSection />
+      )}
     </div>
   );
 }
@@ -1104,18 +1141,20 @@ function DangerZoneSection() {
 
   const clearAllData = async () => {
     setClearing(true);
+    beginClearData();
     try {
       // The server wipes SQLite + cleanly tears down its core; the
       // next agent boot will recreate an empty DB. We don't try to
       // restart the agent process from here — the toast tells the
       // user to do it manually (see `stores/restart.ts` for why).
-      await api.post("/api/v1/admin/clear-data", {});
+      const response = await api.post<ClearDataResponse>("/api/v1/admin/clear-data", {});
       setConfirming(false);
       setClearing(false);
-      await triggerCleared();
+      await triggerCleared(response);
     } catch {
       setClearing(false);
       setConfirming(false);
+      markClearResultUnknown();
     }
   };
 

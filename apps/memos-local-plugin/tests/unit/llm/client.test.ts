@@ -139,6 +139,19 @@ describe("llm/client", () => {
     expect(fake.invocations).toBe(2);
   });
 
+  it("completeJson makes only one request when malformedRetries is zero", async () => {
+    const fake = new FakeProvider(
+      "openai_compatible",
+      () => ({ text: "still bad", durationMs: 1 }),
+    );
+    const client = createLlmClientWithProvider(cfg(), fake);
+
+    await expect(client.completeJson("ask", { malformedRetries: 0 }))
+      .rejects.toMatchObject({ code: ERROR_CODES.LLM_OUTPUT_MALFORMED });
+    expect(fake.invocations).toBe(1);
+    expect(client.stats().retries).toBe(0);
+  });
+
   it("completeJson throws LLM_OUTPUT_MALFORMED when retries exhausted", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: "still bad", durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
@@ -281,6 +294,45 @@ describe("llm/client", () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: "", durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
     await expect(client.complete([] as LlmMessage[])).rejects.toBeInstanceOf(MemosError);
+  });
+
+  it("preserves deferred retry diagnostics in error and status sinks", async () => {
+    const errors: Array<Record<string, unknown>> = [];
+    const statuses: LlmStatusDetail[] = [];
+    const retryAt = Date.now() + 120_000;
+    const provider = new ThrowingProvider(
+      new MemosError(ERROR_CODES.LLM_RATE_LIMITED, "provider cooldown", {
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    const client = createLlmClientWithProvider(
+      cfg({
+        onError: (detail) => errors.push(detail as unknown as Record<string, unknown>),
+        onStatus: (detail) => statuses.push(detail),
+      }),
+      provider,
+    );
+
+    await expect(client.complete("x")).rejects.toBeInstanceOf(MemosError);
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: "error",
+        retryAt,
+        retryDecision: "defer",
+      }),
+    );
   });
 
   // ─── Circuit breaker (issue #1897) ──────────────────────────────────────

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,14 +10,21 @@ import {
   draftForInspection,
   evidenceForInspection,
   ensureSourceHint,
+  isLegacyPackageOnlyRelease,
+  legacyPackageDraftFromEvidence,
+  manualDraftFromNotes,
+  parseSemver,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
   reportExternalFailureFromEnv,
   requestDraft,
   requestValidatedDraft,
   resolveCurrentRef,
+  selectPreviousTag,
+  validateLegacyPackageNotes,
   validateManualNotes,
   versionFromTag,
+  writeDraftFailureInspection,
 } from "./draft-local-plugin-release-notes.mjs";
 
 const evidence = {
@@ -44,6 +51,82 @@ test("normalizes only real local-plugin tag families", () => {
   assert.equal(versionFromTag("memos-local-plugin-v2.0.10"), "2.0.10");
   assert.equal(versionFromTag("openclaw-local-plugin-v2.0.9"), "2.0.9");
   assert.equal(versionFromTag("v2.0.10"), "");
+});
+
+test("detects legacy package-only prereleases", () => {
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1", npmDistTag: "beta" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1", npmDistTag: "latest" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "beta" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "next" }), true);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest" }), false);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "" }), false);
+});
+
+test("can force a stable standalone publish to remain package-only", () => {
+  assert.equal(
+    isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest", forcePackageOnly: true }),
+    true,
+  );
+  assert.equal(
+    isLegacyPackageOnlyRelease({ targetVersion: "2.0.13", npmDistTag: "latest", forcePackageOnly: false }),
+    false,
+  );
+});
+
+test("treats SemVer build metadata as stable metadata, not a prerelease channel", () => {
+  assert.equal(parseSemver("2.0.13+build.7").prerelease, "");
+  assert.equal(parseSemver("2.0.13-beta.1+build.7").prerelease, "beta.1");
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13+build.7", npmDistTag: "latest" }), false);
+  assert.equal(isLegacyPackageOnlyRelease({ targetVersion: "2.0.13-beta.1+build.7", npmDistTag: "latest" }), true);
+});
+
+test("uses the previous stable tag for docs-generating latest releases", () => {
+  const tags = [
+    { tag: "memos-local-plugin-v2.0.12", version: "2.0.12" },
+    { tag: "memos-local-plugin-v2.0.13-beta.1", version: "2.0.13-beta.1" },
+    { tag: "memos-local-plugin-v2.0.13", version: "2.0.13" },
+  ];
+
+  assert.equal(
+    selectPreviousTag(tags, "2.0.13", "memos-local-plugin-v2.0.13", { includePrerelease: false }),
+    "memos-local-plugin-v2.0.12",
+  );
+  assert.equal(
+    selectPreviousTag(tags, "2.0.13", "memos-local-plugin-v2.0.13", { includePrerelease: true }),
+    "memos-local-plugin-v2.0.13-beta.1",
+  );
+});
+
+test("generates independent prerelease notes without docs payloads", () => {
+  const draft = legacyPackageDraftFromEvidence(
+    {
+      current_tag: "memos-local-plugin-v2.0.13-beta.1",
+      previous_tag: "memos-local-plugin-v2.0.12",
+      target_version: "v2.0.13-beta.1",
+      git_ref: "abc1234",
+      changed_files: [{ status: "M", path: "apps/memos-local-plugin/package.json" }],
+      commits: [
+        {
+          sha: "abc1234000000000000000000000000000000000",
+          short_sha: "abc1234",
+          subject: "test: prepare local plugin beta package",
+        },
+      ],
+      package_changes: [{ field: "version", before: "2.0.12", after: "2.0.13-beta.1" }],
+    },
+    { npmDistTag: "beta" },
+  );
+
+  assert.equal(draft.ok, true);
+  assert.equal(draft.needs_review, false);
+  assert.equal(draft.confidence, "standalone-prerelease-no-docs");
+  assert.equal(draft.coverage.missing_required_count, 0);
+  assert.match(draft.release_notes_markdown, /## Changelog/);
+  assert.match(draft.release_notes_markdown, /npm `beta` dist-tag/);
+  assert.match(draft.release_notes_markdown, /independent local-plugin GitHub Prerelease/);
+  assert.match(draft.release_notes_markdown, /does not update the MemOS-Docs Plugin tab/);
+  assert.doesNotMatch(draft.release_notes_markdown, /doc-agent: source-id=/);
+  assert.doesNotMatch(draft.release_notes_markdown, /doc-agent-release-notes-json/);
 });
 
 test("uses an existing release tag as the evidence endpoint", () => {
@@ -156,6 +239,23 @@ test("redacts server debug fields from inspection draft", () => {
   assert.equal(inspection.debug, undefined);
   assert.deepEqual(inspection.release_items[0].source_refs, ["abc1234"]);
   assert.match(inspection.redactions.model_and_prompt_details, /omitted/);
+});
+
+test("keeps release-note quality issues in the inspection draft", () => {
+  const inspection = draftForInspection({
+    ok: false,
+    needs_review: true,
+    coverage: {
+      needs_review: true,
+      required_count: 16,
+      covered_required_count: 16,
+      quality_issues: ["too many release items: 16 > 12"],
+      items_missing_source_refs: [],
+    },
+  });
+
+  assert.deepEqual(inspection.coverage.quality_issues, ["too many release items: 16 > 12"]);
+  assert.deepEqual(inspection.coverage.items_missing_source_refs, []);
 });
 
 test("postprocesses duplicate source refs into the best evidence category", () => {
@@ -458,6 +558,69 @@ test("repairs postprocessed language validation issues with exact context", asyn
   assert.match(result.release_notes_markdown, /doc-agent-release-notes-json/);
 });
 
+test("standalone latest draft validation allows one initial response plus three repairs by default", async () => {
+  const repairEvidence = {
+    commits: [
+      {
+        sha: "abc12340000000000000000000000000000000",
+        short_sha: "abc1234",
+        subject: "feat: add plugin health dashboard (#3001)",
+      },
+    ],
+    release_note_guidance: {
+      source_ref_category_hints: [
+        {
+          category: "Added",
+          source_refs: ["abc1234", "#3001"],
+          subject: "feat: add plugin health dashboard (#3001)",
+        },
+      ],
+    },
+  };
+  const badDraft = {
+    ok: true,
+    needs_review: false,
+    release_items: [
+      {
+        category: "Added",
+        text_cn: "Plugin health dashboard",
+        text_en: "插件健康看板",
+        source_refs: ["abc1234", "#3001"],
+      },
+    ],
+    coverage: { required_count: 1, covered_required_count: 1, missing_required_count: 0 },
+    warnings: [],
+  };
+  const goodDraft = {
+    ok: true,
+    needs_review: false,
+    release_items: [
+      {
+        category: "Added",
+        text_cn: "**插件健康看板**：新增本地插件健康状态展示。",
+        text_en: "**Plugin Health Dashboard**: Added local plugin health status visibility.",
+        source_refs: ["abc1234", "#3001"],
+      },
+    ],
+    coverage: { required_count: 1, covered_required_count: 1, missing_required_count: 0 },
+    warnings: [],
+  };
+  let calls = 0;
+  const requestImpl = async () => {
+    calls += 1;
+    return calls < 4 ? badDraft : goodDraft;
+  };
+
+  const result = await requestValidatedDraft(repairEvidence, { requestImpl });
+
+  assert.equal(calls, 4);
+  assert.equal(result.ok, true);
+  assert.equal(result.needs_review, false);
+  assert.equal(result.validation_attempt_count, 4);
+  assert.equal(result.repair_attempt_count, 3);
+  assert.match(result.release_notes_markdown, /插件健康看板/);
+});
+
 test("stops release-note repair after two validation repair attempts", async () => {
   const repairEvidence = {
     commits: [
@@ -541,7 +704,7 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 - local memory
 
 <!-- doc-agent-release-notes-json
-{"items":[{"text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+  {"items":[{"category":"Added","text_cn":"本地记忆","text_en":"Local memory","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
 -->`;
   assert.equal(validateManualNotes(valid), valid);
   assert.match(ensureSourceHint(valid), /source-id=openclaw-local-plugin/);
@@ -554,10 +717,62 @@ test("manual notes require bilingual evidence refs and passed coverage", () => {
 - local memory
 
 <!-- doc-agent-release-notes-json
-{"items":[{"text_cn":"Local memory","text_en":"本地记忆","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+  {"items":[{"category":"Added","text_cn":"Local memory","text_en":"本地记忆","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
 -->`),
     /text_cn must contain Chinese/,
   );
+});
+
+test("manual stable notes are revalidated against collected evidence", () => {
+  const notes = `## Changelog
+
+### Fixed
+- 修复 Hermes 桥接状态恢复。
+
+<!-- doc-agent-release-notes-json
+{"items":[{"category":"Fixed","text_cn":"修复 Hermes 桥接状态恢复。","text_en":"Restores Hermes bridge state.","source_refs":["abc1234"]}],"coverage":{"needs_review":false}}
+-->`;
+  const evidence = {
+    commits: [{
+      sha: "abc1234567890abc1234567890abc1234567890",
+      short_sha: "abc1234",
+      subject: "fix: restore Hermes bridge state",
+    }],
+    important_commits: [{
+      sha: "abc1234567890abc1234567890abc1234567890",
+      short_sha: "abc1234",
+      subject: "fix: restore Hermes bridge state",
+    }],
+    release_note_guidance: {
+      source_ref_category_hints: [{ source_refs: ["abc1234"], category: "Fixed" }],
+    },
+  };
+  const draft = manualDraftFromNotes(notes, evidence);
+  assert.equal(draft.ok, true);
+  assert.equal(draft.release_items[0].category, "Fixed");
+  assert.match(draft.release_notes_markdown, /source-id=openclaw-local-plugin/);
+
+  assert.throws(
+    () => manualDraftFromNotes(notes.replaceAll("abc1234", "deadbee"), evidence),
+    /failed evidence validation/,
+  );
+});
+
+test("legacy package manual notes reject docs payloads", () => {
+  const valid = `## Changelog
+
+### Prerelease
+- Published MemOS Local Plugin v2.0.13-beta.1 as a beta package.`;
+  assert.equal(validateLegacyPackageNotes(valid), `${valid}\n`);
+  assert.throws(
+    () => validateLegacyPackageNotes(`${valid}\n\n<!-- doc-agent: source-id=openclaw-local-plugin -->`),
+    /must not include Doc Agent source hints/,
+  );
+  assert.throws(
+    () => validateLegacyPackageNotes(`${valid}\n\n<!-- doc-agent-release-notes-json\n{}\n-->`),
+    /must not include Doc Agent source hints/,
+  );
+  assert.throws(() => validateLegacyPackageNotes("### Prerelease\n- missing changelog"), /Changelog/);
 });
 
 test("retries transient draft failures and passes prior error context", async () => {
@@ -582,6 +797,82 @@ test("retries transient draft failures and passes prior error context", async ()
     assert.equal(requests[2].workflow_retry_context.previous_errors.length, 2);
   } finally {
     process.env = previous;
+  }
+});
+
+test("reports compact quality details and preserves the rejected draft for diagnostics", async () => {
+  const previous = { ...process.env };
+  try {
+    process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL = "https://example.invalid/draft";
+    process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN = "test-token";
+    const payload = {
+      ok: false,
+      needs_review: true,
+      release_items: Array.from({ length: 16 }, (_, index) => ({
+        category: "Fixed",
+        text_cn: `修复条目 ${index + 1}`,
+        text_en: `Fix item ${index + 1}`,
+        source_refs: [`abc${String(index).padStart(4, "0")}`],
+      })),
+      coverage: {
+        needs_review: true,
+        required_count: 16,
+        covered_required_count: 16,
+        missing_required_count: 0,
+        invalid_item_refs: [],
+        items_missing_source_refs: [],
+        quality_issues: ["too many release items: 16 > 12"],
+      },
+      warnings: ["too many release items: 16 > 12"],
+      attempts: [],
+    };
+
+    await assert.rejects(
+      requestDraft(evidence, {
+        fetchImpl: async () => response(200, payload),
+        sleep: async () => {},
+      }),
+      (error) => {
+        assert.match(error.message, /too many release items: 16 > 12/);
+        assert.deepEqual(error.draftPayload, payload);
+        return true;
+      },
+    );
+  } finally {
+    process.env = previous;
+  }
+});
+
+test("writes a redacted failure artifact without endpoint or token details", () => {
+  const previous = { ...process.env };
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-draft-failure-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    writeDraftFailureInspection({
+      evidence: {
+        ...evidence,
+        important_diff: { "apps/memos-local-plugin/**": "private diff" },
+      },
+      payload: {
+        ok: false,
+        needs_review: true,
+        coverage: {
+          required_count: 16,
+          covered_required_count: 16,
+          quality_issues: ["too many release items: 16 > 12"],
+        },
+      },
+      error: new Error("failed at https://private.example/draft with Bearer secret-token"),
+    });
+
+    const report = readFileSync(join(directory, "quality-report.json"), "utf8");
+    const redactedEvidence = readFileSync(join(directory, "evidence.json"), "utf8");
+    assert.match(report, /too many release items: 16 > 12/);
+    assert.doesNotMatch(report, /private\.example|secret-token/);
+    assert.doesNotMatch(redactedEvidence, /private diff/);
+  } finally {
+    process.env = previous;
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

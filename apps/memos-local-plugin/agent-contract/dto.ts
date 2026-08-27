@@ -89,6 +89,12 @@ export interface TurnInputDTO {
   agent: AgentKind;
   sessionId: SessionId;
   namespace?: RuntimeNamespace;
+  /**
+   * Optional host-stable idempotency key for this logical turn.
+   * Retries with the same sessionId + turnKey must reuse the original
+   * episode instead of opening another one.
+   */
+  turnKey?: string;
   /** Optional pre-existing episodeId (for continued tasks). */
   episodeId?: EpisodeId;
   /** Free-form text the user said this turn. */
@@ -97,6 +103,17 @@ export interface TurnInputDTO {
   contextHints?: Record<string, unknown>;
   /** Wall-clock when the turn began. */
   ts: EpochMs;
+  /**
+   * Absolute adapter deadline for foreground work. Every pipeline stage
+   * shares this budget; it is not reset after relation or intent handling.
+   */
+  deadlineAt?: EpochMs;
+  /**
+   * Optional per-request override for malformed JSON retries in the
+   * retrieval relevance filter. Adapters that omit it retain the core
+   * default.
+   */
+  llmFilterMalformedRetries?: number;
 }
 
 export interface TurnResultDTO {
@@ -548,6 +565,22 @@ export interface RetrievalQueryDTO {
   sessionId?: SessionId;
   episodeId?: EpisodeId;
   query: string;
+  /**
+   * Retrieval trigger semantics. The default remains `tool_driven` for
+   * backwards compatibility. Adapters that need automatic prompt-time recall
+   * without running session relation/intent routing use `turn_start`.
+   */
+  reason?: Extract<RetrievalReason, "turn_start" | "tool_driven">;
+  /** Host-visible context hints used by turn-start de-duplication. */
+  contextHints?: Record<string, unknown>;
+  /** Absolute deadline for this foreground retrieval request. */
+  deadlineAt?: EpochMs;
+  /**
+   * Optional per-request override for malformed JSON retries in the
+   * retrieval relevance filter. Adapters that omit it retain the core
+   * default.
+   */
+  llmFilterMalformedRetries?: number;
   /** Optional structured filters (e.g. tags). */
   filters?: Record<string, unknown>;
   /** Maximum items to return per tier (overrides config). */
@@ -638,6 +671,21 @@ export interface InjectionSnippet {
   title?: string;
   body: string;
   score?: number;
+  /** Structured score composition for retrieval logs and diagnostics. */
+  scoreDetails?: InjectionScoreDetails;
+}
+
+export interface InjectionScoreDetails {
+  profile: string;
+  semantic: number;
+  tierBoost: number;
+  rrfBoost: number;
+  relevance: number;
+  mmrLambda: number;
+  redundancy: number;
+  finalScore: number;
+  channels: string[];
+  bypassedThreshold: boolean;
 }
 
 /**

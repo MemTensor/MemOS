@@ -11,7 +11,7 @@
  */
 
 import { MemosError } from "../../agent-contract/errors.js";
-import type { Embedder } from "../embedding/index.js";
+import type { Embedder, EmbeddingSettledResult } from "../embedding/index.js";
 import { rootLogger } from "../logger/index.js";
 import type { EmbeddingVector } from "../types.js";
 import type { NormalizedStep } from "./types.js";
@@ -38,6 +38,20 @@ export async function embedSteps(
   const log = rootLogger.child({ channel: "core.capture.embed" });
   if (steps.length === 0) return [];
 
+  const warnPartialFailures = (
+    settled: readonly EmbeddingSettledResult[],
+    inputCount: number,
+  ): void => {
+    let failedCount = 0;
+    for (let i = 0; i < inputCount; i++) {
+      if (!settled[i]?.ok) failedCount++;
+    }
+    if (failedCount > 0) {
+      const event = failedCount === inputCount ? "embed.failed_all" : "embed.partial_failed";
+      log.warn(event, { failedCount, inputCount, stepCount: steps.length });
+    }
+  };
+
   const summaryTexts = steps.map((s, i) => {
     const override = summaryOverrides?.[i]?.trim();
     if (override) return override;
@@ -46,9 +60,19 @@ export async function embedSteps(
   const actionTexts = steps.map(actionText);
   if (opts.summaryOnly) {
     try {
-      const vecs = await embedder.embedMany(
-        summaryTexts.map((t) => ({ text: t || "(empty)", role: "document" as const })),
-      );
+      const inputs = summaryTexts.map((t) => ({
+        text: t || "(empty)",
+        role: "document" as const,
+      }));
+      if (embedder.embedManySettled) {
+        const settled = await embedder.embedManySettled(inputs);
+        warnPartialFailures(settled, inputs.length);
+        return steps.map((_, i) => ({
+          summary: settled[i]?.ok ? settled[i].vector : null,
+          action: null,
+        }));
+      }
+      const vecs = await embedder.embedMany(inputs);
       return steps.map((_, i) => ({ summary: vecs[i] ?? null, action: null }));
     } catch (err) {
       log.warn("embed.failed_all", { err: errDetail(err), stepCount: steps.length });
@@ -63,6 +87,20 @@ export async function embedSteps(
   ];
 
   try {
+    if (embedder.embedManySettled) {
+      const settled = await embedder.embedManySettled(inputs);
+      warnPartialFailures(settled, inputs.length);
+      const out: VecPair[] = new Array(steps.length);
+      for (let i = 0; i < steps.length; i++) {
+        const summary = settled[i];
+        const action = settled[i + steps.length];
+        out[i] = {
+          summary: summary?.ok ? summary.vector : null,
+          action: action?.ok ? action.vector : null,
+        };
+      }
+      return out;
+    }
     const vecs = await embedder.embedMany(inputs);
     const out: VecPair[] = new Array(steps.length);
     for (let i = 0; i < steps.length; i++) {

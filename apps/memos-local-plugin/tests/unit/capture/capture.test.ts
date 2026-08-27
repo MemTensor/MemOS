@@ -224,7 +224,7 @@ describe("capture/pipeline (end-to-end)", () => {
 
   it("recovered replay matches tool traces by payload when timestamps drift", async () => {
     tmp.repos.traces.insert(traceRow({
-      id: "tr_tool",
+      id: "tr_tool_search",
       ts: 1_001,
       turnId: 1_000,
       userText: "run search",
@@ -235,8 +235,18 @@ describe("capture/pipeline (end-to-end)", () => {
       }],
     }));
     tmp.repos.traces.insert(traceRow({
+      id: "tr_tool_read",
+      ts: 1_002,
+      turnId: 1_000,
+      toolCalls: [{
+        name: "read",
+        input: { path: "/tmp/result" },
+        output: "contents",
+      }],
+    }));
+    tmp.repos.traces.insert(traceRow({
       id: "tr_response",
-      ts: 1_003,
+      ts: 1_004,
       turnId: 1_000,
       agentText: "done",
     }));
@@ -256,19 +266,70 @@ describe("capture/pipeline (end-to-end)", () => {
           input: { q: "memos" },
           output: "ok",
         }),
-        turn("assistant", "done", 1_003),
+        turn("tool", "contents", 1_003, {
+          name: "read",
+          input: { path: "/tmp/result" },
+          output: "contents",
+        }),
+        turn("assistant", "done", 1_004),
       ],
     });
-    ep.meta = { recoveredAtStartup: 1_004, recoveryReason: "dirty_reward_rescore" };
+    ep.meta = { recoveredAtStartup: 1_005, recoveryReason: "dirty_reward_rescore" };
 
     const result = await runner.runReflect({ episode: ep, closedBy: "finalized" });
 
-    expect(result.traceIds).toHaveLength(2);
+    expect(result.traceIds).toHaveLength(3);
     expect(result.warnings.some((w) => w.message.includes("skipped recovered orphan"))).toBe(false);
-    expect(tmp.repos.traces.listAllForEpisode("ep_1" as EpisodeId)).toHaveLength(2);
+    expect(tmp.repos.traces.listAllForEpisode("ep_1" as EpisodeId)).toHaveLength(3);
   });
 
-  it("does not insert replay orphans for startup-recovered episodes by default", async () => {
+  it("fails a fully-unmatched recovered replay before LLM, inserts, or capture.done", async () => {
+    const llm = fakeLlm({
+      complete: {
+        "capture.reflection.synth": "should never be requested",
+      },
+    });
+    const runner = buildRunner({
+      alphaScoring: false,
+      synthReflections: true,
+      embedTraces: false,
+    }, llm, null);
+    const ep = episodeSnapshot({
+      id: "ep_1",
+      sessionId: "se_1",
+      turns: [
+        turn("user", "hello", 1_000),
+        turn("assistant", "hi", 1_010),
+      ],
+    });
+    ep.meta = { recoveredAtStartup: 1_020, recoveryReason: "dirty_reward_rescore" };
+
+    await expect(
+      runner.runReflect({ episode: ep, closedBy: "finalized" }),
+    ).rejects.toMatchObject({
+      name: "MemosError",
+      code: "conflict",
+    });
+
+    expect(tmp.repos.traces.listAllForEpisode("ep_1" as EpisodeId)).toHaveLength(0);
+    expect(llm.stats().requests).toBe(0);
+    expect(seen).toContainEqual(expect.objectContaining({
+      kind: "capture.failed",
+      episodeId: "ep_1",
+      stage: "match",
+      error: expect.objectContaining({ code: "conflict" }),
+    }));
+    expect(seen.some((evt) => evt.kind === "capture.done")).toBe(false);
+  });
+
+  it("does not fail recovered replay when at least one trace matches", async () => {
+    tmp.repos.traces.insert(traceRow({
+      id: "tr_matching",
+      ts: 1_010,
+      turnId: 1_000,
+      userText: "hello",
+      agentText: "hi",
+    }));
     const runner = buildRunner({
       alphaScoring: false,
       synthReflections: false,
@@ -280,15 +341,19 @@ describe("capture/pipeline (end-to-end)", () => {
       turns: [
         turn("user", "hello", 1_000),
         turn("assistant", "hi", 1_010),
+        turn("user", "unmatched follow-up", 2_000),
+        turn("assistant", "unmatched answer", 2_010),
       ],
     });
-    ep.meta = { recoveredAtStartup: 1_020, recoveryReason: "dirty_reward_rescore" };
+    ep.meta = { recoveredAtStartup: 2_020, recoveryReason: "dirty_reward_rescore" };
 
     const result = await runner.runReflect({ episode: ep, closedBy: "finalized" });
 
-    expect(tmp.repos.traces.listAllForEpisode("ep_1" as EpisodeId)).toHaveLength(0);
-    expect(result.traceIds).toHaveLength(0);
+    expect(result.traceIds).toEqual(["tr_matching"]);
     expect(result.warnings.some((w) => w.message.includes("skipped recovered orphan"))).toBe(true);
+    expect(seen.some((evt) => evt.kind === "capture.failed")).toBe(false);
+    expect(seen.some((evt) => evt.kind === "capture.done")).toBe(true);
+    expect(tmp.repos.traces.listAllForEpisode("ep_1" as EpisodeId)).toHaveLength(1);
   });
 
   it("caps reflect-phase LLM calls per episode", async () => {

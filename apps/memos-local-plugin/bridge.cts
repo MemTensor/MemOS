@@ -17,8 +17,8 @@
  *   - openclaw → :18799
  *   - hermes   → :18800
  *
- * The viewer port is read from the agent's `~/.<agent>/memos-plugin/
- * config.yaml::viewer.port`. We just call `startHttpServer` once;
+ * The viewer port is adapter-owned (OpenClaw 18799, Hermes 18800).
+ * We just call `startHttpServer` once;
  * if the port is already in use we surface the EADDRINUSE error to
  * stderr and keep running stdio-RPC headless (capture / retrieval
  * still work). There's no port-sharing or auto-promotion logic —
@@ -29,7 +29,6 @@ const path = require("node:path") as typeof import("node:path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require("node:fs") as typeof import("node:fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const childProcess = require("node:child_process") as typeof import("node:child_process");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const url = require("node:url") as typeof import("node:url");
 
@@ -52,6 +51,7 @@ interface BridgeArgs {
   tcpPort?: number;
   agent: "openclaw" | "hermes";
   home?: string;
+  runtimeScope?: string;
 }
 
 type BridgeStatus = "connected" | "reconnecting" | "disconnected" | "unknown";
@@ -72,6 +72,10 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
     else if (raw === "--agent=hermes") args.agent = "hermes";
     else if (raw === "--agent=openclaw") args.agent = "openclaw";
     else if (raw.startsWith("--home=")) args.home = raw.slice(7);
+    else if (raw.startsWith("--runtime-scope=")) {
+      const candidate = raw.slice(16).toLowerCase();
+      if (/^[a-f0-9]{16,64}$/.test(candidate)) args.runtimeScope = candidate;
+    }
   }
   return args;
 }
@@ -87,7 +91,17 @@ function parseArgs(argv: readonly string[]): BridgeArgs {
 const PID_FILENAME = "bridge.pid";
 const STDIO_PID_FILENAME = "bridge-stdio.pid";
 
-function pidFilePath(agent: string, filename: string = PID_FILENAME): string {
+function pidFilePath(
+  agent: string,
+  filename: string = PID_FILENAME,
+  explicitHome?: string,
+): string {
+  const configuredHome = explicitHome?.trim()
+    || process.env.MEMOS_HOME?.trim()
+    || (process.env.MEMOS_CONFIG_FILE?.trim()
+      ? path.dirname(process.env.MEMOS_CONFIG_FILE.trim())
+      : "");
+  if (configuredHome) return path.join(path.resolve(configuredHome), "daemon", filename);
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
     process.env.HOME ?? "/tmp",
@@ -144,7 +158,7 @@ function killExistingBridge(pidPath: string, timeoutMs = 5000): void {
     } catch {
       return; // gone
     }
-    childProcess.spawnSync("sleep", ["0.5"]);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
   try {
     process.kill(existingPid, "SIGKILL");
@@ -157,8 +171,11 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   // ─── Singleton: kill previous bridge that owns the viewer port ───
-  const pidPath = pidFilePath(args.agent);
-  const stdioPidPath = pidFilePath(args.agent, STDIO_PID_FILENAME);
+  const pidPath = pidFilePath(args.agent, PID_FILENAME, args.home);
+  const stdioPidFilename = args.runtimeScope
+    ? `bridge-stdio-${args.runtimeScope}.pid`
+    : STDIO_PID_FILENAME;
+  const stdioPidPath = pidFilePath(args.agent, stdioPidFilename, args.home);
   const ownsViewerPort = args.daemon || !args.noViewer;
   const removeOwnedPidFile = () => {
     if (ownsViewerPort) removePidFile(pidPath);
@@ -294,6 +311,7 @@ async function main(): Promise<void> {
   const { core, config, home } = await bootstrapMemoryCoreFull({
     agent: args.agent,
     namespace: { agentKind: args.agent, profileId: resolvedProfileId },
+    autoRecovery: args.agent !== "hermes" || !args.daemon,
     pkgVersion,
     hostLlmBridge: args.daemon ? null : lazyHostLlmBridge,
     home: resolvedHome,
@@ -486,8 +504,15 @@ async function main(): Promise<void> {
       process.stderr.write(`bridge: daemon received ${sig}, shutting down\n`);
       removeOwnedPidFile();
       try { await viewer!.close(); } catch { /* best-effort */ }
-      await withShutdownTimeout(core.shutdown());
-      process.exit(0);
+      try {
+        await withShutdownTimeout(core.shutdown());
+      } catch {
+        // clear-data already shuts the core down before removing SQLite.
+        // The signal still has to terminate the daemon so the supervisor
+        // can replace it.
+      } finally {
+        process.exit(0);
+      }
     };
     process.on("SIGINT", () => void shutdownDaemon("SIGINT"));
     process.on("SIGTERM", () => void shutdownDaemon("SIGTERM"));

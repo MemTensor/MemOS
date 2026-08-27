@@ -158,6 +158,14 @@ export interface EmbeddingMaintenanceRunResult {
 
 export type Unsubscribe = () => void;
 
+/** Non-serializable execution controls used only by in-process adapters. */
+export interface MemorySearchExecutionOptions {
+  /** Abort when the owning host turn/tool is cancelled. */
+  signal?: AbortSignal;
+  /** Block admission of new background LLM work while this search is active. */
+  foreground?: boolean;
+}
+
 export interface MemoryCore {
   // ── lifecycle ──
   init(): Promise<void>;
@@ -201,6 +209,16 @@ export interface MemoryCore {
   // ── pipeline (per turn) ──
   /** Called *before* the agent acts. Returns the context to inject. */
   onTurnStart(turn: TurnInputDTO): Promise<RetrievalResultDTO>;
+  /**
+   * Optional capability: resolve relation/intent routing and open the durable
+   * episode without running retrieval. Hosts with an eventually-consistent
+   * lifecycle can run this after the agent turn, off the prompt-time critical
+   * path.
+   */
+  prepareTurn?(turn: TurnInputDTO): Promise<{
+    sessionId: SessionId;
+    episodeId: EpisodeId;
+  }>;
   /** Called *after* the agent acts. Persists the trace, schedules induction, etc. */
   onTurnEnd(result: TurnResultDTO): Promise<{ traceId: string; episodeId: EpisodeId }>;
   /** Called when the user gives task-level feedback (or implicit signals fire). */
@@ -221,7 +239,10 @@ export interface MemoryCore {
   ): Promise<{ traceId: string; episodeId: EpisodeId }>;
 
   // ── memory queries ──
-  searchMemory(query: RetrievalQueryDTO): Promise<RetrievalResultDTO>;
+  searchMemory(
+    query: RetrievalQueryDTO,
+    execution?: MemorySearchExecutionOptions,
+  ): Promise<RetrievalResultDTO>;
   getTrace(id: string, namespace?: RuntimeNamespace): Promise<TraceDTO | null>;
   /**
    * Mutate a single trace's user-facing fields (role / summary /

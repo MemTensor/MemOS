@@ -1,29 +1,26 @@
-name: MemOS Local Plugin — Post-Merge Dry Run
+name: MemOS Local Plugin — Legacy Post-Merge Dry Run Disabled
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/memos-local-plugin-publish.yml"
-      - ".github/workflows/memos-local-plugin-post-merge-dry-run.yml"
-      - ".github/scripts/draft-local-plugin-release-notes.mjs"
-      - ".github/scripts/draft-local-plugin-release-notes.test.mjs"
-      - ".github/scripts/retry.sh"
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  dry-run:
+  legacy-post-merge-disabled:
     if: ${{ github.repository == 'MemTensor/MemOS' }}
-    uses: ./.github/workflows/memos-local-plugin-publish.yml
-    with:
-      version: "2.0.10"
-      tag: "latest"
-      git_ref: ""
-      release_notes: ""
-      dry_run: true
-      recover_existing_npm_release: false
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Explain replacement workflow
+        shell: bash
+        run: |
+          {
+            echo "## Legacy standalone local-plugin post-merge dry run disabled"
+            echo ""
+            echo "This workflow no longer runs on push to main."
+            echo ""
+            echo "Use MemOS Release — Post-Merge Dry Run for smoke checks and MemOS Release — Publish for official MemOS v* releases."
+            echo ""
+            echo "The legacy standalone publisher remains available only through the protected manual workflow: MemOS Local Plugin (V2) — Legacy Standalone Publisher."
+          } >> "${GITHUB_STEP_SUMMARY}"

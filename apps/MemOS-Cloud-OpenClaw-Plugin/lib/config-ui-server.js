@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Script } from "node:vm";
+import { checkForPluginUpdate, getPackageVersion } from "./check-update.js";
 import { getConfigResolution } from "./memos-cloud-api.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -19,8 +20,16 @@ const ASSET_DIR = join(__dirname, "config-ui");
 const ANSI_BOLD = "\x1b[1m";
 const ANSI_CYAN = "\x1b[36m";
 const ANSI_GREEN = "\x1b[32m";
+const ANSI_YELLOW = "\x1b[33m";
 const ANSI_RESET = "\x1b[0m";
 const DEFAULT_GATEWAY_READY_PORT = 18789;
+const UPDATE_STATUS_CACHE_MS = 30 * 60 * 1000;
+
+// Hook policies that the gateway requires non-bundled plugins to opt into.
+// Without these, the gateway blocks `agent_end` (and other conversation-access
+// hooks) at registration time. Keep this list in sync with the policies the
+// plugin actually relies on so we never drift from runtime behavior.
+const REQUIRED_HOOK_POLICIES = ["allowConversationAccess"];
 
 const FIELD_GROUPS = [
   { id: "connection", title: "Connection", description: "MemOS endpoint, authentication, and identity mapping." },
@@ -159,6 +168,62 @@ function detectRuntimeProfile() {
   return { id: "openclaw", displayName: "OpenClaw", cliName: "openclaw", configPath: join(homedir(), ".openclaw", "openclaw.json") };
 }
 
+/**
+ * Detect the version of the host CLI (openclaw / moltbot / clawdbot).
+ *
+ * Strategy (in order of preference):
+ *  1. Parse `@X.Y.Z` out of `process.argv[1]` — pnpm/npm global installs
+ *     always embed the version in the store path
+ *     (e.g. `.../openclaw@2026.4.26/node_modules/openclaw/openclaw.mjs`).
+ *  2. Walk up from `process.argv[1]` looking for a `package.json` that has
+ *     a `version` field — covers local `node` invocations and bundled builds.
+ *  3. Return `null` if neither succeeds.
+ */
+export function detectHostVersion() {
+  const scriptPath = String(process.argv[1] || "");
+
+  const atMatch = scriptPath.match(/@(\d+\.\d+(?:\.\d+)?)/);
+  if (atMatch) return atMatch[1];
+
+  try {
+    let dir = dirname(scriptPath);
+    for (let i = 0; i < 8; i++) {
+      try {
+        const raw = readFileSync(join(dir, "package.json"), "utf8");
+        const pkg = JSON.parse(raw);
+        if (pkg.version && typeof pkg.version === "string") return pkg.version;
+      } catch {
+        // not found at this level, keep walking
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+/**
+ * Compare two CalVer / semver version strings component by component.
+ * Returns -1 when a < b, 0 when equal, 1 when a > b.
+ * Non-numeric components (e.g. pre-release suffixes) are ignored.
+ */
+export function compareVersionStrings(a, b) {
+  const partsA = String(a ?? "").split(".").map(Number);
+  const partsB = String(b ?? "").split(".").map(Number);
+  const len = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < len; i++) {
+    const na = Number.isFinite(partsA[i]) ? partsA[i] : 0;
+    const nb = Number.isFinite(partsB[i]) ? partsB[i] : 0;
+    if (na < nb) return -1;
+    if (na > nb) return 1;
+  }
+  return 0;
+}
+
 function parsePositiveInteger(value, fallback) {
   const parsed = Number(value);
   if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
@@ -206,14 +271,27 @@ export async function waitForGatewayReady(rootConfig = {}, log = console, option
   return false;
 }
 
-function shouldStartConfigUi() {
+// Returns true when the current process was launched by an `openclaw gateway`
+// command that actually starts (or restarts) the long-lived gateway. Other
+// CLI entry points (`plugins install`, `security audit`, `--help`, ...) also
+// load this plugin to inspect/register it, but they perform their own
+// config commits and must not be racing with our hook-policy patcher.
+function isGatewayStartCommand() {
   const args = process.argv.map((value) => String(value || "").toLowerCase());
   const gatewayIndex = args.lastIndexOf("gateway");
   if (gatewayIndex === -1) return false;
 
   const nextArg = args[gatewayIndex + 1];
   if (!nextArg || nextArg.startsWith("-")) return true;
-  return nextArg === "start" || nextArg === "restart";
+  return nextArg === "start" || nextArg === "restart" || nextArg === "run";
+}
+
+function shouldStartConfigUi() {
+  return isGatewayStartCommand();
+}
+
+export function isGatewayRuntimeStartup() {
+  return isGatewayStartCommand();
 }
 
 function stripBom(text) {
@@ -289,10 +367,22 @@ function writeGatewayConfig(profile, payload) {
   if (!isPlainObject(nextRoot.plugins)) nextRoot.plugins = {};
   if (!isPlainObject(nextRoot.plugins.entries)) nextRoot.plugins.entries = {};
 
-  const entry = { enabled: payload.enabled !== false };
+  // Preserve any entry-level fields the user already set (e.g. `hooks`,
+  // policy opt-ins, future gateway metadata) so that saving from the config
+  // UI never silently drops gateway-required settings such as
+  // `hooks.allowConversationAccess`.
+  const previousEntry = isPlainObject(nextRoot.plugins.entries[PLUGIN_ID])
+    ? nextRoot.plugins.entries[PLUGIN_ID]
+    : {};
+  const entry = { ...previousEntry, enabled: payload.enabled !== false };
+
   const config = sanitizeStructuredValue(payload.config ?? {});
   if (!isPlainObject(config)) throw new Error("Config payload must be an object.");
-  if (Object.keys(config).length > 0) entry.config = config;
+  if (Object.keys(config).length > 0) {
+    entry.config = config;
+  } else {
+    delete entry.config;
+  }
 
   nextRoot.plugins.entries[PLUGIN_ID] = entry;
 
@@ -301,12 +391,137 @@ function writeGatewayConfig(profile, payload) {
   return readGatewayConfig(profile);
 }
 
+function getPluginEntry(root) {
+  const plugins = isPlainObject(root?.plugins) ? root.plugins : null;
+  if (!plugins) return null;
+  const entries = isPlainObject(plugins.entries) ? plugins.entries : null;
+  if (!entries) return null;
+  return isPlainObject(entries[PLUGIN_ID]) ? entries[PLUGIN_ID] : null;
+}
+
+function getMissingHookPolicies(root, hookKeys) {
+  const entry = getPluginEntry(root);
+  const hooks = isPlainObject(entry?.hooks) ? entry.hooks : {};
+  return hookKeys.filter((key) => hooks[key] !== true);
+}
+
+/**
+ * Ensure the gateway config grants this plugin the typed-hook policies it
+ * needs. The gateway blocks non-bundled plugins from registering hooks like
+ * `agent_end` unless `plugins.entries.<id>.hooks.allowConversationAccess` is
+ * explicitly set to `true`. Users hit this on every fresh install because the
+ * key is not part of any default config template, so we patch it in
+ * automatically on first load.
+ *
+ * Behavior:
+ *  - Fast-path: if `rootConfig` already has all required keys, do nothing
+ *    silently — no logs, no disk reads.
+ *  - Otherwise: read the on-disk config (to preserve unrelated edits made
+ *    after the gateway booted), merge in the missing keys, write it back,
+ *    and return `{ changed: true }` so the caller can ask the user to
+ *    restart the gateway. We only mutate the keys we own.
+ *  - If the config uses `$include` directives we cannot safely rewrite the
+ *    merged tree, so we just warn and leave the file untouched.
+ *
+ * NOTE: callers are responsible for deciding *when* to invoke this. In
+ * particular it must NOT be called from short-lived CLI commands such as
+ * `plugins install` that perform their own config commits — racing with
+ * them triggers `ConfigMutationConflictError`. See `isGatewayRuntimeStartup`.
+ */
+export function ensurePluginHookPolicy(rootConfig = null, log = console, options = {}) {
+  const hookKeys = Array.isArray(options.hookKeys) && options.hookKeys.length > 0
+    ? options.hookKeys
+    : REQUIRED_HOOK_POLICIES;
+
+  const profile = detectRuntimeProfile();
+
+  if (isPlainObject(rootConfig) && getMissingHookPolicies(rootConfig, hookKeys).length === 0) {
+    return { changed: false, configPath: profile.configPath, profile };
+  }
+
+  let current;
+  try {
+    current = readGatewayConfig(profile);
+  } catch (error) {
+    log.warn?.(
+      `[memos-cloud] failed to read ${profile.configPath} while ensuring plugin hook policy: ${String(error?.message ?? error)}`,
+    );
+    return { changed: false, error, configPath: profile.configPath, profile };
+  }
+
+  if (current.hasInclude) {
+    const missing = getMissingHookPolicies(current.root, hookKeys);
+    if (missing.length > 0) {
+      log.warn?.(
+        `[memos-cloud] gateway config at ${profile.configPath} uses $include directives, ` +
+          `cannot auto-enable required plugin hook policies: ${missing.join(", ")}. ` +
+          `Add plugins.entries.${PLUGIN_ID}.hooks={${missing.map((k) => `${k}:true`).join(", ")}} manually and restart the gateway.`,
+      );
+    }
+    return { changed: false, hasInclude: true, configPath: profile.configPath, profile };
+  }
+
+  const missingKeys = getMissingHookPolicies(current.root, hookKeys);
+  if (missingKeys.length === 0) return { changed: false, configPath: profile.configPath, profile };
+
+  const nextRoot = isPlainObject(current.root) ? deepClone(current.root) : {};
+  if (!isPlainObject(nextRoot.plugins)) nextRoot.plugins = {};
+  if (!isPlainObject(nextRoot.plugins.entries)) nextRoot.plugins.entries = {};
+  if (!isPlainObject(nextRoot.plugins.entries[PLUGIN_ID])) {
+    nextRoot.plugins.entries[PLUGIN_ID] = {};
+  }
+  const entry = nextRoot.plugins.entries[PLUGIN_ID];
+  if (entry.enabled === undefined) entry.enabled = true;
+  if (!isPlainObject(entry.hooks)) entry.hooks = {};
+  for (const key of missingKeys) {
+    entry.hooks[key] = true;
+  }
+
+  try {
+    mkdirSync(dirname(profile.configPath), { recursive: true });
+    writeFileSync(profile.configPath, `${JSON.stringify(nextRoot, null, 2)}\n`, "utf8");
+  } catch (error) {
+    log.warn?.(
+      `[memos-cloud] failed to write ${profile.configPath} to enable required plugin hook policies (${missingKeys.join(", ")}): ${String(error?.message ?? error)}`,
+    );
+    return { changed: false, error, configPath: profile.configPath, profile };
+  }
+
+  // Emit the eye-catching banner directly through stdout so the gateway's
+  // log-line prefix (`[plugins] [memos-cloud] ...`) does not break up the
+  // box drawing. Then also emit a single terse `log.warn` line so any
+  // structured log aggregator / CI capture still gets the event.
+//   console.log(renderHookPolicyRestartBanner(profile, missingKeys));
+  log.warn?.(
+    `[memos-cloud] hook policy patched in ${profile.configPath} (added: ${missingKeys.join(", ")}). ` +
+      `Manual gateway restart required: \`${profile.cliName} gateway restart\`.`,
+  );
+
+  return { changed: true, addedKeys: missingKeys, configPath: profile.configPath, profile };
+}
+
+/**
+ * Returns metadata describing how `ensurePluginHookPolicy` would behave for
+ * the current runtime, without writing anything. Useful in tests and for
+ * letting host code surface "we will write to <path>" diagnostics before any
+ * IO actually happens.
+ */
+export function describePluginHookPolicyTarget() {
+  const profile = detectRuntimeProfile();
+  return {
+    runtime: profile.id,
+    configPath: profile.configPath,
+    hookKeys: [...REQUIRED_HOOK_POLICIES],
+  };
+}
+
 function buildStatePayload(service) {
   const state = readGatewayConfig(service.profile);
   const resolution = getConfigResolution(state.config);
   return {
     runtime: state.profile.id,
     runtimeDisplayName: state.profile.displayName,
+    pluginVersion: getPackageVersion(),
     configPath: state.configPath,
     entryExists: state.entryExists,
     fileExists: state.fileExists,
@@ -358,6 +573,38 @@ function getCachedHeartbeatPayload(service, maxAgeMs = 1200) {
     ...payload,
     timestamp: now,
   };
+}
+
+async function getCachedUpdateStatusPayload(service, maxAgeMs = UPDATE_STATUS_CACHE_MS, options = {}) {
+  const now = Date.now();
+  if (!options.force && service.updateStatusCache && now - service.updateStatusCache.createdAt < maxAgeMs) {
+    return {
+      ...service.updateStatusCache.payload,
+      cached: true,
+    };
+  }
+
+  try {
+    const status = await checkForPluginUpdate();
+    const payload = {
+      ok: true,
+      ...status,
+      cached: false,
+    };
+    service.updateStatusCache = {
+      createdAt: now,
+      payload,
+    };
+    return payload;
+  } catch (error) {
+    return {
+      ok: false,
+      currentVersion: getPackageVersion(),
+      error: String(error?.message || error),
+      checkedAt: new Date().toISOString(),
+      cached: false,
+    };
+  }
 }
 
 function loadAssetTemplate(name) {
@@ -469,6 +716,67 @@ function renderConfigAddressBanner(port) {
     .join("\n")}\n${ANSI_GREEN}${horizontalBorder}${ANSI_RESET}`;
 }
 
+function renderHookPolicyRestartBanner(profile, addedKeys) {
+  const heading = "PLUGIN HOOK POLICY UPDATED";
+  const subheading = "Manual gateway restart required";
+  const command = `${profile.cliName} gateway restart`;
+  const keyLines = addedKeys.map((key) => `  - ${key}`);
+
+  const plainLines = [
+    "",
+    heading,
+    subheading,
+    "",
+    "Patched file:",
+    `  ${profile.configPath}`,
+    "",
+    "Added hook policies:",
+    ...keyLines,
+    "",
+    "To apply the change, restart the gateway:",
+    "",
+    `  $ ${command}`,
+    "",
+    "Without a restart, hooks like `agent_end` will not be registered,",
+    "so memory capture / recall will silently stop working.",
+    "",
+  ];
+
+  const contentWidth = plainLines.reduce((max, line) => Math.max(max, line.length), 0);
+  const centeredHeading = centerText(heading, contentWidth);
+  const centeredSubheading = centerText(subheading, contentWidth);
+  const separator = "-".repeat(contentWidth);
+
+  const coloredLines = plainLines.map((line) => {
+    if (line === heading) return `${ANSI_BOLD}${ANSI_YELLOW}${centeredHeading}${ANSI_RESET}`;
+    if (line === subheading) return `${ANSI_YELLOW}${centeredSubheading}${ANSI_RESET}`;
+    if (line === `  $ ${command}`) return `${ANSI_BOLD}${ANSI_GREEN}${line}${ANSI_RESET}`;
+    if (line === `  ${profile.configPath}`) return `${ANSI_CYAN}${line}${ANSI_RESET}`;
+    if (line.startsWith("  - ")) return `${ANSI_CYAN}${line}${ANSI_RESET}`;
+    return line;
+  });
+
+  const visibleLineWidths = plainLines.map((line, index) => {
+    if (index === 1 || index === 2) return contentWidth;
+    return line.length;
+  });
+
+  // Insert a separator line between the subheading block and the body so
+  // the title visually anchors to the top of the box.
+  const headingBoundaryIndex = 3;
+  coloredLines.splice(headingBoundaryIndex, 0, `${ANSI_YELLOW}${separator}${ANSI_RESET}`);
+  visibleLineWidths.splice(headingBoundaryIndex, 0, contentWidth);
+
+  const padYellowBoxLine = (content, visibleLength) =>
+    `${ANSI_YELLOW}| ${ANSI_RESET}${content}${" ".repeat(Math.max(0, contentWidth - visibleLength))}${ANSI_YELLOW} |${ANSI_RESET}`;
+
+  const horizontalBorder = `${ANSI_YELLOW}+${"=".repeat(contentWidth + 2)}+${ANSI_RESET}`;
+
+  return `\n${horizontalBorder}\n${coloredLines
+    .map((line, index) => padYellowBoxLine(line, visibleLineWidths[index]))
+    .join("\n")}\n${horizontalBorder}\n`;
+}
+
 function renderHtml(service) {
   return replaceTokens(loadAssetTemplate("index.html"), {
     "__PLUGIN_ID__": PLUGIN_ID,
@@ -554,7 +862,17 @@ async function createService(log) {
   const token = randomBytes(24).toString("hex");
   const bootId = randomBytes(10).toString("hex");
 
-  const service = { profile, token, bootId, port: 0, url: "", server: null, stateCache: null, heartbeatCache: null };
+  const service = {
+    profile,
+    token,
+    bootId,
+    port: 0,
+    url: "",
+    server: null,
+    stateCache: null,
+    heartbeatCache: null,
+    updateStatusCache: null,
+  };
 
   const server = createServer(async (req, res) => {
     try {
@@ -601,6 +919,13 @@ async function createService(log) {
 
         if (requestUrl.pathname === "/api/state" && req.method === "GET") {
           sendJson(res, 200, getCachedStatePayload(service));
+          return;
+        }
+
+        if (requestUrl.pathname === "/api/update-status" && req.method === "GET") {
+          sendJson(res, 200, await getCachedUpdateStatusPayload(service, UPDATE_STATUS_CACHE_MS, {
+            force: requestUrl.searchParams.get("force") === "1",
+          }));
           return;
         }
 

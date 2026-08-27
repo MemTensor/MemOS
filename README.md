@@ -26,8 +26,15 @@
 
 
 <div align="center">
-  <img width="1660" height="664" alt="MemOS Plugin Banner" src="https://github.com/user-attachments/assets/9d15dde2-196e-4f71-a364-dd5a33062117" />
+  <img width="1660" alt="MemOS agent ecosystem: OpenClaw, Hermes, and DeepSeek Harness" src="./assets/readme/memos-agent-ecosystem.png" />
 </div>
+
+> [!TIP]
+> **New: Connect MemOS to DeepSeek Harness (`dsh`)**
+>
+> Add automatic recall, background capture, hybrid retrieval, and a local Memory Viewer to DeepSeek Harness—powered by the same MemOS core used across agent ecosystems.
+>
+> **[Get started →](#memos-plugin)**
 
 ---
 
@@ -45,6 +52,9 @@
 
 
 ### News
+
+- **2026-08-17** · 🐋 **MemOS Connects with DeepSeek Harness**
+  MemOS now brings persistent memory to **DeepSeek Harness** through both local and cloud plugins. DSH can automatically recall relevant context before a task and retain new experience after a successful turn, without modifying its core.
 
 - **2026-07-02** · 🏆 **MemOS Advances Agent and User Memory Benchmarks**
   With MemOS, **OpenClaw** improves average task completion from **36.63% to 50.87%** across five agent tasks. MemOS also achieves **88.83 on LoCoMo** and **89.20 on LongMemEval**, and leads in **OmniMemEval**, a unified evaluation of 14 commercial memory products across ten datasets.
@@ -93,12 +103,12 @@ MemOS gives AI agents long-term memory. Common uses:
 MemOS is built around four entry points. Pick the one that matches your scenario.
 
 
-|              | Cloud API               | Self-Host          | OpenClaw Cloud Plugin    | Local Plugin                    |
-| ------------ | ----------------------- | ------------------ | ------------------------ | ------------------------------- |
-| Best for     | Your app, fully managed | Teams on own infra | OpenClaw users, zero ops | Hermes/OpenClaw, 100% on-device |
-| Setup        | Get an API key          | docker compose up  | openclaw plugins install | npm install + config            |
-| Infra needed | None (hosted)           | Neo4j + Qdrant     | None (uses MemOS Cloud)  | None (local SQLite)             |
-| Data lives   | MemOS Cloud             | Your servers       | MemOS Cloud              | Your machine                    |
+|              | Cloud API               | Self-Host          | MemOS Cloud Plugin       | Local Plugin                                     |
+| ------------ | ----------------------- | ------------------ | ------------------------ | ------------------------------------------------ |
+| Best for     | Your app, fully managed | Teams on own infra | OpenClaw users, zero ops | DeepSeek Harness, Hermes, or OpenClaw; on-device |
+| Setup        | Get an API key          | docker compose up  | openclaw plugins install | npm install + agent-specific setup               |
+| Infra needed | None (hosted)           | Neo4j + Qdrant     | None (uses MemOS Cloud)  | None (local SQLite)                              |
+| Data lives   | MemOS Cloud             | Your servers       | MemOS Cloud              | Your machine                                     |
 
 ### ☁️ Use the Cloud API (Hosted)
 
@@ -199,18 +209,20 @@ res = requests.post(f"{base}/search", headers=headers, data=json.dumps({
 print(res.json())
 ```
 
+<a id="memos-plugin"></a>
+
 ### 🧠 MemOS Plugin: Persistent Memory for Your AI Agents ✨
 
-Your OpenClaw and Hermes Agents now have **the best** memory system — choose ***Cloud Service*** or ***Self-hosted*** to get started 🏃🏻
+MemOS gives OpenClaw, Hermes, and DeepSeek Harness a shared local memory core; the managed ***MemOS Cloud Plugin*** is available for OpenClaw and DeepSeek Harness 🏃🏻
 
 | 🔌 Plugin                                                                                                     | 💡 Core Features | 🧩 Resources                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 🧠 **[memos-local-plugin 2.0](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin)**         |                  | 🌐 [Website](https://memos-claw.openmem.net/) · 📖 [Docs](https://memos-docs.openmem.net/cn/openclaw/local_plugin) · 🐙 [GitHub](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) · 📦 [NPM](https://www.npmjs.com/package/@memtensor/memos-local-plugin) |
-| ☁️ **[OpenClaw Cloud Plugin](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin)** |                  | 🖥️ [MemOS Dashboard](https://memos-dashboard.openmem.net/login/) · 📖 [Full Tutorial](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin)                                                                                                                         |
+| ☁️ **[MemOS Cloud Plugin](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin)**    |                  | 🖥️ [MemOS Dashboard](https://memos-dashboard.openmem.net/login/) · 📖 [Full Tutorial](https://memos-docs.openmem.net/openclaw/guide#_4-update-plugin)                                                                                                                         |
 
-#### 1. OpenClaw Cloud Plugin
+#### 1. MemOS Cloud Plugin
 
-You use OpenClaw and want persistent memory via MemOS Cloud — no infrastructure to run.
+Use MemOS Cloud for persistent memory in OpenClaw or DeepSeek Harness — no infrastructure to run.
 
 - **Repo:** [MemTensor/MemOS ·](https://github.com/MemTensor/MemOS/tree/main/apps/MemOS-Cloud-OpenClaw-Plugin) `apps/MemOS-Cloud-OpenClaw-Plugin`
 - **NPM:** `[@memtensor/memos-cloud-openclaw-plugin](https://www.npmjs.com/package/@memtensor/memos-cloud-openclaw-plugin)`
@@ -226,16 +238,55 @@ openclaw gateway restart
 
 The plugin recalls memories from MemOS Cloud before each agent run and saves new messages back after the run ends.
 
-#### 2. Local Plugin (memos-local-plugin 2.0)
+##### DeepSeek Harness
 
-You use Hermes Agent or OpenClaw and want 100% on-device memory — nothing leaves your machine.
+Connect DeepSeek Harness to MemOS Cloud through its native plugin mechanism. Before the first model step of each user request, the plugin recalls relevant cloud memories; after a successful turn, it saves the new user and assistant messages back to MemOS Cloud.
+
+1. [Create a MemOS API Key](https://memos-dashboard.openmem.net/cn/apikeys/).
+2. Install the cloud plugin into the default DSH `web` profile:
+
+   ```bash
+   npx @deepseek-ai/dsh plugin --profile web add @memtensor/memos-cloud-dsh-plugin@latest
+   ```
+
+3. Add the API Key to `~/.dsh/.credentials.yaml`:
+
+   ```yaml
+   MEMOS_API_KEY: mpg-your-key
+   ```
+
+4. Add the minimal plugin configuration to `~/.dsh/settings.yaml`:
+
+   ```yaml
+   memos-cloud:
+     apiKeyEnv: MEMOS_API_KEY
+   ```
+
+5. Restart the DSH Web profile:
+
+   ```bash
+   npx @deepseek-ai/dsh web
+   ```
+
+The cloud plugin is fail-open: a temporary MemOS Cloud outage does not interrupt the current DSH task.
+
+#### 2. Local Plugin (OpenClaw, Hermes, and DeepSeek Harness)
+
+You use DeepSeek Harness, Hermes Agent, or OpenClaw and want 100% on-device memory — nothing leaves your machine.
 
 - **Repo:** [MemTensor/MemOS ·](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) `apps/memos-local-plugin`
 - **NPM:** `[@memtensor/memos-local-plugin](https://www.npmjs.com/package/@memtensor/memos-local-plugin)`
 - **Docs:** [https://memos-docs.openmem.net/cn/openclaw/local_plugin](https://memos-docs.openmem.net/cn/openclaw/local_plugin)
+- **DeepSeek Harness:** [integration details](./apps/memos-local-plugin/adapters/deepseek-harness/README.md)
 - **Viewer dashboard:** see `apps/memos-local-plugin/viewer/`
 
-Install (macOS / Linux):
+Install for DeepSeek Harness (macOS / Linux):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash -s -- --agent dsh --profile web
+```
+
+Install for OpenClaw or Hermes (macOS / Linux):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.sh | bash
@@ -247,7 +298,7 @@ Install (Windows PowerShell):
 irm https://raw.githubusercontent.com/MemTensor/MemOS/main/apps/memos-local-plugin/install.ps1 -OutFile "$env:TEMP\memos-install.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\memos-install.ps1"
 ```
 
-Requires Node.js and an already-installed OpenClaw or Hermes. The installer auto-detects OpenClaw and Hermes, deploys the plugin to the right agent home (`~/.hermes/plugins/` or `~/.openclaw/plugins/`), writes the initial `config.yaml`, and restarts the agent runtime.
+Requires Node.js and an already-installed DeepSeek Harness, OpenClaw, or Hermes. The installer deploys MemOS to the selected agent runtime; the DeepSeek Harness target installs it as an out-of-tree DSH bundle, while the OpenClaw and Hermes targets write the initial `config.yaml` in their respective agent homes.
 
 Features: hybrid retrieval (FTS5 + vector), smart dedup, tiered skill evolution (L1 traces / L2 policies / L3 world model), multi-agent collaboration, local-first SQLite storage.
 

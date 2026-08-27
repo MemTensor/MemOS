@@ -1,4 +1,4 @@
-name: MemOS Local Plugin (V2) — Build & Publish
+name: MemOS Local Plugin (V2) — Legacy Standalone Publisher
 
 on:
   workflow_dispatch:
@@ -9,57 +9,89 @@ on:
       tag:
         description: "npm dist-tag (latest for production, beta/next/alpha for testing)"
         required: true
+        type: choice
+        options:
+          - latest
+          - beta
+          - next
+          - alpha
         default: "latest"
       git_ref:
-        description: "Git ref to build from (branch, tag, or SHA). Leave blank to use the branch selected above."
+        description: "Git ref to build package code from. Leave blank for normal releases; release automation always uses this workflow revision."
         required: false
         default: ""
       release_notes:
-        description: "Optional Markdown release notes. Leave blank to let the configured draft service use real git evidence before publish."
+        description: "Optional Markdown notes. Stable latest releases must still pass evidence/source_refs quality checks."
         required: false
         default: ""
       dry_run:
-        description: "Draft release notes and build artifacts only. Skip npm publish, tag, GitHub Release, and release PR."
+        description: "Prepare package notes and build artifacts only. Skip npm publish, tag creation, and the independent local-plugin GitHub Release."
         required: true
         type: boolean
         default: true
       recover_existing_npm_release:
-        description: "Allow reconstructing a missing tag/Release for an npm version. Keep false for normal releases."
+        description: "Allow reconstructing a missing tag for an existing npm version. Keep false for normal releases."
         required: true
         type: boolean
         default: false
+      legacy_publish_confirmation:
+        description: "Required only when dry_run=false. Must exactly equal: LEGACY PUBLISH memos-local-plugin-v<version>"
+        required: false
+        type: string
+        default: ""
   workflow_call:
     inputs:
       version:
-        description: "Version to publish or dry-run (e.g. 2.0.10 or 2.0.11-beta.1)"
         required: true
         type: string
       tag:
-        description: "npm dist-tag (latest for production, beta/next/alpha for testing)"
-        required: false
+        required: true
         type: string
-        default: "latest"
       git_ref:
-        description: "Git ref to build from. Leave blank to use the caller ref."
-        required: false
+        required: true
         type: string
-        default: ""
       release_notes:
-        description: "Optional Markdown release notes. Leave blank to let the configured draft service use evidence."
         required: false
         type: string
         default: ""
       dry_run:
-        description: "Draft release notes and build artifacts only. Skip npm publish, tag, GitHub Release, and release PR."
-        required: false
+        required: true
         type: boolean
-        default: true
       recover_existing_npm_release:
-        description: "Allow reconstructing a missing tag/Release for an npm version. Keep false for normal releases."
         required: false
         type: boolean
         default: false
-
+      docs_sync_mode:
+        required: true
+        type: string
+      memos_release_version:
+        required: true
+        type: string
+      caller_publish_confirmation:
+        required: false
+        type: string
+        default: ""
+      create_draft_release:
+        required: false
+        type: boolean
+        default: true
+      memos_release_tag:
+        required: false
+        type: string
+        default: ""
+    outputs:
+      local_plugin_tag:
+        value: ${{ jobs.publish.outputs.local_plugin_tag }}
+      local_plugin_tag_sha:
+        value: ${{ jobs.publish.outputs.local_plugin_tag_sha }}
+      package_source_sha:
+        value: ${{ jobs.publish.outputs.package_source_sha }}
+      local_plugin_release_url:
+        value: ${{ jobs.publish.outputs.local_plugin_release_url }}
+      local_plugin_release_is_draft:
+        value: ${{ jobs.publish.outputs.local_plugin_release_is_draft }}
+      local_plugin_evidence_digest:
+        value: ${{ jobs.publish.outputs.local_plugin_evidence_digest }}
 concurrency:
   group: memos-local-plugin-publish
   cancel-in-progress: false
@@ -69,11 +101,168 @@ defaults:
     working-directory: apps/memos-local-plugin
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
+  guard-legacy-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      package_source_sha: ${{ steps.resolve-package-source.outputs.sha }}
+    steps:
+      - name: Validate release inputs and standalone publish confirmation
+        shell: bash
+        working-directory: .
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+          LEGACY_PUBLISH_CONFIRMATION: ${{ inputs.legacy_publish_confirmation }}
+          DOCS_SYNC_MODE: ${{ inputs.docs_sync_mode }}
+          MEMOS_RELEASE_VERSION: ${{ inputs.memos_release_version }}
+          CALLER_PUBLISH_CONFIRMATION: ${{ inputs.caller_publish_confirmation }}
+          MEMOS_RELEASE_TAG: ${{ inputs.memos_release_tag }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const version = process.argv[1];
+            const distTag = process.argv[2];
+            const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version);
+            if (!match) throw new Error(`version must be valid SemVer without a leading v; received ${version}`);
+            if (version.includes("+")) throw new Error(`SemVer build metadata is not supported for npm/tag publishing; received ${version}`);
+            const prereleaseIdentifiers = (match[4] || "").split(".").filter(Boolean);
+            if (prereleaseIdentifiers.some((part) => /^\d+$/.test(part) && part.length > 1 && part.startsWith("0"))) {
+              throw new Error(`numeric prerelease identifiers must not contain leading zeroes; received ${version}`);
+            }
+            if (!["latest", "beta", "next", "alpha"].includes(distTag)) {
+              throw new Error(`unsupported npm dist-tag ${distTag}`);
+            }
+            const channel = (match[4] || "").split(".")[0];
+            if (!channel && distTag !== "latest") throw new Error(`stable version ${version} must use latest`);
+            if (channel && distTag === "latest") throw new Error(`prerelease version ${version} must not use latest`);
+            if (["beta", "alpha", "next"].includes(channel) && channel !== distTag) {
+              throw new Error(`prerelease channel ${channel} must use npm dist-tag ${channel}`);
+            }
+            if (channel && !["beta", "alpha", "next"].includes(channel) && distTag !== "next") {
+              throw new Error(`prerelease channel ${channel} must use npm dist-tag next`);
+            }
+          ' "${RELEASE_VERSION}" "${NPM_DIST_TAG}"
+
+          if [ -n "${DOCS_SYNC_MODE}" ]; then
+            if [ "${DOCS_SYNC_MODE}" != "paired_with_memos_release" ]; then
+              echo "::error::Reusable local-plugin publishing only accepts docs_sync_mode=paired_with_memos_release."
+              exit 1
+            fi
+            if ! [[ "${MEMOS_RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::memos_release_version is invalid: ${MEMOS_RELEASE_VERSION:-<empty>}"
+              exit 1
+            fi
+            if [ "${MEMOS_RELEASE_TAG}" != "v${MEMOS_RELEASE_VERSION}" ]; then
+              echo "::error::memos_release_tag must exactly equal v${MEMOS_RELEASE_VERSION}."
+              exit 1
+            fi
+            if [ "${DRY_RUN}" != "true" ]; then
+              expected="PUBLISH v${MEMOS_RELEASE_VERSION} WITH LOCAL PLUGIN v${RELEASE_VERSION}"
+              if [ "${CALLER_PUBLISH_CONFIRMATION}" != "${expected}" ]; then
+                echo "::error::The calling MemOS release confirmation must exactly equal: ${expected}"
+                exit 1
+              fi
+            fi
+            echo "Validated MemOS weekly-release caller; the local-plugin Release will be paired with ${MEMOS_RELEASE_TAG}."
+          elif [ -n "${DOCS_SYNC_MODE}" ] || [ -n "${MEMOS_RELEASE_VERSION}" ] || [ -n "${CALLER_PUBLISH_CONFIRMATION}" ]; then
+            echo "::error::Internal reusable-workflow inputs are not accepted from workflow_dispatch."
+            exit 1
+          elif [ "${DRY_RUN}" = "true" ]; then
+            echo "dry_run=true; legacy standalone publish confirmation is not required."
+          else
+            expected="LEGACY PUBLISH memos-local-plugin-v${RELEASE_VERSION}"
+            if [ "${LEGACY_PUBLISH_CONFIRMATION}" != "${expected}" ]; then
+              echo "::error::This workflow is the standalone local-plugin npm publisher for beta or latest package releases."
+              echo "::error::MemOS Release — Publish remains the weekly whole-repo release path and can also update the Plugin tab from apps/memos-local-plugin/** changes."
+              echo "::error::To intentionally run this legacy publisher, set legacy_publish_confirmation exactly to: ${expected}"
+              exit 1
+            fi
+          fi
+
+      - name: Resolve package source once
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin and validate package source
+        id: resolve-package-source
+        shell: bash
+        working-directory: .
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          package_source_sha="$(git rev-parse HEAD)"
+          test -f apps/memos-local-plugin/package.json
+          echo "sha=${package_source_sha}" >> "${GITHUB_OUTPUT}"
+          echo "Package source SHA: ${package_source_sha}"
+          echo "Release automation SHA: ${WORKFLOW_SHA}"
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            exit 0
+          fi
+
+          git fetch --no-tags origin \
+            "refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" \
+            "${WORKFLOW_SHA}"
+          default_branch_sha="$(git rev-parse "refs/remotes/origin/${DEFAULT_BRANCH}")"
+          if ! git merge-base --is-ancestor "${package_source_sha}" "refs/remotes/origin/${DEFAULT_BRANCH}"; then
+            echo "::error::Formal publish source ${package_source_sha} is not in ${DEFAULT_BRANCH} history. Merge it before publishing."
+            exit 1
+          fi
+          if [ "${WORKFLOW_SHA}" != "${default_branch_sha}" ]; then
+            echo "::error::Formal publishing must use the latest release automation from ${DEFAULT_BRANCH} (${default_branch_sha}); this run uses ${WORKFLOW_SHA}. Select ${DEFAULT_BRANCH} in Run workflow and retry."
+            exit 1
+          fi
+
+      - name: Configure npm authentication preflight
+        if: ${{ inputs.dry_run != true }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Validate npm authentication before platform builds
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        working-directory: .
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is missing; stopping before platform builds."
+            exit 1
+          fi
+          auth_log="${RUNNER_TEMP}/memos-local-plugin-npm-auth-preflight.log"
+          set +e
+          npm whoami \
+            --registry=https://registry.npmjs.org \
+            --fetch-retries=0 \
+            --fetch-timeout=8000 \
+            >"${auth_log}" 2>&1
+          auth_status=$?
+          set -e
+          if [ "${auth_status}" != 0 ]; then
+            sed -n '1,80p' "${auth_log}"
+            echo "::error::NPM_TOKEN authentication failed; stopping before platform builds."
+            exit 1
+          fi
+          echo "npm authentication preflight passed for $(tr -d '[:space:]' <"${auth_log}")."
+
   build-prebuilds:
+    needs: guard-legacy-publish
+    timeout-minutes: 25
     strategy:
       matrix:
         include:
@@ -87,14 +276,38 @@ jobs:
             platform: win32-x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.git_ref || github.ref }}
+          ref: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - name: Checkout trusted release automation scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Use trusted release automation scripts
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          rm -rf .github/scripts
+          mkdir -p .github
+          cp -R .release-workflow/.github/scripts .github/scripts
+          rm -rf .release-workflow
+          echo "Package source ref: $(git rev-parse --short HEAD)"
+          echo "Release automation ref: ${{ github.workflow_sha }}"
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.4.0
         with:
           node-version: 22
+          package-manager-cache: false
 
       - name: Install dependencies
         shell: bash
@@ -114,27 +327,75 @@ jobs:
           '
 
       - name: Upload prebuild artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: prebuild-${{ matrix.platform }}
           path: apps/memos-local-plugin/prebuilds/${{ matrix.platform }}/better_sqlite3.node
 
   publish:
-    needs: build-prebuilds
+    needs:
+      - guard-legacy-publish
+      - build-prebuilds
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    outputs:
+      local_plugin_tag: ${{ steps.release_tag.outputs.tag }}
+      local_plugin_tag_sha: ${{ steps.release_tag.outputs.tag_sha }}
+      package_source_sha: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
+      local_plugin_release_url: ${{ steps.plugin_release.outputs.release_url }}
+      local_plugin_release_is_draft: ${{ steps.plugin_release.outputs.release_is_draft }}
+      local_plugin_evidence_digest: ${{ steps.plugin_release.outputs.evidence_digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.git_ref || github.ref }}
+          ref: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - name: Checkout trusted release automation scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Use trusted release automation scripts
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          rm -rf .github/scripts
+          mkdir -p .github
+          cp -R .release-workflow/.github/scripts .github/scripts
+          rm -rf .release-workflow
+          echo "Package source ref: $(git rev-parse --short HEAD)"
+          echo "Release automation ref: ${{ github.workflow_sha }}"
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.4.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Test npm publish helper
+        working-directory: .
+        run: |
+          node --test \
+            .github/scripts/publish-local-plugin.test.mjs \
+            .github/scripts/wait-for-local-plugin-npm-release.test.mjs \
+            .github/scripts/inspect-local-plugin-release-state.test.mjs \
+            .github/scripts/audit-local-plugin-package.test.mjs \
+            .github/scripts/draft-local-plugin-release-notes.test.mjs \
+            .github/scripts/local-plugin-release-contract.test.mjs \
+            .github/scripts/create-local-plugin-github-release.test.mjs
 
       - name: Download all prebuilds
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: apps/memos-local-plugin/prebuilds
           pattern: prebuild-*
@@ -165,7 +426,8 @@ jobs:
             cp prebuilds/linux-x64/better_sqlite3.node node_modules/better-sqlite3/build/Release/better_sqlite3.node
           '
 
-      - name: Generate telemetry credentials
+      - name: Generate telemetry credentials for a real publish
+        if: ${{ inputs.dry_run != true }}
         run: bash ../../.github/scripts/retry.sh --label "generate telemetry credentials" -- node scripts/generate-telemetry-credentials.cjs
         env:
           MEMOS_ARMS_ENDPOINT: ${{ secrets.MEMOS_ARMS_ENDPOINT }}
@@ -181,24 +443,96 @@ jobs:
             exit 1
           fi
           bash ../../.github/scripts/retry.sh --label "bump package version" -- npm version "${RELEASE_VERSION}" --no-git-tag-version --allow-same-version
+          npm run sync:hermes-version
+          npm run check:hermes-version
 
       - name: Validate and build package
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          set -euo pipefail
           bash ../../.github/scripts/retry.sh --attempts 2 --label "npm run lint" -- npm run lint
           bash ../../.github/scripts/retry.sh --attempts 2 --label "npm test" -- npm test
-          bash ../../.github/scripts/retry.sh --label "npm pack dry-run" -- bash -euo pipefail -c 'npm pack --dry-run --json > "${RUNNER_TEMP}/memos-local-plugin-pack.json"'
+          release_dir="${RUNNER_TEMP}/memos-local-plugin-release"
+          pack_json="${RUNNER_TEMP}/memos-local-plugin-pack.json"
+          mkdir -p "${release_dir}"
+          bash ../../.github/scripts/retry.sh --label "npm pack" -- \
+            bash -euo pipefail -c 'npm pack --json --silent --pack-destination "$1" > "$2"' \
+            _ "${release_dir}" "${pack_json}"
 
-      - name: Draft GitHub Release notes
+          pack_filename="$(
+            node -e '
+              const fs = require("node:fs");
+              const raw = fs.readFileSync(process.argv[1], "utf8");
+              const jsonStart = raw.match(/^\[/m);
+              if (!jsonStart || jsonStart.index === undefined) {
+                throw new Error("npm pack output did not contain a JSON report");
+              }
+              const report = JSON.parse(raw.slice(jsonStart.index));
+              if (!Array.isArray(report) || report.length !== 1 || !report[0].filename) {
+                throw new Error("npm pack did not report exactly one tarball");
+              }
+              fs.writeFileSync(process.argv[1], `${JSON.stringify(report, null, 2)}\n`);
+              process.stdout.write(report[0].filename);
+            ' "${pack_json}"
+          )"
+          release_tarball="${release_dir}/${pack_filename}"
+          test -s "${release_tarball}"
+
+          package_version="$(
+            tar -xOf "${release_tarball}" package/package.json \
+              | node -e '
+                  const fs = require("node:fs");
+                  process.stdout.write(JSON.parse(fs.readFileSync(0, "utf8")).version);
+                '
+          )"
+          manifest_version="$(
+            tar -xOf "${release_tarball}" package/adapters/hermes/plugin.yaml \
+              | awk '$1 == "version:" { print $2; exit }'
+          )"
+          if [ "${package_version}" != "${RELEASE_VERSION}" ]; then
+            echo "::error::Tarball package.json version ${package_version} does not match ${RELEASE_VERSION}."
+            exit 1
+          fi
+          if [ "${manifest_version}" != "${RELEASE_VERSION}" ]; then
+            echo "::error::Tarball Hermes manifest version ${manifest_version} does not match ${RELEASE_VERSION}."
+            exit 1
+          fi
+
+          sha256sum "${release_tarball}" > "${release_tarball}.sha256"
+          package_audit_report="${RUNNER_TEMP}/memos-local-plugin-package-audit.json"
+          RELEASE_TARBALL="${release_tarball}" \
+            PACKAGE_AUDIT_REPORT="${package_audit_report}" \
+            node ../../.github/scripts/audit-local-plugin-package.mjs
+          {
+            echo "RELEASE_TARBALL=${release_tarball}"
+            echo "RELEASE_TARBALL_SHA256=${release_tarball}.sha256"
+            echo "PACKAGE_AUDIT_REPORT=${package_audit_report}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Prepare standalone package inspection notes
         id: release_notes
         working-directory: .
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_TAG: memos-local-plugin-v${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+          RELEASE_EVIDENCE_REF: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
           MANUAL_RELEASE_NOTES: ${{ inputs.release_notes }}
-          DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL }}
-          DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
-          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
-        run: bash .github/scripts/retry.sh --attempts 2 --label "draft GitHub Release notes" -- node .github/scripts/draft-local-plugin-release-notes.mjs
+          FORCE_PACKAGE_ONLY_RELEASE: ${{ inputs.tag != 'latest' || contains(inputs.version, '-') }}
+          DOCS_SYNC_MODE: ${{ inputs.docs_sync_mode }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ (inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL || '' }}
+          DOC_AGENT_RELEASE_FAILURE_URL: ${{ (inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_FAILURE_URL || '' }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ (inputs.tag == 'latest' && !contains(inputs.version, '-')) && secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN || '' }}
+        run: node .github/scripts/draft-local-plugin-release-notes.mjs
+
+      - name: Upload failed release notes diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: memos-local-plugin-release-notes-failure
+          path: ${{ runner.temp }}/memos-local-plugin-release-notes-failure
+          if-no-files-found: ignore
 
       - name: Prepare release notes inspection artifact
         working-directory: .
@@ -216,6 +550,8 @@ jobs:
           MISSING_REQUIRED_COUNT: ${{ steps.release_notes.outputs.missing_required_count }}
           VALIDATION_ATTEMPT_COUNT: ${{ steps.release_notes.outputs.validation_attempt_count }}
           REPAIR_ATTEMPT_COUNT: ${{ steps.release_notes.outputs.repair_attempt_count }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+          DOCS_SYNC_MODE: ${{ inputs.docs_sync_mode }}
         run: |
           set -euo pipefail
           inspection_dir="${RUNNER_TEMP}/memos-local-plugin-release-notes-inspection"
@@ -228,18 +564,76 @@ jobs:
 
           cp "${RELEASE_NOTES_FILE}" "${inspection_dir}/release-notes.md"
           cp "${RUNNER_TEMP}/memos-local-plugin-pack.json" "${inspection_dir}/npm-pack.json"
-          if [ -n "${EVIDENCE_FILE}" ] && [ -s "${EVIDENCE_FILE}" ]; then
-            cp "${EVIDENCE_FILE}" "${inspection_dir}/evidence.json"
+          cp "${RELEASE_TARBALL_SHA256}" "${inspection_dir}/"
+          cp "${PACKAGE_AUDIT_REPORT}" "${inspection_dir}/package-audit.json"
+          if [ -z "${EVIDENCE_FILE}" ] || [ ! -s "${EVIDENCE_FILE}" ]; then
+            echo "::error::Evidence JSON file was not generated."
+            exit 1
           fi
-          if [ "${DRAFT_USED:-}" = "true" ]; then
-            if [ -z "${DRAFT_FILE}" ] || [ ! -s "${DRAFT_FILE}" ]; then
-              echo "::error::Draft JSON file was not generated."
-              exit 1
+          if [ -z "${DRAFT_FILE}" ] || [ ! -s "${DRAFT_FILE}" ]; then
+            echo "::error::Draft JSON file was not generated."
+            exit 1
+          fi
+          cp "${EVIDENCE_FILE}" "${inspection_dir}/evidence.json"
+          cp "${DRAFT_FILE}" "${inspection_dir}/release-notes-draft.json"
+
+          if [ "${DOCS_SYNC_MODE}" = "paired_with_memos_release" ]; then
+            docs_action="publish_paired_local_plugin_release"
+            docs_summary="The weekly workflow creates a paired local-plugin Release. Its release.published event is the only Plugin tab and pre/gray trigger."
+          elif [ "${NPM_DIST_TAG}" = "latest" ] && [[ "${RELEASE_VERSION}" != *-* ]]; then
+            docs_action="publish_standalone_local_plugin_release"
+            docs_summary="After npm and tag verification, the stable local-plugin GitHub Release triggers 106, the Plugin tab, and pre/gray."
+          else
+            docs_action="skip_prerelease_docs"
+            docs_summary="Prerelease packages create npm, tag, inspection artifacts, and an independent GitHub Prerelease; they do not update the Plugin tab or deployment chain."
+          fi
+
+          jq \
+            --arg schema "memos.local-plugin.quality-report.v1" \
+            --arg version "v${RELEASE_VERSION}" \
+            --arg docs_action "${docs_action}" \
+            '{
+              schema: $schema,
+              version: $version,
+              docs_action: $docs_action,
+              ok: (.ok == true),
+              needs_review: (.needs_review == true),
+              confidence: (.confidence // ""),
+              item_count: ((.release_items // []) | length),
+              coverage: (.coverage // {}),
+              language_issues: (.language_issues // []),
+              validation_report: (.validation_report // {}),
+              validation_attempt_count: (.validation_attempt_count // 0),
+              repair_attempt_count: (.repair_attempt_count // 0)
+            }' "${DRAFT_FILE}" > "${inspection_dir}/quality-report.json"
+
+          jq \
+            --arg schema "memos.local-plugin.docs-preview.v1" \
+            --arg version "v${RELEASE_VERSION}" \
+            --arg docs_action "${docs_action}" \
+            --arg summary "${docs_summary}" \
+            '{
+              schema: $schema,
+              version: $version,
+              docs_action: $docs_action,
+              would_create_independent_plugin_release: true,
+              summary: $summary,
+              release_items: (.release_items // [])
+            }' "${DRAFT_FILE}" > "${inspection_dir}/docs-preview.json"
+
+          {
+            echo "# MemOS Local Plugin docs preview"
+            echo
+            echo "- version: v${RELEASE_VERSION}"
+            echo "- action: ${docs_action}"
+            echo "- independent local-plugin GitHub Release: true"
+            echo
+            echo "${docs_summary}"
+            if [ "${docs_action}" != "skip_prerelease_docs" ]; then
+              echo
+              sed '/<!-- doc-agent-release-notes-json/,$d' "${RELEASE_NOTES_FILE}"
             fi
-            cp "${DRAFT_FILE}" "${inspection_dir}/release-notes-draft.json"
-          elif [ -n "${DRAFT_FILE}" ] && [ -s "${DRAFT_FILE}" ]; then
-            cp "${DRAFT_FILE}" "${inspection_dir}/release-notes-draft.json"
-          fi
+          } > "${inspection_dir}/docs-preview.md"
 
           {
             echo "# MemOS local plugin release notes inspection"
@@ -259,12 +653,14 @@ jobs:
             echo
             echo "- release-notes.md"
             echo "- npm-pack.json"
-            if [ -n "${EVIDENCE_FILE}" ] && [ -s "${EVIDENCE_FILE}" ]; then
-              echo "- evidence.json (redacted; no full diff or prompt guidance)"
-            fi
-            if [ -f "${inspection_dir}/release-notes-draft.json" ]; then
-              echo "- release-notes-draft.json"
-            fi
+            echo "- package-audit.json"
+            echo "- $(basename "${RELEASE_TARBALL_SHA256}")"
+            echo "- The tarball is intentionally not uploaded because real publish builds embed public telemetry configuration."
+            echo "- evidence.json (redacted; no full diff or prompt guidance)"
+            echo "- docs-preview.md"
+            echo "- docs-preview.json"
+            echo "- quality-report.json"
+            echo "- release-notes-draft.json"
           } > "${inspection_dir}/README.md"
 
           {
@@ -284,7 +680,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload release notes inspection artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: memos-local-plugin-release-notes-inspection
           path: ${{ runner.temp }}/memos-local-plugin-release-notes-inspection
@@ -293,7 +689,18 @@ jobs:
       - name: Stop before publish in dry run
         if: ${{ inputs.dry_run == true }}
         run: |
-          echo "::notice::dry_run=true; skipped npm publish, tag, GitHub Release, and release PR."
+          echo "::notice::dry_run=true; skipped npm publish, tag creation, and independent local-plugin GitHub Release creation."
+
+      - name: Inspect existing standalone package tag state
+        id: release_state
+        if: ${{ inputs.dry_run != true }}
+        working-directory: .
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: memos-local-plugin-v${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+          EXPECTED_PACKAGE_SOURCE_SHA: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
+        run: node .github/scripts/inspect-local-plugin-release-state.mjs
 
       - name: Publish to npm
         if: ${{ inputs.dry_run != true }}
@@ -304,137 +711,31 @@ jobs:
           RELEASE_TAG: memos-local-plugin-v${{ inputs.version }}
           NPM_DIST_TAG: ${{ inputs.tag }}
           RECOVER_EXISTING_NPM_RELEASE: ${{ inputs.recover_existing_npm_release }}
-          DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
-          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
-        run: |
-          set -euo pipefail
-          npm_view_log="${RUNNER_TEMP}/memos-local-plugin-npm-view.log"
-          npm_version_exists() {
-            for attempt in 1 2 3; do
-              set +e
-              npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version >"${npm_view_log}" 2>&1
-              status=$?
-              set -e
-              if [ "${status}" = 0 ]; then
-                sed -n '1,40p' "${npm_view_log}"
-                return 0
-              fi
-              if grep -Eiq "E404|404 Not Found|No match found|is not in this registry" "${npm_view_log}"; then
-                return 1
-              fi
-              sed -n '1,120p' "${npm_view_log}"
-              if [ "${attempt}" = 3 ]; then
-                echo "::error::npm view failed after three attempts; refusing to guess whether ${PACKAGE_NAME}@${RELEASE_VERSION} exists."
-                exit "${status}"
-              fi
-              sleep "$((attempt * 5))"
-            done
-          }
-          remote_tag_exists() {
-            local release_tag="$1"
-            for attempt in 1 2 3; do
-              set +e
-              git ls-remote --exit-code --tags origin "refs/tags/${release_tag}" >/dev/null 2>&1
-              status=$?
-              set -e
-              if [ "${status}" = 0 ]; then
-                return 0
-              fi
-              if [ "${status}" = 2 ]; then
-                return 1
-              fi
-              if [ "${attempt}" = 3 ]; then
-                echo "::error::Failed to check remote tag ${release_tag} after three attempts."
-                exit "${status}"
-              fi
-              sleep "$((attempt * 5))"
-            done
-          }
+          RELEASE_METADATA_STATE: ${{ steps.release_state.outputs.state }}
+          NPM_VISIBILITY_TIMEOUT_SECONDS: "150"
+          NPM_VISIBILITY_INTERVAL_SECONDS: "10"
+          NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS: "8"
+        run: bash ../../.github/scripts/publish-local-plugin.sh
 
-          if npm_version_exists; then
-            release_tag="memos-local-plugin-v${RELEASE_VERSION}"
-            if remote_tag_exists "${release_tag}"; then
-              echo "${PACKAGE_NAME}@${RELEASE_VERSION} and ${release_tag} already exist; treating this as an idempotent rerun."
-            elif [ "${RECOVER_EXISTING_NPM_RELEASE}" = "true" ]; then
-              echo "Recovery mode enabled; npm version exists, so publish is skipped."
-            else
-              echo "::error::npm version exists but ${release_tag} does not. Refusing to invent release metadata without explicit recovery mode."
-              exit 1
-            fi
-          else
-            attempt_dir="${RUNNER_TEMP}/memos-local-plugin-npm-publish-attempts"
-            mkdir -p "${attempt_dir}"
-            for attempt in 1 2 3; do
-              set +e
-              npm publish --access public --tag "${NPM_DIST_TAG}" >"${attempt_dir}/${attempt}.log" 2>&1
-              publish_status=$?
-              set -e
-              sed -n '1,160p' "${attempt_dir}/${attempt}.log"
-              if [ "${publish_status}" = 0 ]; then
-                break
-              fi
-              if npm_version_exists; then
-                echo "Publish returned an error, but npm now contains the requested version."
-                break
-              fi
-              if [ "${attempt}" = 3 ]; then
-                RELEASE_FAILURE_PHASE=npm-publish \
-                  RELEASE_FAILURE_ATTEMPT_DIR="${attempt_dir}" \
-                  node ../../.github/scripts/draft-local-plugin-release-notes.mjs \
-                  || echo "::warning::Failed to send the exhausted-retry notification."
-                echo "::error::npm publish failed after three attempts."
-                exit 1
-              fi
-              sleep "$((attempt * 5))"
-            done
-            if ! npm_version_exists; then
-              echo "::error::npm publish appeared to finish, but ${PACKAGE_NAME}@${RELEASE_VERSION} is still not visible."
-              exit 1
-            fi
-          fi
-
-      - name: Create release tag and PR
+      - name: Create standalone package tag
+        id: release_tag
         if: ${{ inputs.dry_run != true }}
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: memos-local-plugin-v${{ inputs.version }}
           NPM_DIST_TAG: ${{ inputs.tag }}
-          RELEASE_NOTES_FILE: ${{ steps.release_notes.outputs.release_notes_file }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_METADATA_STATE: ${{ steps.release_state.outputs.state }}
+          EXPECTED_PACKAGE_SOURCE_SHA: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
         run: |
           set -euo pipefail
-          if [ -z "${RELEASE_NOTES_FILE}" ] || [ ! -s "${RELEASE_NOTES_FILE}" ]; then
-            echo "::error::Release notes file was not generated."
-            exit 1
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
 
           release_tag="memos-local-plugin-v${RELEASE_VERSION}"
-          release_branch="release/${release_tag}"
-          release_title="release: @memtensor/memos-local-plugin v${RELEASE_VERSION}"
-          remote_branch_sha() {
-            local branch="$1"
-            local out="${RUNNER_TEMP}/memos-local-plugin-remote-branch.txt"
-            for attempt in 1 2 3; do
-              set +e
-              git ls-remote --heads origin "${branch}" >"${out}" 2>&1
-              status=$?
-              set -e
-              if [ "${status}" = 0 ]; then
-                awk '{print $1}' "${out}"
-                return 0
-              fi
-              sed -n '1,120p' "${out}"
-              if [ "${attempt}" = 3 ]; then
-                echo "::error::Failed to check remote branch ${branch} after three attempts."
-                exit "${status}"
-              fi
-              sleep "$((attempt * 5))"
-            done
-          }
+          release_commit_message="release: @memtensor/memos-local-plugin v${RELEASE_VERSION}"
           remote_tag_exists() {
             local tag="$1"
             for attempt in 1 2 3; do
@@ -455,101 +756,46 @@ jobs:
               sleep "$((attempt * 5))"
             done
           }
-          create_release_if_missing() {
-            release_flags=()
-            if [[ "${RELEASE_VERSION}" == *-* || "${NPM_DIST_TAG}" != "latest" ]]; then
-              release_flags+=(--prerelease)
-              echo "Marking GitHub Release ${release_tag} as prerelease because version=${RELEASE_VERSION}, npm_dist_tag=${NPM_DIST_TAG}."
-            fi
-            for attempt in 1 2 3; do
-              if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-                echo "GitHub Release ${release_tag} already exists; leaving it unchanged."
-                return 0
-              fi
-              set +e
-              gh release create "${release_tag}" \
-                --repo "${GITHUB_REPOSITORY}" \
-                --target "$(git rev-parse HEAD)" \
-                --title "OpenClaw Local Plugin v${RELEASE_VERSION}" \
-                --notes-file "${RELEASE_NOTES_FILE}" \
-                "${release_flags[@]}"
-              status=$?
-              set -e
-              if [ "${status}" = 0 ]; then
-                return 0
-              fi
-              if [ "${attempt}" = 3 ]; then
-                if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-                  echo "GitHub Release ${release_tag} exists after a failed create response; treating as success."
-                  return 0
-                fi
-                echo "::error::Failed to create GitHub Release ${release_tag} after three attempts."
-                exit "${status}"
-              fi
-              sleep "$((attempt * 5))"
-            done
-          }
-          create_pr_if_missing() {
-            if gh pr view "${release_branch}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-              echo "Release PR already exists for ${release_branch}."
-              return 0
-            fi
-            for attempt in 1 2 3; do
-              set +e
-              gh pr create \
-                --repo "${GITHUB_REPOSITORY}" \
-                --base "${DEFAULT_BRANCH}" \
-                --head "${release_branch}" \
-                --title "${release_title}" \
-                --body "Bumps apps/memos-local-plugin/package.json for the published npm release ${RELEASE_VERSION}."
-              status=$?
-              set -e
-              if [ "${status}" = 0 ]; then
-                return 0
-              fi
-              if gh pr view "${release_branch}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-                echo "Release PR exists after a failed create response; treating as success."
-                return 0
-              fi
-              if [ "${attempt}" = 3 ]; then
-                echo "::warning::Failed to create release PR automatically after three attempts. Open a PR from ${release_branch} to ${DEFAULT_BRANCH}."
-                return 0
-              fi
-              sleep "$((attempt * 5))"
-            done
-          }
-
-          git add apps/memos-local-plugin/package.json apps/memos-local-plugin/package-lock.json
-          created_release_commit=false
-          if ! git diff --staged --quiet; then
-            git commit -m "${release_title}"
-            created_release_commit=true
+          if [ "${RELEASE_METADATA_STATE}" = "complete" ]; then
+            echo "The standalone package tag was already validated; no tag metadata will be recreated."
+            echo "tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+            echo "tag_sha=${{ steps.release_state.outputs.tag_commit }}" >> "${GITHUB_OUTPUT}"
+            exit 0
           fi
 
-          if [ "${created_release_commit}" = "true" ]; then
-            remote_branch_sha="$(remote_branch_sha "${release_branch}")"
-            if [ -n "${remote_branch_sha}" ]; then
-              if [ "${remote_branch_sha}" != "$(git rev-parse HEAD)" ]; then
-                echo "::error::Release branch ${release_branch} already exists at a different commit; refusing to overwrite it."
-                exit 1
-              fi
-              echo "Release branch ${release_branch} already points at this commit."
-            else
-              bash .github/scripts/retry.sh --label "push release branch" -- git push origin "HEAD:refs/heads/${release_branch}"
-            fi
+          git add \
+            apps/memos-local-plugin/package.json \
+            apps/memos-local-plugin/package-lock.json \
+            apps/memos-local-plugin/adapters/hermes/plugin.yaml
+          if ! git diff --staged --quiet; then
+            git commit -m "${release_commit_message}"
           fi
 
           if remote_tag_exists "${release_tag}"; then
-            echo "Tag ${release_tag} already exists on origin; leaving it unchanged."
+            echo "::error::Tag ${release_tag} appeared after preflight. Stop and rerun so its target can be validated."
+            exit 1
           else
             git tag "${release_tag}"
             bash .github/scripts/retry.sh --label "push release tag" -- git push origin "refs/tags/${release_tag}"
           fi
 
-          create_release_if_missing
+          tag_sha="$(git rev-parse "refs/tags/${release_tag}^{commit}")"
+          echo "tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "tag_sha=${tag_sha}" >> "${GITHUB_OUTPUT}"
 
-          if [ "${created_release_commit}" = "true" ]; then
-            create_pr_if_missing
-          else
-            echo "No version bump changes to open as a PR."
-          fi
+      - name: Create and verify independent local-plugin GitHub Release
+        id: plugin_release
+        if: ${{ inputs.dry_run != true }}
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
+          RELEASE_TAG_SHA: ${{ steps.release_tag.outputs.tag_sha }}
+          RELEASE_NOTES_FILE: ${{ steps.release_notes.outputs.release_notes_file }}
+          EVIDENCE_FILE: ${{ steps.release_notes.outputs.evidence_file }}
+          RELEASE_ORIGIN_MODE: ${{ inputs.docs_sync_mode == 'paired_with_memos_release' && 'memos_weekly' || 'standalone' }}
+          MEMOS_RELEASE_TAG: ${{ inputs.docs_sync_mode == 'paired_with_memos_release' && inputs.memos_release_tag || '' }}
+          CREATE_DRAFT_RELEASE: ${{ inputs.docs_sync_mode == 'paired_with_memos_release' && inputs.create_draft_release || false }}
+          OUTPUT_RELEASE_BODY_FILE: ${{ runner.temp }}/memos-local-plugin-release-body.md
+        run: node .github/scripts/create-local-plugin-github-release.mjs
