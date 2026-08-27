@@ -80,6 +80,42 @@ class KVCacheMemory(BaseActMemory):
 
         return self._concat_caches(caches_to_merge)
 
+    @staticmethod
+    def _copy_cache(cache: DynamicCache) -> DynamicCache:
+        """Shallow-structure copy of a DynamicCache that shares no mutable state.
+
+        The tensors themselves are not cloned -- ``generate`` appends along the
+        sequence axis rather than writing into the existing rows, so a fresh
+        container with the same tensor objects is enough to protect the stored
+        item, without paying to duplicate the cache.
+        """
+        import torch  # noqa: F401  (kept local, matching this module's style)
+
+        copy = DynamicCache()
+        if hasattr(cache, "layers"):
+            if not hasattr(copy, "layers"):
+                copy.layers = []
+            layer_cls = type(cache.layers[0]) if cache.layers else None
+            while layer_cls is not None and len(copy.layers) < len(cache.layers):
+                copy.layers.append(layer_cls())
+            for i, src in enumerate(cache.layers):
+                dst = copy.layers[i]
+                if not getattr(dst, "is_initialized", True) and hasattr(
+                    dst, "lazy_initialization"
+                ):
+                    dst.lazy_initialization(src.keys, src.values)
+                dst.keys = src.keys
+                dst.values = src.values
+        elif hasattr(cache, "key_cache"):
+            for i in range(len(cache.key_cache)):
+                copy.key_cache.append(cache.key_cache[i])
+                copy.value_cache.append(cache.value_cache[i])
+        else:
+            raise AttributeError(
+                "DynamicCache object has neither 'layers' nor 'key_cache' attributes"
+            )
+        return copy
+
     def get(self, memory_id: str) -> KVCacheItem | None:
         """Get a memory by its ID.
 
@@ -206,7 +242,13 @@ class KVCacheMemory(BaseActMemory):
 
         assert caches, "Need at least one cache"
         if len(caches) == 1:
-            return caches[0]
+            # Do NOT hand back the stored object. The caller passes this cache to
+            # ``generate``, which appends to it in place, so returning the stored
+            # item makes every chat turn grow the saved activation memory:
+            # observed stored length 6 -> 19 -> 32 -> 45 over three turns. The
+            # multi-cache path below already builds a new container, so only this
+            # early return leaked the reference.
+            return self._copy_cache(caches[0])
 
         merged = DynamicCache()
 
