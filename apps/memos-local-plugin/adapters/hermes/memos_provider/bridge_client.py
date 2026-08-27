@@ -46,7 +46,7 @@ HOST_HANDLER_QUEUE_CAPACITY = 16
 # This is the Python-side guard against issue #1910 (bridge process leak:
 # every turn spawns new bridge.cjs). Defence in depth on the Node side
 # lives in ``bridge.cts`` via ``bridge-stdio.pid``.
-_ACTIVE_CLIENTS: dict[tuple[str, bool, str], MemosBridgeClient] = {}
+_ACTIVE_CLIENTS: dict[tuple[str, bool, str, str], MemosBridgeClient] = {}
 _ACTIVE_CLIENTS_LOCK = threading.Lock()
 
 
@@ -145,6 +145,13 @@ class MemosBridgeClient:
         self,
         *,
         bridge_path: str | None = None,
+        node_binary: str | None = None,
+        agent: str = "hermes",
+        no_viewer: bool = True,
+        extra_env: dict[str, str] | None = None,
+        runtime_home: str | None = None,
+        owner_id: str | None = None,
+    ) -> None:| None = None,
         node_binary: str | None = None,
         agent: str = "hermes",
         no_viewer: bool = True,
@@ -265,6 +272,10 @@ class MemosBridgeClient:
         self._singleton_agent = agent
         self._singleton_no_viewer = bool(no_viewer)
         self._singleton_runtime_home = str(resolved_runtime_home)
+        # owner-keying: widen the singleton tracker key to (agent, no_viewer, home,
+        # owner_id) so concurrent provider instances in ONE process (gateway
+        # email/cron/subagent sessions) do not reap each other's bridges.
+        self._singleton_owner = owner_id or f"anon-{id(self)}"
         previous = self._register_active()
         if previous is not None and previous is not self:
             prev_pid = getattr(previous, "pid", "?")
@@ -282,6 +293,7 @@ class MemosBridgeClient:
             self._singleton_agent,
             self._singleton_no_viewer,
             self._singleton_runtime_home,
+            self._singleton_owner,
         )
         with _ACTIVE_CLIENTS_LOCK:
             previous = _ACTIVE_CLIENTS.get(key)
@@ -294,6 +306,7 @@ class MemosBridgeClient:
             self._singleton_agent,
             self._singleton_no_viewer,
             self._singleton_runtime_home,
+            self._singleton_owner,
         )
         with _ACTIVE_CLIENTS_LOCK:
             if _ACTIVE_CLIENTS.get(key) is self:

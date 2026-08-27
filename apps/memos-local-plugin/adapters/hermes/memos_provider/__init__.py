@@ -514,6 +514,7 @@ class MemTensorProvider(MemoryProvider):
                         MemosBridgeClient(
                             runtime_home=home,
                             extra_env=env,
+                            owner_id=f"provider-{id(self)}",
                         )
                     ),
                     before_spawn=lambda home=runtime_home: _prepare_shared_bridge(home),
@@ -526,6 +527,7 @@ class MemTensorProvider(MemoryProvider):
                 new_bridge = MemosBridgeClient(
                     runtime_home=str(runtime_home),
                     extra_env=runtime_env,
+                    owner_id=f"provider-{id(self)}",
                 )
                 new_bridge.register_host_handler(
                     "host.llm.complete",
@@ -2195,6 +2197,7 @@ class MemTensorProvider(MemoryProvider):
                             MemosBridgeClient(
                                 runtime_home=home,
                                 extra_env=env,
+                                owner_id=f"provider-{id(self)}",
                             )
                         ),
                         before_spawn=lambda home=runtime_home: _prepare_shared_bridge(home),
@@ -2261,6 +2264,7 @@ class MemTensorProvider(MemoryProvider):
                 new_bridge = MemosBridgeClient(
                     runtime_home=str(runtime_home),
                     extra_env=runtime_env,
+                    owner_id=f"provider-{id(self)}",
                 )
                 logger.info(
                     "MemOS: new bridge created (pid=%s)",
