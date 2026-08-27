@@ -36,7 +36,8 @@ import pytest
 class TestDeserializeDictField:
     """Contract for ``_deserialize_dict_field`` — see design.md § Helper."""
 
-    def _helper(self):
+    @staticmethod
+    def _helper():
         from memos.graph_dbs.neo4j import _deserialize_dict_field
 
         return _deserialize_dict_field

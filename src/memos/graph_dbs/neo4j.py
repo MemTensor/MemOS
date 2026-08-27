@@ -116,6 +116,10 @@ def _deserialize_dict_field(value: Any) -> Any:
         try:
             return json.loads(value)
         except (ValueError, TypeError):
+            logger.warning(
+                "Failed to deserialize field value %r as JSON dict; dropping to None",
+                value,
+            )
             return None
     return value
 
