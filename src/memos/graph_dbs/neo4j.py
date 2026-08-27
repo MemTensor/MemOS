@@ -96,6 +96,36 @@ def _sanitize_neo4j_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return {key: _sanitize_neo4j_value(value) for key, value in metadata.items()}
 
 
+def _deserialize_dict_field(value: Any) -> Any:
+    """Reverse of :func:`_sanitize_neo4j_value` for dict-typed metadata fields.
+
+    Symmetric read-side counterpart to the write-side sanitizer. See
+    ``openspec/changes/2026-08-27-2288-*`` and issue #2288.
+
+    - ``None`` and ``dict`` values pass through unchanged.
+    - A ``str`` shaped like a JSON object (``"{"`` prefix, ``"}"``
+      suffix) is decoded via :func:`json.loads`.
+    - A ``str`` that fails to decode returns ``None`` — a raw string
+      would still fail pydantic ``dict | None`` validation downstream,
+      so we drop it rather than corrupt the model.
+    - Any other value is returned unchanged.
+    """
+    if value is None or isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return value
+
+
+# Metadata fields written as ``dict`` and stringified by
+# ``_sanitize_neo4j_value``. The read path must reverse the transform so
+# :class:`TextualMemoryItem`'s ``dict | None`` validation succeeds.
+_DICT_METADATA_FIELDS: tuple[str, ...] = ("internal_info", "info")
+
+
 class Neo4jGraphDB(BaseGraphDB):
     """Neo4j-based implementation of a graph memory store.
 
@@ -1891,6 +1921,13 @@ class Neo4jGraphDB(BaseGraphDB):
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
+
+        # Reverse the write-side ``dict → json.dumps`` transform for the
+        # known dict-typed metadata fields. See issue #2288.
+        for _field in _DICT_METADATA_FIELDS:
+            if _field in node:
+                node[_field] = _deserialize_dict_field(node[_field])
+
         return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
 
     def delete_node_by_prams(
