@@ -324,17 +324,20 @@ class BridgeClientTests(unittest.TestCase):
         client.close()  # second call must not raise
 
     def test_module_singleton_closes_previous_client_same_agent(self) -> None:
-        """Constructing a second client with the same agent must reap the first.
+        """Constructing a second client with the same owner must reap the first.
 
         Regression for issue #1910: each turn the Hermes adapter could
         spawn a fresh bridge subprocess without closing its predecessor,
         accumulating 4+ processes per session. The singleton tracker in
         ``MemosBridgeClient`` prevents that by closing any active client
-        for the same ``(agent, no_viewer)`` slot at construction time.
+        for the same ``(agent, no_viewer, runtime_home, owner_id)`` slot
+        at construction time. Issue #2291 widened the key with
+        ``owner_id`` so this test now pins the same-owner replacement
+        contract.
         """
-        first = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        first = MemosBridgeClient(bridge_path="/tmp/bridge.cts", owner_id="same")
         self.assertFalse(first._closed)
-        second = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        second = MemosBridgeClient(bridge_path="/tmp/bridge.cts", owner_id="same")
         # The new constructor must have reaped the previous one.
         self.assertTrue(first._closed)
         self.assertFalse(second._closed)
@@ -367,10 +370,101 @@ class BridgeClientTests(unittest.TestCase):
             first.close()
             second.close()
 
+    def test_module_singleton_isolated_for_distinct_owners(self) -> None:
+        """Distinct ``owner_id`` values must not reap each other (issue #2291).
+
+        Regression for the intra-process bridge fight: the Hermes gateway
+        creates one ``MemTensorProvider`` per concurrent session (email,
+        cron, subagents). Every provider construction used to close the
+        one active client bound to ``(agent, no_viewer, runtime_home)``
+        even when that client belonged to a healthy sibling. With
+        ``owner_id`` widening the singleton key, N providers coexist
+        instead of fighting.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            runtime = str(Path(root) / "shared-home")
+            first = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=runtime,
+                owner_id="provider-1",
+            )
+            second = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=runtime,
+                owner_id="provider-2",
+            )
+
+            self.assertFalse(first._closed)
+            self.assertFalse(second._closed)
+
+            key_first = (
+                first._singleton_agent,
+                first._singleton_no_viewer,
+                first._singleton_runtime_home,
+                first._singleton_owner,
+            )
+            key_second = (
+                second._singleton_agent,
+                second._singleton_no_viewer,
+                second._singleton_runtime_home,
+                second._singleton_owner,
+            )
+            self.assertIsNot(key_first, key_second)
+            self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key_first), first)
+            self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key_second), second)
+
+            first.close()
+            second.close()
+
+    def test_module_singleton_same_owner_replacement_still_reaps_previous(self) -> None:
+        """Same ``owner_id`` re-registration must close its predecessor.
+
+        The #1910 guarantee (a single provider does not keep spawning new
+        bridges without closing the previous one) still holds because a
+        client rebuilt under the same owner slot displaces its predecessor.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            runtime = str(Path(root) / "same-home")
+            first = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=runtime,
+                owner_id="provider-same",
+            )
+            second = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=runtime,
+                owner_id="provider-same",
+            )
+
+            self.assertTrue(first._closed)
+            self.assertFalse(second._closed)
+            second.close()
+
+    def test_module_singleton_anonymous_fallback_isolates_distinct_instances(self) -> None:
+        """Anonymous fallback keys stay unique per client instance (issue #2291)."""
+        with tempfile.TemporaryDirectory() as root:
+            runtime = str(Path(root) / "anon-home")
+            first = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=runtime,
+            )
+            second = MemosBridgeClient(
+                bridge_path="/tmp/bridge.cts",
+                runtime_home=runtime,
+            )
+
+            self.assertFalse(first._closed)
+            self.assertFalse(second._closed)
+            self.assertTrue(first._singleton_owner.startswith("anon-"))
+            self.assertTrue(second._singleton_owner.startswith("anon-"))
+            self.assertNotEqual(first._singleton_owner, second._singleton_owner)
+            first.close()
+            second.close()
+
     def test_close_unregisters_active_client_only_when_still_current(self) -> None:
         """A stale close() must not evict the newer registered client."""
-        first = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
-        second = MemosBridgeClient(bridge_path="/tmp/bridge.cts")
+        first = MemosBridgeClient(bridge_path="/tmp/bridge.cts", owner_id="stale-owner")
+        second = MemosBridgeClient(bridge_path="/tmp/bridge.cts", owner_id="stale-owner")
         # First was already closed by second's __init__. Closing it again is
         # a no-op and must not touch the registry's current entry (second).
         first.close()
@@ -378,6 +472,7 @@ class BridgeClientTests(unittest.TestCase):
             second._singleton_agent,
             second._singleton_no_viewer,
             second._singleton_runtime_home,
+            second._singleton_owner,
         )
         self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key), second)
         second.close()

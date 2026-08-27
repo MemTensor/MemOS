@@ -38,15 +38,21 @@ HOST_HANDLER_WAIT_SECONDS = 5.0
 HOST_HANDLER_QUEUE_CAPACITY = 16
 
 # ─── Module-level singleton tracker ─────────────────────────────────────
-# Each entry maps an ``(agent, no_viewer, runtime_home)`` key to the
-# most-recent active ``MemosBridgeClient`` for that slot. When a new client
-# is constructed for an existing key, the previous client is closed
+# Each entry maps an ``(agent, no_viewer, runtime_home, owner_id)`` key to
+# the most-recent active ``MemosBridgeClient`` for that slot. When a new
+# client is constructed for an existing key, the previous client is closed
 # synchronously so the Node-side ``bridge.cjs`` subprocess does not leak.
 #
 # This is the Python-side guard against issue #1910 (bridge process leak:
 # every turn spawns new bridge.cjs). Defence in depth on the Node side
 # lives in ``bridge.cts`` via ``bridge-stdio.pid``.
-_ACTIVE_CLIENTS: dict[tuple[str, bool, str], MemosBridgeClient] = {}
+#
+# The ``owner_id`` component (issue #2291) lets multiple ``MemTensorProvider``
+# instances in one Hermes gateway process each own a distinct slot instead
+# of fighting for the single per-process ``(agent, no_viewer, runtime_home)``
+# entry. Callers that do not pass ``owner_id`` fall back to
+# ``f"anon-{id(self)}"`` which is unique for the client's lifetime.
+_ACTIVE_CLIENTS: dict[tuple[str, bool, str, str], MemosBridgeClient] = {}
 _ACTIVE_CLIENTS_LOCK = threading.Lock()
 
 
@@ -150,6 +156,7 @@ class MemosBridgeClient:
         no_viewer: bool = True,
         extra_env: dict[str, str] | None = None,
         runtime_home: str | None = None,
+        owner_id: str | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._next_id = 1
@@ -257,14 +264,21 @@ class MemosBridgeClient:
         self._stderr_reader.start()
 
         # Singleton tracking (issue #1910). Register ourselves as the
-        # active client for ``(agent, no_viewer, runtime_home)`` and reap
-        # any previous holder synchronously so its subprocess does not leak.
-        # The reap happens AFTER our reader threads are running, so the
-        # previous client's ``close()`` (which closes stdin and waits for
-        # exit) cannot interfere with our own startup.
+        # active client for ``(agent, no_viewer, runtime_home, owner_id)``
+        # and reap any previous holder synchronously so its subprocess does
+        # not leak. The reap happens AFTER our reader threads are running,
+        # so the previous client's ``close()`` (which closes stdin and
+        # waits for exit) cannot interfere with our own startup.
+        #
+        # The ``owner_id`` component (issue #2291) widens the slot so
+        # concurrent ``MemTensorProvider`` instances in one Hermes gateway
+        # process each keep their own bridge instead of reaping each other.
+        # A ``None`` value falls back to ``anon-<id>`` which is unique for
+        # the client's lifetime.
         self._singleton_agent = agent
         self._singleton_no_viewer = bool(no_viewer)
         self._singleton_runtime_home = str(resolved_runtime_home)
+        self._singleton_owner = owner_id or f"anon-{id(self)}"
         previous = self._register_active()
         if previous is not None and previous is not self:
             prev_pid = getattr(previous, "pid", "?")
@@ -282,6 +296,7 @@ class MemosBridgeClient:
             self._singleton_agent,
             self._singleton_no_viewer,
             self._singleton_runtime_home,
+            self._singleton_owner,
         )
         with _ACTIVE_CLIENTS_LOCK:
             previous = _ACTIVE_CLIENTS.get(key)
@@ -294,6 +309,7 @@ class MemosBridgeClient:
             self._singleton_agent,
             self._singleton_no_viewer,
             self._singleton_runtime_home,
+            self._singleton_owner,
         )
         with _ACTIVE_CLIENTS_LOCK:
             if _ACTIVE_CLIENTS.get(key) is self:
