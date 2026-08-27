@@ -409,7 +409,7 @@ class BridgeClientTests(unittest.TestCase):
                 second._singleton_runtime_home,
                 second._singleton_owner,
             )
-            self.assertIsNot(key_first, key_second)
+            self.assertNotEqual(key_first, key_second)
             self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key_first), first)
             self.assertIs(bridge_client_mod._ACTIVE_CLIENTS.get(key_second), second)
 

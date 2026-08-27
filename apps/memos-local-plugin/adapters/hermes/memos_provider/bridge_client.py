@@ -21,6 +21,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import warnings
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -278,6 +279,17 @@ class MemosBridgeClient:
         self._singleton_agent = agent
         self._singleton_no_viewer = bool(no_viewer)
         self._singleton_runtime_home = str(resolved_runtime_home)
+        if owner_id is None:
+            # Warn callers who silently opt out of the singleton reap-previous
+            # mechanism (issue #1910). ``anon-<id>`` guarantees uniqueness per
+            # instance, so no two anonymous clients ever share a slot and the
+            # leak guard becomes a no-op for them. Force explicit intent.
+            warnings.warn(
+                "MemosBridgeClient created without owner_id; "
+                "the singleton reap-previous mechanism is disabled for this instance. "
+                "Pass an explicit owner_id to prevent bridge process leaks.",
+                stacklevel=2,
+            )
         self._singleton_owner = owner_id or f"anon-{id(self)}"
         previous = self._register_active()
         if previous is not None and previous is not self:
