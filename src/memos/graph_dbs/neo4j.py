@@ -1050,9 +1050,6 @@ class Neo4jGraphDB(BaseGraphDB):
         if not query_words:
             return []
 
-        # Ensure fulltext index exists (lazy creation)
-        self._ensure_fulltext_index()
-
         user_name = user_name if user_name else self.config.user_name
 
         # Build Lucene query: escape each word and join with OR
@@ -1063,6 +1060,9 @@ class Neo4jGraphDB(BaseGraphDB):
         ]
         if not escaped_words:
             return []
+
+        # Ensure fulltext index exists (lazy creation)
+        self._ensure_fulltext_index()
 
         lucene_query = " OR ".join(escaped_words)
         logger.info(

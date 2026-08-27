@@ -121,7 +121,7 @@ class TestFulltextSearchBasic:
             top_k=10,
         )
 
-        params = session_mock.run.call_args[1]
+        params = session_mock.run.call_args[0][1]
         lucene = params["lucene_query"]
         assert " OR " in lucene
         assert "apple" in lucene
@@ -153,7 +153,7 @@ class TestFulltextSearchBasic:
 
         shared_neo4j_db.search_by_fulltext(query_words=["test"], top_k=3)
 
-        params = session_mock.run.call_args[1]
+        params = session_mock.run.call_args[0][1]
         assert params["top_k"] == 3
 
 
@@ -175,7 +175,7 @@ class TestFulltextSearchFiltering:
         )
 
         query = session_mock.run.call_args[0][0]
-        params = session_mock.run.call_args[1]
+        params = session_mock.run.call_args[0][1]
         assert "node.memory_type = $scope" in query
         assert params["scope"] == "WorkingMemory"
 
@@ -189,7 +189,7 @@ class TestFulltextSearchFiltering:
         )
 
         query = session_mock.run.call_args[0][0]
-        params = session_mock.run.call_args[1]
+        params = session_mock.run.call_args[0][1]
         assert "node.status = $status" in query
         assert params["status"] == "activated"
 
@@ -227,7 +227,7 @@ class TestFulltextSearchFiltering:
         )
 
         query = session_mock.run.call_args[0][0]
-        params = session_mock.run.call_args[1]
+        params = session_mock.run.call_args[0][1]
         assert "node.tags = $filter_tags" in query
         assert params["filter_tags"] == "important"
 
@@ -264,7 +264,7 @@ class TestFulltextSearchThreshold:
         )
 
         query = session_mock.run.call_args[0][0]
-        params = session_mock.run.call_args[1]
+        params = session_mock.run.call_args[0][1]
         assert "score >= $threshold" in query
         assert params["threshold"] == 0.50
 
@@ -347,7 +347,7 @@ class TestFulltextIndexCreation:
         session_mock.__enter__.return_value = session_mock
 
         # Override run return values for the search call
-        def run_side_effect(query, **params):
+        def run_side_effect(query, *args, **kwargs):
             mock_result = MagicMock()
             if "SHOW FULLTEXT" in query:
                 mock_result.single.return_value = None
@@ -391,7 +391,7 @@ def _mock_session_run(db, return_rows):
 
     search_records = [_make_record(r) for r in return_rows]
 
-    def _run_side_effect(query, **params):
+    def _run_side_effect(query, *args, **kwargs):
         mock_result = MagicMock()
         if "SHOW FULLTEXT" in query:
             mock_result.single.return_value = None  # index doesn't exist
