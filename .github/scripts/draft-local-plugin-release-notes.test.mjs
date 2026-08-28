@@ -762,7 +762,14 @@ test("manual stable notes are revalidated against collected evidence", () => {
   const visibleNotes = draft.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0];
   assert.match(visibleNotes, /Restores Hermes bridge state/);
   assert.doesNotMatch(visibleNotes, /修复 Hermes/);
-  assert.match(draft.release_notes_markdown, /修复 Hermes/);
+  const embeddedJson = draft.release_notes_markdown.match(
+    /<!--\s*doc-agent-release-notes-json\s*\n([\s\S]*?)\n-->/,
+  )?.[1];
+  assert.ok(embeddedJson, "release notes should retain the hidden bilingual payload");
+  const embeddedPayload = JSON.parse(embeddedJson);
+  assert.equal(embeddedPayload.items[0].text_cn, "修复 Hermes 桥接状态恢复。");
+  assert.equal(embeddedPayload.items[0].text_en, "Restores Hermes bridge state.");
+  assert.deepEqual(embeddedPayload.items[0].source_refs, ["abc1234"]);
   assert.match(draft.release_notes_markdown, /source-id=openclaw-local-plugin/);
 
   assert.throws(
