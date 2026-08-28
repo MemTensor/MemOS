@@ -142,6 +142,10 @@ type DedicatedLlmConfig = {
   providerOrder?: string[];
   openRouter?: boolean;
   reasoning?: ReasoningConfig;
+  /** Max output tokens per completion. */
+  maxTokens?: number;
+  /** Extra HTTP headers for the provider request. */
+  headers?: Record<string, string>;
 };
 
 export interface BootstrapOptions {
@@ -442,6 +446,8 @@ export async function bootstrapMemoryCoreFull(
         providerOrder: evolver?.providerOrder,
         openRouter: evolver?.openRouter ?? false,
         reasoning: evolver?.reasoning,
+        maxTokens: evolver?.maxTokens,
+        headers: evolver?.headers,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -504,6 +510,8 @@ export async function bootstrapMemoryCoreFull(
         providerOrder: l3c?.providerOrder,
         openRouter: l3c?.openRouter ?? false,
         reasoning: l3c?.reasoning,
+        maxTokens: l3c?.maxTokens,
+        headers: l3c?.headers,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
@@ -569,6 +577,8 @@ export interface CreateMemoryCoreOptions {
   onShutdown?: () => void | Promise<void>;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /** Startup-recovery grace used by shutdown. Defaults to 15 seconds. */
+  startupRecoveryShutdownGraceMs?: number;
 }
 
 /**
@@ -588,6 +598,10 @@ export function createMemoryCore(
   const bootAt = Date.now();
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
   const autoRecoveryEnabled = options.autoRecovery ?? true;
+  const startupRecoveryShutdownGraceMs = Math.max(
+    0,
+    options.startupRecoveryShutdownGraceMs ?? 15_000,
+  );
   let telemetry = options.telemetry ?? null;
   let initialized = false;
   let shutDown = false;
@@ -710,6 +724,7 @@ export function createMemoryCore(
   // detach the slow recovery to this promise. `waitForStartupRecovery`
   // exposes it so tests can opt back into the deterministic semantics.
   let startupRecoveryPromise: Promise<void> = Promise.resolve();
+  let startupRecoveryCancelled = false;
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
@@ -1509,6 +1524,7 @@ export function createMemoryCore(
   async function recoverOpenEpisodesAsSessionEnd(
     orphans: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
+    if (startupRecoveryCancelled) return;
     const endedAt = Date.now();
     log.info("init.orphan_episodes.session_end_recover", { count: orphans.length });
     debugStartupRecovery("H1", "startup_recovery_scan", {
@@ -1539,6 +1555,7 @@ export function createMemoryCore(
     });
     try {
       for (const ep of orphans) {
+        if (startupRecoveryCancelled) break;
         if (isLightweightEpisode(ep)) continue;
         try {
           const episodeId = ep.id as EpisodeId;
@@ -1592,7 +1609,9 @@ export function createMemoryCore(
 
       try {
         await handle.flush();
+        if (startupRecoveryCancelled) return;
         for (const episodeId of needsRewardFallback) {
+          if (startupRecoveryCancelled) break;
           if (captureFailedInBatch.has(episodeId)) {
             log.warn("init.orphan_recovery.reward_fallback_skipped", {
               episodeId,
@@ -1609,6 +1628,7 @@ export function createMemoryCore(
             });
           }
         }
+        if (startupRecoveryCancelled) return;
         await handle.flush();
         debugStartupRecovery("H5", "startup_recovery_flush_done", {
           recoveredCount: orphans.length,
@@ -1641,11 +1661,13 @@ export function createMemoryCore(
   async function recoverDirtyClosedEpisodes(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
+    if (startupRecoveryCancelled) return;
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
     // Snapshot the prior failure counters so we can increment them later
     // (after the bus chain settles) without an extra DB read.
     const priorFailedAttempts = new Map<EpisodeId, number>();
     for (const ep of episodes) {
+      if (startupRecoveryCancelled) break;
       if (isLightweightEpisode(ep)) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
@@ -1672,6 +1694,7 @@ export function createMemoryCore(
       });
     }
     await handle.flush();
+    if (startupRecoveryCancelled) return;
     // After the reward / reflect chain has finished, account for the
     // outcome: clear `meta.rewardDirty` on episodes that are no longer
     // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
@@ -1958,10 +1981,32 @@ export function createMemoryCore(
       // wait, a fast `init → shutdown` race during tests or a quick
       // gateway reload would close SQLite while reflect / reward is
       // mid-flush, producing `SQLITE_MISUSE` noise on the way down.
+      let startupRecoveryTimedOut = false;
       try {
-        await startupRecoveryPromise;
-      } catch {
-        /* already logged inside the recovery promise */
+        // Bound the wait: a slow / flaky LLM during startup recovery of a
+        // large dirty episode must not hold shutdown hostage until the
+        // systemd kill timer (15 Aug 2026 stop-sigterm wedge: SIGTERM at
+        // 08:00:23, SIGKILL at 08:10:23). Recovery is resumable — dirty
+        // episodes carry rewardDirty.failedAttempts and the periodic
+        // rescore re-runs them — so nothing is lost by proceeding after a
+        // short grace. Fast init→shutdown races still get their grace.
+        await withTimeout(
+          startupRecoveryPromise,
+          startupRecoveryShutdownGraceMs,
+          "startup_recovery_shutdown_timeout",
+        );
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message === "startup_recovery_shutdown_timeout"
+        ) {
+          startupRecoveryTimedOut = true;
+          startupRecoveryCancelled = true;
+          log.warn("startup_recovery.shutdown_timeout", {
+            timeoutMs: startupRecoveryShutdownGraceMs,
+            action: "cancel_and_shutdown_pipeline",
+          });
+        }
       }
       try {
         await hubRuntime?.stop();
@@ -1970,7 +2015,10 @@ export function createMemoryCore(
           err: err instanceof Error ? err.message : String(err),
         });
       }
-      await handle.shutdown("memory-core.shutdown");
+      await handle.shutdown(
+        "memory-core.shutdown",
+        startupRecoveryTimedOut ? { flushGraceMs: 0 } : undefined,
+      );
     } finally {
       disposeTurnStartApiLogSessionListener();
       turnStartApiLogBySession.clear();
@@ -2003,8 +2051,9 @@ export function createMemoryCore(
     // actually been able to talk to the configured upstream. See #1596.
     const effectiveConfig = diskConfig ?? handle.config;
 
-    const llmInfo = llmHealth(handle.llm, latestTraceTs());
-    const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    const latestTraceTimestamp = latestTraceTs();
+    const llmInfo = llmHealth(handle.llm, latestTraceTimestamp);
+    const embedderInfo = embedderHealth(handle.embedder, latestTraceTimestamp);
     applyConfiguredModelDisplay(effectiveConfig, llmInfo, embedderInfo);
 
     const skillEvolverInfo = resolveSkillEvolver(
@@ -2017,7 +2066,7 @@ export function createMemoryCore(
       // in that case anyway.
       handle.reflectLlm ?? handle.llm,
       llmInfo,
-      latestTraceTs(),
+      latestTraceTimestamp,
     );
 
     // NOTE: we deliberately do NOT fall back to `api_logs`-stored
@@ -2058,9 +2107,7 @@ export function createMemoryCore(
 
   function latestTraceTs(): number | null {
     try {
-      const rows = handle.repos.traces.list({ limit: 1 });
-      if (rows.length === 0) return null;
-      return rows[0]?.ts ?? null;
+      return handle.repos.traces.latestTimestamp();
     } catch {
       return null;
     }
@@ -5026,7 +5073,10 @@ export function createMemoryCore(
     const existing = handle.repos.skills.getById(id);
     if (!existing || !ownedByCurrent(existing)) return null;
     const now = Date.now();
-    handle.repos.skills.setStatus(id, "active", now);
+    handle.db.tx(() => {
+      handle.repos.skills.setStatus(id, "active", now);
+      handle.repos.skills.recordUse(id, now);
+    });
     if (existing.status !== "active") {
       handle.buses.skill.emit({
         kind: "skill.status.changed",

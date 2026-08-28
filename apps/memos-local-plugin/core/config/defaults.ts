@@ -59,6 +59,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     providerIgnore: [],
     providerOrder: [],
     openRouter: false,
+    maxTokens: 1024,
+    headers: {},
   },
   l3Llm: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -75,6 +77,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     providerIgnore: [],
     providerOrder: [],
     openRouter: false,
+    maxTokens: 4096,
+    headers: {},
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -89,6 +93,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     providerIgnore: [],
     providerOrder: [],
     openRouter: false,
+    maxTokens: 4096,
+    headers: {},
   },
   storage: {
     ftsTokenizer: "trigram",
@@ -252,6 +258,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       etaDelta: 0.1,
       archiveEta: 0.1,
       minEtaForRetrieval: 0.1,
+      idleArchiveMs: 30 * 24 * 60 * 60 * 1000,
     },
     feedback: {
       failureThreshold: 3,
@@ -354,6 +361,19 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     channels: {},
   },
 };
+
+/**
+ * Object-valued config slots whose child keys are user-defined rather than
+ * fields in `DEFAULT_CONFIG`. Keep this list explicit: treating every empty
+ * default object as a free-form map would silently disable unknown-key
+ * warnings for any future structured config section that starts out empty.
+ */
+export const FREE_FORM_CONFIG_PATHS: readonly string[] = Object.freeze([
+  "llm.headers",
+  "l3Llm.headers",
+  "skillEvolver.headers",
+  "logging.channels",
+]);
 
 /**
  * Set of dotted-path field names whose values must never be sent to the

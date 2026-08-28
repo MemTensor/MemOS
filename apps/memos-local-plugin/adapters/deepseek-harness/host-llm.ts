@@ -10,6 +10,7 @@ import {
   type GenerateOptions,
   type LlmCallConfig,
   type LlmFailure,
+  type LlmResolvedModelInfo,
   type PreparedLlmCall,
   type StreamChunk,
 } from "@deepseek-ai/dsh-llm";
@@ -29,6 +30,7 @@ const HOST_LLM_TIMEOUT_CODE = "MEMOS_DSH_HOST_LLM_TIMEOUT";
 const HOST_LLM_MESSAGE_SOURCE = "memos-local-memory";
 const NO_REASONING_EFFORT = ReasoningEffortId("off");
 const UNSUPPORTED_REASONING_EFFORT = "UNSUPPORTED_REASONING_EFFORT";
+const MODEL_CAPABILITY_TTL_MS = 10 * 60 * 1_000;
 
 /** Atomic provider/model route captured from the DSH agent that owns a turn. */
 export interface DeepSeekHarnessLlmRoute {
@@ -40,10 +42,32 @@ export interface DeepSeekHarnessLlmRoute {
 
 /** Public subset of DSH's LLM runtime used by this adapter. */
 export interface DeepSeekHarnessLlmLike {
+  resolveModelInfo(
+    provider: string,
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<LlmResolvedModelInfo>;
   prepareCall(
     config: LlmCallConfig,
     signal?: AbortSignal,
   ): Promise<PreparedLlmCall>;
+}
+
+export interface DeepSeekHarnessHostLlmBridge extends HostLlmBridge {
+  /** Drop exact-route capability snapshots after a DSH adapter topology update. */
+  invalidateModelCapabilities(): void;
+}
+
+type AuxiliaryReasoningCapability = "off" | "plain";
+
+interface CapabilityCacheEntry {
+  readonly expiresAt: number;
+  readonly value: Promise<AuxiliaryReasoningCapability>;
+}
+
+interface CapabilityCache {
+  readonly entries: Map<string, CapabilityCacheEntry>;
+  generation: number;
 }
 
 /**
@@ -95,9 +119,17 @@ export interface CreateDeepSeekHarnessHostLlmBridgeOptions {
  */
 export function createDeepSeekHarnessHostLlmBridge(
   options: CreateDeepSeekHarnessHostLlmBridgeOptions,
-): HostLlmBridge {
+): DeepSeekHarnessHostLlmBridge {
+  const capabilityCache: CapabilityCache = {
+    entries: new Map(),
+    generation: 0,
+  };
   return {
     id: HOST_LLM_BRIDGE_ID,
+    invalidateModelCapabilities(): void {
+      capabilityCache.generation++;
+      capabilityCache.entries.clear();
+    },
     async complete(input: HostLlmCompleteInput): Promise<HostLlmCompletion> {
       const route = options.routes.current();
       if (!route) {
@@ -122,6 +154,7 @@ export function createDeepSeekHarnessHostLlmBridge(
           input,
           route,
           callDeadline.signal,
+          capabilityCache,
         );
         const request = createGenerateOptions(input, route, prepared.config);
         request.signal = callDeadline.signal;
@@ -217,20 +250,30 @@ function createGenerateOptions(
  *
  * Retrieval filters and JSON extractors intentionally use small output caps.
  * Reusing a conversation's high reasoning effort can spend that entire cap on
- * reasoning and produce no JSON/text. DSH effort ids are adapter-owned, so the
- * exact registered adapter validates the branded conventional `off` id. Only
- * an explicit unsupported-effort result retries without it, preserving the
- * adapter/provider default. prepareCall performs no provider generation I/O
- * and binds that validation to the same registration used for dispatch, even
- * if HMR replaces the route before the returned stream starts.
+ * reasoning and produce no JSON/text. Resolve exact-model metadata through
+ * DSH, then cache whether its adapter advertises the conventional `off` id.
+ * prepareCall remains the final registration-bound authority: if HMR changes
+ * the route after metadata resolution, an explicit unsupported-effort result
+ * refreshes the cache and retries with the adapter/provider default.
  */
 async function prepareAuxiliaryCall(
   llm: DeepSeekHarnessLlmLike,
   input: HostLlmCompleteInput,
   route: DeepSeekHarnessLlmRoute,
   signal: AbortSignal,
+  capabilityCache: CapabilityCache,
 ): Promise<PreparedLlmCall> {
   const config = createCallConfig(input, route);
+  const capability = await resolveAuxiliaryReasoningCapability(
+    llm,
+    route,
+    signal,
+    capabilityCache,
+  );
+  if (capability === "plain") {
+    return llm.prepareCall(config, signal);
+  }
+  const preparationGeneration = capabilityCache.generation;
   try {
     return await llm.prepareCall(
       { ...config, reasoningEffort: NO_REASONING_EFFORT },
@@ -243,8 +286,62 @@ async function prepareAuxiliaryCall(
     ) {
       throw error;
     }
+    // The exact adapter may have changed after the metadata lookup. Preserve
+    // prepareCall's registration-bound validation as the final authority and
+    // remember the corrected capability only if no newer topology update has
+    // already invalidated this preparation generation.
+    if (capabilityCache.generation === preparationGeneration) {
+      rememberAuxiliaryReasoningCapability(route, "plain", capabilityCache);
+    }
     return llm.prepareCall(config, signal);
   }
+}
+
+function capabilityRouteKey(route: DeepSeekHarnessLlmRoute): string {
+  return JSON.stringify([route.provider, route.model]);
+}
+
+function rememberAuxiliaryReasoningCapability(
+  route: DeepSeekHarnessLlmRoute,
+  capability: AuxiliaryReasoningCapability,
+  cache: CapabilityCache,
+): void {
+  cache.entries.set(capabilityRouteKey(route), {
+    expiresAt: Date.now() + MODEL_CAPABILITY_TTL_MS,
+    value: Promise.resolve(capability),
+  });
+}
+
+async function resolveAuxiliaryReasoningCapability(
+  llm: DeepSeekHarnessLlmLike,
+  route: DeepSeekHarnessLlmRoute,
+  signal: AbortSignal,
+  cache: CapabilityCache,
+): Promise<AuxiliaryReasoningCapability> {
+  const key = capabilityRouteKey(route);
+  const cached = cache.entries.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+  if (cached) cache.entries.delete(key);
+
+  let entry: CapabilityCacheEntry;
+  const value = llm.resolveModelInfo(route.provider, route.model, signal)
+    .then((info): AuxiliaryReasoningCapability => (
+      info.reasoning?.efforts.some((effort) => effort.id === NO_REASONING_EFFORT)
+        ? "off"
+        : "plain"
+    ))
+    .catch((error: unknown) => {
+      if (cache.entries.get(key) === entry) cache.entries.delete(key);
+      throw error;
+    });
+  entry = {
+    expiresAt: Date.now() + MODEL_CAPABILITY_TTL_MS,
+    value,
+  };
+  cache.entries.set(key, entry);
+  return value;
 }
 
 function createCallConfig(
