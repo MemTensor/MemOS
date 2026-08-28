@@ -151,12 +151,6 @@ class MemosBridgeClient:
         extra_env: dict[str, str] | None = None,
         runtime_home: str | None = None,
         owner_id: str | None = None,
-    ) -> None:| None = None,
-        node_binary: str | None = None,
-        agent: str = "hermes",
-        no_viewer: bool = True,
-        extra_env: dict[str, str] | None = None,
-        runtime_home: str | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._next_id = 1
