@@ -392,9 +392,9 @@ test("postprocesses a single misclassified performance item into Improved", () =
   assert.equal(processed.release_items[0].category, "Improved");
   assert.match(processed.release_items[0].text_cn, /向量扫描性能优化/);
   assert.match(processed.release_notes_markdown, /### Improved/);
-  assert.doesNotMatch(processed.release_categories.Improved[0], /[\u3400-\u9fff]/u);
-  assert.match(processed.docs_categories.cn.Improvements[0], /[\u3400-\u9fff]/u);
-  assert.doesNotMatch(processed.docs_categories.en.Improvements[0], /[\u3400-\u9fff]/u);
+  assert.doesNotMatch(processed.release_categories.Improved[0], /\p{Script=Han}/u);
+  assert.match(processed.docs_categories.cn.Improvements[0], /\p{Script=Han}/u);
+  assert.doesNotMatch(processed.docs_categories.en.Improvements[0], /\p{Script=Han}/u);
 });
 
 test("postprocesses mixed endpoint and auth fixes without dropping either concern", () => {
