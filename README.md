@@ -270,6 +270,8 @@ Connect DeepSeek Harness to MemOS Cloud through its native plugin mechanism. Bef
 
 The cloud plugin is fail-open: a temporary MemOS Cloud outage does not interrupt the current DSH task.
 
+For runtime-level troubleshooting, Session recovery, and plugin/MCP safety boundaries, see the independent [DeepSeek Harness Handbook](https://github.com/sandbaseai/deepseek-harness-handbook).
+
 #### 2. Local Plugin (OpenClaw, Hermes, and DeepSeek Harness)
 
 You use DeepSeek Harness, Hermes Agent, or OpenClaw and want 100% on-device memory — nothing leaves your machine.
