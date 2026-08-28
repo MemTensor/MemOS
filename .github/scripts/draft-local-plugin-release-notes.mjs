@@ -760,7 +760,7 @@ function categoriesFromReleaseItems(items) {
   for (const category of RELEASE_CATEGORY_ORDER) {
     const categoryItems = items.filter((item) => item.category === category);
     if (categoryItems.length === 0) continue;
-    releaseCategories[category] = categoryItems.map((item) => item.text_cn);
+    releaseCategories[category] = categoryItems.map((item) => item.text_en);
     const docCategory = RELEASE_TO_DOC_CATEGORY[category];
     docsCategories.cn[docCategory] = categoryItems.map((item) => item.text_cn);
     docsCategories.en[docCategory] = categoryItems.map((item) => item.text_en);
@@ -1039,7 +1039,7 @@ function markdownFromReleaseItems(items, coverage) {
     lines.push("");
     lines.push(`### ${category}`);
     for (const item of categoryItems) {
-      lines.push(`- ${item.text_cn}`);
+      lines.push(`- ${item.text_en}`);
     }
   }
   lines.push("");
@@ -1237,7 +1237,9 @@ export function manualDraftFromNotes(notes, evidence) {
     validation_report: validationReport,
     validation_attempt_count: 1,
     repair_attempt_count: 0,
-    release_notes_markdown: ensureSourceHint(text),
+    release_notes_markdown: ensureSourceHint(
+      markdownFromReleaseItems(draft.release_items, draft.coverage),
+    ),
   };
 }
 

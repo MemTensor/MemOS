@@ -392,6 +392,9 @@ test("postprocesses a single misclassified performance item into Improved", () =
   assert.equal(processed.release_items[0].category, "Improved");
   assert.match(processed.release_items[0].text_cn, /向量扫描性能优化/);
   assert.match(processed.release_notes_markdown, /### Improved/);
+  assert.doesNotMatch(processed.release_categories.Improved[0], /[\u3400-\u9fff]/u);
+  assert.match(processed.docs_categories.cn.Improvements[0], /[\u3400-\u9fff]/u);
+  assert.doesNotMatch(processed.docs_categories.en.Improvements[0], /[\u3400-\u9fff]/u);
 });
 
 test("postprocesses mixed endpoint and auth fixes without dropping either concern", () => {
@@ -554,6 +557,9 @@ test("repairs postprocessed language validation issues with exact context", asyn
     ["text_cn", "text_en"],
   );
   assert.equal(requests[1].release_notes_repair_context.previous_release_items[0].source_refs[0], "abc1234");
+  const visibleNotes = result.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0];
+  assert.match(visibleNotes, /Plugin Health Dashboard/);
+  assert.doesNotMatch(visibleNotes, /插件健康看板/);
   assert.match(result.release_notes_markdown, /插件健康看板/);
   assert.match(result.release_notes_markdown, /doc-agent-release-notes-json/);
 });
@@ -618,6 +624,9 @@ test("standalone latest draft validation allows one initial response plus three 
   assert.equal(result.needs_review, false);
   assert.equal(result.validation_attempt_count, 4);
   assert.equal(result.repair_attempt_count, 3);
+  const visibleNotes = result.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0];
+  assert.match(visibleNotes, /Plugin Health Dashboard/);
+  assert.doesNotMatch(visibleNotes, /插件健康看板/);
   assert.match(result.release_notes_markdown, /插件健康看板/);
 });
 
@@ -750,6 +759,10 @@ test("manual stable notes are revalidated against collected evidence", () => {
   const draft = manualDraftFromNotes(notes, evidence);
   assert.equal(draft.ok, true);
   assert.equal(draft.release_items[0].category, "Fixed");
+  const visibleNotes = draft.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0];
+  assert.match(visibleNotes, /Restores Hermes bridge state/);
+  assert.doesNotMatch(visibleNotes, /修复 Hermes/);
+  assert.match(draft.release_notes_markdown, /修复 Hermes/);
   assert.match(draft.release_notes_markdown, /source-id=openclaw-local-plugin/);
 
   assert.throws(
