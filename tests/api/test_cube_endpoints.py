@@ -10,6 +10,11 @@ import pytest
 
 from fastapi.testclient import TestClient
 
+from memos.api.middleware import auth as auth_middleware
+
+
+TEST_ADMIN_KEY = "test-master-key"
+
 
 @pytest.fixture(scope="module")
 def mock_init_server():
@@ -37,7 +42,15 @@ def mock_init_server():
         "online_bot": None,
     }
 
-    with patch("memos.api.handlers.init_server", return_value=mock_components):
+    with (
+        patch("memos.api.handlers.init_server", return_value=mock_components),
+        patch.object(auth_middleware, "AUTH_ENABLED", True),
+        patch.object(
+            auth_middleware,
+            "MASTER_KEY_HASH",
+            auth_middleware.hash_api_key(TEST_ADMIN_KEY),
+        ),
+    ):
         # Import after patching
         from fastapi import FastAPI
 
@@ -51,7 +64,10 @@ def mock_init_server():
 @pytest.fixture
 def client(mock_init_server):
     """Create test client with mocked dependencies."""
-    return TestClient(mock_init_server)
+    return TestClient(
+        mock_init_server,
+        headers={"Authorization": TEST_ADMIN_KEY},
+    )
 
 
 @pytest.fixture
