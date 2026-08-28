@@ -78,8 +78,11 @@ def _compute_producer_fingerprint(llm: Any) -> dict[str, Any]:
                 if arch:
                     fp["architectures"] = list(arch)
                 fp["num_hidden_layers"] = getattr(model_config, "num_hidden_layers", None)
-                fp["num_kv_heads"] = getattr(model_config, "num_key_value_heads", None) or getattr(
-                    model_config, "num_attention_heads", None
+                _num_kv = getattr(model_config, "num_key_value_heads", None)
+                fp["num_kv_heads"] = (
+                    _num_kv
+                    if _num_kv is not None
+                    else getattr(model_config, "num_attention_heads", None)
                 )
                 head_dim = getattr(model_config, "head_dim", None)
                 if head_dim is None:
@@ -116,7 +119,7 @@ def _compute_producer_fingerprint(llm: Any) -> dict[str, Any]:
 
         fp["transformers_version"] = transformers.__version__
     except Exception:
-        pass
+        logger.debug("Could not determine transformers version for fingerprint", exc_info=True)
 
     return fp
 
@@ -359,7 +362,7 @@ class KVCacheMemory(BaseActMemory):
                 # Reset to empty if data format is unexpected
                 self.kv_cache_memories = {}
 
-        except (EOFError, pickle.UnpicklingError, Exception):
+        except Exception:
             # Corrupt or incompatible cache — log the reason so the failure is
             # distinguishable from an empty cache in production. Loader stays
             # resilient by resetting to an empty dict.

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import pickle
@@ -52,7 +53,11 @@ class TestVLLMProducerFingerprint:
         assert producer["backend"] == "VLLMLLMConfig"
         # vLLM has no HF model → config_fingerprint is None; that's fine
         assert producer["config_fingerprint"] is None
-        assert producer["tokenizer_fingerprint"] is not None
+        # Fingerprint must be the exact SHA-256 of the tokenizer string, not
+        # just any truthy value — locks in that the right field is being
+        # populated with the right hash function.
+        expected = hashlib.sha256(b"tok-A").hexdigest()
+        assert producer["tokenizer_fingerprint"] == expected
 
     def test_tokenizer_mismatch_drops_item(self, vllm_memory_factory, tmp_path, caplog):
         writer = _make_fake_vllm(tokenizer_fp="writer-tok")
@@ -63,9 +68,16 @@ class TestVLLMProducerFingerprint:
 
         reader = _make_fake_vllm(tokenizer_fp="reader-tok")
         kv2, _ = vllm_memory_factory(llm=reader)
-        with caplog.at_level(logging.ERROR, logger="memos"):
+        with caplog.at_level(logging.WARNING, logger="memos"):
             kv2.load(str(tmp_path))
         assert kv2.kv_cache_memories == {}
+        # Lock in that the drop was actually logged — otherwise a silent
+        # code path that empties the dict for a different reason would
+        # still make this test pass.
+        assert any(
+            r.levelno == logging.WARNING and "fingerprint mismatch" in r.getMessage().lower()
+            for r in caplog.records
+        )
 
     def test_missing_producer_installs_with_warning(self, vllm_memory_factory, tmp_path, caplog):
         kv, _ = vllm_memory_factory()
@@ -74,7 +86,6 @@ class TestVLLMProducerFingerprint:
             metadata={"source_text": "old", "extracted_at": "old"},
         )
         payload = {"kv_cache_memories": {legacy.id: legacy}}
-        os.makedirs(tmp_path, exist_ok=True)
         with open(os.path.join(tmp_path, kv.config.memory_filename), "wb") as f:
             pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 

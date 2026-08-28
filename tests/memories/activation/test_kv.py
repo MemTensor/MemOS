@@ -1,5 +1,4 @@
 import logging
-import os
 import pickle
 
 from unittest.mock import MagicMock
@@ -206,8 +205,7 @@ class TestProducerMismatchOnLoad:
             metadata={"source_text": "legacy", "extracted_at": "old"},
         )
         payload = {"kv_cache_memories": {legacy_item.id: legacy_item}}
-        os.makedirs(tmp_path, exist_ok=True)
-        with open(os.path.join(tmp_path, kv.config.memory_filename), "wb") as f:
+        with open(tmp_path / kv.config.memory_filename, "wb") as f:
             pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
         with caplog.at_level(logging.WARNING, logger="memos"):

@@ -194,7 +194,7 @@ class VLLMKVCacheMemory(BaseActMemory):
                 continue
             reasons = _fingerprint_mismatch_reasons(saved_fp, live_fp)
             if reasons:
-                logger.error(
+                logger.warning(
                     "vLLM KV cache item %s dropped: producer fingerprint mismatch (%s)",
                     item_id,
                     "; ".join(reasons),
@@ -245,7 +245,7 @@ class VLLMKVCacheMemory(BaseActMemory):
                 # Reset to empty if data format is unexpected
                 self.kv_cache_memories = {}
 
-        except (EOFError, pickle.UnpicklingError, Exception):
+        except Exception:
             # Corrupt or incompatible cache — log the failure so it is
             # distinguishable from an empty file in production. Loader
             # stays resilient by resetting to an empty dict.
