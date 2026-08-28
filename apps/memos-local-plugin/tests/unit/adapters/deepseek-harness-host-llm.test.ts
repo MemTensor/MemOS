@@ -34,8 +34,27 @@ function streamFrom(
     config: LlmCallConfig,
     signal?: AbortSignal,
   ) => void,
+  observeResolution?: (provider: string, model: string) => void,
 ): DeepSeekHarnessLlmLike {
   return {
+    async resolveModelInfo(provider, model) {
+      observeResolution?.(provider, model);
+      return {
+        provider,
+        id: model,
+        name: model,
+        ...(reasoningEfforts.length === 0
+          ? {}
+          : {
+              reasoning: {
+                efforts: reasoningEfforts.map((effort) => ({
+                  id: ReasoningEffortId(effort),
+                  name: effort,
+                })),
+              },
+            }),
+      };
+    },
     async prepareCall(config, signal) {
       observePreparation?.(config, signal);
       if (
@@ -192,6 +211,7 @@ describe("DeepSeek Harness host LLM bridge", () => {
   it("does not invent an off effort when the exact model does not advertise it", async () => {
     let request: GenerateOptions | undefined;
     const preparations: LlmCallConfig[] = [];
+    let resolutions = 0;
     const routes = new DeepSeekHarnessLlmRouteContext();
     const bridge = createDeepSeekHarnessHostLlmBridge({
       llm: streamFrom([
@@ -201,14 +221,18 @@ describe("DeepSeek Harness host LLM bridge", () => {
         request = options;
       }, [], (config) => {
         preparations.push(config);
+      }, () => {
+        resolutions++;
       }),
       routes,
     });
 
-    const result = await routes.run(
+    const complete = () => routes.run(
       { provider: "openai", model: "gpt-test", reasoningEffort: "high" },
       () => bridge.complete({ messages: [{ role: "user", content: "hello" }] }),
     );
+    const result = await complete();
+    await complete();
 
     expect(request).not.toHaveProperty("system");
     expect(request).not.toHaveProperty("reasoningEffort");
@@ -216,15 +240,178 @@ describe("DeepSeek Harness host LLM bridge", () => {
     expect(request).not.toHaveProperty("temperature");
     expect(request).not.toHaveProperty("maxTokens");
     expect(preparations).toEqual([
-      {
-        provider: "openai",
-        model: "gpt-test",
-        reasoningEffort: ReasoningEffortId("off"),
-      },
+      { provider: "openai", model: "gpt-test" },
       { provider: "openai", model: "gpt-test" },
     ]);
+    expect(resolutions).toBe(1);
     expect(result).not.toHaveProperty("usage");
     expect(result.text).toBe("ok");
+  });
+
+  it("invalidates resolved effort capabilities when the DSH adapter changes", async () => {
+    let supportsOff = false;
+    let resolutions = 0;
+    const preparations: string[] = [];
+    const routes = new DeepSeekHarnessLlmRouteContext();
+    const bridge = createDeepSeekHarnessHostLlmBridge({
+      llm: {
+        async resolveModelInfo(provider, model) {
+          resolutions++;
+          return {
+            provider,
+            id: model,
+            name: model,
+            ...(supportsOff
+              ? {
+                  reasoning: {
+                    efforts: [{ id: ReasoningEffortId("off"), name: "Off" }],
+                  },
+                }
+              : {}),
+          };
+        },
+        async prepareCall(config) {
+          preparations.push(config.reasoningEffort ?? "plain");
+          if (config.reasoningEffort !== undefined && !supportsOff) {
+            throw new LlmError("unsupported", "UNSUPPORTED_REASONING_EFFORT");
+          }
+          return preparedCall(config, () => (async function* () {
+            yield { type: "text-delta", index: 0, text: "ok" } as StreamChunk;
+            yield { type: "finish", reason: { kind: "stop" } } as StreamChunk;
+          })());
+        },
+      },
+      routes,
+    });
+    const complete = () => routes.run(
+      { provider: "openai", model: "gpt-test" },
+      () => bridge.complete({ messages: [{ role: "user", content: "hello" }] }),
+    );
+
+    await complete();
+    supportsOff = true;
+    await complete();
+    bridge.invalidateModelCapabilities();
+    await complete();
+
+    expect(preparations).toEqual(["plain", "plain", "off"]);
+    expect(resolutions).toBe(2);
+  });
+
+  it("coalesces concurrent capability lookups for one route", async () => {
+    let resolutions = 0;
+    const routes = new DeepSeekHarnessLlmRouteContext();
+    const llm = streamFrom([
+      { type: "text-delta", index: 0, text: "ok" },
+      { type: "finish", reason: { kind: "stop" } },
+    ], undefined, [], undefined, () => {
+      resolutions++;
+    });
+    const bridge = createDeepSeekHarnessHostLlmBridge({ llm, routes });
+    const complete = () => routes.run(
+      { provider: "openai", model: "gpt-test" },
+      () => bridge.complete({ messages: [{ role: "user", content: "hello" }] }),
+    );
+
+    await Promise.all([complete(), complete()]);
+
+    expect(resolutions).toBe(1);
+  });
+
+  it("expires cached capabilities so silent model updates are eventually observed", async () => {
+    let now = 1_000;
+    let supportsOff = false;
+    let resolutions = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const routes = new DeepSeekHarnessLlmRouteContext();
+    const preparations: string[] = [];
+    const bridge = createDeepSeekHarnessHostLlmBridge({
+      llm: {
+        async resolveModelInfo(provider, model) {
+          resolutions++;
+          return {
+            provider,
+            id: model,
+            name: model,
+            ...(supportsOff
+              ? {
+                  reasoning: {
+                    efforts: [{ id: ReasoningEffortId("off"), name: "Off" }],
+                  },
+                }
+              : {}),
+          };
+        },
+        async prepareCall(config) {
+          preparations.push(config.reasoningEffort ?? "plain");
+          return preparedCall(config, () => (async function* () {
+            yield { type: "text-delta", index: 0, text: "ok" } as StreamChunk;
+            yield { type: "finish", reason: { kind: "stop" } } as StreamChunk;
+          })());
+        },
+      },
+      routes,
+    });
+    const complete = () => routes.run(
+      { provider: "openai", model: "gpt-test" },
+      () => bridge.complete({ messages: [{ role: "user", content: "hello" }] }),
+    );
+
+    try {
+      await complete();
+      supportsOff = true;
+      now += 10 * 60 * 1_000 + 1;
+      await complete();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(preparations).toEqual(["plain", "off"]);
+    expect(resolutions).toBe(2);
+  });
+
+  it("falls back safely when HMR changes capabilities between lookup and preparation", async () => {
+    const preparations: string[] = [];
+    let firstOff = true;
+    let resolutions = 0;
+    const routes = new DeepSeekHarnessLlmRouteContext();
+    const bridge = createDeepSeekHarnessHostLlmBridge({
+      llm: {
+        resolveModelInfo(provider, model) {
+          resolutions++;
+          return Promise.resolve({
+            provider,
+            id: model,
+            name: model,
+            reasoning: {
+              efforts: [{ id: ReasoningEffortId("off"), name: "Off" }],
+            },
+          });
+        },
+        async prepareCall(config) {
+          preparations.push(config.reasoningEffort ?? "plain");
+          if (config.reasoningEffort !== undefined && firstOff) {
+            firstOff = false;
+            throw new LlmError("adapter changed", "UNSUPPORTED_REASONING_EFFORT");
+          }
+          return preparedCall(config, () => (async function* () {
+            yield { type: "text-delta", index: 0, text: "ok" } as StreamChunk;
+            yield { type: "finish", reason: { kind: "stop" } } as StreamChunk;
+          })());
+        },
+      },
+      routes,
+    });
+    const complete = () => routes.run(
+      { provider: "openai", model: "gpt-test" },
+      () => bridge.complete({ messages: [{ role: "user", content: "hello" }] }),
+    );
+
+    await complete();
+    await complete();
+
+    expect(preparations).toEqual(["off", "plain", "plain"]);
+    expect(resolutions).toBe(1);
   });
 
   it("does not fall back for errors other than unsupported reasoning effort", async () => {
@@ -233,7 +420,17 @@ describe("DeepSeek Harness host LLM bridge", () => {
     prepareCall.mockRejectedValue(failure);
     const routes = new DeepSeekHarnessLlmRouteContext();
     const bridge = createDeepSeekHarnessHostLlmBridge({
-      llm: { prepareCall },
+      llm: {
+        resolveModelInfo: (provider, model) => Promise.resolve({
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [{ id: ReasoningEffortId("off"), name: "Off" }],
+          },
+        }),
+        prepareCall,
+      },
       routes,
     });
 
@@ -253,6 +450,9 @@ describe("DeepSeek Harness host LLM bridge", () => {
     const routes = new DeepSeekHarnessLlmRouteContext();
     const bridge = createDeepSeekHarnessHostLlmBridge({
       llm: {
+        resolveModelInfo: (provider, model, signal) => (
+          ctx.llm.resolveModelInfo(provider, model, signal)
+        ),
         async prepareCall(config, signal) {
           const prepared = await ctx.llm.prepareCall(config, signal);
           // Simulate a provider plugin HMR swap in the exact TOCTOU window
@@ -452,7 +652,14 @@ describe("DeepSeek Harness host LLM bridge", () => {
     const prepareCall = vi.fn<DeepSeekHarnessLlmLike["prepareCall"]>();
     const routes = new DeepSeekHarnessLlmRouteContext();
     const bridge = createDeepSeekHarnessHostLlmBridge({
-      llm: { prepareCall },
+      llm: {
+        resolveModelInfo: (provider, model) => Promise.resolve({
+          provider,
+          id: model,
+          name: model,
+        }),
+        prepareCall,
+      },
       routes,
     });
     const controller = new AbortController();
@@ -469,6 +676,9 @@ describe("DeepSeek Harness host LLM bridge", () => {
   it("enforces the MemOS timeout through the fused DSH request signal", async () => {
     let observedSignal: AbortSignal | undefined;
     const llm: DeepSeekHarnessLlmLike = {
+      resolveModelInfo(provider, model) {
+        return Promise.resolve({ provider, id: model, name: model });
+      },
       prepareCall(config, signal) {
         observedSignal = signal;
         return Promise.resolve(preparedCall(config, (options) => {

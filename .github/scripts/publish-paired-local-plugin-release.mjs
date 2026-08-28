@@ -39,6 +39,17 @@ function output(values) {
   appendFileSync(outputFile, `${lines}\n`, "utf8");
 }
 
+function outputForIntent(status, memosRelease, intent) {
+  output({
+    status,
+    memos_release_tag: memosRelease.tag,
+    memos_release_version: memosRelease.tag.replace(/^v/, ""),
+    local_plugin_tag: intent?.tag || "",
+    local_plugin_version: intent?.version?.replace(/^v/, "") || "",
+    local_plugin_source_sha: intent?.source_sha || "",
+  });
+}
+
 function normalizeRelease(raw) {
   return {
     id: Number(raw?.id || 0),
@@ -155,11 +166,12 @@ function loadMemOSRelease(repo) {
 export function main() {
   const repo = String(process.env.GITHUB_REPOSITORY || "").trim();
   if (repo !== "MemTensor/MemOS") fail(`paired publisher is restricted to MemTensor/MemOS; received ${repo || "<empty>"}`);
+  const validateOnly = String(process.env.VALIDATE_ONLY || "").trim() === "true";
   const memosRelease = loadMemOSRelease(repo);
   const intent = parseLocalPluginReleaseIntent(memosRelease.body);
   if (!intent.enabled) {
     validatePair({ memosRelease, pluginRelease: null, pluginTagSha: "" });
-    output({ status: "skipped", memos_release_tag: memosRelease.tag, local_plugin_tag: "" });
+    outputForIntent("skipped", memosRelease, intent);
     console.log(`MemOS Release ${memosRelease.tag} has no paired local-plugin publish; nothing to do.`);
     return;
   }
@@ -178,8 +190,13 @@ export function main() {
     memosTagSha: String(memosTagCommit.sha || ""),
   });
   if (validated.alreadyPublished) {
-    output({ status: "already_published", memos_release_tag: memosRelease.tag, local_plugin_tag: intent.tag });
+    outputForIntent("already_published", memosRelease, intent);
     console.log(`Paired local-plugin GitHub Release ${intent.tag} is already published and matches the MemOS intent.`);
+    return;
+  }
+  if (validateOnly) {
+    outputForIntent("staged", memosRelease, intent);
+    console.log(`Paired local-plugin GitHub Release ${intent.tag} is staged and ready for npm publish.`);
     return;
   }
 
@@ -204,7 +221,7 @@ export function main() {
     memosTagSha: String(memosTagCommit.sha || ""),
   });
   if (!after.alreadyPublished) fail(`paired local-plugin GitHub Release ${intent.tag} remained a Draft after publish`);
-  output({ status: "published", memos_release_tag: memosRelease.tag, local_plugin_tag: intent.tag });
+  outputForIntent("published", memosRelease, intent);
   console.log(`Published paired local-plugin GitHub Release ${intent.tag}; its release.published webhook is the docs trigger.`);
 }
 

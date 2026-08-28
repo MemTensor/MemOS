@@ -202,6 +202,14 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     }
     return;
   }
+  if (file.version === 18 && file.name === "traces-ts-index") {
+    // Same guard as 012: some test harnesses build partial schemas without a
+    // `traces` table; the index is meaningless there and must not fail boot.
+    if (tableExists(db, "traces")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
 }
 

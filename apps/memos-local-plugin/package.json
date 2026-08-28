@@ -60,6 +60,7 @@
     "prepack": "npm run check:hermes-version && npm run build:package",
     "sync:hermes-version": "node scripts/sync-hermes-version.cjs",
     "check:hermes-version": "node scripts/sync-hermes-version.cjs --check",
+    "release:validate": "npm run check:hermes-version && npm run lint && npm test",
     "dev": "tsc -p tsconfig.json --watch",
     "viewer:dev": "vite --config vite.config.ts",
     "bridge": "tsx bridge.cts",

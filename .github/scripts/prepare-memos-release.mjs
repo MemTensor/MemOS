@@ -11,6 +11,7 @@ import {
   MEMOS_PYPROJECT_PATH,
   assertMemOSVersionTexts,
 } from "./memos-version.mjs";
+import { parseLocalPluginReleaseBinding } from "./local-plugin-release-contract.mjs";
 
 export const PRODUCT_ID = "openclaw-local-plugin";
 export const PRODUCT_PATH = "apps/memos-local-plugin";
@@ -32,6 +33,11 @@ const MAX_TEXT_CN_CHARS = 180;
 const MAX_TEXT_EN_CHARS = 220;
 const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/;
 const CJK_GLOBAL_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/g;
+const LOCAL_PLUGIN_RELEASE_METADATA_PATHS = new Set([
+  `${PRODUCT_PATH}/package.json`,
+  `${PRODUCT_PATH}/package-lock.json`,
+  `${PRODUCT_PATH}/adapters/hermes/plugin.yaml`,
+]);
 const TOKEN_RE =
   /(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+|npm_[A-Za-z0-9_]+|xox[baprs]-[A-Za-z0-9-]+|Bearer\s+[A-Za-z0-9._~+/=-]+)/g;
 const INTERNAL_URL_RE =
@@ -114,6 +120,46 @@ export function displayVersion(raw) {
   return value ? `v${value}` : "";
 }
 
+export function repositoryReleaseNotesPath(rawVersion) {
+  const version = cleanVersion(rawVersion);
+  if (!parseSemver(version) || version.includes("+")) {
+    fail(`Cannot resolve repository release notes for invalid version ${rawVersion || "<empty>"}.`);
+  }
+  return `.github/release-notes/v${version}.md`;
+}
+
+export function validateRepositoryReleaseNotes(notes, { path = "repository release notes" } = {}) {
+  const text = String(notes || "").trim();
+  if (!text) return "";
+  if (text.length > 24000) {
+    fail(`${path} exceeds the 24,000-character release-note limit.`);
+  }
+  if (/<!--\s*doc-agent-/i.test(text)) {
+    fail(`${path} must not contain Doc Agent intent, binding, or evidence markers.`);
+  }
+  if (redact(text) !== text) {
+    fail(`${path} contains a credential-like value or internal service URL.`);
+  }
+  return text;
+}
+
+export function prependRepositoryReleaseNotes(generatedNotes, repositoryNotes) {
+  const generated = String(generatedNotes || "").trim();
+  const authored = validateRepositoryReleaseNotes(repositoryNotes);
+  if (!authored) return generated;
+  return `${authored}\n\n${generated}`.trim();
+}
+
+function readRepositoryReleaseNotes(version, ref) {
+  const path = repositoryReleaseNotesPath(version);
+  const notes = tryGit(["show", `${ref}:${path}`]);
+  return {
+    path,
+    found: Boolean(notes.trim()),
+    body: validateRepositoryReleaseNotes(notes, { path }),
+  };
+}
+
 export function cleanLocalPluginVersion(raw, label = "local_plugin_version") {
   const value = String(raw || "").trim();
   if (!value) fail(`${label} is required.`);
@@ -176,8 +222,29 @@ export function incrementPatchVersion(raw) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
 }
 
-export function validatePublishConfirmation({ dryRun, version, localPluginVersion = "", confirmation }) {
+export function normalizeLocalPluginReleaseMode(raw = "auto") {
+  const value = String(raw || "auto").trim().toLowerCase();
+  if (["auto", "skip", "manual"].includes(value)) return value;
+  fail(`local_plugin_release_mode must be auto, skip, or manual; received ${raw || "<empty>"}.`);
+}
+
+export function deriveReleaseVersionFromMergedPrHead(headRef) {
+  const value = String(headRef || "").trim();
+  const match = /^(?:dev-v?|release\/v)((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/.exec(
+    value,
+  );
+  if (!match) {
+    fail(
+      `Automatic MemOS release publishing only accepts merged release branches named ` +
+        `release/vX.Y.Z, dev-vX.Y.Z, or dev-X.Y.Z; received ${value || "<empty>"}.`,
+    );
+  }
+  return match[1];
+}
+
+export function validatePublishConfirmation({ dryRun, version, localPluginVersion = "", confirmation, autoPostMergeRelease = false }) {
   if (String(dryRun) === "true") return;
+  if (String(autoPostMergeRelease) === "true") return;
   const requestedLocalPluginVersion = String(localPluginVersion || "").trim();
   const expected = requestedLocalPluginVersion
     ? `PUBLISH v${cleanVersion(version)} WITH LOCAL PLUGIN v${cleanLocalPluginVersion(requestedLocalPluginVersion)}`
@@ -210,11 +277,11 @@ export function findPreviousStableLocalPluginTag(tags, { requestedVersion = "" }
   return stableLocalPluginTags(tags, { excludeVersion: requestedVersion })[0] || null;
 }
 
-export function validateReleaseTarget({ dryRun, targetRef }) {
+export function validateReleaseTarget({ dryRun, targetRef, allowCommitSha = false }) {
   if (String(dryRun) === "true") return;
   const value = String(targetRef || "main").trim();
-  if (value !== "main") {
-    fail("dry_run=false requires target_ref to be exactly main.");
+  if (value !== "main" && !(allowCommitSha && /^[0-9a-f]{40}$/.test(value))) {
+    fail("dry_run=false requires target_ref to be exactly main, except for the trusted automatic post-merge SHA path.");
   }
 }
 
@@ -248,8 +315,8 @@ export function npmVersionLookupResult({ status, output }) {
   throw new Error(`npm version lookup was inconclusive: ${redact(text).slice(0, 600)}`);
 }
 
-function npmVersionExists(version) {
-  const override = String(process.env.LOCAL_PLUGIN_NPM_VERSION_EXISTS_OVERRIDE || "").trim();
+function npmVersionExists(version, { overrideName = "LOCAL_PLUGIN_NPM_VERSION_EXISTS_OVERRIDE" } = {}) {
+  const override = String(process.env[overrideName] || "").trim();
   if (override === "true") return true;
   if (override === "false") return false;
 
@@ -275,9 +342,254 @@ function npmVersionExists(version) {
   fail(`npm version lookup failed: ${redact(last?.stderr || last?.stdout || "unknown error")}`);
 }
 
-function resolveRef(ref) {
+export function validatePublishedStableLocalPluginBaseline({ candidate, npmExists, release, sourceIsAncestor }) {
+  if (!candidate?.tag || !candidate?.version) {
+    fail("Cannot validate an empty local-plugin release baseline.");
+  }
+
+  const problems = [];
+  if (!npmExists) {
+    problems.push(`npm package @memtensor/memos-local-plugin@${candidate.version} is missing`);
+  }
+  if (!sourceIsAncestor) {
+    problems.push(`${candidate.tag} is not an ancestor of the current MemOS release target`);
+  }
+  if (!release?.exists) {
+    problems.push(`GitHub Release ${candidate.tag} is missing`);
+  } else {
+    if (String(release.tag_name || "") !== candidate.tag) {
+      problems.push(`GitHub Release is bound to ${release.tag_name || "<empty>"} instead of ${candidate.tag}`);
+    }
+    if (release.draft) problems.push(`GitHub Release ${candidate.tag} is still Draft`);
+    if (release.prerelease) problems.push(`GitHub Release ${candidate.tag} is marked as a prerelease`);
+    if (!String(release.published_at || "").trim()) {
+      problems.push(`GitHub Release ${candidate.tag} has no published_at timestamp`);
+    }
+  }
+  if (problems.length) {
+    fail(
+      `Latest stable-format local-plugin tag ${candidate.tag} is not a completed published baseline: ${problems.join(
+        "; ",
+      )}. Finish or explicitly recover the pending local-plugin release before starting another MemOS release; do not delete or move a published tag.`,
+    );
+  }
+
+  return {
+    ...candidate,
+    npm_verified: true,
+    release_verified: true,
+    source_ancestor_verified: true,
+    release_url: String(release.html_url || ""),
+    release_published_at: String(release.published_at),
+  };
+}
+
+export function validateStableLocalPluginSourceLineage({
+  candidate,
+  tagCommit,
+  tagIsTargetAncestor,
+  parentCommits = [],
+  parentIsTargetAncestor = false,
+  changedFiles = [],
+  packageVersion,
+  manifestVersion,
+}) {
+  if (!candidate?.tag || !candidate?.version || !/^[0-9a-f]{40}$/.test(String(tagCommit || ""))) {
+    fail("Cannot validate an incomplete stable local-plugin tag source.");
+  }
+  if (String(packageVersion || "") !== candidate.version) {
+    fail(`${candidate.tag} contains package version ${packageVersion || "<missing>"}, expected ${candidate.version}.`);
+  }
+  if (String(manifestVersion || "") !== candidate.version) {
+    fail(`${candidate.tag} contains Hermes manifest version ${manifestVersion || "<missing>"}, expected ${candidate.version}.`);
+  }
+  if (tagIsTargetAncestor) {
+    return { accepted: true, relationship: "target_history" };
+  }
+
+  const unexpectedFiles = changedFiles.filter((path) => !LOCAL_PLUGIN_RELEASE_METADATA_PATHS.has(path));
+  const requiredMetadata = new Set([
+    `${PRODUCT_PATH}/package.json`,
+    `${PRODUCT_PATH}/adapters/hermes/plugin.yaml`,
+  ]);
+  const missingMetadata = [...requiredMetadata].filter((path) => !changedFiles.includes(path));
+  if (
+    parentCommits.length !== 1 ||
+    !parentIsTargetAncestor ||
+    unexpectedFiles.length > 0 ||
+    missingMetadata.length > 0
+  ) {
+    const reasons = [];
+    if (parentCommits.length !== 1) reasons.push(`expected one parent, found ${parentCommits.length}`);
+    if (!parentIsTargetAncestor) reasons.push("its parent is not in the current MemOS release target history");
+    if (unexpectedFiles.length) reasons.push(`release commit changes non-metadata file ${unexpectedFiles[0]}`);
+    if (missingMetadata.length) reasons.push(`release commit does not update ${missingMetadata.join(" and ")}`);
+    fail(
+      `${candidate.tag} is outside the current MemOS release target and is not a valid direct release-metadata child: ${reasons.join(
+        "; ",
+      )}.`,
+    );
+  }
+  return { accepted: true, relationship: "release_metadata_child" };
+}
+
+function inspectStableLocalPluginSourceLineage(candidate, targetSha) {
+  const tagCommit = sh(["rev-parse", `refs/tags/${candidate.tag}^{commit}`]);
+  const tagIsTargetAncestor = spawnSync(
+    "git",
+    ["merge-base", "--is-ancestor", tagCommit, targetSha],
+    { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).status === 0;
+  const commitLine = sh(["rev-list", "--parents", "-n", "1", tagCommit]);
+  const [, ...parentCommits] = commitLine.split(/\s+/);
+  const parentIsTargetAncestor = parentCommits.length === 1 && spawnSync(
+    "git",
+    ["merge-base", "--is-ancestor", parentCommits[0], targetSha],
+    { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).status === 0;
+  const changedFiles = parseLines(tryGit(["diff-tree", "--no-commit-id", "--name-only", "-r", tagCommit]));
+  const packageJson = gitShowJson(`refs/tags/${candidate.tag}`, `${PRODUCT_PATH}/package.json`);
+  const hermesManifest = tryGit(["show", `refs/tags/${candidate.tag}:${PRODUCT_PATH}/adapters/hermes/plugin.yaml`]);
+  const manifestVersion = /^version:\s*['"]?([^'"\s]+)['"]?\s*$/m.exec(hermesManifest)?.[1] || "";
+
+  return {
+    ...validateStableLocalPluginSourceLineage({
+      candidate,
+      tagCommit,
+      tagIsTargetAncestor,
+      parentCommits,
+      parentIsTargetAncestor,
+      changedFiles,
+      packageVersion: String(packageJson.version || ""),
+      manifestVersion,
+    }),
+    tag_commit: tagCommit,
+  };
+}
+
+export async function fetchLocalPluginReleaseState({
+  repo,
+  tag,
+  token = process.env.GITHUB_TOKEN || "",
+  allowOverride = true,
+}) {
+  const override = allowOverride
+    ? String(process.env.LOCAL_PLUGIN_BASELINE_RELEASE_STATE_OVERRIDE || "").trim().toLowerCase()
+    : "";
+  if (override) {
+    if (!new Set(["published", "draft", "prerelease", "missing"]).has(override)) {
+      fail("LOCAL_PLUGIN_BASELINE_RELEASE_STATE_OVERRIDE must be published, draft, prerelease, or missing.");
+    }
+    if (override === "missing") return { exists: false, tag_name: tag };
+    return {
+      exists: true,
+      tag_name: tag,
+      draft: override === "draft",
+      prerelease: override === "prerelease",
+      published_at: override === "published" ? "2000-01-01T00:00:00Z" : "",
+      html_url: `https://github.com/${repo}/releases/tag/${tag}`,
+    };
+  }
+
+  if (!String(repo || "").includes("/")) fail(`Invalid GitHub repository for local-plugin baseline lookup: ${repo}`);
+  const url = `https://api.github.com/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`;
+  let lastError = "";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          accept: "application/vnd.github+json",
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          "x-github-api-version": "2022-11-28",
+        },
+      });
+      if (response.status === 404) return { exists: false, tag_name: tag };
+      const text = await response.text();
+      let payload = {};
+      try {
+        payload = text ? JSON.parse(text) : {};
+      } catch {
+        payload = { raw: text };
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${JSON.stringify(payload).slice(0, 500)}`);
+      }
+      return {
+        exists: true,
+        id: Number(payload.id || 0),
+        tag_name: String(payload.tag_name || ""),
+        name: String(payload.name || ""),
+        body: String(payload.body || ""),
+        draft: Boolean(payload.draft),
+        prerelease: Boolean(payload.prerelease),
+        published_at: String(payload.published_at || ""),
+        html_url: String(payload.html_url || ""),
+      };
+    } catch (error) {
+      lastError = redact(error?.message || error);
+      if (attempt === 3) break;
+      warn(`local-plugin baseline GitHub Release lookup attempt ${attempt}/3 failed; retrying without guessing release state.`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    }
+  }
+  fail(`local-plugin baseline GitHub Release lookup failed after 3 attempts: ${lastError}`);
+}
+
+export function validateWeeklyStagedLocalPluginRetry({
+  candidate,
+  memosReleaseTag,
+  release,
+  source,
+} = {}) {
+  if (!candidate?.version) {
+    fail("Cannot validate an incomplete staged weekly local-plugin release.");
+  }
+  const expectedTag = localPluginTagForVersion(candidate.version);
+  const expectedVersion = displayVersion(candidate.version);
+  if (candidate.tag !== expectedTag) {
+    fail("Cannot validate an incomplete staged weekly local-plugin release.");
+  }
+  if (!source?.accepted || !/^[0-9a-f]{40}$/.test(String(source.tag_commit || ""))) {
+    fail(`${expectedTag} is not a verified release source for this MemOS target.`);
+  }
+  if (!release?.exists) {
+    fail(`${expectedTag} exists without a matching GitHub Draft Release; refusing automatic reuse.`);
+  }
+  if (release.tag_name !== expectedTag || release.name !== `MemOS Local Plugin ${expectedVersion}`) {
+    fail(`${expectedTag} has unexpected GitHub Release identity; refusing automatic reuse.`);
+  }
+  if (!release.draft || release.prerelease || release.published_at) {
+    fail(`${expectedTag} is not an unpublished stable Draft Release; refusing automatic reuse.`);
+  }
+
+  const binding = parseLocalPluginReleaseBinding(release.body || "");
+  const mismatches = [];
+  if (binding.version !== expectedVersion) mismatches.push("version");
+  if (binding.tag !== expectedTag) mismatches.push("tag");
+  if (binding.source_sha !== source.tag_commit) mismatches.push("source_sha");
+  if (binding.origin_mode !== "memos_weekly") mismatches.push("origin_mode");
+  if (binding.memos_release_tag !== memosReleaseTag) mismatches.push("memos_release_tag");
+  if (binding.prerelease !== false) mismatches.push("prerelease");
+  if (binding.docs_trigger !== "local_plugin_release_published") mismatches.push("docs_trigger");
+  if (mismatches.length) {
+    fail(`${expectedTag} Draft binding does not match this MemOS weekly release: ${mismatches.join(", ")}.`);
+  }
+
+  return {
+    verified: true,
+    tag: expectedTag,
+    version: expectedVersion,
+    source_sha: source.tag_commit,
+    source_relationship: source.relationship,
+    release_url: release.html_url,
+  };
+}
+
+export function resolveRef(ref) {
   const value = String(ref || "HEAD").trim() || "HEAD";
-  for (const candidate of [value, value.startsWith("origin/") ? "" : `origin/${value}`].filter(Boolean)) {
+  const isSimpleBranch = !value.startsWith("origin/") && !value.startsWith("refs/") && !/^[0-9a-f]{40}$/.test(value);
+  const candidates = isSimpleBranch ? [`origin/${value}`, value] : [value];
+  for (const candidate of candidates) {
     const sha = tryGit(["rev-parse", "--verify", `${candidate}^{commit}`]);
     if (sha) return { ref: candidate, sha };
   }
@@ -394,16 +706,41 @@ function isRevertedCommit(commit, revertedKeys, { matchSubject = false } = {}) {
   });
 }
 
+function isUserFacingProductPath(path) {
+  const value = String(path || "");
+  if (!value.startsWith(`${PRODUCT_PATH}/`)) return false;
+  if (/(^|\/)(test|tests|__tests__|fixtures|mocks)\//i.test(value)) return false;
+  if (/\.(test|spec|fixture)\.[cm]?[jt]sx?$/i.test(value)) return false;
+  if (/\.(md|mdx|rst)$/i.test(value)) return false;
+  if (/(^|\/)(README|CHANGELOG|LICENSE)(?:\.[^/]+)?$/i.test(value)) return false;
+  if (/(^|\/)(package-lock|npm-shrinkwrap|pnpm-lock|yarn.lock)(?:\.json)?$/i.test(value)) return false;
+  if (value === `${PRODUCT_PATH}/package.json`) return false;
+  return true;
+}
+
+function hasUserFacingProductFileChanges(changedFiles) {
+  return changedFiles.some((item) => isUserFacingProductPath(item.path));
+}
+
+function hasExplicitUserImpactSignal(subject) {
+  return /\b(add|added|enable|enabled|support|supported|fix|fixed|prevent|restore|improve|improved|optimi[sz]e|reduc(?:e|ed)|compat|performance|latency|cpu|memory|provider|hermes|gateway|session|foreground|resource|retry-after|recall|input|bridge|runtime|crash|failure|default|config|dashboard|viewer)\b/i.test(
+    String(subject || ""),
+  );
+}
+
 function isImportantCommit(commit, { revertedKeys = new Set() } = {}) {
   if (isRevertedCommit(commit, revertedKeys)) return false;
+  if (commit.has_user_facing_file_changes === false) return false;
   const subject = String(commit.subject || "");
   if (isMaintenanceOnlyCommit(commit)) return false;
   if (/^merge\b/i.test(subject)) return false;
-  if (/^(ci|chore|docs|test|style)(\([^)]+\))?:/i.test(subject)) return false;
+  if (/^(ci|chore|docs|test|style|build)(\([^)]+\))?:/i.test(subject)) return false;
   if (/^chore:\s*update version/i.test(subject)) return false;
-  if (/^release:\s*merge\b/i.test(subject)) return true;
+  if (/^release:\s*merge\b/i.test(subject)) return false;
   if (/^revert\b/i.test(subject)) return false;
-  return /^(feat|fix|perf|refactor|revert)(\([^)]+\))?:|add|improve|optimi[sz]e|compat|memory|plugin|openclaw|gateway|provider|hermes/i.test(subject);
+  if (/^(feat|fix|perf)(\([^)]+\))?:/i.test(subject)) return true;
+  if (/^refactor(\([^)]+\))?:/i.test(subject)) return hasExplicitUserImpactSignal(subject);
+  return hasExplicitUserImpactSignal(subject);
 }
 
 function isMaintenanceOnlyCommit(commit) {
@@ -438,10 +775,11 @@ function isExplicitLocalPluginAggregate(text) {
   return localPluginPattern.test(String(text || ""));
 }
 
-function pathScopedPrRefs(commits) {
+function pathScopedPrRefs(commits, { requireUserFacingFiles = false } = {}) {
   const refs = new Set();
   for (const commit of commits) {
     if (isReleaseMergeCommit(commit) || isMaintenanceOnlyCommit(commit)) continue;
+    if (requireUserFacingFiles && commit.has_user_facing_file_changes !== true) continue;
     for (const ref of sourceRefsFromText(commit.subject)) refs.add(ref);
   }
   return refs;
@@ -459,7 +797,10 @@ function isRevertedAggregateText(text, revertedKeys) {
 
 function releaseAggregateItems(
   commits,
-  { pathRefs = pathScopedPrRefs(commits), revertedKeys = revertedCommitKeys(commits) } = {},
+  {
+    pathRefs = pathScopedPrRefs(commits, { requireUserFacingFiles: true }),
+    revertedKeys = revertedCommitKeys(commits),
+  } = {},
 ) {
   const items = [];
   const seenText = new Set();
@@ -479,7 +820,7 @@ function releaseAggregateItems(
       if (seenText.has(textKey)) continue;
       const refs = sourceRefsFromText(text);
       if (!refs.length) continue;
-      if (!isPathScopedAggregateItem(text, refs, pathRefs)) continue;
+      if (!refs.some((ref) => pathRefs.has(ref))) continue;
       seenText.add(textKey);
       items.push({
         source_commit: commit.short_sha,
@@ -507,6 +848,7 @@ function evidenceCommitsForRelease(commits, aggregateItems, { revertedKeys = new
         body_excerpt: "",
         source_refs: [...new Set(sourceRefs)],
         evidence_source: "release_aggregate_item",
+        has_user_facing_file_changes: true,
       };
     });
   if (synthetic.length) return synthetic;
@@ -521,6 +863,9 @@ function evidenceCommitsForRelease(commits, aggregateItems, { revertedKeys = new
 function localPluginSkipReason({ changedFiles = [], importantCommits = [] }) {
   if (!changedFiles.length) {
     return "no local plugin path changes in apps/memos-local-plugin/**";
+  }
+  if (!hasUserFacingProductFileChanges(changedFiles)) {
+    return "local plugin files changed, but only tests/docs/package metadata/release files changed";
   }
   if (!importantCommits.length) {
     return "local plugin files changed, but no user-facing feature/fix/performance evidence was found";
@@ -568,8 +913,15 @@ function localPluginPackageVersions(previousTag, currentRef) {
 export function validateLocalPluginVersionPlan(
   evidence,
   expectedVersionInput = "",
-  { requestedTagExists = false, npmVersionExists = false, recoveryEnabled = false } = {},
+  {
+    requestedTagExists = false,
+    npmVersionExists = false,
+    recoveryEnabled = false,
+    stagedReleaseRetryVerified = false,
+    releaseMode = "auto",
+  } = {},
 ) {
+  const mode = normalizeLocalPluginReleaseMode(releaseMode);
   const expectedVersionRaw = String(expectedVersionInput || "").trim();
   const previousReleasedVersion = cleanLocalPluginVersion(
     evidence.local_plugin_previous_version_raw || evidence.local_plugin_package_previous_version_raw,
@@ -586,14 +938,30 @@ export function validateLocalPluginVersionPlan(
   const hasProductChanges = Boolean(evidence.has_product_changes);
   const hasUserFacingChanges = Boolean(evidence.has_user_facing_product_changes);
   const nextPatchVersion = incrementPatchVersion(previousReleasedVersion);
-  const releaseRequested = Boolean(expectedVersionRaw);
-  const expectedVersion = releaseRequested
+  const manualVersion = expectedVersionRaw
     ? cleanLocalPluginVersion(expectedVersionRaw, "local_plugin_version input")
     : "";
 
-  if (expectedVersion && parseSemver(expectedVersion)?.prerelease.length) {
+  if (manualVersion && parseSemver(manualVersion)?.prerelease.length) {
     fail("MemOS weekly local_plugin_version must be a stable SemVer. Use the standalone publisher for prereleases.");
   }
+  if (mode === "skip" && manualVersion) {
+    fail("local_plugin_release_mode=skip requires local_plugin_version to be blank.");
+  }
+  if (mode === "manual" && !manualVersion) {
+    fail("local_plugin_release_mode=manual requires local_plugin_version.");
+  }
+  if (mode === "auto" && manualVersion && !hasUserFacingChanges) {
+    fail(
+      hasProductChanges
+        ? "local_plugin_version was provided as an auto-mode guard, but no unpublished user-facing feature/fix/performance evidence was found"
+        : "local_plugin_version was provided as an auto-mode guard, but no unpublished apps/memos-local-plugin/** changes were found",
+    );
+  }
+
+  const releaseRequested = mode === "manual" || (mode === "auto" && hasUserFacingChanges);
+  const expectedVersion = releaseRequested ? (manualVersion || nextPatchVersion) : "";
+
   if (releaseRequested && !hasUserFacingChanges) {
     fail(
       hasProductChanges
@@ -606,7 +974,12 @@ export function validateLocalPluginVersionPlan(
       `MemOS weekly local_plugin_version must be the next stable patch after ${displayVersion(previousReleasedVersion)}: expected ${displayVersion(nextPatchVersion)}, received ${displayVersion(expectedVersion)}. Use the standalone publisher for an intentional major/minor release.`,
     );
   }
-  if (releaseRequested && (requestedTagExists || npmVersionExists) && !recoveryEnabled) {
+  if (
+    releaseRequested &&
+    (requestedTagExists || npmVersionExists) &&
+    !recoveryEnabled &&
+    !stagedReleaseRetryVerified
+  ) {
     const usedBy = [requestedTagExists ? "git tag" : "", npmVersionExists ? "npm" : ""].filter(Boolean).join(" and ");
     fail(
       `${displayVersion(expectedVersion)} is already used by ${usedBy}. Normal weekly releases require a new version; enable explicit recovery only for a verified partial failure from this same source.`,
@@ -621,15 +994,29 @@ export function validateLocalPluginVersionPlan(
         "Wait for registry propagation or resolve the abnormal tag-before-npm state before retrying.",
     );
   }
+  if (releaseRequested && stagedReleaseRetryVerified && (!requestedTagExists || npmVersionExists)) {
+    fail("Verified staged weekly retry requires an existing release tag and an npm version that is not published yet.");
+  }
 
   const resolvedVersion = releaseRequested ? expectedVersion : previousReleasedVersion;
-  const inputIgnoredReason = !releaseRequested && hasUserFacingChanges
-    ? "unpublished user-facing local plugin changes were detected, but local_plugin_version was left blank"
-    : !releaseRequested && hasProductChanges
-      ? "local plugin path changes were detected, but no user-facing evidence requires a release"
-      : !releaseRequested
-        ? "no unpublished local plugin path changes were detected"
-        : "";
+  const inputIgnoredReason = mode === "skip" && hasUserFacingChanges
+    ? "local_plugin_release_mode=skip; unpublished user-facing local plugin changes were detected but will not be released"
+    : mode === "skip"
+      ? "local_plugin_release_mode=skip"
+      : !releaseRequested && hasProductChanges
+        ? "local plugin path changes were detected, but no user-facing evidence requires a release"
+        : !releaseRequested
+          ? "no unpublished local plugin path changes were detected"
+          : "";
+  const versionSource = releaseRequested
+    ? manualVersion
+      ? mode === "auto"
+        ? "auto_detected_with_manual_guard"
+        : "manual_weekly_release_opt_in"
+      : "auto_next_patch_from_latest_stable_local_plugin_tag"
+    : mode === "skip"
+      ? "weekly_release_skip_mode"
+      : "latest_stable_local_plugin_tag";
   return {
     ok: true,
     expected_version: expectedVersion ? displayVersion(expectedVersion) : "",
@@ -639,16 +1026,19 @@ export function validateLocalPluginVersionPlan(
     version_required: releaseRequested,
     release_requested: releaseRequested,
     pending_local_plugin_changes: !releaseRequested && hasUserFacingChanges,
-    version_source: releaseRequested ? "manual_weekly_release_opt_in" : "latest_stable_local_plugin_tag",
-    auto_incremented: false,
+    release_mode: mode,
+    version_source: versionSource,
+    auto_incremented: releaseRequested && !manualVersion,
     input_ignored: false,
     input_ignored_reason: inputIgnoredReason,
-    input_raw: expectedVersionRaw,
+    input_raw: releaseRequested ? expectedVersion : "",
+    input_guard_raw: expectedVersionRaw,
     next_patch_version: displayVersion(nextPatchVersion),
     local_plugin_tag: releaseRequested ? localPluginTagForVersion(expectedVersion) : "",
     requested_tag_exists: Boolean(requestedTagExists),
     npm_version_exists: Boolean(npmVersionExists),
     recovery_enabled: Boolean(recoveryEnabled),
+    staged_release_retry_verified: Boolean(stagedReleaseRetryVerified),
     package_previous_version: displayVersion(previousPackageVersion),
     package_version: displayVersion(currentPackageVersion),
     package_version_changed: previousPackageVersion !== currentPackageVersion,
@@ -695,6 +1085,9 @@ export function collectLocalPluginEvidence({
   const commits = parseLines(commitText).map((line) => {
     const [sha = "", shortSha = "", author = "", date = "", subject = ""] = line.split("\t");
     const bodyExcerpt = commitBodyExcerpt(sha);
+    const changedPaths = parseLines(
+      tryGit(["diff-tree", "--no-commit-id", "--name-only", "-r", sha, "--", PRODUCT_PATH]),
+    );
     const commit = {
       sha,
       short_sha: shortSha,
@@ -702,6 +1095,8 @@ export function collectLocalPluginEvidence({
       date,
       subject: redact(subject),
       body_excerpt: bodyExcerpt,
+      changed_paths: changedPaths,
+      has_user_facing_file_changes: changedPaths.some((path) => isUserFacingProductPath(path)),
     };
     return { ...commit, source_refs: commitRefs(commit) };
   });
@@ -725,7 +1120,10 @@ export function collectLocalPluginEvidence({
   const revertedKeys = revertedCommitKeys(commits);
   const aggregateItems = releaseAggregateItems(commits, { revertedKeys });
   const evidenceCommits = evidenceCommitsForRelease(commits, aggregateItems, { revertedKeys });
-  const importantCommits = evidenceCommits.filter((commit) => isImportantCommit(commit, { revertedKeys }));
+  const hasUserFacingFiles = hasUserFacingProductFileChanges(changedFiles);
+  const importantCommits = hasUserFacingFiles
+    ? evidenceCommits.filter((commit) => isImportantCommit(commit, { revertedKeys }))
+    : [];
   const skipReason = localPluginSkipReason({ changedFiles, importantCommits });
   const localPluginVersion = localPluginPackageVersions(evidenceBaseline, currentRef);
   return {
@@ -754,6 +1152,7 @@ export function collectLocalPluginEvidence({
     git_ref: currentRef,
     product_paths: PRODUCT_PATHS,
     has_product_changes: changedFiles.length > 0,
+    has_user_facing_product_file_changes: hasUserFacingFiles,
     has_user_facing_product_changes: importantCommits.length > 0,
     skip_reason: skipReason,
     commits: evidenceCommits,
@@ -1154,7 +1553,7 @@ export function validateDraft(draft, evidence) {
     if (draft.release_items.length) {
       issues.push({
         kind: "unexpected_release_items",
-        message: "release_items must be empty when the operator skipped local-plugin publishing",
+        message: "release_items must be empty when local-plugin publishing is not requested",
       });
     }
     return {
@@ -1163,6 +1562,7 @@ export function validateDraft(draft, evidence) {
       issue_count: issues.length,
       issues,
       skipped_by_operator: true,
+      local_plugin_release_not_requested: true,
       coverage: {
         required_count: 0,
         covered_required_count: 0,
@@ -1295,7 +1695,7 @@ export async function requestDocAgentDraft(evidence) {
   const operatorSkippedRelease = !evidence.local_plugin_release_requested && !dryRunPreview;
   if (!evidence.has_user_facing_product_changes || operatorSkippedRelease) {
     const warning = operatorSkippedRelease
-      ? "MemOS release operator left local_plugin_version blank; skipped the Doc Agent draft request for this real release."
+      ? "MemOS release did not request a local-plugin release; skipped the Doc Agent draft request for this real release."
       : evidence.skip_reason || "No user-facing MemOS local plugin changes in this MemOS release range.";
     return {
       ok: true,
@@ -1433,7 +1833,7 @@ export function buildDocsPreview(draft, evidence) {
         ? "preview_plugin_tab_entry"
         : "skip_plugin_tab_entry"
       : evidence.pending_local_plugin_changes
-        ? "skip_pending_manual_local_plugin_version"
+        ? "skip_pending_local_plugin_release"
         : "skip_plugin_tab_entry",
     would_create_docs_pr: false,
     files: ["content/cn/plugin-changelog.yml", "content/en/plugin-changelog.yml"],
@@ -1515,7 +1915,11 @@ export function sha256Json(value) {
 }
 
 export async function run() {
-  const version = cleanVersion(process.env.RELEASE_VERSION);
+  const autoPostMergeRelease = String(process.env.AUTO_POST_MERGE_RELEASE || "") === "true";
+  const releaseVersionInput = process.env.RELEASE_VERSION || (
+    autoPostMergeRelease ? deriveReleaseVersionFromMergedPrHead(process.env.MERGED_PR_HEAD_REF) : ""
+  );
+  const version = cleanVersion(releaseVersionInput);
   if (!version) fail("RELEASE_VERSION is required.");
   const parsedReleaseVersion = parseSemver(version);
   if (!parsedReleaseVersion) fail(`Invalid semver version: ${version}`);
@@ -1524,23 +1928,23 @@ export async function run() {
   }
 
   const dryRun = String(process.env.DRY_RUN ?? "true");
+  const createDraftRelease = String(process.env.CREATE_DRAFT_RELEASE ?? "true") !== "false";
   const localPluginVersionInput = String(process.env.LOCAL_PLUGIN_VERSION || "").trim();
+  const localPluginReleaseMode = autoPostMergeRelease
+    ? "auto"
+    : normalizeLocalPluginReleaseMode(process.env.LOCAL_PLUGIN_RELEASE_MODE || "auto");
   const localPluginRecoveryEnabled = String(process.env.RECOVER_EXISTING_LOCAL_PLUGIN_PUBLISH || "") === "true";
   if (localPluginRecoveryEnabled && !localPluginVersionInput) {
     fail("recover_existing_local_plugin_publish=true requires local_plugin_version.");
   }
-  validatePublishConfirmation({
-    dryRun,
-    version,
-    localPluginVersion: localPluginVersionInput,
-    confirmation: process.env.PUBLISH_CONFIRMATION || "",
-  });
 
   const currentTag = `v${version}`;
   const repo = process.env.GITHUB_REPOSITORY || "MemTensor/MemOS";
   const targetRefInput = process.env.TARGET_REF || "main";
-  validateReleaseTarget({ dryRun, targetRef: targetRefInput });
-  const target = resolveRef(dryRun === "true" ? targetRefInput : "refs/remotes/origin/main");
+  validateReleaseTarget({ dryRun, targetRef: targetRefInput, allowCommitSha: autoPostMergeRelease });
+  const target = resolveRef(
+    autoPostMergeRelease || dryRun === "true" ? targetRefInput : "refs/remotes/origin/main",
+  );
   const memosPackageVersion = assertMemOSVersionAtRef(version, target.sha);
   const allTags = listTags();
   const previousTag = process.env.PREVIOUS_TAG || findPreviousMemOSTag(version, currentTag, allTags);
@@ -1548,21 +1952,58 @@ export async function run() {
   const requestedLocalPluginVersion = localPluginVersionInput
     ? cleanLocalPluginVersion(localPluginVersionInput, "local_plugin_version input")
     : "";
-  const previousLocalPlugin = findPreviousStableLocalPluginTag(allTags, {
+  let previousLocalPlugin = findPreviousStableLocalPluginTag(allTags, {
     requestedVersion: requestedLocalPluginVersion,
   });
   if (!previousLocalPlugin) {
     fail("Cannot find a previous stable memos-local-plugin-v* tag for local plugin evidence and version validation.");
   }
-  const requestedLocalPluginTag = requestedLocalPluginVersion
-    ? localPluginTagForVersion(requestedLocalPluginVersion)
-    : "";
-  const requestedLocalPluginTagExists = Boolean(
-    requestedLocalPluginTag && tryGit(["rev-parse", "--verify", `refs/tags/${requestedLocalPluginTag}^{commit}`]),
-  );
-  const requestedNpmVersionExists = requestedLocalPluginVersion
-    ? npmVersionExists(requestedLocalPluginVersion)
-    : false;
+  let stagedLocalPluginRetry = null;
+  if (!requestedLocalPluginVersion) {
+    const latestStableNpmExists = npmVersionExists(previousLocalPlugin.version, {
+      overrideName: "LOCAL_PLUGIN_BASELINE_NPM_VERSION_EXISTS_OVERRIDE",
+    });
+    if (!latestStableNpmExists) {
+      const latestStableRelease = await fetchLocalPluginReleaseState({
+        repo,
+        tag: previousLocalPlugin.tag,
+        allowOverride: false,
+      });
+      if (!latestStableRelease.exists || !latestStableRelease.draft || latestStableRelease.prerelease) {
+        fail(
+          `Latest stable-format local-plugin tag ${previousLocalPlugin.tag} is absent from npm and is not a valid weekly Draft retry.`,
+        );
+      }
+      const stagedSource = inspectStableLocalPluginSourceLineage(previousLocalPlugin, target.sha);
+      stagedLocalPluginRetry = validateWeeklyStagedLocalPluginRetry({
+        candidate: previousLocalPlugin,
+        memosReleaseTag: currentTag,
+        release: latestStableRelease,
+        source: stagedSource,
+      });
+      previousLocalPlugin = findPreviousStableLocalPluginTag(allTags, {
+        requestedVersion: stagedLocalPluginRetry.version,
+      });
+      if (!previousLocalPlugin) {
+        fail(
+          `${stagedLocalPluginRetry.tag} is a verified staged retry, but no earlier completed stable local-plugin baseline exists.`,
+        );
+      }
+    }
+  }
+  const previousLocalPluginRelease = await fetchLocalPluginReleaseState({
+    repo,
+    tag: previousLocalPlugin.tag,
+  });
+  const previousLocalPluginSource = inspectStableLocalPluginSourceLineage(previousLocalPlugin, target.sha);
+  const verifiedPreviousLocalPlugin = validatePublishedStableLocalPluginBaseline({
+    candidate: previousLocalPlugin,
+    npmExists: npmVersionExists(previousLocalPlugin.version, {
+      overrideName: "LOCAL_PLUGIN_BASELINE_NPM_VERSION_EXISTS_OVERRIDE",
+    }),
+    release: previousLocalPluginRelease,
+    sourceIsAncestor: previousLocalPluginSource.accepted,
+  });
   const existingTag = existingReleaseTagState(currentTag, target.sha);
   if (existingTag.publish_blocked && dryRun !== "true") {
     fail(existingTag.message);
@@ -1579,21 +2020,102 @@ export async function run() {
     forceLocalFallback: existingTag.publish_blocked,
     fallbackWarning: existingTag.message,
   });
+  const repositoryReleaseNotes = readRepositoryReleaseNotes(version, target.sha);
+  releaseNotes.body = prependRepositoryReleaseNotes(releaseNotes.body, repositoryReleaseNotes.body);
+  if (repositoryReleaseNotes.found) {
+    releaseNotes.source = `repository-authored+${releaseNotes.source}`;
+  }
+  releaseNotes.repository_notes_file = repositoryReleaseNotes.path;
+  releaseNotes.repository_notes_found = repositoryReleaseNotes.found;
   const evidence = collectLocalPluginEvidence({
     previousTag,
-    previousLocalPluginTag: previousLocalPlugin.tag,
-    previousLocalPluginVersion: previousLocalPlugin.version,
+    previousLocalPluginTag: verifiedPreviousLocalPlugin.tag,
+    previousLocalPluginVersion: verifiedPreviousLocalPlugin.version,
     currentTag,
     currentRef: target.sha,
     targetVersion: version,
     repo,
   });
-  const localPluginVersionPlan = validateLocalPluginVersionPlan(evidence, localPluginVersionInput, {
-    requestedTagExists: requestedLocalPluginTagExists,
-    npmVersionExists: requestedNpmVersionExists,
+  let localPluginVersionPlan = validateLocalPluginVersionPlan(evidence, localPluginVersionInput, {
+    requestedTagExists: false,
+    npmVersionExists: false,
     recoveryEnabled: localPluginRecoveryEnabled,
+    releaseMode: localPluginReleaseMode,
+  });
+  const plannedLocalPluginVersion = localPluginVersionPlan.release_requested
+    ? localPluginVersionPlan.input_raw
+    : "";
+  const plannedLocalPluginTag = plannedLocalPluginVersion
+    ? localPluginTagForVersion(plannedLocalPluginVersion)
+    : "";
+  const plannedLocalPluginTagExists = Boolean(
+    plannedLocalPluginTag && tryGit(["rev-parse", "--verify", `refs/tags/${plannedLocalPluginTag}^{commit}`]),
+  );
+  const plannedNpmVersionExists = plannedLocalPluginVersion
+    ? npmVersionExists(plannedLocalPluginVersion)
+    : false;
+  if (
+    autoPostMergeRelease &&
+    plannedLocalPluginVersion &&
+    plannedLocalPluginTagExists &&
+    !plannedNpmVersionExists
+  ) {
+    if (stagedLocalPluginRetry?.tag && stagedLocalPluginRetry.tag !== plannedLocalPluginTag) {
+      fail(
+        `Verified staged retry ${stagedLocalPluginRetry.tag} does not match planned tag ${plannedLocalPluginTag}.`,
+      );
+    }
+    if (!stagedLocalPluginRetry) {
+      const stagedCandidate = {
+        tag: plannedLocalPluginTag,
+        version: plannedLocalPluginVersion,
+      };
+      const stagedSource = inspectStableLocalPluginSourceLineage(stagedCandidate, target.sha);
+      const stagedRelease = await fetchLocalPluginReleaseState({
+        repo,
+        tag: plannedLocalPluginTag,
+        allowOverride: false,
+      });
+      stagedLocalPluginRetry = validateWeeklyStagedLocalPluginRetry({
+        candidate: stagedCandidate,
+        memosReleaseTag: currentTag,
+        release: stagedRelease,
+        source: stagedSource,
+      });
+    }
+  }
+  localPluginVersionPlan = validateLocalPluginVersionPlan(evidence, localPluginVersionInput, {
+    requestedTagExists: plannedLocalPluginTagExists,
+    npmVersionExists: plannedNpmVersionExists,
+    recoveryEnabled: localPluginRecoveryEnabled,
+    stagedReleaseRetryVerified: Boolean(stagedLocalPluginRetry?.verified),
+    releaseMode: localPluginReleaseMode,
+  });
+  validatePublishConfirmation({
+    dryRun,
+    version,
+    localPluginVersion: localPluginVersionPlan.release_requested
+      ? localPluginVersionPlan.input_raw
+      : "",
+    confirmation: process.env.PUBLISH_CONFIRMATION || "",
+    autoPostMergeRelease,
   });
   evidence.local_plugin_version_plan = localPluginVersionPlan;
+  evidence.local_plugin_release_mode = localPluginReleaseMode;
+  evidence.local_plugin_staged_retry = stagedLocalPluginRetry;
+  evidence.local_plugin_baseline = {
+    tag: verifiedPreviousLocalPlugin.tag,
+    version: displayVersion(verifiedPreviousLocalPlugin.version),
+    npm_verified: verifiedPreviousLocalPlugin.npm_verified,
+    release_verified: verifiedPreviousLocalPlugin.release_verified,
+    source_ancestor_verified: verifiedPreviousLocalPlugin.source_ancestor_verified,
+    source_relationship: previousLocalPluginSource.relationship,
+    release_url: verifiedPreviousLocalPlugin.release_url,
+    release_published_at: verifiedPreviousLocalPlugin.release_published_at,
+  };
+  evidence.auto_post_merge_release = autoPostMergeRelease;
+  evidence.memos_project_version = displayVersion(memosPackageVersion.version);
+  evidence.create_draft_release = createDraftRelease;
   evidence.local_plugin_previous_version = localPluginVersionPlan.previous_version;
   evidence.local_plugin_previous_version_raw = localPluginVersionPlan.previous_version.replace(/^v/, "");
   evidence.local_plugin_version = localPluginVersionPlan.version;
@@ -1604,6 +2126,7 @@ export async function run() {
   evidence.local_plugin_version_input_ignored = localPluginVersionPlan.input_ignored;
   evidence.local_plugin_version_input_ignored_reason = localPluginVersionPlan.input_ignored_reason;
   evidence.local_plugin_version_input_raw = localPluginVersionPlan.input_raw;
+  evidence.local_plugin_version_guard_raw = localPluginVersionPlan.input_guard_raw;
   evidence.local_plugin_release_requested = localPluginVersionPlan.release_requested;
   evidence.pending_local_plugin_changes = localPluginVersionPlan.pending_local_plugin_changes;
   evidence.local_plugin_tag = localPluginVersionPlan.local_plugin_tag;
@@ -1620,6 +2143,8 @@ export async function run() {
   evidence.memos_release_notes = {
     source: releaseNotes.source,
     name: releaseNotes.name,
+    repository_notes_file: releaseNotes.repository_notes_file,
+    repository_notes_found: releaseNotes.repository_notes_found,
     body_preview: redact(releaseNotes.body).slice(0, 12000),
   };
   evidence.existing_tag = existingTag;
@@ -1683,6 +2208,11 @@ export async function run() {
     current_tag: currentTag,
     previous_tag: previousTag,
     memos_release_tag: currentTag,
+    memos_release_version: version,
+    memos_project_version: evidence.memos_project_version,
+    local_plugin_release_mode: localPluginReleaseMode,
+    auto_post_merge_release: autoPostMergeRelease,
+    create_draft_release: createDraftRelease,
     local_plugin_version: evidence.local_plugin_version,
     local_plugin_previous_version: evidence.local_plugin_previous_version,
     local_plugin_version_changed: evidence.local_plugin_version_changed,
@@ -1697,6 +2227,7 @@ export async function run() {
     pending_local_plugin_changes: localPluginVersionPlan.pending_local_plugin_changes,
     local_plugin_tag: localPluginVersionPlan.local_plugin_tag,
     local_plugin_previous_tag: evidence.local_plugin_previous_tag,
+    local_plugin_baseline: evidence.local_plugin_baseline,
     local_plugin_next_patch_version: localPluginVersionPlan.next_patch_version,
     local_plugin_tag_exists: localPluginVersionPlan.requested_tag_exists,
     local_plugin_npm_version_exists: localPluginVersionPlan.npm_version_exists,
@@ -1745,6 +2276,9 @@ export async function run() {
       `- dry_run: ${dryRun}`,
       `- current_tag: ${currentTag}`,
       `- previous_tag: ${previousTag}`,
+      `- local_plugin_release_mode: ${localPluginReleaseMode}`,
+      `- auto_post_merge_release: ${autoPostMergeRelease}`,
+      `- create_draft_release: ${createDraftRelease}`,
       `- local_plugin_version: ${evidence.local_plugin_version}`,
       `- local_plugin_previous_version: ${evidence.local_plugin_previous_version}`,
       `- local_plugin_version_changed: ${evidence.local_plugin_version_changed}`,
@@ -1810,6 +2344,11 @@ export async function run() {
   appendOutput("release_intent_preview_file", releaseIntentPreviewFile);
   appendOutput("evidence_digest", evidenceDigest);
   appendOutput("source_id", PRODUCT_ID);
+  appendOutput("release_version", version);
+  appendOutput("dry_run", String(dryRun === "true"));
+  appendOutput("create_draft_release", String(createDraftRelease));
+  appendOutput("auto_post_merge_release", String(autoPostMergeRelease));
+  appendOutput("local_plugin_release_mode", localPluginReleaseMode);
   appendOutput("previous_tag", previousTag);
   appendOutput("current_tag", currentTag);
   appendOutput("local_plugin_version", evidence.local_plugin_version);

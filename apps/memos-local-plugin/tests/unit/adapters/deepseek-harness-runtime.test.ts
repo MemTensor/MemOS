@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import type { Context } from "@deepseek-ai/cordis";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   configureDeepSeekHarnessHostLlm,
@@ -8,7 +9,11 @@ import {
   deepSeekHarnessMemoryGuidance,
   defaultDeepSeekHarnessHome,
   inject,
+  registerDeepSeekHarnessHostLlmCapabilityInvalidation,
 } from "../../../adapters/deepseek-harness/index.js";
+import type {
+  DeepSeekHarnessHostLlmBridge,
+} from "../../../adapters/deepseek-harness/host-llm.js";
 import { DEFAULT_CONFIG } from "../../../core/config/index.js";
 
 describe("DeepSeek Harness adapter runtime defaults", () => {
@@ -79,5 +84,30 @@ describe("DeepSeek Harness adapter runtime defaults", () => {
     expect(withoutTools).not.toContain("memos_search");
     expect(withoutTools).toContain("untrusted historical data");
     expect(deepSeekHarnessMemoryGuidance(true)).toContain("memos_search");
+  });
+
+  it("invalidates host LLM capabilities when DSH adapters are updated", () => {
+    let listener: (() => void) | undefined;
+    const unregister = vi.fn();
+    const ctx = {
+      on(event: string, callback: () => void): () => void {
+        expect(event).toBe("llm/adapters-updated");
+        listener = callback;
+        return unregister;
+      },
+    } as unknown as Context;
+    const invalidateModelCapabilities = vi.fn();
+    const bridge = {
+      invalidateModelCapabilities,
+    } as unknown as DeepSeekHarnessHostLlmBridge;
+
+    const registered = registerDeepSeekHarnessHostLlmCapabilityInvalidation(
+      ctx,
+      bridge,
+    );
+    listener?.();
+
+    expect(registered).toBe(unregister);
+    expect(invalidateModelCapabilities).toHaveBeenCalledOnce();
   });
 });

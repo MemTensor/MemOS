@@ -205,4 +205,131 @@ describe("storage/migrator", () => {
       db.close();
     }
   });
+
+  it("018-traces-ts-index creates the bare-ts index without rewriting historical migrations", () => {
+    // Regression test for the Aug 2026 restart storm: `latestTraceTs()` runs
+    // an unfiltered newest-first trace read several times per /api/v1/health
+    // request. No existing index leads with bare `ts`, so every call was a
+    // full scan + temp B-tree sort; on a large traces table that blocked the
+    // synchronous better-sqlite3 event loop long enough that health probes
+    // timed out and a liveness watchdog restart-looped the daemon forever.
+    //
+    // Published and development release trains have already used versions
+    // 13-17 for unrelated migrations. The new index must therefore use 018
+    // and preserve those historical bookkeeping rows verbatim.
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      // Simulate a database previously migrated by the other release trains.
+      db.exec(`
+        CREATE TABLE schema_migrations (
+          version    INTEGER PRIMARY KEY,
+          name       TEXT    NOT NULL,
+          applied_at INTEGER NOT NULL
+        ) STRICT;
+      `);
+      db.exec(
+        `INSERT INTO schema_migrations (version, name, applied_at) VALUES
+          (13, 'skill-repair-origin', 1),
+          (14, 'episode-outcome', 2),
+          (15, 'policy-merge-family', 3),
+          (16, 'episode-policy-injections', 4),
+          (17, 'evolution-jobs', 5)`,
+      );
+
+      const result = runMigrations(db);
+      expect(result.applied).toContainEqual(expect.objectContaining({
+        version: 18,
+        name: "traces-ts-index",
+      }));
+
+      // The index exists...
+      const index = db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_traces_ts'`,
+        )
+        .get();
+      expect(index?.name).toBe("idx_traces_ts");
+
+      // ...and the plan for newest-first reads uses it instead of a table
+      // scan plus a temporary sort.
+      const detail = db
+        .prepare<unknown, { sql: string }>(
+          `SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_traces_ts'`,
+        )
+        .get();
+      expect(detail?.sql).toContain("ts DESC");
+      const plan = db
+        .prepare<unknown, { detail: string }>(
+          `EXPLAIN QUERY PLAN SELECT ts FROM traces ORDER BY ts DESC, id DESC LIMIT 1`,
+        )
+        .all()
+        .map((row) => row.detail)
+        .join("\n");
+      expect(plan).toContain("USING COVERING INDEX idx_traces_ts");
+      expect(plan).not.toContain("USE TEMP B-TREE");
+
+      const historicalRows = db
+        .prepare<unknown, { version: number; name: string; applied_at: number }>(
+          `SELECT version, name, applied_at FROM schema_migrations
+           WHERE version BETWEEN 13 AND 17 ORDER BY version`,
+        )
+        .all();
+      expect(historicalRows).toEqual([
+        { version: 13, name: "skill-repair-origin", applied_at: 1 },
+        { version: 14, name: "episode-outcome", applied_at: 2 },
+        { version: 15, name: "policy-merge-family", applied_at: 3 },
+        { version: 16, name: "episode-policy-injections", applied_at: 4 },
+        { version: 17, name: "evolution-jobs", applied_at: 5 },
+      ]);
+
+      // Re-running is idempotent: everything counts as skipped.
+      const again = runMigrations(db);
+      expect(again.applied).toHaveLength(0);
+      expect(again.skipped).toBe(again.total);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps skipping a version recorded under a foreign name when that migration is not repairable", () => {
+    // Conservative path: only migrations in the repairable allowlist may run
+    // under a version/name collision. Everything else keeps the historical
+    // behaviour -- the foreign record wins and the file is skipped untouched.
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      db.exec(`
+        CREATE TABLE schema_migrations (
+          version    INTEGER PRIMARY KEY,
+          name       TEXT    NOT NULL,
+          applied_at INTEGER NOT NULL
+        ) STRICT;
+      `);
+      db.exec(
+        `INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'their-hub-sharing-renamed', 1)`,
+      );
+
+      const result = runMigrations(db);
+      expect(result.applied.map((m) => m.version)).not.toContain(11);
+      // The hub-sharing objects were NOT created because 011 was skipped...
+      const hubTable = db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM sqlite_master WHERE type='table' AND name='hub_shared_skills'`,
+        )
+        .get();
+      expect(hubTable).toBeUndefined();
+      // ...and the foreign bookkeeping row is preserved verbatim.
+      const row = db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM schema_migrations WHERE version = 11`,
+        )
+        .get();
+      expect(row?.name).toBe("their-hub-sharing-renamed");
+    } finally {
+      db.close();
+    }
+  });
 });

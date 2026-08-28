@@ -16,6 +16,7 @@ import {
   makeSkillConfig,
   seedPolicy,
   seedSessionOnly,
+  seedSkill,
   seedTrace,
 } from "./_helpers.js";
 
@@ -153,5 +154,147 @@ describe("skill/subscriber", () => {
     const r = await sub.runOnce({ trigger: "manual", policyId: policy.id });
     expect(r.crystallized).toBe(1);
     sub.dispose();
+  });
+
+  it("archives each stale low-η active skill once without regressing candidate promotion", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const l2Bus = createL2EventBus();
+    const rewardBus = createRewardEventBus();
+    const bus = createSkillEventBus();
+    const events: Array<{
+      skillId: string;
+      previous: string;
+      next: string;
+      transition: string;
+    }> = [];
+    bus.on("skill.status.changed", (event) => {
+      if (event.kind !== "skill.status.changed") return;
+      events.push({
+        skillId: event.skillId,
+        previous: event.previous,
+        next: event.next,
+        transition: event.transition,
+      });
+    });
+
+    const stale = seedSkill(h, {
+      id: "sk_stale" as never,
+      name: "stale_skill",
+      status: "active",
+      eta: 0.05,
+      createdAt: 1 as never,
+      updatedAt: 9_000 as never,
+      lastUsedAt: 1_000 as never,
+    });
+    const candidate = seedSkill(h, {
+      id: "sk_candidate" as never,
+      name: "candidate_skill",
+      status: "candidate",
+      eta: 0.7,
+      createdAt: 1 as never,
+      updatedAt: 1 as never,
+    });
+
+    const sub = attachSkillSubscriber({
+      l2Bus,
+      rewardBus,
+      bus,
+      repos: h.repos,
+      embedder: null,
+      llm: null,
+      log: rootLogger.child({ channel: "core.skill.subscriber" }),
+      config: makeSkillConfig({ minEtaForRetrieval: 0.1, idleArchiveMs: 1_000 }),
+    });
+
+    await sub.lifecycleTick();
+    await sub.lifecycleTick();
+
+    expect(h.repos.skills.getById(stale.id)?.status).toBe("archived");
+    expect(h.repos.skills.getById(candidate.id)?.status).toBe("active");
+    expect(events.filter((event) => event.skillId === stale.id)).toEqual([
+      { skillId: stale.id, previous: "active", next: "archived", transition: "archived" },
+    ]);
+    expect(events.filter((event) => event.skillId === candidate.id)).toHaveLength(1);
+    sub.dispose();
+  });
+
+  it("drains more than one 500-skill idle archive batch in one lifecycle tick", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    for (let i = 0; i < 501; i++) {
+      seedSkill(h, {
+        id: `sk_stale_${i}` as never,
+        name: `stale_skill_${i}`,
+        status: "active",
+        eta: 0.05,
+        createdAt: 1 as never,
+        updatedAt: (i + 1) as never,
+        lastUsedAt: 1 as never,
+      });
+    }
+    const sub = attachSkillSubscriber({
+      l2Bus: createL2EventBus(),
+      rewardBus: createRewardEventBus(),
+      bus: createSkillEventBus(),
+      repos: h.repos,
+      embedder: null,
+      llm: null,
+      log: rootLogger.child({ channel: "core.skill.subscriber" }),
+      config: makeSkillConfig({ minEtaForRetrieval: 0.1, idleArchiveMs: 1_000 }),
+    });
+
+    await sub.lifecycleTick();
+
+    expect(h.repos.skills.count({ status: "archived" })).toBe(501);
+    expect(h.repos.skills.count({ status: "active" })).toBe(0);
+    sub.dispose();
+  });
+
+  it("caps idle archival at ten batches per lifecycle tick", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    for (let i = 0; i < 5_001; i++) {
+      seedSkill(h, {
+        id: `sk_backlog_${i}` as never,
+        name: `backlog_skill_${i}`,
+        status: "active",
+        eta: 0.05,
+        createdAt: 1 as never,
+        updatedAt: (i + 1) as never,
+        lastUsedAt: 1 as never,
+      });
+    }
+    const log = rootLogger.child({ channel: "core.skill.subscriber" });
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const sub = attachSkillSubscriber({
+      l2Bus: createL2EventBus(),
+      rewardBus: createRewardEventBus(),
+      bus: createSkillEventBus(),
+      repos: h.repos,
+      embedder: null,
+      llm: null,
+      log,
+      config: makeSkillConfig({ minEtaForRetrieval: 0.1, idleArchiveMs: 1_000 }),
+    });
+
+    await sub.lifecycleTick();
+
+    expect(h.repos.skills.count({ status: "archived" })).toBe(5_000);
+    expect(h.repos.skills.count({ status: "active" })).toBe(1);
+    expect(warnSpy).toHaveBeenCalledWith("skill.idle_archive_batch_limit_reached", {
+      batchCount: 10,
+      archivedCount: 5_000,
+      batchSize: 500,
+    });
+
+    await sub.lifecycleTick();
+
+    expect(h.repos.skills.count({ status: "archived" })).toBe(5_001);
+    expect(h.repos.skills.count({ status: "active" })).toBe(0);
+    sub.dispose();
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });

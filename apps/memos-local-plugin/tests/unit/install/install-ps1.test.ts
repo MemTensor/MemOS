@@ -14,6 +14,59 @@ function extractOpenClawConfigPatch(script: string): string {
   return match[1];
 }
 
+function extractFunction(script: string, name: string, nextName: string): string {
+  const start = script.indexOf(`function ${name}`);
+  const end = script.indexOf(`function ${nextName}`, start);
+  if (start < 0 || end < 0) throw new Error(`${name} function not found`);
+  return script.slice(start, end);
+}
+
+describe("install.ps1 — gateway recovery", () => {
+  it("restarts OpenClaw from finally when installation fails after stop", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+    const installOpenClaw = extractFunction(
+      script,
+      "Install-OpenClaw",
+      "Install-Hermes",
+    );
+
+    expect(installOpenClaw).toMatch(
+      /Invoke-OpenClawGatewayChecked\s+-Action\s+"stop"[\s\S]*\$GatewayRecoveryState\s*=\s*"needs_recovery"/,
+    );
+    expect(installOpenClaw).toMatch(
+      /finally\s*\{[\s\S]*\$GatewayRecoveryState\s+-eq\s+"needs_recovery"[\s\S]*Invoke-OpenClawGatewayChecked\s+-Action\s+"start"/,
+    );
+  });
+
+  it("checks native gateway failures and does not retry a failed final start", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+    const installOpenClaw = extractFunction(
+      script,
+      "Install-OpenClaw",
+      "Install-Hermes",
+    );
+    const invokeGateway = extractFunction(
+      script,
+      "Invoke-OpenClawGatewayChecked",
+      "Test-BetterSqlite3",
+    );
+
+    expect(invokeGateway).toContain("$ExitCode = $LASTEXITCODE");
+    expect(invokeGateway).toMatch(/if \(\$ExitCode -ne 0\)[\s\S]*throw/);
+    expect(installOpenClaw).toMatch(
+      /catch\s*\{[\s\S]*\$GatewayRecoveryState\s*=\s*"final_failed"[\s\S]*throw/,
+    );
+  });
+
+  it("cleans the installer staging directory from a top-level finally block", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+
+    expect(script).toMatch(
+      /\}\s*finally\s*\{\s*if \(\$StageDir -and \(Test-Path \$StageDir\)\) \{\s*Remove-Item[^\n]*\$StageDir[\s\S]*\}\s*\}\s*$/,
+    );
+  });
+});
+
 describe("install.ps1 — OpenClaw config patch", () => {
   it("preserves existing hook settings and enables conversation access", () => {
     const script = readFileSync(SCRIPT, "utf8");
