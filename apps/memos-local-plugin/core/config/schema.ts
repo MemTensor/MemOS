@@ -116,6 +116,10 @@ const LlmSchema = Type.Object({
   openRouter: Type.Optional(Bool(false)),
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
+  /** Max output tokens per completion (deepseek-v4-flash needs >= 100). */
+  maxTokens: NumberInRange(1024, 100, 131072),
+  /** Extra HTTP headers for the provider request. */
+  headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
 }, { default: {} });
 
 /**
@@ -148,6 +152,10 @@ const SkillEvolverSchema = Type.Object({
   openRouter: Type.Optional(Bool(false)),
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
+  /** Max output tokens per completion. */
+  maxTokens: NumberInRange(1024, 100, 131072),
+  /** Extra HTTP headers for the provider request. */
+  headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
 }, { default: {} });
 
 const StorageSchema = Type.Object({
@@ -363,6 +371,12 @@ const AlgorithmSchema = Type.Object({
     archiveEta: NumberInRange(0.1, 0, 1),
     /** Hide Tier-1 skills whose η is below this. Mirrors retrieval.minSkillEta. */
     minEtaForRetrieval: NumberInRange(0.1, 0, 1),
+    /** Archive low-η active skills after this much retrieval inactivity (minimum 1 hour). */
+    idleArchiveMs: NumberInRange(
+      30 * 24 * 60 * 60 * 1000,
+      60 * 60 * 1000,
+      365 * 24 * 60 * 60 * 1000,
+    ),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */

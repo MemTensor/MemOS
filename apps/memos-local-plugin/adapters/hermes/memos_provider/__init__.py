@@ -1504,12 +1504,12 @@ class MemTensorProvider(MemoryProvider):
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **_kwargs: Any) -> str:  # type: ignore[override]
         if not self._bridge:
-            return json.dumps({"error": "bridge not connected"})
+            return json.dumps({"error": "bridge not connected"}, ensure_ascii=False)
         try:
             if tool_name == "memos_search":
                 query = (args.get("query") or "").strip()
                 if not query:
-                    return json.dumps({"error": "missing query"})
+                    return json.dumps({"error": "missing query"}, ensure_ascii=False)
                 max_results = self._int_arg(args, "maxResults", 10, 1, 50)
                 params: dict[str, Any] = {
                     "agent": "hermes",
@@ -1528,11 +1528,11 @@ class MemTensorProvider(MemoryProvider):
                     params,
                     timeout=_LONG_RPC_TIMEOUT,
                 )
-                return json.dumps({"hits": resp.get("hits", [])})
+                return json.dumps({"hits": resp.get("hits", [])}, ensure_ascii=False)
             if tool_name == "memos_get":
                 item_id = (args.get("id") or "").strip()
                 if not item_id:
-                    return json.dumps({"error": "missing id"})
+                    return json.dumps({"error": "missing id"}, ensure_ascii=False)
                 kind = args.get("kind") or "trace"
                 methods = {
                     "trace": "memory.get_trace",
@@ -1541,12 +1541,14 @@ class MemTensorProvider(MemoryProvider):
                 }
                 method = methods.get(kind)
                 if method is None:
-                    return json.dumps({"error": f"unknown memory kind: {kind}"})
+                    return json.dumps({"error": f"unknown memory kind: {kind}"}, ensure_ascii=False)
                 item = self._bridge_request_with_retry(
                     method, {"id": item_id, "namespace": self._runtime_namespace()}
                 )
                 if not item:
-                    return json.dumps({"found": False, "kind": kind, "id": item_id})
+                    return json.dumps(
+                        {"found": False, "kind": kind, "id": item_id}, ensure_ascii=False
+                    )
                 if kind == "trace":
                     body = self._clip(item.get("agentText") or item.get("body"))
                     meta = {
@@ -1584,7 +1586,8 @@ class MemTensorProvider(MemoryProvider):
                         "id": item.get("id", item_id),
                         "body": body,
                         "meta": meta,
-                    }
+                    },
+                    ensure_ascii=False,
                 )
             if tool_name == "memos_timeline":
                 resp = self._bridge_request_with_retry(
@@ -1596,13 +1599,16 @@ class MemTensorProvider(MemoryProvider):
                 )
                 limit = self._int_arg(args, "limit", 20, 1, 100)
                 traces = resp.get("traces", [])[:limit]
-                return json.dumps({"traces": traces})
+                return json.dumps({"traces": traces}, ensure_ascii=False)
             if tool_name == "memos_skill_list":
                 limit = self._int_arg(args, "limit", 10, 1, 50)
                 params = {"limit": limit, "namespace": self._runtime_namespace()}
                 if args.get("status"):
                     params["status"] = args["status"]
-                return json.dumps(self._bridge_request_with_retry("skill.list", params))
+                return json.dumps(
+                    self._bridge_request_with_retry("skill.list", params),
+                    ensure_ascii=False,
+                )
             if tool_name == "memos_environment":
                 query = (args.get("query") or "").strip()
                 limit = self._int_arg(args, "limit", 5, 1, 30)
@@ -1621,7 +1627,8 @@ class MemTensorProvider(MemoryProvider):
                                 for w in resp.get("worldModels", [])
                             ],
                             "queried": False,
-                        }
+                        },
+                        ensure_ascii=False,
                     )
                 resp = self._bridge_request_with_retry(
                     "memory.search",
@@ -1651,12 +1658,13 @@ class MemTensorProvider(MemoryProvider):
                             for h in hits[:limit]
                         ],
                         "queried": True,
-                    }
+                    },
+                    ensure_ascii=False,
                 )
             if tool_name == "memos_skill_get":
                 skill_id = (args.get("id") or "").strip()
                 if not skill_id:
-                    return json.dumps({"error": "missing id"})
+                    return json.dumps({"error": "missing id"}, ensure_ascii=False)
                 skill = self._bridge_request_with_retry(
                     "skill.get",
                     {
@@ -1667,10 +1675,10 @@ class MemTensorProvider(MemoryProvider):
                         "episodeId": self._episode_id or None,
                     },
                 )
-                return json.dumps({"found": bool(skill), "skill": skill})
+                return json.dumps({"found": bool(skill), "skill": skill}, ensure_ascii=False)
         except Exception as err:
-            return json.dumps({"error": str(err)})
-        return json.dumps({"error": f"unknown tool: {tool_name}"})
+            return json.dumps({"error": str(err)}, ensure_ascii=False)
+        return json.dumps({"error": f"unknown tool: {tool_name}"}, ensure_ascii=False)
 
     # ─── Config schema (for `hermes memory setup`) ────────────────────────
 

@@ -106,6 +106,9 @@ export function makeTracesRepo(db: StorageDb) {
   const selectById = db.prepare<{ id: string }, RawTraceRow>(
     `SELECT ${COLUMNS.join(", ")} FROM traces WHERE id=@id`,
   );
+  const selectLatestTimestamp = db.prepare<unknown, { ts: number }>(
+    `SELECT ts FROM traces ORDER BY ts DESC, id DESC LIMIT 1`,
+  );
 
   return {
     insert(row: TraceRow): void {
@@ -133,6 +136,10 @@ export function makeTracesRepo(db: StorageDb) {
       const r = selectById.get({ id });
       if (!r) return null;
       return mapRow(r);
+    },
+
+    latestTimestamp(): number | null {
+      return selectLatestTimestamp.get()?.ts ?? null;
     },
 
     getManyByIds(ids: readonly TraceId[]): TraceRow[] {

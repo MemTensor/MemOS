@@ -22,6 +22,7 @@ function mkSkill(partial: Partial<SkillRow> = {}): SkillRow {
     vec: null,
     createdAt: partial.createdAt ?? NOW,
     updatedAt: partial.updatedAt ?? NOW,
+    lastUsedAt: partial.lastUsedAt ?? null,
     version: partial.version ?? 1,
   };
 }
@@ -104,9 +105,51 @@ describe("skill/lifecycle", () => {
     expect(recomputeEta(s, policy, cfg)).toBeCloseTo(0.7, 5);
   });
 
-  it("shouldArchiveIdle picks up stale active skills with low η", () => {
+  it("archives a low-η active skill after its last use exceeds idleArchiveMs", () => {
+    const cfg = makeSkillConfig({ minEtaForRetrieval: 0.6, idleArchiveMs: 1_000 });
+    const s = mkSkill({
+      status: "active",
+      eta: 0.4,
+      lastUsedAt: 1_000 as SkillRow["lastUsedAt"],
+    });
+    expect(shouldArchiveIdle(s, 1_000, cfg, 10_000)).toBe(true);
+  });
+
+  it("uses createdAt as the idle baseline for a skill that has never been used", () => {
+    const cfg = makeSkillConfig({ minEtaForRetrieval: 0.6, idleArchiveMs: 1_000 });
+    const s = mkSkill({
+      status: "active",
+      eta: 0.4,
+      createdAt: 1_000 as SkillRow["createdAt"],
+      updatedAt: 9_500 as SkillRow["updatedAt"],
+      lastUsedAt: null,
+    });
+    expect(shouldArchiveIdle(s, 1_000, cfg, 10_000)).toBe(true);
+  });
+
+  it("keeps recently used or retrievable active skills", () => {
+    const cfg = makeSkillConfig({ minEtaForRetrieval: 0.6, idleArchiveMs: 1_000 });
+    const recent = mkSkill({
+      status: "active",
+      eta: 0.4,
+      lastUsedAt: 9_500 as SkillRow["lastUsedAt"],
+    });
+    const retrievable = mkSkill({
+      status: "active",
+      eta: 0.6,
+      lastUsedAt: 1_000 as SkillRow["lastUsedAt"],
+    });
+    expect(shouldArchiveIdle(recent, 1_000, cfg, 10_000)).toBe(false);
+    expect(shouldArchiveIdle(retrievable, 1_000, cfg, 10_000)).toBe(false);
+  });
+
+  it("archives exactly at the configured idle boundary", () => {
     const cfg = makeSkillConfig({ minEtaForRetrieval: 0.6 });
-    const s = mkSkill({ status: "active", eta: 0.4, updatedAt: 0 as SkillRow["updatedAt"] });
-    expect(shouldArchiveIdle(s, 1000, cfg, 10_000)).toBe(true);
+    const skill = mkSkill({
+      status: "active",
+      eta: 0.4,
+      lastUsedAt: 9_000 as SkillRow["lastUsedAt"],
+    });
+    expect(shouldArchiveIdle(skill, 1_000, cfg, 10_000)).toBe(true);
   });
 });

@@ -48,6 +48,30 @@ function Invoke-NativeChecked {
     }
 }
 
+function Invoke-OpenClawGatewayChecked {
+    param(
+        [ValidateSet("start", "stop")]
+        [string]$Action
+    )
+    # PowerShell 5.1 can promote a native process' stderr to an ErrorRecord.
+    # Capture it without turning it into a terminating PowerShell error, then
+    # use the native exit code as the authoritative result.
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $GatewayOutput = @(& cmd.exe /d /c "openclaw gateway $Action" 2>&1)
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+    foreach ($Line in $GatewayOutput) {
+        Write-Host "$Line"
+    }
+    if ($ExitCode -ne 0) {
+        throw "openclaw gateway $Action failed (exit code $ExitCode)"
+    }
+}
+
 function Test-BetterSqlite3 {
     param([string]$NodeBin, [string]$Prefix)
     $SmokeScript = "const Database=require('better-sqlite3');const db=new Database(':memory:');db.exec('SELECT 1');db.close();"
@@ -157,6 +181,7 @@ if ($AgentSelection -eq "auto") {
 
 # Resolve tarball
 $StageDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString())) -Force
+try {
 $SourceKind = "npm"
 $SourceSpec = $NpmPackage
 $BuiltTarball = ""
@@ -482,18 +507,21 @@ function Install-OpenClaw {
     $ConfigPath = Join-Path $env:USERPROFILE ".openclaw\openclaw.json"
 
     $OcBin = Get-Command "openclaw" -ErrorAction SilentlyContinue
-    if ($OcBin) {
-        Write-Info "Stopping OpenClaw gateway"
-        cmd /c "openclaw gateway stop"
-        Start-Sleep -Seconds 1
-    }
+    $GatewayRecoveryState = "inactive"
+    try {
+        if ($OcBin) {
+            Write-Info "Stopping OpenClaw gateway"
+            Invoke-OpenClawGatewayChecked -Action "stop"
+            $GatewayRecoveryState = "needs_recovery"
+            Start-Sleep -Seconds 1
+        }
 
-    Deploy-Tarball -Prefix $Prefix
+        Deploy-Tarball -Prefix $Prefix
 
-    $RuntimeEntry = "./dist/adapters/openclaw/index.js"
-    if (-not (Test-Path (Join-Path $Prefix "dist\adapters\openclaw\index.js"))) {
-        Stop-Die "OpenClaw runtime entry missing."
-    }
+        $RuntimeEntry = "./dist/adapters/openclaw/index.js"
+        if (-not (Test-Path (Join-Path $Prefix "dist\adapters\openclaw\index.js"))) {
+            throw "OpenClaw runtime entry missing."
+        }
 
     Ensure-RuntimeHome -Agent "openclaw" -HomeDir $HomeDir -Prefix $Prefix
 
@@ -628,21 +656,40 @@ config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 "@
 
-    $NodeScriptPath = Join-Path $env:TEMP "patch_openclaw.js"
-    Set-Content -Path $NodeScriptPath -Value $NodeScript -Encoding UTF8
-    node $NodeScriptPath
-    Write-Success "openclaw.json patched"
+        $NodeScriptPath = Join-Path $env:TEMP "patch_openclaw.js"
+        Set-Content -Path $NodeScriptPath -Value $NodeScript -Encoding UTF8
+        Invoke-NativeChecked -Command "node" -Arguments @($NodeScriptPath) -FailureMessage "Failed to patch openclaw.json"
+        Write-Success "openclaw.json patched"
 
-    if ($OcBin) {
-        Write-Info "Starting OpenClaw gateway"
-        cmd /c "openclaw gateway start"
-        if (Wait-ForViewer -Port $OpenClawPort) {
-            Write-Success "OpenClaw install complete"
+        if ($OcBin) {
+            Write-Info "Starting OpenClaw gateway"
+            try {
+                Invoke-OpenClawGatewayChecked -Action "start"
+            } catch {
+                # The regular final start already ran. Do not invoke it a
+                # second time from recovery cleanup and hide the real failure.
+                $GatewayRecoveryState = "final_failed"
+                throw
+            }
+            $GatewayRecoveryState = "inactive"
+            if (Wait-ForViewer -Port $OpenClawPort) {
+                Write-Success "OpenClaw install complete"
+            } else {
+                Write-Warn "Memory Viewer did not respond."
+            }
         } else {
-            Write-Warn "Memory Viewer did not respond."
+            Write-Warn "openclaw CLI not found. Start gateway manually."
         }
-    } else {
-        Write-Warn "openclaw CLI not found. Start gateway manually."
+    } finally {
+        if ($GatewayRecoveryState -eq "needs_recovery") {
+            Write-Warn "Install failed after stopping OpenClaw; restarting the gateway."
+            try {
+                Invoke-OpenClawGatewayChecked -Action "start"
+                Write-Success "OpenClaw gateway recovered"
+            } catch {
+                Write-Warn "OpenClaw gateway recovery failed: $($_.Exception.Message)"
+            }
+        }
     }
 }
 
@@ -786,3 +833,8 @@ if ($AgentSelection -eq "hermes" -or $AgentSelection -eq "all") { Install-Hermes
 Write-Host "`n  ==================================================" -ForegroundColor Green
 Write-Host "     Install finished successfully!                 " -ForegroundColor Green
 Write-Host "  ==================================================`n" -ForegroundColor Green
+} finally {
+    if ($StageDir -and (Test-Path $StageDir)) {
+        Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
+    }
+}

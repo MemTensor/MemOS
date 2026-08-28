@@ -9,7 +9,7 @@
  * traces we fail fast with `skipped_reason="no-evidence"`.
  */
 
-import type { LlmClient, LlmMessage } from "../llm/types.js";
+import type { LlmClient, LlmJsonCompletion, LlmMessage } from "../llm/types.js";
 import { detectModelRefusal } from "../llm/refusal.js";
 import {
   detectDominantLanguage,
@@ -24,7 +24,7 @@ import {
   sanitizeDerivedText,
 } from "../safety/content.js";
 import type { EpisodeId, PolicyRow, SkillRow, TraceRow } from "../types.js";
-import { MemosError } from "../../agent-contract/errors.js";
+import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import { extractToolNames } from "./tool-names.js";
 import type {
   SkillModelRefusalDetails,
@@ -68,6 +68,48 @@ export interface CrystallizeDeps {
 export type CrystallizeResult =
   | { ok: true; draft: SkillCrystallizationDraft }
   | { ok: false; skippedReason: string; modelRefusal?: SkillModelRefusalDetails };
+
+interface DraftShapeDiagnostics {
+  rootType: string;
+  presentFields: string[];
+  unknownFieldCount: number;
+  summaryType: string;
+  stepsType: string;
+  rawStepCount: number | null;
+  normalisedStepCount: number;
+}
+
+interface PreparedDraft {
+  draft: SkillCrystallizationDraft;
+  shape: DraftShapeDiagnostics;
+  repairedFields: Array<"summary" | "steps">;
+  repairSources: Partial<Record<"summary" | "steps", string>>;
+  usedAliases: string[];
+}
+
+const KNOWN_DRAFT_FIELDS = new Set([
+  "name",
+  "display_title",
+  "displayTitle",
+  "summary",
+  "description",
+  "parameters",
+  "preconditions",
+  "steps",
+  "procedure",
+  "examples",
+  "tags",
+  "tools",
+  "decision_guidance",
+  "decisionGuidance",
+]);
+
+const SKILL_DRAFT_SCHEMA_HINT = `{
+  "name": "snake_case string",
+  "display_title": "string",
+  "summary": "string",
+  "steps": [{ "title": "string", "body": "string" }]
+}`;
 
 /**
  * Run one crystallization call and return a normalised draft.
@@ -122,7 +164,8 @@ export async function crystallizeDraft(
         op: "skill.crystallize",
         phase: "skill",
         episodeId: input.episodeId,
-        schemaHint: "skill-crystallize.v2",
+        schemaHint: SKILL_DRAFT_SCHEMA_HINT,
+        malformedRetries: 0,
       },
     );
     const rawRefusal = detectModelRefusal(rsp.raw);
@@ -139,7 +182,9 @@ export async function crystallizeDraft(
       });
       return { ok: false, skippedReason: "llm-refusal", modelRefusal };
     }
-    const draft = normaliseDraft(rsp.value, input);
+    const prepared = prepareDraftFromResponse(rsp, input, log, "initial");
+    logDraftShape(prepared, rsp, input, log, "initial");
+    const draft = prepared.draft;
     const draftRefusal = detectModelRefusal(draft);
     if (draftRefusal) {
       const modelRefusal = {
@@ -154,7 +199,7 @@ export async function crystallizeDraft(
       });
       return { ok: false, skippedReason: "llm-refusal", modelRefusal };
     }
-    if (deps.validate) deps.validate(draft);
+    validatePreparedDraft(draft, prepared.shape, rsp, deps.validate, log, input, "initial");
     return { ok: true, draft };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -202,7 +247,8 @@ The error was: ${message}. Please correct this and generate a valid JSON skill d
             op: "skill.crystallize",
             phase: "skill",
             episodeId: input.episodeId,
-            schemaHint: "skill-crystallize.v2",
+            schemaHint: SKILL_DRAFT_SCHEMA_HINT,
+            malformedRetries: 0,
           },
         );
         const retryRawRefusal = detectModelRefusal(rsp.raw);
@@ -219,7 +265,9 @@ The error was: ${message}. Please correct this and generate a valid JSON skill d
           });
           return { ok: false, skippedReason: "llm-refusal", modelRefusal };
         }
-        const draft = normaliseDraft(rsp.value, input);
+        const prepared = prepareDraftFromResponse(rsp, input, log, "retry");
+        logDraftShape(prepared, rsp, input, log, "retry");
+        const draft = prepared.draft;
         const draftRefusal = detectModelRefusal(draft);
         if (draftRefusal) {
           const modelRefusal = {
@@ -234,7 +282,7 @@ The error was: ${message}. Please correct this and generate a valid JSON skill d
           });
           return { ok: false, skippedReason: "llm-refusal", modelRefusal };
         }
-        if (deps.validate) deps.validate(draft);
+        validatePreparedDraft(draft, prepared.shape, rsp, deps.validate, log, input, "retry");
         log.warn("skill.crystallize.retry_succeeded", {
           policyId: input.policy.id,
           error: message,
@@ -253,6 +301,196 @@ The error was: ${message}. Please correct this and generate a valid JSON skill d
     log.error("skill.crystallize.failed", { policyId: input.policy.id, error: message });
     return { ok: false, skippedReason: `llm-failed: ${message}` };
   }
+}
+
+function prepareDraftFromResponse(
+  rsp: LlmJsonCompletion<Record<string, unknown>>,
+  input: CrystallizeInput,
+  log: Logger,
+  attempt: "initial" | "retry",
+): PreparedDraft {
+  try {
+    return prepareDraft(rsp.value, input);
+  } catch (err) {
+    const shape = emptyDraftShape(rsp.value);
+    log.warn("skill.crystallize.shape_invalid", {
+      policyId: input.policy.id,
+      provider: rsp.provider,
+      model: rsp.model,
+      attempt,
+      reason: "invalid-root",
+      shape,
+    });
+    const message = err instanceof Error ? err.message : String(err);
+    throw new MemosError(ERROR_CODES.LLM_OUTPUT_MALFORMED, message, {
+      provider: rsp.provider,
+      rawPreview: rsp.raw.slice(0, 512),
+      shape,
+    });
+  }
+}
+
+function prepareDraft(raw: unknown, input: CrystallizeInput): PreparedDraft {
+  if (!isRecord(raw)) {
+    throw new Error("skill.crystallize.invalid: root must be an object");
+  }
+
+  const draft = normaliseDraft(raw, input);
+  const shape = inspectDraftShape(raw, draft.steps.length);
+  const repairedFields: PreparedDraft["repairedFields"] = [];
+  const repairSources: PreparedDraft["repairSources"] = {};
+  const usedAliases: string[] = [];
+
+  if (!cleanOptionalText(raw.summary) && cleanOptionalText(raw.description)) {
+    usedAliases.push("description->summary");
+  }
+  if (!Array.isArray(raw.steps) && raw.procedure !== undefined) {
+    usedAliases.push("procedure->steps");
+  }
+  if (Array.isArray(raw.steps) && raw.steps.some(stepUsesAlias)) {
+    usedAliases.push("step-aliases");
+  }
+
+  if (!draft.summary) {
+    const candidates: Array<[string, unknown]> = [
+      ["step.body", draft.steps[0]?.body],
+      ["step.title", draft.steps[0]?.title],
+      ["displayTitle", draft.displayTitle],
+      ["name", draft.name],
+    ];
+    const source = candidates.find(([, value]) => sanitizeDerivedText(value));
+    if (source) {
+      draft.summary = sanitizeDerivedText(source[1]).slice(0, 200);
+      repairedFields.push("summary");
+      repairSources.summary = source[0];
+    }
+  }
+
+  if (draft.steps.length === 0) {
+    const policyBody = sanitizeDerivedMarkdown(input.policy.procedure).slice(0, 2000);
+    if (policyBody) {
+      const policyTitle = sanitizeDerivedText(input.policy.title || input.policy.trigger)
+        .slice(0, 200);
+      draft.steps = [{
+        title: policyTitle || sanitizeDerivedText(policyBody).slice(0, 32),
+        body: policyBody,
+      }];
+      repairedFields.push("steps");
+      repairSources.steps = "policy.procedure";
+    }
+  }
+
+  return { draft, shape, repairedFields, repairSources, usedAliases };
+}
+
+function logDraftShape(
+  prepared: PreparedDraft,
+  rsp: LlmJsonCompletion<Record<string, unknown>>,
+  input: CrystallizeInput,
+  log: Logger,
+  attempt: "initial" | "retry",
+): void {
+  const common = {
+    policyId: input.policy.id,
+    provider: rsp.provider,
+    model: rsp.model,
+    attempt,
+    shape: prepared.shape,
+  };
+  if (prepared.repairedFields.length > 0) {
+    log.warn("skill.crystallize.shape_repaired", {
+      ...common,
+      repairedFields: prepared.repairedFields,
+      repairSources: prepared.repairSources,
+    });
+  } else if (prepared.usedAliases.length > 0) {
+    log.warn("skill.crystallize.shape_normalised", {
+      ...common,
+      aliases: prepared.usedAliases,
+    });
+  }
+}
+
+function validatePreparedDraft(
+  draft: SkillCrystallizationDraft,
+  shape: DraftShapeDiagnostics,
+  rsp: LlmJsonCompletion<Record<string, unknown>>,
+  validate: CrystallizeDeps["validate"],
+  log: Logger,
+  input: CrystallizeInput,
+  attempt: "initial" | "retry",
+): void {
+  try {
+    defaultDraftValidator(draft);
+    if (validate && validate !== defaultDraftValidator) validate(draft);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn("skill.crystallize.shape_invalid", {
+      policyId: input.policy.id,
+      provider: rsp.provider,
+      model: rsp.model,
+      attempt,
+      reason: safeValidationReason(message),
+      shape,
+    });
+    throw new MemosError(ERROR_CODES.LLM_OUTPUT_MALFORMED, message, {
+      provider: rsp.provider,
+      rawPreview: rsp.raw.slice(0, 512),
+      shape,
+    });
+  }
+}
+
+function safeValidationReason(message: string): string {
+  if (message.endsWith("missing name")) return "missing-name";
+  if (message.endsWith("missing summary")) return "missing-summary";
+  if (message.endsWith("missing steps")) return "missing-steps";
+  return "validator-rejected";
+}
+
+function inspectDraftShape(
+  raw: Record<string, unknown>,
+  normalisedStepCount: number,
+): DraftShapeDiagnostics {
+  const keys = Object.keys(raw);
+  return {
+    rootType: "object",
+    presentFields: keys.filter((key) => KNOWN_DRAFT_FIELDS.has(key)).sort(),
+    unknownFieldCount: keys.filter((key) => !KNOWN_DRAFT_FIELDS.has(key)).length,
+    summaryType: valueType(raw.summary),
+    stepsType: valueType(raw.steps),
+    rawStepCount: Array.isArray(raw.steps) ? raw.steps.length : null,
+    normalisedStepCount,
+  };
+}
+
+function emptyDraftShape(raw: unknown): DraftShapeDiagnostics {
+  return {
+    rootType: valueType(raw),
+    presentFields: [],
+    unknownFieldCount: 0,
+    summaryType: "unavailable",
+    stepsType: "unavailable",
+    rawStepCount: null,
+    normalisedStepCount: 0,
+  };
+}
+
+function valueType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stepUsesAlias(value: unknown): boolean {
+  if (typeof value === "string") return true;
+  if (!isRecord(value)) return false;
+  return value.name !== undefined || value.description !== undefined ||
+    value.content !== undefined || value.instruction !== undefined;
 }
 
 function rawPreviewFromError(err: unknown): string | null {
@@ -353,11 +591,11 @@ function normaliseDraft(
   const displayTitle =
     sanitizeDerivedText(raw.display_title ?? raw.displayTitle ?? input.policy.title ?? name) ||
     name;
-  const summary = sanitizeDerivedText(raw.summary);
+  const summary = cleanOptionalText(raw.summary) || cleanOptionalText(raw.description);
 
   const parameters = asArray(raw.parameters).map(coerceParameter).filter(Boolean) as SkillParameterDraft[];
   const preconditions = sanitizeDerivedMarkdownList(asStringArray(raw.preconditions));
-  const steps = asArray(raw.steps).map(coerceStep).filter(Boolean) as SkillStepDraft[];
+  const steps = selectRawSteps(raw).map(coerceStep).filter(Boolean) as SkillStepDraft[];
   const examples = asArray(raw.examples).map(coerceExample).filter(Boolean) as SkillExampleDraft[];
   const tags = dedupeLc(sanitizeDerivedList(asStringArray(raw.tags)));
   // V7 §2.4.6 — coerce both `decision_guidance` (preferred LLM key)
@@ -379,6 +617,22 @@ function normaliseDraft(
     decisionGuidance,
     tools,
   };
+}
+
+function selectRawSteps(raw: Record<string, unknown>): unknown[] {
+  if (Array.isArray(raw.steps)) return raw.steps;
+  if (typeof raw.steps === "string" && raw.steps.trim()) return [raw.steps];
+  if (Array.isArray(raw.procedure)) return raw.procedure;
+  if (typeof raw.procedure === "string" && raw.procedure.trim()) return [raw.procedure];
+  return [];
+}
+
+function cleanOptionalText(value: unknown): string {
+  return typeof value === "string" ? sanitizeDerivedText(value) : "";
+}
+
+function cleanOptionalMarkdown(value: unknown): string {
+  return typeof value === "string" ? sanitizeDerivedMarkdown(value) : "";
 }
 
 function coerceDecisionGuidance(raw: unknown): {
@@ -446,10 +700,18 @@ function coerceParameter(x: unknown): SkillParameterDraft | null {
 }
 
 function coerceStep(x: unknown): SkillStepDraft | null {
+  if (typeof x === "string") {
+    const body = sanitizeDerivedMarkdown(x);
+    if (!body) return null;
+    return { title: sanitizeDerivedText(body).slice(0, 32), body };
+  }
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
-  const title = sanitizeDerivedText(o.title);
-  const body = sanitizeDerivedMarkdown(o.body);
+  const title = cleanOptionalText(o.title) || cleanOptionalText(o.name);
+  const body = cleanOptionalMarkdown(o.body) ||
+    cleanOptionalMarkdown(o.description) ||
+    cleanOptionalMarkdown(o.content) ||
+    cleanOptionalMarkdown(o.instruction);
   if (!title && !body) return null;
   return { title: title || body.slice(0, 32), body };
 }
@@ -469,12 +731,25 @@ function capString(s: string, cap: number): string {
 }
 
 /**
- * A sensible default validator used both in production and in tests.
- * Throws if the draft is structurally unusable (no name, no steps, no summary).
+ * A sensible default validator used both in production and in tests. Summary
+ * can be recovered from the draft itself, but steps must already contain
+ * actionable material. The runtime normaliser may ground missing steps in the
+ * source policy; this validator never invents a generic procedure.
  */
 export function defaultDraftValidator(draft: SkillCrystallizationDraft): void {
   if (!draft.name) throw new Error("skill.crystallize.invalid: missing name");
-  if (!draft.summary) throw new Error("skill.crystallize.invalid: missing summary");
-  if (draft.steps.length === 0)
+  if (!draft.summary) {
+    // Auto-generate a summary from the richest available field. Use `||` not
+    // `??`: LLM JSON emits empty strings, and `??` only falls through on
+    // null/undefined.
+    const autoSummary =
+      draft.steps?.[0]?.body ||
+      draft.steps?.[0]?.title ||
+      draft.displayTitle ||
+      draft.name;
+    draft.summary = autoSummary.slice(0, 200);
+  }
+  if (!draft.steps || draft.steps.length === 0) {
     throw new Error("skill.crystallize.invalid: missing steps");
+  }
 }
