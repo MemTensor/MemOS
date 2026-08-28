@@ -19,8 +19,6 @@ on:
       - ".github/scripts/publish-paired-local-plugin-release.mjs"
       - ".github/scripts/retry.sh"
       - "apps/memos-local-plugin/package.json"
-      - "pyproject.toml"
-      - "src/memos/__init__.py"
 
 concurrency:
   group: memos-release-pre-merge-dry-run-${{ github.event.pull_request.number || github.ref }}
