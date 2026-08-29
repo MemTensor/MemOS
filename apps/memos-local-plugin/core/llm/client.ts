@@ -282,6 +282,7 @@ export function createLlmClientWithProvider(
       maxTokens: opts?.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS,
       jsonMode,
       stop: opts?.stop,
+      op: opts?.op,
     };
   }
 
