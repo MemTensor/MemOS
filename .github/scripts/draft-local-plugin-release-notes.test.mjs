@@ -516,9 +516,21 @@ test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () 
     subjects: [commit.subject],
   };
   const variants = [
+    "10786401",
+    "#10786401",
+    "# 10786401",
+    "`#10786401`",
+    "[10786401]",
+    "(10786401)",
+    "1078640",
+    "commit 10786401",
     "commit: 1078640",
+    "sha 10786401",
+    "SHA: 10786401",
+    "PR #10786401",
+    "pull request: 10786401",
     "https://github.com/MemTensor/MemOS/commit/10786401abcdef0123456789abcdef0123456789",
-    "`# 10786401`",
+    "https://github.com/MemTensor/MemOS/pull/10786401",
   ];
 
   for (const sourceRef of variants) {
