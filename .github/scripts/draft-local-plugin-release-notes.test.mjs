@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -37,6 +37,8 @@ const evidence = {
   current_tag: "memos-local-plugin-v2.0.10",
   target_version: "v2.0.10",
 };
+
+process.env.GITHUB_REPOSITORY ||= evidence.repo;
 
 function response(status, body) {
   return {
@@ -456,6 +458,7 @@ test("repairs a numeric SHA that the draft formats as a PR reference", () => {
   assert.equal(processed.ok, true);
   assert.equal(processed.needs_review, false);
   assert.deepEqual(processed.release_items[0].source_refs, ["10786401"]);
+  assert.ok(Array.isArray(processed.coverage.invalid_item_refs));
   assert.equal(processed.coverage.invalid_item_refs.length, 0);
   assert.equal(processed.coverage.missing_required_count, 0);
   assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 1);
@@ -617,9 +620,11 @@ test("accepts an evidence PR URL and retains its linked commit alias", () => {
   );
 
   assert.equal(processed.ok, true);
-  assert.ok(processed.release_items[0].source_refs.includes("#10786401"));
-  // A topic is evidence-complete only when its linked commit alias is retained too.
-  assert.ok(processed.release_items[0].source_refs.includes("abcdef12"));
+  // The URL is replaced, not retained alongside the canonical evidence aliases.
+  assert.deepEqual(
+    [...processed.release_items[0].source_refs].sort(),
+    ["#10786401", "abcdef12"].sort(),
+  );
 });
 
 test("rejects source URLs from repositories outside MemTensor/MemOS", () => {
@@ -689,6 +694,60 @@ test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
     );
     assert.equal(processed.ok, true);
     assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
+
+    const rejected = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [`https://github.com/MemTensor/MemOS/commit/${commit.sha}`],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.postprocess.dropped_invalid_items, 1);
+  } finally {
+    if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
+    else process.env.GITHUB_REPOSITORY = previousRepository;
+  }
+});
+
+test("fails closed for repository URLs when GITHUB_REPOSITORY is unavailable", () => {
+  const previousRepository = process.env.GITHUB_REPOSITORY;
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  try {
+    delete process.env.GITHUB_REPOSITORY;
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [`https://github.com/MemTensor/MemOS/commit/${commit.sha}`],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(processed.ok, false);
+    assert.equal(processed.postprocess.dropped_invalid_items, 1);
   } finally {
     if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
     else process.env.GITHUB_REPOSITORY = previousRepository;
@@ -725,6 +784,8 @@ test("keeps ambiguous SHA prefixes fail-closed", () => {
   assert.equal(processed.needs_review, true);
   assert.equal(processed.coverage.invalid_item_refs.length, 1);
   assert.equal(processed.coverage.missing_required_count, 2);
+  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, ["#1078640"]);
+  assert.match(processed.warnings.join("\n"), /ambiguous SHA source_refs/);
 });
 
 test("keeps ambiguous hexadecimal SHA prefixes fail-closed", () => {
@@ -1519,8 +1580,45 @@ test("writes failure diagnostics when final postprocessing remains invalid", () 
 });
 
 test("returns a fully validated draft without writing failure diagnostics", () => {
-  const validDraft = { ok: true, needs_review: false, release_items: [] };
-  assert.strictEqual(requireValidatedDraft({ evidence, draft: validDraft }), validDraft);
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-valid-draft-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    const validDraft = { ok: true, needs_review: false, release_items: [] };
+    assert.strictEqual(requireValidatedDraft({ evidence, draft: validDraft }), validDraft);
+    assert.deepEqual(readdirSync(directory), []);
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("preserves the validation error when failure diagnostics cannot be written", () => {
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-unwritable-diagnostics-"));
+  const filePath = join(directory, "not-a-directory");
+  try {
+    writeFileSync(filePath, "blocks directory creation", "utf8");
+    process.env.RELEASE_NOTES_FAILURE_DIR = filePath;
+    assert.throws(
+      () => requireValidatedDraft({ evidence, draft: { ok: false, needs_review: true } }),
+      /Postprocessed release notes require review/,
+    );
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("preserves the validation error when its summary is not serializable", () => {
+  const coverage = { needs_review: true };
+  coverage.circular = coverage;
+  assert.throws(
+    () => requireValidatedDraft({ evidence, draft: { ok: false, needs_review: true, coverage } }),
+    /summary_unavailable/,
+  );
 });
 
 test("reports once after three transient failures", async () => {

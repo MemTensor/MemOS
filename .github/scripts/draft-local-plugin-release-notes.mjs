@@ -708,7 +708,9 @@ function sourceRefFromRepositoryUrl(text) {
     return "";
   }
   if (!/^https?:$/.test(parsed.protocol) || parsed.hostname.toLowerCase() !== "github.com") return "";
-  const expectedRepo = String(process.env.GITHUB_REPOSITORY || "MemTensor/MemOS")
+  const repository = String(process.env.GITHUB_REPOSITORY || "").trim();
+  if (!repository) return "";
+  const expectedRepo = repository
     .split("/")
     .filter(Boolean)
     .map((part) => part.toLowerCase());
@@ -789,6 +791,8 @@ function buildSourceRefIndex(evidence) {
   for (const commit of evidence?.commits || []) {
     const shortRef = normalizeSourceRef(commit?.short_sha);
     const fullRef = normalizeSourceRef(commit?.sha);
+    // Both aliases intentionally remain bare hexadecimal values. Prefix resolution
+    // below depends on fullRef starting with the model-provided SHA candidate.
     if (shortRef && fullRef) shaEntries.push({ shortRef, fullRef });
     for (const ref of refsForCommit(commit)) knownRefs.add(ref);
   }
@@ -836,6 +840,7 @@ function groupKeysForItem(item, refToGroup) {
 
 function canonicalizeEvidenceBackedSourceRefs(items, index) {
   let normalizedRefs = 0;
+  const ambiguousShaRefs = [];
   const canonicalizedItems = items.map((item) => {
     const sourceRefs = [];
     for (const ref of item.source_refs || []) {
@@ -860,6 +865,8 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
           const entry = matches[0];
           canonicalRef = [entry.shortRef, entry.fullRef].find((alias) => index.refToGroup.has(alias))
             || (exactEvidenceRef ? canonicalRef : entry.shortRef);
+        } else if (matches.length > 1 && !ambiguousShaRefs.includes(ref)) {
+          ambiguousShaRefs.push(ref);
         }
       }
       if (canonicalRef !== ref) normalizedRefs += 1;
@@ -867,7 +874,7 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
     }
     return { ...item, source_refs: sourceRefs };
   });
-  return { items: canonicalizedItems, normalizedRefs };
+  return { items: canonicalizedItems, normalizedRefs, ambiguousShaRefs };
 }
 
 function bestHintCategoryForItem(item, index) {
@@ -1429,6 +1436,7 @@ export function postprocessDraftFromEvidence(draft, evidence) {
     const postprocess = {
       applied: true,
       normalized_evidence_backed_source_refs: 0,
+      ambiguous_sha_refs: [],
       dropped_invalid_items: droppedInvalidItems,
       removed_duplicate_source_refs: 0,
       dropped_empty_source_items: 0,
@@ -1481,6 +1489,7 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   const postprocess = {
     applied: true,
     normalized_evidence_backed_source_refs: canonicalized.normalizedRefs,
+    ambiguous_sha_refs: canonicalized.ambiguousShaRefs,
     dropped_invalid_items: droppedInvalidItems,
     removed_duplicate_source_refs: deduped.removedDuplicateRefs,
     dropped_empty_source_items: deduped.droppedItems,
@@ -1501,6 +1510,11 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   }
   if (languageIssues.length > 0) {
     warnings.push("release notes language validation failed; manual review is required");
+  }
+  if (canonicalized.ambiguousShaRefs.length > 0) {
+    warnings.push(
+      `ambiguous SHA source_refs were left unresolved: ${canonicalized.ambiguousShaRefs.join(", ")}`,
+    );
   }
 
   return {
@@ -1675,13 +1689,21 @@ export function writeDraftFailureInspection({ evidence, payload, error }) {
   return directory;
 }
 
-// Rejection always writes a sanitized failure inspection artifact; callers must expect this side effect.
+// Rejection makes a best-effort sanitized inspection write without masking validation failures.
 export function requireValidatedDraft({ evidence, draft }) {
   if (draft?.ok && !draft?.needs_review) return draft;
-  const error = new Error(
-    `Postprocessed release notes require review: ${JSON.stringify(draft?.validation_report || draft?.coverage || {})}`,
-  );
-  writeDraftFailureInspection({ evidence, payload: draft || {}, error });
+  let summary = "{}";
+  try {
+    summary = JSON.stringify(draft?.validation_report || draft?.coverage || {});
+  } catch {
+    summary = "{\"summary_unavailable\":true}";
+  }
+  const error = new Error(`Postprocessed release notes require review: ${summary}`);
+  try {
+    writeDraftFailureInspection({ evidence, payload: draft || {}, error });
+  } catch {
+    // Diagnostic artifact failures must never hide the release-note validation error.
+  }
   throw error;
 }
 
