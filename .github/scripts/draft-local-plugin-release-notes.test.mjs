@@ -41,7 +41,7 @@ const evidence = {
 function withGitHubRepository(repository, callback) {
   const previousRepository = process.env.GITHUB_REPOSITORY;
   try {
-    if (repository) process.env.GITHUB_REPOSITORY = repository;
+    if (repository !== undefined && repository !== null) process.env.GITHUB_REPOSITORY = repository;
     else delete process.env.GITHUB_REPOSITORY;
     return callback();
   } finally {
@@ -498,7 +498,7 @@ test("does not coerce a numeric PR-like prefix into an evidence SHA", () => {
         category: "Fixed",
         text_cn: "**记忆恢复**：修复异常数据恢复问题。",
         text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
-        // This 7-digit prefix intentionally differs from the 8-character evidence SHA.
+        // The # sigil makes this a PR ref. It must not be treated as a SHA prefix.
         source_refs: ["#1234567"],
       }],
       coverage: {},
@@ -765,6 +765,8 @@ test("rejects source URLs from repositories outside MemTensor/MemOS", () => {
     for (const sourceRef of [
       `https://github.com/another/repository/commit/${commit.sha}`,
       "https://github.com/another/repository/pull/1234",
+      "https://github.com/MemTensor/MemOS-fork/pull/1234",
+      "https://github.com/NotMemTensor/MemOS/pull/1234",
     ]) {
       const processed = postprocessDraftFromEvidence(
         {
@@ -971,6 +973,38 @@ test("deduplicates repeated evidence commits before resolving SHA prefixes", () 
   assert.equal(processed.ok, true);
   assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
   assert.deepEqual(processed.postprocess.ambiguous_sha_refs, []);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, []);
+});
+
+test("resolves an exact evidence short SHA even when it is not a full SHA prefix", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "12345678".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: [commit.short_sha],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
   assert.deepEqual(processed.postprocess.unresolved_sha_refs, []);
 });
 

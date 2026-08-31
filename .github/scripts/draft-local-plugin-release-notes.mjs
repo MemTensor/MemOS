@@ -799,6 +799,12 @@ function buildSourceRefIndex(evidence, repository = "") {
     const fullRef = normalizeShaRef(commit?.sha);
     if (shortRef && fullRef && !shaEntriesByFullRef.has(fullRef)) {
       shaEntriesByFullRef.set(fullRef, { shortRef, fullRef });
+    } else if (
+      shortRef
+      && fullRef
+      && shaEntriesByFullRef.get(fullRef)?.shortRef !== shortRef
+    ) {
+      warn(`Evidence contains duplicate SHA ${fullRef} with different short refs; using the first.`);
     }
     for (const ref of refsForCommit(commit)) knownRefs.add(ref);
   }
@@ -861,18 +867,18 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
       // ambiguous form only when it exactly equals an evidence SHA alias, never a prefix.
       // A known #digits PR ref must stay a PR. Only an otherwise unknown numeric
       // reference is eligible for the exact numeric-SHA recovery path.
-      const numericSha = !explicitPrRef && !exactEvidenceRef
+      const ambiguousNumericRef = !explicitPrRef && !exactEvidenceRef
         ? /^#(\d{7,40})$/.exec(canonicalRef)?.[1] || ""
         : "";
       const shaCandidate = explicitShaRef
-        || numericSha
+        || ambiguousNumericRef
         || (/^[a-f0-9]{7,40}$/.test(canonicalRef) ? canonicalRef : "");
       if (shaCandidate) {
         // Numeric #refs require exact aliases. The fullRef arm intentionally covers
         // the rare but valid case of an all-decimal 40-character Git SHA.
-        const matches = index.shaEntries.filter((entry) => numericSha
-          ? entry.shortRef === numericSha || entry.fullRef === numericSha
-          : entry.fullRef.startsWith(shaCandidate));
+        const matches = index.shaEntries.filter((entry) => ambiguousNumericRef
+          ? entry.shortRef === ambiguousNumericRef || entry.fullRef === ambiguousNumericRef
+          : entry.fullRef.startsWith(shaCandidate) || entry.shortRef === shaCandidate);
         // Zero or multiple matches intentionally remain unresolved and fail coverage validation.
         if (matches.length === 1) {
           const entry = matches[0];
