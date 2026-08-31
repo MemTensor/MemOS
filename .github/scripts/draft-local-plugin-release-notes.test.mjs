@@ -616,7 +616,44 @@ test("accepts an explicit PR reference only when that PR is present in evidence"
 
   assert.equal(processed.ok, true);
   assert.ok(processed.release_items[0].source_refs.includes("#10786401"));
+  // A topic is evidence-complete only when its linked commit alias is retained too.
   assert.ok(processed.release_items[0].source_refs.includes("abcdef12"));
+});
+
+test("rejects source URLs from repositories outside MemTensor/MemOS", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery (#1234)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha, "#1234"],
+    subjects: [commit.subject],
+  };
+
+  for (const sourceRef of [
+    `https://github.com/another/repository/commit/${commit.sha}`,
+    "https://github.com/another/repository/pull/1234",
+  ]) {
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [sourceRef],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(processed.ok, false, sourceRef);
+    assert.equal(processed.postprocess.dropped_invalid_items, 1, sourceRef);
+  }
 });
 
 test("keeps ambiguous SHA prefixes fail-closed", () => {
@@ -647,6 +684,37 @@ test("keeps ambiguous SHA prefixes fail-closed", () => {
 
   assert.equal(processed.ok, false);
   assert.equal(processed.needs_review, true);
+  assert.equal(processed.coverage.invalid_item_refs.length, 1);
+  assert.equal(processed.coverage.missing_required_count, 2);
+});
+
+test("keeps ambiguous hexadecimal SHA prefixes fail-closed", () => {
+  const commits = [
+    { short_sha: "abcdef1a", sha: "abcdef1a".padEnd(40, "0"), subject: "fix(plugin): recovery A" },
+    { short_sha: "abcdef1b", sha: "abcdef1b".padEnd(40, "0"), subject: "fix(plugin): recovery B" },
+  ];
+  const topics = commits.map((commit, index) => ({
+    key: `recovery-${index}`,
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  }));
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["abcdef1"],
+      }],
+      coverage: {},
+    },
+    { commits, release_note_guidance: { release_topics: topics } },
+  );
+
+  assert.equal(processed.ok, false);
   assert.equal(processed.coverage.invalid_item_refs.length, 1);
   assert.equal(processed.coverage.missing_required_count, 2);
 });
@@ -687,6 +755,8 @@ test("fails closed when every draft item is malformed", () => {
   assert.deepEqual(processed.release_items, []);
   assert.equal(processed.coverage.missing_required_count, 1);
   assert.equal(processed.postprocess.dropped_invalid_items, 1);
+  // Structurally invalid items are dropped before evidence coverage checks.
+  assert.equal(processed.coverage.invalid_item_refs.length, 0);
 });
 
 test("redacts full diff and prompt guidance from inspection evidence", () => {
@@ -1405,6 +1475,11 @@ test("writes failure diagnostics when final postprocessing remains invalid", () 
     process.env = previous;
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("returns a fully validated draft without writing failure diagnostics", () => {
+  const validDraft = { ok: true, needs_review: false, release_items: [] };
+  assert.strictEqual(requireValidatedDraft({ evidence, draft: validDraft }), validDraft);
 });
 
 test("reports once after three transient failures", async () => {

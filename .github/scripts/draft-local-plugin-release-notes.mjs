@@ -704,9 +704,13 @@ function normalizeSourceRef(value) {
   const text = String(value || "").trim().replace(/^[`[(\s]+|[`)\],.;\s]+$/g, "");
   let match = text.match(/^#\s*(\d+)$/);
   if (match) return `#${match[1]}`;
-  match = text.match(/\/(?:pull|pulls)\/(\d+)(?:[/?#]|$)/i);
+  match = text.match(
+    /^https?:\/\/github\.com\/MemTensor\/MemOS\/pull\/(\d+)(?:[/?#].*)?$/i,
+  );
   if (match) return `pr:#${match[1]}`;
-  match = text.match(/\/commit\/([a-fA-F0-9]{7,40})(?:[/?#]|$)/i);
+  match = text.match(
+    /^https?:\/\/github\.com\/MemTensor\/MemOS\/commit\/([a-fA-F0-9]{7,40})(?:[/?#].*)?$/i,
+  );
   if (match) return `sha:${match[1].toLowerCase()}`;
   match = text.match(/^(?:pr|pull request)\s*:?[\s#]*(\d+)$/i);
   if (match) return `pr:#${match[1]}`;
@@ -827,6 +831,7 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
         || (/^[a-f0-9]{7,40}$/.test(canonicalRef) ? canonicalRef : "");
       if (shaCandidate) {
         const matches = index.shaEntries.filter((entry) => entry.fullRef.startsWith(shaCandidate));
+        // Zero or multiple matches intentionally remain unresolved and fail coverage validation.
         if (matches.length === 1) {
           const entry = matches[0];
           canonicalRef = [entry.shortRef, entry.fullRef].find((alias) => index.refToGroup.has(alias))
@@ -1646,6 +1651,7 @@ export function writeDraftFailureInspection({ evidence, payload, error }) {
   return directory;
 }
 
+// Rejection always records a redacted artifact; callers must expect this filesystem side effect.
 export function requireValidatedDraft({ evidence, draft }) {
   if (draft?.ok && !draft?.needs_review) return draft;
   const error = new Error(
