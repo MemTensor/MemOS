@@ -515,6 +515,8 @@ test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () 
     source_refs: [commit.short_sha],
     subjects: [commit.subject],
   };
+  // This fixture has one commit, so the seven-character SHA prefix is unique. The
+  // numeric and hexadecimal ambiguity tests below cover the multi-match rejection path.
   const variants = [
     "10786401",
     "#10786401",
@@ -587,7 +589,7 @@ test("keeps explicit PR references strict instead of coercing them to numeric SH
   }
 });
 
-test("accepts an explicit PR reference only when that PR is present in evidence", () => {
+test("accepts an evidence PR URL and retains its linked commit alias", () => {
   const commit = {
     short_sha: "abcdef12",
     sha: "abcdef12".padEnd(40, "0"),
@@ -715,6 +717,7 @@ test("keeps ambiguous hexadecimal SHA prefixes fail-closed", () => {
   );
 
   assert.equal(processed.ok, false);
+  assert.equal(processed.needs_review, true);
   assert.equal(processed.coverage.invalid_item_refs.length, 1);
   assert.equal(processed.coverage.missing_required_count, 2);
 });
@@ -1436,7 +1439,7 @@ test("writes a redacted failure artifact without endpoint or token details", () 
 });
 
 test("writes failure diagnostics when final postprocessing remains invalid", () => {
-  const previous = { ...process.env };
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
   const directory = mkdtempSync(join(tmpdir(), "local-plugin-postprocess-failure-"));
   try {
     process.env.RELEASE_NOTES_FAILURE_DIR = directory;
@@ -1472,7 +1475,8 @@ test("writes failure diagnostics when final postprocessing remains invalid", () 
     assert.equal(report.invalid_item_ref_count, 1);
     assert.match(readFileSync(join(directory, "release-notes-draft.json"), "utf8"), /#10786401/);
   } finally {
-    process.env = previous;
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
     rmSync(directory, { recursive: true, force: true });
   }
 });

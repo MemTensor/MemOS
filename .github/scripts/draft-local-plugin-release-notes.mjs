@@ -700,18 +700,40 @@ function normalizeReleaseCategory(value) {
   return RELEASE_CATEGORY_ORDER.includes(text) ? text : "";
 }
 
+function sourceRefFromRepositoryUrl(text) {
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return "";
+  }
+  if (!/^https?:$/.test(parsed.protocol) || parsed.hostname.toLowerCase() !== "github.com") return "";
+  const expectedRepo = String(process.env.GITHUB_REPOSITORY || "MemTensor/MemOS")
+    .split("/")
+    .filter(Boolean)
+    .map((part) => part.toLowerCase());
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (
+    expectedRepo.length !== 2 ||
+    parts.length < 4 ||
+    parts[0].toLowerCase() !== expectedRepo[0] ||
+    parts[1].toLowerCase() !== expectedRepo[1]
+  ) {
+    return "";
+  }
+  if (parts[2].toLowerCase() === "pull" && /^\d+$/.test(parts[3])) return `pr:#${parts[3]}`;
+  if (parts[2].toLowerCase() === "commit" && /^[a-fA-F0-9]{7,40}$/.test(parts[3])) {
+    return `sha:${parts[3].toLowerCase()}`;
+  }
+  return "";
+}
+
 function normalizeSourceRef(value) {
   const text = String(value || "").trim().replace(/^[`[(\s]+|[`)\],.;\s]+$/g, "");
   let match = text.match(/^#\s*(\d+)$/);
   if (match) return `#${match[1]}`;
-  match = text.match(
-    /^https?:\/\/github\.com\/MemTensor\/MemOS\/pull\/(\d+)(?:[/?#].*)?$/i,
-  );
-  if (match) return `pr:#${match[1]}`;
-  match = text.match(
-    /^https?:\/\/github\.com\/MemTensor\/MemOS\/commit\/([a-fA-F0-9]{7,40})(?:[/?#].*)?$/i,
-  );
-  if (match) return `sha:${match[1].toLowerCase()}`;
+  const urlRef = sourceRefFromRepositoryUrl(text);
+  if (urlRef) return urlRef;
   match = text.match(/^(?:pr|pull request)\s*:?[\s#]*(\d+)$/i);
   if (match) return `pr:#${match[1]}`;
   match = text.match(/^(?:commit|sha)\s*:?[\s#]*([a-fA-F0-9]{7,40})$/i);
@@ -823,6 +845,8 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
       if (explicitPrRef) canonicalRef = explicitPrRef;
       if (explicitShaRef) canonicalRef = explicitShaRef;
       const exactEvidenceRef = index.knownRefs.has(canonicalRef);
+      // The draft service can render an all-numeric SHA as #digits. Repair that ambiguous
+      // form only when it is not a real evidence PR and exactly one evidence SHA matches.
       const numericSha = !explicitPrRef && !exactEvidenceRef
         ? /^#(\d{7,40})$/.exec(canonicalRef)?.[1] || ""
         : "";
@@ -1651,7 +1675,7 @@ export function writeDraftFailureInspection({ evidence, payload, error }) {
   return directory;
 }
 
-// Rejection always records a redacted artifact; callers must expect this filesystem side effect.
+// Rejection always writes a sanitized failure inspection artifact; callers must expect this side effect.
 export function requireValidatedDraft({ evidence, draft }) {
   if (draft?.ok && !draft?.needs_review) return draft;
   const error = new Error(
