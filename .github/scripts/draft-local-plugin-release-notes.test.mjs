@@ -38,7 +38,8 @@ const evidence = {
   target_version: "v2.0.10",
 };
 
-// URL trust tests use the canonical repository when run outside GitHub Actions.
+// URL trust tests use the canonical repository outside Actions. Production reads
+// this variable lazily per call so individual tests can still remove or replace it.
 process.env.GITHUB_REPOSITORY ||= evidence.repo;
 
 function response(status, body) {
@@ -485,6 +486,7 @@ test("does not coerce a numeric PR-like prefix into an evidence SHA", () => {
         category: "Fixed",
         text_cn: "**记忆恢复**：修复异常数据恢复问题。",
         text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        // This 7-digit prefix intentionally differs from the 8-character evidence SHA.
         source_refs: ["#1234567"],
       }],
       coverage: {},
@@ -495,6 +497,7 @@ test("does not coerce a numeric PR-like prefix into an evidence SHA", () => {
   assert.equal(processed.ok, false);
   assert.equal(processed.coverage.invalid_item_refs.length, 1);
   assert.deepEqual(processed.postprocess.ambiguous_sha_refs, []);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, ["#1234567"]);
 });
 
 test("preserves an evidence-backed numeric PR reference", () => {
@@ -535,7 +538,10 @@ test("preserves an evidence-backed numeric PR reference", () => {
 
   assert.equal(processed.ok, true);
   assert.equal(processed.needs_review, false);
-  assert.ok(processed.release_items[0].source_refs.includes("#10786401"));
+  assert.deepEqual(
+    [...processed.release_items[0].source_refs].sort(),
+    ["#10786401", "abcdef12"].sort(),
+  );
   assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 0);
 });
 
@@ -565,7 +571,6 @@ test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () 
     "commit: 1078640",
     "sha 10786401",
     "SHA: 10786401",
-    "https://github.com/MemTensor/MemOS/commit/10786401abcdef0123456789abcdef0123456789",
   ];
 
   for (const sourceRef of variants) {
@@ -586,6 +591,39 @@ test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () 
     assert.equal(processed.ok, true, sourceRef);
     assert.deepEqual(processed.release_items[0].source_refs, ["10786401"], sourceRef);
   }
+});
+
+test("rejects a well-formed short SHA absent from collected evidence", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["deadbeef"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.coverage.invalid_item_refs.length, 1);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, ["deadbeef"]);
+  assert.match(processed.warnings.join("\n"), /did not resolve to collected evidence/);
 });
 
 test("keeps explicit PR references strict instead of coercing them to numeric SHAs", () => {

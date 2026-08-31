@@ -845,6 +845,7 @@ function groupKeysForItem(item, refToGroup) {
 function canonicalizeEvidenceBackedSourceRefs(items, index) {
   let normalizedRefs = 0;
   const ambiguousShaRefs = new Set();
+  const unresolvedShaRefs = new Set();
   const canonicalizedItems = items.map((item) => {
     const sourceRefs = [];
     for (const ref of item.source_refs || []) {
@@ -863,6 +864,8 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
         || numericSha
         || (/^[a-f0-9]{7,40}$/.test(canonicalRef) ? canonicalRef : "");
       if (shaCandidate) {
+        // Numeric #refs require exact aliases. The fullRef arm intentionally covers
+        // the rare but valid case of an all-decimal 40-character Git SHA.
         const matches = index.shaEntries.filter((entry) => numericSha
           ? entry.shortRef === numericSha || entry.fullRef === numericSha
           : entry.fullRef.startsWith(shaCandidate));
@@ -873,6 +876,8 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
             || (exactEvidenceRef ? canonicalRef : entry.shortRef);
         } else if (matches.length > 1) {
           ambiguousShaRefs.add(ref);
+        } else {
+          unresolvedShaRefs.add(ref);
         }
       }
       if (canonicalRef !== ref) normalizedRefs += 1;
@@ -880,12 +885,18 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
     }
     return { ...item, source_refs: sourceRefs };
   });
-  return { items: canonicalizedItems, normalizedRefs, ambiguousShaRefs: [...ambiguousShaRefs] };
+  return {
+    items: canonicalizedItems,
+    normalizedRefs,
+    ambiguousShaRefs: [...ambiguousShaRefs],
+    unresolvedShaRefs: [...unresolvedShaRefs],
+  };
 }
 
 function releaseNotesPostprocess({
   normalizedRefs = 0,
   ambiguousShaRefs = [],
+  unresolvedShaRefs = [],
   droppedInvalidItems = 0,
   removedDuplicateRefs = 0,
   droppedEmptyItems = 0,
@@ -896,6 +907,7 @@ function releaseNotesPostprocess({
     applied: true,
     normalized_evidence_backed_source_refs: normalizedRefs,
     ambiguous_sha_refs: ambiguousShaRefs,
+    unresolved_sha_refs: unresolvedShaRefs,
     dropped_invalid_items: droppedInvalidItems,
     removed_duplicate_source_refs: removedDuplicateRefs,
     dropped_empty_source_items: droppedEmptyItems,
@@ -1507,6 +1519,7 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   const postprocess = releaseNotesPostprocess({
     normalizedRefs: canonicalized.normalizedRefs,
     ambiguousShaRefs: canonicalized.ambiguousShaRefs,
+    unresolvedShaRefs: canonicalized.unresolvedShaRefs,
     droppedInvalidItems,
     removedDuplicateRefs: deduped.removedDuplicateRefs,
     droppedEmptyItems: deduped.droppedItems,
@@ -1531,6 +1544,11 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   if (canonicalized.ambiguousShaRefs.length > 0) {
     warnings.push(
       `ambiguous SHA source_refs were left unresolved: ${canonicalized.ambiguousShaRefs.join(", ")}`,
+    );
+  }
+  if (canonicalized.unresolvedShaRefs.length > 0) {
+    warnings.push(
+      `SHA-like source_refs did not resolve to collected evidence: ${canonicalized.unresolvedShaRefs.join(", ")}`,
     );
   }
 
@@ -1720,6 +1738,7 @@ export function requireValidatedDraft({ evidence, draft }) {
     writeDraftFailureInspection({ evidence, payload: draft || {}, error });
   } catch {
     // Intentional: diagnostic artifact failures must never hide the validation error.
+    warn("Failed to write release-note failure diagnostics; preserving the original validation error.");
   }
   throw error;
 }
