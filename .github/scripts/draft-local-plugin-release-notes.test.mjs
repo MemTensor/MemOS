@@ -20,6 +20,7 @@ import {
   releaseTopicsForCommits,
   compactReleaseTopics,
   releaseTopicLimitForRequiredCount,
+  requireValidatedDraft,
   reportExternalFailureFromEnv,
   requestDraft,
   requestValidatedDraft,
@@ -457,7 +458,7 @@ test("repairs a numeric SHA that the draft formats as a PR reference", () => {
   assert.deepEqual(processed.release_items[0].source_refs, ["10786401"]);
   assert.equal(processed.coverage.invalid_item_refs.length, 0);
   assert.equal(processed.coverage.missing_required_count, 0);
-  assert.equal(processed.postprocess.normalized_ambiguous_numeric_sha_refs, 1);
+  assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 1);
 });
 
 test("preserves an evidence-backed numeric PR reference", () => {
@@ -499,7 +500,115 @@ test("preserves an evidence-backed numeric PR reference", () => {
   assert.equal(processed.ok, true);
   assert.equal(processed.needs_review, false);
   assert.ok(processed.release_items[0].source_refs.includes("#10786401"));
-  assert.equal(processed.postprocess.normalized_ambiguous_numeric_sha_refs, 0);
+  assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 0);
+});
+
+test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () => {
+  const commit = {
+    short_sha: "10786401",
+    sha: "10786401abcdef0123456789abcdef0123456789",
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const variants = [
+    "commit: 1078640",
+    "https://github.com/MemTensor/MemOS/commit/10786401abcdef0123456789abcdef0123456789",
+    "`# 10786401`",
+  ];
+
+  for (const sourceRef of variants) {
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [sourceRef],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(processed.ok, true, sourceRef);
+    assert.deepEqual(processed.release_items[0].source_refs, ["10786401"], sourceRef);
+  }
+});
+
+test("keeps ambiguous SHA prefixes fail-closed", () => {
+  const commits = [
+    { short_sha: "1078640a", sha: "1078640a".padEnd(40, "0"), subject: "fix(plugin): recovery A" },
+    { short_sha: "1078640b", sha: "1078640b".padEnd(40, "0"), subject: "fix(plugin): recovery B" },
+  ];
+  const topics = commits.map((commit, index) => ({
+    key: `recovery-${index}`,
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  }));
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["#1078640"],
+      }],
+      coverage: {},
+    },
+    { commits, release_note_guidance: { release_topics: topics } },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.needs_review, true);
+  assert.equal(processed.coverage.invalid_item_refs.length, 1);
+  assert.equal(processed.coverage.missing_required_count, 2);
+});
+
+test("fails closed when every draft item is malformed", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["not-a-source-ref"],
+      }],
+      coverage: {},
+    },
+    {
+      commits: [commit],
+      release_note_guidance: {
+        release_topics: [{
+          key: "memory-recovery",
+          category: "Fixed",
+          source_refs: [commit.short_sha],
+          subjects: [commit.subject],
+        }],
+      },
+    },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.needs_review, true);
+  assert.deepEqual(processed.release_items, []);
+  assert.equal(processed.coverage.missing_required_count, 1);
+  assert.equal(processed.postprocess.dropped_invalid_items, 1);
 });
 
 test("redacts full diff and prompt guidance from inspection evidence", () => {
@@ -1172,6 +1281,48 @@ test("writes a redacted failure artifact without endpoint or token details", () 
     assert.match(report, /too many release items: 16 > 12/);
     assert.doesNotMatch(report, /private\.example|secret-token/);
     assert.doesNotMatch(redactedEvidence, /private diff/);
+  } finally {
+    process.env = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("writes failure diagnostics when final postprocessing remains invalid", () => {
+  const previous = { ...process.env };
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-postprocess-failure-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    const invalidDraft = {
+      ok: false,
+      needs_review: true,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "修复记忆恢复问题。",
+        text_en: "Fixed memory recovery.",
+        source_refs: ["#10786401"],
+      }],
+      coverage: {
+        needs_review: true,
+        required_count: 1,
+        covered_required_count: 1,
+        missing_required_count: 0,
+        invalid_item_refs: [{ ref: "#10786401" }],
+      },
+      validation_report: {
+        ok: false,
+        needs_review: true,
+        invalid_item_ref_count: 1,
+      },
+    };
+
+    assert.throws(
+      () => requireValidatedDraft({ evidence, draft: invalidDraft }),
+      /Postprocessed release notes require review/,
+    );
+    const report = JSON.parse(readFileSync(join(directory, "quality-report.json"), "utf8"));
+    assert.equal(report.ok, false);
+    assert.equal(report.invalid_item_ref_count, 1);
+    assert.match(readFileSync(join(directory, "release-notes-draft.json"), "utf8"), /#10786401/);
   } finally {
     process.env = previous;
     rmSync(directory, { recursive: true, force: true });

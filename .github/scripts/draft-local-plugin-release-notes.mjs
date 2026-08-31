@@ -702,7 +702,16 @@ function normalizeReleaseCategory(value) {
 
 function normalizeSourceRef(value) {
   const text = String(value || "").trim().replace(/^[`[(\s]+|[`)\],.;\s]+$/g, "");
-  if (/^#\d+$/.test(text)) return text;
+  let match = text.match(/^#\s*(\d+)$/);
+  if (match) return `#${match[1]}`;
+  match = text.match(/\/(?:pull|pulls)\/(\d+)(?:[/?#]|$)/i);
+  if (match) return `#${match[1]}`;
+  match = text.match(/\/commit\/([a-fA-F0-9]{7,40})(?:[/?#]|$)/i);
+  if (match) return match[1].toLowerCase();
+  match = text.match(/^(?:pr|pull request)\s*:?[\s#]*(\d+)$/i);
+  if (match) return `#${match[1]}`;
+  match = text.match(/^(?:commit|sha)\s*:?[\s#]*([a-fA-F0-9]{7,40})$/i);
+  if (match) return match[1].toLowerCase();
   if (/^[a-fA-F0-9]{7,40}$/.test(text)) return text.toLowerCase();
   return "";
 }
@@ -749,8 +758,12 @@ function buildSourceRefIndex(evidence) {
   const refToGroup = new Map();
   const groups = new Map();
   const knownRefs = new Set();
+  const shaEntries = [];
 
   for (const commit of evidence?.commits || []) {
+    const shortRef = normalizeSourceRef(commit?.short_sha);
+    const fullRef = normalizeSourceRef(commit?.sha);
+    if (shortRef && fullRef) shaEntries.push({ shortRef, fullRef });
     for (const ref of refsForCommit(commit)) knownRefs.add(ref);
   }
 
@@ -779,7 +792,7 @@ function buildSourceRefIndex(evidence) {
     });
   }
 
-  return { refToGroup, groups, knownRefs };
+  return { refToGroup, groups, knownRefs, shaEntries };
 }
 
 function groupKeyForRef(ref, refToGroup) {
@@ -795,17 +808,23 @@ function groupKeysForItem(item, refToGroup) {
   return keys;
 }
 
-function canonicalizeAmbiguousNumericShaRefs(items, index) {
+function canonicalizeEvidenceBackedSourceRefs(items, index) {
   let normalizedRefs = 0;
   const canonicalizedItems = items.map((item) => {
     const sourceRefs = [];
     for (const ref of item.source_refs || []) {
-      const match = /^#(\d{7,40})$/.exec(ref);
-      const numericSha = match?.[1] || "";
-      const canonicalRef =
-        numericSha && !index.knownRefs.has(ref) && index.knownRefs.has(numericSha)
-          ? numericSha
-          : ref;
+      let canonicalRef = ref;
+      const exactEvidenceRef = index.knownRefs.has(ref);
+      const numericSha = !exactEvidenceRef ? /^#(\d{7,40})$/.exec(ref)?.[1] || "" : "";
+      const shaCandidate = numericSha || (/^[a-f0-9]{7,40}$/.test(ref) ? ref : "");
+      if (shaCandidate) {
+        const matches = index.shaEntries.filter((entry) => entry.fullRef.startsWith(shaCandidate));
+        if (matches.length === 1) {
+          const entry = matches[0];
+          canonicalRef = [entry.shortRef, entry.fullRef].find((alias) => index.refToGroup.has(alias))
+            || (exactEvidenceRef ? ref : entry.shortRef);
+        }
+      }
       if (canonicalRef !== ref) normalizedRefs += 1;
       if (!sourceRefs.includes(canonicalRef)) sourceRefs.push(canonicalRef);
     }
@@ -1364,13 +1383,40 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
 }
 
 export function postprocessDraftFromEvidence(draft, evidence) {
-  const inputItems = Array.isArray(draft?.release_items)
-    ? draft.release_items.map(normalizeReleaseItem).filter(Boolean)
-    : [];
-  if (inputItems.length === 0) return draft;
-
+  const rawItems = Array.isArray(draft?.release_items) ? draft.release_items : [];
+  const inputItems = rawItems.map(normalizeReleaseItem).filter(Boolean);
   const index = buildSourceRefIndex(evidence);
-  const canonicalized = canonicalizeAmbiguousNumericShaRefs(inputItems, index);
+  const droppedInvalidItems = rawItems.length - inputItems.length;
+  if (inputItems.length === 0) {
+    const coverage = coverageFromReleaseItems(evidence, draft || {}, [], index);
+    const postprocess = {
+      applied: true,
+      normalized_evidence_backed_source_refs: 0,
+      dropped_invalid_items: droppedInvalidItems,
+      removed_duplicate_source_refs: 0,
+      dropped_empty_source_items: 0,
+      reclassified_items: 0,
+      final_item_count: 0,
+    };
+    return {
+      ...(draft || {}),
+      ok: false,
+      needs_review: true,
+      release_items: [],
+      release_categories: {},
+      docs_categories: { cn: {}, en: {} },
+      coverage,
+      warnings: [
+        ...(Array.isArray(draft?.warnings) ? draft.warnings : []),
+        "no valid evidence-backed release items remained after deterministic normalization",
+      ],
+      language_issues: [],
+      postprocess,
+      release_notes_markdown: markdownFromReleaseItems([], coverage),
+    };
+  }
+
+  const canonicalized = canonicalizeEvidenceBackedSourceRefs(inputItems, index);
   let reclassifiedItems = 0;
   let items = canonicalized.items.map((item) => {
     const hintedCategory = bestHintCategoryForItem(item, index);
@@ -1397,7 +1443,8 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   const { releaseCategories, docsCategories } = categoriesFromReleaseItems(items);
   const postprocess = {
     applied: true,
-    normalized_ambiguous_numeric_sha_refs: canonicalized.normalizedRefs,
+    normalized_evidence_backed_source_refs: canonicalized.normalizedRefs,
+    dropped_invalid_items: droppedInvalidItems,
     removed_duplicate_source_refs: deduped.removedDuplicateRefs,
     dropped_empty_source_items: deduped.droppedItems,
     reclassified_items: reclassifiedItems,
@@ -1405,7 +1452,8 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   };
   const warnings = Array.isArray(draft.warnings) ? [...draft.warnings] : [];
   if (
-    postprocess.normalized_ambiguous_numeric_sha_refs > 0 ||
+    postprocess.normalized_evidence_backed_source_refs > 0 ||
+    postprocess.dropped_invalid_items > 0 ||
     postprocess.removed_duplicate_source_refs > 0 ||
     postprocess.dropped_empty_source_items > 0 ||
     postprocess.reclassified_items > 0
@@ -1588,6 +1636,15 @@ export function writeDraftFailureInspection({ evidence, payload, error }) {
     "utf8",
   );
   return directory;
+}
+
+export function requireValidatedDraft({ evidence, draft }) {
+  if (draft?.ok && !draft?.needs_review) return draft;
+  const error = new Error(
+    `Postprocessed release notes require review: ${JSON.stringify(draft?.validation_report || draft?.coverage || {})}`,
+  );
+  writeDraftFailureInspection({ evidence, payload: draft || {}, error });
+  throw error;
 }
 
 function requiredUrlFromEnv(name) {
@@ -1847,9 +1904,7 @@ export async function main() {
     });
     throw error;
   }
-  if (!draft.ok || draft.needs_review) {
-    fail(`Postprocessed release notes require review: ${JSON.stringify(draft.validation_report || draft.coverage || {})}`);
-  }
+  draft = requireValidatedDraft({ evidence, draft });
   const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
   writeFileSync(draftPath, JSON.stringify(draftForInspection(draft), null, 2), "utf8");
   writeFileSync(notesPath, ensureSourceHint(draft.release_notes_markdown), "utf8");
