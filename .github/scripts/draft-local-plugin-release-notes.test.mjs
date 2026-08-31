@@ -658,6 +658,43 @@ test("rejects source URLs from repositories outside MemTensor/MemOS", () => {
   }
 });
 
+test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
+  const previousRepository = process.env.GITHUB_REPOSITORY;
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  try {
+    process.env.GITHUB_REPOSITORY = "ForkOwner/ForkRepo";
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [`https://github.com/ForkOwner/ForkRepo/commit/${commit.sha}`],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(processed.ok, true);
+    assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
+  } finally {
+    if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
+    else process.env.GITHUB_REPOSITORY = previousRepository;
+  }
+});
+
 test("keeps ambiguous SHA prefixes fail-closed", () => {
   const commits = [
     { short_sha: "1078640a", sha: "1078640a".padEnd(40, "0"), subject: "fix(plugin): recovery A" },
