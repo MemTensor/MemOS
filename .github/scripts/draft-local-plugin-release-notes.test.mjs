@@ -10,12 +10,16 @@ import {
   draftForInspection,
   evidenceForInspection,
   ensureSourceHint,
+  filterNetEffectiveCommits,
   isLegacyPackageOnlyRelease,
   legacyPackageDraftFromEvidence,
   manualDraftFromNotes,
   parseSemver,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
+  releaseTopicsForCommits,
+  compactReleaseTopics,
+  releaseTopicLimitForRequiredCount,
   reportExternalFailureFromEnv,
   requestDraft,
   requestValidatedDraft,
@@ -191,13 +195,203 @@ test("adds source-ref category hints from commit subjects", () => {
       short_sha: "ca2b3854",
       subject: "fix(memos): apply Memtensor-AI review feedback to PR #1817",
     },
+    {
+      short_sha: "ab12cd34",
+      subject: "adjust session checkpoint ownership for local plugin hosts",
+    },
   ]);
   assert.deepEqual(
     hints.map((hint) => hint.category),
-    ["Improved", "Added", "Fixed", "Fixed"],
+    ["Improved", "Added", "Fixed", "Fixed", "Improved"],
   );
   assert.deepEqual(hints[0].source_refs, ["59c14746", "#2076", "#2077"]);
   assert.deepEqual(hints[2].source_refs, ["de03ab29", "#2063", "#2074"]);
+});
+
+test("removes net-zero reverts while preserving reapplications and revert-of-revert effects", () => {
+  const original = {
+    sha: "1111111111111111111111111111111111111111",
+    short_sha: "11111111",
+    subject: "feat(plugin): add session checkpoint recovery",
+    body: "",
+  };
+  const revert = {
+    sha: "2222222222222222222222222222222222222222",
+    short_sha: "22222222",
+    subject: 'Revert "feat(plugin): add session checkpoint recovery"',
+    body: `This reverts commit ${original.sha}.`,
+  };
+  const reapply = {
+    sha: "3333333333333333333333333333333333333333",
+    short_sha: "33333333",
+    subject: "feat(plugin): restore session checkpoint recovery safely",
+    body: "",
+  };
+  const revertOfRevert = {
+    sha: "4444444444444444444444444444444444444444",
+    short_sha: "44444444",
+    subject: 'Revert "Revert session checkpoint recovery"',
+    body: `This reverts commit ${revert.sha}.`,
+  };
+
+  assert.deepEqual(filterNetEffectiveCommits([revert, original]), []);
+  assert.deepEqual(filterNetEffectiveCommits([reapply, revert, original]), [reapply]);
+  assert.deepEqual(filterNetEffectiveCommits([revertOfRevert, revert, original]), [original]);
+});
+
+test("uses subject fallback for in-range reverts but keeps rollbacks of older releases", () => {
+  const original = {
+    sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    short_sha: "aaaaaaaa",
+    subject: "fix(plugin): retain host input during recall",
+    body: "",
+  };
+  const subjectOnlyRevert = {
+    sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    short_sha: "bbbbbbbb",
+    subject: 'Revert "fix(plugin): retain host input during recall"',
+    body: "",
+  };
+  const priorReleaseRollback = {
+    sha: "cccccccccccccccccccccccccccccccccccccccc",
+    short_sha: "cccccccc",
+    subject: 'Revert "feat(plugin): legacy behavior from an older release"',
+    body: "This reverts commit dddddddddddddddddddddddddddddddddddddddd.",
+  };
+
+  assert.deepEqual(filterNetEffectiveCommits([subjectOnlyRevert, original]), []);
+  assert.deepEqual(filterNetEffectiveCommits([priorReleaseRollback]), [priorReleaseRollback]);
+  assert.deepEqual(categoryHintsForCommits([priorReleaseRollback])[0].category, "Fixed");
+});
+
+test("aggregates the v2.0.18 high-commit release into evidence-complete user topics", () => {
+  const commits = [
+    ["602f60ff", "fix(plugin): make free-form config paths explicit"],
+    ["e1530908", "fix(plugin): scope secret environment fallbacks"],
+    ["c6aaf9d3", "fix(plugin): use OS home for bridge PID fallback"],
+    ["060859d0", "fix(plugin): run idle skill archival in background"],
+    ["117b2a2d", "fix(plugin): recover gateway after installer failures"],
+    ["fa4bb36b", "fix(hermes-adapter): pass ensure_ascii=False in handle_tool_call json.dumps (#2255)"],
+    ["763ca1fc", "fix(skill): auto-generate crystallizer summary/steps instead of rejecting"],
+    ["2b726985", "fix(plugin): default headers {} on l3Llm/skillEvolver slots; maxTokens floor 100"],
+    ["5fd49171", "fix(core): bound startup recovery wait in shutdown to 15s"],
+    ["10786401", "fix(plugin): wire l3Llm/skillEvolver maxTokens+headers; raise dedicated-slot defaults to 4096"],
+    ["d59fe83a", "fix(plugin): add l3Llm.maxTokens default (shares SkillEvolverSchema)"],
+    ["70646de3", "fix(plugin): declare llm.maxTokens and llm.headers as first-class config keys"],
+    ["1f28c8c5", "fix(config): apply OCR review to secret env resolver"],
+    ["d38dfacb", "fix(config): resolve masked apiKey from env on load"],
+    ["10cda282", "perf(plugin): batch idle skill archival"],
+    ["0dad4af3", "fix(plugin): archive idle skills atomically"],
+    ["02aa0d8b", "refactor(plugin): clarify Hermes regex variants"],
+    ["d985d076", "refactor(plugin): avoid JS regex captures"],
+    ["211dd165", "fix(plugin): harden Hermes pgrep pattern"],
+    ["0ff0a72d", "fix(plugin): bound idle archive batches"],
+    ["c5c0d0cd", "fix(plugin): address idle archive review"],
+    ["411406dd", "fix(plugin): archive idle low-eta skills"],
+    ["213665dd", "fix(memos-local-plugin): use POSIX-ERE-compatible pgrep pattern for hermes chat detection"],
+    ["d76c78aa", "fix(plugin): resolve auxiliary reasoning capabilities"],
+    ["b90b5c91", "fix(plugin): harden newest-trace index rollout"],
+    ["f0f35c77", "fix(storage): add idx_traces_ts to unblock event loop on newest-first trace reads (#2284)"],
+    ["068a701a", "fix(plugin): reconcile stale Hermes bridge status"],
+    ["0d9503a1", "Fix #2255: memos_search returns Chinese text as unicode escapes (#2256)"],
+    ["7b35fcd8", "fix(plugin): harden crystallizer draft recovery"],
+  ].map(([short_sha, subject]) => ({
+    short_sha,
+    sha: short_sha.padEnd(40, "0"),
+    subject,
+  }));
+
+  const topics = releaseTopicsForCommits(commits);
+  assert.ok(topics.length > 1);
+  assert.ok(topics.length <= 15);
+  assert.equal(releaseTopicLimitForRequiredCount(commits.length), 15);
+  assert.equal(
+    topics.flatMap((topic) => topic.source_refs).includes("#10786401"),
+    false,
+    "a numeric hexadecimal SHA must not be rewritten as a PR number",
+  );
+  assert.ok(topics.flatMap((topic) => topic.source_refs).includes("10786401"));
+
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: topics.map((topic, index) => ({
+        category: topic.category,
+        text_cn: `**主题 ${index + 1}**：汇总同一用户影响下的本地插件改进。`,
+        text_en: `**Topic ${index + 1}**: Groups related local-plugin changes by user impact.`,
+        source_refs: [topic.source_refs[0]],
+      })),
+      coverage: {},
+      warnings: [],
+    },
+    {
+      commits,
+      release_note_guidance: { release_topics: topics },
+    },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.equal(processed.needs_review, false);
+  assert.equal(processed.coverage.required_count, topics.length);
+  assert.equal(processed.coverage.missing_required_count, 0);
+  assert.ok(processed.release_items.length > 0);
+  assert.ok(
+    processed.release_items.length <= topics.length,
+    "topics with identical user impact may share one release-note item",
+  );
+  assert.deepEqual(
+    new Set(processed.coverage.covered_refs),
+    new Set(topics.flatMap((topic) => topic.source_refs)),
+  );
+
+  const omittedTopicRefs = new Set(topics[0].source_refs);
+  const missingTopic = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: processed.release_items.map((item) => ({
+        ...item,
+        source_refs: item.source_refs.filter((ref) => !omittedTopicRefs.has(ref)),
+      })),
+      coverage: {},
+      warnings: [],
+    },
+    {
+      commits,
+      release_note_guidance: { release_topics: topics },
+    },
+  );
+  assert.equal(missingTopic.ok, false);
+  assert.equal(missingTopic.needs_review, true);
+  assert.equal(missingTopic.coverage.missing_required_count, 1);
+});
+
+test("compacts future topic growth below the hard item limit without losing evidence", () => {
+  const topics = Array.from({ length: 40 }, (_, index) => ({
+    key: `future-topic-${index}`,
+    category: ["Added", "Improved", "Fixed"][index % 3],
+    title_hint: `Future topic ${index}`,
+    reason: "future release topic",
+    source_refs: [`${(0xabc0000 + index).toString(16)}`],
+    subjects: [`future local-plugin change ${index}`],
+  }));
+
+  const compacted = compactReleaseTopics(topics);
+  assert.equal(releaseTopicLimitForRequiredCount(2), 12);
+  assert.equal(releaseTopicLimitForRequiredCount(29), 15);
+  assert.equal(releaseTopicLimitForRequiredCount(40), 18);
+  assert.equal(compacted.length, 18);
+  assert.equal(new Set(compacted.map((topic) => topic.key)).size, compacted.length);
+  assert.deepEqual(
+    new Set(compacted.flatMap((topic) => topic.source_refs)),
+    new Set(topics.flatMap((topic) => topic.source_refs)),
+  );
+  assert.deepEqual(
+    new Set(compacted.flatMap((topic) => topic.subjects)),
+    new Set(topics.flatMap((topic) => topic.subjects)),
+  );
+  assert.ok(compacted.every((topic) => ["Added", "Improved", "Fixed"].includes(topic.category)));
 });
 
 test("redacts full diff and prompt guidance from inspection evidence", () => {

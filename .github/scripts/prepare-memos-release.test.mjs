@@ -26,6 +26,7 @@ import {
   localPluginTagForVersion,
   npmVersionLookupResult,
   prependRepositoryReleaseNotes,
+  releaseItemLimitForRequiredCount,
   requestDocAgentDraft,
   repositoryReleaseNotesPath,
   resolveRef,
@@ -1364,6 +1365,44 @@ test("rejects plugin docs drafts that are too fragmented for the changelog page"
   const result = validateDraft({ ...validDraft, release_items: noisyItems }, evidence);
   assert.equal(result.ok, false);
   assert.ok(result.issues.some((issue) => issue.kind === "too_many_release_items"));
+});
+
+test("allows a larger evidence-complete draft for a high-commit local-plugin release", () => {
+  const required = Array.from({ length: 29 }, (_item, index) => {
+    const shortSha = (0xabc0000 + index).toString(16);
+    return {
+      sha: shortSha.padEnd(40, "0"),
+      short_sha: shortSha,
+      subject: `fix(plugin): user-visible reliability change ${index + 1}`,
+      accepted_refs: [shortSha],
+    };
+  });
+  const dynamicEvidence = {
+    ...evidence,
+    commits: required,
+    important_commits: required,
+    required_source_refs: required,
+    pull_requests: [],
+  };
+  const releaseItems = Array.from({ length: 15 }, (_item, index) => ({
+    category: "Improved",
+    text_cn: `**本地插件可靠性 ${index + 1}**：汇总第 ${index + 1} 类用户场景下的运行改进。`,
+    text_en: `**Local-plugin reliability ${index + 1}**: Groups runtime improvements for user scenario ${index + 1}.`,
+    source_refs: required
+      .filter((_commit, commitIndex) => commitIndex % 15 === index)
+      .map((commit) => commit.short_sha),
+  }));
+
+  assert.equal(releaseItemLimitForRequiredCount(2), 12);
+  assert.equal(releaseItemLimitForRequiredCount(29), 15);
+  assert.equal(releaseItemLimitForRequiredCount(40), 18);
+  const result = validateDraft(
+    { ...validDraft, release_items: releaseItems },
+    dynamicEvidence,
+  );
+  assert.equal(result.ok, true, JSON.stringify(result.issues));
+  assert.equal(result.coverage.missing_required_count, 0);
+  assert.equal(result.issues.some((issue) => issue.kind === "too_many_release_items"), false);
 });
 
 test("rejects plugin docs bullets that are too long to render well", () => {

@@ -28,7 +28,8 @@ export const RELEASE_TO_DOC_CATEGORY = {
 };
 export const MAX_REPAIR_ATTEMPTS = 3;
 export const MAX_DRAFT_ATTEMPTS = MAX_REPAIR_ATTEMPTS + 1;
-const MAX_RELEASE_ITEMS = 12;
+const MIN_RELEASE_ITEMS = 12;
+const MAX_RELEASE_ITEMS = 18;
 const MAX_TEXT_CN_CHARS = 180;
 const MAX_TEXT_EN_CHARS = 220;
 const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/;
@@ -82,6 +83,11 @@ function fail(message) {
 
 function warn(message) {
   console.error(`::warning::${message}`);
+}
+
+export function releaseItemLimitForRequiredCount(requiredCount) {
+  const count = Math.max(0, Number(requiredCount) || 0);
+  return Math.min(MAX_RELEASE_ITEMS, Math.max(MIN_RELEASE_ITEMS, Math.ceil(count / 2)));
 }
 
 function sh(args, options = {}) {
@@ -1181,6 +1187,7 @@ export function collectLocalPluginEvidence({
     release_note_quality_request: {
       candidate_count: 3,
       max_repair_attempts: MAX_REPAIR_ATTEMPTS,
+      max_items: releaseItemLimitForRequiredCount(importantCommits.length),
       methodology: RELEASE_NOTE_METHODS,
       require_source_refs: true,
       require_bilingual_output: true,
@@ -1584,10 +1591,13 @@ export function validateDraft(draft, evidence) {
   if (!draft.release_items.length && evidence.has_user_facing_product_changes) {
     issues.push({ kind: "empty_release_items", message: "release_items is required when product files changed" });
   }
-  if (draft.release_items.length > MAX_RELEASE_ITEMS) {
+  const maxReleaseItems = releaseItemLimitForRequiredCount(
+    evidence.required_source_refs?.length || evidence.important_commits?.length || 0,
+  );
+  if (draft.release_items.length > maxReleaseItems) {
     issues.push({
       kind: "too_many_release_items",
-      message: `release_items must be concise for the Plugin tab; got ${draft.release_items.length}, max ${MAX_RELEASE_ITEMS}`,
+      message: `release_items must be concise for the Plugin tab; got ${draft.release_items.length}, max ${maxReleaseItems}`,
     });
   }
 
