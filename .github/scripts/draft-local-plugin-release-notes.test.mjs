@@ -416,6 +416,92 @@ test("compacts future topic growth below the hard item limit without losing evid
   assert.ok(compacted.every((topic) => ["Added", "Improved", "Fixed"].includes(topic.category)));
 });
 
+test("repairs a numeric SHA that the draft formats as a PR reference", () => {
+  const commit = {
+    short_sha: "10786401",
+    sha: "10786401".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    title_hint: "Memory recovery",
+    reason: "user-visible recovery fix",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [
+        {
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: ["#10786401"],
+        },
+      ],
+      coverage: {},
+      warnings: [],
+    },
+    {
+      commits: [commit],
+      release_note_guidance: { release_topics: [topic] },
+    },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.equal(processed.needs_review, false);
+  assert.deepEqual(processed.release_items[0].source_refs, ["10786401"]);
+  assert.equal(processed.coverage.invalid_item_refs.length, 0);
+  assert.equal(processed.coverage.missing_required_count, 0);
+  assert.equal(processed.postprocess.normalized_ambiguous_numeric_sha_refs, 1);
+});
+
+test("preserves an evidence-backed numeric PR reference", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery (#10786401)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    title_hint: "Memory recovery",
+    reason: "user-visible recovery fix",
+    source_refs: [commit.short_sha, "#10786401"],
+    subjects: [commit.subject],
+  };
+
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [
+        {
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: ["#10786401"],
+        },
+      ],
+      coverage: {},
+      warnings: [],
+    },
+    {
+      commits: [commit],
+      release_note_guidance: { release_topics: [topic] },
+    },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.equal(processed.needs_review, false);
+  assert.ok(processed.release_items[0].source_refs.includes("#10786401"));
+  assert.equal(processed.postprocess.normalized_ambiguous_numeric_sha_refs, 0);
+});
+
 test("redacts full diff and prompt guidance from inspection evidence", () => {
   const inspection = evidenceForInspection({
     ...evidence,

@@ -795,6 +795,25 @@ function groupKeysForItem(item, refToGroup) {
   return keys;
 }
 
+function canonicalizeAmbiguousNumericShaRefs(items, index) {
+  let normalizedRefs = 0;
+  const canonicalizedItems = items.map((item) => {
+    const sourceRefs = [];
+    for (const ref of item.source_refs || []) {
+      const match = /^#(\d{7,40})$/.exec(ref);
+      const numericSha = match?.[1] || "";
+      const canonicalRef =
+        numericSha && !index.knownRefs.has(ref) && index.knownRefs.has(numericSha)
+          ? numericSha
+          : ref;
+      if (canonicalRef !== ref) normalizedRefs += 1;
+      if (!sourceRefs.includes(canonicalRef)) sourceRefs.push(canonicalRef);
+    }
+    return { ...item, source_refs: sourceRefs };
+  });
+  return { items: canonicalizedItems, normalizedRefs };
+}
+
 function bestHintCategoryForItem(item, index) {
   const categories = [];
   for (const key of groupKeysForItem(item, index.refToGroup)) {
@@ -1351,8 +1370,9 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   if (inputItems.length === 0) return draft;
 
   const index = buildSourceRefIndex(evidence);
+  const canonicalized = canonicalizeAmbiguousNumericShaRefs(inputItems, index);
   let reclassifiedItems = 0;
-  let items = inputItems.map((item) => {
+  let items = canonicalized.items.map((item) => {
     const hintedCategory = bestHintCategoryForItem(item, index);
     const category = hintedCategory || item.category;
     if (category !== item.category) reclassifiedItems += 1;
@@ -1377,6 +1397,7 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   const { releaseCategories, docsCategories } = categoriesFromReleaseItems(items);
   const postprocess = {
     applied: true,
+    normalized_ambiguous_numeric_sha_refs: canonicalized.normalizedRefs,
     removed_duplicate_source_refs: deduped.removedDuplicateRefs,
     dropped_empty_source_items: deduped.droppedItems,
     reclassified_items: reclassifiedItems,
@@ -1384,11 +1405,14 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   };
   const warnings = Array.isArray(draft.warnings) ? [...draft.warnings] : [];
   if (
+    postprocess.normalized_ambiguous_numeric_sha_refs > 0 ||
     postprocess.removed_duplicate_source_refs > 0 ||
     postprocess.dropped_empty_source_items > 0 ||
     postprocess.reclassified_items > 0
   ) {
-    warnings.push("release notes were postprocessed to dedupe source_refs and apply evidence category hints");
+    warnings.push(
+      "release notes were postprocessed to normalize evidence-backed numeric SHA refs, dedupe source_refs, and apply evidence category hints",
+    );
   }
   if (languageIssues.length > 0) {
     warnings.push("release notes language validation failed; manual review is required");
