@@ -291,6 +291,7 @@ test("uses subject fallback for in-range reverts but keeps rollbacks of older re
 });
 
 test("aggregates the v2.0.18 high-commit release into evidence-complete user topics", () => {
+  const numericShaCommit = "10786401";
   const commits = [
     ["602f60ff", "fix(plugin): make free-form config paths explicit"],
     ["e1530908", "fix(plugin): scope secret environment fallbacks"],
@@ -301,7 +302,7 @@ test("aggregates the v2.0.18 high-commit release into evidence-complete user top
     ["763ca1fc", "fix(skill): auto-generate crystallizer summary/steps instead of rejecting"],
     ["2b726985", "fix(plugin): default headers {} on l3Llm/skillEvolver slots; maxTokens floor 100"],
     ["5fd49171", "fix(core): bound startup recovery wait in shutdown to 15s"],
-    ["10786401", "fix(plugin): wire l3Llm/skillEvolver maxTokens+headers; raise dedicated-slot defaults to 4096"],
+    [numericShaCommit, "fix(plugin): wire l3Llm/skillEvolver maxTokens+headers; raise dedicated-slot defaults to 4096"],
     ["d59fe83a", "fix(plugin): add l3Llm.maxTokens default (shares SkillEvolverSchema)"],
     ["70646de3", "fix(plugin): declare llm.maxTokens and llm.headers as first-class config keys"],
     ["1f28c8c5", "fix(config): apply OCR review to secret env resolver"],
@@ -341,11 +342,11 @@ test("aggregates the v2.0.18 high-commit release into evidence-complete user top
     "the v2.0.18 test-only commits must not be required release-note evidence",
   );
   assert.equal(
-    topics.flatMap((topic) => topic.source_refs).includes("#10786401"),
+    topics.flatMap((topic) => topic.source_refs).includes(`#${numericShaCommit}`),
     false,
     "a numeric hexadecimal SHA must not be rewritten as a PR number",
   );
-  assert.ok(topics.flatMap((topic) => topic.source_refs).includes("10786401"));
+  assert.ok(topics.flatMap((topic) => topic.source_refs).includes(numericShaCommit));
 
   const processed = postprocessDraftFromEvidence(
     {
@@ -355,7 +356,9 @@ test("aggregates the v2.0.18 high-commit release into evidence-complete user top
         category: topic.category,
         text_cn: `**主题 ${index + 1}**：汇总同一用户影响下的本地插件改进。`,
         text_en: `**Topic ${index + 1}**: Groups related local-plugin changes by user impact.`,
-        source_refs: [topic.source_refs.includes("10786401") ? "#10786401" : topic.source_refs[0]],
+        source_refs: [
+          topic.source_refs.includes(numericShaCommit) ? `#${numericShaCommit}` : topic.source_refs[0],
+        ],
       })),
       coverage: {},
       warnings: [],
@@ -784,7 +787,6 @@ test("rejects source URLs from repositories outside MemTensor/MemOS", () => {
 });
 
 test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
-  const previousRepository = process.env.GITHUB_REPOSITORY;
   const commit = {
     short_sha: "abcdef12",
     sha: "abcdef12".padEnd(40, "0"),
@@ -796,8 +798,7 @@ test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
     source_refs: [commit.short_sha, "#1234"],
     subjects: [commit.subject],
   };
-  try {
-    process.env.GITHUB_REPOSITORY = "ForkOwner/ForkRepo";
+  withGitHubRepository("ForkOwner/ForkRepo", () => {
     const processed = postprocessDraftFromEvidence(
       {
         ok: true,
@@ -871,14 +872,10 @@ test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
     );
     assert.equal(rejectedPull.ok, false);
     assert.equal(rejectedPull.postprocess.dropped_invalid_items, 1);
-  } finally {
-    if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
-    else process.env.GITHUB_REPOSITORY = previousRepository;
-  }
+  });
 });
 
 test("fails closed for repository URLs when GITHUB_REPOSITORY is unavailable", () => {
-  const previousRepository = process.env.GITHUB_REPOSITORY;
   const commit = {
     short_sha: "abcdef12",
     sha: "abcdef12".padEnd(40, "0"),
@@ -890,8 +887,7 @@ test("fails closed for repository URLs when GITHUB_REPOSITORY is unavailable", (
     source_refs: [commit.short_sha],
     subjects: [commit.subject],
   };
-  try {
-    delete process.env.GITHUB_REPOSITORY;
+  withGitHubRepository(undefined, () => {
     const processed = postprocessDraftFromEvidence(
       {
         ok: true,
@@ -908,10 +904,7 @@ test("fails closed for repository URLs when GITHUB_REPOSITORY is unavailable", (
     );
     assert.equal(processed.ok, false);
     assert.equal(processed.postprocess.dropped_invalid_items, 1);
-  } finally {
-    if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
-    else process.env.GITHUB_REPOSITORY = previousRepository;
-  }
+  });
 });
 
 test("keeps ambiguous SHA prefixes fail-closed", () => {
@@ -1012,7 +1005,7 @@ test("initializes warnings when a valid draft omits the field", () => {
   assert.deepEqual(processed.warnings, []);
 });
 
-test("keeps ambiguous hexadecimal SHA prefixes fail-closed", () => {
+test("keeps bare and explicit ambiguous hexadecimal SHA prefixes fail-closed", () => {
   const commits = [
     { short_sha: "abcdef1a", sha: "abcdef1a".padEnd(40, "0"), subject: "fix(plugin): recovery A" },
     { short_sha: "abcdef1b", sha: "abcdef1b".padEnd(40, "0"), subject: "fix(plugin): recovery B" },
@@ -1023,27 +1016,29 @@ test("keeps ambiguous hexadecimal SHA prefixes fail-closed", () => {
     source_refs: [commit.short_sha],
     subjects: [commit.subject],
   }));
-  const processed = postprocessDraftFromEvidence(
-    {
-      ok: true,
-      needs_review: false,
-      release_items: [{
-        category: "Fixed",
-        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
-        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
-        source_refs: ["abcdef1"],
-      }],
-      coverage: {},
-    },
-    { commits, release_note_guidance: { release_topics: topics } },
-  );
+  for (const sourceRef of ["abcdef1", "sha:abcdef1"]) {
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [sourceRef],
+        }],
+        coverage: {},
+      },
+      { commits, release_note_guidance: { release_topics: topics } },
+    );
 
-  assert.equal(processed.ok, false);
-  assert.equal(processed.needs_review, true);
-  assert.equal(processed.coverage.invalid_item_refs.length, 1);
-  assert.equal(processed.coverage.missing_required_count, 2);
-  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, ["abcdef1"]);
-  assert.match(processed.warnings.join("\n"), /ambiguous SHA source_refs/);
+    assert.equal(processed.ok, false, sourceRef);
+    assert.equal(processed.needs_review, true, sourceRef);
+    assert.equal(processed.coverage.invalid_item_refs.length, 1, sourceRef);
+    assert.equal(processed.coverage.missing_required_count, 2, sourceRef);
+    assert.deepEqual(processed.postprocess.ambiguous_sha_refs, [sourceRef], sourceRef);
+    assert.match(processed.warnings.join("\n"), /ambiguous SHA source_refs/, sourceRef);
+  }
 });
 
 test("fails closed when every draft item is malformed", () => {
@@ -1814,7 +1809,9 @@ test("returns a fully validated draft without writing failure diagnostics", () =
   try {
     process.env.RELEASE_NOTES_FAILURE_DIR = directory;
     const validDraft = { ok: true, needs_review: false, release_items: [] };
-    assert.strictEqual(requireValidatedDraft({ evidence, draft: validDraft }), validDraft);
+    const result = requireValidatedDraft({ evidence, draft: validDraft });
+    assert.strictEqual(result, validDraft);
+    assert.deepEqual(result, { ok: true, needs_review: false, release_items: [] });
     assert.deepEqual(readdirSync(directory), []);
   } finally {
     if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
@@ -1855,7 +1852,11 @@ test("preserves the validation error when failure diagnostics cannot be written"
     process.env.RELEASE_NOTES_FAILURE_DIR = filePath;
     assert.throws(
       () => requireValidatedDraft({ evidence, draft: { ok: false, needs_review: true } }),
-      /Postprocessed release notes require review/,
+      (error) => {
+        assert.match(error.message, /Postprocessed release notes require review/);
+        assert.doesNotMatch(error.message, /ENOTDIR|ENOENT/);
+        return true;
+      },
     );
   } finally {
     if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;

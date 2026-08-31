@@ -1533,9 +1533,13 @@ export function postprocessDraftFromEvidence(draft, evidence) {
     finalItemCount: items.length,
   });
   const warnings = Array.isArray(draft.warnings) ? [...draft.warnings] : [];
+  if (postprocess.dropped_invalid_items > 0) {
+    warnings.push(
+      `${postprocess.dropped_invalid_items} release item(s) were dropped as structurally invalid`,
+    );
+  }
   if (
     postprocess.normalized_evidence_backed_source_refs > 0 ||
-    postprocess.dropped_invalid_items > 0 ||
     postprocess.removed_duplicate_source_refs > 0 ||
     postprocess.dropped_empty_source_items > 0 ||
     postprocess.reclassified_items > 0
