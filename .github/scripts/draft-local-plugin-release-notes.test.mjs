@@ -527,10 +527,7 @@ test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () 
     "commit: 1078640",
     "sha 10786401",
     "SHA: 10786401",
-    "PR #10786401",
-    "pull request: 10786401",
     "https://github.com/MemTensor/MemOS/commit/10786401abcdef0123456789abcdef0123456789",
-    "https://github.com/MemTensor/MemOS/pull/10786401",
   ];
 
   for (const sourceRef of variants) {
@@ -551,6 +548,75 @@ test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () 
     assert.equal(processed.ok, true, sourceRef);
     assert.deepEqual(processed.release_items[0].source_refs, ["10786401"], sourceRef);
   }
+});
+
+test("keeps explicit PR references strict instead of coercing them to numeric SHAs", () => {
+  const commit = {
+    short_sha: "10786401",
+    sha: "10786401abcdef0123456789abcdef0123456789",
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+
+  for (const sourceRef of [
+    "PR #10786401",
+    "pull request: 10786401",
+    "https://github.com/MemTensor/MemOS/pull/10786401",
+  ]) {
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [sourceRef],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(processed.ok, false, sourceRef);
+    assert.equal(processed.coverage.invalid_item_refs.length, 1, sourceRef);
+  }
+});
+
+test("accepts an explicit PR reference only when that PR is present in evidence", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery (#10786401)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha, "#10786401"],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["https://github.com/MemTensor/MemOS/pull/10786401"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.ok(processed.release_items[0].source_refs.includes("#10786401"));
+  assert.ok(processed.release_items[0].source_refs.includes("abcdef12"));
 });
 
 test("keeps ambiguous SHA prefixes fail-closed", () => {

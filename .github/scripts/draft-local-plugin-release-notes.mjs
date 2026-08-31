@@ -705,13 +705,13 @@ function normalizeSourceRef(value) {
   let match = text.match(/^#\s*(\d+)$/);
   if (match) return `#${match[1]}`;
   match = text.match(/\/(?:pull|pulls)\/(\d+)(?:[/?#]|$)/i);
-  if (match) return `#${match[1]}`;
+  if (match) return `pr:#${match[1]}`;
   match = text.match(/\/commit\/([a-fA-F0-9]{7,40})(?:[/?#]|$)/i);
-  if (match) return match[1].toLowerCase();
+  if (match) return `sha:${match[1].toLowerCase()}`;
   match = text.match(/^(?:pr|pull request)\s*:?[\s#]*(\d+)$/i);
-  if (match) return `#${match[1]}`;
+  if (match) return `pr:#${match[1]}`;
   match = text.match(/^(?:commit|sha)\s*:?[\s#]*([a-fA-F0-9]{7,40})$/i);
-  if (match) return match[1].toLowerCase();
+  if (match) return `sha:${match[1].toLowerCase()}`;
   if (/^[a-fA-F0-9]{7,40}$/.test(text)) return text.toLowerCase();
   return "";
 }
@@ -814,15 +814,23 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
     const sourceRefs = [];
     for (const ref of item.source_refs || []) {
       let canonicalRef = ref;
-      const exactEvidenceRef = index.knownRefs.has(ref);
-      const numericSha = !exactEvidenceRef ? /^#(\d{7,40})$/.exec(ref)?.[1] || "" : "";
-      const shaCandidate = numericSha || (/^[a-f0-9]{7,40}$/.test(ref) ? ref : "");
+      const explicitPrRef = /^pr:(#\d+)$/.exec(ref)?.[1] || "";
+      const explicitShaRef = /^sha:([a-f0-9]{7,40})$/.exec(ref)?.[1] || "";
+      if (explicitPrRef) canonicalRef = explicitPrRef;
+      if (explicitShaRef) canonicalRef = explicitShaRef;
+      const exactEvidenceRef = index.knownRefs.has(canonicalRef);
+      const numericSha = !explicitPrRef && !exactEvidenceRef
+        ? /^#(\d{7,40})$/.exec(canonicalRef)?.[1] || ""
+        : "";
+      const shaCandidate = explicitShaRef
+        || numericSha
+        || (/^[a-f0-9]{7,40}$/.test(canonicalRef) ? canonicalRef : "");
       if (shaCandidate) {
         const matches = index.shaEntries.filter((entry) => entry.fullRef.startsWith(shaCandidate));
         if (matches.length === 1) {
           const entry = matches[0];
           canonicalRef = [entry.shortRef, entry.fullRef].find((alias) => index.refToGroup.has(alias))
-            || (exactEvidenceRef ? ref : entry.shortRef);
+            || (exactEvidenceRef ? canonicalRef : entry.shortRef);
         }
       }
       if (canonicalRef !== ref) normalizedRefs += 1;
