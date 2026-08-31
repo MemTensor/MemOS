@@ -15,6 +15,7 @@ import {
   compareSemver,
   cleanLocalPluginVersion,
   cleanVersion,
+  compactFallbackItems,
   deriveReleaseVersionFromMergedPrHead,
   docsPreviewMarkdown,
   existingReleaseTagState,
@@ -1403,6 +1404,70 @@ test("allows a larger evidence-complete draft for a high-commit local-plugin rel
   assert.equal(result.ok, true, JSON.stringify(result.issues));
   assert.equal(result.coverage.missing_required_count, 0);
   assert.equal(result.issues.some((issue) => issue.kind === "too_many_release_items"), false);
+});
+
+test("offline preview dynamically compacts 29 commits without dropping required refs", async () => {
+  const required = Array.from({ length: 29 }, (_item, index) => {
+    const shortSha = (0xdef0000 + index).toString(16);
+    return {
+      sha: shortSha.padEnd(40, "0"),
+      short_sha: shortSha,
+      subject: `fix(plugin): repair user-visible runtime scenario ${index + 1}`,
+      accepted_refs: [shortSha],
+    };
+  });
+  const dynamicEvidence = {
+    ...evidence,
+    dry_run: true,
+    commits: required,
+    important_commits: required,
+    required_source_refs: required,
+    pull_requests: [],
+    release_aggregate_items: [],
+  };
+  const originalUrl = process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL;
+  const originalToken = process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN;
+  const originalOffline = process.env.ALLOW_OFFLINE_DOCS_PREVIEW;
+
+  try {
+    delete process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL;
+    delete process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN;
+    process.env.ALLOW_OFFLINE_DOCS_PREVIEW = "true";
+
+    const draft = await requestDocAgentDraft(dynamicEvidence);
+    const result = validateDraft(draft, dynamicEvidence);
+
+    assert.equal(draft.release_items.length, 15);
+    assert.equal(result.ok, true, JSON.stringify(result.issues));
+    assert.equal(result.coverage.required_count, 29);
+    assert.equal(result.coverage.covered_required_count, 29);
+    assert.equal(result.coverage.missing_required_count, 0);
+    assert.equal(new Set(draft.release_items.flatMap((item) => item.source_refs)).size, 29);
+  } finally {
+    if (originalUrl === undefined) delete process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL;
+    else process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_URL = originalUrl;
+    if (originalToken === undefined) delete process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN;
+    else process.env.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN = originalToken;
+    if (originalOffline === undefined) delete process.env.ALLOW_OFFLINE_DOCS_PREVIEW;
+    else process.env.ALLOW_OFFLINE_DOCS_PREVIEW = originalOffline;
+  }
+});
+
+test("offline compaction keeps categories separate and retains every source ref", () => {
+  const items = Array.from({ length: 20 }, (_item, index) => ({
+    category: index % 2 ? "Fixed" : "Improved",
+    text_cn: `**场景 ${index + 1}**：提升本地插件在用户场景 ${index + 1} 下的处理稳定性。`,
+    text_en: `**Scenario ${index + 1}**: Improves local-plugin reliability for user scenario ${index + 1}.`,
+    source_refs: [`${(0xfed0000 + index).toString(16)}`],
+  }));
+  const compacted = compactFallbackItems(items, 12);
+
+  assert.equal(compacted.length, 12);
+  assert.deepEqual(
+    new Set(compacted.flatMap((item) => item.source_refs)),
+    new Set(items.flatMap((item) => item.source_refs)),
+  );
+  assert.ok(compacted.every((item) => ["Improved", "Fixed"].includes(item.category)));
 });
 
 test("rejects plugin docs bullets that are too long to render well", () => {
