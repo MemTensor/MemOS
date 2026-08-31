@@ -37,6 +37,8 @@ const CURRENT_TAG_PREFIX = "memos-local-plugin-v";
 const TAG_PREFIXES = [CURRENT_TAG_PREFIX, "openclaw-local-plugin-v"];
 const RELEASE_NOTES_MARKER = "doc-agent-release-notes-json";
 const RELEASE_CATEGORY_ORDER = ["Added", "Improved", "Fixed"];
+const MIN_RELEASE_TOPICS = 12;
+const MAX_RELEASE_TOPICS = 18;
 const MAX_DRAFT_REPAIR_ATTEMPTS = 3;
 const RELEASE_TO_DOC_CATEGORY = {
   Added: "New Features",
@@ -51,6 +53,11 @@ function fail(message) {
 
 function warn(message) {
   console.error(`::warning::${message}`);
+}
+
+export function releaseTopicLimitForRequiredCount(requiredCount) {
+  const count = Math.max(0, Number(requiredCount) || 0);
+  return Math.min(MAX_RELEASE_TOPICS, Math.max(MIN_RELEASE_TOPICS, Math.ceil(count / 2)));
 }
 
 function sh(args, options = {}) {
@@ -203,22 +210,90 @@ export function findPreviousTag(targetVersion, currentTag, options = {}) {
   return selectPreviousTag(listProductTags(), targetVersion, currentTag, options);
 }
 
+function commitIdentity(commit) {
+  return String(commit?.sha || commit?.short_sha || "").toLowerCase();
+}
+
+function revertTargetSha(commit) {
+  return `${commit?.subject || ""}\n${commit?.body || ""}`.match(
+    /This reverts commit ([0-9a-f]{7,40})\b/i,
+  )?.[1]?.toLowerCase() || "";
+}
+
+function revertedSubject(commit) {
+  return String(commit?.subject || "").match(/^Revert\s+"(.+)"(?:\s+\(#\d+\))?$/i)?.[1] || "";
+}
+
+function commitMatchesSha(commit, targetSha) {
+  const identity = commitIdentity(commit);
+  return Boolean(identity && targetSha && (identity.startsWith(targetSha) || targetSha.startsWith(identity)));
+}
+
+export function filterNetEffectiveCommits(commits) {
+  const chronological = [...commits].reverse();
+  const seen = [];
+  const active = new Map();
+  const effectRoot = new Map();
+  const resolvedReverts = new Set();
+
+  for (const commit of chronological) {
+    const identity = commitIdentity(commit);
+    if (!identity) continue;
+
+    const isRevert = /^revert\b/i.test(String(commit.subject || ""));
+    let target = null;
+    if (isRevert) {
+      const targetSha = revertTargetSha(commit);
+      if (targetSha) {
+        target = [...seen].reverse().find((candidate) => commitMatchesSha(candidate, targetSha)) || null;
+      } else {
+        const targetSubject = revertedSubject(commit).toLowerCase();
+        if (targetSubject) {
+          target =
+            [...seen]
+              .reverse()
+              .find((candidate) => String(candidate.subject || "").toLowerCase() === targetSubject) || null;
+        }
+      }
+    }
+
+    if (target) {
+      const targetIdentity = commitIdentity(target);
+      const root = effectRoot.get(targetIdentity) || targetIdentity;
+      active.set(root, !active.get(root));
+      effectRoot.set(identity, root);
+      resolvedReverts.add(identity);
+    } else {
+      active.set(identity, true);
+      effectRoot.set(identity, identity);
+    }
+    seen.push(commit);
+  }
+
+  return commits.filter((commit) => {
+    const identity = commitIdentity(commit);
+    return identity && !resolvedReverts.has(identity) && active.get(identity) === true;
+  });
+}
+
 function parseCommits(previousTag, currentRef) {
   const text = sh([
     "log",
-    "--format=%H%x09%h%x09%s",
+    "--format=%H%x1f%h%x1f%s%x1f%b%x1e",
     "--no-merges",
     `${previousTag}..${currentRef}`,
     "--",
     PRODUCT_PATH,
   ]);
-  return text
-    .split("\n")
+  const commits = text
+    .split("\x1e")
+    .map((record) => record.trim())
     .filter(Boolean)
-    .map((line) => {
-      const [sha = "", shortSha = "", subject = ""] = line.split("\t");
-      return { sha, short_sha: shortSha, subject };
+    .map((record) => {
+      const [sha = "", shortSha = "", subject = "", body = ""] = record.split("\x1f");
+      return { sha, short_sha: shortSha, subject, body };
     });
+  return filterNetEffectiveCommits(commits).map(({ body: _body, ...commit }) => commit);
 }
 
 function parseChangedFiles(previousTag, currentRef) {
@@ -271,10 +346,17 @@ function categoryHintForSubject(subject) {
   const lower = value.toLowerCase();
   if (
     lower.startsWith("release:") ||
+    /^(ci|chore|docs|test|style|build)(\([^)]+\))?:/i.test(value) ||
     /^fix(\([^)]+\))?:\s*ruff\b/i.test(value) ||
     /review feedback/i.test(value)
   ) {
     return null;
+  }
+  if (/^revert\b/i.test(value)) {
+    return {
+      category: "Fixed",
+      reason: "user-visible rollback of behavior introduced before this release range",
+    };
   }
   if (/^(feat|feature|add)(\([^)]+\))?:|^add\s+/i.test(value)) {
     return {
@@ -314,7 +396,10 @@ function categoryHintForSubject(subject) {
       reason: "specific bug fix",
     };
   }
-  return null;
+  return {
+    category: "Improved",
+    reason: "path-scoped local-plugin change requiring product-facing classification",
+  };
 }
 
 export function categoryHintsForCommits(commits) {
@@ -332,13 +417,151 @@ export function categoryHintsForCommits(commits) {
     .filter(Boolean);
 }
 
+const RELEASE_TOPIC_DEFINITIONS = [
+  {
+    key: "hermes-runtime",
+    category: "Fixed",
+    title_hint: "Hermes runtime and bridge reliability",
+    pattern: /hermes|bridge|pgrep|pid|utf-?8|ensure_ascii|world_model/i,
+  },
+  {
+    key: "idle-skill-archival",
+    category: "Improved",
+    title_hint: "Idle skill archival efficiency and safety",
+    pattern: /idle skill|skill archival|archive idle|idle archive/i,
+  },
+  {
+    key: "configuration-secrets",
+    category: "Fixed",
+    title_hint: "Configuration paths and secret fallback handling",
+    pattern: /config path|secret|environment fallback|env resolver|masked apiKey/i,
+  },
+  {
+    key: "llm-slots",
+    category: "Fixed",
+    title_hint: "LLM and Skill Evolver slot configuration",
+    pattern: /l3llm|l3 llm|skillEvolver|maxTokens|headers|dedicated-slot|llm\./i,
+  },
+  {
+    key: "startup-recovery",
+    category: "Fixed",
+    title_hint: "Startup, installer, recovery, and shutdown reliability",
+    pattern: /startup|installer|gateway after|recovery wait|shutdown/i,
+  },
+  {
+    key: "crystallizer",
+    category: "Fixed",
+    title_hint: "Crystallizer draft and summary recovery",
+    pattern: /crystallizer|crystallize|summary\/steps/i,
+  },
+  {
+    key: "trace-storage",
+    category: "Improved",
+    title_hint: "Trace indexing and storage migration reliability",
+    pattern: /trace index|newest-trace|idx_traces|storage|migrator/i,
+  },
+  {
+    key: "reasoning-capabilities",
+    category: "Fixed",
+    title_hint: "Auxiliary reasoning capability reliability",
+    pattern: /auxiliary reasoning|reasoning capabilities/i,
+  },
+  {
+    key: "release-automation",
+    category: "Improved",
+    title_hint: "Local plugin release automation",
+    pattern: /paired local plugin releases|release automation|package inspection/i,
+  },
+];
+
+function releaseTopicDefinition(hint) {
+  const subject = String(hint?.subject || "");
+  const matched = RELEASE_TOPIC_DEFINITIONS.find((definition) => definition.pattern.test(subject));
+  if (matched) return matched;
+  const category = normalizeReleaseCategory(hint?.category) || "Fixed";
+  return {
+    key: `other-${category.toLowerCase()}`,
+    category,
+    title_hint: `${category} local plugin behavior`,
+  };
+}
+
+export function releaseTopicsForCommits(commits) {
+  const topics = new Map();
+  for (const hint of categoryHintsForCommits(commits)) {
+    const definition = releaseTopicDefinition(hint);
+    const existing = topics.get(definition.key) || {
+      key: definition.key,
+      category: definition.category,
+      title_hint: definition.title_hint,
+      reason: "aggregate related user-visible changes into one evidence-backed release item",
+      source_refs: [],
+      subjects: [],
+    };
+    for (const ref of hint.source_refs || []) {
+      if (!existing.source_refs.includes(ref)) existing.source_refs.push(ref);
+    }
+    if (hint.subject && !existing.subjects.includes(hint.subject)) {
+      existing.subjects.push(hint.subject);
+    }
+    topics.set(definition.key, existing);
+  }
+  return compactReleaseTopics(
+    [...topics.values()],
+    releaseTopicLimitForRequiredCount(commits.length),
+  );
+}
+
+export function compactReleaseTopics(
+  rawTopics,
+  maxTopics = releaseTopicLimitForRequiredCount(rawTopics.length),
+) {
+  const topics = rawTopics.map((topic) => ({
+    ...topic,
+    source_refs: [...new Set(topic.source_refs || [])],
+    subjects: [...new Set(topic.subjects || [])],
+  }));
+  let consolidationIndex = 0;
+
+  while (topics.length > maxTopics) {
+    let bestPair = null;
+    for (let left = 0; left < topics.length; left += 1) {
+      for (let right = left + 1; right < topics.length; right += 1) {
+        if (topics[left].category !== topics[right].category) continue;
+        const score = (topics[left].source_refs.length + topics[right].source_refs.length) * 1000 + left + right;
+        if (!bestPair || score < bestPair.score) bestPair = { left, right, score };
+      }
+    }
+    if (!bestPair) {
+      fail(`Cannot compact ${topics.length} local-plugin release topics without mixing categories.`);
+    }
+
+    const first = topics[bestPair.left];
+    const second = topics[bestPair.right];
+    topics.splice(bestPair.right, 1);
+    topics.splice(bestPair.left, 1, {
+      key: `consolidated-${first.category.toLowerCase()}-${consolidationIndex}`,
+      category: first.category,
+      title_hint: `${first.category} local plugin behavior`,
+      reason: "consolidate related user-visible changes while preserving complete evidence coverage",
+      source_refs: [...new Set([...first.source_refs, ...second.source_refs])],
+      subjects: [...new Set([...first.subjects, ...second.subjects])],
+    });
+    consolidationIndex += 1;
+  }
+  return topics;
+}
+
 export function releaseNoteGuidanceForCommits(commits) {
   return {
     ...RELEASE_NOTE_GUIDANCE,
     source_ref_category_hints: categoryHintsForCommits(commits),
+    release_topics: releaseTopicsForCommits(commits),
     source_ref_hint_policy:
       "Treat source_ref_category_hints as advisory classification hints grounded in evidence. " +
-      "Use them to avoid moving performance/compatibility work into Fixed merely because the commit subject starts with fix.",
+      "Use them to avoid moving performance/compatibility work into Fixed merely because the commit subject starts with fix. " +
+      "Treat release_topics as the required coverage units: write at most one concise release item per topic, " +
+      "and preserve every topic source_ref on that item.",
   };
 }
 
@@ -362,9 +585,10 @@ export function collectEvidence({ targetVersion, currentTag, previousTag, curren
     release_note_quality_request: {
       candidate_count: 3,
       max_repair_attempts: MAX_DRAFT_REPAIR_ATTEMPTS,
+      max_items: releaseTopicLimitForRequiredCount(commits.length),
       selection_policy: [
         "Preserve complete evidence coverage and valid source_refs before optimizing readability.",
-        "Prefer 6-10 concise product-facing bullets and never exceed 12 bullets.",
+        "Prefer 6-10 concise product-facing bullets when possible; for larger releases do not exceed max_items.",
       ],
     },
     repo,
@@ -402,6 +626,7 @@ export function evidenceForInspection(evidence) {
       source_ref_category_hints: Array.isArray(guidance.source_ref_category_hints)
         ? guidance.source_ref_category_hints
         : [],
+      release_topics: Array.isArray(guidance.release_topics) ? guidance.release_topics : [],
     },
     redactions: {
       important_diff: "omitted from public workflow artifacts; sent only to the configured draft service",
@@ -477,7 +702,6 @@ function normalizeReleaseCategory(value) {
 
 function normalizeSourceRef(value) {
   const text = String(value || "").trim().replace(/^[`[(\s]+|[`)\],.;\s]+$/g, "");
-  if (/^\d{2,}$/.test(text)) return `#${text}`;
   if (/^#\d+$/.test(text)) return text;
   if (/^[a-fA-F0-9]{7,40}$/.test(text)) return text.toLowerCase();
   return "";
@@ -530,20 +754,27 @@ function buildSourceRefIndex(evidence) {
     for (const ref of refsForCommit(commit)) knownRefs.add(ref);
   }
 
-  for (const hint of evidence?.release_note_guidance?.source_ref_category_hints || []) {
+  const topics = evidence?.release_note_guidance?.release_topics || [];
+  const sourceGroups = topics.length > 0
+    ? topics
+    : evidence?.release_note_guidance?.source_ref_category_hints || [];
+  for (const [position, hint] of sourceGroups.entries()) {
     const refs = normalizeSourceRefs(hint.source_refs);
     const category = normalizeReleaseCategory(hint.category);
     if (refs.length === 0 || !category) continue;
-    const groupKey = refs[0];
+    const groupKey = topics.length > 0
+      ? `topic:${String(hint.key || position)}`
+      : refs[0];
     for (const ref of refs) {
-      knownRefs.add(ref);
       refToGroup.set(ref, groupKey);
     }
     groups.set(groupKey, {
       key: groupKey,
       category,
       refs,
-      subject: String(hint.subject || ""),
+      subjects: Array.isArray(hint.subjects)
+        ? hint.subjects.map((value) => String(value || "")).filter(Boolean)
+        : [String(hint.subject || "")].filter(Boolean),
       reason: String(hint.reason || ""),
     });
   }
@@ -576,7 +807,7 @@ function bestHintCategoryForItem(item, index) {
 
 function subjectsForItem(item, index) {
   return groupKeysForItem(item, index.refToGroup)
-    .map((key) => index.groups.get(key)?.subject || "")
+    .flatMap((key) => index.groups.get(key)?.subjects || [])
     .filter(Boolean)
     .join(" ");
 }
@@ -720,13 +951,20 @@ function dedupeSourceRefsByBestCategory(items, index) {
   const filtered = [];
   for (const item of items) {
     const refs = [];
+    const ownedGroups = new Set();
     for (const ref of item.source_refs) {
       const groupKey = groupKeyForRef(ref, index.refToGroup);
       const owner = ownerByGroup.get(groupKey);
       if (!owner || owner === item) {
         if (!refs.includes(ref)) refs.push(ref);
+        if (owner === item && index.groups.has(groupKey)) ownedGroups.add(groupKey);
       } else {
         removedDuplicateRefs += 1;
+      }
+    }
+    for (const groupKey of ownedGroups) {
+      for (const ref of index.groups.get(groupKey)?.refs || []) {
+        if (!refs.includes(ref)) refs.push(ref);
       }
     }
     if (refs.length === 0) {
@@ -792,7 +1030,7 @@ function coverageFromReleaseItems(evidence, draft, items, index) {
     .filter((group) => !coveredGroups.has(group.key))
     .map((group) => ({
       short_sha: group.refs.find((ref) => /^[a-f0-9]{7,40}$/.test(ref)) || "",
-      subject: group.subject,
+      subject: (group.subjects || []).join("; "),
       refs: group.refs,
       reason: group.reason || "important local-plugin release source",
     }));
@@ -817,7 +1055,7 @@ function coverageFromReleaseItems(evidence, draft, items, index) {
     covered_refs: coveredRefs.sort(),
     policy:
       previousCoverage.policy ||
-      "important feat/fix/perf/refactor commits must be referenced by at least one bullet source_ref",
+      "every deterministic local-plugin release topic must be referenced by one evidence-backed bullet; all topic source_refs are preserved",
   };
 }
 
