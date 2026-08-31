@@ -218,6 +218,15 @@ export interface ScanRow {
 export const DEFAULT_SCAN_HARD_CAP = 5_000;
 
 /**
+ * `orderBy` is interpolated into SQL, so it must be a repo-internal constant.
+ * This allowlist (identifier[, identifier]… each optionally ASC/DESC) rejects
+ * anything else at the boundary, so a future caller passing request-derived
+ * input fails loudly instead of opening SQL injection.
+ */
+const SAFE_ORDER_BY_RE =
+  /^[a-z_][a-z0-9_]*(\s+(asc|desc))?(,\s*[a-z_][a-z0-9_]*(\s+(asc|desc))?)*$/i;
+
+/**
  * Stream rows from `table`, decode vectors, and run top-K cosine against
  * `query`. `selectExtra` lets callers bring along columns that will surface in
  * `VectorHit.meta`.
@@ -245,6 +254,9 @@ export function scanAndTopK<TMeta = undefined>(
   if (k <= 0 || query.length === 0) return [];
 
   const { vecColumn, norm2Column, where, params, hardCap, orderBy } = opts;
+  if (orderBy !== undefined && !SAFE_ORDER_BY_RE.test(orderBy)) {
+    throw new Error(`scanAndTopK: unsafe orderBy value: ${JSON.stringify(orderBy)}`);
+  }
   const cap = hardCap ?? DEFAULT_SCAN_HARD_CAP;
   const cols = ["id", vecColumn, ...(norm2Column ? [norm2Column] : []), ...selectExtra];
   const sql = [

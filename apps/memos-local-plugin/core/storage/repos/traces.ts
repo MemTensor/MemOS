@@ -552,7 +552,7 @@ export function makeTracesRepo(db: StorageDb) {
           where: whereParts.join(" AND "),
           params,
           hardCap: opts.hardCap,
-          orderBy: "ts DESC, id DESC",
+          orderBy: "ts DESC, id DESC", // repo-internal constant; validated in scanAndTopK
         },
       );
     },

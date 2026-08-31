@@ -280,4 +280,27 @@ describe("scanAndTopK — streaming rewrite (#2076)", () => {
     // assert about the winner; the point of the option is that it no
     // longer matters.
   });
+
+  it("rejects an orderBy that is not a repo-internal column list (SQL-injection boundary)", () => {
+    const db = openTinyVecDb();
+    try {
+      const inject = "ts DESC; DROP TABLE bench --";
+      expect(() =>
+        scanAndTopK(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          db as any,
+          "bench",
+          [],
+          vec([1, 0]),
+          1,
+          { vecColumn: "vec", where: "vec IS NOT NULL", orderBy: inject },
+        ),
+      ).toThrow(/unsafe orderBy/);
+      // The table is untouched — the guard fired before any SQL ran.
+      const n = db.prepare("SELECT COUNT(*) AS n FROM bench").get() as { n: number };
+      expect(n.n).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
 });
