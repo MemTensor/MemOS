@@ -199,6 +199,14 @@ test("adds source-ref category hints from commit subjects", () => {
       short_sha: "ab12cd34",
       subject: "adjust session checkpoint ownership for local plugin hosts",
     },
+    {
+      short_sha: "31976918",
+      subject: "test(plugin): format Hermes UTF-8 regression",
+    },
+    {
+      short_sha: "492bc844",
+      subject: "test(hermes-adapter): add world_model coverage and drop fragile \\u check",
+    },
   ]);
   assert.deepEqual(
     hints.map((hint) => hint.category),
@@ -206,6 +214,11 @@ test("adds source-ref category hints from commit subjects", () => {
   );
   assert.deepEqual(hints[0].source_refs, ["59c14746", "#2076", "#2077"]);
   assert.deepEqual(hints[2].source_refs, ["de03ab29", "#2063", "#2074"]);
+  assert.equal(
+    hints.some((hint) => hint.source_refs.includes("31976918") || hint.source_refs.includes("492bc844")),
+    false,
+    "test-only Hermes commits must not become required user-facing release topics",
+  );
 });
 
 test("removes net-zero reverts while preserving reapplications and revert-of-revert effects", () => {
@@ -295,6 +308,8 @@ test("aggregates the v2.0.18 high-commit release into evidence-complete user top
     ["068a701a", "fix(plugin): reconcile stale Hermes bridge status"],
     ["0d9503a1", "Fix #2255: memos_search returns Chinese text as unicode escapes (#2256)"],
     ["7b35fcd8", "fix(plugin): harden crystallizer draft recovery"],
+    ["31976918", "test(plugin): format Hermes UTF-8 regression"],
+    ["492bc844", "test(hermes-adapter): add world_model coverage and drop fragile \\u check"],
   ].map(([short_sha, subject]) => ({
     short_sha,
     sha: short_sha.padEnd(40, "0"),
@@ -304,7 +319,14 @@ test("aggregates the v2.0.18 high-commit release into evidence-complete user top
   const topics = releaseTopicsForCommits(commits);
   assert.ok(topics.length > 1);
   assert.ok(topics.length <= 15);
-  assert.equal(releaseTopicLimitForRequiredCount(commits.length), 15);
+  assert.equal(releaseTopicLimitForRequiredCount(29), 15);
+  assert.equal(
+    topics.some((topic) =>
+      topic.source_refs.some((ref) => ref === "31976918" || ref === "492bc844"),
+    ),
+    false,
+    "the v2.0.18 test-only commits must not be required release-note evidence",
+  );
   assert.equal(
     topics.flatMap((topic) => topic.source_refs).includes("#10786401"),
     false,
