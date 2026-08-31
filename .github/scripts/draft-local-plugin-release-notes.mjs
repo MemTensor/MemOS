@@ -700,7 +700,7 @@ function normalizeReleaseCategory(value) {
   return RELEASE_CATEGORY_ORDER.includes(text) ? text : "";
 }
 
-function sourceRefFromRepositoryUrl(text) {
+function sourceRefFromRepositoryUrl(text, repository) {
   let parsed;
   try {
     parsed = new URL(text);
@@ -708,9 +708,9 @@ function sourceRefFromRepositoryUrl(text) {
     return "";
   }
   if (!/^https?:$/.test(parsed.protocol) || parsed.hostname.toLowerCase() !== "github.com") return "";
-  const repository = String(process.env.GITHUB_REPOSITORY || "").trim();
-  if (!repository) return "";
-  const expectedRepo = repository
+  const trustedRepository = String(repository || "").trim();
+  if (!trustedRepository) return "";
+  const expectedRepo = trustedRepository
     .split("/")
     .filter(Boolean)
     .map((part) => part.toLowerCase());
@@ -735,11 +735,11 @@ function normalizeShaRef(value) {
   return /^[a-f0-9]{7,40}$/.test(text) ? text : "";
 }
 
-function normalizeSourceRef(value) {
+function normalizeSourceRef(value, repository = "") {
   const text = String(value || "").trim().replace(/^[`[(\s]+|[`)\],.;\s]+$/g, "");
   let match = text.match(/^#\s*(\d+)$/);
   if (match) return `#${match[1]}`;
-  const urlRef = sourceRefFromRepositoryUrl(text);
+  const urlRef = sourceRefFromRepositoryUrl(text, repository);
   if (urlRef) return urlRef;
   match = text.match(/^(?:pr|pull request)\s*:?[\s#]*(\d+)$/i);
   if (match) return `pr:#${match[1]}`;
@@ -750,11 +750,11 @@ function normalizeSourceRef(value) {
   return "";
 }
 
-function normalizeSourceRefs(raw) {
+function normalizeSourceRefs(raw, repository = "") {
   const values = Array.isArray(raw) ? raw : String(raw || "").match(/#\d+|[a-fA-F0-9]{7,40}/g) || [];
   const refs = [];
   for (const value of values) {
-    const ref = normalizeSourceRef(value);
+    const ref = normalizeSourceRef(value, repository);
     if (ref && !refs.includes(ref)) refs.push(ref);
   }
   return refs;
@@ -773,12 +773,12 @@ function refsForCommit(commit) {
   return refs;
 }
 
-function normalizeReleaseItem(raw) {
+function normalizeReleaseItem(raw, repository = "") {
   if (!raw || typeof raw !== "object") return null;
   const category = normalizeReleaseCategory(raw.category);
   const textCn = String(raw.text_cn || "").trim().replace(/^-+\s*/, "");
   const textEn = String(raw.text_en || "").trim().replace(/^-+\s*/, "");
-  const sourceRefs = normalizeSourceRefs(raw.source_refs);
+  const sourceRefs = normalizeSourceRefs(raw.source_refs, repository);
   if (!category || !textCn || !textEn || sourceRefs.length === 0) return null;
   return {
     category,
@@ -788,16 +788,18 @@ function normalizeReleaseItem(raw) {
   };
 }
 
-function buildSourceRefIndex(evidence) {
+function buildSourceRefIndex(evidence, repository = "") {
   const refToGroup = new Map();
   const groups = new Map();
   const knownRefs = new Set();
-  const shaEntries = [];
+  const shaEntriesByFullRef = new Map();
 
   for (const commit of evidence?.commits || []) {
     const shortRef = normalizeShaRef(commit?.short_sha);
     const fullRef = normalizeShaRef(commit?.sha);
-    if (shortRef && fullRef) shaEntries.push({ shortRef, fullRef });
+    if (shortRef && fullRef && !shaEntriesByFullRef.has(fullRef)) {
+      shaEntriesByFullRef.set(fullRef, { shortRef, fullRef });
+    }
     for (const ref of refsForCommit(commit)) knownRefs.add(ref);
   }
 
@@ -806,7 +808,7 @@ function buildSourceRefIndex(evidence) {
     ? topics
     : evidence?.release_note_guidance?.source_ref_category_hints || [];
   for (const [position, hint] of sourceGroups.entries()) {
-    const refs = normalizeSourceRefs(hint.source_refs);
+    const refs = normalizeSourceRefs(hint.source_refs, repository);
     const category = normalizeReleaseCategory(hint.category);
     if (refs.length === 0 || !category) continue;
     const groupKey = topics.length > 0
@@ -826,7 +828,7 @@ function buildSourceRefIndex(evidence) {
     });
   }
 
-  return { refToGroup, groups, knownRefs, shaEntries };
+  return { refToGroup, groups, knownRefs, shaEntries: [...shaEntriesByFullRef.values()] };
 }
 
 function groupKeyForRef(ref, refToGroup) {
@@ -857,6 +859,8 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
       const exactEvidenceRef = index.knownRefs.has(canonicalRef);
       // The draft service can render an all-numeric short SHA as #digits. Repair that
       // ambiguous form only when it exactly equals an evidence SHA alias, never a prefix.
+      // A known #digits PR ref must stay a PR. Only an otherwise unknown numeric
+      // reference is eligible for the exact numeric-SHA recovery path.
       const numericSha = !explicitPrRef && !exactEvidenceRef
         ? /^#(\d{7,40})$/.exec(canonicalRef)?.[1] || ""
         : "";
@@ -872,15 +876,16 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
         // Zero or multiple matches intentionally remain unresolved and fail coverage validation.
         if (matches.length === 1) {
           const entry = matches[0];
-          canonicalRef = [entry.shortRef, entry.fullRef].find((alias) => index.refToGroup.has(alias))
-            || (exactEvidenceRef ? canonicalRef : entry.shortRef);
+          const groupedAlias = [entry.shortRef, entry.fullRef]
+            .find((alias) => index.refToGroup.has(alias));
+          canonicalRef = groupedAlias || (exactEvidenceRef ? canonicalRef : entry.shortRef);
         } else if (matches.length > 1) {
           ambiguousShaRefs.add(ref);
         } else {
           unresolvedShaRefs.add(ref);
         }
       }
-      if (canonicalRef !== ref) normalizedRefs += 1;
+      if (canonicalRef !== ref && index.knownRefs.has(canonicalRef)) normalizedRefs += 1;
       if (!sourceRefs.includes(canonicalRef)) sourceRefs.push(canonicalRef);
     }
     return { ...item, source_refs: sourceRefs };
@@ -1466,9 +1471,10 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
 }
 
 export function postprocessDraftFromEvidence(draft, evidence) {
+  const repository = String(process.env.GITHUB_REPOSITORY || "").trim();
   const rawItems = Array.isArray(draft?.release_items) ? draft.release_items : [];
-  const inputItems = rawItems.map(normalizeReleaseItem).filter(Boolean);
-  const index = buildSourceRefIndex(evidence);
+  const inputItems = rawItems.map((item) => normalizeReleaseItem(item, repository)).filter(Boolean);
+  const index = buildSourceRefIndex(evidence, repository);
   const droppedInvalidItems = rawItems.length - inputItems.length;
   if (inputItems.length === 0) {
     const coverage = coverageFromReleaseItems(evidence, draft || {}, [], index);

@@ -38,9 +38,17 @@ const evidence = {
   target_version: "v2.0.10",
 };
 
-// URL trust tests use the canonical repository outside Actions. Production reads
-// this variable lazily per call so individual tests can still remove or replace it.
-process.env.GITHUB_REPOSITORY ||= evidence.repo;
+function withGitHubRepository(repository, callback) {
+  const previousRepository = process.env.GITHUB_REPOSITORY;
+  try {
+    if (repository) process.env.GITHUB_REPOSITORY = repository;
+    else delete process.env.GITHUB_REPOSITORY;
+    return callback();
+  } finally {
+    if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
+    else process.env.GITHUB_REPOSITORY = previousRepository;
+  }
+}
 
 function response(status, body) {
   return {
@@ -347,7 +355,7 @@ test("aggregates the v2.0.18 high-commit release into evidence-complete user top
         category: topic.category,
         text_cn: `**主题 ${index + 1}**：汇总同一用户影响下的本地插件改进。`,
         text_en: `**Topic ${index + 1}**: Groups related local-plugin changes by user impact.`,
-        source_refs: [topic.source_refs[0]],
+        source_refs: [topic.source_refs.includes("10786401") ? "#10786401" : topic.source_refs[0]],
       })),
       coverage: {},
       warnings: [],
@@ -362,6 +370,7 @@ test("aggregates the v2.0.18 high-commit release into evidence-complete user top
   assert.equal(processed.needs_review, false);
   assert.equal(processed.coverage.required_count, topics.length);
   assert.equal(processed.coverage.missing_required_count, 0);
+  assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 1);
   assert.ok(processed.release_items.length > 0);
   assert.ok(
     processed.release_items.length <= topics.length,
@@ -590,6 +599,8 @@ test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () 
     );
     assert.equal(processed.ok, true, sourceRef);
     assert.deepEqual(processed.release_items[0].source_refs, ["10786401"], sourceRef);
+    assert.deepEqual(processed.postprocess.ambiguous_sha_refs, [], sourceRef);
+    assert.deepEqual(processed.postprocess.unresolved_sha_refs, [], sourceRef);
   }
 });
 
@@ -626,10 +637,10 @@ test("rejects a well-formed short SHA absent from collected evidence", () => {
   assert.match(processed.warnings.join("\n"), /did not resolve to collected evidence/);
 });
 
-test("keeps explicit PR references strict instead of coercing them to numeric SHAs", () => {
+test("does not count an unresolved wrapped SHA as evidence-backed normalization", () => {
   const commit = {
-    short_sha: "10786401",
-    sha: "10786401abcdef0123456789abcdef0123456789",
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
     subject: "fix(plugin): stabilize memory recovery",
   };
   const topic = {
@@ -638,29 +649,65 @@ test("keeps explicit PR references strict instead of coercing them to numeric SH
     source_refs: [commit.short_sha],
     subjects: [commit.subject],
   };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["sha:deadbeef"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
 
-  for (const sourceRef of [
-    "PR #10786401",
-    "pull request: 10786401",
-    "https://github.com/MemTensor/MemOS/pull/10786401",
-  ]) {
-    const processed = postprocessDraftFromEvidence(
-      {
-        ok: true,
-        needs_review: false,
-        release_items: [{
-          category: "Fixed",
-          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
-          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
-          source_refs: [sourceRef],
-        }],
-        coverage: {},
-      },
-      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
-    );
-    assert.equal(processed.ok, false, sourceRef);
-    assert.equal(processed.coverage.invalid_item_refs.length, 1, sourceRef);
-  }
+  assert.equal(processed.ok, false);
+  assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 0);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, ["sha:deadbeef"]);
+  assert.deepEqual(processed.coverage.invalid_item_refs.map((item) => item.ref), ["deadbeef"]);
+});
+
+test("keeps explicit PR references strict instead of coercing them to numeric SHAs", () => {
+  const commit = {
+    short_sha: "10786401",
+    sha: "10786401abcdef0123456789abcdef0123456789",
+    subject: "fix(plugin): stabilize memory recovery (#10786401)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+
+  withGitHubRepository(evidence.repo, () => {
+    for (const sourceRef of [
+      "PR #10786401",
+      "pull request: 10786401",
+      "https://github.com/MemTensor/MemOS/pull/10786401",
+    ]) {
+      const processed = postprocessDraftFromEvidence(
+        {
+          ok: true,
+          needs_review: false,
+          release_items: [{
+            category: "Fixed",
+            text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+            text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+            source_refs: [sourceRef],
+          }],
+          coverage: {},
+        },
+        { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+      );
+      assert.equal(processed.ok, false, sourceRef);
+      assert.equal(processed.coverage.missing_required_count, 1, sourceRef);
+      assert.equal(processed.coverage.invalid_item_refs.length, 0, sourceRef);
+    }
+  });
 });
 
 test("accepts an evidence PR URL and retains its linked commit alias", () => {
@@ -675,7 +722,7 @@ test("accepts an evidence PR URL and retains its linked commit alias", () => {
     source_refs: [commit.short_sha, "#10786401"],
     subjects: [commit.subject],
   };
-  const processed = postprocessDraftFromEvidence(
+  const processed = withGitHubRepository(evidence.repo, () => postprocessDraftFromEvidence(
     {
       ok: true,
       needs_review: false,
@@ -688,7 +735,7 @@ test("accepts an evidence PR URL and retains its linked commit alias", () => {
       coverage: {},
     },
     { commits: [commit], release_note_guidance: { release_topics: [topic] } },
-  );
+  ));
 
   assert.equal(processed.ok, true);
   // The URL is replaced, not retained alongside the canonical evidence aliases.
@@ -711,27 +758,29 @@ test("rejects source URLs from repositories outside MemTensor/MemOS", () => {
     subjects: [commit.subject],
   };
 
-  for (const sourceRef of [
-    `https://github.com/another/repository/commit/${commit.sha}`,
-    "https://github.com/another/repository/pull/1234",
-  ]) {
-    const processed = postprocessDraftFromEvidence(
-      {
-        ok: true,
-        needs_review: false,
-        release_items: [{
-          category: "Fixed",
-          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
-          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
-          source_refs: [sourceRef],
-        }],
-        coverage: {},
-      },
-      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
-    );
-    assert.equal(processed.ok, false, sourceRef);
-    assert.equal(processed.postprocess.dropped_invalid_items, 1, sourceRef);
-  }
+  withGitHubRepository(evidence.repo, () => {
+    for (const sourceRef of [
+      `https://github.com/another/repository/commit/${commit.sha}`,
+      "https://github.com/another/repository/pull/1234",
+    ]) {
+      const processed = postprocessDraftFromEvidence(
+        {
+          ok: true,
+          needs_review: false,
+          release_items: [{
+            category: "Fixed",
+            text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+            text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+            source_refs: [sourceRef],
+          }],
+          coverage: {},
+        },
+        { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+      );
+      assert.equal(processed.ok, false, sourceRef);
+      assert.equal(processed.postprocess.dropped_invalid_items, 1, sourceRef);
+    }
+  });
 });
 
 test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
@@ -739,12 +788,12 @@ test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
   const commit = {
     short_sha: "abcdef12",
     sha: "abcdef12".padEnd(40, "0"),
-    subject: "fix(plugin): stabilize memory recovery",
+    subject: "fix(plugin): stabilize memory recovery (#1234)",
   };
   const topic = {
     key: "memory-recovery",
     category: "Fixed",
-    source_refs: [commit.short_sha],
+    source_refs: [commit.short_sha, "#1234"],
     subjects: [commit.subject],
   };
   try {
@@ -764,7 +813,30 @@ test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
       { commits: [commit], release_note_guidance: { release_topics: [topic] } },
     );
     assert.equal(processed.ok, true);
-    assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
+    assert.deepEqual(
+      [...processed.release_items[0].source_refs].sort(),
+      [commit.short_sha, "#1234"].sort(),
+    );
+
+    const acceptedPull = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: ["https://github.com/ForkOwner/ForkRepo/pull/1234"],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(acceptedPull.ok, true);
+    assert.deepEqual(
+      [...acceptedPull.release_items[0].source_refs].sort(),
+      [commit.short_sha, "#1234"].sort(),
+    );
 
     const rejected = postprocessDraftFromEvidence(
       {
@@ -782,6 +854,23 @@ test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
     );
     assert.equal(rejected.ok, false);
     assert.equal(rejected.postprocess.dropped_invalid_items, 1);
+
+    const rejectedPull = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: ["https://github.com/MemTensor/MemOS/pull/1234"],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(rejectedPull.ok, false);
+    assert.equal(rejectedPull.postprocess.dropped_invalid_items, 1);
   } finally {
     if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
     else process.env.GITHUB_REPOSITORY = previousRepository;
@@ -857,6 +946,70 @@ test("keeps ambiguous SHA prefixes fail-closed", () => {
   assert.equal(processed.coverage.missing_required_count, 2);
   assert.deepEqual(processed.postprocess.ambiguous_sha_refs, ["1078640"]);
   assert.match(processed.warnings.join("\n"), /ambiguous SHA source_refs/);
+});
+
+test("deduplicates repeated evidence commits before resolving SHA prefixes", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["abcdef1"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit, { ...commit }], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
+  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, []);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, []);
+});
+
+test("initializes warnings when a valid draft omits the field", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: [commit.short_sha],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.deepEqual(processed.warnings, []);
 });
 
 test("keeps ambiguous hexadecimal SHA prefixes fail-closed", () => {
@@ -1644,7 +1797,10 @@ test("writes failure diagnostics when final postprocessing remains invalid", () 
     const report = JSON.parse(readFileSync(join(directory, "quality-report.json"), "utf8"));
     assert.equal(report.ok, false);
     assert.equal(report.invalid_item_ref_count, 1);
-    assert.match(readFileSync(join(directory, "release-notes-draft.json"), "utf8"), /#10786401/);
+    const diagnosticDraft = JSON.parse(
+      readFileSync(join(directory, "release-notes-draft.json"), "utf8"),
+    );
+    assert.deepEqual(diagnosticDraft.release_items[0].source_refs, ["#10786401"]);
   } finally {
     if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
     else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
@@ -1660,6 +1816,29 @@ test("returns a fully validated draft without writing failure diagnostics", () =
     const validDraft = { ok: true, needs_review: false, release_items: [] };
     assert.strictEqual(requireValidatedDraft({ evidence, draft: validDraft }), validDraft);
     assert.deepEqual(readdirSync(directory), []);
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects ok drafts that still require review", () => {
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-needs-review-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    assert.throws(
+      () => requireValidatedDraft({
+        evidence,
+        draft: { ok: true, needs_review: true, release_items: [] },
+      }),
+      /Postprocessed release notes require review/,
+    );
+    assert.deepEqual(
+      readdirSync(directory).sort(),
+      ["README.md", "evidence.json", "quality-report.json", "release-notes-draft.json"],
+    );
   } finally {
     if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
     else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
