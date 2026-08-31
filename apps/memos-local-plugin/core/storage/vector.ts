@@ -185,6 +185,15 @@ export interface VectorScanOptions {
   params?: Record<string, unknown>;
   /** Optional LIMIT to cap candidates fetched from SQLite. */
   hardCap?: number;
+  /**
+   * Optional ORDER BY clause (without the "ORDER BY") applied before the
+   * `hardCap` LIMIT. Without it the bounded candidate window is SQLite's
+   * arbitrary physical scan prefix, so the globally best vector can be
+   * excluded purely by physical position. Repos pass their recency column
+   * (e.g. `ts DESC, id DESC`) so the window is a deterministic, meaningful
+   * candidate policy — most recent rows first — that existing indexes serve.
+   */
+  orderBy?: string;
 }
 
 export interface ScanRow {
@@ -213,6 +222,12 @@ export const DEFAULT_SCAN_HARD_CAP = 5_000;
  * `query`. `selectExtra` lets callers bring along columns that will surface in
  * `VectorHit.meta`.
  *
+ * Bounded-scan semantics: the `hardCap` LIMIT bounds how many rows enter
+ * cosine ranking. Without `orderBy` that window is SQLite's arbitrary
+ * physical scan prefix; repos pass a deterministic recency order (e.g.
+ * `ts DESC, id DESC`) so the window is a defined candidate policy — the most
+ * recent qualifying rows — instead of a physical accident (#2233).
+ *
  * Streaming: we use `.iterate()` (not `.all()`) so at most one row's
  * BLOB is decoded at a time. The top-K min-heap keeps only `k`
  * vectors of state, so peak RSS is O(k * dim) regardless of how many
@@ -229,12 +244,13 @@ export function scanAndTopK<TMeta = undefined>(
 ): Array<VectorHit<string, TMeta>> {
   if (k <= 0 || query.length === 0) return [];
 
-  const { vecColumn, norm2Column, where, params, hardCap } = opts;
+  const { vecColumn, norm2Column, where, params, hardCap, orderBy } = opts;
   const cap = hardCap ?? DEFAULT_SCAN_HARD_CAP;
   const cols = ["id", vecColumn, ...(norm2Column ? [norm2Column] : []), ...selectExtra];
   const sql = [
     `SELECT ${cols.join(", ")} FROM ${table}`,
     where ? `WHERE ${where}` : "",
+    orderBy ? `ORDER BY ${orderBy}` : "",
     `LIMIT ${cap}`,
   ]
     .filter(Boolean)
