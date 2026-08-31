@@ -38,6 +38,7 @@ const evidence = {
   target_version: "v2.0.10",
 };
 
+// URL trust tests use the canonical repository when run outside GitHub Actions.
 process.env.GITHUB_REPOSITORY ||= evidence.repo;
 
 function response(status, body) {
@@ -422,7 +423,7 @@ test("compacts future topic growth below the hard item limit without losing evid
 test("repairs a numeric SHA that the draft formats as a PR reference", () => {
   const commit = {
     short_sha: "10786401",
-    sha: "10786401".padEnd(40, "0"),
+    sha: "10786401abcdef0123456789abcdef0123456789",
     subject: "fix(plugin): stabilize memory recovery",
   };
   const topic = {
@@ -462,6 +463,38 @@ test("repairs a numeric SHA that the draft formats as a PR reference", () => {
   assert.equal(processed.coverage.invalid_item_refs.length, 0);
   assert.equal(processed.coverage.missing_required_count, 0);
   assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 1);
+});
+
+test("does not coerce a numeric PR-like prefix into an evidence SHA", () => {
+  const commit = {
+    short_sha: "12345678",
+    sha: "12345678abcdef0123456789abcdef0123456789",
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["#1234567"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.coverage.invalid_item_refs.length, 1);
+  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, []);
 });
 
 test("preserves an evidence-backed numeric PR reference", () => {
@@ -773,7 +806,7 @@ test("keeps ambiguous SHA prefixes fail-closed", () => {
         category: "Fixed",
         text_cn: "**记忆恢复**：修复异常数据恢复问题。",
         text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
-        source_refs: ["#1078640"],
+        source_refs: ["1078640"],
       }],
       coverage: {},
     },
@@ -784,7 +817,7 @@ test("keeps ambiguous SHA prefixes fail-closed", () => {
   assert.equal(processed.needs_review, true);
   assert.equal(processed.coverage.invalid_item_refs.length, 1);
   assert.equal(processed.coverage.missing_required_count, 2);
-  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, ["#1078640"]);
+  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, ["1078640"]);
   assert.match(processed.warnings.join("\n"), /ambiguous SHA source_refs/);
 });
 
@@ -818,6 +851,8 @@ test("keeps ambiguous hexadecimal SHA prefixes fail-closed", () => {
   assert.equal(processed.needs_review, true);
   assert.equal(processed.coverage.invalid_item_refs.length, 1);
   assert.equal(processed.coverage.missing_required_count, 2);
+  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, ["abcdef1"]);
+  assert.match(processed.warnings.join("\n"), /ambiguous SHA source_refs/);
 });
 
 test("fails closed when every draft item is malformed", () => {
@@ -1617,7 +1652,7 @@ test("preserves the validation error when its summary is not serializable", () =
   coverage.circular = coverage;
   assert.throws(
     () => requireValidatedDraft({ evidence, draft: { ok: false, needs_review: true, coverage } }),
-    /summary_unavailable/,
+    /Postprocessed release notes require review:.*summary_unavailable/,
   );
 });
 

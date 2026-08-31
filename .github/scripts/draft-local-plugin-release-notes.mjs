@@ -730,6 +730,11 @@ function sourceRefFromRepositoryUrl(text) {
   return "";
 }
 
+function normalizeShaRef(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return /^[a-f0-9]{7,40}$/.test(text) ? text : "";
+}
+
 function normalizeSourceRef(value) {
   const text = String(value || "").trim().replace(/^[`[(\s]+|[`)\],.;\s]+$/g, "");
   let match = text.match(/^#\s*(\d+)$/);
@@ -740,7 +745,8 @@ function normalizeSourceRef(value) {
   if (match) return `pr:#${match[1]}`;
   match = text.match(/^(?:commit|sha)\s*:?[\s#]*([a-fA-F0-9]{7,40})$/i);
   if (match) return `sha:${match[1].toLowerCase()}`;
-  if (/^[a-fA-F0-9]{7,40}$/.test(text)) return text.toLowerCase();
+  const shaRef = normalizeShaRef(text);
+  if (shaRef) return shaRef;
   return "";
 }
 
@@ -757,7 +763,7 @@ function normalizeSourceRefs(raw) {
 function refsForCommit(commit) {
   const refs = [];
   for (const ref of [commit?.short_sha, commit?.sha]) {
-    const normalized = normalizeSourceRef(ref);
+    const normalized = normalizeShaRef(ref);
     if (normalized && !refs.includes(normalized)) refs.push(normalized);
   }
   for (const match of String(commit?.subject || "").matchAll(/#(\d+)/g)) {
@@ -789,10 +795,8 @@ function buildSourceRefIndex(evidence) {
   const shaEntries = [];
 
   for (const commit of evidence?.commits || []) {
-    const shortRef = normalizeSourceRef(commit?.short_sha);
-    const fullRef = normalizeSourceRef(commit?.sha);
-    // Both aliases intentionally remain bare hexadecimal values. Prefix resolution
-    // below depends on fullRef starting with the model-provided SHA candidate.
+    const shortRef = normalizeShaRef(commit?.short_sha);
+    const fullRef = normalizeShaRef(commit?.sha);
     if (shortRef && fullRef) shaEntries.push({ shortRef, fullRef });
     for (const ref of refsForCommit(commit)) knownRefs.add(ref);
   }
@@ -840,7 +844,7 @@ function groupKeysForItem(item, refToGroup) {
 
 function canonicalizeEvidenceBackedSourceRefs(items, index) {
   let normalizedRefs = 0;
-  const ambiguousShaRefs = [];
+  const ambiguousShaRefs = new Set();
   const canonicalizedItems = items.map((item) => {
     const sourceRefs = [];
     for (const ref of item.source_refs || []) {
@@ -850,8 +854,8 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
       if (explicitPrRef) canonicalRef = explicitPrRef;
       if (explicitShaRef) canonicalRef = explicitShaRef;
       const exactEvidenceRef = index.knownRefs.has(canonicalRef);
-      // The draft service can render an all-numeric SHA as #digits. Repair that ambiguous
-      // form only when it is not a real evidence PR and exactly one evidence SHA matches.
+      // The draft service can render an all-numeric short SHA as #digits. Repair that
+      // ambiguous form only when it exactly equals an evidence SHA alias, never a prefix.
       const numericSha = !explicitPrRef && !exactEvidenceRef
         ? /^#(\d{7,40})$/.exec(canonicalRef)?.[1] || ""
         : "";
@@ -859,14 +863,16 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
         || numericSha
         || (/^[a-f0-9]{7,40}$/.test(canonicalRef) ? canonicalRef : "");
       if (shaCandidate) {
-        const matches = index.shaEntries.filter((entry) => entry.fullRef.startsWith(shaCandidate));
+        const matches = index.shaEntries.filter((entry) => numericSha
+          ? entry.shortRef === numericSha || entry.fullRef === numericSha
+          : entry.fullRef.startsWith(shaCandidate));
         // Zero or multiple matches intentionally remain unresolved and fail coverage validation.
         if (matches.length === 1) {
           const entry = matches[0];
           canonicalRef = [entry.shortRef, entry.fullRef].find((alias) => index.refToGroup.has(alias))
             || (exactEvidenceRef ? canonicalRef : entry.shortRef);
-        } else if (matches.length > 1 && !ambiguousShaRefs.includes(ref)) {
-          ambiguousShaRefs.push(ref);
+        } else if (matches.length > 1) {
+          ambiguousShaRefs.add(ref);
         }
       }
       if (canonicalRef !== ref) normalizedRefs += 1;
@@ -874,7 +880,28 @@ function canonicalizeEvidenceBackedSourceRefs(items, index) {
     }
     return { ...item, source_refs: sourceRefs };
   });
-  return { items: canonicalizedItems, normalizedRefs, ambiguousShaRefs };
+  return { items: canonicalizedItems, normalizedRefs, ambiguousShaRefs: [...ambiguousShaRefs] };
+}
+
+function releaseNotesPostprocess({
+  normalizedRefs = 0,
+  ambiguousShaRefs = [],
+  droppedInvalidItems = 0,
+  removedDuplicateRefs = 0,
+  droppedEmptyItems = 0,
+  reclassifiedItems = 0,
+  finalItemCount = 0,
+} = {}) {
+  return {
+    applied: true,
+    normalized_evidence_backed_source_refs: normalizedRefs,
+    ambiguous_sha_refs: ambiguousShaRefs,
+    dropped_invalid_items: droppedInvalidItems,
+    removed_duplicate_source_refs: removedDuplicateRefs,
+    dropped_empty_source_items: droppedEmptyItems,
+    reclassified_items: reclassifiedItems,
+    final_item_count: finalItemCount,
+  };
 }
 
 function bestHintCategoryForItem(item, index) {
@@ -1433,16 +1460,7 @@ export function postprocessDraftFromEvidence(draft, evidence) {
   const droppedInvalidItems = rawItems.length - inputItems.length;
   if (inputItems.length === 0) {
     const coverage = coverageFromReleaseItems(evidence, draft || {}, [], index);
-    const postprocess = {
-      applied: true,
-      normalized_evidence_backed_source_refs: 0,
-      ambiguous_sha_refs: [],
-      dropped_invalid_items: droppedInvalidItems,
-      removed_duplicate_source_refs: 0,
-      dropped_empty_source_items: 0,
-      reclassified_items: 0,
-      final_item_count: 0,
-    };
+    const postprocess = releaseNotesPostprocess({ droppedInvalidItems });
     return {
       ...(draft || {}),
       ok: false,
@@ -1486,16 +1504,15 @@ export function postprocessDraftFromEvidence(draft, evidence) {
     coverage.needs_review = true;
   }
   const { releaseCategories, docsCategories } = categoriesFromReleaseItems(items);
-  const postprocess = {
-    applied: true,
-    normalized_evidence_backed_source_refs: canonicalized.normalizedRefs,
-    ambiguous_sha_refs: canonicalized.ambiguousShaRefs,
-    dropped_invalid_items: droppedInvalidItems,
-    removed_duplicate_source_refs: deduped.removedDuplicateRefs,
-    dropped_empty_source_items: deduped.droppedItems,
-    reclassified_items: reclassifiedItems,
-    final_item_count: items.length,
-  };
+  const postprocess = releaseNotesPostprocess({
+    normalizedRefs: canonicalized.normalizedRefs,
+    ambiguousShaRefs: canonicalized.ambiguousShaRefs,
+    droppedInvalidItems,
+    removedDuplicateRefs: deduped.removedDuplicateRefs,
+    droppedEmptyItems: deduped.droppedItems,
+    reclassifiedItems,
+    finalItemCount: items.length,
+  });
   const warnings = Array.isArray(draft.warnings) ? [...draft.warnings] : [];
   if (
     postprocess.normalized_evidence_backed_source_refs > 0 ||
@@ -1702,7 +1719,7 @@ export function requireValidatedDraft({ evidence, draft }) {
   try {
     writeDraftFailureInspection({ evidence, payload: draft || {}, error });
   } catch {
-    // Diagnostic artifact failures must never hide the release-note validation error.
+    // Intentional: diagnostic artifact failures must never hide the validation error.
   }
   throw error;
 }
