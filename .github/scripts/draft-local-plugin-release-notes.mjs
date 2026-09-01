@@ -700,18 +700,68 @@ function normalizeReleaseCategory(value) {
   return RELEASE_CATEGORY_ORDER.includes(text) ? text : "";
 }
 
-function normalizeSourceRef(value) {
-  const text = String(value || "").trim().replace(/^[`[(\s]+|[`)\],.;\s]+$/g, "");
-  if (/^#\d+$/.test(text)) return text;
-  if (/^[a-fA-F0-9]{7,40}$/.test(text)) return text.toLowerCase();
+function sourceRefFromRepositoryUrl(text, repository) {
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return "";
+  }
+  if (!/^https?:$/.test(parsed.protocol) || parsed.hostname.toLowerCase() !== "github.com") return "";
+  const trustedRepository = String(repository || "").trim();
+  if (!trustedRepository) return "";
+  const expectedRepo = trustedRepository
+    .split("/")
+    .filter(Boolean)
+    .map((part) => part.toLowerCase());
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (
+    expectedRepo.length !== 2 ||
+    parts.length < 4 ||
+    parts[0].toLowerCase() !== expectedRepo[0] ||
+    parts[1].toLowerCase() !== expectedRepo[1]
+  ) {
+    return "";
+  }
+  if (parts[2].toLowerCase() === "pull" && /^\d+$/.test(parts[3])) return `pr:#${parts[3]}`;
+  if (parts[2].toLowerCase() === "commit" && /^[a-fA-F0-9]{7,40}$/.test(parts[3])) {
+    return `sha:${parts[3].toLowerCase()}`;
+  }
   return "";
 }
 
-function normalizeSourceRefs(raw) {
-  const values = Array.isArray(raw) ? raw : String(raw || "").match(/#\d+|[a-fA-F0-9]{7,40}/g) || [];
+function normalizeShaRef(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return /^[a-f0-9]{7,40}$/.test(text) ? text : "";
+}
+
+function normalizeSourceRef(value, repository = "") {
+  const text = String(value || "").trim().replace(/^[`[(\s]+|[`)\],.;\s]+$/g, "");
+  let match = text.match(/^#\s*(\d+)$/);
+  if (match) return `#${match[1]}`;
+  const urlRef = sourceRefFromRepositoryUrl(text, repository);
+  if (urlRef) return urlRef;
+  match = text.match(/^(?:pr|pull request)\s*:?[\s#]*(\d+)$/i);
+  if (match) return `pr:#${match[1]}`;
+  match = text.match(/^(?:commit|sha)\s*:?[\s#]*([a-fA-F0-9]{7,40})$/i);
+  if (match) return `sha:${match[1].toLowerCase()}`;
+  const shaRef = normalizeShaRef(text);
+  if (shaRef) return shaRef;
+  return "";
+}
+
+function normalizeSourceRefs(raw, repository = "") {
+  const values = Array.isArray(raw)
+    ? raw
+    : (() => {
+        const text = String(raw || "").trim();
+        return normalizeSourceRef(text, repository)
+          ? [text]
+          : text.match(/#\d+|[a-fA-F0-9]{7,40}/g) || [];
+      })();
   const refs = [];
   for (const value of values) {
-    const ref = normalizeSourceRef(value);
+    const ref = normalizeSourceRef(value, repository);
     if (ref && !refs.includes(ref)) refs.push(ref);
   }
   return refs;
@@ -720,7 +770,7 @@ function normalizeSourceRefs(raw) {
 function refsForCommit(commit) {
   const refs = [];
   for (const ref of [commit?.short_sha, commit?.sha]) {
-    const normalized = normalizeSourceRef(ref);
+    const normalized = normalizeShaRef(ref);
     if (normalized && !refs.includes(normalized)) refs.push(normalized);
   }
   for (const match of String(commit?.subject || "").matchAll(/#(\d+)/g)) {
@@ -730,12 +780,12 @@ function refsForCommit(commit) {
   return refs;
 }
 
-function normalizeReleaseItem(raw) {
+function normalizeReleaseItem(raw, repository = "") {
   if (!raw || typeof raw !== "object") return null;
   const category = normalizeReleaseCategory(raw.category);
   const textCn = String(raw.text_cn || "").trim().replace(/^-+\s*/, "");
   const textEn = String(raw.text_en || "").trim().replace(/^-+\s*/, "");
-  const sourceRefs = normalizeSourceRefs(raw.source_refs);
+  const sourceRefs = normalizeSourceRefs(raw.source_refs, repository);
   if (!category || !textCn || !textEn || sourceRefs.length === 0) return null;
   return {
     category,
@@ -745,12 +795,32 @@ function normalizeReleaseItem(raw) {
   };
 }
 
-function buildSourceRefIndex(evidence) {
+function buildSourceRefIndex(evidence, repository = "") {
   const refToGroup = new Map();
   const groups = new Map();
   const knownRefs = new Set();
+  const shaEntriesByFullRef = new Map();
 
   for (const commit of evidence?.commits || []) {
+    const shortRef = normalizeShaRef(commit?.short_sha);
+    const fullRef = normalizeShaRef(commit?.sha);
+    const canonicalShortRef = shortRef || fullRef;
+    const identityRef = fullRef || (canonicalShortRef ? `short:${canonicalShortRef}` : "");
+    if (canonicalShortRef && identityRef && !shaEntriesByFullRef.has(identityRef)) {
+      shaEntriesByFullRef.set(identityRef, {
+        shortRef: canonicalShortRef,
+        fullRef: fullRef || canonicalShortRef,
+      });
+    } else if (
+      canonicalShortRef
+      && identityRef
+      && shaEntriesByFullRef.get(identityRef)?.shortRef !== canonicalShortRef
+    ) {
+      warn(
+        `Evidence contains duplicate SHA ${fullRef || canonicalShortRef} ` +
+          "with different short refs; using the first.",
+      );
+    }
     for (const ref of refsForCommit(commit)) knownRefs.add(ref);
   }
 
@@ -759,7 +829,7 @@ function buildSourceRefIndex(evidence) {
     ? topics
     : evidence?.release_note_guidance?.source_ref_category_hints || [];
   for (const [position, hint] of sourceGroups.entries()) {
-    const refs = normalizeSourceRefs(hint.source_refs);
+    const refs = normalizeSourceRefs(hint.source_refs, repository);
     const category = normalizeReleaseCategory(hint.category);
     if (refs.length === 0 || !category) continue;
     const groupKey = topics.length > 0
@@ -779,7 +849,7 @@ function buildSourceRefIndex(evidence) {
     });
   }
 
-  return { refToGroup, groups, knownRefs };
+  return { refToGroup, groups, knownRefs, shaEntries: [...shaEntriesByFullRef.values()] };
 }
 
 function groupKeyForRef(ref, refToGroup) {
@@ -793,6 +863,83 @@ function groupKeysForItem(item, refToGroup) {
     if (!keys.includes(key)) keys.push(key);
   }
   return keys;
+}
+
+function canonicalizeEvidenceBackedSourceRefs(items, index) {
+  let normalizedRefs = 0;
+  const ambiguousShaRefs = new Set();
+  const unresolvedShaRefs = new Set();
+  const canonicalizedItems = items.map((item) => {
+    const sourceRefs = [];
+    for (const ref of item.source_refs || []) {
+      let canonicalRef = ref;
+      const explicitPrRef = /^pr:(#\d+)$/.exec(ref)?.[1] || "";
+      const explicitShaRef = /^sha:([a-f0-9]{7,40})$/.exec(ref)?.[1] || "";
+      if (explicitPrRef) canonicalRef = explicitPrRef;
+      if (explicitShaRef) canonicalRef = explicitShaRef;
+      const exactEvidenceRef = index.knownRefs.has(canonicalRef);
+      // The draft service can render an all-numeric short SHA as #digits. Repair that
+      // ambiguous form only when it exactly equals an evidence SHA alias, never a prefix.
+      // A known #digits PR ref must stay a PR. Only an otherwise unknown numeric
+      // reference is eligible for the exact numeric-SHA recovery path.
+      const ambiguousNumericRef = !explicitPrRef && !exactEvidenceRef
+        ? /^#(\d{7,40})$/.exec(canonicalRef)?.[1] || ""
+        : "";
+      const shaCandidate = explicitShaRef
+        || ambiguousNumericRef
+        || (/^[a-f0-9]{7,40}$/.test(canonicalRef) ? canonicalRef : "");
+      if (shaCandidate) {
+        // Numeric #refs require exact aliases. The fullRef arm intentionally covers
+        // the rare but valid case of an all-decimal 40-character Git SHA.
+        const matches = index.shaEntries.filter((entry) => ambiguousNumericRef
+          ? entry.shortRef === ambiguousNumericRef || entry.fullRef === ambiguousNumericRef
+          : entry.fullRef.startsWith(shaCandidate) || entry.shortRef === shaCandidate);
+        // Zero or multiple matches intentionally remain unresolved and fail coverage validation.
+        if (matches.length === 1) {
+          const entry = matches[0];
+          const groupedAlias = [entry.shortRef, entry.fullRef]
+            .find((alias) => index.refToGroup.has(alias));
+          canonicalRef = groupedAlias || (exactEvidenceRef ? canonicalRef : entry.shortRef);
+        } else if (matches.length > 1) {
+          ambiguousShaRefs.add(ref);
+        } else {
+          unresolvedShaRefs.add(ref);
+        }
+      }
+      if (canonicalRef !== ref && index.knownRefs.has(canonicalRef)) normalizedRefs += 1;
+      if (!sourceRefs.includes(canonicalRef)) sourceRefs.push(canonicalRef);
+    }
+    return { ...item, source_refs: sourceRefs };
+  });
+  return {
+    items: canonicalizedItems,
+    normalizedRefs,
+    ambiguousShaRefs: [...ambiguousShaRefs],
+    unresolvedShaRefs: [...unresolvedShaRefs],
+  };
+}
+
+function releaseNotesPostprocess({
+  normalizedRefs = 0,
+  ambiguousShaRefs = [],
+  unresolvedShaRefs = [],
+  droppedInvalidItems = 0,
+  removedDuplicateRefs = 0,
+  droppedEmptyItems = 0,
+  reclassifiedItems = 0,
+  finalItemCount = 0,
+} = {}) {
+  return {
+    applied: true,
+    normalized_evidence_backed_source_refs: normalizedRefs,
+    ambiguous_sha_refs: ambiguousShaRefs,
+    unresolved_sha_refs: unresolvedShaRefs,
+    dropped_invalid_items: droppedInvalidItems,
+    removed_duplicate_source_refs: removedDuplicateRefs,
+    dropped_empty_source_items: droppedEmptyItems,
+    reclassified_items: reclassifiedItems,
+    final_item_count: finalItemCount,
+  };
 }
 
 function bestHintCategoryForItem(item, index) {
@@ -1277,7 +1424,7 @@ function markdownFromReleaseItems(items, coverage) {
     lines.push("");
     lines.push(`### ${category}`);
     for (const item of categoryItems) {
-      lines.push(`- ${item.text_cn}`);
+      lines.push(`- ${item.text_en}`);
     }
   }
   lines.push("");
@@ -1345,14 +1492,35 @@ export function legacyPackageDraftFromEvidence(evidence, { npmDistTag = "" } = {
 }
 
 export function postprocessDraftFromEvidence(draft, evidence) {
-  const inputItems = Array.isArray(draft?.release_items)
-    ? draft.release_items.map(normalizeReleaseItem).filter(Boolean)
-    : [];
-  if (inputItems.length === 0) return draft;
+  const repository = String(process.env.GITHUB_REPOSITORY || "").trim();
+  const rawItems = Array.isArray(draft?.release_items) ? draft.release_items : [];
+  const inputItems = rawItems.map((item) => normalizeReleaseItem(item, repository)).filter(Boolean);
+  const index = buildSourceRefIndex(evidence, repository);
+  const droppedInvalidItems = rawItems.length - inputItems.length;
+  if (inputItems.length === 0) {
+    const coverage = coverageFromReleaseItems(evidence, draft || {}, [], index);
+    const postprocess = releaseNotesPostprocess({ droppedInvalidItems });
+    return {
+      ...(draft || {}),
+      ok: false,
+      needs_review: true,
+      release_items: [],
+      release_categories: {},
+      docs_categories: { cn: {}, en: {} },
+      coverage,
+      warnings: [
+        ...(Array.isArray(draft?.warnings) ? draft.warnings : []),
+        "no valid evidence-backed release items remained after deterministic normalization",
+      ],
+      language_issues: [],
+      postprocess,
+      release_notes_markdown: markdownFromReleaseItems([], coverage),
+    };
+  }
 
-  const index = buildSourceRefIndex(evidence);
+  const canonicalized = canonicalizeEvidenceBackedSourceRefs(inputItems, index);
   let reclassifiedItems = 0;
-  let items = inputItems.map((item) => {
+  let items = canonicalized.items.map((item) => {
     const hintedCategory = bestHintCategoryForItem(item, index);
     const category = hintedCategory || item.category;
     if (category !== item.category) reclassifiedItems += 1;
@@ -1375,23 +1543,44 @@ export function postprocessDraftFromEvidence(draft, evidence) {
     coverage.needs_review = true;
   }
   const { releaseCategories, docsCategories } = categoriesFromReleaseItems(items);
-  const postprocess = {
-    applied: true,
-    removed_duplicate_source_refs: deduped.removedDuplicateRefs,
-    dropped_empty_source_items: deduped.droppedItems,
-    reclassified_items: reclassifiedItems,
-    final_item_count: items.length,
-  };
+  const postprocess = releaseNotesPostprocess({
+    normalizedRefs: canonicalized.normalizedRefs,
+    ambiguousShaRefs: canonicalized.ambiguousShaRefs,
+    unresolvedShaRefs: canonicalized.unresolvedShaRefs,
+    droppedInvalidItems,
+    removedDuplicateRefs: deduped.removedDuplicateRefs,
+    droppedEmptyItems: deduped.droppedItems,
+    reclassifiedItems,
+    finalItemCount: items.length,
+  });
   const warnings = Array.isArray(draft.warnings) ? [...draft.warnings] : [];
+  if (postprocess.dropped_invalid_items > 0) {
+    warnings.push(
+      `${postprocess.dropped_invalid_items} release item(s) were dropped as structurally invalid`,
+    );
+  }
   if (
+    postprocess.normalized_evidence_backed_source_refs > 0 ||
     postprocess.removed_duplicate_source_refs > 0 ||
     postprocess.dropped_empty_source_items > 0 ||
     postprocess.reclassified_items > 0
   ) {
-    warnings.push("release notes were postprocessed to dedupe source_refs and apply evidence category hints");
+    warnings.push(
+      "release notes were postprocessed to normalize evidence-backed numeric SHA refs, dedupe source_refs, and apply evidence category hints",
+    );
   }
   if (languageIssues.length > 0) {
     warnings.push("release notes language validation failed; manual review is required");
+  }
+  if (canonicalized.ambiguousShaRefs.length > 0) {
+    warnings.push(
+      `ambiguous SHA source_refs were left unresolved: ${canonicalized.ambiguousShaRefs.join(", ")}`,
+    );
+  }
+  if (canonicalized.unresolvedShaRefs.length > 0) {
+    warnings.push(
+      `SHA-like source_refs did not resolve to collected evidence: ${canonicalized.unresolvedShaRefs.join(", ")}`,
+    );
   }
 
   return {
@@ -1475,7 +1664,7 @@ export function manualDraftFromNotes(notes, evidence) {
     validation_report: validationReport,
     validation_attempt_count: 1,
     repair_attempt_count: 0,
-    release_notes_markdown: ensureSourceHint(text),
+    release_notes_markdown: ensureSourceHint(draft.release_notes_markdown),
   };
 }
 
@@ -1529,9 +1718,10 @@ function draftReviewSummary(payload) {
 }
 
 export function writeDraftFailureInspection({ evidence, payload, error }) {
+  const runnerTemp = String(process.env.RUNNER_TEMP || "").trim();
   const directory =
     String(process.env.RELEASE_NOTES_FAILURE_DIR || "").trim() ||
-    join(tmpdir(), "memos-local-plugin-release-notes-failure");
+    join(runnerTemp || tmpdir(), "memos-local-plugin-release-notes-failure");
   mkdirSync(directory, { recursive: true });
   const safeDraft = draftForInspection(payload || {});
   const summary = draftReviewSummary(payload || {});
@@ -1564,6 +1754,25 @@ export function writeDraftFailureInspection({ evidence, payload, error }) {
     "utf8",
   );
   return directory;
+}
+
+// Rejection makes a best-effort sanitized inspection write without masking validation failures.
+export function requireValidatedDraft({ evidence, draft }) {
+  if (draft?.ok && !draft?.needs_review) return draft;
+  let summary = "{}";
+  try {
+    summary = JSON.stringify(draft?.validation_report || draft?.coverage || {});
+  } catch {
+    summary = "{\"summary_unavailable\":true}";
+  }
+  const error = new Error(`Postprocessed release notes require review: ${summary}`);
+  try {
+    writeDraftFailureInspection({ evidence, payload: draft || {}, error });
+  } catch {
+    // Intentional: diagnostic artifact failures must never hide the validation error.
+    warn("Failed to write release-note failure diagnostics; preserving the original validation error.");
+  }
+  throw error;
 }
 
 function requiredUrlFromEnv(name) {
@@ -1823,9 +2032,7 @@ export async function main() {
     });
     throw error;
   }
-  if (!draft.ok || draft.needs_review) {
-    fail(`Postprocessed release notes require review: ${JSON.stringify(draft.validation_report || draft.coverage || {})}`);
-  }
+  draft = requireValidatedDraft({ evidence, draft });
   const draftPath = join(tmpdir(), `memos-local-plugin-${targetVersion}-release-notes-draft.json`);
   writeFileSync(draftPath, JSON.stringify(draftForInspection(draft), null, 2), "utf8");
   writeFileSync(notesPath, ensureSourceHint(draft.release_notes_markdown), "utf8");
