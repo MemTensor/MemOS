@@ -232,8 +232,27 @@ class KVCacheMemory(BaseActMemory):
                 keys = [c.layers[layer].keys for c in caches]
                 vals = [c.layers[layer].values for c in caches]
                 # single concat per layer
-                merged.layers[layer].keys = torch.cat(keys, dim=-2)
-                merged.layers[layer].values = torch.cat(vals, dim=-2)
+                concat_keys = torch.cat(keys, dim=-2)
+                concat_vals = torch.cat(vals, dim=-2)
+                merged_layer = merged.layers[layer]
+                # From transformers>=4.57, DynamicLayer.get_seq_length() and
+                # DynamicLayer.update() gate on the `is_initialized` flag,
+                # which is only flipped inside `lazy_initialization`. Bare
+                # `layer_cls()` construction plus direct attribute assignment
+                # leaves the flag False, so the merged cache reports length 0
+                # and DynamicLayer.update() silently overwrites `.keys` /
+                # `.values` with empty tensors on the first forward pass
+                # (see issue #2313). Route through the public
+                # lazy_initialization path so dtype / device / is_initialized
+                # are set exactly as upstream expects, then overwrite the
+                # tensors with the merged content. The hasattr guard leaves
+                # older layer classes (without lazy_initialization) untouched.
+                if hasattr(merged_layer, "lazy_initialization") and not getattr(
+                    merged_layer, "is_initialized", False
+                ):
+                    merged_layer.lazy_initialization(concat_keys)
+                merged_layer.keys = concat_keys
+                merged_layer.values = concat_vals
 
         # Check for old structure (key_cache)
         elif hasattr(caches[0], "key_cache"):
