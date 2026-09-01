@@ -89,8 +89,6 @@ class KVCacheMemory(BaseActMemory):
         container with the same tensor objects is enough to protect the stored
         item, without paying to duplicate the cache.
         """
-        import torch  # noqa: F401  (kept local, matching this module's style)
-
         copy = DynamicCache()
         if hasattr(cache, "layers"):
             if not hasattr(copy, "layers"):
