@@ -501,16 +501,48 @@ export function createLlmClientWithProvider(
     const messages = normalizeMessages(input);
     const systemHint = buildJsonSystemHint(opts.schemaHint);
     const msgs = ensureJsonWordInUserMessage(inject(messages, systemHint));
-    const call = buildCallInput(opts, true);
+    let call = buildCallInput(opts, true);
     const op = opts.op ?? "complete.json";
     const maxMalformedRetries = Math.max(0, opts.malformedRetries ?? 1);
     let attempt = 0;
     let lastRaw = "";
     let lastErr: unknown = null;
+    // Thinking models share one max_tokens budget between reasoning and the
+    // final answer, so a truncated response arrives as 200 OK with
+    // finish_reason="length". Without an explicit check it looks like plain
+    // malformed JSON and the retry re-sends the same doomed budget. On the
+    // first truncation, log diagnostics and double max_tokens for the next
+    // attempt (capped).
+    const LENGTH_RETRY_MAX_TOKENS_CEILING = 32_768;
+    let truncatedOnce = false;
 
     while (attempt <= maxMalformedRetries) {
       attempt++;
       const { completion } = await callWithFallback(msgs, call, opts, op);
+      if (completion.finishReason === "length") {
+        jsonLog.warn("max_tokens_truncated", {
+          op,
+          attempt,
+          maxTokens: call.maxTokens,
+          completionChars: completion.text.length,
+          usage: completion.usage
+            ? {
+                completionTokens: completion.usage.completionTokens,
+                totalTokens: completion.usage.totalTokens,
+              }
+            : undefined,
+        });
+        if (!truncatedOnce && (call.maxTokens ?? 0) < LENGTH_RETRY_MAX_TOKENS_CEILING) {
+          truncatedOnce = true;
+          call = {
+            ...call,
+            maxTokens: Math.min(
+              LENGTH_RETRY_MAX_TOKENS_CEILING,
+              Math.max(2 * (call.maxTokens ?? DEFAULT_MAX_TOKENS), DEFAULT_MAX_TOKENS),
+            ),
+          };
+        }
+      }
       lastRaw = completion.text;
       try {
         const parsed = opts.parse
