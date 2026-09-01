@@ -1649,7 +1649,7 @@ export function manualDraftFromNotes(notes, evidence) {
     validation_report: validationReport,
     validation_attempt_count: 1,
     repair_attempt_count: 0,
-    release_notes_markdown: ensureSourceHint(text),
+    release_notes_markdown: ensureSourceHint(draft.release_notes_markdown),
   };
 }
 

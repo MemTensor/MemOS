@@ -1686,6 +1686,15 @@ test("manual stable notes are revalidated against collected evidence", () => {
   const draft = manualDraftFromNotes(notes, evidence);
   assert.equal(draft.ok, true);
   assert.equal(draft.release_items[0].category, "Fixed");
+  assert.match(
+    draft.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /Restores Hermes bridge state/,
+  );
+  assert.doesNotMatch(
+    draft.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /修复 Hermes 桥接状态恢复/,
+  );
+  assert.match(draft.release_notes_markdown, /修复 Hermes 桥接状态恢复/);
   assert.match(draft.release_notes_markdown, /source-id=openclaw-local-plugin/);
 
   assert.throws(
