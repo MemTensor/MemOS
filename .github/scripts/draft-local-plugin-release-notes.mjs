@@ -1409,7 +1409,7 @@ function markdownFromReleaseItems(items, coverage) {
     lines.push("");
     lines.push(`### ${category}`);
     for (const item of categoryItems) {
-      lines.push(`- ${item.text_cn}`);
+      lines.push(`- ${item.text_en}`);
     }
   }
   lines.push("");
@@ -1703,9 +1703,10 @@ function draftReviewSummary(payload) {
 }
 
 export function writeDraftFailureInspection({ evidence, payload, error }) {
+  const runnerTemp = String(process.env.RUNNER_TEMP || "").trim();
   const directory =
     String(process.env.RELEASE_NOTES_FAILURE_DIR || "").trim() ||
-    join(tmpdir(), "memos-local-plugin-release-notes-failure");
+    join(runnerTemp || tmpdir(), "memos-local-plugin-release-notes-failure");
   mkdirSync(directory, { recursive: true });
   const safeDraft = draftForInspection(payload || {});
   const summary = draftReviewSummary(payload || {});

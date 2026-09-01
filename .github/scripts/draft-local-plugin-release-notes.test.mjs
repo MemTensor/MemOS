@@ -1265,6 +1265,15 @@ test("postprocesses duplicate source refs into the best evidence category", () =
     processed.release_items.find((item) => item.text_cn.includes("记忆恢复"))?.text_cn.includes("XML"),
     false,
   );
+  assert.match(
+    processed.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /Vector Scan Performance/,
+  );
+  assert.doesNotMatch(
+    processed.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /向量扫描性能优化/,
+  );
+  assert.match(processed.release_notes_markdown, /向量扫描性能优化/);
   assert.match(processed.release_notes_markdown, /doc-agent-release-notes-json/);
 });
 
@@ -1469,6 +1478,14 @@ test("repairs postprocessed language validation issues with exact context", asyn
     ["text_cn", "text_en"],
   );
   assert.equal(requests[1].release_notes_repair_context.previous_release_items[0].source_refs[0], "abc1234");
+  assert.match(
+    result.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /Plugin Health Dashboard/,
+  );
+  assert.doesNotMatch(
+    result.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /插件健康看板/,
+  );
   assert.match(result.release_notes_markdown, /插件健康看板/);
   assert.match(result.release_notes_markdown, /doc-agent-release-notes-json/);
 });
@@ -1533,6 +1550,10 @@ test("standalone latest draft validation allows one initial response plus three 
   assert.equal(result.needs_review, false);
   assert.equal(result.validation_attempt_count, 4);
   assert.equal(result.repair_attempt_count, 3);
+  assert.match(
+    result.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /Plugin Health Dashboard/,
+  );
   assert.match(result.release_notes_markdown, /插件健康看板/);
 });
 
@@ -1834,6 +1855,34 @@ test("writes failure diagnostics when final postprocessing remains invalid", () 
     if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
     else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("writes default failure diagnostics under RUNNER_TEMP for artifact upload", () => {
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const previousRunnerTemp = process.env.RUNNER_TEMP;
+  const runnerTemp = mkdtempSync(join(tmpdir(), "local-plugin-runner-temp-"));
+  const expectedDirectory = join(runnerTemp, "memos-local-plugin-release-notes-failure");
+  try {
+    delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    process.env.RUNNER_TEMP = runnerTemp;
+    assert.throws(
+      () => requireValidatedDraft({
+        evidence,
+        draft: { ok: false, needs_review: true, release_items: [], coverage: {} },
+      }),
+      /Postprocessed release notes require review/,
+    );
+    assert.deepEqual(
+      readdirSync(expectedDirectory).sort(),
+      ["README.md", "evidence.json", "quality-report.json", "release-notes-draft.json"],
+    );
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    if (previousRunnerTemp === undefined) delete process.env.RUNNER_TEMP;
+    else process.env.RUNNER_TEMP = previousRunnerTemp;
+    rmSync(runnerTemp, { recursive: true, force: true });
   }
 });
 
