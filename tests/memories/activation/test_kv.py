@@ -106,6 +106,7 @@ def test_concat_layer_reports_initialized_and_full_seq_length(kv_memory):
     # This path is only exercised on transformers >= 4.57. The bug lives
     # here — get_seq_length() must reflect the true merged length.
     if hasattr(merged, "layers"):
+        assert len(merged.layers) == 1, f"expected 1 layer, got {len(merged.layers)}"
         assert merged.layers[0].keys.shape[-2] == 2 * seq_len
         assert merged.layers[0].values.shape[-2] == 2 * seq_len
         # `is_initialized` is set inside DynamicLayer.lazy_initialization —
