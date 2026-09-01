@@ -1,4 +1,5 @@
 import logging
+import pickle
 
 from unittest.mock import MagicMock
 
@@ -96,8 +97,6 @@ def test_dump_records_model_identity(kv_memory, tmp_path):
     kv_memory.config.extractor_llm.model_name_or_path = "org/model-a"
     kv_memory.add([KVCacheItem(memory=make_filled_cache())])
     kv_memory.dump(str(tmp_path))
-
-    import pickle
 
     with open(tmp_path / kv_memory.config.memory_filename, "rb") as f:
         data = pickle.load(f)
