@@ -28,7 +28,8 @@ export const RELEASE_TO_DOC_CATEGORY = {
 };
 export const MAX_REPAIR_ATTEMPTS = 3;
 export const MAX_DRAFT_ATTEMPTS = MAX_REPAIR_ATTEMPTS + 1;
-const MAX_RELEASE_ITEMS = 12;
+const MIN_RELEASE_ITEMS = 12;
+const MAX_RELEASE_ITEMS = 18;
 const MAX_TEXT_CN_CHARS = 180;
 const MAX_TEXT_EN_CHARS = 220;
 const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/;
@@ -82,6 +83,11 @@ function fail(message) {
 
 function warn(message) {
   console.error(`::warning::${message}`);
+}
+
+export function releaseItemLimitForRequiredCount(requiredCount) {
+  const count = Math.max(0, Number(requiredCount) || 0);
+  return Math.min(MAX_RELEASE_ITEMS, Math.max(MIN_RELEASE_ITEMS, Math.ceil(count / 2)));
 }
 
 function sh(args, options = {}) {
@@ -1181,6 +1187,7 @@ export function collectLocalPluginEvidence({
     release_note_quality_request: {
       candidate_count: 3,
       max_repair_attempts: MAX_REPAIR_ATTEMPTS,
+      max_items: releaseItemLimitForRequiredCount(importantCommits.length),
       methodology: RELEASE_NOTE_METHODS,
       require_source_refs: true,
       require_bilingual_output: true,
@@ -1426,26 +1433,80 @@ function dedupeFallbackItems(items) {
   return [...byKey.values()];
 }
 
+function fallbackItemTitle(text) {
+  return String(text || "")
+    .match(/^\*\*([^*]+)\*\*/)?.[1]
+    ?.trim() || "local-plugin behavior";
+}
+
+function combinedFallbackCopy(category, first, second, sequence) {
+  const cnTitles = [fallbackItemTitle(first.text_cn), fallbackItemTitle(second.text_cn)]
+    .filter(Boolean)
+    .join("、")
+    .slice(0, 72);
+  const enTitles = [fallbackItemTitle(first.text_en), fallbackItemTitle(second.text_en)]
+    .filter(Boolean)
+    .join(" and ")
+    .slice(0, 100);
+  const copy = {
+    Added: {
+      text_cn: `**本地插件组合新能力 ${sequence}**：第 ${sequence} 组统一呈现 ${cnTitles} 相关的新能力与使用场景，并保留完整发布依据。`,
+      text_en: `**Combined local-plugin capabilities ${sequence}**: Group ${sequence} covers new capabilities and usage scenarios related to ${enTitles} while preserving complete release evidence.`,
+    },
+    Improved: {
+      text_cn: `**本地插件组合改进 ${sequence}**：第 ${sequence} 组统一呈现 ${cnTitles} 相关的体验与性能改进，并保留完整发布依据。`,
+      text_en: `**Combined local-plugin improvements ${sequence}**: Group ${sequence} covers experience and performance improvements related to ${enTitles} while preserving complete release evidence.`,
+    },
+    Fixed: {
+      text_cn: `**本地插件组合修复 ${sequence}**：第 ${sequence} 组统一呈现 ${cnTitles} 相关的问题修复与稳定性改进，并保留完整发布依据。`,
+      text_en: `**Combined local-plugin fixes ${sequence}**: Group ${sequence} covers fixes and reliability improvements related to ${enTitles} while preserving complete release evidence.`,
+    },
+  };
+  return copy[category] || copy.Improved;
+}
+
+export function compactFallbackItems(rawItems, maxItems) {
+  const items = rawItems.map((item) => ({
+    ...item,
+    source_refs: [...new Set(item.source_refs || [])],
+  }));
+  let sequence = 1;
+
+  while (items.length > maxItems) {
+    let bestPair = null;
+    for (let left = 0; left < items.length; left += 1) {
+      for (let right = left + 1; right < items.length; right += 1) {
+        if (items[left].category !== items[right].category) continue;
+        const score = (items[left].source_refs.length + items[right].source_refs.length) * 1000 + left + right;
+        if (!bestPair || score < bestPair.score) bestPair = { left, right, score };
+      }
+    }
+    if (!bestPair) {
+      fail(`Cannot compact ${items.length} offline release-note items without mixing categories.`);
+    }
+
+    const first = items[bestPair.left];
+    const second = items[bestPair.right];
+    const combinedCopy = combinedFallbackCopy(first.category, first, second, sequence);
+    items.splice(bestPair.right, 1);
+    items.splice(bestPair.left, 1, {
+      category: first.category,
+      ...combinedCopy,
+      source_refs: [...new Set([...first.source_refs, ...second.source_refs])],
+    });
+    sequence += 1;
+  }
+  return items;
+}
+
 function localFallbackDraft(evidence) {
-  const revertedKeys = new Set((evidence.reverted_change_keys || []).map((item) => String(item).toLowerCase()));
-  const aggregateItems = (evidence.release_aggregate_items || [])
-    .filter((item) => !/^revert\b/i.test(item.text))
-    .filter((item) => !revertedKeys.has(String(item.text || "").toLowerCase()));
-  const sourceItems = aggregateItems.length
-    ? aggregateItems.map((item) => {
-        const prRefs = (item.source_refs || []).filter((ref) => String(ref).startsWith("#"));
-        return {
-          ...item,
-          source_refs: prRefs.length ? prRefs : [item.source_commit].filter(Boolean),
-        };
-      })
-    : evidence.important_commits.map((commit) => ({
-        text: commit.subject,
-        source_refs: [commit.short_sha],
-      }));
+  const sourceItems = evidence.important_commits.map((commit) => ({
+    text: commit.subject,
+    source_refs: [commit.short_sha],
+  }));
   let items = dedupeFallbackItems(sourceItems
     .map((sourceItem) => {
-      const topic = fallbackTopicForText(sourceItem.text, { allowGeneric: aggregateItems.length === 0 });
+      const topic = fallbackTopicForText(sourceItem.text, { allowGeneric: true });
       if (!topic) return null;
       return {
         category: topic.category,
@@ -1454,7 +1515,7 @@ function localFallbackDraft(evidence) {
         source_refs: sourceItem.source_refs?.length ? sourceItem.source_refs : [evidence.important_commits[0]?.short_sha].filter(Boolean),
       };
     })
-    .filter(Boolean)).slice(0, 10);
+    .filter(Boolean));
   if (!items.length && evidence.important_commits.length) {
     items = dedupeFallbackItems(evidence.important_commits.map((commit) => {
       const topic = fallbackTopicForText(commit.subject, { allowGeneric: true });
@@ -1464,8 +1525,16 @@ function localFallbackDraft(evidence) {
         text_en: topic.text_en,
         source_refs: [commit.short_sha],
       };
-    })).slice(0, 10);
+    }));
   }
+  items = compactFallbackItems(
+    items,
+    releaseItemLimitForRequiredCount(evidence.required_source_refs.length),
+  );
+  const coveredRefs = new Set(items.flatMap((item) => item.source_refs));
+  const coveredRequiredCount = evidence.required_source_refs.filter((required) =>
+    required.accepted_refs.some((ref) => coveredRefs.has(ref)),
+  ).length;
   return {
     ok: true,
     needs_review: false,
@@ -1474,8 +1543,8 @@ function localFallbackDraft(evidence) {
     release_items: items,
     coverage: {
       required_count: evidence.required_source_refs.length,
-      covered_required_count: Math.min(items.length, evidence.required_source_refs.length),
-      missing_required_count: Math.max(0, evidence.required_source_refs.length - items.length),
+      covered_required_count: coveredRequiredCount,
+      missing_required_count: Math.max(0, evidence.required_source_refs.length - coveredRequiredCount),
     },
     validation_attempt_count: 1,
     repair_attempt_count: 0,
@@ -1584,10 +1653,13 @@ export function validateDraft(draft, evidence) {
   if (!draft.release_items.length && evidence.has_user_facing_product_changes) {
     issues.push({ kind: "empty_release_items", message: "release_items is required when product files changed" });
   }
-  if (draft.release_items.length > MAX_RELEASE_ITEMS) {
+  const maxReleaseItems = releaseItemLimitForRequiredCount(
+    evidence.required_source_refs?.length || evidence.important_commits?.length || 0,
+  );
+  if (draft.release_items.length > maxReleaseItems) {
     issues.push({
       kind: "too_many_release_items",
-      message: `release_items must be concise for the Plugin tab; got ${draft.release_items.length}, max ${MAX_RELEASE_ITEMS}`,
+      message: `release_items must be concise for the Plugin tab; got ${draft.release_items.length}, max ${maxReleaseItems}`,
     });
   }
 
