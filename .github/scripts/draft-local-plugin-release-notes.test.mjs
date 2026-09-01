@@ -829,7 +829,7 @@ test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
           category: "Fixed",
           text_cn: "**记忆恢复**：修复异常数据恢复问题。",
           text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
-          source_refs: ["https://github.com/ForkOwner/ForkRepo/pull/1234"],
+          source_refs: "https://github.com/ForkOwner/ForkRepo/pull/1234",
         }],
         coverage: {},
       },
@@ -980,6 +980,38 @@ test("resolves an exact evidence short SHA even when it is not a full SHA prefix
   const commit = {
     short_sha: "abcdef12",
     sha: "12345678".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: [commit.short_sha],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, []);
+});
+
+test("resolves an evidence short SHA when a producer omits the full SHA", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "",
     subject: "fix(plugin): stabilize memory recovery",
   };
   const topic = {

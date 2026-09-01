@@ -751,7 +751,14 @@ function normalizeSourceRef(value, repository = "") {
 }
 
 function normalizeSourceRefs(raw, repository = "") {
-  const values = Array.isArray(raw) ? raw : String(raw || "").match(/#\d+|[a-fA-F0-9]{7,40}/g) || [];
+  const values = Array.isArray(raw)
+    ? raw
+    : (() => {
+        const text = String(raw || "").trim();
+        return normalizeSourceRef(text, repository)
+          ? [text]
+          : text.match(/#\d+|[a-fA-F0-9]{7,40}/g) || [];
+      })();
   const refs = [];
   for (const value of values) {
     const ref = normalizeSourceRef(value, repository);
@@ -797,14 +804,22 @@ function buildSourceRefIndex(evidence, repository = "") {
   for (const commit of evidence?.commits || []) {
     const shortRef = normalizeShaRef(commit?.short_sha);
     const fullRef = normalizeShaRef(commit?.sha);
-    if (shortRef && fullRef && !shaEntriesByFullRef.has(fullRef)) {
-      shaEntriesByFullRef.set(fullRef, { shortRef, fullRef });
+    const canonicalShortRef = shortRef || fullRef;
+    const identityRef = fullRef || (canonicalShortRef ? `short:${canonicalShortRef}` : "");
+    if (canonicalShortRef && identityRef && !shaEntriesByFullRef.has(identityRef)) {
+      shaEntriesByFullRef.set(identityRef, {
+        shortRef: canonicalShortRef,
+        fullRef: fullRef || canonicalShortRef,
+      });
     } else if (
-      shortRef
-      && fullRef
-      && shaEntriesByFullRef.get(fullRef)?.shortRef !== shortRef
+      canonicalShortRef
+      && identityRef
+      && shaEntriesByFullRef.get(identityRef)?.shortRef !== canonicalShortRef
     ) {
-      warn(`Evidence contains duplicate SHA ${fullRef} with different short refs; using the first.`);
+      warn(
+        `Evidence contains duplicate SHA ${fullRef || canonicalShortRef} ` +
+          "with different short refs; using the first.",
+      );
     }
     for (const ref of refsForCommit(commit)) knownRefs.add(ref);
   }
