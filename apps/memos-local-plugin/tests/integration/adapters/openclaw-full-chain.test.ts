@@ -26,7 +26,7 @@
  *   - `capture.alpha.reflection.score.v1`— α scoring
  *   - `capture.summarize`                — trace-level summaries
  *   - `reward.reward.r_human.v3`         — R_human axis scoring
- *   - `l2.l2.induction.v2`               — L2 policy induction
+ *   - `l2.l2.induction.v3`               — L2 policy induction
  *   - `l3.abstraction.v2`                — L3 world-model abstraction
  *   - `skill.crystallize`                — skill draft
  *
@@ -234,7 +234,7 @@ function buildLlm(): LlmClient {
         reason: "concrete root-cause reflection",
       }),
 
-      "l2.l2.induction.v2": (input: unknown) => {
+      "l2.l2.induction.v3": (input: unknown) => {
         const evidence = (input as { evidenceTraces?: Array<{ id: string }> })
           ?.evidenceTraces ?? [];
         return {

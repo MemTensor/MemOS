@@ -189,7 +189,7 @@ function buildFullChainLlm(): LlmClient {
       }),
 
       // L2 induction — distills a policy from ≥2 similar traces.
-      "l2.l2.induction.v2": (input: unknown) => {
+      "l2.l2.induction.v3": (input: unknown) => {
         const text = lastUserMessage(input);
         const isPython = /python|pip|\.py\b/i.test(text);
         return {

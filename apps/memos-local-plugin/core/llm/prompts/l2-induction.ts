@@ -11,15 +11,22 @@ import type { PromptDef } from "./index.js";
  * Boundary contract (see `docs/GRANULARITY-AND-MEMORY-LAYERS.md` §6):
  * an L2 policy is **procedural** ("how to do it") — it MUST contain an
  * action template. Anything declarative ("the environment looks like X")
- * belongs to the L3 world model, not here. The system prompt explicitly
- * rejects environment-fact drift to keep the two layers semantically
- * orthogonal. Bumping the version to v2 captures that change.
+ * belongs to the L3 world model, not here.
+ *
+ * v3 (issue #2318): adds a second boundary against **conversational acts**
+ * (asking, confirming, notifying, reporting status) leaking into the
+ * `action` field. Such policies passed schema validation but crystallised
+ * into dead skills — always retrieved, never callable. The revised prompt
+ * (a) enumerates the dialogue verbs to reject and (b) tells the model to
+ * abstain when the cluster's only shared behaviour is dialogue.
+ *
+ * v2 history: added the L3 world-model drift guard.
  */
 export const L2_INDUCTION_PROMPT: PromptDef = {
   id: "l2.induction",
-  version: 2,
+  version: 3,
   description:
-    "Distill an L2 policy (procedural sub-task strategy) from a cluster of similar L1 traces, with explicit boundaries against L3 world-model drift.",
+    "Distill an L2 policy (procedural sub-task strategy) from a cluster of similar L1 traces, with explicit boundaries against L3 world-model drift and against conversational-act 'actions'.",
   system: `You induce reusable **procedural policies** from agent experience.
 
 A policy is a "how-to": "when you see condition X in the agent's state,
@@ -82,6 +89,59 @@ libs by default":
   Do NOT express here (declarative — that's L3's job):
     "Alpine container images ship only the pure-Python tier of the
      Python dependency stack."
+
+──────────────────── Boundaries — conversational acts are NOT policies ────────────────────
+
+A **conversational act** is an I/O behaviour aimed at the user (or
+another agent) — not a procedure applied to the environment. When a
+trace cluster's dominant shared behaviour is dialogue, do NOT wrap that
+dialogue as an ACTION. Such policies pass schema validation but produce
+"dead skills" — the crystalliser promotes them, retrieval surfaces
+them, and no agent can meaningfully invoke them because there is
+nothing to invoke.
+
+Dialogue verbs / patterns to REJECT as ACTION templates (non-exhaustive):
+  - **asking the user** to clarify, choose, or provide input
+    ("ask the user to confirm the skill name before viewing it")
+  - **requesting confirmation** before proceeding
+    ("confirm with the user before deleting the file")
+  - **notifying / informing** the user about state
+    ("notify the user that the build finished")
+  - **reporting status** back to the user
+    ("report the current pipeline status to the user")
+  - **explaining / clarifying** to the user
+    ("explain to the user why the request failed")
+
+Contrast:
+
+  Wrong (dialogue as action — dead skill):
+    trigger:  "user hasn't specified which skill they want to view"
+    action:   "ask the user to confirm the skill name before viewing it"
+
+  Right (dialogue folded into trigger; real procedure as action):
+    trigger:  "user's view-skill request omits an unambiguous skill id
+               AND at least two skills fuzzy-match the phrase they used"
+    action:   "1. look up all skills whose name/tags fuzzy-match the
+               user's phrase; 2. if exactly one hits, resolve to that
+               skill's id; 3. if multiple hit, present the top 3 with
+               ids and let the user pick by id in the next turn"
+
+The distinction: the "wrong" version's action IS the dialogue; the
+"right" version's action is a resolution procedure the agent can carry
+out, and asking the user is at most a fallback branch, not the main
+step. If your only shared behaviour across traces is "the agent talks
+to the user", you have NO policy to induce — see the abstain rule
+below.
+
+Abstain when the cluster IS dialogue-only: if every trace in the input
+reduces to the same dialogue act with no follow-up procedure the agent
+executes on the environment, **do not emit a policy**. Instead return:
+
+  { "abstain": true, "reason": "cluster's shared behaviour is a
+    conversational act, not a reusable procedure — no policy to induce" }
+
+An abstained induction is a successful outcome, not a failure — it
+prevents dead skills from entering the pool.
 
 ──────────────────── Output ─────────────────────
 

@@ -48,6 +48,35 @@ describe("llm/prompts", () => {
     expect(detectDominantLanguage(["GRPO / TRL / reward_fn.py"])).toBe("en");
   });
 
+  it("l2 induction prompt guards against conversational-act actions (issue #2318)", () => {
+    // Version must bump when we tighten guidance so downstream
+    // `promptId@version` records attribute the new behaviour correctly.
+    expect(L2_INDUCTION_PROMPT.version).toBe(3);
+
+    const sys = L2_INDUCTION_PROMPT.system;
+
+    // The boundary block must name conversational acts as a rejected
+    // ACTION shape (symmetric to the existing L3 world-model drift guard).
+    expect(sys).toMatch(/conversational act/i);
+
+    // Enumerate the dialogue verbs we want the model to recognise as
+    // dead-skill precursors — must appear in the prompt so the LLM has a
+    // concrete list to check itself against.
+    expect(sys).toMatch(/\bask(ing)?\b.*\bthe user\b|\bask the user\b/i);
+    expect(sys).toMatch(/\bconfirm(ation)?\b/i);
+    expect(sys).toMatch(/\bnotify(ing)?\b|\bnotification\b/i);
+    expect(sys).toMatch(/\breport(ing)? status\b|\bstatus report\b/i);
+
+    // When the trace cluster's ONLY shared behaviour is dialogue, the
+    // prompt must offer the model an "abstain" escape hatch instead of
+    // forcing it to fabricate a policy.
+    expect(sys).toMatch(/abstain|no policy|do not emit|omit the policy/i);
+
+    // The existing L3-drift guard must still be present — this change is
+    // additive, not a rewrite.
+    expect(sys).toMatch(/L3|world model|world-model/i);
+  });
+
   it("retrieval filter prompt asks for ranked output without selected-field leftovers", () => {
     expect(RETRIEVAL_FILTER_PROMPT.system).toContain('"ranked"');
     expect(RETRIEVAL_FILTER_PROMPT.system).not.toContain('"selected"');
