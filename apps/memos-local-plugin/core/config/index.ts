@@ -145,6 +145,23 @@ export function resolveConfig(raw: unknown, warnings?: string[], agent?: string)
     throw new MemosError("config_invalid", `invalid logging.timezone: ${completed.logging.timezone}`);
   }
 
+  // Cross-field: baseMs must not exceed maxMs, otherwise the exponential
+  // back-off's very first `wait = min(base * 2^0, max)` clamps to `max`
+  // and the retry curve collapses to a flat delay. The individual field
+  // ranges overlap (base up to 24h, max down to 1min) so the schema step
+  // above cannot catch this on its own — issue #2319 PR #2325 review.
+  {
+    const base = completed.algorithm.skill.crystallizationBackoffBaseMs;
+    const max = completed.algorithm.skill.crystallizationBackoffMaxMs;
+    if (base > max) {
+      throw new MemosError(
+        "config_invalid",
+        `algorithm.skill.crystallizationBackoffBaseMs (${base}) must be <= crystallizationBackoffMaxMs (${max})`,
+        { base, max },
+      );
+    }
+  }
+
   return Object.freeze(completed) as ResolvedConfig;
 }
 

@@ -83,6 +83,16 @@ function decide(
   // guard is skipped entirely when the state is "stale" (i.e., the
   // policy itself has been updated since we last tried it), because a
   // fresh update likely reflects new evidence and warrants a retry.
+  //
+  // Ordering caveat: because this runs before the `policy.status` gate,
+  // a policy that is *both* quarantined and inactive/archived reports
+  // the back-off reason, hiding the underlying status. Operators who
+  // clear a quarantine (via a policy edit that bumps `updatedAt` past
+  // `lastAttemptAt`) may then see a status-based skip they did not
+  // expect. That is intentional — quarantine is a "do not retry" signal
+  // that must dominate any downstream reasoning — so operators should
+  // consult `policy.status` independently rather than rely on eligibility
+  // skip reasons alone.
   const backoffSkip = evaluateBackoff(policy, cfg, now);
   if (backoffSkip !== null) {
     return {
@@ -166,7 +176,7 @@ function evaluateBackoff(
 
   // A policy update after the last attempt invalidates the back-off —
   // new evidence has arrived, retry immediately.
-  if (bo.lastAttemptAt != null && policy.updatedAt > bo.lastAttemptAt) {
+  if (bo.lastAttemptAt !== null && policy.updatedAt > bo.lastAttemptAt) {
     return null;
   }
 
@@ -175,7 +185,7 @@ function evaluateBackoff(
     return `crystallization-quarantined attempts=${bo.attempts} reason=${reason}`;
   }
 
-  if (bo.backoffUntil != null && now < bo.backoffUntil) {
+  if (bo.backoffUntil !== null && now < bo.backoffUntil) {
     return `crystallization-backoff attempts=${bo.attempts} until=${bo.backoffUntil}`;
   }
 

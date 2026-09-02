@@ -380,10 +380,16 @@ const AlgorithmSchema = Type.Object({
     /**
      * Initial back-off before retrying a failed crystallization for the
      * same policy. Doubles per attempt, capped at `crystallizationBackoffMaxMs`.
-     * See issue #2319 for the retry-storm this replaces.
+     * Must not exceed `crystallizationBackoffMaxMs` — cross-checked at
+     * config-load time (`resolveConfig`) because the individual field ranges
+     * overlap. See issue #2319 for the retry-storm this replaces.
      */
     crystallizationBackoffBaseMs: NumberInRange(5 * 60 * 1000, 1000, 24 * 60 * 60 * 1000),
-    /** Upper bound of the exponential back-off between crystallization retries. */
+    /**
+     * Upper bound of the exponential back-off between crystallization retries.
+     * Must be >= `crystallizationBackoffBaseMs` (see cross-field check in
+     * `resolveConfig`).
+     */
     crystallizationBackoffMaxMs: NumberInRange(
       24 * 60 * 60 * 1000,
       60 * 1000,

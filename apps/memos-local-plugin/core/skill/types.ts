@@ -128,7 +128,11 @@ export interface SkillConfig {
    * see issue #2319 for the retry-storm the field was designed to prevent.
    */
   crystallizationBackoffBaseMs: number;
-  /** Cap for exponential back-off between crystallization retries. */
+  /**
+   * Cap for exponential back-off between crystallization retries.
+   * Must be >= `crystallizationBackoffBaseMs`. Enforced at config-load
+   * time in `resolveConfig`.
+   */
   crystallizationBackoffMaxMs: number;
   /**
    * After this many consecutive failures the policy is quarantined and

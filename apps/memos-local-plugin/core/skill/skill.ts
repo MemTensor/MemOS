@@ -178,7 +178,7 @@ export async function runSkill(
       const verifyReason = `verify:${verdict.reason ?? "verify-failed"}`;
       warnings.push({
         policyId: decision.policy.id,
-        reason: verdict.reason ?? "verify-failed",
+        reason: verifyReason,
       });
       recordCrystallizationFailure(decision.policy.id, verifyReason, deps);
       bus.emit({
@@ -221,13 +221,33 @@ export async function runSkill(
 
     repos.skills.upsert(row);
     // Success clears any prior back-off — the next natural policy update
-    // or reward tick can retry without artificial delay.
+    // or reward tick can retry without artificial delay. A failure here
+    // leaves the policy stuck in whatever backoff / quarantine state it
+    // was in, so we surface it as both a warning and a `skill.failed`
+    // bus event (stage=persist) — otherwise operators would only see
+    // `resetCrystallizationFailure` errors in the log stream, and the
+    // quarantine would look permanent even after a successful upsert.
     try {
       repos.policies.resetCrystallizationFailure(decision.policy.id);
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       log.warn("skill.backoff.reset_failed", {
         policyId: decision.policy.id,
-        err: err instanceof Error ? err.message : String(err),
+        skillId: row.id,
+        err: errMsg,
+      });
+      warnings.push({
+        policyId: decision.policy.id,
+        skillId: row.id,
+        reason: `backoff-reset-failed: ${errMsg}`,
+      });
+      bus.emit({
+        kind: "skill.failed",
+        at: nowMs(),
+        policyId: decision.policy.id,
+        skillId: row.id,
+        stage: "persist",
+        reason: `backoff-reset-failed: ${errMsg}`,
       });
     }
     if (!row.vec && deps.embedder) {

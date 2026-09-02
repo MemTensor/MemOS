@@ -213,7 +213,10 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
   if (file.version === 19 && file.name === "policy-crystallization-backoff") {
     // Additive columns via ensureColumn so partial-schema test harnesses
     // (no `policies` table) do not blow up on boot, and re-running the
-    // migrator on a DB that already has the columns is a no-op.
+    // migrator on a DB that already has the columns is a no-op. The SQL
+    // file (migrations/019-policy-crystallization-backoff.sql) documents
+    // the same schema for tooling that reads the migrations dir directly;
+    // keep both sides in sync.
     ensurePolicyCrystallizationBackoffColumns(db);
     return;
   }
@@ -375,6 +378,12 @@ function ensurePolicyCrystallizationBackoffColumns(db: StorageDb): void {
   ensureColumn(db, "policies", "crystallization_backoff_until", "INTEGER");
   ensureColumn(db, "policies", "crystallization_last_attempt_at", "INTEGER");
   ensureColumn(db, "policies", "crystallization_last_failure_reason", "TEXT");
+  // Partial index — keep in sync with 019-policy-crystallization-backoff.sql.
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_policies_crystallization_backoff
+       ON policies(crystallization_backoff_until)
+       WHERE crystallization_backoff_until IS NOT NULL`,
+  );
 }
 
 function ensureHubSharingSearchColumns(db: StorageDb): void {

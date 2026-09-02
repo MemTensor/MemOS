@@ -261,6 +261,87 @@ describe("storage/repos — happy paths", () => {
     }
   });
 
+  it("policies: recordCrystallizationFailure throws on missing policy (issue #2319)", () => {
+    // A silent success would let a caller typo or race with deleteById log
+    // a fake back-off record — the throw surfaces the anomaly instead.
+    const { repos, cleanup } = makeTmpDb();
+    try {
+      expect(() =>
+        repos.policies.recordCrystallizationFailure("p_does_not_exist", {
+          reason: "unit-test",
+          baseMs: 1_000,
+          maxMs: 60_000,
+          maxAttempts: 8,
+          now: 1,
+        }),
+      ).toThrow(/policy p_does_not_exist not found/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("policies: recordCrystallizationFailure increments monotonically across calls", () => {
+    // Atomic RMW inside a transaction — sequential calls always advance
+    // `attempts` by 1 with the correct back-off.
+    const { repos, cleanup } = makeTmpDb();
+    try {
+      repos.policies.insert({
+        id: "p_bo",
+        title: "bo",
+        trigger: "",
+        procedure: "",
+        verification: "",
+        boundary: "",
+        support: 1,
+        gain: 0,
+        status: "active",
+        sourceEpisodeIds: [],
+        inducedBy: "proto",
+        decisionGuidance: { preference: [], antiPattern: [] },
+        vec: vec([1, 0]),
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const r1 = repos.policies.recordCrystallizationFailure("p_bo", {
+        reason: "verify:coverage-below-threshold",
+        baseMs: 1_000,
+        maxMs: 60_000,
+        maxAttempts: 3,
+        now: 100,
+      });
+      expect(r1.attempts).toBe(1);
+      expect(r1.quarantined).toBe(false);
+      expect(r1.backoffUntil).toBe(1_100);
+      const r2 = repos.policies.recordCrystallizationFailure("p_bo", {
+        reason: "verify:coverage-below-threshold",
+        baseMs: 1_000,
+        maxMs: 60_000,
+        maxAttempts: 3,
+        now: 200,
+      });
+      expect(r2.attempts).toBe(2);
+      expect(r2.quarantined).toBe(false);
+      const r3 = repos.policies.recordCrystallizationFailure("p_bo", {
+        reason: "verify:coverage-below-threshold",
+        baseMs: 1_000,
+        maxMs: 60_000,
+        maxAttempts: 3,
+        now: 300,
+      });
+      expect(r3.attempts).toBe(3);
+      expect(r3.quarantined).toBe(true);
+      expect(r3.backoffUntil).toBeNull();
+      const stored = repos.policies.getById("p_bo")!;
+      expect(stored.crystallizationBackoff?.attempts).toBe(3);
+      expect(stored.crystallizationBackoff?.backoffUntil).toBeNull();
+      expect(stored.crystallizationBackoff?.lastFailureReason).toBe(
+        "verify:coverage-below-threshold",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
   it("skills: insert + bumpTrial + unique name constraint", () => {
     const { repos, cleanup } = makeTmpDb();
     try {

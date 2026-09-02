@@ -68,6 +68,45 @@ describe("config/loadConfig", () => {
     }
   });
 
+  it("rejects crystallization back-off base > max with config_invalid (issue #2319)", () => {
+    // Both fields individually valid, but the pair inverts the exponential
+    // curve into a flat retry — schema ranges overlap so only the
+    // cross-field guard in resolveConfig catches this.
+    const raw = {
+      algorithm: {
+        skill: {
+          crystallizationBackoffBaseMs: 10 * 60 * 60 * 1000, // 10h
+          crystallizationBackoffMaxMs: 60 * 1000, // 1min
+        },
+      },
+    };
+    expect(() => resolveConfig(raw)).toThrow(MemosError);
+    try {
+      resolveConfig(raw);
+      throw new Error("expected resolveConfig to reject inverted back-off");
+    } catch (err) {
+      expect(MemosError.is(err)).toBe(true);
+      expect((err as MemosError).code).toBe("config_invalid");
+      expect((err as MemosError).message).toMatch(
+        /crystallizationBackoffBaseMs.*must be <=.*crystallizationBackoffMaxMs/,
+      );
+    }
+  });
+
+  it("accepts crystallization back-off base == max", () => {
+    const raw = {
+      algorithm: {
+        skill: {
+          crystallizationBackoffBaseMs: 60 * 60 * 1000,
+          crystallizationBackoffMaxMs: 60 * 60 * 1000,
+        },
+      },
+    };
+    const cfg = resolveConfig(raw);
+    expect(cfg.algorithm.skill.crystallizationBackoffBaseMs).toBe(60 * 60 * 1000);
+    expect(cfg.algorithm.skill.crystallizationBackoffMaxMs).toBe(60 * 60 * 1000);
+  });
+
   it("defaults OpenRouter provider routing lists to empty arrays", () => {
     const cfg = resolveConfig({});
     expect(cfg.llm.providerIgnore).toEqual([]);

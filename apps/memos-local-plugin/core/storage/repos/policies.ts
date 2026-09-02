@@ -1,4 +1,4 @@
-import type { EmbeddingVector, PolicyId, PolicyRow, ShareScope } from "../../types.js";
+import type { EmbeddingVector, EpochMs, PolicyId, PolicyRow, ShareScope } from "../../types.js";
 import type { PolicyListFilter, StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
 import { scanAndTopK, type VectorHit } from "../vector.js";
@@ -414,46 +414,61 @@ export function makePoliciesRepo(db: StorageDb) {
         now: number;
       },
     ): { attempts: number; backoffUntil: number | null; quarantined: boolean } {
-      const row = db.prepare<
-        { id: string },
-        { attempts: number | null }
-      >(
-        `SELECT crystallization_attempts AS attempts FROM policies WHERE id=@id`,
-      ).get({ id });
-      const previous = row?.attempts ?? 0;
-      const attempts = previous + 1;
-      const quarantined = attempts >= opts.maxAttempts;
-      let backoffUntil: number | null;
-      if (quarantined) {
-        backoffUntil = null;
-      } else {
-        // 2^(attempts-1) grows fast; clamp the shift so it can't overflow
-        // JS safe-integer arithmetic for very large maxAttempts settings.
-        const exp = Math.max(0, Math.min(attempts - 1, 30));
-        const wait = Math.min(opts.baseMs * 2 ** exp, opts.maxMs);
-        backoffUntil = opts.now + wait;
-      }
-      db.prepare<{
-        id: string;
-        attempts: number;
-        backoff_until: number | null;
-        last_attempt_at: number;
-        last_failure_reason: string;
-      }>(
-        `UPDATE policies
-           SET crystallization_attempts = @attempts,
-               crystallization_backoff_until = @backoff_until,
-               crystallization_last_attempt_at = @last_attempt_at,
-               crystallization_last_failure_reason = @last_failure_reason
-         WHERE id = @id`,
-      ).run({
-        id,
-        attempts,
-        backoff_until: backoffUntil,
-        last_attempt_at: opts.now,
-        last_failure_reason: opts.reason,
+      // Read-modify-write must be atomic — two concurrent writers reading
+      // the same `attempts` would both write `previous+1`, under-counting
+      // failures and letting a permanently-failing policy retry past the
+      // quarantine threshold. Wrap in a transaction so SQLite serializes
+      // the pair. We also throw when the policy row is missing so a caller
+      // typo or a race with `deleteById` surfaces as a logged warning
+      // (`skill.backoff.record_failed`) instead of silently reporting a
+      // successful record for a row that never got updated.
+      return db.tx(() => {
+        const row = db.prepare<
+          { id: string },
+          { attempts: number | null }
+        >(
+          `SELECT crystallization_attempts AS attempts FROM policies WHERE id=@id`,
+        ).get({ id });
+        if (!row) {
+          throw new Error(
+            `recordCrystallizationFailure: policy ${id} not found`,
+          );
+        }
+        const previous = row.attempts ?? 0;
+        const attempts = previous + 1;
+        const quarantined = attempts >= opts.maxAttempts;
+        let backoffUntil: number | null;
+        if (quarantined) {
+          backoffUntil = null;
+        } else {
+          // 2^(attempts-1) grows fast; clamp the shift so it can't overflow
+          // JS safe-integer arithmetic for very large maxAttempts settings.
+          const exp = Math.max(0, Math.min(attempts - 1, 30));
+          const wait = Math.min(opts.baseMs * 2 ** exp, opts.maxMs);
+          backoffUntil = opts.now + wait;
+        }
+        db.prepare<{
+          id: string;
+          attempts: number;
+          backoff_until: number | null;
+          last_attempt_at: number;
+          last_failure_reason: string;
+        }>(
+          `UPDATE policies
+             SET crystallization_attempts = @attempts,
+                 crystallization_backoff_until = @backoff_until,
+                 crystallization_last_attempt_at = @last_attempt_at,
+                 crystallization_last_failure_reason = @last_failure_reason
+           WHERE id = @id`,
+        ).run({
+          id,
+          attempts,
+          backoff_until: backoffUntil,
+          last_attempt_at: opts.now,
+          last_failure_reason: opts.reason,
+        });
+        return { attempts, backoffUntil, quarantined };
       });
-      return { attempts, backoffUntil, quarantined };
     },
 
     /**
@@ -616,10 +631,10 @@ function mapRow(r: RawPolicyRow): PolicyRow {
         ? {
             attempts: r.crystallization_attempts,
             backoffUntil: (r.crystallization_backoff_until ?? null) as
-              | PolicyRow["updatedAt"]
+              | EpochMs
               | null,
             lastAttemptAt: (r.crystallization_last_attempt_at ?? null) as
-              | PolicyRow["updatedAt"]
+              | EpochMs
               | null,
             lastFailureReason: r.crystallization_last_failure_reason ?? null,
           }
