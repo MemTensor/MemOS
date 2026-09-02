@@ -366,6 +366,9 @@ function bumpFailureBackoff(deps: RunSkillDeps, policyId: PolicyId): void {
   deps.repos.kv.set(failCountKey(policyId), count);
   if (count >= SKILL_FAILURE_BACKOFF_LIMIT) {
     deps.repos.policies.setSkillEligible(policyId, false);
+    // Clear the counter on trip: a later manual re-enable must get a fresh
+    // window, not instant re-trip on the next single failure.
+    deps.repos.kv.del(failCountKey(policyId));
     deps.log.warn("skill.backoff.exhausted", { policyId, count });
   }
 }

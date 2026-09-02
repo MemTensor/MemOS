@@ -81,8 +81,25 @@ describe("skill crystallize failure backoff", () => {
     }
 
     await runSkill({ trigger: "manual", policyId }, deps);
-    expect(failCount(h, policyId)).toBe(3);
+    // the counter is cleared on trip — the re-enable path gets a fresh window
+    expect(failCount(h, policyId)).toBe(0);
     expect(h.repos.policies.getById(policyId)!.skillEligible).toBe(false);
+  });
+
+  it("gives a manually re-enabled policy a fresh backoff window", async () => {
+    const h = open();
+    const policyId = seedCandidate(h);
+    const deps = makeDeps(h, refusingLlm());
+    for (let i = 0; i < 3; i++) await runSkill({ trigger: "manual", policyId }, deps);
+    expect(h.repos.policies.getById(policyId)!.skillEligible).toBe(false);
+    expect(failCount(h, policyId)).toBe(0);
+
+    // admin re-enables the policy: the next failure must count from 0,
+    // not instantly re-trip off the stale counter
+    h.repos.policies.setSkillEligible(policyId, true);
+    await runSkill({ trigger: "manual", policyId }, deps);
+    expect(h.repos.policies.getById(policyId)!.skillEligible).not.toBe(false);
+    expect(failCount(h, policyId)).toBe(1);
   });
 
   it("reports the tripped backoff as its own skip reason on later runs", async () => {
@@ -97,7 +114,8 @@ describe("skill crystallize failure backoff", () => {
     // stays frozen at 3
     expect(r.evaluated).toBe(0);
     expect(r.crystallized).toBe(0);
-    expect(failCount(h, policyId)).toBe(3);
+    // the counter was cleared when the backoff tripped
+    expect(failCount(h, policyId)).toBe(0);
     expect(h.repos.policies.getById(policyId)!.skillEligible).toBe(false);
   });
 
