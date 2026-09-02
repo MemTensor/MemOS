@@ -2135,10 +2135,16 @@ export function createMemoryCore(
     ensureLive();
     const existing = handle.sessionManager.getSession(sessionId);
     if (!existing) {
-      throw new MemosError(
-        "session_not_found",
-        `session not found: ${sessionId}`,
-      );
+      // Idempotent: closing an already-unknown session is a no-op. Adapters
+      // and the memmy-agent bridge can race the lifecycle (host `/new`
+      // followed by a fresh user message, or a duplicate `session.close`
+      // fire from `on_session_end`) — a hard throw here surfaced to the
+      // user as "session not found" on the second message even though the
+      // session was correctly re-opened by the next turn. Mirror the
+      // `session.closed` bus event which is emit-and-forget.
+      log.debug("closeSession.unknown_session_ignored", { sessionId });
+      turnStartApiLogBySession.delete(sessionId);
+      return;
     }
     handle.sessionManager.closeSession(sessionId, "client");
     turnStartApiLogBySession.delete(sessionId);

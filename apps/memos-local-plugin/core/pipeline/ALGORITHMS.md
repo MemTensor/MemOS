@@ -204,7 +204,7 @@ Mapping conventions:
 | `onTurnStart`             | Retrieval throws                  | Log error, return empty `InjectionPacket`.           |
 | `onTurnEnd`               | No open episode for session       | Throw `Error("no open episode for session ...")`.    |
 | `onTurnEnd`               | Current open episode is closed    | Throw `Error("episode ... is not open")`.            |
-| `closeSession`            | Session unknown                   | `MemosError("session_not_found")`.                   |
+| `closeSession`            | Session unknown                   | No-op (idempotent); mirrors closeEpisode semantics.  |
 | `closeEpisode`            | Episode unknown                   | `MemosError("episode_not_found")`.                   |
 | `retireSkill`             | Skill unknown                     | `MemosError("skill_not_found")`.                     |
 | Post-shutdown calls       | Any method                        | `MemosError("already_shut_down")`.                   |
