@@ -149,6 +149,11 @@ class TestIdStability1to1:
                 user_name="u1",
             )
 
+        # Verify the handler ran the happy path (enhanced item was stored)
+        assert text_mem.add.called, (
+            "text_mem.add was not called — handler may have exited early"
+        )
+
         # delete must not be called with the original_id
         if text_mem.delete.called:
             for c in text_mem.delete.call_args_list:

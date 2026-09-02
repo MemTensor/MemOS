@@ -197,7 +197,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                             orig_item.id,
                         )
 
-            if processed_memories and len(processed_memories) > 0:
+            if processed_memories:
                 flattened_memories = []
                 for memory_list in processed_memories:
                     flattened_memories.extend(memory_list)
