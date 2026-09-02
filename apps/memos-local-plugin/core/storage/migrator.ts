@@ -210,6 +210,13 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     }
     return;
   }
+  if (file.version === 19 && file.name === "policy-crystallization-backoff") {
+    // Additive columns via ensureColumn so partial-schema test harnesses
+    // (no `policies` table) do not blow up on boot, and re-running the
+    // migrator on a DB that already has the columns is a no-op.
+    ensurePolicyCrystallizationBackoffColumns(db);
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
 }
 
@@ -355,6 +362,19 @@ function ensureFeedbackExperienceMetadataColumns(db: StorageDb): void {
   );
   db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_experience ON policies(experience_type, evidence_polarity, updated_at DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_policies_skill_eligible ON policies(skill_eligible, status, updated_at DESC)`);
+}
+
+function ensurePolicyCrystallizationBackoffColumns(db: StorageDb): void {
+  if (!tableExists(db, "policies")) return;
+  ensureColumn(
+    db,
+    "policies",
+    "crystallization_attempts",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  ensureColumn(db, "policies", "crystallization_backoff_until", "INTEGER");
+  ensureColumn(db, "policies", "crystallization_last_attempt_at", "INTEGER");
+  ensureColumn(db, "policies", "crystallization_last_failure_reason", "TEXT");
 }
 
 function ensureHubSharingSearchColumns(db: StorageDb): void {

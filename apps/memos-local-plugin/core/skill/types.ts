@@ -120,6 +120,22 @@ export interface SkillConfig {
   minEtaForRetrieval: number;
   /** Archive a low-η active skill after it has not been retrieved for this long. */
   idleArchiveMs: number;
+  /**
+   * V7 §2.5 addendum — first back-off between crystallization retries after
+   * a per-policy failure (`crystallize`, `verify`, or `no-evidence`).
+   * Doubles per attempt via `min(baseMs * 2^(attempts-1), maxMs)`. Failure
+   * state is stored on the `policies` row so it survives daemon restarts;
+   * see issue #2319 for the retry-storm the field was designed to prevent.
+   */
+  crystallizationBackoffBaseMs: number;
+  /** Cap for exponential back-off between crystallization retries. */
+  crystallizationBackoffMaxMs: number;
+  /**
+   * After this many consecutive failures the policy is quarantined and
+   * never retried until its `updatedAt` moves past `lastAttemptAt` (i.e.
+   * new evidence arrived) or the failure state is explicitly cleared.
+   */
+  crystallizationMaxAttempts: number;
 }
 
 /**

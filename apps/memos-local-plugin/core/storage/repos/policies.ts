@@ -46,6 +46,10 @@ const COLUMNS = [
   "share_target",
   "shared_at",
   "edited_at",
+  "crystallization_attempts",
+  "crystallization_backoff_until",
+  "crystallization_last_attempt_at",
+  "crystallization_last_failure_reason",
 ];
 
 export interface PolicySearchMeta {
@@ -386,6 +390,87 @@ export function makePoliciesRepo(db: StorageDb) {
       ).run({ id, vec: toBlob(vec)!, updated_at: Date.now() });
       return res.changes > 0;
     },
+
+    /**
+     * Record a failed crystallization attempt and schedule the next retry
+     * via exponential back-off. Returns the resulting state so the caller
+     * can log / emit metrics without re-reading the row.
+     *
+     * At `attempts >= maxAttempts` the policy enters "quarantine": we clear
+     * `backoff_until` (there is no scheduled retry) but keep the attempt
+     * counter, so `evaluateEligibility` continues to skip until the policy
+     * itself is updated (bumping `updated_at` past `last_attempt_at`) or
+     * `resetCrystallizationFailure` is called explicitly.
+     *
+     * See openspec/changes/2026-09-02-2319-pre-submission-checklist/design.md.
+     */
+    recordCrystallizationFailure(
+      id: PolicyId,
+      opts: {
+        reason: string;
+        baseMs: number;
+        maxMs: number;
+        maxAttempts: number;
+        now: number;
+      },
+    ): { attempts: number; backoffUntil: number | null; quarantined: boolean } {
+      const row = db.prepare<
+        { id: string },
+        { attempts: number | null }
+      >(
+        `SELECT crystallization_attempts AS attempts FROM policies WHERE id=@id`,
+      ).get({ id });
+      const previous = row?.attempts ?? 0;
+      const attempts = previous + 1;
+      const quarantined = attempts >= opts.maxAttempts;
+      let backoffUntil: number | null;
+      if (quarantined) {
+        backoffUntil = null;
+      } else {
+        // 2^(attempts-1) grows fast; clamp the shift so it can't overflow
+        // JS safe-integer arithmetic for very large maxAttempts settings.
+        const exp = Math.max(0, Math.min(attempts - 1, 30));
+        const wait = Math.min(opts.baseMs * 2 ** exp, opts.maxMs);
+        backoffUntil = opts.now + wait;
+      }
+      db.prepare<{
+        id: string;
+        attempts: number;
+        backoff_until: number | null;
+        last_attempt_at: number;
+        last_failure_reason: string;
+      }>(
+        `UPDATE policies
+           SET crystallization_attempts = @attempts,
+               crystallization_backoff_until = @backoff_until,
+               crystallization_last_attempt_at = @last_attempt_at,
+               crystallization_last_failure_reason = @last_failure_reason
+         WHERE id = @id`,
+      ).run({
+        id,
+        attempts,
+        backoff_until: backoffUntil,
+        last_attempt_at: opts.now,
+        last_failure_reason: opts.reason,
+      });
+      return { attempts, backoffUntil, quarantined };
+    },
+
+    /**
+     * Clear the per-policy crystallization back-off state. Called after a
+     * successful crystallization / rebuild so the next natural policy
+     * update or reward tick can retry without artificial delay.
+     */
+    resetCrystallizationFailure(id: PolicyId): void {
+      db.prepare<{ id: string }>(
+        `UPDATE policies
+           SET crystallization_attempts = 0,
+               crystallization_backoff_until = NULL,
+               crystallization_last_attempt_at = NULL,
+               crystallization_last_failure_reason = NULL
+         WHERE id = @id`,
+      ).run({ id });
+    },
   };
 }
 
@@ -420,6 +505,10 @@ interface RawPolicyRow {
   share_target: string | null;
   shared_at: number | null;
   edited_at: number | null;
+  crystallization_attempts: number | null;
+  crystallization_backoff_until: number | null;
+  crystallization_last_attempt_at: number | null;
+  crystallization_last_failure_reason: string | null;
 }
 
 type RawPolicySearchRow = Pick<
@@ -444,6 +533,7 @@ const EMPTY_GUIDANCE: PolicyRow["decisionGuidance"] = Object.freeze({
 });
 
 function rowToParams(row: PolicyRow): Record<string, unknown> {
+  const bo = row.crystallizationBackoff ?? null;
   return {
     id: row.id,
     ...ownerParamsFromRow(row),
@@ -476,6 +566,10 @@ function rowToParams(row: PolicyRow): Record<string, unknown> {
     share_target: row.share?.target ?? null,
     shared_at: row.share?.sharedAt ?? null,
     edited_at: row.editedAt ?? null,
+    crystallization_attempts: bo?.attempts ?? 0,
+    crystallization_backoff_until: bo?.backoffUntil ?? null,
+    crystallization_last_attempt_at: bo?.lastAttemptAt ?? null,
+    crystallization_last_failure_reason: bo?.lastFailureReason ?? null,
   };
 }
 
@@ -517,6 +611,19 @@ function mapRow(r: RawPolicyRow): PolicyRow {
           }
         : null,
     editedAt: r.edited_at,
+    crystallizationBackoff:
+      r.crystallization_attempts != null && r.crystallization_attempts > 0
+        ? {
+            attempts: r.crystallization_attempts,
+            backoffUntil: (r.crystallization_backoff_until ?? null) as
+              | PolicyRow["updatedAt"]
+              | null,
+            lastAttemptAt: (r.crystallization_last_attempt_at ?? null) as
+              | PolicyRow["updatedAt"]
+              | null,
+            lastFailureReason: r.crystallization_last_failure_reason ?? null,
+          }
+        : null,
   };
 }
 

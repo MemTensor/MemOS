@@ -36,6 +36,7 @@ function mkPolicy(partial: Partial<PolicyRow>): PolicyRow {
     vec: partial.vec ?? null,
     createdAt: (partial.createdAt ?? BASE_POLICY.createdAt) as PolicyRow["createdAt"],
     updatedAt: (partial.updatedAt ?? BASE_POLICY.updatedAt) as PolicyRow["updatedAt"],
+    crystallizationBackoff: partial.crystallizationBackoff,
   };
 }
 
@@ -145,5 +146,97 @@ describe("skill/eligibility", () => {
     );
     expect(r.decisions[0]!.action).toBe("crystallize");
     expect(r.decisions[0]!.existingSkill?.status).toBe("archived");
+  });
+
+  // ─── Crystallization back-off gate (issue #2319) ─────────────────────
+
+  it("skips a policy whose back-off window has not yet elapsed", () => {
+    const cfg = makeSkillConfig({
+      crystallizationBackoffBaseMs: 60_000,
+      crystallizationBackoffMaxMs: 3_600_000,
+      crystallizationMaxAttempts: 8,
+    });
+    const policy = mkPolicy({
+      support: 5,
+      gain: 0.4,
+      updatedAt: 1_000 as PolicyRow["updatedAt"],
+      crystallizationBackoff: {
+        attempts: 1,
+        backoffUntil: 60_000 as PolicyRow["updatedAt"],
+        lastAttemptAt: 5_000 as PolicyRow["updatedAt"],
+        lastFailureReason: "llm-refusal",
+      },
+    });
+    const r = evaluateEligibility(
+      { policies: [policy], skillsByPolicy: new Map(), now: 30_000 },
+      cfg,
+    );
+    expect(r.decisions[0]!.action).toBe("skip");
+    expect(r.decisions[0]!.reason).toMatch(/^crystallization-backoff attempts=1 until=60000$/);
+  });
+
+  it("proceeds once the back-off window has elapsed", () => {
+    const cfg = makeSkillConfig({
+      crystallizationBackoffBaseMs: 60_000,
+      crystallizationMaxAttempts: 8,
+    });
+    const policy = mkPolicy({
+      support: 5,
+      gain: 0.4,
+      updatedAt: 1_000 as PolicyRow["updatedAt"],
+      crystallizationBackoff: {
+        attempts: 1,
+        backoffUntil: 60_000 as PolicyRow["updatedAt"],
+        lastAttemptAt: 5_000 as PolicyRow["updatedAt"],
+        lastFailureReason: "llm-refusal",
+      },
+    });
+    const r = evaluateEligibility(
+      { policies: [policy], skillsByPolicy: new Map(), now: 60_001 },
+      cfg,
+    );
+    expect(r.decisions[0]!.action).toBe("crystallize");
+  });
+
+  it("quarantines a policy once max attempts is reached", () => {
+    const cfg = makeSkillConfig({ crystallizationMaxAttempts: 3 });
+    const policy = mkPolicy({
+      support: 5,
+      gain: 0.4,
+      updatedAt: 100 as PolicyRow["updatedAt"],
+      crystallizationBackoff: {
+        attempts: 3,
+        backoffUntil: null,
+        lastAttemptAt: 1_000 as PolicyRow["updatedAt"],
+        lastFailureReason: "verify:coverage-below-threshold",
+      },
+    });
+    const r = evaluateEligibility(
+      { policies: [policy], skillsByPolicy: new Map(), now: 999_999_999 },
+      cfg,
+    );
+    expect(r.decisions[0]!.action).toBe("skip");
+    expect(r.decisions[0]!.reason).toContain("crystallization-quarantined attempts=3");
+    expect(r.decisions[0]!.reason).toContain("reason=verify:coverage-below-threshold");
+  });
+
+  it("ignores back-off when the policy has been updated since the last attempt", () => {
+    const cfg = makeSkillConfig({ crystallizationMaxAttempts: 8 });
+    const policy = mkPolicy({
+      support: 5,
+      gain: 0.4,
+      updatedAt: 10_000 as PolicyRow["updatedAt"],
+      crystallizationBackoff: {
+        attempts: 5,
+        backoffUntil: 999_999_999 as PolicyRow["updatedAt"],
+        lastAttemptAt: 5_000 as PolicyRow["updatedAt"],
+        lastFailureReason: "verify:resonance-below-threshold",
+      },
+    });
+    const r = evaluateEligibility(
+      { policies: [policy], skillsByPolicy: new Map(), now: 6_000 },
+      cfg,
+    );
+    expect(r.decisions[0]!.action).toBe("crystallize");
   });
 });

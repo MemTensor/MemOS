@@ -299,3 +299,33 @@ A skill run never throws because one policy in a batch misbehaves.
 Run-level cancellation is never used — the orchestrator instead
 returns `rejected` / `warnings` counts in `RunSkillResult` so the
 caller can assert on them.
+
+### Persistent back-off (issue #2319)
+
+`runSkill` also persists per-policy failure state on the `policies`
+row (migration 019: `crystallization_attempts`,
+`crystallization_backoff_until`, `crystallization_last_attempt_at`,
+`crystallization_last_failure_reason`). Every failure branch —
+`evidence` (no-evidence), `crystallize` (LLM refusal / parse / disabled),
+`verify` (coverage or resonance rejection) — calls
+`policies.recordCrystallizationFailure` which:
+
+* increments `attempts`
+* schedules `backoffUntil = now + min(baseMs * 2^(attempts-1), maxMs)`
+* stamps `lastAttemptAt = now` and the failure reason
+
+At `attempts >= crystallizationMaxAttempts` the policy is quarantined:
+`backoffUntil` is cleared, and eligibility keeps skipping until either
+the policy is updated (bumping `updatedAt` past `lastAttemptAt`) or a
+successful crystallization calls
+`policies.resetCrystallizationFailure`.
+
+Eligibility auto-invalidates the back-off when a fresh policy update
+arrives: if `policy.updatedAt > lastAttemptAt` the guard is ignored and
+the retry proceeds. This is the natural rehab path — new evidence
+means the previous failure may no longer apply.
+
+Defaults: `baseMs=5min`, `maxMs=24h`, `maxAttempts=8`. Under the
+observed 25-day workload from #2319 this turns 2,640 retries into 8
+retries then quarantine — a >300× budget reduction.
+

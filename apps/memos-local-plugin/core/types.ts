@@ -203,6 +203,21 @@ export interface PolicyRow extends OwnedRow {
   } | null;
   /** Last user edit through the viewer's edit modal (migration 009). */
   editedAt?: EpochMs | null;
+  /**
+   * V7 §2.5 addendum — persistent back-off state for skill crystallization
+   * retries (migration 019). Absent / `null` = never attempted;
+   * `attempts === 0` = clean state. When `updatedAt > lastAttemptAt` the
+   * state is considered stale and eligibility ignores it (letting a fresh
+   * policy update through immediately). See
+   * `openspec/changes/2026-09-02-2319-pre-submission-checklist/design.md`
+   * for the full rationale.
+   */
+  crystallizationBackoff?: {
+    attempts: number;
+    backoffUntil: EpochMs | null;
+    lastAttemptAt: EpochMs | null;
+    lastFailureReason: string | null;
+  } | null;
 }
 
 /**

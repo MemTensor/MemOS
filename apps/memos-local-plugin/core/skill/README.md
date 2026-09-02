@@ -201,7 +201,10 @@ See `algorithm.skill` in
 | `minSupport`                | `2`     | Min distinct-episode support to crystallize.          |
 | `minGain`                   | `0.02`  | Min policy gain required (paired with the new shrinkage-anchored gain in `core/memory/l2/gain.ts`). |
 | `candidateTrials`           | `3`     | Trials required to transition out of `candidate`. NOTE: legacy docs called this `probationaryTrials`; the schema field is `candidateTrials`. |
-| `cooldownMs`                | `60000` | Debounce between runs triggered by the same policy.   |
+| `cooldownMs`                | `60000` | Debounce between runs triggered by the same policy. **Documented for legacy YAML files — currently a no-op; see `crystallizationBackoffBaseMs` for the wired-up mechanism.** |
+| `crystallizationBackoffBaseMs` | `300000` | Initial wait before retrying a failed crystallization (doubles per attempt, issue #2319). |
+| `crystallizationBackoffMaxMs`  | `86400000` | Upper bound of the exponential back-off between crystallization retries. |
+| `crystallizationMaxAttempts`   | `8`      | Consecutive failures before a policy is quarantined from crystallization. |
 | `traceCharCap`              | `600`   | Char cap per evidence trace in the crystallize prompt.|
 | `evidenceLimit`             | `4`     | Max evidence traces per crystallize call.             |
 | `useLlm`                    | `true`  | Toggle the LLM off (tests / degraded mode).           |

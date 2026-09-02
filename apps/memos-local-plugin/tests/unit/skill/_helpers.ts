@@ -41,6 +41,9 @@ export function makeSkillConfig(partial: Partial<SkillConfig> = {}): SkillConfig
     archiveEta: 0.1,
     minEtaForRetrieval: 0.1,
     idleArchiveMs: 30 * 24 * 60 * 60 * 1000,
+    crystallizationBackoffBaseMs: 5 * 60 * 1000,
+    crystallizationBackoffMaxMs: 24 * 60 * 60 * 1000,
+    crystallizationMaxAttempts: 8,
     ...partial,
   };
 }

@@ -77,7 +77,10 @@ export async function runSkill(
   const warnings: RunSkillResult["warnings"] = [];
 
   const tEligibility = nowMs();
-  const eligibility = evaluateEligibility({ policies, skillsByPolicy }, config);
+  const eligibility = evaluateEligibility(
+    { policies, skillsByPolicy, now: tEligibility },
+    config,
+  );
   timings.eligibility = nowMs() - tEligibility;
 
   bus.emit({
@@ -105,6 +108,7 @@ export async function runSkill(
     });
     if (evidence.traces.length === 0) {
       warnings.push({ policyId: decision.policy.id, reason: "no-evidence" });
+      recordCrystallizationFailure(decision.policy.id, "no-evidence", deps);
       bus.emit({
         kind: "skill.failed",
         at: nowMs(),
@@ -146,6 +150,11 @@ export async function runSkill(
         policyId: decision.policy.id,
         reason: crystResult.skippedReason,
       });
+      recordCrystallizationFailure(
+        decision.policy.id,
+        crystResult.skippedReason,
+        deps,
+      );
       bus.emit({
         kind: "skill.failed",
         at: nowMs(),
@@ -166,10 +175,12 @@ export async function runSkill(
 
     if (!verdict.ok) {
       rejected += 1;
+      const verifyReason = `verify:${verdict.reason ?? "verify-failed"}`;
       warnings.push({
         policyId: decision.policy.id,
         reason: verdict.reason ?? "verify-failed",
       });
+      recordCrystallizationFailure(decision.policy.id, verifyReason, deps);
       bus.emit({
         kind: "skill.verification.failed",
         at: nowMs(),
@@ -209,6 +220,16 @@ export async function runSkill(
     }
 
     repos.skills.upsert(row);
+    // Success clears any prior back-off — the next natural policy update
+    // or reward tick can retry without artificial delay.
+    try {
+      repos.policies.resetCrystallizationFailure(decision.policy.id);
+    } catch (err) {
+      log.warn("skill.backoff.reset_failed", {
+        policyId: decision.policy.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
     if (!row.vec && deps.embedder) {
       repos.embeddingRetryQueue.enqueue({
         id: `er_${ids.span()}`,
@@ -337,6 +358,48 @@ export function applySkillFeedback(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Persist a per-policy failure into the `policies` row so eligibility can
+ * skip the policy on the next tick (issue #2319). Isolated from `runSkill`
+ * so a repo-side error can never leak past the orchestrator and abort
+ * remaining policies in the batch.
+ */
+function recordCrystallizationFailure(
+  policyId: PolicyRow["id"],
+  reason: string,
+  deps: RunSkillDeps,
+): void {
+  try {
+    const result = deps.repos.policies.recordCrystallizationFailure(policyId, {
+      reason,
+      baseMs: deps.config.crystallizationBackoffBaseMs,
+      maxMs: deps.config.crystallizationBackoffMaxMs,
+      maxAttempts: deps.config.crystallizationMaxAttempts,
+      now: nowMs(),
+    });
+    if (result.quarantined) {
+      deps.log.warn("skill.backoff.quarantined", {
+        policyId,
+        attempts: result.attempts,
+        reason,
+      });
+    } else {
+      deps.log.debug("skill.backoff.recorded", {
+        policyId,
+        attempts: result.attempts,
+        backoffUntil: result.backoffUntil,
+        reason,
+      });
+    }
+  } catch (err) {
+    deps.log.warn("skill.backoff.record_failed", {
+      policyId,
+      reason,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 function gatherPolicies(input: RunSkillInput, repos: Repos): PolicyRow[] {
   if (input.policyId) {

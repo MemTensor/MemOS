@@ -377,6 +377,20 @@ const AlgorithmSchema = Type.Object({
       60 * 60 * 1000,
       365 * 24 * 60 * 60 * 1000,
     ),
+    /**
+     * Initial back-off before retrying a failed crystallization for the
+     * same policy. Doubles per attempt, capped at `crystallizationBackoffMaxMs`.
+     * See issue #2319 for the retry-storm this replaces.
+     */
+    crystallizationBackoffBaseMs: NumberInRange(5 * 60 * 1000, 1000, 24 * 60 * 60 * 1000),
+    /** Upper bound of the exponential back-off between crystallization retries. */
+    crystallizationBackoffMaxMs: NumberInRange(
+      24 * 60 * 60 * 1000,
+      60 * 1000,
+      30 * 24 * 60 * 60 * 1000,
+    ),
+    /** Consecutive failures before a policy is quarantined from crystallization. */
+    crystallizationMaxAttempts: NumberInRange(8, 1, 100),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */

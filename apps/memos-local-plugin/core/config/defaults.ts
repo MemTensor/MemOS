@@ -259,6 +259,14 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       archiveEta: 0.1,
       minEtaForRetrieval: 0.1,
       idleArchiveMs: 30 * 24 * 60 * 60 * 1000,
+      // Persistent per-policy back-off for skill crystallization retries
+      // (issue #2319). Defaults picked to keep transient failures snappy
+      // (5 min → 10 min → 20 min ...) while permanent-failure policies get
+      // quarantined after ~10 h of cumulative exponential wait — a >300×
+      // reduction on the observed 2,640-failures-in-25-days workload.
+      crystallizationBackoffBaseMs: 5 * 60 * 1000,
+      crystallizationBackoffMaxMs: 24 * 60 * 60 * 1000,
+      crystallizationMaxAttempts: 8,
     },
     feedback: {
       failureThreshold: 3,

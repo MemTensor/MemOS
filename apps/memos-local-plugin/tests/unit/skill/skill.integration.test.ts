@@ -323,4 +323,105 @@ describe("skill/runSkill (integration)", () => {
     expect(r.warnings[0]?.reason).toBe("no-evidence");
     expect(events.some((e) => e.kind === "skill.failed")).toBe(true);
   });
+
+  // ─── Crystallization back-off regression (issue #2319) ───────────────
+
+  it("does not re-invoke the LLM while the back-off window is active", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": makeDraft({
+          summary: "I am Claude, made by Anthropic. I cannot process this request.",
+        }),
+      },
+    });
+
+    const { deps } = makeDeps(h, {
+      llm,
+      config: makeSkillConfig({
+        crystallizationBackoffBaseMs: 60_000,
+        crystallizationBackoffMaxMs: 3_600_000,
+        crystallizationMaxAttempts: 8,
+      }),
+    });
+
+    const first = await runSkill({ trigger: "manual", policyId }, deps);
+    expect(first.rejected).toBe(1);
+    const requestsAfterFirst = llm.stats().requests;
+    expect(requestsAfterFirst).toBe(1);
+
+    // Second run under the same wall-clock landed inside the back-off
+    // window: the LLM must not be invoked again.
+    const second = await runSkill({ trigger: "manual", policyId }, deps);
+    expect(second.evaluated).toBe(0);
+    expect(second.rejected).toBe(0);
+    expect(llm.stats().requests).toBe(requestsAfterFirst);
+
+    const stored = h.repos.policies.getById(policyId)!;
+    expect(stored.crystallizationBackoff?.attempts).toBe(1);
+    expect(stored.crystallizationBackoff?.lastFailureReason).toBe("llm-refusal");
+  });
+
+  it("clears back-off state after a successful crystallization", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    // Pre-seed a failure state on the row so we can confirm success wipes it.
+    h.repos.policies.recordCrystallizationFailure(policyId, {
+      reason: "llm-refusal",
+      baseMs: 60_000,
+      maxMs: 3_600_000,
+      maxAttempts: 8,
+      now: 1_000,
+    });
+    // Move the policy timestamp past lastAttemptAt so the back-off is
+    // "stale" and the run proceeds without waiting.
+    const p = h.repos.policies.getById(policyId)!;
+    h.repos.policies.upsert({
+      ...p,
+      updatedAt: 999_999_999 as typeof p.updatedAt,
+    });
+
+    const { deps } = makeDeps(h);
+    const r = await runSkill({ trigger: "manual", policyId }, deps);
+    expect(r.crystallized).toBe(1);
+
+    const after = h.repos.policies.getById(policyId)!;
+    expect(after.crystallizationBackoff).toBeNull();
+  });
+
+  it("quarantines a policy after crystallizationMaxAttempts consecutive failures", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    const { deps } = makeDeps(h, {
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": makeDraft({
+            summary: "I am Claude, made by Anthropic. I cannot process this request.",
+          }),
+        },
+      }),
+      config: makeSkillConfig({
+        crystallizationBackoffBaseMs: 1,
+        crystallizationBackoffMaxMs: 5,
+        crystallizationMaxAttempts: 2,
+      }),
+    });
+
+    // Attempt 1: records failure, schedules a back-off ≤ 5 ms.
+    await runSkill({ trigger: "manual", policyId }, deps);
+    // Wait the tiny back-off out.
+    await new Promise((r) => setTimeout(r, 15));
+    // Attempt 2: records failure, hits maxAttempts, quarantines.
+    await runSkill({ trigger: "manual", policyId }, deps);
+
+    const after = h.repos.policies.getById(policyId)!;
+    expect(after.crystallizationBackoff?.attempts).toBe(2);
+    expect(after.crystallizationBackoff?.backoffUntil).toBeNull();
+
+    // A third run must skip the policy entirely — no attempted crystallize.
+    const third = await runSkill({ trigger: "manual", policyId }, deps);
+    expect(third.evaluated).toBe(0);
+    expect(third.rejected).toBe(0);
+  });
 });
