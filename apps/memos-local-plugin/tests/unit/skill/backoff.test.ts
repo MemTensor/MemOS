@@ -111,7 +111,7 @@ describe("skill crystallize failure backoff", () => {
     const r = await runSkill({ trigger: "manual", policyId }, deps);
     // the eligibility gate now skips before crystallize — the run counts
     // the policy as skipped (not evaluated) and the failure counter
-    // stays frozen at 3
+    // stays cleared at 0 (cleared when the backoff tripped)
     expect(r.evaluated).toBe(0);
     expect(r.crystallized).toBe(0);
     // the counter was cleared when the backoff tripped
