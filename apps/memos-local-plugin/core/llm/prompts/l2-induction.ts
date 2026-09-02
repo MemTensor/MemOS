@@ -17,6 +17,7 @@ import type { PromptDef } from "./index.js";
  * v3 history: adds a negative list for conversational acts (clarify /
  * confirm-with-user / notify / reporting status). 2026-08-28 audit: those
  * crystallized into dead skills nobody can invoke.
+ * Bumping the version to v3 captures that change.
  */
 export const L2_INDUCTION_PROMPT: PromptDef = {
   id: "l2.induction",
