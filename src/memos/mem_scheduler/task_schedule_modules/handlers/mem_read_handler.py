@@ -182,6 +182,21 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 logger.warning("%s: Fail to transfer mem: %s", e, memory_items)
                 processed_memories = []
 
+            # ID-stability: when fine_transfer_simple_mem returns exactly one
+            # enhanced memory per input item (1:1 mapping), reuse the original
+            # node ID on the enhanced item.  Neo4j uses MERGE semantics so the
+            # graph node is updated in-place and the caller's handle stays valid.
+            reused_ids: set[str] = set()
+            if processed_memories and len(processed_memories) == len(memory_items):
+                for orig_item, enhanced_list in zip(memory_items, processed_memories, strict=True):
+                    if len(enhanced_list) == 1:
+                        enhanced_list[0].id = orig_item.id
+                        reused_ids.add(orig_item.id)
+                        logger.info(
+                            "[mem_read_handler] Reusing original ID %s for 1:1 enhanced memory",
+                            orig_item.id,
+                        )
+
             if processed_memories and len(processed_memories) > 0:
                 flattened_memories = []
                 for memory_list in processed_memories:
@@ -398,9 +413,11 @@ class MemReadMessageHandler(BaseSchedulerHandler):
             else:
                 logger.info("mem_reader returned no processed memories")
 
-            delete_ids = list(mem_ids)
+            # Exclude IDs that were reused in-place — deleting them would
+            # destroy the node we just overwrote with the enhanced content.
+            delete_ids = [mid for mid in mem_ids if mid not in reused_ids]
             if bindings_to_delete:
-                delete_ids.extend(list(bindings_to_delete))
+                delete_ids.extend([bid for bid in bindings_to_delete if bid not in reused_ids])
             delete_ids = list(dict.fromkeys(delete_ids))
             if delete_ids:
                 try:
