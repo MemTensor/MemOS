@@ -165,6 +165,54 @@ describe("llm/client", () => {
     expect(fake.invocations).toBe(2);
   });
 
+  it("completeJson fails fast on finish_reason=length instead of retrying at same budget", async () => {
+    // Thinking models share max_tokens between reasoning and answer, so a
+    // truncated completion arrives as 200 OK with finish_reason="length"
+    // and an unparseable JSON body. Retrying at the same budget truncates
+    // again — the retry should be skipped.
+    const fake = new FakeProvider("openai_compatible", () => ({
+      text: '{"partial":',
+      finishReason: "length",
+      durationMs: 1,
+      usage: { promptTokens: 10, completionTokens: 512, totalTokens: 522 },
+    }));
+    const client = createLlmClientWithProvider(cfg(), fake);
+
+    try {
+      await client.completeJson("ask", { malformedRetries: 3, maxTokens: 512 });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MemosError);
+      const memos = err as MemosError;
+      expect(memos.code).toBe(ERROR_CODES.LLM_OUTPUT_MALFORMED);
+      expect(memos.details).toMatchObject({
+        truncated: true,
+        finishReason: "length",
+        maxTokens: 512,
+      });
+      expect(memos.message).toMatch(/truncat|max_tokens|length/i);
+    }
+    // Key assertion: exactly one provider call, not one + retries.
+    expect(fake.invocations).toBe(1);
+    expect(client.stats().retries).toBe(0);
+  });
+
+  it("completeJson still retries on malformed output that is not a length truncation", async () => {
+    // Regression guard: the length short-circuit must not swallow genuine
+    // malformed outputs (finishReason=stop|undefined), which are still
+    // worth retrying — a resample may produce valid JSON.
+    const fake = new FakeProvider("openai_compatible", (n) => ({
+      text: n === 1 ? "not json" : '{"ok":1}',
+      finishReason: "stop",
+      durationMs: 1,
+    }));
+    const client = createLlmClientWithProvider(cfg(), fake);
+    const r = await client.completeJson<{ ok: number }>("ask", { malformedRetries: 1 });
+    expect(r.value.ok).toBe(1);
+    expect(fake.invocations).toBe(2);
+    expect(client.stats().retries).toBe(1);
+  });
+
   it("stream passes provider-native chunks through", async () => {
     const client = createLlmClientWithProvider(cfg(), new StreamingProvider());
     const chunks: LlmStreamChunk[] = [];

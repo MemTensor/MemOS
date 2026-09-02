@@ -507,11 +507,13 @@ export function createLlmClientWithProvider(
     let attempt = 0;
     let lastRaw = "";
     let lastErr: unknown = null;
+    let lastCompletion: LlmCompletion | null = null;
 
     while (attempt <= maxMalformedRetries) {
       attempt++;
       const { completion } = await callWithFallback(msgs, call, opts, op);
       lastRaw = completion.text;
+      lastCompletion = completion;
       try {
         const parsed = opts.parse
           ? opts.parse(completion.text)
@@ -534,6 +536,35 @@ export function createLlmClientWithProvider(
         };
       } catch (err) {
         lastErr = err;
+        // Thinking models share `max_tokens` between reasoning and answer.
+        // When the budget is exhausted, providers return 200 OK with
+        // `finish_reason="length"` and an unfinished JSON body. Parsing
+        // fails, but retrying at the same `maxTokens` will truncate at the
+        // same offset — it is a budget problem, not a formatting one. Fail
+        // fast so callers see `truncated:true` and can raise `maxTokens`
+        // instead of burning another paid request.
+        if (completion.finishReason === "length") {
+          jsonLog.warn("truncated", {
+            op,
+            attempt,
+            maxTokens: call.maxTokens,
+            finishReason: completion.finishReason,
+            usage: completion.usage,
+          });
+          throw new MemosError(
+            ERROR_CODES.LLM_OUTPUT_MALFORMED,
+            "LLM JSON truncated: response hit max_tokens (finish_reason=length); raise maxTokens",
+            {
+              provider: provider.name,
+              op,
+              truncated: true,
+              finishReason: completion.finishReason,
+              maxTokens: call.maxTokens,
+              usage: completion.usage,
+              rawPreview: completion.text.slice(0, 512),
+            },
+          );
+        }
         jsonLog.warn("malformed", {
           op,
           attempt,
@@ -552,6 +583,7 @@ export function createLlmClientWithProvider(
           provider: provider.name,
           op,
           rawPreview: lastRaw.slice(0, 512),
+          finishReason: lastCompletion?.finishReason,
         });
   }
 
