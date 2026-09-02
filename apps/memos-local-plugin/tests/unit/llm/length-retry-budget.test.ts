@@ -72,6 +72,19 @@ describe("completeJson truncation retry budget", () => {
     expect(stub.inputs[1]!.maxTokens).toBe(2 * DEFAULT_MAX_TOKENS);
   });
 
+  it("still retries once on truncation when malformedRetries is 0", async () => {
+    const stub = new StubProvider("openai_compatible", (n) =>
+      n === 1
+        ? { text: "{\"q\":", durationMs: 1, finishReason: "length" as const }
+        : { text: "{\"q\":2}", durationMs: 1, finishReason: "stop" as const },
+    );
+    const client = createLlmClientWithProvider(cfg(), stub);
+    const r = await client.completeJson<{ q: number }>("ask", { malformedRetries: 0 });
+    expect(r.value.q).toBe(2);
+    expect(stub.inputs).toHaveLength(2);
+    expect(stub.inputs[1]!.maxTokens).toBe(2 * DEFAULT_MAX_TOKENS);
+  });
+
   it("caps the doubled budget at 32768", async () => {
     const stub = new StubProvider("openai_compatible", (n) =>
       n === 1
