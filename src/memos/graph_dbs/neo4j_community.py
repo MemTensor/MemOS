@@ -1038,35 +1038,44 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
         )
 
-        # First count matching nodes to get accurate count
-        count_query = f"MATCH (n:Memory) WHERE {ids_where} RETURN count(n) AS node_count"
-        logger.info(f"[delete_node_by_prams] count_query: {count_query}")
-        print(f"[delete_node_by_prams] count_query: {count_query}")
+        # Collect IDs before deletion so we can purge vectors from vec_db afterwards.
+        id_collect_query = f"MATCH (n:Memory) WHERE {ids_where} RETURN n.id AS id"
+        logger.info(f"[delete_node_by_prams] id_collect_query: {id_collect_query}")
 
-        # Then delete nodes
+        # Delete nodes
         delete_query = f"MATCH (n:Memory) WHERE {ids_where} DETACH DELETE n"
         logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] params: {params}")
 
         deleted_count = 0
+        collected_ids: list[str] = []
         try:
             with self.driver.session(database=self.db_name) as session:
-                # Count nodes before deletion
-                count_result = session.run(count_query, **params)
-                count_record = count_result.single()
-                expected_count = 0
-                if count_record:
-                    expected_count = count_record["node_count"] or 0
+                # Collect IDs of nodes that are about to be deleted
+                id_result = session.run(id_collect_query, **params)
+                collected_ids = [record["id"] for record in id_result]
+                deleted_count = len(collected_ids)
 
-                # Delete nodes
+                # Delete nodes from graph
                 session.run(delete_query, **params)
-                # Use the count from before deletion as the actual deleted count
-                deleted_count = expected_count
 
         except Exception as e:
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
             raise
+
+        # Purge corresponding embedding vectors so they are no longer searchable.
+        # This is the fix for #2331: the graph node was removed but stale vectors
+        # in vec_db caused deleted memories to resurface in search results.
+        if collected_ids:
+            try:
+                self.vec_db.delete(collected_ids)
+                logger.info(
+                    "[delete_node_by_prams] Purged %d vectors from vec_db", len(collected_ids)
+                )
+            except Exception as e:
+                logger.warning(
+                    "[delete_node_by_prams] vec_db cleanup failed (graph deletion already succeeded): %s",
+                    e,
+                )
 
         logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
         return deleted_count
