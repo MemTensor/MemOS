@@ -108,6 +108,7 @@ class TestDeleteNodeByPramsVecCleanup:
 
         db.delete_node_by_prams(filter={"user_id": "alice"})
 
+        db.get_by_metadata.assert_called_once()
         db.vec_db.delete.assert_called_once_with(matched_ids)
 
     def test_delete_by_memory_ids_empty_list_no_vec_call(self, community_config):

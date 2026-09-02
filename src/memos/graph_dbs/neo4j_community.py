@@ -1040,7 +1040,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         # Collect IDs before deletion so we can purge vectors from vec_db afterwards.
         id_collect_query = f"MATCH (n:Memory) WHERE {ids_where} RETURN n.id AS id"
-        logger.info(f"[delete_node_by_prams] id_collect_query: {id_collect_query}")
+        logger.info("[delete_node_by_prams] id_collect_query: %s", id_collect_query)
 
         # Delete nodes
         delete_query = f"MATCH (n:Memory) WHERE {ids_where} DETACH DELETE n"
@@ -1052,7 +1052,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             with self.driver.session(database=self.db_name) as session:
                 # Collect IDs of nodes that are about to be deleted
                 id_result = session.run(id_collect_query, **params)
-                collected_ids = [record["id"] for record in id_result]
+                collected_ids = [record["id"] for record in id_result if record["id"] is not None]
                 deleted_count = len(collected_ids)
 
                 # Delete nodes from graph
