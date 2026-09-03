@@ -146,6 +146,7 @@ export async function induceDraft(
       log.warn("induce.title_fallback", {
         signatureLabel: input.signatureLabel,
         synthesisedTitle: draft.title,
+        rawTitleType: typeof rawTitle,
       });
     }
     if (deps.validate) deps.validate(draft);
@@ -285,7 +286,7 @@ function normaliseDraft(
  * throwing away the trigger/procedure that we did get.
  */
 function synthesiseTitle(signatureLabel: string): string {
-  const clean = signatureLabel.trim();
-  if (clean.length > 0) return clean.slice(0, 120);
+  const clean = sanitizeDerivedText(signatureLabel);
+  if (clean.length > 0) return truncate(clean, 120);
   return "Untitled policy";
 }

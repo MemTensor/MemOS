@@ -124,10 +124,12 @@ export async function abstractDraft(
     );
 
     const draft = normaliseDraft(rsp.value);
-    if (isEmptyString((rsp.value as Record<string, unknown>).title)) {
+    const rawTitle = (rsp.value as { title?: unknown }).title;
+    if (typeof rawTitle !== "string" || rawTitle.trim().length === 0) {
       log.warn("abstract.title_fallback", {
         clusterKey: input.cluster.key,
         synthesisedTitle: draft.title,
+        rawTitleType: typeof rawTitle,
       });
     }
     if (deps.validate) deps.validate(draft);
@@ -285,14 +287,10 @@ function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
   };
 }
 
-function isEmptyString(v: unknown): boolean {
-  return typeof v !== "string" || v.trim().length === 0;
-}
-
 /**
  * Build a display-quality title from whatever structure the draft carries.
  * The abstractor's `title` is a display attribute; a missing one shouldn't
- * lose the whole world model. See `docs/openspec/changes/…-2335-…/design.md`.
+ * lose the whole world model.
  */
 function synthesiseTitle(
   domainTags: readonly string[],
@@ -300,17 +298,20 @@ function synthesiseTitle(
 ): string {
   if (domainTags.length > 0) {
     const joined = domainTags.slice(0, 3).map(titleCaseTag).join(" · ");
-    if (joined.trim().length > 0) return joined.slice(0, 160);
+    return [...joined].slice(0, 160).join("");
   }
   for (const e of environment) {
-    if (e.label && e.label.trim().length > 0) return e.label.slice(0, 160);
+    if (e.label && e.label.trim().length > 0) {
+      return [...e.label].slice(0, 160).join("");
+    }
   }
   return "Untitled world model";
 }
 
 function titleCaseTag(tag: string): string {
   if (tag.length === 0) return tag;
-  return tag.charAt(0).toUpperCase() + tag.slice(1);
+  const chars = [...tag];
+  return chars[0].toUpperCase() + chars.slice(1).join("");
 }
 
 function pickTriple(value: Record<string, unknown>): {
