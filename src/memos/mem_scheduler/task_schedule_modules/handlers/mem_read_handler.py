@@ -179,8 +179,8 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     is_upload_skill=is_upload_skill,
                 )
             except Exception as e:
-                logger.warning("%s: Fail to transfer mem: %s", e, memory_items)
-                processed_memories = []
+                logger.warning("%s: Fail to transfer mem: %s", e, memory_items, exc_info=True)
+                return
 
             if processed_memories and len(processed_memories) > 0:
                 flattened_memories = []
