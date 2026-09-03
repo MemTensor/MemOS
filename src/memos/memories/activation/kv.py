@@ -6,11 +6,15 @@ from datetime import datetime
 from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
+from memos.log import get_logger
 from memos.dependency import require_python_package
 from memos.llms.factory import LLMFactory
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import KVCacheItem
 from memos.memories.textual.item import TextualMemoryItem
+
+
+logger = get_logger(__name__)
 
 
 class KVCacheMemory(BaseActMemory):
@@ -158,6 +162,7 @@ class KVCacheMemory(BaseActMemory):
                 data = pickle.load(f)
 
             if isinstance(data, dict):
+                self._check_model_identity(data.get("model_identity"))
                 # Load memories, handle both old and new formats
                 if "kv_cache_memories" in data:
                     memories = data["kv_cache_memories"]
@@ -191,11 +196,57 @@ class KVCacheMemory(BaseActMemory):
         # Create directory if it doesn't exist
         os.makedirs(dir, exist_ok=True)
 
-        # Prepare data to save (only memories)
-        data = {"kv_cache_memories": self.kv_cache_memories}
+        # Prepare data to save, tagged with the model that produced it.
+        # A KV cache is only meaningful to the exact weights it was built from --
+        # the tensors are that model's internal activations, not portable data.
+        # Without this tag a cache dumped under one model loads silently into
+        # another and shifts the next-token distribution with no error raised.
+        data = {
+            "kv_cache_memories": self.kv_cache_memories,
+            "model_identity": self._model_identity(),
+        }
 
         with open(file_path, "wb") as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def _model_identity(self) -> dict | None:
+        """Identity of the model whose activations these caches are.
+
+        Best-effort: returns None if the extractor LLM does not expose a model
+        name, so a dump never fails because identity could not be determined.
+        """
+        cfg = getattr(self.config, "extractor_llm", None)
+        name = None
+        for attr in ("model_name_or_path", "model_name", "model"):
+            name = getattr(cfg, attr, None)
+            if isinstance(name, str) and name:
+                break
+            name = None
+        if name is None:
+            return None
+        return {"model_name_or_path": name}
+
+    def _check_model_identity(self, saved: dict | None) -> None:
+        """Warn when a cache is loaded under different weights than it was built with.
+
+        Deliberately a warning, not an exception: caches dumped before this field
+        existed carry no identity, and refusing to load them would break every
+        existing store. A mismatch is still always surfaced, because the failure
+        it causes otherwise is silent -- the model accepts the foreign cache and
+        simply produces different tokens.
+        """
+        current = self._model_identity()
+        if saved is None or current is None:
+            return
+        if saved.get("model_name_or_path") != current.get("model_name_or_path"):
+            logger.warning(
+                "KV cache was built with model %r but is being loaded into %r. "
+                "A KV cache is only valid for the exact weights that produced it; "
+                "loading it into different weights shifts the next-token "
+                "distribution with no error. Rebuild the cache for this model.",
+                saved.get("model_name_or_path"),
+                current.get("model_name_or_path"),
+            )
 
     def _concat_caches(self, caches: list[DynamicCache]) -> DynamicCache:
         """
