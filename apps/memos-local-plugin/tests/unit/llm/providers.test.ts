@@ -14,6 +14,7 @@ import type {
   LlmProviderCtx,
   LlmProviderLogger,
   LlmMessage,
+  LlmStreamChunk,
   ProviderCallInput,
 } from "../../../core/llm/types.js";
 
@@ -338,6 +339,92 @@ describe("llm/providers", () => {
       });
       expect(body.reasoning).toEqual({ enabled: true, max_tokens: 4_000 });
     });
+
+    // Regression pin for issue #2336 follow-up: the streaming path used to
+    // pass raw `<think>` and DeepSeek gateway tokens through per-chunk,
+    // leaking them to any consumer that accumulates `chunk.delta`. The
+    // sanitizer only ran on the non-streaming `complete()` path. This test
+    // splits a `<think>...</think>` block across two SSE events (proving
+    // per-chunk sanitization would miss it) plus DeepSeek session tokens,
+    // and asserts the joined delta stream matches the sanitizer output.
+    it("sanitizes <think> blocks that span SSE chunk boundaries during streaming", async () => {
+      const sseBody = [
+        // Opener + first half of the reasoning block.
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: "<think>let me " } }],
+        })}\n\n`,
+        // Closing tag + first special token in a second event — a naive
+        // per-chunk sanitizer would miss the block because the opener and
+        // closer arrive in different SSE frames.
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: "reason</think>\n<｜end▁of▁sentence｜>\n" } }],
+        })}\n\n`,
+        // The actual payload the caller cares about.
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: '{"polarity":"negative"}' } }],
+        })}\n\n`,
+        // Finish frame.
+        `data: ${JSON.stringify({
+          choices: [{ delta: {}, finish_reason: "stop" }],
+          usage: { prompt_tokens: 5, completion_tokens: 12, total_tokens: 17 },
+        })}\n\n`,
+        `data: [DONE]\n\n`,
+      ].join("");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          new Response(sseBody, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+        ),
+      );
+      const p = new OpenAiLlmProvider();
+      const chunks: LlmStreamChunk[] = [];
+      for await (const c of p.stream(msgs, call(), ctxFor(cfg()))) chunks.push(c);
+      const joined = chunks.map((c) => c.delta).join("");
+      expect(joined).toBe('{"polarity":"negative"}');
+      expect(joined).not.toContain("<think>");
+      expect(joined).not.toContain("</think>");
+      expect(joined).not.toContain("<｜end▁of▁sentence｜>");
+      // The done chunk still carries finish reason + usage.
+      const last = chunks[chunks.length - 1];
+      expect(last?.done).toBe(true);
+      expect(last?.finishReason).toBe("stop");
+      expect(last?.usage?.totalTokens).toBe(17);
+    });
+
+    it("sanitizes an orphan </think> streamed as the first SSE chunk", async () => {
+      const sseBody = [
+        `data: ${JSON.stringify({
+          choices: [
+            {
+              delta: {
+                content:
+                  "</think>\n<｜end▁of▁sentence｜>\n<｜end▁of▁session｜>\n\n---\n\n[Writing Rule] final.",
+              },
+            },
+          ],
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          choices: [{ delta: {}, finish_reason: "stop" }],
+        })}\n\n`,
+        `data: [DONE]\n\n`,
+      ].join("");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          new Response(sseBody, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+        ),
+      );
+      const p = new OpenAiLlmProvider();
+      const chunks: LlmStreamChunk[] = [];
+      for await (const c of p.stream(msgs, call(), ctxFor(cfg()))) chunks.push(c);
+      expect(chunks.map((c) => c.delta).join("")).toBe("---\n\n[Writing Rule] final.");
+    });
   });
 
   // ─── anthropic ─────────────────────────────────────────────────────────────
@@ -406,6 +493,52 @@ describe("llm/providers", () => {
       // We assert indirectly by checking the last captured body.
       // The fetch mock only keeps the last call — but since we fired one,
       // the value is that one.
+    });
+
+    // Regression pin for issue #2336 follow-up: same defect as the OpenAI
+    // streaming path — per-chunk deltas leaked `<think>` blocks and DeepSeek
+    // gateway tokens because the sanitizer only ran on `complete()`.
+    it("sanitizes <think> blocks that span SSE chunk boundaries during streaming", async () => {
+      const sseBody = [
+        `data: ${JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "<think>reason " }] } }],
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          candidates: [
+            { content: { parts: [{ text: "goes here</think>\n<｜end▁of▁sentence｜>\n" }] } },
+          ],
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '{"polarity":"positive"}' }] } }],
+        })}\n\n`,
+        `data: ${JSON.stringify({
+          candidates: [{ finishReason: "STOP" }],
+          usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 5, totalTokenCount: 8 },
+        })}\n\n`,
+      ].join("");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          new Response(sseBody, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+        ),
+      );
+      const p = new GeminiLlmProvider();
+      const chunks: LlmStreamChunk[] = [];
+      for await (const c of p.stream(msgs, call(), ctxFor(cfg({ provider: "gemini" })))) {
+        chunks.push(c);
+      }
+      const joined = chunks.map((c) => c.delta).join("");
+      expect(joined).toBe('{"polarity":"positive"}');
+      expect(joined).not.toContain("<think>");
+      expect(joined).not.toContain("</think>");
+      expect(joined).not.toContain("<｜end▁of▁sentence｜>");
+      const last = chunks[chunks.length - 1];
+      expect(last?.done).toBe(true);
+      expect(last?.finishReason).toBe("stop");
+      expect(last?.usage?.totalTokens).toBe(8);
     });
   });
 

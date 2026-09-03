@@ -112,7 +112,20 @@ export class GeminiLlmProvider implements LlmProvider {
       log,
     });
 
+    // Buffer the SSE deltas until the stream terminates, then sanitize the
+    // full accumulated text before yielding it (issue #2336 follow-up).
+    //
+    // Rationale: `<think>...</think>` blocks and DeepSeek-style special
+    // tokens can be split across chunk boundaries, so a naive per-chunk
+    // `sanitizeCompletionText` would miss any artifact that straddles two
+    // SSE events. Callers accumulate `chunk.delta` (see
+    // `core/llm/client.ts::stream`), so we can safely emit one sanitized
+    // delta at the tail: `chunks.map(c => c.delta).join("")` still yields
+    // the sanitized full text, matching the contract exercised by the
+    // provider tests.
     let done = false;
+    let accumulated = "";
+    let pendingUsage: GemResp["usageMetadata"] | undefined;
     for await (const payload of decodeSse(resp.body!)) {
       let evt: GemResp;
       try {
@@ -123,25 +136,43 @@ export class GeminiLlmProvider implements LlmProvider {
       const cand = evt.candidates?.[0];
       const delta = cand?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
       const finish = cand?.finishReason;
-      if (delta.length > 0) yield { delta, done: false };
+      if (delta.length > 0) accumulated += delta;
+      if (evt.usageMetadata) pendingUsage = evt.usageMetadata;
       if (finish) {
         done = true;
+        const sanitized = sanitizeCompletionText(accumulated);
+        if (sanitized.length > 0) yield { delta: sanitized, done: false };
+        const usage = evt.usageMetadata ?? pendingUsage;
         yield {
           delta: "",
           done: true,
           finishReason: mapFinish(finish),
-          usage: evt.usageMetadata
+          usage: usage
             ? {
-                promptTokens: evt.usageMetadata.promptTokenCount,
-                completionTokens: evt.usageMetadata.candidatesTokenCount,
-                totalTokens: evt.usageMetadata.totalTokenCount,
+                promptTokens: usage.promptTokenCount,
+                completionTokens: usage.candidatesTokenCount,
+                totalTokens: usage.totalTokenCount,
               }
             : undefined,
         };
         return;
       }
     }
-    if (!done) yield { delta: "", done: true };
+    if (!done) {
+      const sanitized = sanitizeCompletionText(accumulated);
+      if (sanitized.length > 0) yield { delta: sanitized, done: false };
+      yield {
+        delta: "",
+        done: true,
+        usage: pendingUsage
+          ? {
+              promptTokens: pendingUsage.promptTokenCount,
+              completionTokens: pendingUsage.candidatesTokenCount,
+              totalTokens: pendingUsage.totalTokenCount,
+            }
+          : undefined,
+      };
+    }
   }
 }
 

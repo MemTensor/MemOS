@@ -167,12 +167,37 @@ export class OpenAiLlmProvider implements LlmProvider {
       log,
     });
 
+    // Buffer the SSE deltas until the stream terminates, then sanitize the
+    // full accumulated text before yielding it (issue #2336 follow-up).
+    //
+    // Rationale: `<think>...</think>` blocks and DeepSeek special tokens
+    // (`<｜end▁of▁sentence｜>`, etc.) can be split across chunk boundaries,
+    // so a naive per-chunk `sanitizeCompletionText` would miss any artifact
+    // that straddles two SSE events. Callers accumulate `chunk.delta` (see
+    // `core/llm/client.ts::stream`), so we can safely emit one sanitized
+    // delta at the tail: `chunks.map(c => c.delta).join("")` still yields
+    // the sanitized full text, matching the contract exercised by the
+    // provider tests.
     let emittedDone = false;
+    let accumulated = "";
+    let pendingUsage: OaResp["usage"] | undefined;
     for await (const payload of decodeSse(resp.body!)) {
       if (payload === "[DONE]") {
         if (!emittedDone) {
           emittedDone = true;
-          yield { delta: "", done: true };
+          const sanitized = sanitizeCompletionText(accumulated);
+          if (sanitized.length > 0) yield { delta: sanitized, done: false };
+          yield {
+            delta: "",
+            done: true,
+            usage: pendingUsage
+              ? {
+                  promptTokens: pendingUsage.prompt_tokens,
+                  completionTokens: pendingUsage.completion_tokens,
+                  totalTokens: pendingUsage.total_tokens,
+                }
+              : undefined,
+          };
         }
         return;
       }
@@ -187,26 +212,44 @@ export class OpenAiLlmProvider implements LlmProvider {
       const delta = choice?.delta?.content ?? "";
       const finish = choice?.finish_reason;
       if (delta.length > 0) {
-        yield { delta, done: false };
+        accumulated += delta;
       }
+      if (parsed.usage) pendingUsage = parsed.usage;
       if (finish) {
         emittedDone = true;
+        const sanitized = sanitizeCompletionText(accumulated);
+        if (sanitized.length > 0) yield { delta: sanitized, done: false };
+        const usage = parsed.usage ?? pendingUsage;
         yield {
           delta: "",
           done: true,
           finishReason: mapFinish(finish),
-          usage: parsed.usage
+          usage: usage
             ? {
-                promptTokens: parsed.usage.prompt_tokens,
-                completionTokens: parsed.usage.completion_tokens,
-                totalTokens: parsed.usage.total_tokens,
+                promptTokens: usage.prompt_tokens,
+                completionTokens: usage.completion_tokens,
+                totalTokens: usage.total_tokens,
               }
             : undefined,
         };
         return;
       }
     }
-    if (!emittedDone) yield { delta: "", done: true };
+    if (!emittedDone) {
+      const sanitized = sanitizeCompletionText(accumulated);
+      if (sanitized.length > 0) yield { delta: sanitized, done: false };
+      yield {
+        delta: "",
+        done: true,
+        usage: pendingUsage
+          ? {
+              promptTokens: pendingUsage.prompt_tokens,
+              completionTokens: pendingUsage.completion_tokens,
+              totalTokens: pendingUsage.total_tokens,
+            }
+          : undefined,
+      };
+    }
   }
 }
 
