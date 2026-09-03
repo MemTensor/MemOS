@@ -226,4 +226,81 @@ describe("scanAndTopK — streaming rewrite (#2076)", () => {
       db.close();
     }
   });
+
+  it("orderBy makes the hardCap window a deterministic recency policy, not a physical prefix (#2233)", () => {
+    // Same table shape `traces`/`policies` vector search uses: a recency
+    // column next to the vector BLOB.
+    const query = vec([1, 0]);
+    const makeRows = () => {
+      // Two perfect matches: an OLD one and a NEW one; 18 orthogonal fillers.
+      // Which one a bounded window sees is entirely decided by its ordering
+      // policy — the bug was that the policy was "whatever SQLite's physical
+      // scan happens to visit first".
+      const rows = [
+        { id: "r-new", v: vec([1, 0]), ts: 1_000 },
+        { id: "r-old", v: vec([1, 0]), ts: 1 },
+      ];
+      for (let i = 0; i < 18; i++) {
+        rows.push({ id: `r-filler-${i}`, v: vec([0, 1]), ts: 2 + i });
+      }
+      return rows;
+    };
+
+    // With the recency order the repos now pass, a cap-1 window is
+    // deterministically the newest row — the perfect match with ts=1000 —
+    // regardless of the table's physical row layout.
+    for (const layout of ["insertion", "reversed"] as const) {
+      const db = new Database(":memory:");
+      db.exec(`CREATE TABLE bench (id TEXT PRIMARY KEY, vec BLOB, ts INTEGER NOT NULL);`);
+      try {
+        const insert = db.prepare("INSERT INTO bench (id, vec, ts) VALUES (?, ?, ?)");
+        const rows = makeRows();
+        const ordered = layout === "reversed" ? [...rows].reverse() : rows;
+        for (const r of ordered) insert.run(r.id, encodeVector(r.v), r.ts);
+
+        const hits = scanAndTopK(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          db as any,
+          "bench",
+          [],
+          query,
+          1,
+          { vecColumn: "vec", where: "vec IS NOT NULL", hardCap: 1, orderBy: "ts DESC, id DESC" },
+        );
+        expect(hits).toHaveLength(1);
+        expect(hits[0]!.id).toBe("r-new");
+        expect(hits[0]!.score).toBeCloseTo(1, 5);
+      } finally {
+        db.close();
+      }
+    }
+
+    // Without orderBy the cap-1 window is whichever row the planner visits
+    // first — layout-dependent by definition, so there is nothing stable to
+    // assert about the winner; the point of the option is that it no
+    // longer matters.
+  });
+
+  it("rejects an orderBy that is not a repo-internal column list (SQL-injection boundary)", () => {
+    const db = openTinyVecDb();
+    try {
+      const inject = "ts DESC; DROP TABLE bench --";
+      expect(() =>
+        scanAndTopK(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          db as any,
+          "bench",
+          [],
+          vec([1, 0]),
+          1,
+          { vecColumn: "vec", where: "vec IS NOT NULL", orderBy: inject },
+        ),
+      ).toThrow(/unsafe orderBy/);
+      // The table is untouched — the guard fired before any SQL ran.
+      const n = db.prepare("SELECT COUNT(*) AS n FROM bench").get() as { n: number };
+      expect(n.n).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
 });
