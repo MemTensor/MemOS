@@ -146,10 +146,38 @@ describe("memory/l2/induce", () => {
     expect(res.reason).toBe("llm_failed");
   });
 
-  it("reason=llm_failed when the LLM draft is malformed (missing title)", async () => {
+  it("synthesises a fallback title from the pattern signature when the LLM omits it", async () => {
+    // Regression for #2335 (parity with l3.abstract): the LLM
+    // occasionally returns an empty `title`. That is a display attribute,
+    // not a load-bearing field — the whole draft shouldn't be discarded.
     const llm = fakeLlm({
       completeJson: {
-        "l2.l2.induction.v2": { trigger: "no title", procedure: "..." },
+        "l2.l2.induction.v2": {
+          title: "   ",
+          trigger: "pip install fails in alpine",
+          procedure: "apk add + retry",
+          confidence: 0.6,
+        },
+      },
+    });
+    const res = await induceDraft(
+      {
+        evidenceTraces: [mkTrace("tr_a", "ep_1", vec([1, 0]))],
+        episodeIds: ["ep_1"] as EpisodeId[],
+        signatureLabel: "docker|pip|MODULE_NOT_FOUND",
+        charCap: 1000,
+      },
+      { llm, log },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.title).toBe("docker|pip|MODULE_NOT_FOUND");
+  });
+
+  it("reason=llm_failed when the LLM draft is malformed (missing trigger)", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "l2.l2.induction.v2": { title: "have title", procedure: "..." },
       },
     });
     const res = await induceDraft(

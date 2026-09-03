@@ -110,14 +110,17 @@ export async function induceDraft(
         schemaHint: `{"title":"...","trigger":"...","procedure":"...","verification":"...","rationale":"...","caveats":["..."],"confidence":0..1,"support_trace_ids":["tr_..."]}`,
         validate: (v) => {
           const o = v as Record<string, unknown>;
-          for (const k of ["title", "trigger"]) {
-            if (typeof o[k] !== "string" || !(o[k] as string).trim()) {
-              throw new MemosError(
-                ERROR_CODES.LLM_OUTPUT_MALFORMED,
-                `l2.induction: '${k}' must be a non-empty string`,
-                { got: o[k] },
-              );
-            }
+          // `trigger` is load-bearing — a policy without a trigger has
+          // no matching semantics. `title` is a display attribute; if
+          // empty, `normaliseDraft` synthesises a fallback from the
+          // pattern signature so a single flaky LLM response doesn't
+          // discard an otherwise-usable draft.
+          if (typeof o.trigger !== "string" || !(o.trigger as string).trim()) {
+            throw new MemosError(
+              ERROR_CODES.LLM_OUTPUT_MALFORMED,
+              `l2.induction: 'trigger' must be a non-empty string`,
+              { got: o.trigger },
+            );
           }
           if (
             typeof o.procedure !== "string" &&
@@ -133,7 +136,18 @@ export async function induceDraft(
       },
     );
 
-    const draft = normaliseDraft(rsp.value, input.evidenceTraces.map((t) => t.id));
+    const draft = normaliseDraft(
+      rsp.value,
+      input.evidenceTraces.map((t) => t.id),
+      input.signatureLabel,
+    );
+    const rawTitle = (rsp.value as { title?: unknown }).title;
+    if (typeof rawTitle !== "string" || rawTitle.trim().length === 0) {
+      log.warn("induce.title_fallback", {
+        signatureLabel: input.signatureLabel,
+        synthesisedTitle: draft.title,
+      });
+    }
     if (deps.validate) deps.validate(draft);
     return { ok: true, draft };
   } catch (err) {
@@ -230,7 +244,11 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + "…";
 }
 
-function normaliseDraft(value: Record<string, unknown>, traceIds: readonly TraceId[]): InductionDraft {
+function normaliseDraft(
+  value: Record<string, unknown>,
+  traceIds: readonly TraceId[],
+  signatureLabel: string,
+): InductionDraft {
   const procedure =
     typeof value.procedure === "string"
       ? (value.procedure as string)
@@ -244,8 +262,12 @@ function normaliseDraft(value: Record<string, unknown>, traceIds: readonly Trace
   const supportTraceIds = Array.isArray(value.support_trace_ids)
     ? (value.support_trace_ids as unknown[]).filter((x): x is string => typeof x === "string")
     : [];
+  const cleanedTitle = sanitizeDerivedText(value.title);
+  const title = cleanedTitle.length > 0
+    ? cleanedTitle
+    : synthesiseTitle(signatureLabel);
   return {
-    title: sanitizeDerivedText(value.title),
+    title,
     trigger: sanitizeDerivedMarkdown(value.trigger),
     procedure: sanitizeDerivedMarkdown(procedure),
     verification: typeof value.verification === "string" ? sanitizeDerivedMarkdown(value.verification) : "",
@@ -255,4 +277,15 @@ function normaliseDraft(value: Record<string, unknown>, traceIds: readonly Trace
     confidence: Math.max(0, Math.min(1, confidence)),
     supportTraceIds: supportTraceIds.length > 0 ? (supportTraceIds as TraceId[]) : Array.from(traceIds),
   };
+}
+
+/**
+ * Build a display-quality title from the pattern signature when the LLM
+ * returns an empty `title`. Keeps the whole draft usable instead of
+ * throwing away the trigger/procedure that we did get.
+ */
+function synthesiseTitle(signatureLabel: string): string {
+  const clean = signatureLabel.trim();
+  if (clean.length > 0) return clean.slice(0, 120);
+  return "Untitled policy";
 }

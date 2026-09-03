@@ -104,13 +104,11 @@ export async function abstractDraft(
         schemaHint: `{"title":"...","domain_tags":["..."],"environment":[{"label":"...","description":"...","evidenceIds":["..."]}],"inference":[...],"constraints":[...],"body":"markdown","confidence":0..1,"supersedes_world_ids":[]}`,
         validate: (v) => {
           const o = v as Record<string, unknown>;
-          if (typeof o.title !== "string" || !(o.title as string).trim()) {
-            throw new MemosError(
-              ERROR_CODES.LLM_OUTPUT_MALFORMED,
-              "l3.abstraction: 'title' must be a non-empty string",
-              { got: o.title },
-            );
-          }
+          // Empty `title` is tolerated — `normaliseDraft` synthesises a
+          // fallback from `domain_tags` / first environment label so a
+          // single missing display attribute doesn't abort the entire
+          // world-model. Missing triple, however, means the draft has
+          // no usable payload and must still fail.
           const triple = ["environment", "inference", "constraints"];
           for (const k of triple) {
             if (!Array.isArray(o[k])) {
@@ -126,6 +124,12 @@ export async function abstractDraft(
     );
 
     const draft = normaliseDraft(rsp.value);
+    if (isEmptyString((rsp.value as Record<string, unknown>).title)) {
+      log.warn("abstract.title_fallback", {
+        clusterKey: input.cluster.key,
+        synthesisedTitle: draft.title,
+      });
+    }
     if (deps.validate) deps.validate(draft);
     return { ok: true, draft };
   } catch (err) {
@@ -260,9 +264,14 @@ function packPolicy(
 
 function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
   const triple = pickTriple(value);
+  const domainTags = normaliseTags(value.domain_tags);
+  const rawTitle = sanitizeDerivedText(value.title);
+  const title = rawTitle.length > 0
+    ? rawTitle
+    : synthesiseTitle(domainTags, triple.environment);
   return {
-    title: sanitizeDerivedText(value.title),
-    domainTags: normaliseTags(value.domain_tags),
+    title,
+    domainTags,
     environment: triple.environment,
     inference: triple.inference,
     constraints: triple.constraints,
@@ -274,6 +283,34 @@ function normaliseDraft(value: Record<string, unknown>): L3AbstractionDraft {
           .map((s) => s as WorldModelId)
       : [],
   };
+}
+
+function isEmptyString(v: unknown): boolean {
+  return typeof v !== "string" || v.trim().length === 0;
+}
+
+/**
+ * Build a display-quality title from whatever structure the draft carries.
+ * The abstractor's `title` is a display attribute; a missing one shouldn't
+ * lose the whole world model. See `docs/openspec/changes/…-2335-…/design.md`.
+ */
+function synthesiseTitle(
+  domainTags: readonly string[],
+  environment: readonly L3AbstractionDraftEntry[],
+): string {
+  if (domainTags.length > 0) {
+    const joined = domainTags.slice(0, 3).map(titleCaseTag).join(" · ");
+    if (joined.trim().length > 0) return joined.slice(0, 160);
+  }
+  for (const e of environment) {
+    if (e.label && e.label.trim().length > 0) return e.label.slice(0, 160);
+  }
+  return "Untitled world model";
+}
+
+function titleCaseTag(tag: string): string {
+  if (tag.length === 0) return tag;
+  return tag.charAt(0).toUpperCase() + tag.slice(1);
 }
 
 function pickTriple(value: Record<string, unknown>): {

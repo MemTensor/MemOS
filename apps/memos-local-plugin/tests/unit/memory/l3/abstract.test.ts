@@ -180,6 +180,79 @@ describe("memory/l3/abstract", () => {
     expect(res.detail).toContain("boom");
   });
 
+  it("synthesises a fallback title from domain_tags when the LLM returns empty title", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "   ",
+          domain_tags: ["Alpine", "python", "pip"],
+          environment: [{ label: "Alpine", description: "musl libc" }],
+          inference: [{ label: "wheels fail", description: "musl" }],
+          constraints: [{ label: "avoid wheels", description: "no binary" }],
+          body: "body",
+          confidence: 0.6,
+          supersedes_world_ids: [],
+        },
+      },
+    });
+
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.title.trim().length).toBeGreaterThan(0);
+    expect(res.draft.title.toLowerCase()).toContain("alpine");
+  });
+
+  it("falls back to environment label when title and domain_tags are empty", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "",
+          domain_tags: [],
+          environment: [{ label: "Runtime", description: "runtime" }],
+          inference: [{ label: "x", description: "y" }],
+          constraints: [{ label: "z", description: "w" }],
+          body: "",
+          confidence: 0.5,
+        },
+      },
+    });
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.title).toBe("Runtime");
+  });
+
+  it("falls back to a static title when title / tags / environment are all empty", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "",
+          domain_tags: [],
+          environment: [{ label: "", description: "d" }],
+          inference: [{ label: "x", description: "y" }],
+          constraints: [{ label: "z", description: "w" }],
+          body: "",
+          confidence: 0.5,
+        },
+      },
+    });
+    const res = await abstractDraft(
+      { cluster: mkCluster(), evidenceByPolicy: new Map() },
+      { llm, log, config: cfg() },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.draft.title).toBe("Untitled world model");
+  });
+
   it("returns llm_failed when the LLM returns missing triple", async () => {
     const llm = fakeLlm({
       completeJson: {
