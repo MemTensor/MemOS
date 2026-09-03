@@ -7,6 +7,7 @@
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
 import { decodeSse, httpPostJson, httpPostStream } from "../fetcher.js";
+import { sanitizeCompletionText } from "../sanitize.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -66,7 +67,9 @@ export class GeminiLlmProvider implements LlmProvider {
     });
 
     const cand = json.candidates?.[0];
-    const text = cand?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+    const text = sanitizeCompletionText(
+      cand?.content?.parts?.map((p) => p.text ?? "").join("") ?? "",
+    );
     return {
       text,
       finishReason: mapFinish(cand?.finishReason),

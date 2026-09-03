@@ -8,6 +8,7 @@
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
 import { applyOpenRouterProviderRouting } from "../../openrouter.js";
 import { decodeSse, httpPostJson, httpPostStream } from "../fetcher.js";
+import { sanitizeCompletionText } from "../sanitize.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -100,7 +101,7 @@ export class OpenAiLlmProvider implements LlmProvider {
     });
 
     const choice = json.choices?.[0];
-    const text = choice?.message?.content ?? "";
+    const text = sanitizeCompletionText(choice?.message?.content ?? "");
     return {
       text,
       finishReason: mapFinish(choice?.finish_reason),

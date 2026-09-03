@@ -7,6 +7,7 @@
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
 import { decodeSse, httpPostJson, httpPostStream } from "../fetcher.js";
+import { sanitizeCompletionText } from "../sanitize.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -74,10 +75,12 @@ export class AnthropicLlmProvider implements LlmProvider {
       log,
     });
 
-    const text = (json.content ?? [])
-      .filter((b) => b.type === "text" && typeof b.text === "string")
-      .map((b) => b.text ?? "")
-      .join("");
+    const text = sanitizeCompletionText(
+      (json.content ?? [])
+        .filter((b) => b.type === "text" && typeof b.text === "string")
+        .map((b) => b.text ?? "")
+        .join(""),
+    );
     return {
       text,
       finishReason: mapFinish(json.stop_reason),

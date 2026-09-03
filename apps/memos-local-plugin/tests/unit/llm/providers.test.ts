@@ -101,6 +101,50 @@ describe("llm/providers", () => {
       await expect(p.complete(msgs, call(), ctxFor(cfg({ apiKey: "" })))).rejects.toBeInstanceOf(MemosError);
     });
 
+    // Regression pin for issue #2336: thinking-enabled DeepSeek-family models
+    // on gateways that keep the reasoning block inside `choice.message.content`
+    // used to leak `<think>...</think>` and DeepSeek session tokens into
+    // `ProviderCompletion.text`, which then ended up persisted in
+    // `FeedbackRow.rationale`. The provider must sanitize before returning.
+    it("strips <think> blocks and DeepSeek gateway tokens from returned text (issue #2336)", async () => {
+      captureFetch({
+        choices: [
+          {
+            message: {
+              content:
+                "<think>let me reason about polarity</think>\n<｜end▁of▁sentence｜>\n" +
+                '{"polarity":"negative","rationale":"user says wrong"}',
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+      const p = new OpenAiLlmProvider();
+      const res = await p.complete(msgs, call(), ctxFor(cfg()));
+      expect(res.text).toBe(
+        '{"polarity":"negative","rationale":"user says wrong"}',
+      );
+      expect(res.text).not.toContain("<think>");
+      expect(res.text).not.toContain("</think>");
+      expect(res.text).not.toContain("<｜end▁of▁sentence｜>");
+    });
+
+    it("strips an orphan </think> fragment as observed in the #2336 evidence", async () => {
+      captureFetch({
+        choices: [
+          {
+            message: {
+              content:
+                "</think>\n<｜end▁of▁sentence｜>\n<｜end▁of▁session｜>\n\n---\n\n[Writing Rule] final.",
+            },
+          },
+        ],
+      });
+      const p = new OpenAiLlmProvider();
+      const res = await p.complete(msgs, call(), ctxFor(cfg()));
+      expect(res.text).toBe("---\n\n[Writing Rule] final.");
+    });
+
     it("forwards config.reasoning into an OpenRouter request body", async () => {
       const cap = captureFetch({ choices: [{ message: { content: "{}" } }] });
       const p = new OpenAiLlmProvider();

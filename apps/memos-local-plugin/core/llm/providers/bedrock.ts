@@ -13,6 +13,7 @@
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
 import { httpPostJson } from "../fetcher.js";
+import { sanitizeCompletionText } from "../sanitize.js";
 import type {
   LlmMessage,
   LlmProvider,
@@ -92,7 +93,7 @@ export class BedrockLlmProvider implements LlmProvider {
     });
 
     const blocks = json.output?.message?.content ?? [];
-    const text = blocks.map((b) => b.text ?? "").join("");
+    const text = sanitizeCompletionText(blocks.map((b) => b.text ?? "").join(""));
     return {
       text,
       finishReason: mapFinish(json.stopReason),
