@@ -335,6 +335,51 @@ describe("llm/client", () => {
     );
   });
 
+  // ─── op propagation to providers (issue #2308) ────────────────────────
+  //
+  // The facade must forward `opts.op` onto the `ProviderCallInput` handed to
+  // `provider.complete()` / `provider.stream()` so per-op provider behavior
+  // (e.g. request-body tweaks, routing overrides, reasoning kill-switches
+  // keyed on `capture.summarize`) can fire. Dropping it silently makes
+  // those switches unreachable.
+  describe("op propagation (issue #2308)", () => {
+    it("complete forwards opts.op onto the provider input", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.complete("hi", { op: "capture.summarize" });
+      expect(fake.lastInput?.op).toBe("capture.summarize");
+    });
+
+    it("completeJson forwards opts.op onto the provider input", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({
+        text: '{"a":1}',
+        durationMs: 1,
+      }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.completeJson<{ a: number }>("score", { op: "retrieval.filter" });
+      expect(fake.lastInput?.op).toBe("retrieval.filter");
+    });
+
+    it("stream forwards opts.op onto the provider input (non-streaming provider)", async () => {
+      // FakeProvider has no stream(); the facade wraps complete() in a
+      // single-chunk iterable, which still exercises buildCallInput.
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "one", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      const parts: string[] = [];
+      for await (const c of client.stream("x", { op: "skill.evolve" })) {
+        if (!c.done) parts.push(c.delta);
+      }
+      expect(fake.lastInput?.op).toBe("skill.evolve");
+    });
+
+    it("omits op field when caller supplies no op (contract stays optional)", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.complete("hi");
+      expect(fake.lastInput?.op).toBeUndefined();
+    });
+  });
+
   // ─── Circuit breaker (issue #1897) ──────────────────────────────────────
   describe("circuit breaker", () => {
     function statusSink(): { rows: LlmStatusDetail[]; push: (d: LlmStatusDetail) => void } {
