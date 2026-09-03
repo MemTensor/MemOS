@@ -58,11 +58,17 @@ class FakeProvider implements LlmProvider {
 
 class StreamingProvider implements LlmProvider {
   readonly name: LlmProviderName = "openai_compatible";
+  public lastInput: ProviderCallInput | null = null;
+
   async complete(): Promise<ProviderCompletion> {
     return { text: "full", durationMs: 1 };
   }
   // eslint-disable-next-line require-yield
-  async *stream(): AsyncGenerator<LlmStreamChunk> {
+  async *stream(
+    _messages: LlmMessage[],
+    opts: ProviderCallInput,
+  ): AsyncGenerator<LlmStreamChunk> {
+    this.lastInput = opts;
     yield { delta: "he", done: false };
     yield { delta: "llo", done: false };
     yield {
@@ -372,7 +378,16 @@ describe("llm/client", () => {
       expect(fake.lastInput?.op).toBe("skill.evolve");
     });
 
-    it("omits op field when caller supplies no op (contract stays optional)", async () => {
+    it("stream forwards opts.op onto a native streaming provider", async () => {
+      const provider = new StreamingProvider();
+      const client = createLlmClientWithProvider(cfg(), provider);
+      for await (const _chunk of client.stream("x", { op: "capture.summarize" })) {
+        // Consume the stream so the provider receives the cooked input.
+      }
+      expect(provider.lastInput?.op).toBe("capture.summarize");
+    });
+
+    it("leaves op undefined when the caller supplies no op", async () => {
       const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
       const client = createLlmClientWithProvider(cfg(), fake);
       await client.complete("hi");
