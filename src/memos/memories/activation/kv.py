@@ -232,8 +232,27 @@ class KVCacheMemory(BaseActMemory):
                 keys = [c.layers[layer].keys for c in caches]
                 vals = [c.layers[layer].values for c in caches]
                 # single concat per layer
-                merged.layers[layer].keys = torch.cat(keys, dim=-2)
-                merged.layers[layer].values = torch.cat(vals, dim=-2)
+                merged_keys = torch.cat(keys, dim=-2)
+                merged_values = torch.cat(vals, dim=-2)
+
+                # A layer constructed directly is not "initialized", and on
+                # transformers >= 4.57 ``DynamicLayer.get_seq_length()`` returns 0
+                # for an uninitialized layer *regardless of the tensors it holds*:
+                #
+                #     if not self.is_initialized or self.keys.numel() == 0:
+                #         return 0
+                #
+                # Assigning ``.keys``/``.values`` therefore leaves the merged cache
+                # reporting length 0, and the model treats it as empty and discards
+                # every merged token on the first forward pass -- silently, with no
+                # error. Initialize through the public path so the length is real.
+                merged_layer = merged.layers[layer]
+                if not getattr(merged_layer, "is_initialized", True) and hasattr(
+                    merged_layer, "lazy_initialization"
+                ):
+                    merged_layer.lazy_initialization(merged_keys, merged_values)
+                merged_layer.keys = merged_keys
+                merged_layer.values = merged_values
 
         # Check for old structure (key_cache)
         elif hasattr(caches[0], "key_cache"):
