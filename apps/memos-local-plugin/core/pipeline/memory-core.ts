@@ -91,6 +91,7 @@ import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
 import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
+import { waitForRetry } from "../util/retry-after.js";
 import {
   getHostLlmBridge,
   registerHostLlmBridge,
@@ -733,6 +734,8 @@ export function createMemoryCore(
     DEEP_WINDOW_DRAIN_INTERVAL_MS,
   );
   let lastDeepWindowDrain = 0;
+  const dirtyClosedInFlight = new Set<EpisodeId>();
+  const recoveryTimers: Array<ReturnType<typeof setInterval>> = [];
 
   // ─── Startup recovery background promise (issue #1776 + #1808) ──
   // `init()` used to `await` the entire reflect → reward → L2 chain for
@@ -809,7 +812,7 @@ export function createMemoryCore(
   }
 
   async function autoRescoreDirtyClosedEpisodes(): Promise<void> {
-    if (!autoRecoveryEnabled) return;
+    if (!autoRecoveryEnabled || shutDown) return;
     const nowMs = Date.now();
     // Issue #2333: the dirty-reward retry is an LLM-heavy compensation
     // path. Outside the deep-processing window it must not run at all —
@@ -823,8 +826,14 @@ export function createMemoryCore(
     // must be a no-op.
     if (handle.algorithm.lightweightMemory.enabled) return;
     try {
+      // Finish and acknowledge live chains before selecting retries. They
+      // may have completed via their own subscribers without a facade flush.
+      if (handle.algorithm.deepProcessing.mode === "window") await handle.flush();
+      if (shutDown || deepWindow.shouldDefer()) return;
       const allDirty = collectDirtyClosedEpisodes()
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+        .filter((ep) => !isLightweightEpisode(ep) &&
+          !dirtyClosedInFlight.has(ep.id as EpisodeId) &&
+          !deepWindow.isProcessing(ep.id as EpisodeId) && episodeRewardIsDirty(ep));
       // Apply the same backoff filter as init() so the 10-min periodic
       // scan does not hammer episodes whose LLM call keeps failing.
       const dirtyClosed = boundDeepWindowBatch(
@@ -867,7 +876,7 @@ export function createMemoryCore(
    * reflect → reward → L2 → L3 → skill chain runs.
    */
   async function drainDeepProcessingQueue(): Promise<void> {
-    if (!autoRecoveryEnabled) return;
+    if (!autoRecoveryEnabled || shutDown) return;
     if (handle.algorithm.lightweightMemory.enabled) return;
     if (handle.algorithm.deepProcessing.mode !== "window") return;
     if (deepWindow.shouldDefer()) return;
@@ -880,11 +889,16 @@ export function createMemoryCore(
       const rows: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
       for (const entry of batch) {
         const row = handle.repos.episodes.getById(entry.episodeId);
-        // Deleted, already scored by a manual run, or lightweight —
-        // dropping the entry is correct, nothing is owed.
-        if (!row || isLightweightEpisode(row) || !episodeRewardIsDirty(row)) {
+        if (!row || row.status !== "closed" || isLightweightEpisode(row) ||
+          dirtyClosedInFlight.has(entry.episodeId) || deepWindow.isProcessing(entry.episodeId)) {
           continue;
         }
+        // Queue membership is an outstanding evolution obligation. Reward
+        // coverage alone cannot acknowledge it: feedback may have scored an
+        // episode before its first reflection. Also backfill older entries
+        // that predate the independent pending marker.
+        handle.repos.episodes.updateMeta(entry.episodeId, { deepProcessingPending: true });
+        if (!dirtyEpisodeBackoffElapsed(row, nowMs)) continue;
         rows.push(row);
       }
       log.info("deep_window.drain", {
@@ -1371,6 +1385,7 @@ export function createMemoryCore(
       }, 10 * 60 * 1000);
       // Mark as unref so the timer doesn't block shutdown
       (rescoreInterval as unknown as { unref?: () => void }).unref?.();
+      recoveryTimers.push(rescoreInterval);
     }
 
     // Issue #2333: deep-processing queue drain. Ticks on a fixed 60s
@@ -1386,6 +1401,7 @@ export function createMemoryCore(
         });
       }, DEEP_WINDOW_DRAIN_TICK_MS);
       (drainInterval as unknown as { unref?: () => void }).unref?.();
+      recoveryTimers.push(drainInterval);
       log.info("deep_window.enabled", {
         window: handle.algorithm.deepProcessing.window,
         timezone: handle.algorithm.deepProcessing.timezone || "system",
@@ -1759,7 +1775,7 @@ export function createMemoryCore(
             await handle.rewardRunner.run({
               episodeId,
               feedback: [],
-              trigger: "manual",
+              trigger: "implicit_fallback",
             });
           }
         }
@@ -1796,64 +1812,74 @@ export function createMemoryCore(
   async function recoverDirtyClosedEpisodes(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
-    if (startupRecoveryCancelled) return;
-    log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
-    // Snapshot the prior failure counters so we can increment them later
-    // (after the bus chain settles) without an extra DB read.
-    const priorFailedAttempts = new Map<EpisodeId, number>();
-    for (const ep of episodes) {
-      if (startupRecoveryCancelled) break;
-      if (isLightweightEpisode(ep)) continue;
-      const episodeId = ep.id as EpisodeId;
-      const endedAt = ep.endedAt ?? Date.now();
-      const prevDirty = (ep.meta?.rewardDirty as
-        | { failedAttempts?: unknown }
-        | undefined) ?? {};
-      const prevAttempts =
-        typeof prevDirty.failedAttempts === "number"
-          ? prevDirty.failedAttempts
-          : 0;
-      priorFailedAttempts.set(episodeId, prevAttempts);
-      handle.repos.episodes.updateMeta(episodeId, {
-        closeReason: "finalized",
-        recoveredAtStartup: endedAt,
-        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
-      });
-      const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
-        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
-      });
-      handle.buses.session.emit({
-        kind: "episode.finalized",
-        episode: snapshot,
-        closedBy: "finalized",
-      });
-    }
-    await handle.flush();
-    if (startupRecoveryCancelled) return;
-    // After the reward / reflect chain has finished, account for the
-    // outcome: clear `meta.rewardDirty` on episodes that are no longer
-    // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
-    // that still match the dirty predicate (LLM failure / no-op). This
-    // closes the "retried indefinitely" loop reported in issue #1808.
-    const now = Date.now();
-    for (const [episodeId, prevAttempts] of priorFailedAttempts) {
-      const after = handle.repos.episodes.getById(episodeId);
-      if (!after) continue;
-      const stillDirty = episodeRewardIsDirty(after);
-      if (stillDirty) {
+    if (startupRecoveryCancelled || shutDown) return;
+    episodes = episodes.filter((ep) => !dirtyClosedInFlight.has(ep.id as EpisodeId) &&
+      !deepWindow.isProcessing(ep.id as EpisodeId));
+    if (episodes.length === 0) return;
+    // Claim before emitting any events. Startup recovery, the queue drain
+    // and periodic scans can overlap while the LLM/flush is awaiting I/O.
+    for (const ep of episodes) dirtyClosedInFlight.add(ep.id as EpisodeId);
+    try {
+      log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
+      // Snapshot the prior failure counters so we can increment them later
+      // (after the bus chain settles) without an extra DB read.
+      const priorFailedAttempts = new Map<EpisodeId, number>();
+      for (const ep of episodes) {
+        if (startupRecoveryCancelled) break;
+        if (isLightweightEpisode(ep)) continue;
+        const episodeId = ep.id as EpisodeId;
+        const endedAt = ep.endedAt ?? Date.now();
+        const prevDirty = (ep.meta?.rewardDirty as
+          | { failedAttempts?: unknown }
+          | undefined) ?? {};
+        const prevAttempts =
+          typeof prevDirty.failedAttempts === "number"
+            ? prevDirty.failedAttempts
+            : 0;
+        priorFailedAttempts.set(episodeId, prevAttempts);
         handle.repos.episodes.updateMeta(episodeId, {
-          rewardDirty: {
-            failedAttempts: prevAttempts + 1,
-            lastFailureAt: now,
-          },
+          closeReason: "finalized",
+          recoveredAtStartup: endedAt,
+          recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
         });
-      } else if (
-        after.meta &&
-        typeof after.meta === "object" &&
-        "rewardDirty" in after.meta
-      ) {
-        handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
+        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
+          recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+        });
+        handle.buses.session.emit({
+          kind: "episode.finalized",
+          episode: snapshot,
+          closedBy: "finalized",
+        });
       }
+      await handle.flush();
+      if (startupRecoveryCancelled) return;
+      // After the reward / reflect chain has finished, account for the
+      // outcome: clear `meta.rewardDirty` on episodes that are no longer
+      // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
+      // that still match the dirty predicate (LLM failure / no-op). This
+      // closes the "retried indefinitely" loop reported in issue #1808.
+      const now = Date.now();
+      for (const [episodeId, prevAttempts] of priorFailedAttempts) {
+        const after = handle.repos.episodes.getById(episodeId);
+        if (!after) continue;
+        const stillDirty = episodeRewardIsDirty(after);
+        if (stillDirty) {
+          handle.repos.episodes.updateMeta(episodeId, {
+            rewardDirty: {
+              failedAttempts: prevAttempts + 1,
+              lastFailureAt: now,
+            },
+          });
+        } else if (
+          after.meta &&
+          typeof after.meta === "object" &&
+          "rewardDirty" in after.meta
+        ) {
+          handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
+        }
+      }
+    } finally {
+      for (const ep of episodes) dirtyClosedInFlight.delete(ep.id as EpisodeId);
     }
   }
 
@@ -1917,6 +1943,9 @@ export function createMemoryCore(
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
     if (meta.lightweightMemory === true) return false;
+    // Independent of reward coverage: explicit feedback does not reflect
+    // an episode, and an interrupted downstream pass still needs replay.
+    if (meta.deepProcessingPending === true) return true;
     // An intentional triviality skip is terminal and must take precedence
     // over a stale retry marker written by an older recovery attempt.
     if (rewardWasSkipped(ep)) return false;
@@ -2110,6 +2139,7 @@ export function createMemoryCore(
   async function shutdown(): Promise<void> {
     if (shutDown) return;
     shutDown = true;
+    for (const timer of recoveryTimers.splice(0)) clearInterval(timer);
     try {
       // Make sure the background startup recovery (issue #1808) has
       // finished before we tear down the bus / DB handle. Without this
@@ -2249,6 +2279,28 @@ export function createMemoryCore(
   }
 
   // ─── Session / episode ──
+  async function flushBeforeClose(): Promise<void> {
+    if (handle.algorithm.deepProcessing.mode !== "window") {
+      await handle.flush();
+      return;
+    }
+    if (deepWindow.shouldDefer()) return;
+    const controller = new AbortController();
+    const windowClosed = async (): Promise<void> => {
+      while (deepWindow.isOpen()) {
+        await waitForRetry(1_000, controller.signal);
+      }
+    };
+    try {
+      // Let the background chain resume in the next window without holding
+      // an adapter's close RPC open overnight. The durable pending marker
+      // survives if that adapter exits before the next window.
+      await Promise.race([handle.flush(), windowClosed()]);
+    } finally {
+      controller.abort();
+    }
+  }
+
   async function openSession(input: {
     agent: AgentKind;
     sessionId?: SessionId;
@@ -2278,7 +2330,7 @@ export function createMemoryCore(
     handle.sessionManager.closeSession(sessionId, "client");
     turnStartApiLogBySession.delete(sessionId);
     try {
-      await handle.flush();
+      await flushBeforeClose();
     } catch (err) {
       log.warn("closeSession.flush_failed", {
         sessionId,
@@ -2328,7 +2380,7 @@ export function createMemoryCore(
     // extra latency on the close call — but the chat is already done
     // at this point, so the user doesn't wait on it.
     try {
-      await handle.flush();
+      await flushBeforeClose();
     } catch (err) {
       log.warn("closeEpisode.flush_failed", {
         episodeId,

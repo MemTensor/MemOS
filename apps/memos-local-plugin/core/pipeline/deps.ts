@@ -11,6 +11,7 @@
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import type { StorageDb } from "../storage/index.js";
+import type { EpisodeId } from "../types.js";
 
 import {
   createSessionManager,
@@ -207,6 +208,8 @@ export interface PipelineSubscriberSet {
   skills: SkillSubscriberHandle;
   feedback: FeedbackSubscriberHandle;
   deepWindow: DeepWindowQueue;
+  /** Acknowledge durable evolution work only after the complete chain drains. */
+  prepareDeepProcessingCompletion(): () => void;
   subscriptions: PipelineSubscriptions;
 }
 
@@ -221,7 +224,6 @@ export function buildPipelineSubscribers(
   const bgLlmSemaphore = createSemaphore(algorithm.session.bgLlmConcurrency);
   const bgLlm = rateLimitLlmClient(deps.llm, bgLlmSemaphore, resources);
   const bgReflectLlm = rateLimitLlmClient(deps.reflectLlm, bgLlmSemaphore, resources);
-  const bgL3Llm = rateLimitLlmClient(deps.l3Llm ?? deps.llm, bgLlmSemaphore, resources);
   const bgEmbedder = resources
     ? prioritizeEmbedder(deps.embedder, resources, "background")
     : deps.embedder;
@@ -236,6 +238,37 @@ export function buildPipelineSubscribers(
     log: log.child({ channel: "core.pipeline.deep-window" }),
     now: deps.now,
   });
+  const windowEnabled = algorithm.deepProcessing.mode === "window" && !lightweightMode;
+  const evolutionLlm = windowEnabled
+    ? rateLimitLlmClient(deps.llm, bgLlmSemaphore, resources, deepWindow)
+    : bgLlm;
+  const bgL3Llm = rateLimitLlmClient(
+    deps.l3Llm ?? deps.llm, bgLlmSemaphore, resources,
+    windowEnabled ? deepWindow : undefined,
+  );
+  const deepProcessingRuns = new Map<EpisodeId, { reflected: boolean }>();
+
+  function markDeepProcessingPending(episodeId: EpisodeId): void {
+    deps.repos.episodes.updateMeta(episodeId, { deepProcessingPending: true });
+  }
+
+  function prepareDeepProcessingCompletion(): () => void {
+    // Snapshot after capture drains. A new capture can start while the
+    // remaining subscribers drain; that newer run must not be acknowledged.
+    const runs = new Map(deepProcessingRuns);
+    return () => {
+      for (const [episodeId, run] of runs) {
+        if (deepProcessingRuns.get(episodeId) !== run) continue;
+        deepProcessingRuns.delete(episodeId);
+        deepWindow.finishProcessing(episodeId);
+        // A shutdown-aborted wait remains recoverable even when explicit
+        // feedback has already written a complete reward score.
+        if (!run.reflected || deepWindow.shouldDefer() || resources?.shutdownSignal.aborted) continue;
+        deps.repos.episodes.updateMeta(episodeId, { deepProcessingPending: undefined });
+        deepWindow.acknowledge(episodeId);
+      }
+    };
+  }
 
   const captureRunner = createCaptureRunner({
     tracesRepo: deps.repos.traces,
@@ -249,11 +282,28 @@ export function buildPipelineSubscribers(
     // participates in the shared concurrency limit. `bgReflectLlm`
     // remains read-only evaluator metadata below; the original
     // `deps.reflectLlm` is also exposed to the Overview health card.
-    reflectLlm: bgLlm,
+    reflectLlm: evolutionLlm,
     bus: buses.capture,
     cfg: algorithm.capture,
     now: deps.now,
   });
+  if (!lightweightMode) {
+    const runReflect = captureRunner.runReflect;
+    captureRunner.runReflect = async (input) => {
+      // Finish obligations persisted by an earlier window-mode process even
+      // if the operator has since restored immediate processing.
+      if (!windowEnabled && input.episode.meta.deepProcessingPending !== true) {
+        return runReflect(input);
+      }
+      markDeepProcessingPending(input.episode.id);
+      const run = { reflected: false };
+      deepProcessingRuns.set(input.episode.id, run);
+      deepWindow.startProcessing(input.episode.id);
+      const result = await runReflect(input);
+      run.reflected = result.warnings.length === 0;
+      return result;
+    };
+  }
 
   // Lightweight mode short-circuits the evolution pipeline: reward /
   // L2 / L3 / skill / feedback subscribers are NOT attached to their
@@ -275,6 +325,7 @@ export function buildPipelineSubscribers(
       skills: lightweightSkillHandle(),
       feedback: lightweightFeedbackHandle(),
       deepWindow,
+      prepareDeepProcessingCompletion,
       subscriptions: {
         capture: lightweightCaptureSubscription(),
         reward: lightweightRewardSubscription(),
@@ -282,7 +333,7 @@ export function buildPipelineSubscribers(
     };
   }
 
-  const rewardRunner = createRewardRunner({
+  const rewardDeps: Parameters<typeof createRewardRunner>[0] = {
     tracesRepo: deps.repos.traces,
     episodesRepo: deps.repos.episodes,
     feedbackRepo: deps.repos.feedback,
@@ -310,7 +361,18 @@ export function buildPipelineSubscribers(
     getEpisodeSnapshot: session
       ? (id) => session.sessionManager.getEpisode(id)
       : undefined,
-  });
+  };
+  // Explicit/manual reward calls remain immediate. Automatic reward uses
+  // the same per-request window admission as reflection, L2, L3 and skills.
+  const immediateRewardRunner = createRewardRunner(rewardDeps);
+  const automaticRewardRunner = windowEnabled
+    ? createRewardRunner({ ...rewardDeps, llm: evolutionLlm })
+    : immediateRewardRunner;
+  const rewardRunner: RewardRunner = windowEnabled ? {
+    run: (input) => (input.trigger === "implicit_fallback"
+      ? automaticRewardRunner
+      : immediateRewardRunner).run(input),
+  } : immediateRewardRunner;
 
   const captureSub = attachCaptureSubscriber(buses.session, captureRunner, {
     // Issue #2333: outside the deep-processing window the topic-end
@@ -321,6 +383,7 @@ export function buildPipelineSubscribers(
     deferHook: {
       defer: () => deepWindow.shouldDefer(),
       onDeferred: (episodeId, closedBy) => {
+        markDeepProcessingPending(episodeId);
         deepWindow.enqueue(episodeId, closedBy);
       },
     },
@@ -337,7 +400,7 @@ export function buildPipelineSubscribers(
     repos: deps.repos,
     rewardBus: buses.reward,
     l2Bus: buses.l2,
-    llm: bgLlm,
+    llm: evolutionLlm,
     log: log.child({ channel: "core.memory.l2" }),
     config: algorithm.l2Induction,
     thresholds: {
@@ -362,7 +425,7 @@ export function buildPipelineSubscribers(
   const skillHandle = attachSkillSubscriber({
     repos: deps.repos,
     embedder: bgEmbedder,
-    llm: bgLlm,
+    llm: evolutionLlm,
     bus: buses.skill,
     l2Bus: buses.l2,
     rewardBus: buses.reward,
@@ -387,6 +450,7 @@ export function buildPipelineSubscribers(
     skills: skillHandle,
     feedback: feedbackHandle,
     deepWindow,
+    prepareDeepProcessingCompletion,
     subscriptions: {
       capture: captureSub,
       reward: rewardSub,

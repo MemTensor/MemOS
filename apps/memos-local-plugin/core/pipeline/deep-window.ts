@@ -18,6 +18,7 @@
 import type { EpisodeId } from "../types.js";
 import type { EpisodeCloseReason } from "../session/types.js";
 import type { Logger } from "../logger/types.js";
+import { waitForRetry } from "../util/retry-after.js";
 import {
   isWithinDailyWindow,
   parseDailyWindow,
@@ -58,10 +59,18 @@ export interface DeepWindowQueue {
   shouldDefer(): boolean;
   /** True when heavy evolution work is allowed to run right now. */
   isOpen(): boolean;
+  /** Pause new provider calls outside the window; shutdown cancels the wait. */
+  waitUntilOpen(signal?: AbortSignal): Promise<void>;
   /** Persist an episode for later batch processing. Deduplicates by id. */
   enqueue(episodeId: EpisodeId, closedBy: EpisodeCloseReason): void;
   /** Remove and return up to `maxBatchPerCycle` entries, oldest first. */
   takeBatch(): DeepWindowQueueEntry[];
+  /** Remove work that another recovery entry point has completed. */
+  acknowledge(episodeId: EpisodeId): void;
+  /** Track live evolution chains as well as queue/recovery work. */
+  isProcessing(episodeId: EpisodeId): boolean;
+  startProcessing(episodeId: EpisodeId): void;
+  finishProcessing(episodeId: EpisodeId): void;
   /** Current queue depth. */
   size(): number;
 }
@@ -77,13 +86,13 @@ export function createDeepWindowQueue(deps: DeepWindowQueueDeps): DeepWindowQueu
   const now = deps.now ?? Date.now;
   const enabled = deps.config.mode === "window";
   // Parsed once: `resolveConfig` rejects a malformed spec at load time, so
-  // a null here means a caller built the config by hand. Treat it as "no
-  // window" — `isOpen()` then stays false and nothing is deferred either,
-  // because `shouldDefer()` short-circuits on `enabled`.
+  // a null here means a caller built the config by hand. Fail closed:
+  // `isOpen()` stays false in window mode.
   const window: DailyWindow | null = enabled
     ? parseDailyWindow(deps.config.window)
     : null;
   const maxBatch = Math.max(1, Math.floor(deps.config.maxBatchPerCycle));
+  const processing = new Set<EpisodeId>();
 
   function read(): DeepWindowQueueEntry[] {
     const raw = deps.kv.get<unknown>(DEEP_PROCESSING_QUEUE_KEY, null);
@@ -98,6 +107,13 @@ export function createDeepWindowQueue(deps: DeepWindowQueueDeps): DeepWindowQueu
 
   return {
     isOpen,
+
+    async waitUntilOpen(signal?: AbortSignal): Promise<void> {
+      signal?.throwIfAborted();
+      while (!isOpen()) {
+        await waitForRetry(60_000, signal);
+      }
+    },
 
     shouldDefer(): boolean {
       if (!enabled) return false;
@@ -127,6 +143,16 @@ export function createDeepWindowQueue(deps: DeepWindowQueueDeps): DeepWindowQueu
       deps.kv.set(DEEP_PROCESSING_QUEUE_KEY, entries.slice(batch.length));
       return batch;
     },
+
+    acknowledge(episodeId): void {
+      const entries = read();
+      const remaining = entries.filter((entry) => entry.episodeId !== episodeId);
+      if (remaining.length !== entries.length) deps.kv.set(DEEP_PROCESSING_QUEUE_KEY, remaining);
+    },
+
+    isProcessing: (episodeId) => processing.has(episodeId),
+    startProcessing: (episodeId) => { processing.add(episodeId); },
+    finishProcessing: (episodeId) => { processing.delete(episodeId); },
 
     size(): number {
       return read().length;
