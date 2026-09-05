@@ -26,6 +26,15 @@ export {
   type CreateMemoryCoreOptions,
 } from "./memory-core.js";
 
+export {
+  createDeepWindowQueue,
+  DEEP_PROCESSING_QUEUE_KEY,
+  DEEP_PROCESSING_QUEUE_MAX,
+  type DeepProcessingConfig,
+  type DeepWindowQueue,
+  type DeepWindowQueueEntry,
+} from "./deep-window.js";
+
 export type {
   PipelineAlgorithmConfig,
   PipelineBuses,

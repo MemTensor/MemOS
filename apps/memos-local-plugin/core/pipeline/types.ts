@@ -45,6 +45,10 @@ import type {
 } from "../retrieval/types.js";
 import type { RetrievalEventBus } from "../retrieval/events.js";
 import type {
+  DeepProcessingConfig,
+  DeepWindowQueue,
+} from "./deep-window.js";
+import type {
   EpisodeManager,
   EpisodeSnapshot,
   IntentClassifier,
@@ -91,6 +95,7 @@ export interface PipelineAlgorithmConfig {
   feedback: FeedbackConfig;
   retrieval: RetrievalConfig;
   session: SessionRoutingConfig;
+  deepProcessing: DeepProcessingConfig;
 }
 
 export interface LightweightMemoryConfig {
@@ -209,6 +214,13 @@ export interface PipelineHandle {
   readonly l3: L3SubscriberHandle;
   readonly skills: SkillSubscriberHandle;
   readonly feedback: FeedbackSubscriberHandle;
+  /**
+   * Deep-processing window queue (issue #2333). Always present; when
+   * `algorithm.deepProcessing.mode` is `"always"` it reports
+   * `shouldDefer() === false` / `isOpen() === true` so every caller can
+   * gate on it unconditionally.
+   */
+  readonly deepWindow: DeepWindowQueue;
 
   // Event buses (pipeline owns + aggregates into a unified CoreEvent stream).
   readonly buses: PipelineBuses;

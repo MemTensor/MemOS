@@ -180,6 +180,48 @@ const AlgorithmSchema = Type.Object({
      */
     enabled: Bool(true),
   }, { default: {} }),
+  deepProcessing: Type.Object({
+    /**
+     * Issue #2333 — full-mode (self-evolution) LLM calls compete with the
+     * user's foreground conversation for the same provider quota. The
+     * deep-processing window defers the heavy evolution chain
+     * (reflect → reward → L2 → L3 → skill) plus the dirty-reward
+     * compensation retries to a daily idle window.
+     *
+     *   - "always" (default): evolve as episodes close — legacy behaviour.
+     *   - "window": outside the configured window episodes are captured
+     *     and stored normally, but their evolution is queued and batched
+     *     inside the window.
+     */
+    mode: Type.Union(
+      [Type.Literal("always"), Type.Literal("window")],
+      { default: "always" },
+    ),
+    /**
+     * Daily idle window in `HH:MM-HH:MM` local wall-clock time, e.g.
+     * `02:00-06:00`. A range whose start is greater than its end wraps
+     * past midnight (e.g. `23:00-07:00`). Only meaningful when
+     * `mode: "window"`.
+     */
+    window: StringWithDefault("02:00-06:00"),
+    /**
+     * IANA timezone used to evaluate `window` (e.g. `Asia/Shanghai`).
+     * Empty = the host's system local timezone.
+     */
+    timezone: StringWithDefault(""),
+    /**
+     * Minimum seconds between two batch cycles while inside the window.
+     * Each cycle processes at most `maxBatchPerCycle` queued episodes;
+     * the shared `algorithm.session.bgLlmConcurrency` budget still caps
+     * how many LLM calls run in parallel.
+     */
+    drainIntervalSec: NumberInRange(600, 60, 86_400),
+    /**
+     * Maximum queued episodes processed per batch cycle. Remaining
+     * episodes stay queued for the next cycle in the same window.
+     */
+    maxBatchPerCycle: NumberInRange(10, 1, 500),
+  }, { default: {} }),
   capture: Type.Object({
     /** Cap on agent/user text length (chars). Longer content is summarized. */
     maxTextChars: NumberInRange(4_000, 200, 64_000),

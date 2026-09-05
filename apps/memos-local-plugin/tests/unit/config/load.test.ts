@@ -347,8 +347,85 @@ viewer:
   });
 });
 
-describe("config/loadConfig MEMOS_HOME override", () => {
-  const SAVED = process.env["MEMOS_HOME"];
+/**
+ * Issue #2333 deep-processing window validation. A malformed window must
+ * fail at load time rather than silently defer every episode forever.
+ */
+describe("config/deepProcessing validation (issue #2333)", () => {
+  it('mode "always" does not validate the window or timezone', () => {
+    // The spec is irrelevant when the mode is off.
+    const cfg = resolveConfig({
+      algorithm: {
+        deepProcessing: {
+          mode: "always",
+          window: "garbage",
+          timezone: "Not/AZone",
+        },
+      },
+    });
+    expect(cfg.algorithm.deepProcessing.mode).toBe("always");
+  });
+
+  it('mode "window" rejects a malformed HH:MM-HH:MM spec', () => {
+    expect(() =>
+      resolveConfig({
+        algorithm: {
+          deepProcessing: {
+            mode: "window",
+            window: "2-6",
+            timezone: "UTC",
+          },
+        },
+      }),
+    ).toThrow(/invalid algorithm\.deepProcessing\.window.*2-6/);
+  });
+
+  it('mode "window" rejects an invalid IANA timezone', () => {
+    expect(() =>
+      resolveConfig({
+        algorithm: {
+          deepProcessing: {
+            mode: "window",
+            window: "02:00-06:00",
+            timezone: "Not/AZone",
+          },
+        },
+      }),
+    ).toThrow(/invalid algorithm\.deepProcessing\.timezone.*Not\/AZone/);
+  });
+
+  it('mode "window" accepts a well-formed window and IANA zone', () => {
+    const cfg = resolveConfig({
+      algorithm: {
+        deepProcessing: {
+          mode: "window",
+          window: "23:00-07:00",
+          timezone: "Asia/Shanghai",
+          drainIntervalSec: 1800,
+          maxBatchPerCycle: 5,
+        },
+      },
+    });
+    expect(cfg.algorithm.deepProcessing.mode).toBe("window");
+    expect(cfg.algorithm.deepProcessing.window).toBe("23:00-07:00");
+    expect(cfg.algorithm.deepProcessing.timezone).toBe("Asia/Shanghai");
+  });
+
+  it("accepts an empty timezone (defaults to system)", () => {
+    const cfg = resolveConfig({
+      algorithm: {
+        deepProcessing: {
+          mode: "window",
+          window: "02:00-06:00",
+          timezone: "",
+        },
+      },
+    });
+    expect(cfg.algorithm.deepProcessing.timezone).toBe("");
+  });
+});
+
+describe("config/loadConfig MEMOS_HOME override", () => {  const SAVED = process.env["MEMOS_HOME"];
   beforeEach(() => { delete process.env["MEMOS_HOME"]; });
   afterEach(() => { if (SAVED === undefined) delete process.env["MEMOS_HOME"]; else process.env["MEMOS_HOME"] = SAVED; });
 

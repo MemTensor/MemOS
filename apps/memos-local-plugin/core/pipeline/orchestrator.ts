@@ -1629,6 +1629,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     const nextTick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
     await subs.subscriptions.capture.drain();
+    const completeDeepProcessing = subs.prepareDeepProcessingCompletion();
     if (lightweightMode) {
       await embeddingRetryWorker.flush();
       return;
@@ -1650,6 +1651,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     await skillLifecycleWorker.runNow();
     await subs.feedback.flush();
     await embeddingRetryWorker.flush();
+    completeDeepProcessing();
   }
 
   async function shutdown(
@@ -1859,6 +1861,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     l3: subs.l3,
     skills: subs.skills,
     feedback: subs.feedback,
+    deepWindow: subs.deepWindow,
     buses,
     subscribeEvents,
     getRecentEvents,
