@@ -1,3 +1,5 @@
+import pytest
+
 from memos.api.config import APIConfig
 
 
@@ -116,6 +118,54 @@ def test_feedback_model_ignores_task_scoped_endpoint_env(monkeypatch):
     config = APIConfig.get_feedback_llm_config()
 
     assert config["backend"] == "qwen"
+    assert config["config"]["api_key"] == "qwen-key"
+    assert config["config"]["api_base"] == "https://dashscope.example/v1"
+
+
+@pytest.mark.parametrize(
+    ("env_name", "getter"),
+    [
+        ("SUGGESTION_MODEL", APIConfig.get_suggestion_llm_config),
+        ("MEMSCHEDULER_MODEL", APIConfig.get_scheduler_llm_config),
+    ],
+)
+def test_task_specific_model_uses_provider_env(monkeypatch, env_name, getter):
+    monkeypatch.setenv(env_name, "qwen3.6-flash")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://openai.example/v1")
+
+    config = getter()
+
+    assert config["backend"] == "qwen"
+    assert config["config"]["model_name_or_path"] == "qwen3.6-flash"
+    assert config["config"]["api_key"] == "qwen-key"
+    assert config["config"]["api_base"] == "https://dashscope.example/v1"
+    assert config["config"]["temperature"] == 0.6
+    assert config["config"]["extra_body"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize(
+    ("env_name", "getter"),
+    [
+        ("SUGGESTION_MODEL", APIConfig.get_suggestion_llm_config),
+        ("MEMSCHEDULER_MODEL", APIConfig.get_scheduler_llm_config),
+    ],
+)
+def test_task_specific_model_falls_back_to_general_model(monkeypatch, env_name, getter):
+    monkeypatch.delenv("SUGGESTION_MODEL", raising=False)
+    monkeypatch.delenv("MEMSCHEDULER_MODEL", raising=False)
+    monkeypatch.setenv("MEMREADER_GENERAL_MODEL", "qwen3.6-flash")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://openai.example/v1")
+
+    config = getter()
+
+    assert config["backend"] == "qwen"
+    assert config["config"]["model_name_or_path"] == "qwen3.6-flash"
     assert config["config"]["api_key"] == "qwen-key"
     assert config["config"]["api_base"] == "https://dashscope.example/v1"
 

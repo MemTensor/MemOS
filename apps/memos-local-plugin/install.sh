@@ -7,13 +7,14 @@
 #   bash install.sh --version ./pkg.tgz    # use a local tarball
 #
 # Interactive: with a TTY we ask where to install (OpenClaw / Hermes /
-# both). Press ENTER for auto-detect. Non-TTY falls straight to
-# auto-detect. macOS + Linux only.
+# DeepSeek Harness / both legacy agents). Press ENTER for auto-detect.
+# Non-TTY falls straight to auto-detect. macOS + Linux only.
 #
 # Design notes:
 #   - Each agent runs its OWN viewer on its OWN well-known port:
 #       openclaw → :18799
 #       hermes   → :18800
+#       dsh      → :18801
 #     Ports are intentionally fixed and not configurable by the
 #     installer — having two agents share one port (the previous
 #     "hub/peer" model) caused too many sharp edges (read-only
@@ -85,6 +86,8 @@ NPM_PACKAGE="@memtensor/memos-local-plugin"
 # Per-agent viewer ports are fixed (see header design notes).
 OPENCLAW_PORT="18799"
 HERMES_PORT="18800"
+DSH_PORT="18801"
+DSH_PNPM_VERSION="11.7.0"
 REQUIRED_NODE_MAJOR=20
 OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"
 # Older plugin IDs disabled on install so they don't fight for the
@@ -94,6 +97,8 @@ LEGACY_PLUGIN_IDS=("memos-local-openclaw-plugin")
 # ─── Args ─────────────────────────────────────────────────────────────────
 VERSION_ARG=""
 AGENT_SELECTION=""
+DSH_PROFILE="web"
+DSH_PROFILE_EXPLICIT="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -101,9 +106,17 @@ while [[ $# -gt 0 ]]; do
     --agent|--target)
       AGENT_SELECTION="${2:-}"
       case "${AGENT_SELECTION}" in
-        auto|openclaw|hermes|all) ;;
-        *) die "--agent must be one of: auto, openclaw, hermes, all" ;;
+        auto|openclaw|hermes|dsh|all) ;;
+        *) die "--agent must be one of: auto, openclaw, hermes, dsh, all" ;;
       esac
+      shift 2
+      ;;
+    --profile)
+      DSH_PROFILE="${2:-}"
+      [[ -n "${DSH_PROFILE}" ]] || die "--profile requires a DSH profile name"
+      [[ "${DSH_PROFILE}" =~ ^[A-Za-z0-9._-]+$ ]] \
+        || die "--profile may contain only letters, numbers, '.', '_' and '-'"
+      DSH_PROFILE_EXPLICIT="true"
       shift 2
       ;;
     --port)
@@ -116,15 +129,20 @@ Usage:
   bash install.sh --version X.Y.Z                # specific npm version
   bash install.sh --version ./pkg.tgz            # local tarball
   bash install.sh --agent hermes                 # install one target
-  bash install.sh --agent openclaw|hermes|all
+  bash install.sh --agent dsh --profile web      # install into a DSH profile
+  bash install.sh --agent openclaw|hermes|dsh|all
+
+"all" keeps its existing meaning: installed OpenClaw + Hermes targets.
+Select DSH explicitly with --agent dsh.
 
 Each agent runs its viewer on a fixed port:
   openclaw → http://127.0.0.1:${OPENCLAW_PORT}
   hermes   → http://127.0.0.1:${HERMES_PORT}
+  dsh      → http://127.0.0.1:${DSH_PORT}
 EOF
       exit 0
       ;;
-    *) die "Unknown argument: $1 (only --version is supported)" ;;
+    *) die "Unknown argument: $1 (see --help for supported options)" ;;
   esac
 done
 
@@ -209,6 +227,7 @@ ensure_node() {
 # ─── Detect hosts ─────────────────────────────────────────────────────────
 HAS_OPENCLAW="false"
 HAS_HERMES="false"
+HAS_DSH="false"
 [[ -d "${HOME}/.openclaw" ]] && HAS_OPENCLAW="true"
 [[ -d "${HOME}/.hermes"   ]] && HAS_HERMES="true"
 
@@ -217,6 +236,14 @@ find_openclaw_cli() {
   [[ -x "${HOME}/.local/bin/openclaw" ]] && { echo "${HOME}/.local/bin/openclaw"; return 0; }
   return 1
 }
+
+find_dsh_cli() {
+  command -v dsh 2>/dev/null && return 0
+  [[ -x "${HOME}/.local/bin/dsh" ]] && { echo "${HOME}/.local/bin/dsh"; return 0; }
+  return 1
+}
+
+find_dsh_cli >/dev/null 2>&1 && HAS_DSH="true"
 
 # ─── Interactive picker ───────────────────────────────────────────────────
 pick_agents_interactively() {
@@ -233,6 +260,11 @@ pick_agents_interactively() {
   else
     printf "    ${DIM}○  Hermes     (not installed)${NC}\n"
   fi
+  if [[ "${HAS_DSH}" == "true" ]]; then
+    printf "    ${GREEN}●${NC}  DSH        ${DIM}$(find_dsh_cli)${NC}\n"
+  else
+    printf "    ${DIM}○  DSH        (not installed)${NC}\n"
+  fi
   echo
   local choice
   if [[ ! -t 0 ]]; then
@@ -244,6 +276,7 @@ pick_agents_interactively() {
     printf "        ${DIM}[1]${NC}  🦞  OpenClaw only\n"
     printf "        ${DIM}[2]${NC}  👩  Hermes only\n"
     printf "        ${DIM}[3]${NC}  📦  Both\n"
+    printf "        ${DIM}[4]${NC}  🐋  DeepSeek Harness only\n"
     printf "        ${DIM}[q]${NC}  🚪  Quit\n"
     echo
     printf "  Choice: "
@@ -254,6 +287,7 @@ pick_agents_interactively() {
     1)   AGENT_SELECTION="openclaw" ;;
     2)   AGENT_SELECTION="hermes" ;;
     3)   AGENT_SELECTION="all" ;;
+    4)   AGENT_SELECTION="dsh" ;;
     q|Q) info "Aborted."; exit 0 ;;
     *)   die "Invalid choice: ${choice}" ;;
   esac
@@ -262,36 +296,64 @@ pick_agents_interactively() {
 # ─── Resolve tarball ──────────────────────────────────────────────────────
 BUILT_TARBALL=""
 STAGE_DIR=""
+DSH_PNPM_TEMP_DIR=""
 SOURCE_KIND=""   # "path" for a local file, "npm" otherwise
 SOURCE_SPEC=""
+GATEWAY_RECOVERY_BIN=""
+GATEWAY_RECOVERY_STATE="inactive"
+
+cleanup_install_state() {
+  if [[ "${GATEWAY_RECOVERY_STATE:-inactive}" == "needs_recovery" \
+        && -n "${GATEWAY_RECOVERY_BIN:-}" ]]; then
+    local recovery_out=""
+    if ! recovery_out="$("${GATEWAY_RECOVERY_BIN}" gateway start 2>&1)"; then
+      warn "OpenClaw gateway recovery failed; the gateway may still be stopped."
+      if [[ -n "${recovery_out}" ]]; then
+        printf '%s\n' "${recovery_out}" | sed 's/^/       /' >&2
+      fi
+    fi
+  fi
+  if [[ -n "${STAGE_DIR}" && -d "${STAGE_DIR}" ]]; then
+    rm -rf -- "${STAGE_DIR}"
+  fi
+  if [[ -n "${DSH_PNPM_TEMP_DIR}" && -d "${DSH_PNPM_TEMP_DIR}" ]]; then
+    rm -rf -- "${DSH_PNPM_TEMP_DIR}"
+  fi
+}
+trap cleanup_install_state EXIT
+
+resolve_source_spec() {
+  if [[ -n "${VERSION_ARG}" && -f "${VERSION_ARG}" ]]; then
+    local absolute_path
+    absolute_path="$(cd "$(dirname "${VERSION_ARG}")" && pwd)/$(basename "${VERSION_ARG}")"
+    SOURCE_KIND="path"
+    SOURCE_SPEC="${absolute_path}"
+    return 0
+  fi
+
+  if [[ -z "${VERSION_ARG}" ]]; then
+    SOURCE_SPEC="${NPM_PACKAGE}"
+  else
+    SOURCE_SPEC="${NPM_PACKAGE}@${VERSION_ARG}"
+  fi
+  SOURCE_KIND="npm"
+}
 
 resolve_tarball() {
+  resolve_source_spec
   STAGE_DIR="$(mktemp -d)"
-  trap 'rm -rf "${STAGE_DIR}"' EXIT
 
-  if [[ -n "${VERSION_ARG}" && -f "${VERSION_ARG}" ]]; then
-    BUILT_TARBALL="$(cd "$(dirname "${VERSION_ARG}")" && pwd)/$(basename "${VERSION_ARG}")"
-    SOURCE_KIND="path"
-    SOURCE_SPEC="${BUILT_TARBALL}"
+  if [[ "${SOURCE_KIND}" == "path" ]]; then
+    BUILT_TARBALL="${SOURCE_SPEC}"
     success "Using local tarball: ${BUILT_TARBALL}"
     return 0
   fi
 
-  local spec
-  if [[ -z "${VERSION_ARG}" ]]; then
-    spec="${NPM_PACKAGE}"
-    info "Downloading latest ${NPM_PACKAGE} from npm …"
-  else
-    spec="${NPM_PACKAGE}@${VERSION_ARG}"
-    info "Downloading ${spec} from npm …"
-  fi
-  SOURCE_KIND="npm"
-  SOURCE_SPEC="${spec}"
-
-  (cd "${STAGE_DIR}" && npm pack "${spec}" --loglevel=error >/dev/null 2>&1)
+  info "Downloading ${SOURCE_SPEC} from npm …"
+  (cd "${STAGE_DIR}" && npm pack "${SOURCE_SPEC}" --loglevel=error >/dev/null 2>&1)
   BUILT_TARBALL="$(ls "${STAGE_DIR}"/*.tgz 2>/dev/null | head -1)"
   [[ -n "${BUILT_TARBALL}" && -f "${BUILT_TARBALL}" ]] \
-    || die "npm pack failed for ${spec}. Check the npm registry or pass a local path via --version ./pkg.tgz"
+    || die "npm pack failed for ${SOURCE_SPEC}. Check the npm registry or pass a local path via --version ./pkg.tgz"
   success "Package ready: $(basename "${BUILT_TARBALL}")"
 }
 
@@ -344,7 +406,10 @@ deploy_tarball_to_prefix() {
   node_dir="$(dirname "${node_bin}")"
   node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
   printf "%s\n" "${node_bin}" > "${prefix}/.memos-node-bin"
-  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
+  # npm 11 still resolves omitted devDependency peer trees unless legacy peer
+  # resolution is requested. DSH peers are intentionally absent from the
+  # standalone OpenClaw/Hermes runtime.
+  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --legacy-peer-deps --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
   [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
 
   if [[ -d "${prefix}/node_modules/better-sqlite3" ]]; then
@@ -431,11 +496,16 @@ install_openclaw() {
   mkdir -p "${HOME}/.openclaw"
 
   local oc_bin=""
+  # These remain global because the EXIT trap runs after this function returns.
+  GATEWAY_RECOVERY_BIN=""
+  GATEWAY_RECOVERY_STATE="inactive"
   if oc_bin="$(find_openclaw_cli)"; then
     step "Stopping OpenClaw gateway"
     "${oc_bin}" gateway stop >/dev/null 2>&1 || true
     sleep 1
     success "Gateway stopped"
+    GATEWAY_RECOVERY_BIN="${oc_bin}"
+    GATEWAY_RECOVERY_STATE="needs_recovery"
   fi
 
   deploy_tarball_to_prefix "${prefix}"
@@ -610,6 +680,9 @@ NODE
        || (command -v lsof >/dev/null 2>&1 && lsof -i ":18789" -t >/dev/null 2>&1); then
       success "OpenClaw gateway already running"
     else
+      # The intended final start already ran and failed; do not repeat the same
+      # command from the EXIT trap.
+      GATEWAY_RECOVERY_STATE="final_failed"
       error "openclaw gateway start failed:"
       echo "${start_out}" | sed 's/^/       /' >&2
       warn "Inspect ~/.openclaw/logs/gateway.err.log for the full reason."
@@ -618,6 +691,10 @@ NODE
   else
     success "OpenClaw gateway started"
   fi
+  # The service started (or was already running), so later viewer fallback
+  # failures must not trigger another service start from the EXIT trap.
+  GATEWAY_RECOVERY_STATE="inactive"
+  GATEWAY_RECOVERY_BIN=""
 
   step "Waiting for Memory Viewer"
   if wait_for_viewer "${OPENCLAW_PORT}"; then
@@ -1036,9 +1113,254 @@ CFGEOF
   return 0
 }
 
+# ─── DeepSeek Harness install ─────────────────────────────────────────────
+# DSH owns its profile dependency graph and bundle reconciliation. We never
+# unpack into the profile or edit package.json/cordis.patch.yml ourselves.
+# pnpm 11 deliberately blocks unreviewed lifecycle scripts. On that one
+# expected failure we approve only the exact dependency names reviewed for
+# this package, deny unnecessary scripts (including ONNX Runtime's optional
+# Linux CUDA download), and repeat the same add so DSH can reconcile the
+# bundle after pnpm exits successfully.
+read_pending_dsh_builds() {
+  local workspace="$1"
+  [[ -f "${workspace}" ]] || return 0
+  awk '
+    /^allowBuilds:[[:space:]]*$/ { in_allow = 1; next }
+    in_allow && /^[^[:space:]]/ { in_allow = 0 }
+    in_allow && /: set this to true or false[[:space:]]*$/ {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/: set this to true or false[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "${workspace}" | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'
+}
+
+ensure_dsh_pnpm() {
+  local pnpm_bin pnpm_version
+  if pnpm_bin="$(command -v pnpm 2>/dev/null)"; then
+    if ! pnpm_version="$(pnpm --version 2>/dev/null)" || [[ -z "${pnpm_version}" ]]; then
+      die "pnpm exists at ${pnpm_bin}, but it cannot run. Repair that installation and re-run."
+    fi
+    success "pnpm ${pnpm_version}"
+    return 0
+  fi
+
+  command -v npm >/dev/null 2>&1 \
+    || die "pnpm is missing and npm is unavailable. Install pnpm@${DSH_PNPM_VERSION} and re-run."
+
+  warn "pnpm not found on PATH. Preparing pnpm@${DSH_PNPM_VERSION} for this DSH install..."
+  DSH_PNPM_TEMP_DIR="$(mktemp -d)" \
+    || die "Unable to create a temporary directory for pnpm."
+  if ! npm install \
+    --prefix "${DSH_PNPM_TEMP_DIR}" \
+    --no-save \
+    --ignore-scripts \
+    --no-audit \
+    --no-fund \
+    --package-lock=false \
+    --loglevel=error \
+    "pnpm@${DSH_PNPM_VERSION}"; then
+    die "Unable to prepare pnpm@${DSH_PNPM_VERSION}. Install it manually with: npm install -g pnpm@${DSH_PNPM_VERSION}"
+  fi
+
+  export PATH="${DSH_PNPM_TEMP_DIR}/node_modules/.bin:${PATH}"
+  hash -r
+  if ! pnpm_version="$(pnpm --version 2>/dev/null)" \
+    || [[ "${pnpm_version}" != "${DSH_PNPM_VERSION}" ]]; then
+    die "Temporary pnpm verification failed. Install it manually with: npm install -g pnpm@${DSH_PNPM_VERSION}"
+  fi
+
+  success "Temporary pnpm ${pnpm_version} ready"
+  info "It is removed after this installer exits; normal dsh runtime does not need it."
+}
+
+resolve_dsh_home_for_installer() {
+  node -e 'const path = require("node:path"); const os = require("node:os"); const MEMOS_DSH_HOME = true; const configured = process.env.DSH_HOME; const selected = configured !== undefined && configured.trim().length > 0 ? configured : path.join(os.homedir(), ".dsh"); const expanded = selected === "~" ? os.homedir() : selected.startsWith("~/") || selected.startsWith("~\\") ? path.join(os.homedir(), selected.slice(2)) : selected; process.stdout.write(path.resolve(expanded));'
+}
+
+deny_existing_dsh_onnx_build() {
+  local workspace="$1"
+  [[ -f "${workspace}" ]] || return 0
+  node -e 'const fs = require("node:fs"); const MEMOS_DSH_POLICY = true; const file = process.argv[1]; const raw = fs.readFileSync(file, "utf8"); const eol = raw.includes("\r\n") ? "\r\n" : "\n"; const hadFinalEol = raw.endsWith(eol); const lines = raw.split(/\r?\n/); if (hadFinalEol) lines.pop(); let inAllowBuilds = false; let changed = false; const key = /^(\s+)(["\x27]?)onnxruntime-node\2:\s*(?:true|false|set this to true or false)(\s*(?:#.*)?)$/; for (let i = 0; i < lines.length; i += 1) { if (/^allowBuilds:\s*(?:#.*)?$/.test(lines[i])) { inAllowBuilds = true; continue; } if (inAllowBuilds && /^[^\s#]/.test(lines[i])) break; if (!inAllowBuilds) continue; const match = key.exec(lines[i]); if (!match) continue; const replacement = `${match[1]}${match[2]}onnxruntime-node${match[2]}: false${match[3]}`; if (replacement !== lines[i]) { lines[i] = replacement; changed = true; } break; } if (changed) fs.writeFileSync(file, `${lines.join(eol)}${hadFinalEol ? eol : ""}`, "utf8");' "${workspace}"
+}
+
+run_dsh_plugin_without_onnx_cuda() {
+  ONNXRUNTIME_NODE_INSTALL=skip "$@"
+}
+
+verify_dsh_better_sqlite3() {
+  local profile_dir="$1"
+  (
+    cd "${profile_dir}"
+    node -e 'const Database = require("better-sqlite3"); const db = new Database(":memory:"); try { db.prepare("SELECT 1").get(); } finally { db.close(); }'
+  )
+}
+
+verify_dsh_onnx_cpu() {
+  local profile_dir="$1"
+  (
+    cd "${profile_dir}"
+    node -e 'const ort = require("onnxruntime-node"); const cpu = ort.listSupportedBackends().find((backend) => backend.name === "cpu"); if (!cpu || cpu.bundled !== true) throw new Error("onnxruntime-node CPU backend is unavailable");'
+  )
+}
+
+install_dsh() {
+  STEP_CURRENT=0
+  header "DeepSeek Harness Install"
+
+  local dsh_bin
+  dsh_bin="$(find_dsh_cli)" \
+    || die "dsh CLI not found. Install DeepSeek Harness first: npm install -g @deepseek-ai/dsh"
+
+  local node_version node_major_version node_minor_version
+  node_version="$(node -p 'process.versions.node')"
+  node_major_version="${node_version%%.*}"
+  node_minor_version="${node_version#*.}"
+  node_minor_version="${node_minor_version%%.*}"
+  if ! (( node_major_version >= 24 || (node_major_version == 22 && node_minor_version >= 19) )); then
+    die "DSH requires Node.js ^22.19.0 or >=24.0.0 (have v${node_version})."
+  fi
+  ensure_dsh_pnpm
+
+  local spec="${SOURCE_SPEC}"
+  [[ -n "${spec}" ]] || die "Unable to resolve the DSH package source."
+
+  local dsh_home profile_dir profile_workspace
+  if ! dsh_home="$(resolve_dsh_home_for_installer)"; then
+    error "Unable to resolve the DSH home directory."
+    return 1
+  fi
+  profile_dir="${dsh_home}/profiles/${DSH_PROFILE}"
+  profile_workspace="${profile_dir}/pnpm-workspace.yaml"
+
+  if ! deny_existing_dsh_onnx_build "${profile_workspace}"; then
+    error "Unable to disable the unnecessary onnxruntime-node CUDA installer in ${profile_workspace}."
+    return 1
+  fi
+
+  step "Installing ${spec} into DSH profile ${DSH_PROFILE}"
+  local add_log add_status=0
+  add_log="$(mktemp)"
+  run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" add "${spec}" 2>&1 \
+    | tee "${add_log}" || add_status="${PIPESTATUS[0]}"
+
+  if (( add_status != 0 )); then
+    if ! grep -Fq "ERR_PNPM_IGNORED_BUILDS" "${add_log}"; then
+      rm -f "${add_log}"
+      error "DSH plugin installation failed before build-script review."
+      return "${add_status}"
+    fi
+
+    local pending package
+    pending="$(read_pending_dsh_builds "${profile_workspace}")"
+    if [[ -z "${pending}" ]]; then
+      rm -f "${add_log}"
+      error "pnpm reported ignored builds, but no pending build policy was found at ${profile_workspace}."
+      return 1
+    fi
+
+    local unknown=""
+    while IFS= read -r package; do
+      [[ -n "${package}" ]] || continue
+      case "${package}" in
+        better-sqlite3|esbuild|onnxruntime-node|sharp|protobufjs|"${NPM_PACKAGE}") ;;
+        *) unknown+="${unknown:+, }${package}" ;;
+      esac
+    done <<< "${pending}"
+    if [[ -n "${unknown}" ]]; then
+      rm -f "${add_log}"
+      error "Refusing to approve unreviewed DSH build scripts: ${unknown}"
+      warn "Review the new dependency scripts before updating the installer allowlist."
+      return 1
+    fi
+
+    local -a approval_args=()
+    for package in better-sqlite3 esbuild sharp; do
+      if grep -Fxq "${package}" <<< "${pending}"; then approval_args+=("${package}"); fi
+    done
+    for package in onnxruntime-node protobufjs "${NPM_PACKAGE}"; do
+      if grep -Fxq "${package}" <<< "${pending}"; then approval_args+=("!${package}"); fi
+    done
+
+    info "pnpm requested build-script review for this fresh DSH profile."
+    info "Allowing reviewed native installers: better-sqlite3, esbuild, sharp"
+    info "Denying unnecessary scripts: onnxruntime-node CUDA download, protobufjs, ${NPM_PACKAGE}"
+    if ! run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" approve-builds "${approval_args[@]}"; then
+      rm -f "${add_log}"
+      error "DSH dependency build approval failed."
+      return 1
+    fi
+
+    step "Completing DSH bundle activation"
+    if ! run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" add "${spec}"; then
+      rm -f "${add_log}"
+      error "DSH plugin installation still failed after reviewed build approval."
+      return 1
+    fi
+  fi
+  rm -f "${add_log}"
+
+  if ! deny_existing_dsh_onnx_build "${profile_workspace}"; then
+    error "Unable to persist the onnxruntime-node CUDA build denial in ${profile_workspace}."
+    return 1
+  fi
+
+  step "Verifying the composed DSH profile"
+  local composed
+  if ! composed="$("${dsh_bin}" --profile "${DSH_PROFILE}" --dump-config 2>&1)"; then
+    error "DSH could not compose profile ${DSH_PROFILE} after installation."
+    printf '%s\n' "${composed}" >&2
+    return 1
+  fi
+  if ! grep -Fq "${NPM_PACKAGE}" <<< "${composed}" \
+    || ! grep -Eq 'id:[[:space:]]*memos-local-memory' <<< "${composed}"; then
+    error "DSH installed the dependency but did not activate the MemOS bundle."
+    return 1
+  fi
+
+  step "Verifying DSH native runtime"
+  if [[ ! -d "${profile_dir}" ]]; then
+    error "DSH profile directory is missing after installation: ${profile_dir}"
+    return 1
+  fi
+
+  if verify_dsh_better_sqlite3 "${profile_dir}"; then
+    success "better-sqlite3 native binding OK"
+  else
+    warn "better-sqlite3 native binding is not loadable; rebuilding it in the DSH profile."
+    if ! (cd "${profile_dir}" && pnpm rebuild better-sqlite3); then
+      error "better-sqlite3 rebuild failed in ${profile_dir}."
+      return 1
+    fi
+    if ! verify_dsh_better_sqlite3 "${profile_dir}"; then
+      error "better-sqlite3 native binding is not loadable after rebuild."
+      return 1
+    fi
+    success "better-sqlite3 native binding repaired"
+  fi
+
+  if ! verify_dsh_onnx_cpu "${profile_dir}"; then
+    error "onnxruntime-node CPU binding is not loadable."
+    return 1
+  fi
+  success "onnxruntime-node CPU binding OK"
+
+  echo
+  success "DeepSeek Harness install complete"
+  printf "       ${DIM}Profile:${NC}   %s\n" "${DSH_PROFILE}"
+  printf "       ${DIM}Viewer after restart:${NC} ${CYAN}http://127.0.0.1:${DSH_PORT}/${NC}\n"
+  printf "       ${DIM}Next:${NC}      restart with ${BOLD}dsh --profile %s${NC}\n" "${DSH_PROFILE}"
+  return 0
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────
 banner
 pick_agents_interactively
+
+if [[ "${DSH_PROFILE_EXPLICIT}" == "true" && "${AGENT_SELECTION}" != "dsh" ]]; then
+  die "--profile is only valid with --agent dsh"
+fi
 
 if [[ "${AGENT_SELECTION}" == "auto" ]]; then
   if [[ "${HAS_OPENCLAW}" != "true" && "${HAS_HERMES}" != "true" ]]; then
@@ -1057,17 +1379,23 @@ fi
 case "${AGENT_SELECTION}" in
   openclaw) [[ "${HAS_OPENCLAW}" == "true" ]] || warn "~/.openclaw missing — will create." ;;
   hermes)   [[ "${HAS_HERMES}"   == "true" ]] || die  "~/.hermes missing — install Hermes first." ;;
+  dsh)      [[ "${HAS_DSH}"      == "true" ]] || die  "dsh CLI missing — install DeepSeek Harness first." ;;
   all) ;;
   *) die "Invalid selection: ${AGENT_SELECTION}" ;;
 esac
 
 ensure_node
-resolve_tarball
+if [[ "${AGENT_SELECTION}" == "dsh" ]]; then
+  resolve_source_spec
+else
+  resolve_tarball
+fi
 
 STATUS=0
 case "${AGENT_SELECTION}" in
   openclaw) install_openclaw || STATUS=1 ;;
   hermes)   install_hermes   || STATUS=1 ;;
+  dsh)      install_dsh      || STATUS=1 ;;
   all)
     if [[ "${HAS_OPENCLAW}" == "true" ]]; then install_openclaw || STATUS=1; else warn "Skipping OpenClaw (~/.openclaw not found)"; fi
     if [[ "${HAS_HERMES}"   == "true" ]]; then install_hermes   || STATUS=1; else warn "Skipping Hermes (~/.hermes not found)"; fi
@@ -1092,6 +1420,11 @@ if (( STATUS == 0 )); then
     hermes)
       printf "  ${BOLD}Quick links:${NC}\n"
       printf "    ${GREEN}●${NC}  Memory Viewer   ${CYAN}http://127.0.0.1:${HERMES_PORT}${NC}  ${DIM}(hermes)${NC}\n"
+      ;;
+    dsh)
+      printf "  ${BOLD}Quick links:${NC}\n"
+      printf "    ${DIM}○  Memory Viewer   ${CYAN}http://127.0.0.1:${DSH_PORT}${NC}  (after DSH restart)${NC}\n"
+      printf "    ${GREEN}●${NC}  DSH Web UI      ${CYAN}http://127.0.0.1:3080${NC}\n"
       ;;
     all)
       printf "  ${BOLD}Quick links:${NC}\n"

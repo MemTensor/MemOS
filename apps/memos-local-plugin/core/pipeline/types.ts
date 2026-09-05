@@ -225,6 +225,15 @@ export interface PipelineHandle {
 
   // Orchestrator entry points (turn lifecycle).
   onTurnStart(input: TurnInputDTO): Promise<InjectionPacket>;
+  /** Pure prompt-time turn-start retrieval; does not route or mutate episodes. */
+  recallTurn(input: TurnInputDTO, signal?: AbortSignal): Promise<InjectionPacket>;
+  /** Mark an adapter-owned retrieval as foreground until the returned release runs. */
+  enterForeground(): () => void;
+  /** Background relation/intent routing; does not run retrieval. */
+  prepareTurn(input: TurnInputDTO): Promise<{
+    sessionId: SessionId;
+    episodeId: EpisodeId;
+  }>;
   consumeRetrievalStats(packetId: string): RetrievalResult["stats"] | null;
   onTurnEnd(result: TurnResultDTO): Promise<TurnEndResult>;
 
@@ -239,10 +248,17 @@ export interface PipelineHandle {
 
   // Imperative helpers.
   flush(): Promise<void>;
-  shutdown(reason?: string): Promise<void>;
+  shutdown(reason?: string, options?: PipelineShutdownOptions): Promise<void>;
 
   /** Compose a retrieval-deps instance scoped to this pipeline. Used by tests. */
   retrievalDeps(): RetrievalDeps;
+}
+
+export interface PipelineShutdownOptions {
+  /** Grace before aborting provider calls and queued background work. */
+  flushGraceMs?: number;
+  /** Final drain window after abort before subscribers are detached. */
+  abortWaitMs?: number;
 }
 
 export interface PipelineBuses {

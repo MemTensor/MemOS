@@ -74,10 +74,11 @@ function legacyDbPath(agent: LegacyAgent): string {
   }
 }
 
-function resolveAgent(options: ServerOptions | undefined): LegacyAgent {
+function resolveAgent(options: ServerOptions | undefined): LegacyAgent | null {
   const a = options?.agent;
   if (a === "hermes") return "hermes";
-  return "openclaw";
+  if (!a || a === "openclaw") return "openclaw";
+  return null;
 }
 
 export function registerMigrateRoutes(
@@ -89,10 +90,22 @@ export function registerMigrateRoutes(
 
   // ── Generic, agent-aware endpoints (preferred). Pick the source
   //    DB based on the running agent; the viewer uses these. ──────────
-  routes.set("GET /api/v1/migrate/legacy/scan", async () => scanFor(currentAgent));
-  routes.set("POST /api/v1/migrate/legacy/run", async (ctx) =>
-    runFor(ctx, deps, currentAgent),
-  );
+  routes.set("GET /api/v1/migrate/legacy/scan", async () => {
+    if (currentAgent) return scanFor(currentAgent);
+    return {
+      found: false,
+      agent: options.agent ?? "unknown",
+      path: "",
+      error: "No legacy memory database is defined for this agent.",
+    };
+  });
+  routes.set("POST /api/v1/migrate/legacy/run", async (ctx) => {
+    if (!currentAgent) {
+      writeError(ctx, 404, "not_found", "No legacy memory database is defined for this agent.");
+      return;
+    }
+    return runFor(ctx, deps, currentAgent);
+  });
 
   // ── Explicit per-agent aliases (back-compat + tests). ─────────────
   routes.set("GET /api/v1/migrate/openclaw/scan", async () => scanFor("openclaw"));

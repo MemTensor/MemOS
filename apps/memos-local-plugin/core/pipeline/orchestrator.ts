@@ -56,6 +56,7 @@ import type {
   PipelineBuses,
   PipelineDeps,
   PipelineHandle,
+  PipelineShutdownOptions,
   RecordToolOutcomeInput,
   TurnEndResult,
 } from "./types.js";
@@ -88,6 +89,7 @@ import {
   prioritizeEmbedder,
 } from "../util/foreground-resources.js";
 import { createRequestDeadline } from "../util/request-deadline.js";
+import { createSkillLifecycleWorker } from "../skill/lifecycle-worker.js";
 
 function classifyWithTimeout(
   classifyFn: () => Promise<RelationDecision>,
@@ -307,6 +309,12 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     log,
     emit: emitCore,
   });
+  const skillLifecycleWorker = createSkillLifecycleWorker({
+    runLifecycle: () => subs.skills.lifecycleTick(),
+    log: log.child({ channel: "core.skill.lifecycle-worker" }),
+    now: deps.now,
+  });
+  if (!lightweightMode) skillLifecycleWorker.start();
 
   // In-memory index of the open episode per session so we can route
   // `addTurn` calls without a repo round-trip.
@@ -1115,6 +1123,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
         skipLlmFilter: input.contextHints?.__memosDeferLlmFilterToCaller === true,
         signal,
         deadlineAt: input.deadlineAt,
+        llmFilterMalformedRetries: input.llmFilterMalformedRetries,
         plan: plan
           ? {
               scenarioId: plan.scenarioId,
@@ -1242,11 +1251,52 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     }
   }
 
-  async function onTurnStartForeground(
+  /**
+   * Prompt-time retrieval for hosts that keep lifecycle enrichment eventually
+   * consistent. This deliberately performs no session/episode writes and no
+   * relation or intent classification.
+   */
+  async function recallTurn(
+    input: TurnInputDTO,
+    externalSignal?: AbortSignal,
+  ): Promise<InjectionPacket> {
+    const leaveForeground = foregroundResources.enterForeground();
+    const deadline =
+      input.deadlineAt === undefined
+        ? null
+        : createRequestDeadline(input.deadlineAt);
+    const startedAt = Date.now();
+    try {
+      const requestSignal = deadline && externalSignal
+        ? AbortSignal.any([deadline.signal, externalSignal])
+        : deadline?.signal ?? externalSignal;
+      return await retrieveTurnStart(input, undefined, requestSignal);
+    } finally {
+      if (deadline?.signal.aborted) {
+        log.warn("turn.recall.deadline_exceeded", {
+          sessionId: input.sessionId,
+          deadlineAt: input.deadlineAt,
+          elapsedMs: Date.now() - startedAt,
+        });
+      }
+      deadline?.dispose();
+      leaveForeground();
+    }
+  }
+
+  interface PreparedTurn {
+    t0: number;
+    sessionId: SessionId;
+    episode: EpisodeSnapshot;
+    normalized: TurnInputDTO;
+    retrievePlan: RetrievePlan;
+  }
+
+  async function prepareTurnInternal(
     input: TurnInputDTO,
     signal?: AbortSignal,
     setStage: (stage: string) => void = () => {},
-  ): Promise<InjectionPacket> {
+  ): Promise<PreparedTurn> {
     const t0 = now();
     setStage("ensure_session");
     const initialSessionId = await ensureSession(
@@ -1292,6 +1342,27 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       intent: schedulerIntent,
       relation: schedulerRelation(routing.relation),
     });
+    return { t0, sessionId, episode, normalized, retrievePlan };
+  }
+
+  /** Resolve turn routing in the caller's background queue, without retrieval. */
+  async function prepareTurn(
+    input: TurnInputDTO,
+  ): Promise<{ sessionId: SessionId; episodeId: EpisodeId }> {
+    const prepared = await prepareTurnInternal(input);
+    return {
+      sessionId: prepared.sessionId,
+      episodeId: prepared.episode.id as EpisodeId,
+    };
+  }
+
+  async function onTurnStartForeground(
+    input: TurnInputDTO,
+    signal?: AbortSignal,
+    setStage: (stage: string) => void = () => {},
+  ): Promise<InjectionPacket> {
+    const prepared = await prepareTurnInternal(input, signal, setStage);
+    const { t0, sessionId, episode, normalized, retrievePlan } = prepared;
 
     try {
       if (retrievePlan.entry === "turn_start_skip") {
@@ -1503,6 +1574,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       toolCalls: result.toolCalls.length,
       agentChars: result.agentText.length,
     });
+    skillLifecycleWorker.trigger();
 
     // The episode stays OPEN — finalize is deferred to topic end.
     return {
@@ -1575,27 +1647,36 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     await subs.l3.drain();
     await nextTick();
     await subs.skills.flush();
-    await subs.skills.lifecycleTick();
+    await skillLifecycleWorker.runNow();
     await subs.feedback.flush();
     await embeddingRetryWorker.flush();
   }
 
-  async function shutdown(reason: string = "shutdown"): Promise<void> {
+  async function shutdown(
+    reason: string = "shutdown",
+    options: PipelineShutdownOptions = {},
+  ): Promise<void> {
     log.info("pipeline.shutdown.begin", { reason });
     // Stop admitting retry jobs, but preserve a bounded grace period for raw
     // capture and downstream enrichment. Hermes' bridge owns a 20s outer
     // shutdown ceiling, so abort before that rather than either hanging or
     // discarding every single-shot session's enrichment immediately.
+    skillLifecycleWorker.stop();
     embeddingRetryWorker.stop();
+    const flushGraceMs = Math.max(0, options.flushGraceMs ?? 15_000);
+    const abortWaitMs = Math.max(0, options.abortWaitMs ?? 4_000);
+    if (flushGraceMs === 0) {
+      foregroundResources.shutdown(reason);
+    }
     const flushPromise = flush();
     try {
-      const completed = await settlesWithin(flushPromise, 15_000);
+      const completed = await settlesWithin(flushPromise, flushGraceMs);
       if (!completed) {
-        log.warn("pipeline.flush_timeout", { reason, timeoutMs: 15_000 });
+        log.warn("pipeline.flush_timeout", { reason, timeoutMs: flushGraceMs });
         foregroundResources.shutdown(reason);
-        const aborted = await settlesWithin(flushPromise, 4_000);
+        const aborted = await settlesWithin(flushPromise, abortWaitMs);
         if (!aborted) {
-          log.warn("pipeline.flush_abandoned", { reason, abortWaitMs: 4_000 });
+          log.warn("pipeline.flush_abandoned", { reason, abortWaitMs });
         }
       }
     } catch (err) {
@@ -1783,6 +1864,9 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     getRecentEvents,
     subscribeLogs,
     onTurnStart,
+    recallTurn,
+    enterForeground: () => foregroundResources.enterForeground(),
+    prepareTurn,
     consumeRetrievalStats,
     onTurnEnd,
     recordToolOutcome,

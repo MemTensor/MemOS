@@ -6,11 +6,23 @@ on:
       - main
     paths:
       - ".github/workflows/memos-release-publish.yml"
+      - ".github/workflows/memos-release-publish-main.yml"
+      - ".github/workflows/memos-release-publish-paired-local-plugin.yml"
+      - ".github/workflows/memos-release-prepare.yml"
+      - ".github/workflows/memos-local-plugin-publish.yml"
       - ".github/workflows/memos-release-pre-merge-dry-run.yml"
       - ".github/workflows/memos-release-post-merge-dry-run.yml"
+      - ".github/scripts/memos-version.mjs"
+      - ".github/scripts/memos-version.test.mjs"
       - ".github/scripts/prepare-memos-release.mjs"
       - ".github/scripts/prepare-memos-release.test.mjs"
+      - ".github/scripts/publish-local-plugin.sh"
+      - ".github/scripts/publish-local-plugin.test.mjs"
+      - ".github/scripts/publish-paired-local-plugin-release.mjs"
       - ".github/scripts/retry.sh"
+      - "apps/memos-local-plugin/package.json"
+      - "pyproject.toml"
+      - "src/memos/__init__.py"
 
 concurrency:
   group: memos-release-post-merge-dry-run-main
@@ -40,11 +52,19 @@ jobs:
           git fetch --tags --force origin
           git fetch origin '+refs/heads/*:refs/remotes/origin/*'
 
-      - name: Infer next stable release version for preview
+      - name: Read stable package version for preview
         id: version
         shell: bash
         run: |
           set -euo pipefail
+          version_output="${RUNNER_TEMP}/memos-package-version.out"
+          : > "${version_output}"
+          GITHUB_OUTPUT="${version_output}" node .github/scripts/memos-version.mjs inspect
+          version="$(sed -n 's/^version=//p' "${version_output}")"
+          if [ -z "${version}" ]; then
+            echo "::error::Cannot read the stable MemOS package version."
+            exit 1
+          fi
           latest="$(
             git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --merged origin/main --sort=-v:refname |
               grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
@@ -54,22 +74,19 @@ jobs:
             echo "::error::Cannot infer the latest MemOS stable tag from origin/main."
             exit 1
           fi
-          version="${latest#v}"
-          IFS=. read -r major minor patch <<< "${version}"
-          next_version="${major}.${minor}.$((patch + 1))"
-          echo "version=${next_version}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "latest_tag=${latest}" >> "${GITHUB_OUTPUT}"
 
       - name: Run release workflow tests
         shell: bash
-        run: node --test .github/scripts/prepare-memos-release.test.mjs
+        run: node --test .github/scripts/*.test.mjs
 
       - name: Prepare offline release inspection
         id: prepare
         shell: bash
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          TARGET_REF: origin/main
+          TARGET_REF: ${{ github.sha }}
           DRY_RUN: true
           GITHUB_TOKEN: ${{ github.token }}
           # Post-merge smoke check fallback. Manual publish still requires GitHub/Doc Agent validation.

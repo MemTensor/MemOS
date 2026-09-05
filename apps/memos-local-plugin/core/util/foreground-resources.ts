@@ -1,7 +1,9 @@
+import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type {
   EmbedCallOptions,
   Embedder,
   EmbedInput,
+  EmbeddingSettledResult,
 } from "../embedding/types.js";
 import type { EmbeddingVector } from "../types.js";
 
@@ -255,6 +257,52 @@ export function prioritizeEmbedder(
     return results;
   }
 
+  async function embedManySettled(
+    inputs: Array<string | EmbedInput>,
+    options?: EmbedCallOptions,
+  ): Promise<EmbeddingSettledResult[]> {
+    const signal = resources.signalFor(options?.signal);
+    const callOptions = { ...options, signal };
+    const run = async (slice: Array<string | EmbedInput>): Promise<EmbeddingSettledResult[]> => {
+      if (inner!.embedManySettled) return await inner!.embedManySettled(slice, callOptions);
+      try {
+        return (await inner!.embedMany(slice, callOptions)).map((vector) => ({
+          ok: true as const,
+          vector,
+        }));
+      } catch (err) {
+        const error = err instanceof MemosError
+          ? err
+          : new MemosError(
+              ERROR_CODES.EMBEDDING_UNAVAILABLE,
+              `legacy embedMany failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+        return slice.map(() => ({ ok: false as const, error }));
+      }
+    };
+    if (priority === "foreground" || inputs.length <= backgroundChunkSize) {
+      if (priority === "background") await resources.waitForBackground(signal);
+      const release = await resources.acquireEmbedding(priority, signal);
+      try {
+        return await run(inputs);
+      } finally {
+        release();
+      }
+    }
+
+    const results: EmbeddingSettledResult[] = [];
+    for (let start = 0; start < inputs.length; start += backgroundChunkSize) {
+      await resources.waitForBackground(signal);
+      const release = await resources.acquireEmbedding(priority, signal);
+      try {
+        results.push(...await run(inputs.slice(start, start + backgroundChunkSize)));
+      } finally {
+        release();
+      }
+    }
+    return results;
+  }
+
   return {
     get dimensions() {
       return inner.dimensions;
@@ -267,6 +315,7 @@ export function prioritizeEmbedder(
     },
     embedOne,
     embedMany,
+    embedManySettled,
     stats: () => inner.stats(),
     resetCache: () => inner.resetCache(),
     close: () => inner.close(),

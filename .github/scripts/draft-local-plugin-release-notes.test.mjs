@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,12 +10,17 @@ import {
   draftForInspection,
   evidenceForInspection,
   ensureSourceHint,
+  filterNetEffectiveCommits,
   isLegacyPackageOnlyRelease,
   legacyPackageDraftFromEvidence,
   manualDraftFromNotes,
   parseSemver,
   RELEASE_NOTE_GUIDANCE,
   postprocessDraftFromEvidence,
+  releaseTopicsForCommits,
+  compactReleaseTopics,
+  releaseTopicLimitForRequiredCount,
+  requireValidatedDraft,
   reportExternalFailureFromEnv,
   requestDraft,
   requestValidatedDraft,
@@ -32,6 +37,18 @@ const evidence = {
   current_tag: "memos-local-plugin-v2.0.10",
   target_version: "v2.0.10",
 };
+
+function withGitHubRepository(repository, callback) {
+  const previousRepository = process.env.GITHUB_REPOSITORY;
+  try {
+    if (repository !== undefined && repository !== null) process.env.GITHUB_REPOSITORY = repository;
+    else delete process.env.GITHUB_REPOSITORY;
+    return callback();
+  } finally {
+    if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
+    else process.env.GITHUB_REPOSITORY = previousRepository;
+  }
+}
 
 function response(status, body) {
   return {
@@ -191,13 +208,943 @@ test("adds source-ref category hints from commit subjects", () => {
       short_sha: "ca2b3854",
       subject: "fix(memos): apply Memtensor-AI review feedback to PR #1817",
     },
+    {
+      short_sha: "ab12cd34",
+      subject: "adjust session checkpoint ownership for local plugin hosts",
+    },
+    {
+      short_sha: "31976918",
+      subject: "test(plugin): format Hermes UTF-8 regression",
+    },
+    {
+      short_sha: "492bc844",
+      subject: "test(hermes-adapter): add world_model coverage and drop fragile \\u check",
+    },
   ]);
   assert.deepEqual(
     hints.map((hint) => hint.category),
-    ["Improved", "Added", "Fixed", "Fixed"],
+    ["Improved", "Added", "Fixed", "Fixed", "Improved"],
   );
   assert.deepEqual(hints[0].source_refs, ["59c14746", "#2076", "#2077"]);
   assert.deepEqual(hints[2].source_refs, ["de03ab29", "#2063", "#2074"]);
+  assert.equal(
+    hints.some((hint) => hint.source_refs.includes("31976918") || hint.source_refs.includes("492bc844")),
+    false,
+    "test-only Hermes commits must not become required user-facing release topics",
+  );
+});
+
+test("removes net-zero reverts while preserving reapplications and revert-of-revert effects", () => {
+  const original = {
+    sha: "1111111111111111111111111111111111111111",
+    short_sha: "11111111",
+    subject: "feat(plugin): add session checkpoint recovery",
+    body: "",
+  };
+  const revert = {
+    sha: "2222222222222222222222222222222222222222",
+    short_sha: "22222222",
+    subject: 'Revert "feat(plugin): add session checkpoint recovery"',
+    body: `This reverts commit ${original.sha}.`,
+  };
+  const reapply = {
+    sha: "3333333333333333333333333333333333333333",
+    short_sha: "33333333",
+    subject: "feat(plugin): restore session checkpoint recovery safely",
+    body: "",
+  };
+  const revertOfRevert = {
+    sha: "4444444444444444444444444444444444444444",
+    short_sha: "44444444",
+    subject: 'Revert "Revert session checkpoint recovery"',
+    body: `This reverts commit ${revert.sha}.`,
+  };
+
+  assert.deepEqual(filterNetEffectiveCommits([revert, original]), []);
+  assert.deepEqual(filterNetEffectiveCommits([reapply, revert, original]), [reapply]);
+  assert.deepEqual(filterNetEffectiveCommits([revertOfRevert, revert, original]), [original]);
+});
+
+test("uses subject fallback for in-range reverts but keeps rollbacks of older releases", () => {
+  const original = {
+    sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    short_sha: "aaaaaaaa",
+    subject: "fix(plugin): retain host input during recall",
+    body: "",
+  };
+  const subjectOnlyRevert = {
+    sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    short_sha: "bbbbbbbb",
+    subject: 'Revert "fix(plugin): retain host input during recall"',
+    body: "",
+  };
+  const priorReleaseRollback = {
+    sha: "cccccccccccccccccccccccccccccccccccccccc",
+    short_sha: "cccccccc",
+    subject: 'Revert "feat(plugin): legacy behavior from an older release"',
+    body: "This reverts commit dddddddddddddddddddddddddddddddddddddddd.",
+  };
+
+  assert.deepEqual(filterNetEffectiveCommits([subjectOnlyRevert, original]), []);
+  assert.deepEqual(filterNetEffectiveCommits([priorReleaseRollback]), [priorReleaseRollback]);
+  assert.deepEqual(categoryHintsForCommits([priorReleaseRollback])[0].category, "Fixed");
+});
+
+test("aggregates the v2.0.18 high-commit release into evidence-complete user topics", () => {
+  const numericShaCommit = "10786401";
+  const commits = [
+    ["602f60ff", "fix(plugin): make free-form config paths explicit"],
+    ["e1530908", "fix(plugin): scope secret environment fallbacks"],
+    ["c6aaf9d3", "fix(plugin): use OS home for bridge PID fallback"],
+    ["060859d0", "fix(plugin): run idle skill archival in background"],
+    ["117b2a2d", "fix(plugin): recover gateway after installer failures"],
+    ["fa4bb36b", "fix(hermes-adapter): pass ensure_ascii=False in handle_tool_call json.dumps (#2255)"],
+    ["763ca1fc", "fix(skill): auto-generate crystallizer summary/steps instead of rejecting"],
+    ["2b726985", "fix(plugin): default headers {} on l3Llm/skillEvolver slots; maxTokens floor 100"],
+    ["5fd49171", "fix(core): bound startup recovery wait in shutdown to 15s"],
+    [numericShaCommit, "fix(plugin): wire l3Llm/skillEvolver maxTokens+headers; raise dedicated-slot defaults to 4096"],
+    ["d59fe83a", "fix(plugin): add l3Llm.maxTokens default (shares SkillEvolverSchema)"],
+    ["70646de3", "fix(plugin): declare llm.maxTokens and llm.headers as first-class config keys"],
+    ["1f28c8c5", "fix(config): apply OCR review to secret env resolver"],
+    ["d38dfacb", "fix(config): resolve masked apiKey from env on load"],
+    ["10cda282", "perf(plugin): batch idle skill archival"],
+    ["0dad4af3", "fix(plugin): archive idle skills atomically"],
+    ["02aa0d8b", "refactor(plugin): clarify Hermes regex variants"],
+    ["d985d076", "refactor(plugin): avoid JS regex captures"],
+    ["211dd165", "fix(plugin): harden Hermes pgrep pattern"],
+    ["0ff0a72d", "fix(plugin): bound idle archive batches"],
+    ["c5c0d0cd", "fix(plugin): address idle archive review"],
+    ["411406dd", "fix(plugin): archive idle low-eta skills"],
+    ["213665dd", "fix(memos-local-plugin): use POSIX-ERE-compatible pgrep pattern for hermes chat detection"],
+    ["d76c78aa", "fix(plugin): resolve auxiliary reasoning capabilities"],
+    ["b90b5c91", "fix(plugin): harden newest-trace index rollout"],
+    ["f0f35c77", "fix(storage): add idx_traces_ts to unblock event loop on newest-first trace reads (#2284)"],
+    ["068a701a", "fix(plugin): reconcile stale Hermes bridge status"],
+    ["0d9503a1", "Fix #2255: memos_search returns Chinese text as unicode escapes (#2256)"],
+    ["7b35fcd8", "fix(plugin): harden crystallizer draft recovery"],
+    ["31976918", "test(plugin): format Hermes UTF-8 regression"],
+    ["492bc844", "test(hermes-adapter): add world_model coverage and drop fragile \\u check"],
+  ].map(([short_sha, subject]) => ({
+    short_sha,
+    sha: short_sha.padEnd(40, "0"),
+    subject,
+  }));
+
+  const topics = releaseTopicsForCommits(commits);
+  assert.ok(topics.length > 1);
+  assert.ok(topics.length <= 15);
+  assert.equal(releaseTopicLimitForRequiredCount(29), 15);
+  assert.equal(
+    topics.some((topic) =>
+      topic.source_refs.some((ref) => ref === "31976918" || ref === "492bc844"),
+    ),
+    false,
+    "the v2.0.18 test-only commits must not be required release-note evidence",
+  );
+  assert.equal(
+    topics.flatMap((topic) => topic.source_refs).includes(`#${numericShaCommit}`),
+    false,
+    "a numeric hexadecimal SHA must not be rewritten as a PR number",
+  );
+  assert.ok(topics.flatMap((topic) => topic.source_refs).includes(numericShaCommit));
+
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: topics.map((topic, index) => ({
+        category: topic.category,
+        text_cn: `**主题 ${index + 1}**：汇总同一用户影响下的本地插件改进。`,
+        text_en: `**Topic ${index + 1}**: Groups related local-plugin changes by user impact.`,
+        source_refs: [
+          topic.source_refs.includes(numericShaCommit) ? `#${numericShaCommit}` : topic.source_refs[0],
+        ],
+      })),
+      coverage: {},
+      warnings: [],
+    },
+    {
+      commits,
+      release_note_guidance: { release_topics: topics },
+    },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.equal(processed.needs_review, false);
+  assert.equal(processed.coverage.required_count, topics.length);
+  assert.equal(processed.coverage.missing_required_count, 0);
+  assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 1);
+  assert.ok(processed.release_items.length > 0);
+  assert.ok(
+    processed.release_items.length <= topics.length,
+    "topics with identical user impact may share one release-note item",
+  );
+  assert.deepEqual(
+    new Set(processed.coverage.covered_refs),
+    new Set(topics.flatMap((topic) => topic.source_refs)),
+  );
+
+  const omittedTopicRefs = new Set(topics[0].source_refs);
+  const missingTopic = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: processed.release_items.map((item) => ({
+        ...item,
+        source_refs: item.source_refs.filter((ref) => !omittedTopicRefs.has(ref)),
+      })),
+      coverage: {},
+      warnings: [],
+    },
+    {
+      commits,
+      release_note_guidance: { release_topics: topics },
+    },
+  );
+  assert.equal(missingTopic.ok, false);
+  assert.equal(missingTopic.needs_review, true);
+  assert.equal(missingTopic.coverage.missing_required_count, 1);
+});
+
+test("compacts future topic growth below the hard item limit without losing evidence", () => {
+  const topics = Array.from({ length: 40 }, (_, index) => ({
+    key: `future-topic-${index}`,
+    category: ["Added", "Improved", "Fixed"][index % 3],
+    title_hint: `Future topic ${index}`,
+    reason: "future release topic",
+    source_refs: [`${(0xabc0000 + index).toString(16)}`],
+    subjects: [`future local-plugin change ${index}`],
+  }));
+
+  const compacted = compactReleaseTopics(topics);
+  assert.equal(releaseTopicLimitForRequiredCount(2), 12);
+  assert.equal(releaseTopicLimitForRequiredCount(29), 15);
+  assert.equal(releaseTopicLimitForRequiredCount(40), 18);
+  assert.equal(compacted.length, 18);
+  assert.equal(new Set(compacted.map((topic) => topic.key)).size, compacted.length);
+  assert.deepEqual(
+    new Set(compacted.flatMap((topic) => topic.source_refs)),
+    new Set(topics.flatMap((topic) => topic.source_refs)),
+  );
+  assert.deepEqual(
+    new Set(compacted.flatMap((topic) => topic.subjects)),
+    new Set(topics.flatMap((topic) => topic.subjects)),
+  );
+  assert.ok(compacted.every((topic) => ["Added", "Improved", "Fixed"].includes(topic.category)));
+});
+
+test("repairs a numeric SHA that the draft formats as a PR reference", () => {
+  const commit = {
+    short_sha: "10786401",
+    sha: "10786401abcdef0123456789abcdef0123456789",
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    title_hint: "Memory recovery",
+    reason: "user-visible recovery fix",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [
+        {
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: ["#10786401"],
+        },
+      ],
+      coverage: {},
+      warnings: [],
+    },
+    {
+      commits: [commit],
+      release_note_guidance: { release_topics: [topic] },
+    },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.equal(processed.needs_review, false);
+  assert.deepEqual(processed.release_items[0].source_refs, ["10786401"]);
+  assert.ok(Array.isArray(processed.coverage.invalid_item_refs));
+  assert.equal(processed.coverage.invalid_item_refs.length, 0);
+  assert.equal(processed.coverage.missing_required_count, 0);
+  assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 1);
+});
+
+test("does not coerce a numeric PR-like prefix into an evidence SHA", () => {
+  const commit = {
+    short_sha: "12345678",
+    sha: "12345678abcdef0123456789abcdef0123456789",
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        // The # sigil makes this a PR ref. It must not be treated as a SHA prefix.
+        source_refs: ["#1234567"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.coverage.invalid_item_refs.length, 1);
+  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, []);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, ["#1234567"]);
+});
+
+test("preserves an evidence-backed numeric PR reference", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery (#10786401)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    title_hint: "Memory recovery",
+    reason: "user-visible recovery fix",
+    source_refs: [commit.short_sha, "#10786401"],
+    subjects: [commit.subject],
+  };
+
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [
+        {
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: ["#10786401"],
+        },
+      ],
+      coverage: {},
+      warnings: [],
+    },
+    {
+      commits: [commit],
+      release_note_guidance: { release_topics: [topic] },
+    },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.equal(processed.needs_review, false);
+  assert.deepEqual(
+    [...processed.release_items[0].source_refs].sort(),
+    ["#10786401", "abcdef12"].sort(),
+  );
+  assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 0);
+});
+
+test("normalizes explicit wrappers and a unique evidence-backed SHA prefix", () => {
+  const commit = {
+    short_sha: "10786401",
+    sha: "10786401abcdef0123456789abcdef0123456789",
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  // This fixture has one commit, so the seven-character SHA prefix is unique. The
+  // numeric and hexadecimal ambiguity tests below cover the multi-match rejection path.
+  const variants = [
+    "10786401",
+    "#10786401",
+    "# 10786401",
+    "`#10786401`",
+    "[10786401]",
+    "(10786401)",
+    "1078640",
+    "commit 10786401",
+    "commit: 1078640",
+    "sha 10786401",
+    "SHA: 10786401",
+  ];
+
+  for (const sourceRef of variants) {
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [sourceRef],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(processed.ok, true, sourceRef);
+    assert.deepEqual(processed.release_items[0].source_refs, ["10786401"], sourceRef);
+    assert.deepEqual(processed.postprocess.ambiguous_sha_refs, [], sourceRef);
+    assert.deepEqual(processed.postprocess.unresolved_sha_refs, [], sourceRef);
+  }
+});
+
+test("rejects a well-formed short SHA absent from collected evidence", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["deadbeef"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.coverage.invalid_item_refs.length, 1);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, ["deadbeef"]);
+  assert.match(processed.warnings.join("\n"), /did not resolve to collected evidence/);
+});
+
+test("does not count an unresolved wrapped SHA as evidence-backed normalization", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["sha:deadbeef"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.postprocess.normalized_evidence_backed_source_refs, 0);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, ["sha:deadbeef"]);
+  assert.deepEqual(processed.coverage.invalid_item_refs.map((item) => item.ref), ["deadbeef"]);
+});
+
+test("keeps explicit PR references strict instead of coercing them to numeric SHAs", () => {
+  const commit = {
+    short_sha: "10786401",
+    sha: "10786401abcdef0123456789abcdef0123456789",
+    subject: "fix(plugin): stabilize memory recovery (#10786401)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+
+  withGitHubRepository(evidence.repo, () => {
+    for (const sourceRef of [
+      "PR #10786401",
+      "pull request: 10786401",
+      "https://github.com/MemTensor/MemOS/pull/10786401",
+    ]) {
+      const processed = postprocessDraftFromEvidence(
+        {
+          ok: true,
+          needs_review: false,
+          release_items: [{
+            category: "Fixed",
+            text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+            text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+            source_refs: [sourceRef],
+          }],
+          coverage: {},
+        },
+        { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+      );
+      assert.equal(processed.ok, false, sourceRef);
+      assert.equal(processed.coverage.missing_required_count, 1, sourceRef);
+      assert.equal(processed.coverage.invalid_item_refs.length, 0, sourceRef);
+    }
+  });
+});
+
+test("accepts an evidence PR URL and retains its linked commit alias", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery (#10786401)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha, "#10786401"],
+    subjects: [commit.subject],
+  };
+  const processed = withGitHubRepository(evidence.repo, () => postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["https://github.com/MemTensor/MemOS/pull/10786401"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  ));
+
+  assert.equal(processed.ok, true);
+  // The URL is replaced, not retained alongside the canonical evidence aliases.
+  assert.deepEqual(
+    [...processed.release_items[0].source_refs].sort(),
+    ["#10786401", "abcdef12"].sort(),
+  );
+});
+
+test("rejects source URLs from repositories outside MemTensor/MemOS", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery (#1234)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha, "#1234"],
+    subjects: [commit.subject],
+  };
+
+  withGitHubRepository(evidence.repo, () => {
+    for (const sourceRef of [
+      `https://github.com/another/repository/commit/${commit.sha}`,
+      "https://github.com/another/repository/pull/1234",
+      "https://github.com/MemTensor/MemOS-fork/pull/1234",
+      "https://github.com/NotMemTensor/MemOS/pull/1234",
+    ]) {
+      const processed = postprocessDraftFromEvidence(
+        {
+          ok: true,
+          needs_review: false,
+          release_items: [{
+            category: "Fixed",
+            text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+            text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+            source_refs: [sourceRef],
+          }],
+          coverage: {},
+        },
+        { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+      );
+      assert.equal(processed.ok, false, sourceRef);
+      assert.equal(processed.postprocess.dropped_invalid_items, 1, sourceRef);
+    }
+  });
+});
+
+test("uses GITHUB_REPOSITORY as the source URL trust boundary", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery (#1234)",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha, "#1234"],
+    subjects: [commit.subject],
+  };
+  withGitHubRepository("ForkOwner/ForkRepo", () => {
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [`https://github.com/ForkOwner/ForkRepo/commit/${commit.sha}`],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(processed.ok, true);
+    assert.deepEqual(
+      [...processed.release_items[0].source_refs].sort(),
+      [commit.short_sha, "#1234"].sort(),
+    );
+
+    const acceptedPull = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: "https://github.com/ForkOwner/ForkRepo/pull/1234",
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(acceptedPull.ok, true);
+    assert.deepEqual(
+      [...acceptedPull.release_items[0].source_refs].sort(),
+      [commit.short_sha, "#1234"].sort(),
+    );
+
+    const rejected = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [`https://github.com/MemTensor/MemOS/commit/${commit.sha}`],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.postprocess.dropped_invalid_items, 1);
+
+    const rejectedPull = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: ["https://github.com/MemTensor/MemOS/pull/1234"],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(rejectedPull.ok, false);
+    assert.equal(rejectedPull.postprocess.dropped_invalid_items, 1);
+  });
+});
+
+test("fails closed for repository URLs when GITHUB_REPOSITORY is unavailable", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  withGitHubRepository(undefined, () => {
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [`https://github.com/MemTensor/MemOS/commit/${commit.sha}`],
+        }],
+        coverage: {},
+      },
+      { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+    );
+    assert.equal(processed.ok, false);
+    assert.equal(processed.postprocess.dropped_invalid_items, 1);
+  });
+});
+
+test("keeps ambiguous SHA prefixes fail-closed", () => {
+  const commits = [
+    { short_sha: "1078640a", sha: "1078640a".padEnd(40, "0"), subject: "fix(plugin): recovery A" },
+    { short_sha: "1078640b", sha: "1078640b".padEnd(40, "0"), subject: "fix(plugin): recovery B" },
+  ];
+  const topics = commits.map((commit, index) => ({
+    key: `recovery-${index}`,
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  }));
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["1078640"],
+      }],
+      coverage: {},
+    },
+    { commits, release_note_guidance: { release_topics: topics } },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.needs_review, true);
+  assert.equal(processed.coverage.invalid_item_refs.length, 1);
+  assert.equal(processed.coverage.missing_required_count, 2);
+  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, ["1078640"]);
+  assert.match(processed.warnings.join("\n"), /ambiguous SHA source_refs/);
+});
+
+test("deduplicates repeated evidence commits before resolving SHA prefixes", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["abcdef1"],
+      }],
+      coverage: {},
+    },
+    { commits: [commit, { ...commit }], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
+  assert.deepEqual(processed.postprocess.ambiguous_sha_refs, []);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, []);
+});
+
+test("resolves an exact evidence short SHA even when it is not a full SHA prefix", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "12345678".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: [commit.short_sha],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, []);
+});
+
+test("resolves an evidence short SHA when a producer omits the full SHA", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "",
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: [commit.short_sha],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.deepEqual(processed.release_items[0].source_refs, [commit.short_sha]);
+  assert.deepEqual(processed.postprocess.unresolved_sha_refs, []);
+});
+
+test("initializes warnings when a valid draft omits the field", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const topic = {
+    key: "memory-recovery",
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: [commit.short_sha],
+      }],
+      coverage: {},
+    },
+    { commits: [commit], release_note_guidance: { release_topics: [topic] } },
+  );
+
+  assert.equal(processed.ok, true);
+  assert.deepEqual(processed.warnings, []);
+});
+
+test("keeps bare and explicit ambiguous hexadecimal SHA prefixes fail-closed", () => {
+  const commits = [
+    { short_sha: "abcdef1a", sha: "abcdef1a".padEnd(40, "0"), subject: "fix(plugin): recovery A" },
+    { short_sha: "abcdef1b", sha: "abcdef1b".padEnd(40, "0"), subject: "fix(plugin): recovery B" },
+  ];
+  const topics = commits.map((commit, index) => ({
+    key: `recovery-${index}`,
+    category: "Fixed",
+    source_refs: [commit.short_sha],
+    subjects: [commit.subject],
+  }));
+  for (const sourceRef of ["abcdef1", "sha:abcdef1"]) {
+    const processed = postprocessDraftFromEvidence(
+      {
+        ok: true,
+        needs_review: false,
+        release_items: [{
+          category: "Fixed",
+          text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+          text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+          source_refs: [sourceRef],
+        }],
+        coverage: {},
+      },
+      { commits, release_note_guidance: { release_topics: topics } },
+    );
+
+    assert.equal(processed.ok, false, sourceRef);
+    assert.equal(processed.needs_review, true, sourceRef);
+    assert.equal(processed.coverage.invalid_item_refs.length, 1, sourceRef);
+    assert.equal(processed.coverage.missing_required_count, 2, sourceRef);
+    assert.deepEqual(processed.postprocess.ambiguous_sha_refs, [sourceRef], sourceRef);
+    assert.match(processed.warnings.join("\n"), /ambiguous SHA source_refs/, sourceRef);
+  }
+});
+
+test("fails closed when every draft item is malformed", () => {
+  const commit = {
+    short_sha: "abcdef12",
+    sha: "abcdef12".padEnd(40, "0"),
+    subject: "fix(plugin): stabilize memory recovery",
+  };
+  const processed = postprocessDraftFromEvidence(
+    {
+      ok: true,
+      needs_review: false,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "**记忆恢复**：修复异常数据恢复问题。",
+        text_en: "**Memory Recovery**: Fixed abnormal data recovery.",
+        source_refs: ["not-a-source-ref"],
+      }],
+      coverage: {},
+    },
+    {
+      commits: [commit],
+      release_note_guidance: {
+        release_topics: [{
+          key: "memory-recovery",
+          category: "Fixed",
+          source_refs: [commit.short_sha],
+          subjects: [commit.subject],
+        }],
+      },
+    },
+  );
+
+  assert.equal(processed.ok, false);
+  assert.equal(processed.needs_review, true);
+  assert.deepEqual(processed.release_items, []);
+  assert.equal(processed.coverage.missing_required_count, 1);
+  assert.equal(processed.postprocess.dropped_invalid_items, 1);
+  // Structurally invalid items are dropped before evidence coverage checks.
+  assert.equal(processed.coverage.invalid_item_refs.length, 0);
 });
 
 test("redacts full diff and prompt guidance from inspection evidence", () => {
@@ -350,6 +1297,15 @@ test("postprocesses duplicate source refs into the best evidence category", () =
     processed.release_items.find((item) => item.text_cn.includes("记忆恢复"))?.text_cn.includes("XML"),
     false,
   );
+  assert.match(
+    processed.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /Vector Scan Performance/,
+  );
+  assert.doesNotMatch(
+    processed.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /向量扫描性能优化/,
+  );
+  assert.match(processed.release_notes_markdown, /向量扫描性能优化/);
   assert.match(processed.release_notes_markdown, /doc-agent-release-notes-json/);
 });
 
@@ -554,6 +1510,14 @@ test("repairs postprocessed language validation issues with exact context", asyn
     ["text_cn", "text_en"],
   );
   assert.equal(requests[1].release_notes_repair_context.previous_release_items[0].source_refs[0], "abc1234");
+  assert.match(
+    result.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /Plugin Health Dashboard/,
+  );
+  assert.doesNotMatch(
+    result.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /插件健康看板/,
+  );
   assert.match(result.release_notes_markdown, /插件健康看板/);
   assert.match(result.release_notes_markdown, /doc-agent-release-notes-json/);
 });
@@ -618,6 +1582,10 @@ test("standalone latest draft validation allows one initial response plus three 
   assert.equal(result.needs_review, false);
   assert.equal(result.validation_attempt_count, 4);
   assert.equal(result.repair_attempt_count, 3);
+  assert.match(
+    result.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /Plugin Health Dashboard/,
+  );
   assert.match(result.release_notes_markdown, /插件健康看板/);
 });
 
@@ -750,6 +1718,15 @@ test("manual stable notes are revalidated against collected evidence", () => {
   const draft = manualDraftFromNotes(notes, evidence);
   assert.equal(draft.ok, true);
   assert.equal(draft.release_items[0].category, "Fixed");
+  assert.match(
+    draft.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /Restores Hermes bridge state/,
+  );
+  assert.doesNotMatch(
+    draft.release_notes_markdown.split("<!-- doc-agent-release-notes-json")[0],
+    /修复 Hermes 桥接状态恢复/,
+  );
+  assert.match(draft.release_notes_markdown, /修复 Hermes 桥接状态恢复/);
   assert.match(draft.release_notes_markdown, /source-id=openclaw-local-plugin/);
 
   assert.throws(
@@ -874,6 +1851,151 @@ test("writes a redacted failure artifact without endpoint or token details", () 
     process.env = previous;
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("writes failure diagnostics when final postprocessing remains invalid", () => {
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-postprocess-failure-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    const invalidDraft = {
+      ok: false,
+      needs_review: true,
+      release_items: [{
+        category: "Fixed",
+        text_cn: "修复记忆恢复问题。",
+        text_en: "Fixed memory recovery.",
+        source_refs: ["#10786401"],
+      }],
+      coverage: {
+        needs_review: true,
+        required_count: 1,
+        covered_required_count: 1,
+        missing_required_count: 0,
+        invalid_item_refs: [{ ref: "#10786401" }],
+      },
+      validation_report: {
+        ok: false,
+        needs_review: true,
+        invalid_item_ref_count: 1,
+      },
+    };
+
+    assert.throws(
+      () => requireValidatedDraft({ evidence, draft: invalidDraft }),
+      /Postprocessed release notes require review/,
+    );
+    const report = JSON.parse(readFileSync(join(directory, "quality-report.json"), "utf8"));
+    assert.equal(report.ok, false);
+    assert.equal(report.invalid_item_ref_count, 1);
+    const diagnosticDraft = JSON.parse(
+      readFileSync(join(directory, "release-notes-draft.json"), "utf8"),
+    );
+    assert.deepEqual(diagnosticDraft.release_items[0].source_refs, ["#10786401"]);
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("writes default failure diagnostics under RUNNER_TEMP for artifact upload", () => {
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const previousRunnerTemp = process.env.RUNNER_TEMP;
+  const runnerTemp = mkdtempSync(join(tmpdir(), "local-plugin-runner-temp-"));
+  const expectedDirectory = join(runnerTemp, "memos-local-plugin-release-notes-failure");
+  try {
+    delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    process.env.RUNNER_TEMP = runnerTemp;
+    assert.throws(
+      () => requireValidatedDraft({
+        evidence,
+        draft: { ok: false, needs_review: true, release_items: [], coverage: {} },
+      }),
+      /Postprocessed release notes require review/,
+    );
+    assert.deepEqual(
+      readdirSync(expectedDirectory).sort(),
+      ["README.md", "evidence.json", "quality-report.json", "release-notes-draft.json"],
+    );
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    if (previousRunnerTemp === undefined) delete process.env.RUNNER_TEMP;
+    else process.env.RUNNER_TEMP = previousRunnerTemp;
+    rmSync(runnerTemp, { recursive: true, force: true });
+  }
+});
+
+test("returns a fully validated draft without writing failure diagnostics", () => {
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-valid-draft-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    const validDraft = { ok: true, needs_review: false, release_items: [] };
+    const result = requireValidatedDraft({ evidence, draft: validDraft });
+    assert.strictEqual(result, validDraft);
+    assert.deepEqual(result, { ok: true, needs_review: false, release_items: [] });
+    assert.deepEqual(readdirSync(directory), []);
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects ok drafts that still require review", () => {
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-needs-review-"));
+  try {
+    process.env.RELEASE_NOTES_FAILURE_DIR = directory;
+    assert.throws(
+      () => requireValidatedDraft({
+        evidence,
+        draft: { ok: true, needs_review: true, release_items: [] },
+      }),
+      /Postprocessed release notes require review/,
+    );
+    assert.deepEqual(
+      readdirSync(directory).sort(),
+      ["README.md", "evidence.json", "quality-report.json", "release-notes-draft.json"],
+    );
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("preserves the validation error when failure diagnostics cannot be written", () => {
+  const previousFailureDir = process.env.RELEASE_NOTES_FAILURE_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "local-plugin-unwritable-diagnostics-"));
+  const filePath = join(directory, "not-a-directory");
+  try {
+    writeFileSync(filePath, "blocks directory creation", "utf8");
+    process.env.RELEASE_NOTES_FAILURE_DIR = filePath;
+    assert.throws(
+      () => requireValidatedDraft({ evidence, draft: { ok: false, needs_review: true } }),
+      (error) => {
+        assert.match(error.message, /Postprocessed release notes require review/);
+        assert.doesNotMatch(error.message, /ENOTDIR|ENOENT/);
+        return true;
+      },
+    );
+  } finally {
+    if (previousFailureDir === undefined) delete process.env.RELEASE_NOTES_FAILURE_DIR;
+    else process.env.RELEASE_NOTES_FAILURE_DIR = previousFailureDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("preserves the validation error when its summary is not serializable", () => {
+  const coverage = { needs_review: true };
+  coverage.circular = coverage;
+  assert.throws(
+    () => requireValidatedDraft({ evidence, draft: { ok: false, needs_review: true, coverage } }),
+    /Postprocessed release notes require review:.*summary_unavailable/,
+  );
 });
 
 test("reports once after three transient failures", async () => {

@@ -142,7 +142,7 @@ const en = {
   "settings.account.enable": "Enable",
   "settings.account.logout": "Sign out",
   "settings.account.resetHint":
-    "Remove ~/.openclaw/memos-plugin/.auth.json to reset.",
+    "Remove .auth.json from this agent's MemOS runtime directory to reset.",
   "settings.account.resetPassword": "Reset password",
   "settings.account.resetConfirm":
     "This will delete the saved password and log you out. On the next visit you'll be asked to set a new password. Continue?",
@@ -165,7 +165,7 @@ const en = {
   "auth.setup.confirm": "Confirm password",
   "auth.setup.submit": "Set password and enter",
   "auth.setup.hint":
-    "The password is stored locally as a scrypt hash. Remove ~/.openclaw/memos-plugin/.auth.json to reset.",
+    "The password is stored locally as a scrypt hash. Remove .auth.json from this agent's MemOS runtime directory to reset.",
   "auth.err.empty": "Password cannot be empty.",
   "auth.err.required": "Password is required.",
   "auth.err.tooShort": "Password is too short.",
@@ -190,23 +190,33 @@ const en = {
     "Run in PowerShell: openclaw gateway stop; then openclaw gateway start.",
   "restart.manualHint.hermes":
     "Fully quit Hermes, then start it again. Wait about 20–30 seconds for Hermes itself to finish initializing. Keep this page open; it will reconnect and refresh automatically when Memory Viewer is ready.",
+  "restart.manualHint.deepseek-harness":
+    "Stop and restart the active DSH profile, then reopen the Memory Viewer.",
   "restart.manualCloseHint": "Close this message, fully exit Hermes, then retry clearing data.",
   "restart.clearComplete": "Local memory data has been cleared.",
   "restart.clearCompleteHint.openclaw": "Start OpenClaw, then reopen the Memory Viewer.",
   "restart.clearCompleteHint.hermes": "Start Hermes, then reopen the Memory Viewer.",
+  "restart.clearCompleteHint.deepseek-harness":
+    "Restart the active DSH profile, then reopen the Memory Viewer.",
   "restart.clearFailed": "Local memory data could not be fully cleared.",
   "restart.clearFailedHint.openclaw": "Start OpenClaw, then retry clearing the data.",
   "restart.clearFailedHint.hermes": "Start Hermes, then retry clearing the data.",
+  "restart.clearFailedHint.deepseek-harness":
+    "Stop the active DSH profile before removing its memory database.",
   "restart.clearResultUnknown": "The clear result could not be confirmed.",
   "restart.clearResultUnknownHint.openclaw":
     "Start OpenClaw, then check whether the local memory data was cleared.",
   "restart.clearResultUnknownHint.hermes":
     "Start Hermes, then check whether the local memory data was cleared.",
+  "restart.clearResultUnknownHint.deepseek-harness":
+    "Restart DSH, then check whether the local memory data was cleared.",
   "restart.failed": "Restart didn't complete — the service didn't come back in time.",
   "restart.failedHint.openclaw":
     "Run in PowerShell: openclaw gateway stop; then openclaw gateway start.",
   "restart.failedHint.hermes":
     "Try manually: stop the current Hermes session and rerun `hermes chat`",
+  "restart.failedHint.deepseek-harness":
+    "Stop and restart the active DSH profile manually.",
   "common.selectAll": "Select all",
   "common.deleteSelected": "Delete selected",
 
@@ -877,10 +887,12 @@ const en = {
     "Ready {ready}/{total}; missing {missing}; dimension mismatch {mismatch}; current dim {dim}.",
   "settings.embedding.maintenance.unavailable":
     "Configure an embedding provider before repairing or rebuilding vectors.",
-  "settings.embedding.batchSize.label": "Items per request",
-  "settings.embedding.batchSize.option": "{n} items per request",
-  "settings.embedding.batchSize.hint":
-    "Larger batches usually rebuild faster, but may hit provider limits or timeouts.",
+  "settings.embedding.maxInputTokens.label": "Maximum input tokens",
+  "settings.embedding.maxInputTokens.hint":
+    "Defaults to 1024; use 0 for no client-side limit. Longer inputs are sampled into chunks and pooled; rebuild vectors after changing it.",
+  "settings.embedding.providerBatchSize.label": "Embedding API batch size",
+  "settings.embedding.providerBatchSize.hint":
+    "Maximum texts per provider request. Rejected oversized batches are split automatically.",
   "settings.embedding.repair": "Repair missing/mismatched",
   "settings.embedding.rebuild": "Rebuild all vectors",
   "settings.embedding.rebuild.running": "Rebuilding embeddings…",
@@ -1063,7 +1075,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.account.enable": "启用",
   "settings.account.logout": "退出登录",
   "settings.account.resetHint":
-    "删除 ~/.openclaw/memos-plugin/.auth.json 可重置。",
+    "删除当前 agent 的 MemOS 运行目录中的 .auth.json 即可重置。",
   "settings.account.resetPassword": "重置密码",
   "settings.account.resetConfirm":
     "此操作会删除已保存的密码并退出登录，下次访问时需要重新设置密码。是否继续？",
@@ -1085,7 +1097,7 @@ const zh: Record<TranslationKey, string> = {
   "auth.setup.confirm": "再次输入",
   "auth.setup.submit": "设置密码并进入",
   "auth.setup.hint":
-    "密码以 scrypt 哈希存储在本机。删除 ~/.openclaw/memos-plugin/.auth.json 可重置。",
+    "密码以 scrypt 哈希存储在本机。删除当前 agent 的 MemOS 运行目录中的 .auth.json 即可重置。",
   "auth.err.empty": "密码不能为空。",
   "auth.err.required": "请输入密码。",
   "auth.err.tooShort": "密码太短。",
@@ -1107,21 +1119,26 @@ const zh: Record<TranslationKey, string> = {
     "请在 PowerShell 中依次执行：openclaw gateway stop；openclaw gateway start",
   "restart.manualHint.hermes":
     "请完全退出并重新启动 Hermes。重启后请等待 Hermes 自身完成初始化，通常约 20–30 秒。请保持当前页面打开，Memory Viewer 就绪后会自动重连并刷新。",
+  "restart.manualHint.deepseek-harness": "请停止并重新启动当前 DSH profile，然后重新打开 Memory Viewer。",
   "restart.manualCloseHint": "请关闭此提示并完全退出 Hermes，然后重新执行清空数据。",
   "restart.clearComplete": "本地记忆数据已清理。",
   "restart.clearCompleteHint.openclaw": "请启动 OpenClaw，然后重新打开 Memory Viewer。",
   "restart.clearCompleteHint.hermes": "请启动 Hermes，然后重新打开 Memory Viewer。",
+  "restart.clearCompleteHint.deepseek-harness": "请重新启动当前 DSH profile，然后重新打开 Memory Viewer。",
   "restart.clearFailed": "本地记忆数据未能完全清理。",
   "restart.clearFailedHint.openclaw": "请启动 OpenClaw，然后重新执行清空数据。",
   "restart.clearFailedHint.hermes": "请启动 Hermes，然后重新执行清空数据。",
+  "restart.clearFailedHint.deepseek-harness": "请先停止当前 DSH profile，再手动移除记忆数据库。",
   "restart.clearResultUnknown": "无法确认本次清理结果。",
   "restart.clearResultUnknownHint.openclaw": "请启动 OpenClaw，然后检查本地记忆数据是否已清理。",
   "restart.clearResultUnknownHint.hermes": "请启动 Hermes，然后检查本地记忆数据是否已清理。",
+  "restart.clearResultUnknownHint.deepseek-harness": "请重启 DSH，然后检查本地记忆数据是否已清理。",
   "restart.failed": "重启超时 — 服务未能在预期时间内恢复。",
   "restart.failedHint.openclaw":
     "请在 PowerShell 中依次执行：openclaw gateway stop；openclaw gateway start",
   "restart.failedHint.hermes":
     "请手动重启：停止当前 Hermes 会话后重新执行 `hermes chat`",
+  "restart.failedHint.deepseek-harness": "请手动停止并重新启动当前 DSH profile。",
   "common.never": "从未",
   "common.selectAll": "全选",
   "common.deleteSelected": "删除所选",
@@ -1735,9 +1752,10 @@ const zh: Record<TranslationKey, string> = {
   "settings.embedding.maintenance.stats":
     "可用 {ready}/{total}；缺失 {missing}；维度不匹配 {mismatch}；当前维度 {dim}。",
   "settings.embedding.maintenance.unavailable": "请先配置嵌入模型，再修复或重建向量。",
-  "settings.embedding.batchSize.label": "每次请求条数",
-  "settings.embedding.batchSize.option": "每次请求 {n} 条",
-  "settings.embedding.batchSize.hint": "每次请求条数越大通常重建越快，但可能触发模型服务限流或超时。",
+  "settings.embedding.maxInputTokens.label": "单条输入最大 Token 数",
+  "settings.embedding.maxInputTokens.hint": "默认 1024；设为 0 表示不启用客户端限制。超长输入会分块采样并聚合向量，修改后请重建向量。",
+  "settings.embedding.providerBatchSize.label": "Embedding API 批量大小",
+  "settings.embedding.providerBatchSize.hint": "单次模型请求最多发送的文本数；超限失败时会自动拆批。",
   "settings.embedding.repair": "修复缺失/错维",
   "settings.embedding.rebuild": "全量重建向量",
   "settings.embedding.rebuild.running": "正在重建向量…",

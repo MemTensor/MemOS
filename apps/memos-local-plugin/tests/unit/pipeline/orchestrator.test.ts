@@ -110,6 +110,41 @@ describe("pipeline/orchestrator", () => {
     expect(packet.reason).toBe("turn_start");
   });
 
+  it("recalls a turn without opening or routing a session", async () => {
+    pipeline = createPipeline(buildDeps(dbHandle!));
+
+    const packet = await pipeline.recallTurn({
+      agent: "deepseek-harness",
+      sessionId: "s-recall-only",
+      userText: "find the previous repository build decision",
+      ts: 1_700_000_000_000,
+    });
+
+    expect(packet.reason).toBe("turn_start");
+    expect(packet.sessionId).toBe("s-recall-only");
+    expect(pipeline.sessionManager.getSession("s-recall-only")).toBeNull();
+    expect(dbHandle!.repos.episodes.list({ sessionId: "s-recall-only" })).toEqual([]);
+  });
+
+  it("prepares relation and intent routing without running retrieval", async () => {
+    const embedder = fakeEmbedder({ dimensions: 384 });
+    pipeline = createPipeline(buildDeps(dbHandle!, embedder));
+    const requestsBefore = embedder.stats().requests;
+
+    const prepared = await pipeline.prepareTurn({
+      agent: "deepseek-harness",
+      sessionId: "s-prepare-only",
+      userText: "continue the repository migration",
+      ts: 1_700_000_000_000,
+    });
+
+    expect(prepared.sessionId).toBe("s-prepare-only");
+    expect(prepared.episodeId).toBeTruthy();
+    expect(pipeline.sessionManager.getSession("s-prepare-only")).not.toBeNull();
+    expect(dbHandle!.repos.episodes.list({ sessionId: "s-prepare-only" })).toHaveLength(1);
+    expect(embedder.stats().requests).toBe(requestsBefore);
+  });
+
   it("threads a dedicated l3Llm through to the handle", () => {
     const l3Llm = fakeLlm({ completeJson: {} });
     pipeline = createPipeline({ ...buildDeps(dbHandle!), l3Llm });

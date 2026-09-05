@@ -1,7 +1,7 @@
 {
   "name": "@memtensor/memos-local-plugin",
-  "version": "2.0.14-beta.1",
-  "description": "Reflect2Evolve memory plugin: layered L1/L2/L3 memory, reflection-weighted value backprop, cross-task policy induction, skill crystallization, three-tier retrieval. Adapters for OpenClaw and Hermes Agent via a shared algorithm core.",
+  "version": "2.0.16-beta.1",
+  "description": "Reflect2Evolve memory plugin: layered L1/L2/L3 memory, reflection-weighted value backprop, cross-task policy induction, skill crystallization, and three-tier retrieval for OpenClaw, Hermes Agent, and DeepSeek Harness.",
   "type": "module",
   "main": "dist/core/index.js",
   "types": "dist/core/index.d.ts",
@@ -12,6 +12,11 @@
       "./dist/adapters/openclaw/index.js"
     ],
     "installDependencies": true
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./adapters/deepseek-harness/cordis.patch.yml"
+    }
   },
   "files": [
     "dist",
@@ -26,6 +31,7 @@
     "server/**/*.ts",
     "adapters/openclaw/**/*.ts",
     "adapters/openclaw/*.sh",
+    "adapters/deepseek-harness/cordis.patch.yml",
     "adapters/hermes/*.sh",
     "adapters/hermes/plugin.yaml",
     "adapters/hermes/memos_provider/*.py",
@@ -39,6 +45,7 @@
     "tsconfig.json",
     "!**/ALGORITHMS.md",
     "!**/README.md",
+    "adapters/deepseek-harness/README.md",
     "!**/__pycache__",
     "!**/*.pyc",
     "!**/.gitkeep",
@@ -53,6 +60,7 @@
     "prepack": "npm run check:hermes-version && npm run build:package",
     "sync:hermes-version": "node scripts/sync-hermes-version.cjs",
     "check:hermes-version": "node scripts/sync-hermes-version.cjs --check",
+    "release:validate": "npm run check:hermes-version && npm run lint && npm test",
     "dev": "tsc -p tsconfig.json --watch",
     "viewer:dev": "vite --config vite.config.ts",
     "bridge": "tsx bridge.cts",
@@ -72,14 +80,16 @@
     "self-evolution",
     "skill-crystallization",
     "openclaw",
-    "hermes"
+    "hermes",
+    "deepseek-harness",
+    "dsh-plugin"
   ],
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.0",
+    "@huggingface/transformers": "4.2.0",
     "@preact/signals": "^2.9.0",
     "@sinclair/typebox": "^0.34.48",
     "better-sqlite3": "^12.10.0",
@@ -88,7 +98,51 @@
     "uuid": "^10.0.0",
     "yaml": "^2.6.0"
   },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-timeout": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-timeout": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-timeout": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@preact/preset-vite": "^2.10.5",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",

@@ -107,6 +107,28 @@ describe("skill/runSkill (integration)", () => {
     expect(all[0]!.sourcePolicyIds).toContain(policyId);
   });
 
+  it("persists grounded policy steps when the LLM omits its steps", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    const policy = h.repos.policies.getById(policyId)!;
+    const { deps } = makeDeps(h, {
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": makeDraft({ steps: [] }),
+        },
+      }),
+    });
+
+    const r = await runSkill({ trigger: "manual", policyId }, deps);
+
+    expect(r.crystallized).toBe(1);
+    const stored = h.repos.skills.list()[0]!;
+    expect(stored.procedureJson?.steps).toEqual([
+      { title: policy.title, body: policy.procedure },
+    ]);
+    expect(stored.invocationGuide).not.toContain("Execute the fix");
+  });
+
   it("rebuilds an existing skill when the policy has drifted", async () => {
     const h = open();
     const { policyId } = seedFullCandidate(h);

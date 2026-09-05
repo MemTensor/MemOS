@@ -8,6 +8,8 @@
  * Hermes has separate chat and viewer bridge processes. Unix can replace
  * both automatically; Windows returns exact manual handoff instructions
  * because no supervisor currently owns the portable viewer daemon.
+ * DeepSeek Harness hosts MemOS in-process and currently requires a manual
+ * profile restart after configuration changes.
  */
 import { signal } from "@preact/signals";
 import { api } from "../api/client";
@@ -43,12 +45,14 @@ export const restartState = signal<{ phase: RestartPhase; message?: string }>({
   phase: "idle",
 });
 
-export type RestartAgent = "openclaw" | "hermes";
+export type RestartAgent = "openclaw" | "hermes" | "deepseek-harness";
 
 let lockedRestartAgent: RestartAgent | null = null;
 
 function agentFromHealth(): RestartAgent {
-  return health.value?.agent === "openclaw" ? "openclaw" : "hermes";
+  if (health.value?.agent === "openclaw") return "openclaw";
+  if (health.value?.agent === "deepseek-harness") return "deepseek-harness";
+  return "hermes";
 }
 
 function lockRestartAgent(): RestartAgent {
@@ -153,6 +157,11 @@ export async function triggerRestart(): Promise<void> {
           phase: "manualRestartRequired",
           message: response.message,
         };
+        // Hermes on Windows replaces its standalone Viewer daemon, so keep
+        // this page open and reconnect to the new process. DSH owns the
+        // Viewer in-process; its explicit profile-restart handoff must return
+        // immediately instead of polling the still-running current process.
+        if (agent === "deepseek-harness") return;
         const replaced = await pollHealthUntilReplaced(response.instanceId);
         if (replaced) {
           window.location.href =

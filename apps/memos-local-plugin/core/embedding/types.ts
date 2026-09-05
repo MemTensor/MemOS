@@ -5,6 +5,7 @@
  * are never imported directly outside of `core/embedding/`.
  */
 
+import type { MemosError } from "../../agent-contract/errors.js";
 import type { EmbeddingVector } from "../types.js";
 import type { RetryDiagnosticDetails } from "../util/retry-after.js";
 
@@ -44,6 +45,12 @@ export interface EmbeddingConfig {
   maxRetries?: number;
   /** Max texts per HTTP round trip. Default: 32. */
   batchSize?: number;
+  /**
+   * Maximum estimated tokens per provider input. Longer logical inputs are
+   * represented by at most four sampled chunks and pooled back to one vector.
+   * `0` disables client-side chunking. Default: 1024.
+   */
+  maxInputTokens?: number;
   /** Extra headers to tack on outgoing HTTP. */
   headers?: Record<string, string>;
   /** If true, all output vectors are L2-normalized. Default: true. */
@@ -180,12 +187,25 @@ export interface Embedder {
     options?: EmbedCallOptions,
   ): Promise<EmbeddingVector[]>;
 
+  /**
+   * Batch-embed without allowing one rejected input to discard successful
+   * neighbours. Implementations predating this method may omit it.
+   */
+  embedManySettled?(
+    inputs: Array<string | EmbedInput>,
+    options?: EmbedCallOptions,
+  ): Promise<EmbeddingSettledResult[]>;
+
   stats(): EmbedStats;
 
   resetCache(): void;
 
   close(): Promise<void>;
 }
+
+export type EmbeddingSettledResult =
+  | { ok: true; vector: EmbeddingVector }
+  | { ok: false; error: MemosError };
 
 export interface EmbedCallOptions {
   signal?: AbortSignal;

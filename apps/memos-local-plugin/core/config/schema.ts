@@ -14,8 +14,13 @@ import { Type, type Static } from "@sinclair/typebox";
 
 const StringWithDefault = (def = "") => Type.String({ default: def });
 const Bool = (def: boolean) => Type.Boolean({ default: def });
-const NumberInRange = (def: number, min?: number, max?: number) =>
-  Type.Number({ default: def, ...(min != null ? { minimum: min } : {}), ...(max != null ? { maximum: max } : {}) });
+const NumberInRange = (def: number, min?: number, max?: number, description?: string) =>
+  Type.Number({
+    default: def,
+    ...(min != null ? { minimum: min } : {}),
+    ...(max != null ? { maximum: max } : {}),
+    ...(description ? { description } : {}),
+  });
 
 // ─── Sub-schemas ────────────────────────────────────────────────────────────
 
@@ -45,6 +50,18 @@ const EmbeddingSchema = Type.Object({
   providerOrder: Type.Optional(Type.Array(Type.String(), { default: [] })),
   /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
   openRouter: Type.Optional(Bool(false)),
+  /**
+   * Maximum estimated tokens in one provider input. `0` explicitly disables
+   * client-side chunking. New installations default to a conservative 1024.
+   */
+  maxInputTokens: NumberInRange(
+    1_024,
+    0,
+    1_000_000,
+    "Maximum estimated tokens per embedding input. Set to 0 to disable client-side chunking.",
+  ),
+  /** Maximum physical texts sent in one embedding-provider HTTP request. */
+  batchSize: NumberInRange(32, 1, 256),
   cache: Type.Object({
     enabled: Bool(true),
     maxItems: NumberInRange(20_000, 0),
@@ -99,6 +116,10 @@ const LlmSchema = Type.Object({
   openRouter: Type.Optional(Bool(false)),
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
+  /** Max output tokens per completion (deepseek-v4-flash needs >= 100). */
+  maxTokens: NumberInRange(1024, 100, 131072),
+  /** Extra HTTP headers for the provider request. */
+  headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
 }, { default: {} });
 
 /**
@@ -131,6 +152,10 @@ const SkillEvolverSchema = Type.Object({
   openRouter: Type.Optional(Bool(false)),
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
+  /** Max output tokens per completion. */
+  maxTokens: NumberInRange(1024, 100, 131072),
+  /** Extra HTTP headers for the provider request. */
+  headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
 }, { default: {} });
 
 const StorageSchema = Type.Object({
@@ -346,6 +371,12 @@ const AlgorithmSchema = Type.Object({
     archiveEta: NumberInRange(0.1, 0, 1),
     /** Hide Tier-1 skills whose η is below this. Mirrors retrieval.minSkillEta. */
     minEtaForRetrieval: NumberInRange(0.1, 0, 1),
+    /** Archive low-η active skills after this much retrieval inactivity (minimum 1 hour). */
+    idleArchiveMs: NumberInRange(
+      30 * 24 * 60 * 60 * 1000,
+      60 * 60 * 1000,
+      365 * 24 * 60 * 60 * 1000,
+    ),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */

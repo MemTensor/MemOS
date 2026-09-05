@@ -32,6 +32,7 @@ import type {
   EpisodeId,
   EpisodeListItemDTO,
   FeedbackDTO,
+  InjectionPacket,
   PolicyDTO,
   RetrievalHitDTO,
   RetrievalQueryDTO,
@@ -52,6 +53,7 @@ import type {
   EmbeddingMaintenanceRunResult,
   EmbeddingMaintenanceStats,
   MemoryCore,
+  MemorySearchExecutionOptions,
   Unsubscribe,
 } from "../../agent-contract/memory-core.js";
 import type {
@@ -114,9 +116,11 @@ import {
 } from "../runtime/namespace.js";
 import { createHubRuntime, type HubMemorySearchHit, type HubRuntime } from "../hub/runtime.js";
 import { llmFilterCandidates } from "../retrieval/llm-filter.js";
+import { createRequestDeadline } from "../util/request-deadline.js";
 import type { RankedCandidate } from "../retrieval/ranker.js";
 import type {
   RetrievalConfig,
+  RetrievalResult,
   TraceCandidate,
 } from "../retrieval/types.js";
 import type { UserFeedback } from "../reward/types.js";
@@ -124,6 +128,7 @@ import type { UserFeedback } from "../reward/types.js";
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
+const DEADLINE_FILTER_SAFE_CUTOFF_MS = 2_000;
 const IMPORT_WRITE_BATCH_SIZE = 500;
 
 type DedicatedLlmConfig = {
@@ -137,6 +142,10 @@ type DedicatedLlmConfig = {
   providerOrder?: string[];
   openRouter?: boolean;
   reasoning?: ReasoningConfig;
+  /** Max output tokens per completion. */
+  maxTokens?: number;
+  /** Extra HTTP headers for the provider request. */
+  headers?: Record<string, string>;
 };
 
 export interface BootstrapOptions {
@@ -437,6 +446,8 @@ export async function bootstrapMemoryCoreFull(
         providerOrder: evolver?.providerOrder,
         openRouter: evolver?.openRouter ?? false,
         reasoning: evolver?.reasoning,
+        maxTokens: evolver?.maxTokens,
+        headers: evolver?.headers,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -499,6 +510,8 @@ export async function bootstrapMemoryCoreFull(
         providerOrder: l3c?.providerOrder,
         openRouter: l3c?.openRouter ?? false,
         reasoning: l3c?.reasoning,
+        maxTokens: l3c?.maxTokens,
+        headers: l3c?.headers,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
@@ -564,6 +577,8 @@ export interface CreateMemoryCoreOptions {
   onShutdown?: () => void | Promise<void>;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /** Startup-recovery grace used by shutdown. Defaults to 15 seconds. */
+  startupRecoveryShutdownGraceMs?: number;
 }
 
 /**
@@ -583,6 +598,10 @@ export function createMemoryCore(
   const bootAt = Date.now();
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
   const autoRecoveryEnabled = options.autoRecovery ?? true;
+  const startupRecoveryShutdownGraceMs = Math.max(
+    0,
+    options.startupRecoveryShutdownGraceMs ?? 15_000,
+  );
   let telemetry = options.telemetry ?? null;
   let initialized = false;
   let shutDown = false;
@@ -705,6 +724,7 @@ export function createMemoryCore(
   // detach the slow recovery to this promise. `waitForStartupRecovery`
   // exposes it so tests can opt back into the deterministic semantics.
   let startupRecoveryPromise: Promise<void> = Promise.resolve();
+  let startupRecoveryCancelled = false;
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
@@ -807,12 +827,19 @@ export function createMemoryCore(
   async function searchHubMemoryHits(
     query: string,
     limit = 5,
+    deadlineAt?: number,
   ): Promise<RetrievalHitDTO[]> {
     if (!hubRuntimeConfig.hub.enabled || !hubRuntime || !query.trim()) return [];
+    let timeoutMs = 1_500;
+    if (deadlineAt !== undefined) {
+      const remainingMs = deadlineAt - Date.now();
+      if (!Number.isFinite(remainingMs) || remainingMs <= 0) return [];
+      timeoutMs = Math.min(timeoutMs, remainingMs);
+    }
     try {
       const hits = await withTimeout(
         hubRuntime.searchMemories(query, limit),
-        1_500,
+        timeoutMs,
         "hub_search_timeout",
       );
       return hits.map(hubMemoryToRetrievalHit);
@@ -853,6 +880,9 @@ export function createMemoryCore(
     localAlreadyFiltered: boolean;
     config: RetrievalConfig;
     episodeId?: string;
+    deadlineAt?: number;
+    signal?: AbortSignal;
+    llmFilterMalformedRetries?: number;
   }): Promise<{
     hits: RetrievalHitDTO[];
     dropped: RetrievalHitDTO[];
@@ -890,7 +920,18 @@ export function createMemoryCore(
       {
         llm: handle.retrievalDeps().llm ?? null,
         log,
-        timeoutMs: FINAL_HUB_LLM_FILTER_TIMEOUT_MS,
+        timeoutMs: input.deadlineAt === undefined
+          ? FINAL_HUB_LLM_FILTER_TIMEOUT_MS
+          : Math.max(
+              1,
+              Math.min(
+                DEADLINE_FILTER_SAFE_CUTOFF_MS,
+                input.deadlineAt - Date.now(),
+              ),
+            ),
+        deadlineAt: input.deadlineAt,
+        signal: input.signal,
+        malformedRetries: input.llmFilterMalformedRetries,
         config: input.config,
       },
     );
@@ -1483,6 +1524,7 @@ export function createMemoryCore(
   async function recoverOpenEpisodesAsSessionEnd(
     orphans: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
+    if (startupRecoveryCancelled) return;
     const endedAt = Date.now();
     log.info("init.orphan_episodes.session_end_recover", { count: orphans.length });
     debugStartupRecovery("H1", "startup_recovery_scan", {
@@ -1513,6 +1555,7 @@ export function createMemoryCore(
     });
     try {
       for (const ep of orphans) {
+        if (startupRecoveryCancelled) break;
         if (isLightweightEpisode(ep)) continue;
         try {
           const episodeId = ep.id as EpisodeId;
@@ -1566,7 +1609,9 @@ export function createMemoryCore(
 
       try {
         await handle.flush();
+        if (startupRecoveryCancelled) return;
         for (const episodeId of needsRewardFallback) {
+          if (startupRecoveryCancelled) break;
           if (captureFailedInBatch.has(episodeId)) {
             log.warn("init.orphan_recovery.reward_fallback_skipped", {
               episodeId,
@@ -1583,6 +1628,7 @@ export function createMemoryCore(
             });
           }
         }
+        if (startupRecoveryCancelled) return;
         await handle.flush();
         debugStartupRecovery("H5", "startup_recovery_flush_done", {
           recoveredCount: orphans.length,
@@ -1615,11 +1661,13 @@ export function createMemoryCore(
   async function recoverDirtyClosedEpisodes(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
+    if (startupRecoveryCancelled) return;
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
     // Snapshot the prior failure counters so we can increment them later
     // (after the bus chain settles) without an extra DB read.
     const priorFailedAttempts = new Map<EpisodeId, number>();
     for (const ep of episodes) {
+      if (startupRecoveryCancelled) break;
       if (isLightweightEpisode(ep)) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
@@ -1646,6 +1694,7 @@ export function createMemoryCore(
       });
     }
     await handle.flush();
+    if (startupRecoveryCancelled) return;
     // After the reward / reflect chain has finished, account for the
     // outcome: clear `meta.rewardDirty` on episodes that are no longer
     // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
@@ -1932,10 +1981,32 @@ export function createMemoryCore(
       // wait, a fast `init → shutdown` race during tests or a quick
       // gateway reload would close SQLite while reflect / reward is
       // mid-flush, producing `SQLITE_MISUSE` noise on the way down.
+      let startupRecoveryTimedOut = false;
       try {
-        await startupRecoveryPromise;
-      } catch {
-        /* already logged inside the recovery promise */
+        // Bound the wait: a slow / flaky LLM during startup recovery of a
+        // large dirty episode must not hold shutdown hostage until the
+        // systemd kill timer (15 Aug 2026 stop-sigterm wedge: SIGTERM at
+        // 08:00:23, SIGKILL at 08:10:23). Recovery is resumable — dirty
+        // episodes carry rewardDirty.failedAttempts and the periodic
+        // rescore re-runs them — so nothing is lost by proceeding after a
+        // short grace. Fast init→shutdown races still get their grace.
+        await withTimeout(
+          startupRecoveryPromise,
+          startupRecoveryShutdownGraceMs,
+          "startup_recovery_shutdown_timeout",
+        );
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message === "startup_recovery_shutdown_timeout"
+        ) {
+          startupRecoveryTimedOut = true;
+          startupRecoveryCancelled = true;
+          log.warn("startup_recovery.shutdown_timeout", {
+            timeoutMs: startupRecoveryShutdownGraceMs,
+            action: "cancel_and_shutdown_pipeline",
+          });
+        }
       }
       try {
         await hubRuntime?.stop();
@@ -1944,7 +2015,10 @@ export function createMemoryCore(
           err: err instanceof Error ? err.message : String(err),
         });
       }
-      await handle.shutdown("memory-core.shutdown");
+      await handle.shutdown(
+        "memory-core.shutdown",
+        startupRecoveryTimedOut ? { flushGraceMs: 0 } : undefined,
+      );
     } finally {
       disposeTurnStartApiLogSessionListener();
       turnStartApiLogBySession.clear();
@@ -1977,8 +2051,9 @@ export function createMemoryCore(
     // actually been able to talk to the configured upstream. See #1596.
     const effectiveConfig = diskConfig ?? handle.config;
 
-    const llmInfo = llmHealth(handle.llm, latestTraceTs());
-    const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    const latestTraceTimestamp = latestTraceTs();
+    const llmInfo = llmHealth(handle.llm, latestTraceTimestamp);
+    const embedderInfo = embedderHealth(handle.embedder, latestTraceTimestamp);
     applyConfiguredModelDisplay(effectiveConfig, llmInfo, embedderInfo);
 
     const skillEvolverInfo = resolveSkillEvolver(
@@ -1991,7 +2066,7 @@ export function createMemoryCore(
       // in that case anyway.
       handle.reflectLlm ?? handle.llm,
       llmInfo,
-      latestTraceTs(),
+      latestTraceTimestamp,
     );
 
     // NOTE: we deliberately do NOT fall back to `api_logs`-stored
@@ -2032,9 +2107,7 @@ export function createMemoryCore(
 
   function latestTraceTs(): number | null {
     try {
-      const rows = handle.repos.traces.list({ limit: 1 });
-      if (rows.length === 0) return null;
-      return rows[0]?.ts ?? null;
+      return handle.repos.traces.latestTimestamp();
     } catch {
       return null;
     }
@@ -2167,7 +2240,7 @@ export function createMemoryCore(
     const ns = namespaceFor(turn.agent, turn);
     activeNamespace = ns;
     try {
-      hubHits = await searchHubMemoryHits(turn.userText, 5);
+      hubHits = await searchHubMemoryHits(turn.userText, 5, turn.deadlineAt);
       hubCandidates = logCandidatesFromHits(hubHits);
       const namespacedTurn = {
         ...turn,
@@ -2212,6 +2285,7 @@ export function createMemoryCore(
         localAlreadyFiltered: hubHits.length === 0,
         config: handle.retrievalDeps().config,
         episodeId: packet.episodeId,
+        deadlineAt: turn.deadlineAt,
       });
       finalFilteredCandidates = logCandidatesFromHits(final.hits);
       finalDroppedCandidates = logCandidatesFromHits(final.dropped);
@@ -2315,6 +2389,22 @@ export function createMemoryCore(
         );
       }
     }
+  }
+
+  async function prepareTurn(
+    turn: Parameters<NonNullable<MemoryCore["prepareTurn"]>>[0],
+  ): Promise<{ sessionId: SessionId; episodeId: EpisodeId }> {
+    ensureLive();
+    const ns = namespaceFor(turn.agent, turn);
+    activeNamespace = ns;
+    return handle.prepareTurn({
+      ...turn,
+      namespace: ns,
+      contextHints: {
+        ...(turn.contextHints ?? {}),
+        ...namespaceMeta(ns),
+      },
+    });
   }
 
   async function onTurnEnd(
@@ -2845,6 +2935,7 @@ export function createMemoryCore(
   // ─── Memory queries ──
   async function searchMemory(
     query: RetrievalQueryDTO,
+    execution: MemorySearchExecutionOptions = {},
   ): Promise<RetrievalResultDTO> {
     ensureLive();
     const ns = query.namespace ?? activeNamespace;
@@ -2862,6 +2953,15 @@ export function createMemoryCore(
       ("adhoc-session-" + randomUUID().slice(0, 8) as SessionId);
     const ts = Date.now();
     const startedAt = Date.now();
+    const foregroundDeadline = query.deadlineAt !== undefined
+      ? createRequestDeadline(query.deadlineAt)
+      : null;
+    const requestSignal = foregroundDeadline && execution.signal
+      ? AbortSignal.any([foregroundDeadline.signal, execution.signal])
+      : foregroundDeadline?.signal ?? execution.signal;
+    const leaveForeground = execution.foreground
+      ? handle.enterForeground()
+      : null;
     let ok = true;
     let candidates: RetrievalLogCandidate[] = [];
     let filtered: typeof candidates = [];
@@ -2870,18 +2970,52 @@ export function createMemoryCore(
     let retrievalStats: RetrievalStatsLogPayload | undefined;
     let finalHubKept = 0;
     try {
-      const hubHits = await searchHubMemoryHits(query.query, query.topK?.tier2 ?? 5);
+      const hubHits = await searchHubMemoryHits(
+        query.query,
+        query.topK?.tier2 ?? 5,
+        query.deadlineAt,
+      );
       hubCandidates = logCandidatesFromHits(hubHits);
-      const result = await toolDrivenRetrieve(deps, {
-        reason: "tool_driven",
-        agent: query.agent,
-        namespace: ns,
-        sessionId,
-        episodeId: query.episodeId,
-        tool: "memos_search",
-        args: { ...(query.filters ?? {}), query: query.query },
-        ts,
-      }, { skipLlmFilter: hubHits.length > 0 });
+      let result: {
+        packet: InjectionPacket;
+        stats: RetrievalResult["stats"] | null;
+      };
+      if (query.reason === "turn_start") {
+        const packet = await handle.recallTurn({
+          agent: query.agent,
+          namespace: ns,
+          sessionId,
+          episodeId: query.episodeId,
+          userText: query.query,
+          contextHints: {
+            ...(query.contextHints ?? {}),
+            ...(hubHits.length > 0 ? { __memosDeferLlmFilterToCaller: true } : {}),
+          },
+          ts,
+          deadlineAt: query.deadlineAt,
+          llmFilterMalformedRetries: query.llmFilterMalformedRetries,
+        }, requestSignal);
+        result = {
+          packet,
+          stats: handle.consumeRetrievalStats(packet.packetId),
+        };
+      } else {
+        result = await toolDrivenRetrieve(deps, {
+          reason: "tool_driven",
+          agent: query.agent,
+          namespace: ns,
+          sessionId,
+          episodeId: query.episodeId,
+          tool: "memos_search",
+          args: { ...(query.filters ?? {}), query: query.query },
+          ts,
+        }, {
+          skipLlmFilter: hubHits.length > 0,
+          signal: requestSignal,
+          deadlineAt: query.deadlineAt,
+          llmFilterMalformedRetries: query.llmFilterMalformedRetries,
+        });
+      }
       const localLogStages = buildLocalRetrievalLogStages(result.packet);
       candidates = localLogStages.candidates;
       let hits: RetrievalHitDTO[] = result.packet.snippets.map((snip) => ({
@@ -2922,6 +3056,9 @@ export function createMemoryCore(
         localAlreadyFiltered: hubHits.length === 0,
         config: deps.config,
         episodeId: query.episodeId,
+        deadlineAt: query.deadlineAt,
+        signal: requestSignal,
+        llmFilterMalformedRetries: query.llmFilterMalformedRetries,
       });
       const returnedHits = final.hits;
       const finalFilterStats: RetrievalStatsLogPayload["finalFilter"] | undefined =
@@ -2952,14 +3089,16 @@ export function createMemoryCore(
       // funnels. All fields are optional on the producer side so older
       // consumers keep working.
       const s = result.stats;
-      retrievalStats = withHubStats(
-        retrievalStatsPayload(s),
-        hubCandidates.length,
-        filtered.length,
-        finalHubKept,
-        finalFilterStats,
-      );
-      if (s.embedding?.degraded) {
+      retrievalStats = s
+        ? withHubStats(
+            retrievalStatsPayload(s),
+            hubCandidates.length,
+            filtered.length,
+            finalHubKept,
+            finalFilterStats,
+          )
+        : undefined;
+      if (s?.embedding?.degraded) {
         handle.repos.apiLogs.insert({
           toolName: "system_error",
           input: { role: "embedding" },
@@ -2998,7 +3137,7 @@ export function createMemoryCore(
         handle.repos.apiLogs.insert({
           toolName: "memos_search",
           input: {
-            type: "tool_call",
+            type: query.reason === "turn_start" ? "turn_start" : "tool_call",
             agent: query.agent,
             query: query.query,
             sessionId,
@@ -3030,6 +3169,8 @@ export function createMemoryCore(
           candidates.length,
         );
       }
+      foregroundDeadline?.dispose();
+      leaveForeground?.();
     }
   }
 
@@ -4534,23 +4675,36 @@ export function createMemoryCore(
     let error: string | undefined;
     if (batch.length > 0) {
       try {
-        const vecs = await handle.embedder.embedMany(
-          batch.map((slot) => ({ text: slot.sourceText || "(empty)", role: "document" as const })),
-        );
+        const inputs = batch.map((slot) => ({
+          text: slot.sourceText || "(empty)",
+          role: "document" as const,
+        }));
+        const settled = handle.embedder.embedManySettled
+          ? await handle.embedder.embedManySettled(inputs)
+          : (await handle.embedder.embedMany(inputs)).map((vector) => ({
+              ok: true as const,
+              vector,
+            }));
+        let firstSlotError: string | undefined;
         for (let i = 0; i < batch.length; i++) {
           const slot = batch[i]!;
-          const vec = vecs[i];
-          if (!vec) {
+          const result = settled[i];
+          if (!result?.ok) {
             failed++;
+            firstSlotError ??= result?.error.message ?? `missing vector for ${slot.id}`;
             continue;
           }
           try {
-            if (slot.update(vec)) updated++;
+            if (slot.update(result.vector)) updated++;
             else failed++;
           } catch {
             failed++;
           }
         }
+        // In repair mode successful slots disappear from the next query, so
+        // partial failures do not block progress. Stop only when a pass makes
+        // no progress and the remaining slots are terminally rejected.
+        if (mode === "repair" && updated === 0 && failed > 0) error = firstSlotError;
       } catch (err) {
         failed = batch.length;
         error = err instanceof Error ? err.message : String(err);
@@ -4561,7 +4715,7 @@ export function createMemoryCore(
     const nextOffset = mode === "rebuild" ? offset + batch.length : 0;
     const done = mode === "rebuild"
       ? nextOffset >= targetSlots.length || batch.length === 0
-      : statsAfter.needsRepair === 0 || batch.length === 0;
+      : statsAfter.needsRepair === 0 || batch.length === 0 || (updated === 0 && failed > 0);
     return {
       mode,
       processed: batch.length,
@@ -4919,7 +5073,10 @@ export function createMemoryCore(
     const existing = handle.repos.skills.getById(id);
     if (!existing || !ownedByCurrent(existing)) return null;
     const now = Date.now();
-    handle.repos.skills.setStatus(id, "active", now);
+    handle.db.tx(() => {
+      handle.repos.skills.setStatus(id, "active", now);
+      handle.repos.skills.recordUse(id, now);
+    });
     if (existing.status !== "active") {
       handle.buses.skill.emit({
         kind: "skill.status.changed",
@@ -5071,6 +5228,7 @@ export function createMemoryCore(
     openEpisode,
     closeEpisode,
     onTurnStart,
+    prepareTurn,
     onTurnEnd,
     submitFeedback,
     recordToolOutcome,
