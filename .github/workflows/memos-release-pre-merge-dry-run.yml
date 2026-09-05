@@ -5,16 +5,20 @@ on:
     paths:
       - ".github/workflows/memos-release-publish.yml"
       - ".github/workflows/memos-release-publish-main.yml"
+      - ".github/workflows/memos-release-publish-paired-local-plugin.yml"
       - ".github/workflows/memos-release-prepare.yml"
+      - ".github/workflows/memos-local-plugin-publish.yml"
       - ".github/workflows/memos-release-pre-merge-dry-run.yml"
       - ".github/workflows/memos-release-post-merge-dry-run.yml"
       - ".github/scripts/memos-version.mjs"
       - ".github/scripts/memos-version.test.mjs"
       - ".github/scripts/prepare-memos-release.mjs"
       - ".github/scripts/prepare-memos-release.test.mjs"
+      - ".github/scripts/publish-local-plugin.sh"
+      - ".github/scripts/publish-local-plugin.test.mjs"
+      - ".github/scripts/publish-paired-local-plugin-release.mjs"
       - ".github/scripts/retry.sh"
-      - "pyproject.toml"
-      - "src/memos/__init__.py"
+      - "apps/memos-local-plugin/package.json"
 
 concurrency:
   group: memos-release-pre-merge-dry-run-${{ github.event.pull_request.number || github.ref }}
@@ -71,7 +75,7 @@ jobs:
 
       - name: Run release workflow tests
         shell: bash
-        run: node --test .github/scripts/memos-version.test.mjs .github/scripts/prepare-memos-release.test.mjs
+        run: node --test .github/scripts/*.test.mjs
 
       - name: Prepare offline release inspection
         id: prepare

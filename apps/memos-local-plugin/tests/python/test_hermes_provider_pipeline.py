@@ -931,5 +931,295 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(turn_end["toolCalls"][1]["thinkingBefore"], "先列计划，再查机票。")
 
 
+class ChineseToolResultBridge(FakeBridge):
+    """Fake bridge whose read-path responses embed Chinese characters.
+
+    Used by ``HandleToolCallEnsureAsciiTests`` to prove that every
+    ``json.dumps`` inside ``handle_tool_call`` passes
+    ``ensure_ascii=False`` so Chinese memory content is returned to the
+    host LLM as readable UTF-8 rather than ``\\uXXXX`` escapes (#2255).
+    """
+
+    _CH_REFLECTION = "用户提供了 Tushare KEY，需要在后续查询中携带。"
+    _CH_SNIPPET = "记忆命中：北京晚高峰的地铁调度策略。"
+    _CH_POLICY_TITLE = "策略：夜间批任务错峰"
+    _CH_POLICY_BODY = "在凌晨 02:00 之后触发全量导入，避开在线读写高峰。"
+    _CH_WORLD_TITLE = "世界模型：城市晚高峰"
+    _CH_WORLD_BODY = "工作日 17:30-19:30 主干道车流密集，通勤需绕行。"
+    _CH_SKILL_TITLE = "技能：中文摘要"
+    _CH_SKILL_PROCEDURE = "先分段抽取关键句，再融合成 3 句摘要。"
+
+    def request(self, method: str, params: dict | None = None, **_kwargs: object) -> dict:
+        payload = params or {}
+        self.calls.append((method, payload))
+        if method == "session.open":
+            return {"sessionId": payload.get("sessionId") or "hermes:test-session"}
+        if method == "core.health":
+            return {"ok": True}
+        if method == "memory.search":
+            return {
+                "hits": [
+                    {
+                        "id": "trace-cn-1",
+                        "refId": "trace-cn-1",
+                        "refKind": "trace",
+                        "tier": 1,
+                        "score": 0.87,
+                        "snippet": self._CH_SNIPPET,
+                        "reflection": self._CH_REFLECTION,
+                    },
+                    {
+                        "id": "world-cn-1",
+                        "refId": "world-cn-1",
+                        "refKind": "world_model",
+                        "tier": 3,
+                        "score": 0.71,
+                        "snippet": f"{self._CH_WORLD_TITLE}\n{self._CH_WORLD_BODY}",
+                    },
+                ]
+            }
+        if method == "memory.get_trace":
+            return {
+                "id": payload.get("id"),
+                "episodeId": "ep-cn-1",
+                "agentText": "已按用户请求完成中文摘要生成。",
+                "userText": "帮我把上面的中文材料压缩成 3 句摘要。",
+                "reflection": self._CH_REFLECTION,
+                "ts": "2026-08-16T02:50:22Z",
+                "toolCalls": [],
+                "value": 0.9,
+            }
+        if method == "memory.get_policy":
+            return {
+                "id": payload.get("id"),
+                "title": self._CH_POLICY_TITLE,
+                "procedure": self._CH_POLICY_BODY,
+                "trigger": "夜间空闲窗口",
+                "verification": "首屏读取 P95 无回退",
+                "boundary": "仅离线批任务",
+                "gain": "峰值 QPS 下降 30%",
+                "support": 12,
+                "status": "active",
+            }
+        if method == "memory.get_world":
+            return {
+                "id": payload.get("id"),
+                "title": self._CH_WORLD_TITLE,
+                "body": self._CH_WORLD_BODY,
+                "policyIds": ["policy-cn-1"],
+            }
+        if method == "memory.timeline":
+            return {
+                "traces": [
+                    {
+                        "id": "trace-cn-1",
+                        "snippet": self._CH_SNIPPET,
+                        "reflection": self._CH_REFLECTION,
+                    }
+                ]
+            }
+        if method == "memory.list_world_models":
+            return {
+                "worldModels": [
+                    {
+                        "id": "world-cn-1",
+                        "title": self._CH_WORLD_TITLE,
+                        "body": self._CH_WORLD_BODY,
+                        "policyIds": ["policy-cn-1"],
+                    }
+                ]
+            }
+        if method == "skill.list":
+            return {
+                "skills": [
+                    {
+                        "id": "skill-cn-1",
+                        "title": self._CH_SKILL_TITLE,
+                        "summary": self._CH_SKILL_PROCEDURE,
+                    }
+                ]
+            }
+        if method == "skill.get":
+            return {
+                "id": payload.get("id"),
+                "title": self._CH_SKILL_TITLE,
+                "procedure": self._CH_SKILL_PROCEDURE,
+            }
+        if method in {"episode.close", "session.close", "subagent.record"}:
+            return {"ok": True}
+        raise AssertionError(f"unexpected bridge method: {method}")
+
+
+class HandleToolCallEnsureAsciiTests(unittest.TestCase):
+    """Regression guard for #2255.
+
+    Every ``json.dumps`` in ``MemTensorProvider.handle_tool_call`` must
+    pass ``ensure_ascii=False`` so Chinese (and other non-ASCII) memory
+    content reaches the host LLM as readable UTF-8. Without the flag,
+    Python's default serialization escapes each non-ASCII code point to
+    ``\\uXXXX``, dramatically increasing token load and making tool
+    results unreadable for humans debugging the Hermes side.
+    """
+
+    def setUp(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch = patch.dict(
+            "os.environ",
+            {"MEMOS_HERMES_BRIDGE_MODE": "legacy"},
+        )
+        self._mode_patch.start()
+
+    def tearDown(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch.stop()
+
+    def _make_provider(self, bridge: ChineseToolResultBridge) -> object:
+        patches = (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        )
+        for p in patches:
+            self.addCleanup(p.stop)
+            p.start()
+        provider = memos_provider.MemTensorProvider()
+        provider.initialize(
+            "hermes:2255",
+            hermes_home="/tmp/hermes-2255-home",
+            platform="cli",
+            agent_identity="hermes-2255",
+        )
+        self.addCleanup(provider.shutdown)
+        return provider
+
+    # -- individual tools -------------------------------------------------
+    #
+    # Each test proves ``ensure_ascii=False`` by asserting that the raw
+    # serialized string contains the Chinese literal verbatim. That
+    # guarantee is stronger than searching for the two-character sequence
+    # ``\\u`` in the output: with ``ensure_ascii=True`` Python would emit
+    # ``\uXXXX`` escapes and the raw Chinese literal would NOT appear, so
+    # ``assertIn(_CH_..., raw)`` alone catches the regression while
+    # avoiding false positives on legitimate values that just happen to
+    # contain a backslash followed by ``u`` (e.g. Windows paths, regex
+    # patterns, or unrelated escape sequences in future fields).
+
+    def test_memos_search_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_search", {"query": "中文摘要"})
+
+        self.assertIn(ChineseToolResultBridge._CH_REFLECTION, raw)
+        parsed = json.loads(raw)
+        self.assertEqual(
+            parsed["hits"][0]["reflection"],
+            ChineseToolResultBridge._CH_REFLECTION,
+        )
+
+    def test_memos_get_trace_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_get", {"id": "trace-cn-1", "kind": "trace"})
+
+        self.assertIn(ChineseToolResultBridge._CH_REFLECTION, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["found"])
+        self.assertEqual(parsed["meta"]["reflection"], ChineseToolResultBridge._CH_REFLECTION)
+
+    def test_memos_get_policy_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_get", {"id": "policy-cn-1", "kind": "policy"})
+
+        self.assertIn(ChineseToolResultBridge._CH_POLICY_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertIn(ChineseToolResultBridge._CH_POLICY_BODY, parsed["body"])
+
+    def test_memos_get_world_model_returns_utf8_chinese(self) -> None:
+        """Regression guard for the ``world_model`` branch of ``memos_get``.
+
+        Without this case a future accidental removal of
+        ``ensure_ascii=False`` from the ``world_model`` branch of
+        ``memos_get`` (routed via ``memory.get_world``) would go
+        undetected — the other ``memos_get`` tests only exercise the
+        ``trace`` and ``policy`` kinds.
+        """
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_get", {"id": "world-cn-1", "kind": "world_model"})
+
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["found"])
+        self.assertEqual(parsed["kind"], "world_model")
+        self.assertEqual(parsed["meta"]["title"], ChineseToolResultBridge._CH_WORLD_TITLE)
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_BODY, parsed["body"])
+
+    def test_memos_timeline_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_timeline", {"episodeId": "ep-cn-1"})
+
+        self.assertIn(ChineseToolResultBridge._CH_SNIPPET, raw)
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["traces"][0]["snippet"], ChineseToolResultBridge._CH_SNIPPET)
+
+    def test_memos_skill_list_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_skill_list", {"limit": 5})
+
+        self.assertIn(ChineseToolResultBridge._CH_SKILL_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertEqual(
+            parsed["skills"][0]["title"],
+            ChineseToolResultBridge._CH_SKILL_TITLE,
+        )
+
+    def test_memos_environment_list_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_environment", {"limit": 5})
+
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_BODY, raw)
+        parsed = json.loads(raw)
+        self.assertFalse(parsed["queried"])
+        self.assertEqual(
+            parsed["worldModels"][0]["title"],
+            ChineseToolResultBridge._CH_WORLD_TITLE,
+        )
+
+    def test_memos_environment_query_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_environment", {"query": "晚高峰", "limit": 5})
+
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["queried"])
+
+    def test_memos_skill_get_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_skill_get", {"id": "skill-cn-1"})
+
+        self.assertIn(ChineseToolResultBridge._CH_SKILL_PROCEDURE, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["found"])
+        self.assertEqual(
+            parsed["skill"]["procedure"],
+            ChineseToolResultBridge._CH_SKILL_PROCEDURE,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

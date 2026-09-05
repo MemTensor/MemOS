@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock
 
+from memos.api.handlers.base_handler import HandlerDependencies
+from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.suggestion_handler import (
     _get_further_suggestion,
     handle_get_suggestion_queries,
@@ -128,3 +130,34 @@ def test_handle_get_suggestion_queries_with_further_message():
     assert len(message_list) >= 2
     assert message_list[0]["role"] == "system"
     assert message_list[1]["role"] == "user"
+
+
+def test_chat_handler_further_suggestion_uses_suggestion_llm():
+    main_llm = Mock()
+    suggestion_llm = Mock()
+    suggestion_llm.generate.return_value = '{"query": ["next from suggestion llm"]}'
+
+    dependencies = HandlerDependencies(
+        llm=main_llm,
+        suggestion_llm=suggestion_llm,
+        naive_mem_cube=Mock(),
+        mem_reader=Mock(),
+        mem_scheduler=Mock(),
+    )
+    handler = ChatHandler(
+        dependencies=dependencies,
+        chat_llms={},
+        search_handler=Mock(),
+        add_handler=Mock(),
+    )
+
+    result = handler._get_further_suggestion(
+        [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+    )
+
+    assert result == ["next from suggestion llm"]
+    suggestion_llm.generate.assert_called_once()
+    main_llm.generate.assert_not_called()

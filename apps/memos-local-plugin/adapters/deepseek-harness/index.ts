@@ -36,6 +36,7 @@ import {
 import {
   createDeepSeekHarnessHostLlmBridge,
   DeepSeekHarnessLlmRouteContext,
+  type DeepSeekHarnessHostLlmBridge,
 } from "./host-llm.js";
 import { registerDeepSeekHarnessTools } from "./tools.js";
 
@@ -123,6 +124,16 @@ export function configureDeepSeekHarnessHostLlm(
       ...config.llm,
       provider: "host" as const,
     }),
+  });
+}
+
+/** Refresh exact-model capability snapshots whenever DSH replaces an adapter. */
+export function registerDeepSeekHarnessHostLlmCapabilityInvalidation(
+  ctx: Context,
+  bridge: DeepSeekHarnessHostLlmBridge,
+): () => void {
+  return ctx.on("llm/adapters-updated", () => {
+    bridge.invalidateModelCapabilities();
   });
 }
 
@@ -247,6 +258,12 @@ export async function apply(
     const hostLlmBridge = config.hostLlmEnabled
       ? createDeepSeekHarnessHostLlmBridge({ llm: ctx.llm, routes })
       : null;
+    if (hostLlmBridge) {
+      registrations.push(registerDeepSeekHarnessHostLlmCapabilityInvalidation(
+        ctx,
+        hostLlmBridge,
+      ));
+    }
     const autoRecoveryEnabled = deepSeekHarnessAutoRecoveryEnabled(memoryConfig);
 
     core = await bootstrapMemoryCore({

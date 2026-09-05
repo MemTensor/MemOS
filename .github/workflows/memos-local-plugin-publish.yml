@@ -79,6 +79,14 @@ on:
         required: false
         type: string
         default: ""
+      publish_phase:
+        required: false
+        type: string
+        default: "full"
+      auto_post_merge_release:
+        required: false
+        type: boolean
+        default: false
     outputs:
       local_plugin_tag:
         value: ${{ jobs.publish.outputs.local_plugin_tag }}
@@ -122,6 +130,8 @@ jobs:
           MEMOS_RELEASE_VERSION: ${{ inputs.memos_release_version }}
           CALLER_PUBLISH_CONFIRMATION: ${{ inputs.caller_publish_confirmation }}
           MEMOS_RELEASE_TAG: ${{ inputs.memos_release_tag }}
+          PUBLISH_PHASE: ${{ inputs.publish_phase || 'full' }}
+          AUTO_POST_MERGE_RELEASE: ${{ inputs.auto_post_merge_release }}
         run: |
           set -euo pipefail
           node -e '
@@ -148,6 +158,22 @@ jobs:
             }
           ' "${RELEASE_VERSION}" "${NPM_DIST_TAG}"
 
+          case "${PUBLISH_PHASE}" in
+            full|stage_release|publish_npm_only) ;;
+            *)
+              echo "::error::publish_phase must be full, stage_release, or publish_npm_only; received ${PUBLISH_PHASE}."
+              exit 1
+              ;;
+          esac
+          if [ "${PUBLISH_PHASE}" != "full" ] && [ "${DOCS_SYNC_MODE}" != "paired_with_memos_release" ]; then
+            echo "::error::publish_phase=${PUBLISH_PHASE} is only valid for paired MemOS weekly releases."
+            exit 1
+          fi
+          if [ "${PUBLISH_PHASE}" = "publish_npm_only" ] && [ "${DRY_RUN}" = "true" ]; then
+            echo "::error::publish_phase=publish_npm_only requires dry_run=false."
+            exit 1
+          fi
+
           if [ -n "${DOCS_SYNC_MODE}" ]; then
             if [ "${DOCS_SYNC_MODE}" != "paired_with_memos_release" ]; then
               echo "::error::Reusable local-plugin publishing only accepts docs_sync_mode=paired_with_memos_release."
@@ -161,7 +187,7 @@ jobs:
               echo "::error::memos_release_tag must exactly equal v${MEMOS_RELEASE_VERSION}."
               exit 1
             fi
-            if [ "${DRY_RUN}" != "true" ]; then
+            if [ "${DRY_RUN}" != "true" ] && [ "${AUTO_POST_MERGE_RELEASE}" != "true" ]; then
               expected="PUBLISH v${MEMOS_RELEASE_VERSION} WITH LOCAL PLUGIN v${RELEASE_VERSION}"
               if [ "${CALLER_PUBLISH_CONFIRMATION}" != "${expected}" ]; then
                 echo "::error::The calling MemOS release confirmation must exactly equal: ${expected}"
@@ -199,6 +225,8 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PUBLISH_PHASE: ${{ inputs.publish_phase || 'full' }}
+          MEMOS_RELEASE_TAG: ${{ inputs.memos_release_tag }}
         run: |
           set -euo pipefail
           package_source_sha="$(git rev-parse HEAD)"
@@ -215,17 +243,66 @@ jobs:
             "refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" \
             "${WORKFLOW_SHA}"
           default_branch_sha="$(git rev-parse "refs/remotes/origin/${DEFAULT_BRANCH}")"
-          if ! git merge-base --is-ancestor "${package_source_sha}" "refs/remotes/origin/${DEFAULT_BRANCH}"; then
-            echo "::error::Formal publish source ${package_source_sha} is not in ${DEFAULT_BRANCH} history. Merge it before publishing."
-            exit 1
-          fi
           if [ "${WORKFLOW_SHA}" != "${default_branch_sha}" ]; then
             echo "::error::Formal publishing must use the latest release automation from ${DEFAULT_BRANCH} (${default_branch_sha}); this run uses ${WORKFLOW_SHA}. Select ${DEFAULT_BRANCH} in Run workflow and retry."
             exit 1
           fi
 
+          source_is_allowed=false
+          if git merge-base --is-ancestor "${package_source_sha}" "refs/remotes/origin/${DEFAULT_BRANCH}"; then
+            source_is_allowed=true
+          elif [ "${PUBLISH_PHASE}" = "publish_npm_only" ] && [ -n "${MEMOS_RELEASE_TAG}" ]; then
+            # A paired weekly release may stage the local-plugin tag on a direct
+            # metadata-only child of the MemOS Release commit. The automation
+            # still comes from current main; only the package source is allowed
+            # to use this narrowly validated child commit.
+            paired_source_ref="refs/memos-paired-source/${MEMOS_RELEASE_TAG}"
+            git fetch --force --no-tags origin \
+              "refs/tags/${MEMOS_RELEASE_TAG}:${paired_source_ref}"
+            memos_release_sha="$(git rev-parse "${paired_source_ref}^{commit}")"
+
+            if [ "${package_source_sha}" = "${memos_release_sha}" ]; then
+              source_is_allowed=true
+            else
+              commit_line="$(git rev-list --parents -n 1 "${package_source_sha}")"
+              read -r commit_sha parent_sha extra_parent <<< "${commit_line}"
+              if [ "${commit_sha}" != "${package_source_sha}" ] || \
+                 [ -z "${parent_sha:-}" ] || \
+                 [ -n "${extra_parent:-}" ] || \
+                 [ "${parent_sha}" != "${memos_release_sha}" ]; then
+                echo "::error::Paired local-plugin source ${package_source_sha} must equal ${MEMOS_RELEASE_TAG} (${memos_release_sha}) or be its direct single-parent metadata child."
+                exit 1
+              fi
+
+              unexpected_file=""
+              while IFS= read -r changed_file; do
+                case "${changed_file}" in
+                  apps/memos-local-plugin/package.json|\
+                  apps/memos-local-plugin/package-lock.json|\
+                  apps/memos-local-plugin/adapters/hermes/plugin.yaml)
+                    ;;
+                  *)
+                    unexpected_file="${changed_file}"
+                    break
+                    ;;
+                esac
+              done < <(git diff-tree --no-commit-id --name-only -r "${package_source_sha}")
+
+              if [ -n "${unexpected_file}" ]; then
+                echo "::error::Paired local-plugin metadata commit changes forbidden file: ${unexpected_file}"
+                exit 1
+              fi
+              source_is_allowed=true
+            fi
+          fi
+
+          if [ "${source_is_allowed}" != "true" ]; then
+            echo "::error::Formal publish source ${package_source_sha} is not in ${DEFAULT_BRANCH} history and is not a valid paired local-plugin metadata source. Merge it before publishing."
+            exit 1
+          fi
+
       - name: Configure npm authentication preflight
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && (inputs.publish_phase || 'full') != 'stage_release' }}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.4.0
         with:
           node-version: 22
@@ -233,7 +310,7 @@ jobs:
           package-manager-cache: false
 
       - name: Validate npm authentication before platform builds
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && (inputs.publish_phase || 'full') != 'stage_release' }}
         shell: bash
         working-directory: .
         env:
@@ -427,7 +504,7 @@ jobs:
           '
 
       - name: Generate telemetry credentials for a real publish
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && (inputs.publish_phase || 'full') != 'stage_release' }}
         run: bash ../../.github/scripts/retry.sh --label "generate telemetry credentials" -- node scripts/generate-telemetry-credentials.cjs
         env:
           MEMOS_ARMS_ENDPOINT: ${{ secrets.MEMOS_ARMS_ENDPOINT }}
@@ -451,8 +528,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          bash ../../.github/scripts/retry.sh --attempts 2 --label "npm run lint" -- npm run lint
-          bash ../../.github/scripts/retry.sh --attempts 2 --label "npm test" -- npm test
+          bash ../../.github/scripts/retry.sh --attempts 2 --label "npm run release:validate" -- npm run release:validate
           release_dir="${RUNNER_TEMP}/memos-local-plugin-release"
           pack_json="${RUNNER_TEMP}/memos-local-plugin-pack.json"
           mkdir -p "${release_dir}"
@@ -702,8 +778,19 @@ jobs:
           EXPECTED_PACKAGE_SOURCE_SHA: ${{ needs.guard-legacy-publish.outputs.package_source_sha }}
         run: node .github/scripts/inspect-local-plugin-release-state.mjs
 
+      - name: Require staged local-plugin metadata before npm-only publish
+        if: ${{ inputs.dry_run != true && (inputs.publish_phase || 'full') == 'publish_npm_only' }}
+        env:
+          RELEASE_METADATA_STATE: ${{ steps.release_state.outputs.state }}
+        run: |
+          set -euo pipefail
+          if [ "${RELEASE_METADATA_STATE}" != "complete" ]; then
+            echo "::error::publish_phase=publish_npm_only requires an existing, validated memos-local-plugin tag created by the staged paired Release step."
+            exit 1
+          fi
+
       - name: Publish to npm
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && (inputs.publish_phase || 'full') != 'stage_release' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PACKAGE_NAME: "@memtensor/memos-local-plugin"
@@ -715,11 +802,12 @@ jobs:
           NPM_VISIBILITY_TIMEOUT_SECONDS: "150"
           NPM_VISIBILITY_INTERVAL_SECONDS: "10"
           NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS: "8"
+          ALLOW_STAGED_TAG_BEFORE_NPM: ${{ (inputs.publish_phase || 'full') == 'publish_npm_only' && 'true' || 'false' }}
         run: bash ../../.github/scripts/publish-local-plugin.sh
 
       - name: Create standalone package tag
         id: release_tag
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && (inputs.publish_phase || 'full') != 'publish_npm_only' }}
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
@@ -785,7 +873,7 @@ jobs:
 
       - name: Create and verify independent local-plugin GitHub Release
         id: plugin_release
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && (inputs.publish_phase || 'full') != 'publish_npm_only' }}
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
