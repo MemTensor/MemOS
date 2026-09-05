@@ -103,6 +103,17 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     lightweightMemory: {
       enabled: true,
     },
+    deepProcessing: {
+      // "always" keeps the legacy behaviour (evolve as episodes close).
+      // "window" defers reflect/reward/L2/L3/skill plus dirty-reward
+      // retries to the configured daily idle window — see issue #2333.
+      mode: "always",
+      window: "02:00-06:00",
+      // Empty = evaluate `window` in the host's system local timezone.
+      timezone: "",
+      drainIntervalSec: 600,
+      maxBatchPerCycle: 10,
+    },
     capture: {
       maxTextChars: 4_000,
       maxToolOutputChars: 2_000,

@@ -1859,6 +1859,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
     l3: subs.l3,
     skills: subs.skills,
     feedback: subs.feedback,
+    deepWindow: subs.deepWindow,
     buses,
     subscribeEvents,
     getRecentEvents,

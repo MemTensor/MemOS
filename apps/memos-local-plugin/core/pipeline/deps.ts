@@ -99,6 +99,7 @@ import type {
   PipelineSubscriptions,
 } from "./types.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
+import { createDeepWindowQueue, type DeepWindowQueue } from "./deep-window.js";
 import { createSemaphore } from "../util/semaphore.js";
 import { rateLimitLlmClient } from "../util/rate-limited-llm.js";
 import {
@@ -177,6 +178,7 @@ export function extractAlgorithmConfig(
       classifyTimeoutMs: alg.session.classifyTimeoutMs,
       bgLlmConcurrency: alg.session.bgLlmConcurrency,
     },
+    deepProcessing: alg.deepProcessing,
   };
 }
 
@@ -204,6 +206,7 @@ export interface PipelineSubscriberSet {
   l3: L3SubscriberHandle;
   skills: SkillSubscriberHandle;
   feedback: FeedbackSubscriberHandle;
+  deepWindow: DeepWindowQueue;
   subscriptions: PipelineSubscriptions;
 }
 
@@ -223,6 +226,16 @@ export function buildPipelineSubscribers(
     ? prioritizeEmbedder(deps.embedder, resources, "background")
     : deps.embedder;
   const lightweightMode = algorithm.lightweightMemory.enabled;
+
+  // Issue #2333: the deep-processing window queue. Built even in
+  // lightweight mode so `PipelineHandle.deepWindow` is never null —
+  // downstream gates read it unconditionally.
+  const deepWindow = createDeepWindowQueue({
+    kv: deps.repos.kv,
+    config: algorithm.deepProcessing,
+    log: log.child({ channel: "core.pipeline.deep-window" }),
+    now: deps.now,
+  });
 
   const captureRunner = createCaptureRunner({
     tracesRepo: deps.repos.traces,
@@ -261,6 +274,7 @@ export function buildPipelineSubscribers(
       l3: lightweightL3Handle(),
       skills: lightweightSkillHandle(),
       feedback: lightweightFeedbackHandle(),
+      deepWindow,
       subscriptions: {
         capture: lightweightCaptureSubscription(),
         reward: lightweightRewardSubscription(),
@@ -298,7 +312,19 @@ export function buildPipelineSubscribers(
       : undefined,
   });
 
-  const captureSub = attachCaptureSubscriber(buses.session, captureRunner, {});
+  const captureSub = attachCaptureSubscriber(buses.session, captureRunner, {
+    // Issue #2333: outside the deep-processing window the topic-end
+    // reflect pass (and with it reward / L2 / L3 / skill, which hang off
+    // `capture.done`) is queued instead of run. The drain in
+    // `memory-core.ts` re-emits `episode.finalized` inside the window,
+    // where `shouldDefer()` is false and this hook is a no-op.
+    deferHook: {
+      defer: () => deepWindow.shouldDefer(),
+      onDeferred: (episodeId, closedBy) => {
+        deepWindow.enqueue(episodeId, closedBy);
+      },
+    },
+  });
   const rewardSub = attachRewardSubscriber(
     buses.capture,
     rewardRunner,
@@ -360,6 +386,7 @@ export function buildPipelineSubscribers(
     l3: l3Handle,
     skills: skillHandle,
     feedback: feedbackHandle,
+    deepWindow,
     subscriptions: {
       capture: captureSub,
       reward: rewardSub,

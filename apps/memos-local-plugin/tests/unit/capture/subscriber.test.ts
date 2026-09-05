@@ -202,3 +202,138 @@ describe("capture/subscriber", () => {
     sub.stop();
   });
 });
+
+/**
+ * Issue #2333 — the deep-processing window. Outside the configured idle
+ * window the topic-end reflect pass must not run; the episode is queued
+ * instead and replayed by the batch drain once the window opens.
+ */
+describe("capture/subscriber deep-processing window (issue #2333)", () => {
+  beforeAll(() => initTestLogger());
+
+  it("queues instead of reflecting while defer() is true", async () => {
+    const bus = createSessionEventBus();
+    const { runner, calls } = makeRunner(async (inp) => emptyResult(inp.episode.id));
+    const deferred: Array<[string, EpisodeCloseReason]> = [];
+    const sub = attachCaptureSubscriber(bus, runner, {
+      deferHook: {
+        defer: () => true,
+        onDeferred: (episodeId, closedBy) => {
+          deferred.push([episodeId, closedBy]);
+        },
+      },
+    });
+    finalize(bus, "ep_night");
+    await sub.drain();
+    expect(calls).toHaveLength(0);
+    expect(deferred).toEqual([["ep_night", "finalized"]]);
+    sub.stop();
+  });
+
+  it("preserves closedBy so abandoned episodes keep their R_task = −1 path", async () => {
+    const bus = createSessionEventBus();
+    const { runner } = makeRunner(async (inp) => emptyResult(inp.episode.id));
+    const deferred: Array<[string, EpisodeCloseReason]> = [];
+    const sub = attachCaptureSubscriber(bus, runner, {
+      deferHook: {
+        defer: () => true,
+        onDeferred: (episodeId, closedBy) => {
+          deferred.push([episodeId, closedBy]);
+        },
+      },
+    });
+    finalize(bus, "ep_gone", "abandoned");
+    await sub.drain();
+    expect(deferred).toEqual([["ep_gone", "abandoned"]]);
+    sub.stop();
+  });
+
+  it("runs the normal chain when defer() is false", async () => {
+    const bus = createSessionEventBus();
+    const { runner, calls } = makeRunner(async (inp) => emptyResult(inp.episode.id));
+    const deferred: string[] = [];
+    const sub = attachCaptureSubscriber(bus, runner, {
+      deferHook: {
+        defer: () => false,
+        onDeferred: (episodeId) => deferred.push(episodeId),
+      },
+    });
+    finalize(bus, "ep_in_window");
+    await sub.drain();
+    expect(calls.map((c) => c.episode.id)).toEqual(["ep_in_window"]);
+    expect(deferred).toEqual([]);
+    sub.stop();
+  });
+
+  it("re-evaluates defer() per event, so the drain's replay is processed", async () => {
+    // Models the real drain: the episode is deferred at 14:00, then the
+    // batch re-emits `episode.finalized` at 03:00 with the window open.
+    const bus = createSessionEventBus();
+    const { runner, calls } = makeRunner(async (inp) => emptyResult(inp.episode.id));
+    let inWindow = false;
+    const queued: string[] = [];
+    const sub = attachCaptureSubscriber(bus, runner, {
+      deferHook: {
+        defer: () => !inWindow,
+        onDeferred: (episodeId) => queued.push(episodeId),
+      },
+    });
+
+    finalize(bus, "ep_1");
+    await sub.drain();
+    expect(calls).toHaveLength(0);
+    expect(queued).toEqual(["ep_1"]);
+
+    inWindow = true;
+    finalize(bus, "ep_1");
+    await sub.drain();
+    expect(calls.map((c) => c.episode.id)).toEqual(["ep_1"]);
+    expect(queued).toEqual(["ep_1"]);
+    sub.stop();
+  });
+
+  it("a throwing onDeferred still suppresses the reflect pass", async () => {
+    // Losing the queue entry is recoverable (the dirty-reward rescan
+    // re-finds the episode). Running reflect anyway would not be: it
+    // would spend foreground quota, which is the whole point of the
+    // window.
+    const bus = createSessionEventBus();
+    const { runner, calls } = makeRunner(async (inp) => emptyResult(inp.episode.id));
+    const sub = attachCaptureSubscriber(bus, runner, {
+      deferHook: {
+        defer: () => true,
+        onDeferred: () => {
+          throw new Error("kv write failed");
+        },
+      },
+    });
+    expect(() => finalize(bus, "ep_1")).not.toThrow();
+    await sub.drain();
+    expect(calls).toHaveLength(0);
+    sub.stop();
+  });
+
+  it("skips lightweight episodes before consulting the hook", async () => {
+    const bus = createSessionEventBus();
+    const { runner, calls } = makeRunner(async (inp) => emptyResult(inp.episode.id));
+    let deferCalls = 0;
+    const sub = attachCaptureSubscriber(bus, runner, {
+      deferHook: {
+        defer: () => {
+          deferCalls++;
+          return true;
+        },
+        onDeferred: () => {},
+      },
+    });
+    bus.emit({
+      kind: "episode.finalized",
+      episode: { ...snap("ep_light"), meta: { lightweightMemory: true } },
+      closedBy: "finalized",
+    });
+    await sub.drain();
+    expect(calls).toHaveLength(0);
+    expect(deferCalls).toBe(0);
+    sub.stop();
+  });
+});

@@ -26,6 +26,7 @@ import {
 } from "./defaults.js";
 import { migrateHermesViewerPort } from "./migrations.js";
 import { parseYaml } from "./yaml.js";
+import { isValidTimezone, parseDailyWindow } from "../util/time-window.js";
 
 export type { ResolvedConfig } from "./schema.js";
 export type { ResolvedHome } from "./paths.js";
@@ -143,6 +144,28 @@ export function resolveConfig(raw: unknown, warnings?: string[], agent?: string)
     new Intl.DateTimeFormat("en-US", { timeZone: completed.logging.timezone }).format(0);
   } catch {
     throw new MemosError("config_invalid", `invalid logging.timezone: ${completed.logging.timezone}`);
+  }
+
+  // Issue #2333: reject a malformed deep-processing window at load time.
+  // `isWithinDailyWindow` treats an unparseable spec as "never inside the
+  // window", which in `mode: "window"` would defer every episode forever
+  // and silently stop all memory evolution. Failing loudly here is the
+  // only safe option.
+  if (completed.algorithm.deepProcessing.mode === "window") {
+    const { window, timezone } = completed.algorithm.deepProcessing;
+    if (!parseDailyWindow(window)) {
+      throw new MemosError(
+        "config_invalid",
+        `invalid algorithm.deepProcessing.window: ${window} ` +
+          `(expected HH:MM-HH:MM, e.g. 02:00-06:00)`,
+      );
+    }
+    if (!isValidTimezone(timezone)) {
+      throw new MemosError(
+        "config_invalid",
+        `invalid algorithm.deepProcessing.timezone: ${timezone}`,
+      );
+    }
   }
 
   return Object.freeze(completed) as ResolvedConfig;
