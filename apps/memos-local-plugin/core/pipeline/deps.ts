@@ -23,6 +23,7 @@ import {
   adaptEpisodesRepo,
 } from "../session/index.js";
 import type {
+  EpisodeCloseReason,
   EpisodeManager,
   IntentClassifier,
   RelationClassifier,
@@ -248,12 +249,19 @@ export function buildPipelineSubscribers(
   );
   const deepProcessingRuns = new Map<EpisodeId, { reflected: boolean; superseded: boolean }>();
 
-  function markDeepProcessingPending(episodeId: EpisodeId): void {
+  function markDeepProcessingPending(episodeId: EpisodeId, closedBy: EpisodeCloseReason): void {
     // A reopened episode can close again while its older downstream chain
     // is waiting for the next window. That chain cannot acknowledge new work.
     const previous = deepProcessingRuns.get(episodeId);
     if (previous) previous.superseded = true;
-    deps.repos.episodes.updateMeta(episodeId, { deepProcessingPending: true });
+    try {
+      deps.repos.episodes.updateMeta(episodeId, { deepProcessingPending: true });
+    } catch (err) {
+      // Feedback can complete reward coverage before the next rescan. Keep a
+      // queue obligation if the independent pending marker could not be saved.
+      deepWindow.enqueue(episodeId, closedBy);
+      throw err;
+    }
   }
 
   function prepareDeepProcessingCompletion(): () => void {
@@ -302,7 +310,7 @@ export function buildPipelineSubscribers(
       if (!windowEnabled && input.episode.meta.deepProcessingPending !== true) {
         return runReflect(input);
       }
-      markDeepProcessingPending(input.episode.id);
+      markDeepProcessingPending(input.episode.id, input.closedBy ?? "finalized");
       const run = { reflected: false, superseded: false };
       deepProcessingRuns.set(input.episode.id, run);
       deepWindow.startProcessing(input.episode.id);
@@ -390,7 +398,7 @@ export function buildPipelineSubscribers(
     deferHook: {
       defer: () => deepWindow.shouldDefer(),
       onDeferred: (episodeId, closedBy) => {
-        markDeepProcessingPending(episodeId);
+        markDeepProcessingPending(episodeId, closedBy);
         deepWindow.enqueue(episodeId, closedBy);
       },
     },

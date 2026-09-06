@@ -146,18 +146,19 @@ export function resolveConfig(raw: unknown, warnings?: string[], agent?: string)
     throw new MemosError("config_invalid", `invalid logging.timezone: ${completed.logging.timezone}`);
   }
 
-  // Issue #2333: reject a malformed deep-processing window at load time.
+  // Issue #2333: reject a malformed or empty deep-processing window at load time.
   // `isWithinDailyWindow` treats an unparseable spec as "never inside the
   // window", which in `mode: "window"` would defer every episode forever
   // and silently stop all memory evolution. Failing loudly here is the
   // only safe option.
   if (completed.algorithm.deepProcessing.mode === "window") {
     const { window, timezone } = completed.algorithm.deepProcessing;
-    if (!parseDailyWindow(window)) {
+    const parsedWindow = parseDailyWindow(window);
+    if (!parsedWindow || parsedWindow.startMin === parsedWindow.endMin) {
       throw new MemosError(
         "config_invalid",
         `invalid algorithm.deepProcessing.window: ${window} ` +
-          `(expected HH:MM-HH:MM, e.g. 02:00-06:00)`,
+          `(expected HH:MM-HH:MM with different start and end times, e.g. 02:00-06:00)`,
       );
     }
     if (!isValidTimezone(timezone)) {

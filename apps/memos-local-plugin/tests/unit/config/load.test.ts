@@ -380,6 +380,22 @@ describe("config/deepProcessing validation (issue #2333)", () => {
     ).toThrow(/invalid algorithm\.deepProcessing\.window.*2-6/);
   });
 
+  it.each(["02:00-02:00", "00:00-00:00", " 2:00 - 02:00 "])(
+    'mode "window" rejects a zero-length window: %s',
+    (window) => {
+      expect(() => resolveConfig({
+        algorithm: { deepProcessing: { mode: "window", window, timezone: "UTC" } },
+      })).toThrow(/invalid algorithm\.deepProcessing\.window/);
+    },
+  );
+
+  it('mode "always" ignores a zero-length window', () => {
+    const cfg = resolveConfig({
+      algorithm: { deepProcessing: { mode: "always", window: "02:00-02:00" } },
+    });
+    expect(cfg.algorithm.deepProcessing.mode).toBe("always");
+  });
+
   it('mode "window" rejects an invalid IANA timezone', () => {
     expect(() =>
       resolveConfig({

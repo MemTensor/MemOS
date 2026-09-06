@@ -252,6 +252,33 @@ describe("deep window recovery coordination", () => {
     });
   });
 
+  it.each([false, true])("recovers a feedback-scored episode after its pending write fails (window open: %s)", async (windowOpen) => {
+    const snapshot = seed();
+    await core.init();
+    if (windowOpen) now = Date.parse("2026-09-06T03:00:00Z");
+    const reflect = vi.spyOn(pipeline.captureRunner, "runReflect");
+    const updateMeta = vi.spyOn(db.repos.episodes, "updateMeta").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    try {
+      pipeline.buses.session.emit({ kind: "episode.finalized", episode: snapshot, closedBy: "finalized" });
+      await pipeline.flush();
+    } finally {
+      updateMeta.mockRestore();
+    }
+    reflect.mockClear();
+    // Explicit feedback can make reward coverage complete before reflection.
+    db.repos.episodes.setRTask(episodeId, 0.8);
+    db.repos.episodes.updateMeta(episodeId, { reward: { traceCount: 1, trigger: "explicit_feedback" } });
+    now = Date.parse("2026-09-07T03:00:00Z");
+    await tick();
+    timers.find((timer) => timer.delay === 600_000)!.callback();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await pipeline.flush();
+    expect(reflect).toHaveBeenCalledTimes(1);
+    expect(db.repos.episodes.getById(episodeId)?.meta?.deepProcessingPending).not.toBe(true);
+  });
+
   it.each(["session", "episode"] as const)("returns from %s close while evolution is waiting for tomorrow", async (kind) => {
     await core.init();
     const sessionId = await core.openSession({ agent: "openclaw" });
@@ -293,6 +320,36 @@ describe("deep window recovery coordination", () => {
       finish();
       await closing;
       flush.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["session", "episode"] as const)("releases %s close when shutdown abandons a blocked flush", async (kind) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await core.init();
+    const sessionId = await core.openSession({ agent: "openclaw" });
+    const id = await core.openEpisode({ sessionId, userMessage: "test scheduled processing" });
+    now = Date.parse("2026-09-06T03:00:00Z");
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => { finish = resolve; });
+    const drain = vi.spyOn(pipeline.l3, "drain").mockReturnValue(blocked);
+    let returned = false;
+    const closing = (kind === "session" ? core.closeSession(sessionId) : core.closeEpisode(id))
+      .then(() => { returned = true; });
+    let shuttingDown: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(drain).toHaveBeenCalledTimes(1));
+      expect(returned).toBe(false);
+      shuttingDown = core.shutdown();
+      await vi.waitFor(() => expect(drain).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(19_000);
+      await shuttingDown;
+      expect(returned).toBe(true);
+    } finally {
+      finish();
+      await closing;
+      await shuttingDown;
+      drain.mockRestore();
       vi.useRealTimers();
     }
   });

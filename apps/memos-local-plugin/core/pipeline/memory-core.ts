@@ -2302,7 +2302,9 @@ export function createMemoryCore(
     if (deepWindow.shouldDefer()) return;
     const controller = new AbortController();
     const windowClosed = async (): Promise<void> => {
-      while (deepWindow.isOpen()) {
+      // A provider can outlive shutdown's bounded flush if it ignores abort.
+      // The adapter's close request must still be able to finish.
+      while (!shutDown && deepWindow.isOpen()) {
         await waitForRetry(1_000, controller.signal);
       }
     };
