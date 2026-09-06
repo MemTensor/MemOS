@@ -57,8 +57,13 @@ function seed(): EpisodeSnapshot {
     toolCalls: [], reflection: null, alpha: 0, value: 0, rHuman: null,
     priority: 0, tags: [], vecSummary: null, vecAction: null, schemaVersion: 1,
   });
+  const trace = db.repos.traces.listAllForEpisode(episodeId)[0]!;
   return {
-    ...db.repos.episodes.getById(episodeId)!, turns: [], turnCount: 2,
+    ...db.repos.episodes.getById(episodeId)!, turnCount: 2,
+    turns: [
+      { id: `${trace.id}:user`, role: "user", content: trace.userText ?? "", ts: trace.turnId ?? trace.ts },
+      { id: `${trace.id}:assistant`, role: "assistant", content: trace.agentText ?? "", ts: trace.ts },
+    ],
     meta: { closeReason: "finalized" },
     intent: { kind: "task", confidence: 1, reason: "test", signals: [], retrieval: { tier1: true, tier2: true, tier3: true } },
   };
@@ -71,6 +76,125 @@ async function tick(): Promise<void> {
 }
 
 describe("deep window recovery coordination", () => {
+  it.each([false, true])("preserves an abandoned episode's close reason (queue lost: %s)", async (loseQueue) => {
+    const snapshot = seed();
+    snapshot.meta.closeReason = "abandoned";
+    snapshot.meta.abandonReason = "cancelled by user";
+    db.repos.episodes.updateMeta(episodeId, snapshot.meta);
+    await core.init();
+    const reflect = vi.spyOn(pipeline.captureRunner, "runReflect");
+    pipeline.buses.session.emit({ kind: "episode.finalized", episode: snapshot, closedBy: "abandoned" });
+    if (loseQueue) db.repos.kv.set(DEEP_PROCESSING_QUEUE_KEY, []);
+    now = Date.parse("2026-09-06T03:00:00Z");
+    if (loseQueue) {
+      timers.find((timer) => timer.delay === 600_000)!.callback();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await pipeline.flush();
+    } else {
+      await tick();
+    }
+    expect(reflect).toHaveBeenCalledTimes(1);
+    expect(reflect).toHaveBeenCalledWith(expect.objectContaining({
+      closedBy: "abandoned",
+      episode: expect.objectContaining({ meta: expect.objectContaining({ closeReason: "abandoned" }) }),
+    }));
+    expect(db.repos.episodes.getById(episodeId)?.meta?.closeReason).toBe("abandoned");
+  });
+
+  it("acknowledges a completed chain even when its final work finishes after the window", async () => {
+    const snapshot = seed();
+    pipeline.deepWindow.enqueue(episodeId, "finalized");
+    now = Date.parse("2026-09-06T05:59:59Z");
+    await pipeline.captureRunner.runReflect({ episode: snapshot, closedBy: "finalized" });
+    now = Date.parse("2026-09-06T06:00:01Z");
+    await pipeline.flush();
+    expect(db.repos.episodes.getById(episodeId)?.meta?.deepProcessingPending).not.toBe(true);
+    expect(pipeline.deepWindow.size()).toBe(0);
+  });
+
+  it("keeps a newer deferred close pending when an older chain finishes", async () => {
+    const snapshot = seed();
+    now = Date.parse("2026-09-06T05:59:59Z");
+    pipeline.buses.session.emit({ kind: "episode.finalized", episode: snapshot, closedBy: "finalized" });
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => { finish = resolve; });
+    const drain = vi.spyOn(pipeline.l3, "drain").mockReturnValueOnce(blocked);
+    const flushing = pipeline.flush();
+    try {
+      await vi.waitFor(() => expect(drain).toHaveBeenCalledTimes(1));
+      now = Date.parse("2026-09-06T14:00:00Z");
+      const trace = db.repos.traces.getById(snapshot.traceIds[0]!)!;
+      const nextTrace = { ...trace, id: "tr_window_late" as typeof trace.id, ts: now, turnId: now };
+      db.repos.traces.insert(nextTrace);
+      snapshot.traceIds = [...snapshot.traceIds, nextTrace.id];
+      db.repos.episodes.appendTrace(episodeId, snapshot.traceIds);
+      pipeline.buses.session.emit({ kind: "episode.finalized", episode: snapshot, closedBy: "finalized" });
+      // Reward coverage can already include the new trace without reflecting it.
+      db.repos.episodes.setRTask(episodeId, 0.8);
+      db.repos.episodes.updateMeta(episodeId, { reward: { traceCount: 2, trigger: "explicit_feedback" } });
+      now = Date.parse("2026-09-07T03:00:00Z");
+    } finally {
+      finish();
+      await flushing;
+      drain.mockRestore();
+    }
+    expect(db.repos.episodes.getById(episodeId)?.meta?.deepProcessingPending).toBe(true);
+    expect(pipeline.deepWindow.size()).toBe(1);
+  });
+
+  it("does not replay a stale startup selection already completed by the queue drain", async () => {
+    seed();
+    const row = db.repos.episodes.getById(episodeId)!;
+    db.repos.episodes.insert({
+      ...row, id: "ep_window_orphan" as EpisodeId, status: "open", traceIds: [],
+      startedAt: now - 86_400_000, endedAt: null, meta: {},
+    });
+    pipeline.deepWindow.enqueue(episodeId, "finalized");
+    now = Date.parse("2026-09-06T03:00:00Z");
+    const reflect = vi.spyOn(pipeline.captureRunner, "runReflect");
+    const originalFlush = pipeline.flush;
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => { finish = resolve; });
+    const flush = vi.spyOn(pipeline, "flush").mockImplementationOnce(async () => {
+      await blocked;
+      await originalFlush();
+    });
+    try {
+      await core.init();
+      now += 60_000;
+      await tick();
+    } finally {
+      finish();
+      await core.waitForStartupRecovery?.();
+      flush.mockRestore();
+    }
+    expect(reflect.mock.calls.filter(([input]) => input.episode.id === episodeId)).toHaveLength(1);
+  });
+
+  it("does not access recovery rows after shutdown has finished", async () => {
+    const snapshot = seed();
+    await core.init();
+    pipeline.buses.session.emit({ kind: "episode.finalized", episode: snapshot, closedBy: "finalized" });
+    now = Date.parse("2026-09-06T03:00:00Z");
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => { finish = resolve; });
+    const flush = vi.spyOn(pipeline, "flush").mockReturnValueOnce(blocked);
+    timers.findLast((timer) => timer.delay === 60_000)!.callback();
+    expect(flush).toHaveBeenCalledTimes(1);
+    try {
+      await core.shutdown();
+      // The caller may close SQLite as soon as shutdown resolves.
+      const read = vi.spyOn(db.repos.episodes, "getById");
+      finish();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      finish();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      flush.mockRestore();
+    }
+  });
+
   it("acknowledges deferred work after switching back to always mode", async () => {
     seed();
     db.repos.episodes.updateMeta(episodeId, { deepProcessingPending: true });

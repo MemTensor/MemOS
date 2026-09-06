@@ -246,9 +246,13 @@ export function buildPipelineSubscribers(
     deps.l3Llm ?? deps.llm, bgLlmSemaphore, resources,
     windowEnabled ? deepWindow : undefined,
   );
-  const deepProcessingRuns = new Map<EpisodeId, { reflected: boolean }>();
+  const deepProcessingRuns = new Map<EpisodeId, { reflected: boolean; superseded: boolean }>();
 
   function markDeepProcessingPending(episodeId: EpisodeId): void {
+    // A reopened episode can close again while its older downstream chain
+    // is waiting for the next window. That chain cannot acknowledge new work.
+    const previous = deepProcessingRuns.get(episodeId);
+    if (previous) previous.superseded = true;
     deps.repos.episodes.updateMeta(episodeId, { deepProcessingPending: true });
   }
 
@@ -263,7 +267,10 @@ export function buildPipelineSubscribers(
         deepWindow.finishProcessing(episodeId);
         // A shutdown-aborted wait remains recoverable even when explicit
         // feedback has already written a complete reward score.
-        if (!run.reflected || deepWindow.shouldDefer() || resources?.shutdownSignal.aborted) continue;
+        // A fully drained chain is complete even if its last admitted call
+        // finished after the window closed. Only newer or interrupted work
+        // needs to remain pending.
+        if (!run.reflected || run.superseded || resources?.shutdownSignal.aborted) continue;
         deps.repos.episodes.updateMeta(episodeId, { deepProcessingPending: undefined });
         deepWindow.acknowledge(episodeId);
       }
@@ -296,7 +303,7 @@ export function buildPipelineSubscribers(
         return runReflect(input);
       }
       markDeepProcessingPending(input.episode.id);
-      const run = { reflected: false };
+      const run = { reflected: false, superseded: false };
       deepProcessingRuns.set(input.episode.id, run);
       deepWindow.startProcessing(input.episode.id);
       const result = await runReflect(input);

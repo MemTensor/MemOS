@@ -57,6 +57,7 @@ import type {
   Unsubscribe,
 } from "../../agent-contract/memory-core.js";
 import type {
+  EpisodeCloseReason,
   EpisodeSnapshot,
   EpisodeTurn,
   IntentDecision,
@@ -1813,8 +1814,18 @@ export function createMemoryCore(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
     if (startupRecoveryCancelled || shutDown) return;
-    episodes = episodes.filter((ep) => !dirtyClosedInFlight.has(ep.id as EpisodeId) &&
-      !deepWindow.isProcessing(ep.id as EpisodeId));
+    // Startup selections may wait behind orphan recovery while a timer
+    // completes or changes the same episodes. Claim their current state,
+    // not the stale snapshot selected before that asynchronous work.
+    const nowMs = Date.now();
+    episodes = episodes.flatMap((ep) => {
+      const episodeId = ep.id as EpisodeId;
+      if (dirtyClosedInFlight.has(episodeId) || deepWindow.isProcessing(episodeId)) return [];
+      const current = handle.repos.episodes.getById(episodeId);
+      return current && current.status === "closed" && !isLightweightEpisode(current) &&
+        episodeRewardIsDirty(current) && dirtyEpisodeBackoffElapsed(current, nowMs)
+        ? [current] : [];
+    });
     if (episodes.length === 0) return;
     // Claim before emitting any events. Startup recovery, the queue drain
     // and periodic scans can overlap while the LLM/flush is awaiting I/O.
@@ -1828,6 +1839,7 @@ export function createMemoryCore(
         if (startupRecoveryCancelled) break;
         if (isLightweightEpisode(ep)) continue;
         const episodeId = ep.id as EpisodeId;
+        const closedBy: EpisodeCloseReason = ep.meta?.closeReason === "abandoned" ? "abandoned" : "finalized";
         const endedAt = ep.endedAt ?? Date.now();
         const prevDirty = (ep.meta?.rewardDirty as
           | { failedAttempts?: unknown }
@@ -1838,21 +1850,24 @@ export function createMemoryCore(
             : 0;
         priorFailedAttempts.set(episodeId, prevAttempts);
         handle.repos.episodes.updateMeta(episodeId, {
-          closeReason: "finalized",
+          closeReason: closedBy,
           recoveredAtStartup: endedAt,
           recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
         });
         const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
           recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+          closedBy,
         });
         handle.buses.session.emit({
           kind: "episode.finalized",
           episode: snapshot,
-          closedBy: "finalized",
+          closedBy,
         });
       }
       await handle.flush();
-      if (startupRecoveryCancelled) return;
+      // Timer-driven recovery can outlive shutdown's own bounded flush;
+      // the caller is allowed to close SQLite once shutdown returns.
+      if (startupRecoveryCancelled || shutDown) return;
       // After the reward / reflect chain has finished, account for the
       // outcome: clear `meta.rewardDirty` on episodes that are no longer
       // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
@@ -2032,7 +2047,7 @@ export function createMemoryCore(
   function snapshotFromRecoveredEpisode(
     ep: EpisodeRow & { meta?: Record<string, unknown> },
     endedAt: number,
-    opts: { recoveryReason?: string } = {},
+    opts: { recoveryReason?: string; closedBy?: EpisodeCloseReason } = {},
   ): EpisodeSnapshot {
     const traceIds = (ep.traceIds ?? []) as TraceId[];
     const traces =
@@ -2106,7 +2121,7 @@ export function createMemoryCore(
       traceIds,
       meta: {
         ...(ep.meta ?? {}),
-        closeReason: "finalized",
+        closeReason: opts.closedBy ?? "finalized",
         recoveredAtStartup: endedAt,
         recoveryReason: opts.recoveryReason ?? "missed_session_end",
       },
