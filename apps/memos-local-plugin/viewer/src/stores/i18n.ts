@@ -1831,10 +1831,21 @@ export interface DetectDefaultOptions {
    */
   navLanguage?: string;
   /**
-   * Storage object to consult for a previously saved locale. When
-   * omitted the detector reads ambient `globalThis.localStorage`, and
-   * silently falls back to `navLanguage` if that access throws (private
-   * mode, SSR, …). Pass a Map-backed stub in tests.
+   * Storage object to consult for a previously saved locale. Semantics
+   * are asymmetric on purpose:
+   *
+   *   - **omitted** (`undefined`): read ambient `globalThis.localStorage`
+   *     (and silently fall back to `navLanguage` if that access throws –
+   *     private mode, SSR, …). Pass a `Map`-backed stub in tests to
+   *     simulate an empty or pre-populated store.
+   *   - **`null`**: explicit "disable storage" sentinel. The detector
+   *     skips storage lookup entirely and jumps straight to
+   *     `navLanguage`. Use this in tests that want to exercise the
+   *     navigator-only branch without providing a stub.
+   *
+   * If you want a no-op stub instead of disabling the lookup, pass an
+   * object whose `getItem` always returns `null` (e.g. `{ getItem: () => null }`)
+   * rather than `null`.
    */
   storage?: Pick<Storage, "getItem"> | null;
   /** Key used to read the saved locale from `storage`. */
@@ -1851,16 +1862,29 @@ export interface DetectDefaultOptions {
  * assert on both branches without mutating global state. When called
  * with no arguments (as the module does at import time) it behaves
  * exactly as it always has in the browser.
+ *
+ * @internal Exported for unit tests only. Not a stable public API —
+ * consumers outside this module should not depend on the signature.
+ *
+ * NOTE: `setLocale` writes back to the ambient `localStorage`, not to
+ * an injected storage stub. The `opts.storage` seam only covers the
+ * read path during initial detection; a test that exercises
+ * `detectDefault` with a `Map`-backed stub will not observe writes
+ * made by `setLocale`.
  */
 export function detectDefault(opts: DetectDefaultOptions = {}): Locale {
   const storageKey = opts.storageKey ?? STORAGE_KEY;
-  const storage =
-    opts.storage !== undefined
-      ? opts.storage
-      : typeof globalThis !== "undefined" &&
-          (globalThis as { localStorage?: Storage }).localStorage
-        ? (globalThis as { localStorage: Storage }).localStorage
-        : null;
+  let storage: Pick<Storage, "getItem"> | null;
+  if (opts.storage !== undefined) {
+    storage = opts.storage;
+  } else if (
+    typeof globalThis !== "undefined" &&
+    (globalThis as { localStorage?: Storage }).localStorage
+  ) {
+    storage = (globalThis as { localStorage: Storage }).localStorage;
+  } else {
+    storage = null;
+  }
   if (storage) {
     try {
       const saved = storage.getItem(storageKey);
