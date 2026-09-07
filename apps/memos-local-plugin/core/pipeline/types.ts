@@ -21,7 +21,7 @@ import type { ResolvedConfig, ResolvedHome } from "../config/index.js";
 import type { CaptureConfig, CaptureEventBus } from "../capture/types.js";
 import type { CaptureRunner } from "../capture/capture.js";
 import type { CaptureSubscription } from "../capture/subscriber.js";
-import type { RewardConfig, RewardEventBus } from "../reward/types.js";
+import type { RewardConfig, RewardEventBus, RewardInput, RewardResult } from "../reward/types.js";
 import type { RewardRunner } from "../reward/reward.js";
 import type { RewardSubscription } from "../reward/subscriber.js";
 import type { L2Config, L2EventBus } from "../memory/l2/types.js";
@@ -136,6 +136,11 @@ export interface SessionRoutingConfig {
 
 // ─── Dependency graph ─────────────────────────────────────────────────────
 
+export interface PipelineRewardRunner extends RewardRunner {
+  /** The caller persists and schedules evolution separately from immediate scoring. */
+  run(input: RewardInput & { deferEvolution?: boolean }): Promise<RewardResult>;
+}
+
 /**
  * The pipeline owns every long-lived service. The caller (usually an
  * adapter bootstrap or `createMemoryCore`) supplies the foundational
@@ -209,7 +214,7 @@ export interface PipelineHandle {
   readonly intent: IntentClassifier;
   readonly relation: RelationClassifier;
   readonly captureRunner: CaptureRunner;
-  readonly rewardRunner: RewardRunner;
+  readonly rewardRunner: PipelineRewardRunner;
   readonly l2: L2SubscriberHandle;
   readonly l3: L3SubscriberHandle;
   readonly skills: SkillSubscriberHandle;

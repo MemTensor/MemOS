@@ -48,6 +48,7 @@ import {
   attachRewardSubscriber,
 } from "../reward/index.js";
 import type {
+  RewardEvent,
   RewardEventBus,
   RewardRunner,
   RewardSubscription,
@@ -98,6 +99,7 @@ import type {
   PipelineAlgorithmConfig,
   PipelineBuses,
   PipelineDeps,
+  PipelineRewardRunner,
   PipelineSubscriptions,
 } from "./types.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
@@ -203,7 +205,7 @@ export function buildPipelineBuses(): PipelineBuses {
 
 export interface PipelineSubscriberSet {
   captureRunner: CaptureRunner;
-  rewardRunner: RewardRunner;
+  rewardRunner: PipelineRewardRunner;
   l2: L2SubscriberHandle;
   l3: L3SubscriberHandle;
   skills: SkillSubscriberHandle;
@@ -380,11 +382,34 @@ export function buildPipelineSubscribers(
   // Explicit/manual reward calls remain immediate. Automatic reward uses
   // the same per-request window admission as reflection, L2, L3 and skills.
   const immediateRewardRunner = createRewardRunner(rewardDeps);
+  // Facade feedback owns a durable evolution job. Publish the immediate
+  // score to observers without starting L2/skills ahead of that job's batch.
+  // Match the event object so unrelated/manual rewards keep their behavior.
+  const deferredRewardEvents = new WeakSet<RewardEvent>();
+  const deferredFeedbackRunner = windowEnabled ? createRewardRunner({
+    ...rewardDeps,
+    bus: {
+      ...buses.reward,
+      emit(event) {
+        if (event.kind === "reward.updated") deferredRewardEvents.add(event);
+        buses.reward.emit(event);
+      },
+    },
+  }) : immediateRewardRunner;
+  const evolutionRewardBus: RewardEventBus = windowEnabled ? {
+    ...buses.reward,
+    on: (kind, listener) => buses.reward.on(kind, (event) => {
+      if (!deferredRewardEvents.has(event)) listener(event);
+    }),
+    onAny: (listener) => buses.reward.onAny((event) => {
+      if (!deferredRewardEvents.has(event)) listener(event);
+    }),
+  } : buses.reward;
   const automaticRewardRunner = windowEnabled
     ? createRewardRunner({ ...rewardDeps, llm: evolutionLlm })
     : immediateRewardRunner;
-  const rewardRunner: RewardRunner = windowEnabled ? {
-    run: (input) => (input.trigger === "implicit_fallback"
+  const rewardRunner: PipelineRewardRunner = windowEnabled ? {
+    run: (input) => (input.deferEvolution ? deferredFeedbackRunner : input.trigger === "implicit_fallback"
       ? automaticRewardRunner
       : immediateRewardRunner).run(input),
   } : immediateRewardRunner;
@@ -413,7 +438,7 @@ export function buildPipelineSubscribers(
   const l2Handle = attachL2Subscriber({
     db: deps.db,
     repos: deps.repos,
-    rewardBus: buses.reward,
+    rewardBus: evolutionRewardBus,
     l2Bus: buses.l2,
     llm: evolutionLlm,
     log: log.child({ channel: "core.memory.l2" }),
@@ -443,7 +468,7 @@ export function buildPipelineSubscribers(
     llm: evolutionLlm,
     bus: buses.skill,
     l2Bus: buses.l2,
-    rewardBus: buses.reward,
+    rewardBus: evolutionRewardBus,
     log: log.child({ channel: "core.skill" }),
     config: algorithm.skill,
   });

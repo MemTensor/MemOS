@@ -170,7 +170,7 @@ Implements the adapter contract 1:1. A few translation details:
 | `closeEpisode`         | Idempotent; returns silently if already closed.                        |
 | `onTurnStart`          | Wraps the orchestrator's `InjectionPacket` into a `RetrievalResultDTO`.|
 | `onTurnEnd`            | Returns the last trace id the episode snapshot reports.                |
-| `submitFeedback`       | Writes to `feedback` repo, returns the DTO with a fresh UUID + `ts`.   |
+| `submitFeedback`       | Persists feedback and scores it immediately; schedules evolution when a deep-processing window is configured. |
 | `searchMemory`         | Synthetic `turn_start`-style retrieval.                                |
 | `getTrace` / `getSkill`| Repo read + DTO mapping. Nulls pass through.                           |
 | `retireSkill`          | Sets `status="retired"`, emits `skill.status.changed` + `skill.retired`.|
@@ -180,6 +180,16 @@ Implements the adapter contract 1:1. A few translation details:
 
 Every public call guards on `ensureLive()` and throws
 `MemosError("already_shut_down")` after `shutdown()`.
+
+With `algorithm.deepProcessing.mode: "window"`, feedback returns after
+immediate scoring, repair, and experience extraction. Its L2/L3/skill work
+is recorded in SQLite `kv` in the same transaction as the feedback and
+completed in a scheduled batch. Queue drains, periodic scans, and startup
+recovery share `maxBatchPerCycle` and `drainIntervalSec`; feedback and capture
+work for the same episode occupy one batch slot. Failed or interrupted
+feedback jobs remain recoverable with retry backoff, independently of the
+episode's reward score or outstanding reflection. The default `"always"`
+mode keeps synchronous downstream processing.
 
 ### Bootstrap
 

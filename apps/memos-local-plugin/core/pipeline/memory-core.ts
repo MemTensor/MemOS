@@ -65,6 +65,7 @@ import type {
 
 import type {
   EpisodeRow,
+  FeedbackId,
   FeedbackRow,
   PolicyId,
   PolicyRow,
@@ -102,6 +103,7 @@ import type { ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";
+import { createFeedbackEvolutionQueue, type FeedbackEvolutionJob } from "./feedback-evolution.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
 import {
   buildLocalRetrievalLogStages,
@@ -125,7 +127,7 @@ import type {
   RetrievalResult,
   TraceCandidate,
 } from "../retrieval/types.js";
-import type { UserFeedback } from "../reward/types.js";
+import type { RewardResult, UserFeedback } from "../reward/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
@@ -734,8 +736,10 @@ export function createMemoryCore(
     60_000,
     DEEP_WINDOW_DRAIN_INTERVAL_MS,
   );
-  let lastDeepWindowDrain = 0;
+  let lastDeepWindowDrain: number | null = null;
   const dirtyClosedInFlight = new Set<EpisodeId>();
+  const feedbackEvolution = createFeedbackEvolutionQueue(handle.repos.kv);
+  const feedbackEvolutionInFlight = new Set<FeedbackId>();
   const recoveryTimers: Array<ReturnType<typeof setInterval>> = [];
 
   // ─── Startup recovery background promise (issue #1776 + #1808) ──
@@ -818,7 +822,7 @@ export function createMemoryCore(
     // Issue #2333: the dirty-reward retry is an LLM-heavy compensation
     // path. Outside the deep-processing window it must not run at all —
     // the rows stay dirty and are picked up by the next in-window scan.
-    if (deepWindow.shouldDefer()) return;
+    if (!deepWindowBatchAvailable(nowMs)) return;
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
     // Issue #2063: lightweight mode explicitly disables reward — the
@@ -837,17 +841,19 @@ export function createMemoryCore(
           !deepWindow.isProcessing(ep.id as EpisodeId) && episodeRewardIsDirty(ep));
       // Apply the same backoff filter as init() so the 10-min periodic
       // scan does not hammer episodes whose LLM call keeps failing.
-      const dirtyClosed = boundDeepWindowBatch(
-        allDirty.filter((ep) => dirtyEpisodeBackoffElapsed(ep, nowMs)),
-      );
-      if (dirtyClosed.length > 0) {
-        await recoverDirtyClosedEpisodes(dirtyClosed);
-      }
+      const dirtyClosed = allDirty.filter((ep) => dirtyEpisodeBackoffElapsed(ep, nowMs));
+      await recoverDirtyClosedEpisodes(dirtyClosed);
     } catch (err) {
       log.debug("dirty_closed_reward.scan_error", {
         err: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  function deepWindowBatchAvailable(nowMs: number): boolean {
+    if (handle.algorithm.deepProcessing.mode !== "window") return true;
+    return deepWindow.isOpen() && (lastDeepWindowDrain === null ||
+      nowMs - lastDeepWindowDrain >= DEEP_WINDOW_DRAIN_INTERVAL_MS);
   }
 
   /**
@@ -882,11 +888,10 @@ export function createMemoryCore(
     if (handle.algorithm.deepProcessing.mode !== "window") return;
     if (deepWindow.shouldDefer()) return;
     const nowMs = Date.now();
-    if (nowMs - lastDeepWindowDrain < DEEP_WINDOW_DRAIN_INTERVAL_MS) return;
-    lastDeepWindowDrain = nowMs;
+    if (!deepWindowBatchAvailable(nowMs)) return;
     try {
       const batch = deepWindow.takeBatch();
-      if (batch.length === 0) return;
+      if (batch.length === 0 && feedbackEvolution.list().length === 0) return;
       const rows: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
       for (const entry of batch) {
         const row = handle.repos.episodes.getById(entry.episodeId);
@@ -907,9 +912,7 @@ export function createMemoryCore(
         eligible: rows.length,
         remaining: deepWindow.size(),
       });
-      if (rows.length > 0) {
-        await recoverDirtyClosedEpisodes(rows);
-      }
+      await recoverDirtyClosedEpisodes(rows);
     } catch (err) {
       log.debug("deep_window.drain_error", {
         err: err instanceof Error ? err.message : String(err),
@@ -1327,7 +1330,7 @@ export function createMemoryCore(
             });
           }
         }
-        dirtyClosedForBackground = boundDeepWindowBatch(dirtyClosed);
+        dirtyClosedForBackground = dirtyClosed;
       }
       } catch (err) {
         log.debug("init.orphan_scan.failed", {
@@ -1341,7 +1344,8 @@ export function createMemoryCore(
     // Gateway can start accepting WebSocket upgrades immediately.
     if (
       autoRecoveryEnabled &&
-      (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0)
+      (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0 ||
+        (!handle.algorithm.lightweightMemory.enabled && feedbackEvolution.list().length > 0))
     ) {
       const stale = staleForBackground;
       const dirtyClosed = dirtyClosedForBackground;
@@ -1355,9 +1359,7 @@ export function createMemoryCore(
           if (stale.length > 0) {
             await recoverOpenEpisodesAsSessionEnd(stale);
           }
-          if (dirtyClosed.length > 0) {
-            await recoverDirtyClosedEpisodes(dirtyClosed);
-          }
+          await recoverDirtyClosedEpisodes(dirtyClosed);
           log.info("init.background_recovery_finished", {
             staleCount: stale.length,
             dirtyClosedCount: dirtyClosed.length,
@@ -1818,6 +1820,7 @@ export function createMemoryCore(
     // completes or changes the same episodes. Claim their current state,
     // not the stale snapshot selected before that asynchronous work.
     const nowMs = Date.now();
+    if (!deepWindowBatchAvailable(nowMs)) return;
     episodes = episodes.flatMap((ep) => {
       const episodeId = ep.id as EpisodeId;
       if (dirtyClosedInFlight.has(episodeId) || deepWindow.isProcessing(episodeId)) return [];
@@ -1826,12 +1829,43 @@ export function createMemoryCore(
         episodeRewardIsDirty(current) && dirtyEpisodeBackoffElapsed(current, nowMs)
         ? [current] : [];
     });
-    if (episodes.length === 0) return;
+    // Group feedback and capture work for the same episode into one batch
+    // slot. Feedback on an open episode (or without an episode) must also
+    // be recoverable; it cannot depend on the closed/dirty scan predicate.
+    const work = new Map<string, { episode?: typeof episodes[number]; feedback: FeedbackEvolutionJob[] }>();
+    for (const job of feedbackEvolution.list()) {
+      if (feedbackEvolutionInFlight.has(job.feedbackId) || !rewardRetryBackoffElapsed(job, nowMs)) continue;
+      if (job.episodeId && (dirtyClosedInFlight.has(job.episodeId) || deepWindow.isProcessing(job.episodeId))) continue;
+      const key = job.episodeId ?? `feedback:${job.feedbackId}`;
+      const entry = work.get(key) ?? { feedback: [] };
+      entry.feedback.push(job);
+      work.set(key, entry);
+    }
+    for (const episode of episodes) {
+      const entry = work.get(episode.id) ?? { feedback: [] };
+      entry.episode = episode;
+      work.set(episode.id, entry);
+    }
+    const batch = boundDeepWindowBatch([...work.values()]);
+    episodes = batch.flatMap((entry) => entry.episode ? [entry.episode] : []);
+    const feedbackJobs = batch.flatMap((entry) => entry.feedback);
+    if (batch.length === 0) return;
+    // Reserve once, after current-state/backoff checks and before any await.
+    // Queue drains, periodic scans and startup recovery share this budget;
+    // an empty or ineligible selection must not delay the next real batch.
+    if (handle.algorithm.deepProcessing.mode === "window") lastDeepWindowDrain = nowMs;
     // Claim before emitting any events. Startup recovery, the queue drain
     // and periodic scans can overlap while the LLM/flush is awaiting I/O.
-    for (const ep of episodes) dirtyClosedInFlight.add(ep.id as EpisodeId);
+    const claimedEpisodes = new Set([
+      ...episodes.map((ep) => ep.id as EpisodeId),
+      ...feedbackJobs.flatMap((job) => job.episodeId ? [job.episodeId] : []),
+    ]);
+    for (const episodeId of claimedEpisodes) dirtyClosedInFlight.add(episodeId);
+    for (const job of feedbackJobs) feedbackEvolutionInFlight.add(job.feedbackId);
     try {
-      log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
+      log.info("init.dirty_closed_episodes.rescore", {
+        count: episodes.length, feedbackCount: feedbackJobs.length,
+      });
       // Snapshot the prior failure counters so we can increment them later
       // (after the bus chain settles) without an extra DB read.
       const priorFailedAttempts = new Map<EpisodeId, number>();
@@ -1868,6 +1902,10 @@ export function createMemoryCore(
       // Timer-driven recovery can outlive shutdown's own bounded flush;
       // the caller is allowed to close SQLite once shutdown returns.
       if (startupRecoveryCancelled || shutDown) return;
+      for (const job of feedbackJobs) {
+        await recoverFeedbackEvolution(job);
+        if (startupRecoveryCancelled || shutDown) return;
+      }
       // After the reward / reflect chain has finished, account for the
       // outcome: clear `meta.rewardDirty` on episodes that are no longer
       // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
@@ -1894,7 +1932,68 @@ export function createMemoryCore(
         }
       }
     } finally {
-      for (const ep of episodes) dirtyClosedInFlight.delete(ep.id as EpisodeId);
+      for (const episodeId of claimedEpisodes) dirtyClosedInFlight.delete(episodeId);
+      for (const job of feedbackJobs) feedbackEvolutionInFlight.delete(job.feedbackId);
+    }
+  }
+
+  async function recoverFeedbackEvolution(job: FeedbackEvolutionJob): Promise<void> {
+    if (startupRecoveryCancelled || shutDown || deepWindow.shouldDefer()) return;
+    // Subscribers report provider failures on their buses and often resolve
+    // normally. A resolved drain alone is not enough to acknowledge durable
+    // work whose reward coverage is already complete.
+    const failures = new Set<string>();
+    const unsubscribe = [
+      handle.buses.l2.on("l2.failed", (event) => {
+        if (event.kind === "l2.failed" && event.episodeId === job.episodeId) failures.add("l2");
+      }),
+      handle.buses.l3.on("l3.failed", (event) => {
+        if (event.kind === "l3.failed" &&
+          ["llm_failed", "draft_invalid", "L3_RUN_FAILED"].includes(event.error.code)) failures.add("l3");
+      }),
+      handle.buses.skill.on("skill.failed", (event) => {
+        if (event.kind === "skill.failed" && event.reason.startsWith("llm-failed:")) failures.add("skill");
+      }),
+    ];
+    try {
+      if (!job.prepared) {
+        const row = handle.repos.feedback.getById(job.feedbackId);
+        if (!row) {
+          feedbackEvolution.acknowledge(job.feedbackId);
+          return;
+        }
+        const episode = row.episodeId ? handle.repos.episodes.getById(row.episodeId) : null;
+        const trace = row.traceId ? handle.repos.traces.getById(row.traceId) : null;
+        const deferEvolution = handle.algorithm.deepProcessing.mode === "window";
+        const prepared = await prepareFeedbackEvolution(row, episode, trace, deferEvolution);
+        if (startupRecoveryCancelled || shutDown) return;
+        job = {
+          ...job, ...prepared, prepared: true,
+          // In always mode preparation has already notified subscribers.
+          reward: deferEvolution ? prepared.reward : undefined,
+        };
+        feedbackEvolution.put(job);
+      }
+      if (job.reward) handle.buses.reward.emit({ kind: "reward.updated", result: job.reward });
+      await runFeedbackDownstream(job.episodeId, job.policyId, true);
+      if (startupRecoveryCancelled || shutDown) return;
+      if (failures.size > 0) {
+        throw new MemosError("internal", "feedback evolution requires retry", {
+          feedbackId: job.feedbackId, stages: [...failures],
+        });
+      }
+      feedbackEvolution.acknowledge(job.feedbackId);
+    } catch (err) {
+      if (startupRecoveryCancelled || shutDown) return;
+      feedbackEvolution.put({
+        ...job, failedAttempts: (job.failedAttempts ?? 0) + 1, lastFailureAt: Date.now(),
+      });
+      log.warn("feedback.evolution_failed", {
+        feedbackId: job.feedbackId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      for (const off of unsubscribe) off();
     }
   }
 
@@ -2033,6 +2132,13 @@ export function createMemoryCore(
     const dirty = (ep.meta?.rewardDirty as
       | { failedAttempts?: unknown; lastFailureAt?: unknown }
       | undefined) ?? {};
+    return rewardRetryBackoffElapsed(dirty, nowMs);
+  }
+
+  function rewardRetryBackoffElapsed(
+    dirty: { failedAttempts?: unknown; lastFailureAt?: unknown },
+    nowMs: number,
+  ): boolean {
     const attempts = typeof dirty.failedAttempts === "number" ? dirty.failedAttempts : 0;
     if (attempts < MAX_DIRTY_REWARD_ATTEMPTS) return true;
     const lastFailureAt = typeof dirty.lastFailureAt === "number" ? dirty.lastFailureAt : 0;
@@ -2666,6 +2772,15 @@ export function createMemoryCore(
       rationale: feedback.rationale ?? null,
       raw: feedback.raw ?? null,
     };
+    const episode = row.episodeId
+      ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
+      : null;
+    const lightweightFeedback = handle.algorithm.lightweightMemory.enabled ||
+      (episode ? isLightweightEpisode(episode) : false);
+    const deferEvolution = !lightweightFeedback && handle.algorithm.deepProcessing.mode === "window";
+    const job: FeedbackEvolutionJob = {
+      feedbackId: row.id, queuedAt: ts, episodeId: episode?.id, prepared: false,
+    };
     handle.db.tx(() => {
       handle.repos.feedback.insert(row);
       if (targetTrace) {
@@ -2679,29 +2794,57 @@ export function createMemoryCore(
           priority: Math.max(targetTrace.priority, Math.abs(explicitValue)),
         });
       }
+      // Record the obligation with the feedback itself. A crash during
+      // scoring/experience extraction can then resume preparation on restart.
+      if (deferEvolution) feedbackEvolution.put(job);
     });
 
-    const episode = row.episodeId
-      ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
-      : null;
     const trace = row.traceId
       ? handle.repos.traces.getById(row.traceId as TraceId)
       : null;
-    const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
-    const text = feedbackText(row);
-    const lightweightFeedback = handle.algorithm.lightweightMemory.enabled ||
-      (episode ? isLightweightEpisode(episode) : false);
 
-    if (lightweightFeedback) {
-      if (telemetry) {
-        telemetry.trackFeedback(
-          handle.namespace.agentKind,
-          feedback.polarity,
-        );
+    if (!lightweightFeedback) {
+      feedbackEvolutionInFlight.add(row.id);
+      try {
+        const prepared = await prepareFeedbackEvolution(row, episode, trace, deferEvolution);
+        if (shutDown) return toFeedbackDTO(row);
+        if (deferEvolution) {
+          if (episode || prepared.policyId || prepared.reward) {
+            feedbackEvolution.put({ ...job, ...prepared, prepared: true });
+          } else {
+            feedbackEvolution.acknowledge(row.id);
+          }
+        } else {
+          try {
+            await runFeedbackDownstream(episode?.id, prepared.policyId);
+          } catch (err) {
+            log.warn("feedback.downstream_flush_failed", {
+              episodeId: episode?.id,
+              policyId: prepared.policyId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      } finally {
+        feedbackEvolutionInFlight.delete(row.id);
       }
-      return toFeedbackDTO(row);
     }
 
+    if (telemetry) {
+      telemetry.trackFeedback(handle.namespace.agentKind, feedback.polarity);
+    }
+    return toFeedbackDTO(row);
+  }
+
+  async function prepareFeedbackEvolution(
+    row: FeedbackRow,
+    episode: EpisodeRow | null,
+    trace: TraceRow | null,
+    deferEvolution: boolean,
+  ): Promise<{ reward?: RewardResult; policyId?: PolicyId }> {
+    const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
+    const text = feedbackText(row);
+    let reward: RewardResult | undefined;
     if (episode && sessionId) {
       const rewardFeedback: UserFeedback = {
         id: row.id as UserFeedback["id"],
@@ -2716,10 +2859,11 @@ export function createMemoryCore(
         rationale: row.rationale,
       };
       try {
-        await handle.rewardRunner.run({
+        reward = await handle.rewardRunner.run({
           episodeId: episode.id,
           feedback: [rewardFeedback],
           trigger: "explicit_feedback",
+          ...(deferEvolution ? { deferEvolution: true } : {}),
         });
       } catch (err) {
         log.warn("feedback.reward_failed", {
@@ -2729,6 +2873,7 @@ export function createMemoryCore(
       }
     }
 
+    if (shutDown) return { reward };
     if (text && sessionId) {
       try {
         await handle.feedback.submitUserFeedback({
@@ -2745,6 +2890,7 @@ export function createMemoryCore(
       }
     }
 
+    if (shutDown) return { reward };
     let policyId: PolicyId | undefined;
     try {
       const experience = await runFeedbackExperience(
@@ -2764,33 +2910,39 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
+    return { reward, policyId };
+  }
 
-    try {
-      await handle.l2.drain();
-      if (policyId) {
-        await handle.skills.runOnce({ trigger: "manual", policyId });
-      }
-      if (episode) {
-        await handle.l3.runOnce({ trigger: "manual", episodeId: episode.id });
-      }
-      await handle.skills.flush();
-      await handle.feedback.flush();
+  async function runFeedbackDownstream(
+    episodeId?: EpisodeId,
+    policyId?: PolicyId,
+    waitForL3 = false,
+  ): Promise<void> {
+    if (shutDown) return;
+    await handle.l2.drain();
+    if (shutDown) return;
+    if (waitForL3) {
+      // L2 may already have started abstraction; runOnce otherwise skips
+      // the explicit feedback pass while that older run is in flight.
       await handle.l3.drain();
-    } catch (err) {
-      log.warn("feedback.downstream_flush_failed", {
-        episodeId: episode?.id,
-        policyId,
-        err: err instanceof Error ? err.message : String(err),
-      });
+      if (shutDown) return;
     }
-
-    if (telemetry) {
-      telemetry.trackFeedback(
-        handle.namespace.agentKind,
-        feedback.polarity,
-      );
+    if (policyId) {
+      await handle.skills.runOnce({ trigger: "manual", policyId });
     }
-    return toFeedbackDTO(row);
+    if (shutDown) return;
+    if (episodeId) {
+      const result = await handle.l3.runOnce({ trigger: "manual", episodeId });
+      if (waitForL3 && result.warnings.some((warning) => warning.stage === "noop")) {
+        throw new MemosError("conflict", "feedback abstraction is still pending");
+      }
+    }
+    if (shutDown) return;
+    await handle.skills.flush();
+    if (shutDown) return;
+    await handle.feedback.flush();
+    if (shutDown) return;
+    await handle.l3.drain();
   }
 
   function aggregateTraceFeedbackValue(rows: readonly FeedbackRow[]): number {
