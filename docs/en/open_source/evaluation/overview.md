@@ -85,6 +85,6 @@ get `questions_32k.csv` and `shared_contexts_32k.jsonl` from https://huggingface
 ```bash
 # Edit the configuration in evaluation/scripts/run_pm_eval.sh
 # Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
-# If you want to use MIRIX, edit the the configuration in evaluation/scripts/personamem/config.yaml
+# If you want to use MIRIX, edit the configuration in evaluation/scripts/personamem/config.yaml
 evaluation/scripts/run_pm_eval.sh
 ```
