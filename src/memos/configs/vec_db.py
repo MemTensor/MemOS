@@ -54,6 +54,19 @@ class MilvusVecDBConfig(BaseVecDBConfig):
     password: str = Field(default="", description="Password for Milvus connection")
 
 
+class OceanBaseVecDBConfig(BaseVecDBConfig):
+    """Configuration for OceanBase / seekdb vector database (via pyseekdb)."""
+
+    vector_dimension: int = Field(
+        ..., gt=0, description="Dimension of the vectors; required to build the HNSW index"
+    )
+    host: str = Field(..., description="Host for the seekdb / OceanBase server")
+    port: int = Field(default=2881, description="Port for the seekdb / OceanBase server")
+    user: str = Field(default="root", description="Username for the connection")
+    password: str = Field(default="", description="Password for the connection")
+    database: str = Field(default="memos", description="Database name")
+
+
 class VectorDBConfigFactory(BaseConfig):
     """Factory class for creating vector database configurations."""
 
@@ -63,6 +76,8 @@ class VectorDBConfigFactory(BaseConfig):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "qdrant": QdrantVecDBConfig,
         "milvus": MilvusVecDBConfig,
+        "oceanbase": OceanBaseVecDBConfig,
+        "seekdb": OceanBaseVecDBConfig,
     }
 
     @field_validator("backend")
