@@ -330,6 +330,8 @@ export interface ServiceDescriptor {
 // ─── The façade we register against ───────────────────────────────────────
 
 export interface OpenClawPluginApi {
+  /** Older hosts omit this; tool discovery must not start a second runtime. */
+  registrationMode?: "full" | "discovery" | "tool-discovery" | "setup-only" | "setup-runtime" | "cli-metadata";
   /** Plugin id + metadata the host injected. */
   id: string;
   name: string;
