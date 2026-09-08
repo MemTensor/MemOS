@@ -28,6 +28,7 @@ import type { Repos } from "../storage/repos/index.js";
 import { now as nowMs } from "../time.js";
 import { ids } from "../id.js";
 import type {
+  PolicyId,
   PolicyRow,
   SkillId,
   SkillRow,
@@ -154,6 +155,12 @@ export async function runSkill(
         reason: crystResult.skippedReason,
         modelRefusal: crystResult.modelRefusal,
       });
+      // WHY: "llm-disabled" is a global configuration state, not a failure of
+      // this policy. Counting it would trip the whole candidate pool while
+      // the LLM is merely switched off — with no recovery path back.
+      if (crystResult.skippedReason !== "llm-disabled") {
+        bumpFailureBackoff(deps, decision.policy.id);
+      }
       continue;
     }
 
@@ -176,6 +183,7 @@ export async function runSkill(
         skillId: "sk_placeholder" as SkillId,
         reason: verdict.reason ?? "verify-failed",
       });
+      bumpFailureBackoff(deps, decision.policy.id);
       continue;
     }
 
@@ -224,6 +232,10 @@ export async function runSkill(
       });
     }
     timings.persist += nowMs() - tPersist;
+
+    // A successful crystallization resets the failure counter so later
+    // failures start counting from zero again.
+    deps.repos.kv.del(failCountKey(decision.policy.id));
 
     if (decision.action === "rebuild") rebuilt += 1;
     else crystallized += 1;
@@ -337,6 +349,29 @@ export function applySkillFeedback(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
+
+// WHY: a crystallize/verify failure leaves the policy untouched, so every
+// trigger retries it forever (2026-08-28 audit: 2640 repeated failures over
+// 25 days, the bulk of wasted skill invocations). Count consecutive failures
+// in kv; after 3, flip skill_eligible=false so the policy is skipped. A
+// successful crystallization clears the counter.
+const SKILL_FAILURE_BACKOFF_LIMIT = 3;
+
+function failCountKey(policyId: string): string {
+  return `skill.failCount:${policyId}`;
+}
+
+function bumpFailureBackoff(deps: RunSkillDeps, policyId: PolicyId): void {
+  const count = deps.repos.kv.get<number>(failCountKey(policyId), 0) + 1;
+  deps.repos.kv.set(failCountKey(policyId), count);
+  if (count >= SKILL_FAILURE_BACKOFF_LIMIT) {
+    deps.repos.policies.setSkillEligible(policyId, false);
+    // Clear the counter on trip: a later manual re-enable must get a fresh
+    // window, not instant re-trip on the next single failure.
+    deps.repos.kv.del(failCountKey(policyId));
+    deps.log.warn("skill.backoff.exhausted", { policyId, count });
+  }
+}
 
 function gatherPolicies(input: RunSkillInput, repos: Repos): PolicyRow[] {
   if (input.policyId) {
