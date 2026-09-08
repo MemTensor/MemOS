@@ -9,6 +9,7 @@ import os
 import zipfile
 
 from io import BytesIO
+from pathlib import Path
 
 
 def get_openapi_app():
@@ -42,24 +43,29 @@ def download_examples(dest: str) -> bool:
     print(f"📥 Downloading examples from {zip_url}...")
 
     try:
-        response = requests.get(zip_url)
+        response = requests.get(zip_url, timeout=30)
         response.raise_for_status()
+
+        dest_root = Path(dest).resolve()
+        dest_root.mkdir(parents=True, exist_ok=True)
 
         with zipfile.ZipFile(BytesIO(response.content)) as z:
             extracted_files = []
             for file in z.namelist():
                 if "MemOS-main/examples/" in file and not file.endswith("/"):
                     # Remove the prefix and extract to dest
-                    relative_path = file.replace("MemOS-main/examples/", "")
-                    extract_path = os.path.join(dest, relative_path)
+                    relative_path = file.replace("MemOS-main/examples/", "", 1)
+                    extract_path = (dest_root / relative_path).resolve()
+                    if not extract_path.is_relative_to(dest_root):
+                        raise ValueError(f"Unsafe zip path: {file}")
 
                     # Create directory if it doesn't exist
-                    os.makedirs(os.path.dirname(extract_path), exist_ok=True)
+                    extract_path.parent.mkdir(parents=True, exist_ok=True)
 
                     # Extract the file
                     with z.open(file) as source, open(extract_path, "wb") as target:
                         target.write(source.read())
-                    extracted_files.append(extract_path)
+                    extracted_files.append(str(extract_path))
 
         print(f"✅ Examples downloaded to: {dest}")
         print(f"📁 {len(extracted_files)} files extracted")

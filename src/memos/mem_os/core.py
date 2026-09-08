@@ -230,6 +230,22 @@ class MOSCore:
                 f"User '{user_id}' does not have access to cube '{cube_id}'. Please register the cube first or request access."
             )
 
+    def _resolve_accessible_cube_id(self, user_id: str, mem_cube_id: str | None) -> str:
+        """Resolve an optional cube id to a loaded cube the user may access."""
+        if mem_cube_id is None:
+            accessible_cubes = self.user_manager.get_user_cubes(user_id)
+            if not accessible_cubes:
+                raise ValueError(
+                    f"No accessible cubes found for user '{user_id}'. Please register a cube first."
+                )
+            mem_cube_id = accessible_cubes[0].cube_id
+        else:
+            self._validate_cube_access(user_id, mem_cube_id)
+
+        if mem_cube_id not in self.mem_cubes:
+            raise ValueError(f"MemCube '{mem_cube_id}' is not loaded. Please register.")
+        return mem_cube_id
+
     def _get_all_documents(self, path: str) -> list[str]:
         """Get all documents from path.
 
@@ -938,22 +954,7 @@ class MOSCore:
             Union[TextualMemoryItem, ActivationMemoryItem, ParametricMemoryItem]: The requested memory item.
         """
         target_user_id = user_id if user_id is not None else self.user_id
-        # Validate user has access to this cube
-        self._validate_cube_access(target_user_id, mem_cube_id)
-        if mem_cube_id is None:
-            # Try to find a default cube for the user
-            accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
-            if not accessible_cubes:
-                raise ValueError(
-                    f"No accessible cubes found for user '{target_user_id}'. Please register a cube first."
-                )
-            mem_cube_id = accessible_cubes[0].cube_id  # TODO not only first
-        else:
-            self._validate_cube_access(target_user_id, mem_cube_id)
-
-        assert mem_cube_id in self.mem_cubes, (
-            f"MemCube with ID {mem_cube_id} does not exist. please regiester"
-        )
+        mem_cube_id = self._resolve_accessible_cube_id(target_user_id, mem_cube_id)
         return self.mem_cubes[mem_cube_id].text_mem.get(memory_id)
 
     def get_all(
@@ -1009,22 +1010,8 @@ class MOSCore:
             memory_id (str): The identifier of the textual memory to update.
             text_memory_item (TextualMemoryItem | dict[str, Any]): The updated textual memory item.
         """
-        assert mem_cube_id in self.mem_cubes, (
-            f"MemCube with ID {mem_cube_id} does not exist. please regiester"
-        )
         target_user_id = user_id if user_id is not None else self.user_id
-        # Validate user has access to this cube
-        self._validate_cube_access(target_user_id, mem_cube_id)
-        if mem_cube_id is None:
-            # Try to find a default cube for the user
-            accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
-            if not accessible_cubes:
-                raise ValueError(
-                    f"No accessible cubes found for user '{target_user_id}'. Please register a cube first."
-                )
-            mem_cube_id = accessible_cubes[0].cube_id  # TODO not only first
-        else:
-            self._validate_cube_access(target_user_id, mem_cube_id)
+        mem_cube_id = self._resolve_accessible_cube_id(target_user_id, mem_cube_id)
         if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
             self.mem_cubes[mem_cube_id].text_mem.update(memory_id, memories=text_memory_item)
             logger.info(f"MemCube {mem_cube_id} updated memory {memory_id}")
@@ -1041,22 +1028,8 @@ class MOSCore:
             mem_cube_id (str): The identifier of the MemCube to delete the memory from.
             memory_id (str): The identifier of the  memory to delete.
         """
-        assert mem_cube_id in self.mem_cubes, (
-            f"MemCube with ID {mem_cube_id} does not exist. please regiester"
-        )
         target_user_id = user_id if user_id is not None else self.user_id
-        # Validate user has access to this cube
-        self._validate_cube_access(target_user_id, mem_cube_id)
-        if mem_cube_id is None:
-            # Try to find a default cube for the user
-            accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
-            if not accessible_cubes:
-                raise ValueError(
-                    f"No accessible cubes found for user '{target_user_id}'. Please register a cube first."
-                )
-            mem_cube_id = accessible_cubes[0].cube_id  # TODO not only first
-        else:
-            self._validate_cube_access(target_user_id, mem_cube_id)
+        mem_cube_id = self._resolve_accessible_cube_id(target_user_id, mem_cube_id)
         self.mem_cubes[mem_cube_id].text_mem.delete(memory_id)
         logger.info(f"MemCube {mem_cube_id} deleted memory {memory_id}")
 
@@ -1067,22 +1040,8 @@ class MOSCore:
         Args:
             mem_cube_id (str): The identifier of the MemCube to delete the memories from.
         """
-        assert mem_cube_id in self.mem_cubes, (
-            f"MemCube with ID {mem_cube_id} does not exist. please regiester"
-        )
         target_user_id = user_id if user_id is not None else self.user_id
-        # Validate user has access to this cube
-        self._validate_cube_access(target_user_id, mem_cube_id)
-        if mem_cube_id is None:
-            # Try to find a default cube for the user
-            accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
-            if not accessible_cubes:
-                raise ValueError(
-                    f"No accessible cubes found for user '{target_user_id}'. Please register a cube first."
-                )
-            mem_cube_id = accessible_cubes[0].cube_id  # TODO not only first
-        else:
-            self._validate_cube_access(target_user_id, mem_cube_id)
+        mem_cube_id = self._resolve_accessible_cube_id(target_user_id, mem_cube_id)
         self.mem_cubes[mem_cube_id].text_mem.delete_all()
         logger.info(f"MemCube {mem_cube_id} deleted all memories")
 
@@ -1098,11 +1057,7 @@ class MOSCore:
                 If None, the default MemCube for the user is used.
         """
         target_user_id = user_id if user_id is not None else self.user_id
-        accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
-        if not mem_cube_id:
-            mem_cube_id = accessible_cubes[0].cube_id
-        if mem_cube_id not in self.mem_cubes:
-            raise ValueError(f"MemCube with ID {mem_cube_id} does not exist. please regiester")
+        mem_cube_id = self._resolve_accessible_cube_id(target_user_id, mem_cube_id)
         self.mem_cubes[mem_cube_id].dump(dump_dir)
         logger.info(f"MemCube {mem_cube_id} dumped to {dump_dir}")
 
@@ -1122,11 +1077,7 @@ class MOSCore:
                 If None, the default MemCube for the user is used.
         """
         target_user_id = user_id if user_id is not None else self.user_id
-        accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
-        if not mem_cube_id:
-            mem_cube_id = accessible_cubes[0].cube_id
-        if mem_cube_id not in self.mem_cubes:
-            raise ValueError(f"MemCube with ID {mem_cube_id} does not exist. please regiester")
+        mem_cube_id = self._resolve_accessible_cube_id(target_user_id, mem_cube_id)
         self.mem_cubes[mem_cube_id].load(load_dir, memory_types=memory_types)
         logger.info(f"MemCube {mem_cube_id} loaded from {load_dir}")
 

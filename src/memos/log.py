@@ -9,6 +9,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from logging.config import dictConfig
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from sys import stdout
 from typing import Any
@@ -25,6 +26,11 @@ from memos.context.context import (
     get_current_user_name,
     get_current_user_type,
 )
+
+try:
+    from concurrent_log_handler import ConcurrentTimedRotatingFileHandler as _TimedRotatingFileHandler
+except Exception:
+    _TimedRotatingFileHandler = TimedRotatingFileHandler
 
 
 # Load environment variables
@@ -259,7 +265,7 @@ LOGGING_CONFIG = {
     },
     "filters": {
         "package_tree_filter": {"()": "logging.Filter", "name": settings.LOG_FILTER_TREE_PREFIX},
-        "context_filter": {"()": "memos.log.ContextFilter"},
+        "context_filter": {"()": ContextFilter},
     },
     "handlers": {
         "console": {
@@ -271,7 +277,7 @@ LOGGING_CONFIG = {
         },
         "file": {
             "level": "INFO",
-            "class": "concurrent_log_handler.ConcurrentTimedRotatingFileHandler",
+            "()": _TimedRotatingFileHandler,
             "when": "midnight",
             "interval": 1,
             "backupCount": 3,
@@ -313,8 +319,23 @@ def configure_logging(force: bool = False) -> None:
     with _LOGGING_CONFIG_LOCK:
         current_pid = _get_current_pid()
         if force or current_pid != _LOGGING_CONFIGURED_PID:
-            dictConfig(LOGGING_CONFIG)
-            _LOGGING_CONFIGURED_PID = current_pid
+            try:
+                dictConfig(LOGGING_CONFIG)
+            except Exception as exc:
+                # Fallback to a plain stdlib configuration if advanced logging dependencies
+                # are unavailable at runtime (e.g., missing optional dependency).
+                logging.basicConfig(
+                    level=logging.INFO,
+                    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+                    stream=stdout,
+                )
+                logging.getLogger(__name__).exception(
+                    "Logging configuration via dictConfig failed; falling back to basicConfig",
+                    exc_info=exc,
+                )
+            finally:
+                _LOGGING_CONFIGURED_PID = current_pid
+
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
