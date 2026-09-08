@@ -8,31 +8,31 @@ MemOS is a Memory Operating System for LLMs and AI agents, maintained
 
 ## Table of Contents
 
-*   [Ways to Contribute](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#ways-to-contribute)
+*   [Ways to Contribute](#ways-to-contribute)
 
-*   [Before You Start](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#before-you-start)
+*   [Before You Start](#before-you-start)
 
-*   [Setting Up Your Development Environment](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#setting-up-your-development-environment)
+*   [Setting Up Your Development Environment](#setting-up-your-development-environment)
 
-*   [Development Workflow](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#development-workflow)
+*   [Development Workflow](#development-workflow)
 
-*   [Commit Message Guidelines](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#commit-message-guidelines)
+*   [Commit Message Guidelines](#commit-message-guidelines)
 
-*   [What Makes a Good PR](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#what-makes-a-good-pr)
+*   [What Makes a Good PR](#what-makes-a-good-pr)
 
-*   [Review Process](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#review-process)
+*   [Review Process](#review-process)
 
-*   [Writing Tests](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#writing-tests)
+*   [Writing Tests](#writing-tests)
 
-*   [Writing Documentation](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#writing-documentation)
+*   [Writing Documentation](#writing-documentation)
 
-*   [Community](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#community)
+*   [Community](#community)
 
-*   [Code of Conduct](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#code-of-conduct)
+*   [Code of Conduct](#code-of-conduct)
 
-*   [License](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#license)
+*   [License](#license)
 
-*   [Recognition](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#recognition)
+*   [Recognition](#recognition)
 
 
 ---
@@ -257,7 +257,7 @@ make test
 
 ```
 
-All tests should pass before you open a PR. If you've added new functionality, please add tests for it (see [Writing Tests](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#writing-tests) below).
+All tests should pass before you open a PR. If you've added new functionality, please add tests for it (see [Writing Tests](#writing-tests) below).
 
 ### 5. Rebase onto the latest `dev`
 
@@ -270,7 +270,7 @@ git rebase upstream/dev
 
 ### 6. Commit your changes
 
-Follow the [Commit Message Guidelines](https://claude.ai/chat/4504392b-b48f-484a-b284-09624e7f1147#commit-message-guidelines) below.
+Follow the [Commit Message Guidelines](#commit-message-guidelines) below.
 
 ### 7. Push to your fork
 
