@@ -57,6 +57,7 @@ import type {
   Unsubscribe,
 } from "../../agent-contract/memory-core.js";
 import type {
+  EpisodeCloseReason,
   EpisodeSnapshot,
   EpisodeTurn,
   IntentDecision,
@@ -64,6 +65,7 @@ import type {
 
 import type {
   EpisodeRow,
+  FeedbackId,
   FeedbackRow,
   PolicyId,
   PolicyRow,
@@ -91,6 +93,7 @@ import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
 import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
+import { waitForRetry } from "../util/retry-after.js";
 import {
   getHostLlmBridge,
   registerHostLlmBridge,
@@ -100,6 +103,7 @@ import type { ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";
+import { createFeedbackEvolutionQueue, type FeedbackEvolutionJob } from "./feedback-evolution.js";
 import { wrapRetrievalRepos } from "./retrieval-repos.js";
 import {
   buildLocalRetrievalLogStages,
@@ -123,7 +127,7 @@ import type {
   RetrievalResult,
   TraceCandidate,
 } from "../retrieval/types.js";
-import type { UserFeedback } from "../reward/types.js";
+import type { RewardResult, UserFeedback } from "../reward/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
@@ -714,6 +718,30 @@ export function createMemoryCore(
   const DIRTY_CLOSED_SCAN_PAGE_SIZE = 500;
   const DIRTY_CLOSED_SCAN_CURSOR_KEY = "pipeline.dirty_closed_scan_cursor.v1";
 
+  // ─── Deep-processing window (issue #2333) ──
+  // With `algorithm.deepProcessing.mode: "window"` every automatic path
+  // that spends provider quota on evolution must stay quiet outside the
+  // configured idle window: the topic-end reflect pass (gated in the
+  // capture subscriber via `deferHook`), the periodic dirty-reward
+  // rescan, the startup dirty recovery, and the reward fallback at the
+  // end of orphan recovery. `shouldDefer()` is always false when the
+  // mode is `"always"`, so these gates are no-ops by default.
+  const deepWindow = handle.deepWindow;
+  const DEEP_WINDOW_DRAIN_INTERVAL_MS = Math.max(
+    1_000,
+    handle.algorithm.deepProcessing.drainIntervalSec * 1_000,
+  );
+  /** Timer cadence. Kept short so the window edge is noticed promptly. */
+  const DEEP_WINDOW_DRAIN_TICK_MS = Math.min(
+    60_000,
+    DEEP_WINDOW_DRAIN_INTERVAL_MS,
+  );
+  let lastDeepWindowDrain: number | null = null;
+  const dirtyClosedInFlight = new Set<EpisodeId>();
+  const feedbackEvolution = createFeedbackEvolutionQueue(handle.repos.kv);
+  const feedbackEvolutionInFlight = new Set<FeedbackId>();
+  const recoveryTimers: Array<ReturnType<typeof setInterval>> = [];
+
   // ─── Startup recovery background promise (issue #1776 + #1808) ──
   // `init()` used to `await` the entire reflect → reward → L2 chain for
   // every stale / dirty episode found in SQLite. On databases with
@@ -789,8 +817,12 @@ export function createMemoryCore(
   }
 
   async function autoRescoreDirtyClosedEpisodes(): Promise<void> {
-    if (!autoRecoveryEnabled) return;
+    if (!autoRecoveryEnabled || shutDown) return;
     const nowMs = Date.now();
+    // Issue #2333: the dirty-reward retry is an LLM-heavy compensation
+    // path. Outside the deep-processing window it must not run at all —
+    // the rows stay dirty and are picked up by the next in-window scan.
+    if (!deepWindowBatchAvailable(nowMs)) return;
     if (nowMs - lastDirtyClosedScan < 30_000) return;
     lastDirtyClosedScan = nowMs;
     // Issue #2063: lightweight mode explicitly disables reward — the
@@ -799,16 +831,90 @@ export function createMemoryCore(
     // must be a no-op.
     if (handle.algorithm.lightweightMemory.enabled) return;
     try {
+      // Finish and acknowledge live chains before selecting retries. They
+      // may have completed via their own subscribers without a facade flush.
+      if (handle.algorithm.deepProcessing.mode === "window") await handle.flush();
+      if (shutDown || deepWindow.shouldDefer()) return;
       const allDirty = collectDirtyClosedEpisodes()
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+        .filter((ep) => !isLightweightEpisode(ep) &&
+          !dirtyClosedInFlight.has(ep.id as EpisodeId) &&
+          !deepWindow.isProcessing(ep.id as EpisodeId) && episodeRewardIsDirty(ep));
       // Apply the same backoff filter as init() so the 10-min periodic
       // scan does not hammer episodes whose LLM call keeps failing.
       const dirtyClosed = allDirty.filter((ep) => dirtyEpisodeBackoffElapsed(ep, nowMs));
-      if (dirtyClosed.length > 0) {
-        await recoverDirtyClosedEpisodes(dirtyClosed);
-      }
+      await recoverDirtyClosedEpisodes(dirtyClosed);
     } catch (err) {
       log.debug("dirty_closed_reward.scan_error", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function deepWindowBatchAvailable(nowMs: number): boolean {
+    if (handle.algorithm.deepProcessing.mode !== "window") return true;
+    return deepWindow.isOpen() && (lastDeepWindowDrain === null ||
+      nowMs - lastDeepWindowDrain >= DEEP_WINDOW_DRAIN_INTERVAL_MS);
+  }
+
+  /**
+   * Cap a recovery batch at `algorithm.deepProcessing.maxBatchPerCycle`
+   * while the window is in force. In `"always"` mode the batch is
+   * returned untouched, preserving the legacy behaviour of draining the
+   * whole scan page in one pass.
+   */
+  function boundDeepWindowBatch<T>(episodes: T[]): T[] {
+    if (handle.algorithm.deepProcessing.mode !== "window") return episodes;
+    const max = Math.max(1, handle.algorithm.deepProcessing.maxBatchPerCycle);
+    if (episodes.length <= max) return episodes;
+    log.info("deep_window.batch_capped", {
+      pending: episodes.length,
+      maxBatchPerCycle: max,
+    });
+    return episodes.slice(0, max);
+  }
+
+  /**
+   * Drain the deep-processing queue (issue #2333).
+   *
+   * Runs only inside the configured window and at most once per
+   * `drainIntervalSec`. Each cycle re-emits `episode.finalized` for up to
+   * `maxBatchPerCycle` queued episodes; the capture subscriber's
+   * `deferHook` sees `shouldDefer() === false` in-window, so the normal
+   * reflect → reward → L2 → L3 → skill chain runs.
+   */
+  async function drainDeepProcessingQueue(): Promise<void> {
+    if (!autoRecoveryEnabled || shutDown) return;
+    if (handle.algorithm.lightweightMemory.enabled) return;
+    if (handle.algorithm.deepProcessing.mode !== "window") return;
+    if (deepWindow.shouldDefer()) return;
+    const nowMs = Date.now();
+    if (!deepWindowBatchAvailable(nowMs)) return;
+    try {
+      const batch = deepWindow.takeBatch();
+      if (batch.length === 0 && feedbackEvolution.list().length === 0) return;
+      const rows: Array<EpisodeRow & { meta?: Record<string, unknown> }> = [];
+      for (const entry of batch) {
+        const row = handle.repos.episodes.getById(entry.episodeId);
+        if (!row || row.status !== "closed" || isLightweightEpisode(row) ||
+          dirtyClosedInFlight.has(entry.episodeId) || deepWindow.isProcessing(entry.episodeId)) {
+          continue;
+        }
+        // Queue membership is an outstanding evolution obligation. Reward
+        // coverage alone cannot acknowledge it: feedback may have scored an
+        // episode before its first reflection. Also backfill older entries
+        // that predate the independent pending marker.
+        handle.repos.episodes.updateMeta(entry.episodeId, { deepProcessingPending: true });
+        if (!dirtyEpisodeBackoffElapsed(row, nowMs)) continue;
+        rows.push(row);
+      }
+      log.info("deep_window.drain", {
+        taken: batch.length,
+        eligible: rows.length,
+        remaining: deepWindow.size(),
+      });
+      await recoverDirtyClosedEpisodes(rows);
+    } catch (err) {
+      log.debug("deep_window.drain_error", {
         err: err instanceof Error ? err.message : String(err),
       });
     }
@@ -1194,6 +1300,17 @@ export function createMemoryCore(
         // Same story for dirty-closed episodes — never rescore them
         // when the pipeline is intentionally light.
         dirtyClosedForBackground = [];
+      } else if (deepWindow.shouldDefer()) {
+        // Issue #2333: a restart outside the deep-processing window must
+        // not replay the dirty backlog — that is exactly the foreground
+        // quota contention the window exists to avoid. The rows stay
+        // dirty; `drainDeepProcessingQueue` / the in-window rescan pick
+        // them up once the window opens.
+        log.info("init.dirty_closed_episodes.deferred_to_deep_window", {
+          window: handle.algorithm.deepProcessing.window,
+          timezone: handle.algorithm.deepProcessing.timezone || "system",
+        });
+        dirtyClosedForBackground = [];
       } else {
         const nowForDirty = Date.now();
         const allDirty = collectDirtyClosedEpisodes()
@@ -1227,7 +1344,8 @@ export function createMemoryCore(
     // Gateway can start accepting WebSocket upgrades immediately.
     if (
       autoRecoveryEnabled &&
-      (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0)
+      (staleForBackground.length > 0 || dirtyClosedForBackground.length > 0 ||
+        (!handle.algorithm.lightweightMemory.enabled && feedbackEvolution.list().length > 0))
     ) {
       const stale = staleForBackground;
       const dirtyClosed = dirtyClosedForBackground;
@@ -1241,9 +1359,7 @@ export function createMemoryCore(
           if (stale.length > 0) {
             await recoverOpenEpisodesAsSessionEnd(stale);
           }
-          if (dirtyClosed.length > 0) {
-            await recoverDirtyClosedEpisodes(dirtyClosed);
-          }
+          await recoverDirtyClosedEpisodes(dirtyClosed);
           log.info("init.background_recovery_finished", {
             staleCount: stale.length,
             dirtyClosedCount: dirtyClosed.length,
@@ -1272,6 +1388,31 @@ export function createMemoryCore(
       }, 10 * 60 * 1000);
       // Mark as unref so the timer doesn't block shutdown
       (rescoreInterval as unknown as { unref?: () => void }).unref?.();
+      recoveryTimers.push(rescoreInterval);
+    }
+
+    // Issue #2333: deep-processing queue drain. Ticks on a fixed 60s
+    // clock so the window edge is noticed promptly; the per-cycle
+    // `drainIntervalSec` throttle inside `drainDeepProcessingQueue`
+    // decides whether a tick actually does work.
+    if (autoRecoveryEnabled && handle.algorithm.deepProcessing.mode === "window") {
+      const drainInterval = setInterval(() => {
+        void drainDeepProcessingQueue().catch((err) => {
+          log.debug("deep_window.drain_tick_error", {
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }, DEEP_WINDOW_DRAIN_TICK_MS);
+      (drainInterval as unknown as { unref?: () => void }).unref?.();
+      recoveryTimers.push(drainInterval);
+      log.info("deep_window.enabled", {
+        window: handle.algorithm.deepProcessing.window,
+        timezone: handle.algorithm.deepProcessing.timezone || "system",
+        drainIntervalSec: handle.algorithm.deepProcessing.drainIntervalSec,
+        maxBatchPerCycle: handle.algorithm.deepProcessing.maxBatchPerCycle,
+        queued: deepWindow.size(),
+        openNow: deepWindow.isOpen(),
+      });
     }
 
     // Wire `memory_add` into the api_logs table on EVERY turn so the
@@ -1619,12 +1760,25 @@ export function createMemoryCore(
             });
             continue;
           }
+          // Issue #2333: the capture subscriber deferred this episode, so
+          // `rTask` is legitimately still null. Forcing a reward run here
+          // would spend foreground quota on the very work the window was
+          // meant to postpone — and it would score an episode whose
+          // reflection has not been written yet.
+          if (deepWindow.shouldDefer()) {
+            deepWindow.enqueue(episodeId, "finalized");
+            log.info("init.orphan_recovery.reward_fallback_skipped", {
+              episodeId,
+              reason: "deep_processing_window_closed",
+            });
+            continue;
+          }
           const row = handle.repos.episodes.getById(episodeId);
           if (row?.rTask == null) {
             await handle.rewardRunner.run({
               episodeId,
               feedback: [],
-              trigger: "manual",
+              trigger: "implicit_fallback",
             });
           }
         }
@@ -1661,64 +1815,185 @@ export function createMemoryCore(
   async function recoverDirtyClosedEpisodes(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
-    if (startupRecoveryCancelled) return;
-    log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
-    // Snapshot the prior failure counters so we can increment them later
-    // (after the bus chain settles) without an extra DB read.
-    const priorFailedAttempts = new Map<EpisodeId, number>();
-    for (const ep of episodes) {
-      if (startupRecoveryCancelled) break;
-      if (isLightweightEpisode(ep)) continue;
+    if (startupRecoveryCancelled || shutDown) return;
+    // Startup selections may wait behind orphan recovery while a timer
+    // completes or changes the same episodes. Claim their current state,
+    // not the stale snapshot selected before that asynchronous work.
+    const nowMs = Date.now();
+    if (!deepWindowBatchAvailable(nowMs)) return;
+    episodes = episodes.flatMap((ep) => {
       const episodeId = ep.id as EpisodeId;
-      const endedAt = ep.endedAt ?? Date.now();
-      const prevDirty = (ep.meta?.rewardDirty as
-        | { failedAttempts?: unknown }
-        | undefined) ?? {};
-      const prevAttempts =
-        typeof prevDirty.failedAttempts === "number"
-          ? prevDirty.failedAttempts
-          : 0;
-      priorFailedAttempts.set(episodeId, prevAttempts);
-      handle.repos.episodes.updateMeta(episodeId, {
-        closeReason: "finalized",
-        recoveredAtStartup: endedAt,
-        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
-      });
-      const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
-        recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
-      });
-      handle.buses.session.emit({
-        kind: "episode.finalized",
-        episode: snapshot,
-        closedBy: "finalized",
-      });
+      if (dirtyClosedInFlight.has(episodeId) || deepWindow.isProcessing(episodeId)) return [];
+      const current = handle.repos.episodes.getById(episodeId);
+      return current && current.status === "closed" && !isLightweightEpisode(current) &&
+        episodeRewardIsDirty(current) && dirtyEpisodeBackoffElapsed(current, nowMs)
+        ? [current] : [];
+    });
+    // Group feedback and capture work for the same episode into one batch
+    // slot. Feedback on an open episode (or without an episode) must also
+    // be recoverable; it cannot depend on the closed/dirty scan predicate.
+    const work = new Map<string, { episode?: typeof episodes[number]; feedback: FeedbackEvolutionJob[] }>();
+    for (const job of feedbackEvolution.list()) {
+      if (feedbackEvolutionInFlight.has(job.feedbackId) || !rewardRetryBackoffElapsed(job, nowMs)) continue;
+      if (job.episodeId && (dirtyClosedInFlight.has(job.episodeId) || deepWindow.isProcessing(job.episodeId))) continue;
+      const key = job.episodeId ?? `feedback:${job.feedbackId}`;
+      const entry = work.get(key) ?? { feedback: [] };
+      entry.feedback.push(job);
+      work.set(key, entry);
     }
-    await handle.flush();
-    if (startupRecoveryCancelled) return;
-    // After the reward / reflect chain has finished, account for the
-    // outcome: clear `meta.rewardDirty` on episodes that are no longer
-    // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
-    // that still match the dirty predicate (LLM failure / no-op). This
-    // closes the "retried indefinitely" loop reported in issue #1808.
-    const now = Date.now();
-    for (const [episodeId, prevAttempts] of priorFailedAttempts) {
-      const after = handle.repos.episodes.getById(episodeId);
-      if (!after) continue;
-      const stillDirty = episodeRewardIsDirty(after);
-      if (stillDirty) {
+    for (const episode of episodes) {
+      const entry = work.get(episode.id) ?? { feedback: [] };
+      entry.episode = episode;
+      work.set(episode.id, entry);
+    }
+    const batch = boundDeepWindowBatch([...work.values()]);
+    episodes = batch.flatMap((entry) => entry.episode ? [entry.episode] : []);
+    const feedbackJobs = batch.flatMap((entry) => entry.feedback);
+    if (batch.length === 0) return;
+    // Reserve once, after current-state/backoff checks and before any await.
+    // Queue drains, periodic scans and startup recovery share this budget;
+    // an empty or ineligible selection must not delay the next real batch.
+    if (handle.algorithm.deepProcessing.mode === "window") lastDeepWindowDrain = nowMs;
+    // Claim before emitting any events. Startup recovery, the queue drain
+    // and periodic scans can overlap while the LLM/flush is awaiting I/O.
+    const claimedEpisodes = new Set([
+      ...episodes.map((ep) => ep.id as EpisodeId),
+      ...feedbackJobs.flatMap((job) => job.episodeId ? [job.episodeId] : []),
+    ]);
+    for (const episodeId of claimedEpisodes) dirtyClosedInFlight.add(episodeId);
+    for (const job of feedbackJobs) feedbackEvolutionInFlight.add(job.feedbackId);
+    try {
+      log.info("init.dirty_closed_episodes.rescore", {
+        count: episodes.length, feedbackCount: feedbackJobs.length,
+      });
+      // Snapshot the prior failure counters so we can increment them later
+      // (after the bus chain settles) without an extra DB read.
+      const priorFailedAttempts = new Map<EpisodeId, number>();
+      for (const ep of episodes) {
+        if (startupRecoveryCancelled) break;
+        if (isLightweightEpisode(ep)) continue;
+        const episodeId = ep.id as EpisodeId;
+        const closedBy: EpisodeCloseReason = ep.meta?.closeReason === "abandoned" ? "abandoned" : "finalized";
+        const endedAt = ep.endedAt ?? Date.now();
+        const prevDirty = (ep.meta?.rewardDirty as
+          | { failedAttempts?: unknown }
+          | undefined) ?? {};
+        const prevAttempts =
+          typeof prevDirty.failedAttempts === "number"
+            ? prevDirty.failedAttempts
+            : 0;
+        priorFailedAttempts.set(episodeId, prevAttempts);
         handle.repos.episodes.updateMeta(episodeId, {
-          rewardDirty: {
-            failedAttempts: prevAttempts + 1,
-            lastFailureAt: now,
-          },
+          closeReason: closedBy,
+          recoveredAtStartup: endedAt,
+          recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
         });
-      } else if (
-        after.meta &&
-        typeof after.meta === "object" &&
-        "rewardDirty" in after.meta
-      ) {
-        handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
+        const snapshot = snapshotFromRecoveredEpisode(ep, endedAt, {
+          recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+          closedBy,
+        });
+        handle.buses.session.emit({
+          kind: "episode.finalized",
+          episode: snapshot,
+          closedBy,
+        });
       }
+      await handle.flush();
+      // Timer-driven recovery can outlive shutdown's own bounded flush;
+      // the caller is allowed to close SQLite once shutdown returns.
+      if (startupRecoveryCancelled || shutDown) return;
+      for (const job of feedbackJobs) {
+        await recoverFeedbackEvolution(job);
+        if (startupRecoveryCancelled || shutDown) return;
+      }
+      // After the reward / reflect chain has finished, account for the
+      // outcome: clear `meta.rewardDirty` on episodes that are no longer
+      // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
+      // that still match the dirty predicate (LLM failure / no-op). This
+      // closes the "retried indefinitely" loop reported in issue #1808.
+      const now = Date.now();
+      for (const [episodeId, prevAttempts] of priorFailedAttempts) {
+        const after = handle.repos.episodes.getById(episodeId);
+        if (!after) continue;
+        const stillDirty = episodeRewardIsDirty(after);
+        if (stillDirty) {
+          handle.repos.episodes.updateMeta(episodeId, {
+            rewardDirty: {
+              failedAttempts: prevAttempts + 1,
+              lastFailureAt: now,
+            },
+          });
+        } else if (
+          after.meta &&
+          typeof after.meta === "object" &&
+          "rewardDirty" in after.meta
+        ) {
+          handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
+        }
+      }
+    } finally {
+      for (const episodeId of claimedEpisodes) dirtyClosedInFlight.delete(episodeId);
+      for (const job of feedbackJobs) feedbackEvolutionInFlight.delete(job.feedbackId);
+    }
+  }
+
+  async function recoverFeedbackEvolution(job: FeedbackEvolutionJob): Promise<void> {
+    if (startupRecoveryCancelled || shutDown || deepWindow.shouldDefer()) return;
+    // Subscribers report provider failures on their buses and often resolve
+    // normally. A resolved drain alone is not enough to acknowledge durable
+    // work whose reward coverage is already complete.
+    const failures = new Set<string>();
+    const unsubscribe = [
+      handle.buses.l2.on("l2.failed", (event) => {
+        if (event.kind === "l2.failed" && event.episodeId === job.episodeId) failures.add("l2");
+      }),
+      handle.buses.l3.on("l3.failed", (event) => {
+        if (event.kind === "l3.failed" &&
+          ["llm_failed", "draft_invalid", "L3_RUN_FAILED"].includes(event.error.code)) failures.add("l3");
+      }),
+      handle.buses.skill.on("skill.failed", (event) => {
+        if (event.kind === "skill.failed" && event.reason.startsWith("llm-failed:")) failures.add("skill");
+      }),
+    ];
+    try {
+      if (!job.prepared) {
+        const row = handle.repos.feedback.getById(job.feedbackId);
+        if (!row) {
+          feedbackEvolution.acknowledge(job.feedbackId);
+          return;
+        }
+        const episode = row.episodeId ? handle.repos.episodes.getById(row.episodeId) : null;
+        const trace = row.traceId ? handle.repos.traces.getById(row.traceId) : null;
+        const deferEvolution = handle.algorithm.deepProcessing.mode === "window";
+        const prepared = await prepareFeedbackEvolution(row, episode, trace, deferEvolution);
+        if (startupRecoveryCancelled || shutDown) return;
+        job = {
+          ...job, ...prepared, prepared: true,
+          // In always mode preparation has already notified subscribers.
+          reward: deferEvolution ? prepared.reward : undefined,
+        };
+        feedbackEvolution.put(job);
+      }
+      if (job.reward) handle.buses.reward.emit({ kind: "reward.updated", result: job.reward });
+      await runFeedbackDownstream(job.episodeId, job.policyId, true);
+      if (startupRecoveryCancelled || shutDown) return;
+      if (failures.size > 0) {
+        throw new MemosError("internal", "feedback evolution requires retry", {
+          feedbackId: job.feedbackId, stages: [...failures],
+        });
+      }
+      feedbackEvolution.acknowledge(job.feedbackId);
+    } catch (err) {
+      if (startupRecoveryCancelled || shutDown) return;
+      feedbackEvolution.put({
+        ...job, failedAttempts: (job.failedAttempts ?? 0) + 1, lastFailureAt: Date.now(),
+      });
+      log.warn("feedback.evolution_failed", {
+        feedbackId: job.feedbackId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      for (const off of unsubscribe) off();
     }
   }
 
@@ -1782,6 +2057,9 @@ export function createMemoryCore(
   function episodeRewardIsDirty(ep: EpisodeRow & { meta?: Record<string, unknown> }): boolean {
     const meta = ep.meta ?? {};
     if (meta.lightweightMemory === true) return false;
+    // Independent of reward coverage: explicit feedback does not reflect
+    // an episode, and an interrupted downstream pass still needs replay.
+    if (meta.deepProcessingPending === true) return true;
     // An intentional triviality skip is terminal and must take precedence
     // over a stale retry marker written by an older recovery attempt.
     if (rewardWasSkipped(ep)) return false;
@@ -1854,6 +2132,13 @@ export function createMemoryCore(
     const dirty = (ep.meta?.rewardDirty as
       | { failedAttempts?: unknown; lastFailureAt?: unknown }
       | undefined) ?? {};
+    return rewardRetryBackoffElapsed(dirty, nowMs);
+  }
+
+  function rewardRetryBackoffElapsed(
+    dirty: { failedAttempts?: unknown; lastFailureAt?: unknown },
+    nowMs: number,
+  ): boolean {
     const attempts = typeof dirty.failedAttempts === "number" ? dirty.failedAttempts : 0;
     if (attempts < MAX_DIRTY_REWARD_ATTEMPTS) return true;
     const lastFailureAt = typeof dirty.lastFailureAt === "number" ? dirty.lastFailureAt : 0;
@@ -1868,7 +2153,7 @@ export function createMemoryCore(
   function snapshotFromRecoveredEpisode(
     ep: EpisodeRow & { meta?: Record<string, unknown> },
     endedAt: number,
-    opts: { recoveryReason?: string } = {},
+    opts: { recoveryReason?: string; closedBy?: EpisodeCloseReason } = {},
   ): EpisodeSnapshot {
     const traceIds = (ep.traceIds ?? []) as TraceId[];
     const traces =
@@ -1942,7 +2227,7 @@ export function createMemoryCore(
       traceIds,
       meta: {
         ...(ep.meta ?? {}),
-        closeReason: "finalized",
+        closeReason: opts.closedBy ?? "finalized",
         recoveredAtStartup: endedAt,
         recoveryReason: opts.recoveryReason ?? "missed_session_end",
       },
@@ -1975,6 +2260,7 @@ export function createMemoryCore(
   async function shutdown(): Promise<void> {
     if (shutDown) return;
     shutDown = true;
+    for (const timer of recoveryTimers.splice(0)) clearInterval(timer);
     try {
       // Make sure the background startup recovery (issue #1808) has
       // finished before we tear down the bus / DB handle. Without this
@@ -2114,6 +2400,30 @@ export function createMemoryCore(
   }
 
   // ─── Session / episode ──
+  async function flushBeforeClose(): Promise<void> {
+    if (handle.algorithm.deepProcessing.mode !== "window") {
+      await handle.flush();
+      return;
+    }
+    if (deepWindow.shouldDefer()) return;
+    const controller = new AbortController();
+    const windowClosed = async (): Promise<void> => {
+      // A provider can outlive shutdown's bounded flush if it ignores abort.
+      // The adapter's close request must still be able to finish.
+      while (!shutDown && deepWindow.isOpen()) {
+        await waitForRetry(1_000, controller.signal);
+      }
+    };
+    try {
+      // Let the background chain resume in the next window without holding
+      // an adapter's close RPC open overnight. The durable pending marker
+      // survives if that adapter exits before the next window.
+      await Promise.race([handle.flush(), windowClosed()]);
+    } finally {
+      controller.abort();
+    }
+  }
+
   async function openSession(input: {
     agent: AgentKind;
     sessionId?: SessionId;
@@ -2143,7 +2453,7 @@ export function createMemoryCore(
     handle.sessionManager.closeSession(sessionId, "client");
     turnStartApiLogBySession.delete(sessionId);
     try {
-      await handle.flush();
+      await flushBeforeClose();
     } catch (err) {
       log.warn("closeSession.flush_failed", {
         sessionId,
@@ -2193,7 +2503,7 @@ export function createMemoryCore(
     // extra latency on the close call — but the chat is already done
     // at this point, so the user doesn't wait on it.
     try {
-      await handle.flush();
+      await flushBeforeClose();
     } catch (err) {
       log.warn("closeEpisode.flush_failed", {
         episodeId,
@@ -2462,6 +2772,15 @@ export function createMemoryCore(
       rationale: feedback.rationale ?? null,
       raw: feedback.raw ?? null,
     };
+    const episode = row.episodeId
+      ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
+      : null;
+    const lightweightFeedback = handle.algorithm.lightweightMemory.enabled ||
+      (episode ? isLightweightEpisode(episode) : false);
+    const deferEvolution = !lightweightFeedback && handle.algorithm.deepProcessing.mode === "window";
+    const job: FeedbackEvolutionJob = {
+      feedbackId: row.id, queuedAt: ts, episodeId: episode?.id, prepared: false,
+    };
     handle.db.tx(() => {
       handle.repos.feedback.insert(row);
       if (targetTrace) {
@@ -2475,29 +2794,57 @@ export function createMemoryCore(
           priority: Math.max(targetTrace.priority, Math.abs(explicitValue)),
         });
       }
+      // Record the obligation with the feedback itself. A crash during
+      // scoring/experience extraction can then resume preparation on restart.
+      if (deferEvolution) feedbackEvolution.put(job);
     });
 
-    const episode = row.episodeId
-      ? handle.repos.episodes.getById(row.episodeId as EpisodeId)
-      : null;
     const trace = row.traceId
       ? handle.repos.traces.getById(row.traceId as TraceId)
       : null;
-    const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
-    const text = feedbackText(row);
-    const lightweightFeedback = handle.algorithm.lightweightMemory.enabled ||
-      (episode ? isLightweightEpisode(episode) : false);
 
-    if (lightweightFeedback) {
-      if (telemetry) {
-        telemetry.trackFeedback(
-          handle.namespace.agentKind,
-          feedback.polarity,
-        );
+    if (!lightweightFeedback) {
+      feedbackEvolutionInFlight.add(row.id);
+      try {
+        const prepared = await prepareFeedbackEvolution(row, episode, trace, deferEvolution);
+        if (shutDown) return toFeedbackDTO(row);
+        if (deferEvolution) {
+          if (episode || prepared.policyId || prepared.reward) {
+            feedbackEvolution.put({ ...job, ...prepared, prepared: true });
+          } else {
+            feedbackEvolution.acknowledge(row.id);
+          }
+        } else {
+          try {
+            await runFeedbackDownstream(episode?.id, prepared.policyId);
+          } catch (err) {
+            log.warn("feedback.downstream_flush_failed", {
+              episodeId: episode?.id,
+              policyId: prepared.policyId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      } finally {
+        feedbackEvolutionInFlight.delete(row.id);
       }
-      return toFeedbackDTO(row);
     }
 
+    if (telemetry) {
+      telemetry.trackFeedback(handle.namespace.agentKind, feedback.polarity);
+    }
+    return toFeedbackDTO(row);
+  }
+
+  async function prepareFeedbackEvolution(
+    row: FeedbackRow,
+    episode: EpisodeRow | null,
+    trace: TraceRow | null,
+    deferEvolution: boolean,
+  ): Promise<{ reward?: RewardResult; policyId?: PolicyId }> {
+    const sessionId = episode?.sessionId ?? trace?.sessionId ?? null;
+    const text = feedbackText(row);
+    let reward: RewardResult | undefined;
     if (episode && sessionId) {
       const rewardFeedback: UserFeedback = {
         id: row.id as UserFeedback["id"],
@@ -2512,10 +2859,11 @@ export function createMemoryCore(
         rationale: row.rationale,
       };
       try {
-        await handle.rewardRunner.run({
+        reward = await handle.rewardRunner.run({
           episodeId: episode.id,
           feedback: [rewardFeedback],
           trigger: "explicit_feedback",
+          ...(deferEvolution ? { deferEvolution: true } : {}),
         });
       } catch (err) {
         log.warn("feedback.reward_failed", {
@@ -2525,6 +2873,7 @@ export function createMemoryCore(
       }
     }
 
+    if (shutDown) return { reward };
     if (text && sessionId) {
       try {
         await handle.feedback.submitUserFeedback({
@@ -2541,6 +2890,7 @@ export function createMemoryCore(
       }
     }
 
+    if (shutDown) return { reward };
     let policyId: PolicyId | undefined;
     try {
       const experience = await runFeedbackExperience(
@@ -2560,33 +2910,39 @@ export function createMemoryCore(
         err: err instanceof Error ? err.message : String(err),
       });
     }
+    return { reward, policyId };
+  }
 
-    try {
-      await handle.l2.drain();
-      if (policyId) {
-        await handle.skills.runOnce({ trigger: "manual", policyId });
-      }
-      if (episode) {
-        await handle.l3.runOnce({ trigger: "manual", episodeId: episode.id });
-      }
-      await handle.skills.flush();
-      await handle.feedback.flush();
+  async function runFeedbackDownstream(
+    episodeId?: EpisodeId,
+    policyId?: PolicyId,
+    waitForL3 = false,
+  ): Promise<void> {
+    if (shutDown) return;
+    await handle.l2.drain();
+    if (shutDown) return;
+    if (waitForL3) {
+      // L2 may already have started abstraction; runOnce otherwise skips
+      // the explicit feedback pass while that older run is in flight.
       await handle.l3.drain();
-    } catch (err) {
-      log.warn("feedback.downstream_flush_failed", {
-        episodeId: episode?.id,
-        policyId,
-        err: err instanceof Error ? err.message : String(err),
-      });
+      if (shutDown) return;
     }
-
-    if (telemetry) {
-      telemetry.trackFeedback(
-        handle.namespace.agentKind,
-        feedback.polarity,
-      );
+    if (policyId) {
+      await handle.skills.runOnce({ trigger: "manual", policyId });
     }
-    return toFeedbackDTO(row);
+    if (shutDown) return;
+    if (episodeId) {
+      const result = await handle.l3.runOnce({ trigger: "manual", episodeId });
+      if (waitForL3 && result.warnings.some((warning) => warning.stage === "noop")) {
+        throw new MemosError("conflict", "feedback abstraction is still pending");
+      }
+    }
+    if (shutDown) return;
+    await handle.skills.flush();
+    if (shutDown) return;
+    await handle.feedback.flush();
+    if (shutDown) return;
+    await handle.l3.drain();
   }
 
   function aggregateTraceFeedbackValue(rows: readonly FeedbackRow[]): number {

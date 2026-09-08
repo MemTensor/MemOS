@@ -9,7 +9,8 @@
  */
 
 import { rootLogger } from "../logger/index.js";
-import type { SessionEventBus } from "../session/types.js";
+import type { EpisodeId } from "../types.js";
+import type { EpisodeCloseReason, SessionEventBus } from "../session/types.js";
 import type { CaptureRunner } from "./capture.js";
 
 export interface CaptureSubscriberOptions {
@@ -21,6 +22,20 @@ export interface CaptureSubscriberOptions {
   captureAbandoned?: boolean;
   /** Callback for unhandled errors from fire-and-forget captures. */
   onError?: (err: unknown) => void;
+  /**
+   * Issue #2333 deep-processing window hook. When provided and
+   * `defer()` returns true, the subscriber does NOT run the topic-end
+   * reflect pass now — it calls `onDeferred` (which persists a queue
+   * entry) and returns. The batch drain re-emits `episode.finalized`
+   * inside the configured window, which lands back here with `defer()`
+   * false and the normal chain proceeds.
+   */
+  deferHook?: {
+    /** True when heavy evolution work must be deferred right now. */
+    defer: () => boolean;
+    /** Persist the episode for later batch processing. */
+    onDeferred: (episodeId: EpisodeId, closedBy: EpisodeCloseReason) => void;
+  };
 }
 
 export interface CaptureSubscription {
@@ -49,6 +64,23 @@ export function attachCaptureSubscriber(
     }
     if (evt.episode.meta?.lightweightMemory === true) {
       log.debug("subscriber.skip_lightweight", { episodeId: evt.episode.id });
+      return;
+    }
+    if (opts.deferHook && opts.deferHook.defer()) {
+      log.info("subscriber.deferred_to_deep_window", {
+        episodeId: evt.episode.id,
+        closedBy: evt.closedBy,
+      });
+      try {
+        opts.deferHook.onDeferred(evt.episode.id, evt.closedBy);
+      } catch (err) {
+        // Losing the queue entry must not lose the episode: the dirty-reward
+        // rescan picks it up again once the window opens.
+        log.error("subscriber.deferred_queue_failed", {
+          episodeId: evt.episode.id,
+          err: errDetail(err),
+        });
+      }
       return;
     }
     // Topic ended → batch reflect across every step + emit
