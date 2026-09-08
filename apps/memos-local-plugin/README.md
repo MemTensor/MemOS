@@ -120,6 +120,28 @@ npm pack
 bash install.sh --version ./memtensor-memos-local-plugin-1.0.0-beta.1.tgz
 ```
 
+For OpenClaw, use the installer for local archives too:
+
+```bash
+bash install.sh --agent openclaw --version ./memtensor-memos-local-plugin-2.0.16-beta.1.tgz
+```
+
+Do not substitute `openclaw plugins install ./package.tgz` for this command:
+that raw-archive path can resolve development-only DeepSeek peer dependencies
+and fail with `ERESOLVE`, including on OpenClaw 2026.9.1 and 2026.9.2.
+The installer stages production dependencies and rebuilds `better-sqlite3`.
+OpenClaw's newer `npm-pack:` path avoids the peer-resolution conflict, but a
+successful managed install alone does not verify native bindings or initialize
+MemOS runtime configuration; the installer above remains the supported setup.
+
+When upgrading OpenClaw itself, migrate retired host configuration with
+`openclaw doctor --fix` before installing MemOS. The MemOS installer removes its
+own legacy `plugins.installs` records, preserves other plugins' old-host records,
+and uses the host CLI for capability consent when available. It does not rewrite
+the host's internal installation database. See
+[the compatibility test results](docs/OPENCLAW-COMPATIBILITY.md) for tested versions
+and limits.
+
 On Windows, run `install.ps1` from PowerShell instead of `install.sh` for
 OpenClaw or Hermes. The DSH one-command target currently supports macOS/Linux;
 Windows users can use DSH's lower-level `dsh plugin` flow.
