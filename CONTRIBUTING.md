@@ -429,19 +429,19 @@ Questions, ideas, showing off what you built — pick whichever channe
 | [Discord](https://discord.gg/Txbx3gebZR) | Real-time chat, mostly English-speaking community |
 | [WeChat Group](https://statics.memtensor.com.cn/memos/qr-code.png) | 中文实时交流，国内用户首选 |
 
-For sensitive issues (security vulnerabilities, Code of Conduct concerns), please contact the maintainers privately rather than using public channels. See our [Code of Conduct](https://claude.ai/chat/CODE_OF_CONDUCT.md) for the reporting email.
+For sensitive issues (security vulnerabilities, Code of Conduct concerns), please contact the maintainers privately rather than using public channels. See our [Code of Conduct](CODE_OF_CONDUCT.md) for the reporting email.
 
 ---
 
 ## Code of Conduct
 
-By participating in this project, you agree to abide by our [Code of Conduct](https://claude.ai/chat/CODE_OF_CONDUCT.md). We're committed to making MemOS a welcoming, harassment-free community for everyone.
+By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md). We're committed to making MemOS a welcoming, harassment-free community for everyone.
 
 ---
 
 ## License
 
-MemOS is licensed under the [Apache License 2.0](https://claude.ai/chat/LICENSE). By contributing, you agree that your contributions will be licensed under the same license.
+MemOS is licensed under the [Apache License 2.0](LICENSE). By contributing, you agree that your contributions will be licensed under the same license.
 
 ---
 
