@@ -1,11 +1,16 @@
 import json
 
+from pathlib import Path
+
 from memos.configs.mem_cube import BaseMemCubeConfig, GeneralMemCubeConfig
 from tests.utils import (
     check_config_base_class,
     check_config_instantiation_invalid,
     check_config_instantiation_valid,
 )
+
+
+MEM_CUBE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "examples/data/mem_cube_2/config.json"
 
 
 def test_base_mem_cube_config():
@@ -28,13 +33,13 @@ def test_base_mem_cube_config():
 def test_general_mem_cube_config():
     check_config_base_class(
         GeneralMemCubeConfig,
-        factory_fields=["text_mem", "act_mem", "para_mem", "pref_mem"],
+        factory_fields=["cube_id", "text_mem", "act_mem", "para_mem", "pref_mem"],
         required_fields=[],
-        optional_fields=["config_filename", "user_id", "cube_id"],
+        optional_fields=["config_filename", "user_id"],
         reserved_fields=["model_schema"],
     )
 
-    with open("examples/data/mem_cube_2/config.json") as f:
+    with MEM_CUBE_CONFIG_PATH.open(encoding="utf-8") as f:
         config_data = json.load(f)
 
     check_config_instantiation_valid(
@@ -44,3 +49,14 @@ def test_general_mem_cube_config():
 
     config_data["text_mem"]["backend"] = "kv_cache"  # Invalid backend for text_mem
     check_config_instantiation_invalid(GeneralMemCubeConfig, config_data)
+
+
+def test_general_mem_cube_config_generates_unique_default_cube_ids():
+    with MEM_CUBE_CONFIG_PATH.open(encoding="utf-8") as f:
+        config_data = json.load(f)
+    config_data.pop("cube_id", None)
+
+    first_config = GeneralMemCubeConfig(**config_data)
+    second_config = GeneralMemCubeConfig(**config_data)
+
+    assert first_config.cube_id != second_config.cube_id
