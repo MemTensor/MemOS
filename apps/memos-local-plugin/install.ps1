@@ -59,7 +59,12 @@ function Invoke-OpenClawGatewayChecked {
     $PreviousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $GatewayOutput = @(& cmd.exe /d /c "openclaw gateway $Action" 2>&1)
+        $GatewayCommand = "openclaw gateway $Action"
+        if ($Action -eq "stop") {
+            $StopHelp = @(& cmd.exe /d /c "openclaw gateway stop --help" 2>&1) | Out-String
+            if ($StopHelp -match '--force') { $GatewayCommand += " --force" }
+        }
+        $GatewayOutput = @(& cmd.exe /d /c $GatewayCommand 2>&1)
         $ExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $PreviousErrorActionPreference
@@ -69,6 +74,45 @@ function Invoke-OpenClawGatewayChecked {
     }
     if ($ExitCode -ne 0) {
         throw "openclaw gateway $Action failed (exit code $ExitCode)"
+    }
+}
+
+function Enable-OpenClawMemoryPlugin {
+    # Host state formats change independently of the plugin. Let the host own
+    # validation and capability consent; do not edit its SQLite install index.
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $PreviousStateDir = $env:OPENCLAW_STATE_DIR
+    $PreviousConfigPath = $env:OPENCLAW_CONFIG_PATH
+    $ProbeDir = Join-Path $env:TEMP ("memos-openclaw-help-" + [guid]::NewGuid().ToString("N"))
+    $ErrorActionPreference = "Continue"
+    try {
+        $ConfigHelp = @(& cmd.exe /d /c "openclaw config --help" 2>&1) | Out-String
+        if ($ConfigHelp -match 'validate') {
+            $Output = @(& cmd.exe /d /c "openclaw config validate" 2>&1)
+            $ExitCode = $LASTEXITCODE
+            $Output | ForEach-Object { Write-Host "$_" }
+            if ($ExitCode -ne 0) { throw "OpenClaw config validation failed; run openclaw doctor --fix and retry." }
+        }
+        # Older plugin CLI help can load configured plugins. Probe with plugins
+        # disabled, then restore the real host paths before accepting consent.
+        New-Item -ItemType Directory -Path $ProbeDir -ErrorAction Stop | Out-Null
+        Set-Content -Path (Join-Path $ProbeDir "openclaw.json") -Value '{"plugins":{"enabled":false}}' -Encoding ASCII -ErrorAction Stop
+        $env:OPENCLAW_STATE_DIR = $ProbeDir
+        $env:OPENCLAW_CONFIG_PATH = Join-Path $ProbeDir "openclaw.json"
+        $EnableHelp = @(& cmd.exe /d /c "openclaw plugins enable --help" 2>&1) | Out-String
+        $env:OPENCLAW_STATE_DIR = $PreviousStateDir
+        $env:OPENCLAW_CONFIG_PATH = $PreviousConfigPath
+        if ($EnableHelp -match '--accept-capabilities') {
+            $Output = @(& cmd.exe /d /c "openclaw plugins enable memos-local-plugin --accept-capabilities" 2>&1)
+            $ExitCode = $LASTEXITCODE
+            $Output | ForEach-Object { Write-Host "$_" }
+            if ($ExitCode -ne 0) { throw "OpenClaw could not enable the MemOS plugin (exit code $ExitCode)." }
+        }
+    } finally {
+        $env:OPENCLAW_STATE_DIR = $PreviousStateDir
+        $env:OPENCLAW_CONFIG_PATH = $PreviousConfigPath
+        $ErrorActionPreference = $PreviousErrorActionPreference
+        if (Test-Path $ProbeDir) { Remove-Item -Recurse -Force $ProbeDir -ErrorAction SilentlyContinue }
     }
 }
 
@@ -662,6 +706,7 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
         Write-Success "openclaw.json patched"
 
         if ($OcBin) {
+            Enable-OpenClawMemoryPlugin
             Write-Info "Starting OpenClaw gateway"
             try {
                 Invoke-OpenClawGatewayChecked -Action "start"
