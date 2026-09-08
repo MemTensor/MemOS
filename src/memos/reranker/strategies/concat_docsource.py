@@ -101,10 +101,10 @@ class ConcatDocSourceStrategy(BaseRerankerStrategy):
         graph_results = kwargs.get("graph_results")
         documents = kwargs.get("documents")
         reconstructed_items = []
-        for idx in ranked_indices:
+        for idx, score in zip(ranked_indices, scores, strict=False):
             item = graph_results[idx]
             item.memory = f"{documents[idx]}"
-            reconstructed_items.append((item, scores[idx]))
+            reconstructed_items.append((item, score))
 
         reconstructed_items.sort(key=lambda x: x[1], reverse=True)
         return reconstructed_items[:top_k]
