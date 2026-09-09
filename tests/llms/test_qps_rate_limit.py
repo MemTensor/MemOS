@@ -6,6 +6,7 @@ import threading
 import time
 
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import httpx
@@ -332,16 +333,35 @@ def test_retry_after_is_honored():
 
 
 def test_permit_budget_is_shared_between_retries(monkeypatch):
+    now = 100.0
+
+    def advance(seconds):
+        nonlocal now
+        now += seconds
+
+    # Keep the clock local to the limiter so SDK/logging clocks are unaffected.
+    backoff = MagicMock(side_effect=advance)
+    monkeypatch.setattr(rate_limit, "time", SimpleNamespace(monotonic=lambda: now, sleep=backoff))
     replies = [
         httpx.Response(429, json={"error": {"message": "test"}}),
         httpx.Response(200, json=response_body()),
     ]
-    llm, limiter = make_llm(monkeypatch, lambda _: replies.pop(0))
-    limiter.acquire.side_effect = lambda **_: time.sleep(0.002)
-    assert llm.generate([]) == "ok"
-    budgets = [call.kwargs["timeout_seconds"] for call in limiter.acquire.call_args_list]
-    assert 0 < budgets[1] < budgets[0]
-    llm.client.close()
+
+    def respond(_):
+        advance(10.0)
+        return replies.pop(0)
+
+    llm, limiter = make_llm(monkeypatch, respond)
+    limiter.acquire.side_effect = lambda **_: advance(0.25)
+    try:
+        assert llm.generate([]) == "ok"
+        budgets = [call.kwargs["timeout_seconds"] for call in limiter.acquire.call_args_list]
+        initial_budget = llm.config.rate_limit.rule_for("gpt-4o-mini").max_wait_seconds
+        # Deduct permit waiting only, excluding model I/O and retry backoff.
+        assert budgets == pytest.approx([initial_budget, initial_budget - 0.25])
+        backoff.assert_called_once()
+    finally:
+        llm.client.close()
 
 
 def test_expired_waiter_does_not_send_when_redis_returns_late(monkeypatch):
