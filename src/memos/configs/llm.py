@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from pydantic import Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
+from memos.configs.llm_rate_limit import LLMRateLimitConfig
 
 
 class BaseLLMConfig(BaseConfig):
@@ -23,6 +24,17 @@ class BaseLLMConfig(BaseConfig):
 
 
 class OpenAILLMConfig(BaseLLMConfig):
+    rate_limit: LLMRateLimitConfig = Field(default_factory=LLMRateLimitConfig.load)
+
+    @field_validator("rate_limit", mode="before")
+    @classmethod
+    def load_rate_limit(cls, value: Any) -> LLMRateLimitConfig:
+        if isinstance(value, LLMRateLimitConfig):
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("rate_limit must be a configuration object")
+        return LLMRateLimitConfig.load(value)
+
     api_key: str = Field(..., description="API key for OpenAI")
     api_base: str = Field(
         default="https://api.openai.com/v1", description="Base URL for OpenAI API"
