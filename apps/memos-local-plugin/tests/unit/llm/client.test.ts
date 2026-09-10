@@ -546,6 +546,16 @@ describe("llm/client", () => {
       expect(s.circuitOpenedReason).toBeNull();
     });
 
+    it("LlmClientStats exposes circuit fields when closed", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.complete("x");
+      const s = client.stats();
+      expect(s.circuitOpen).toBe(false);
+      expect(s.circuitOpenUntil).toBeNull();
+      expect(s.circuitOpenedReason).toBeNull();
+    });
+
     it("re-opens the breaker if the half-open probe fails terminally again", async () => {
       const sink = statusSink();
       let now = 1_000_000;
@@ -570,5 +580,52 @@ describe("llm/client", () => {
       // Provider was touched twice total (initial trip + probe).
       expect(provider.calls).toBe(2);
     });
+  });
+
+  it("completeJson throws LLM_OUTPUT_MALFORMED with finishReason=length detail when provider returns finishReason=length", async () => {
+    const fake = new FakeProvider("openai_compatible", () => ({
+      text: '{"title":"x","domain_tags":["a","b"]',
+      finishReason: "length",
+      durationMs: 1,
+    }));
+    const client = createLlmClientWithProvider(cfg(), fake);
+    try {
+      await client.completeJson("ask");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MemosError);
+      expect((err as MemosError).code).toBe(ERROR_CODES.LLM_OUTPUT_MALFORMED);
+      expect((err as MemosError).details?.finishReason).toBe("length");
+      expect((err as MemosError).details?.rawLen).toBeGreaterThan(0);
+    }
+  });
+
+  it("completeJson includes rawLen in malformed error when truncated", async () => {
+    const rawText = '{"title":"x","domain_tags":["a","b"]';
+    const fake = new FakeProvider("openai_compatible", () => ({
+      text: rawText,
+      finishReason: "length",
+      durationMs: 1,
+    }));
+    const client = createLlmClientWithProvider(cfg(), fake);
+    try {
+      await client.completeJson("ask");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MemosError);
+      expect((err as MemosError).details?.rawLen).toBe(rawText.length);
+    }
+  });
+
+  it("completeJson succeeds normally when finishReason=stop and JSON is valid", async () => {
+    const fake = new FakeProvider("openai_compatible", () => ({
+      text: '{"title":"Good","items":[1,2,3]}',
+      finishReason: "stop",
+      durationMs: 1,
+    }));
+    const client = createLlmClientWithProvider(cfg(), fake);
+    const r = await client.completeJson<{ title: string; items: number[] }>("ask");
+    expect(r.value.title).toBe("Good");
+    expect(r.value.items).toEqual([1, 2, 3]);
   });
 });
