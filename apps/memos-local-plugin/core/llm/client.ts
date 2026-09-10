@@ -512,6 +512,41 @@ export function createLlmClientWithProvider(
       attempt++;
       const { completion } = await callWithFallback(msgs, call, opts, op);
       lastRaw = completion.text;
+
+      // Detect output truncation before attempting JSON parsing. When the
+      // provider signals `finishReason === "length"` the answer is incomplete
+      // by definition; parsing will fail (or worse: succeed on a nested sub-
+      // block), causing the caller's schema validator to report a field-level
+      // error that points the debugger at the model instead of the real cause.
+      // Surface a dedicated error immediately so the log clearly shows the
+      // truncation, including rawLen for budget diagnosis.
+      if (completion.finishReason === "length") {
+        const truncErr = new MemosError(
+          ERROR_CODES.LLM_OUTPUT_MALFORMED,
+          "LLM output truncated at maxTokens (finishReason=length); increase maxTokens or reduce prompt size",
+          {
+            provider: provider.name,
+            op,
+            finishReason: "length",
+            rawLen: completion.text.length,
+            rawPreview: completion.text.slice(0, 512),
+          },
+        );
+        lastErr = truncErr;
+        jsonLog.warn("malformed", {
+          op,
+          attempt,
+          finishReason: "length",
+          rawLen: completion.text.length,
+          err: summarizeErr(truncErr),
+        });
+        if (attempt <= maxMalformedRetries) {
+          retries++;
+          continue;
+        }
+        break;
+      }
+
       try {
         const parsed = opts.parse
           ? opts.parse(completion.text)
@@ -537,6 +572,7 @@ export function createLlmClientWithProvider(
         jsonLog.warn("malformed", {
           op,
           attempt,
+          rawLen: completion.text.length,
           err: summarizeErr(err),
         });
         if (attempt <= maxMalformedRetries) {
