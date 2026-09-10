@@ -65,7 +65,7 @@ fi
 : "${HOME:?HOME must be set for user-level plugin directory creation}"
 USER_HERMES_PLUGINS_DIR="${HOME}/.hermes/plugins/memory"
 mkdir -p "$USER_HERMES_PLUGINS_DIR"
-USER_TARGET="$USER_HERMES_PLUGINS_DIR/memtensor"
+USER_TARGET="${HOME}/.hermes/plugins/memtensor"
 # Clean up a pre-existing non-symlink entry (file or dir) left over from
 # a previous manual install so `ln -sfn` doesn't refuse or misbehave.
 if [[ -L "$USER_TARGET" ]]; then rm "$USER_TARGET"
