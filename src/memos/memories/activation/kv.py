@@ -276,6 +276,7 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
             new_layer = type(layer)()
             if getattr(layer, "keys", None) is not None:
                 new_layer.keys = layer.keys.clone()
+            if getattr(layer, "values", None) is not None:
                 new_layer.values = layer.values.clone()
             cloned.layers.append(new_layer)
     elif hasattr(cache, "key_cache"):
