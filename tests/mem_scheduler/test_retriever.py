@@ -360,3 +360,53 @@ class TestSchedulerRetriever(unittest.TestCase):
         # Should return all memories
         self.assertEqual(result, memories)
         self.assertTrue(success_flag)
+
+    def test_combined_filtering_still_filters_a_single_unrelated_memory(self):
+        """A lone memory must still go through unrelated filtering.
+
+        The combined filter used to return early on `len(memories) <= 1`, a
+        guard that only makes sense for redundancy (one memory cannot be
+        redundant with itself). Unrelated filtering is per-memory, so skipping
+        it left an off-topic memory sitting in working memory.
+        """
+        query_history = ["What is my deployment pipeline?"]
+        memories = [TextualMemoryItem(memory="The user's cat is named Whiskers")]
+
+        self.llm.generate.return_value = json.dumps(
+            {
+                "kept_memories": [],
+                "unrelated_removed_count": 1,
+                "redundant_removed_count": 0,
+                "reasoning": "No semantic connection to the deployment query",
+            }
+        )
+
+        result, success_flag = self.retriever.filter_unrelated_and_redundant_memories(
+            query_history=query_history, memories=memories
+        )
+
+        self.assertEqual(result, [])
+        self.assertTrue(success_flag)
+        # The LLM must actually be consulted, not short-circuited.
+        self.assertTrue(self.llm.generate.called)
+
+    def test_combined_filtering_keeps_a_single_relevant_memory(self):
+        """The counterpart: one on-topic memory must survive the filter."""
+        query_history = ["What is my deployment pipeline?"]
+        memories = [TextualMemoryItem(memory="Deployment uses a blue-green pipeline")]
+
+        self.llm.generate.return_value = json.dumps(
+            {
+                "kept_memories": [0],
+                "unrelated_removed_count": 0,
+                "redundant_removed_count": 0,
+                "reasoning": "Directly answers the deployment query",
+            }
+        )
+
+        result, success_flag = self.retriever.filter_unrelated_and_redundant_memories(
+            query_history=query_history, memories=memories
+        )
+
+        self.assertEqual(result, memories)
+        self.assertTrue(success_flag)
