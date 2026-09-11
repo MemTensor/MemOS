@@ -99,6 +99,12 @@ def test_get_cache_single_item_returns_independent_copy(kv_memory):
     merged.key_cache[0] = torch.cat([merged.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
     assert item.memory.key_cache[0].shape == (1, 2, 3)
 
+    # In-place mutation must not leak either: a clone sharing tensor storage
+    # would surface here even though the reference swap above passes.
+    merged.key_cache[0].fill_(99.0)
+    assert not torch.all(item.memory.key_cache[0] == 99.0), "get_cache shares storage with store"
+    assert item.memory.key_cache[0].shape == (1, 2, 3)
+
 
 def test_get_cache_multi_item_merge_does_not_alias_inputs(kv_memory):
     item1 = KVCacheItem(memory=make_filled_cache())
@@ -182,3 +188,27 @@ def test_clone_dynamic_cache_layers_guard_keys_and_values_independently():
     assert cloned.layers[0].values is None
     assert cloned.layers[1].keys is None
     assert torch.equal(cloned.layers[1].values, values_only.values)
+
+
+def test_clone_dynamic_cache_handles_per_layer_key_value_cache():
+    # Some transformers versions carry per-layer key_cache/value_cache
+    # instead of keys/values (mirrors move_dynamic_cache_htod); the clone
+    # must copy those tensors too instead of returning an empty layer.
+    class FakeLayer:
+        pass
+
+    class FakeLayeredCache:
+        pass
+
+    cache = FakeLayeredCache()
+    layer = FakeLayer()
+    layer.key_cache = torch.zeros(1, 2, 3)
+    layer.value_cache = torch.zeros(1, 2, 3)
+    cache.layers = [layer]
+
+    cloned = clone_dynamic_cache(cache)
+    assert torch.equal(cloned.layers[0].key_cache, layer.key_cache)
+    assert torch.equal(cloned.layers[0].value_cache, layer.value_cache)
+
+    cloned.layers[0].key_cache.fill_(99.0)
+    assert not torch.all(layer.key_cache == 99.0), "clone shares tensor storage with original"

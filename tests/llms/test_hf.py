@@ -201,9 +201,10 @@ class TestHFLLM(unittest.TestCase):
 
         def forward(*args, **kwargs):
             # transformers appends the new tokens' K/V to the cache in place.
+            # _prefill always passes the cache by keyword; .get keeps the mock
+            # resilient to an explicit-None caller without inventing a
+            # positional call shape.
             kv = kwargs.get("past_key_values")
-            if kv is None and len(args) > 1:
-                kv = args[1]
             kv.key_cache[0] = torch.cat([kv.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
             kv.value_cache[0] = torch.cat([kv.value_cache[0], torch.ones(1, 1, 3)], dim=-2)
             out = MagicMock()
