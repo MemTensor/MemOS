@@ -1,3 +1,6 @@
+import logging
+import pickle
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -33,11 +36,11 @@ def kv_memory(dummy_config):
         yield KVCacheMemory(dummy_config)
 
 
-def make_filled_cache():
-    # Create a DynamicCache with at least one dummy tensor layer
+def make_filled_cache(seq_len: int = 3, n_layers: int = 1):
+    """Create a DynamicCache with dummy tensors, on any transformers version."""
     cache = DynamicCache()
-    cache.key_cache.append(torch.zeros(1, 2, 3))
-    cache.value_cache.append(torch.zeros(1, 2, 3))
+    for layer_idx in range(n_layers):
+        cache.update(torch.zeros(1, 2, seq_len, 4), torch.zeros(1, 2, seq_len, 4), layer_idx)
     return cache
 
 
@@ -59,8 +62,11 @@ def test_get_cache_merge(kv_memory):
     merged = kv_memory.get_cache([item1.id, item2.id])
     assert isinstance(merged, DynamicCache)
     # Check the number of layers in merged key/value cache
-    assert len(merged.key_cache) == 1
-    assert len(merged.value_cache) == 1
+    if hasattr(merged, "layers"):
+        assert len(merged.layers) == 1
+    else:
+        assert len(merged.key_cache) == 1
+        assert len(merged.value_cache) == 1
 
 
 def test_delete_and_get_all(kv_memory):
@@ -84,3 +90,50 @@ def test_from_textual_memory(kv_memory):
     item = kv_memory.from_textual_memory(DummyTextualMemory())
     assert isinstance(item, KVCacheItem)
     assert item.metadata["bar"] == 1
+
+
+def test_dump_records_model_identity(kv_memory, tmp_path):
+    """A dumped cache must record which model produced it."""
+    kv_memory.config.extractor_llm.model_name_or_path = "org/model-a"
+    kv_memory.add([KVCacheItem(memory=make_filled_cache())])
+    kv_memory.dump(str(tmp_path))
+
+    with open(tmp_path / kv_memory.config.memory_filename, "rb") as f:
+        data = pickle.load(f)
+    assert data.get("model_identity") == {"model_name_or_path": "org/model-a"}
+
+
+def test_load_warns_on_model_mismatch(kv_memory, tmp_path, caplog):
+    """Loading a cache built by different weights must not be silent.
+
+    A KV cache is the internal activations of one specific set of weights. Loaded
+    into a different model it is accepted without error and simply shifts the
+    next-token distribution -- measured KL 0.08-0.92 with top-1 flips on 2 of 5
+    probes for a close fine-tune pair. Before this change nothing was recorded
+    and nothing was checked, so the mismatch was undetectable.
+    """
+    kv_memory.config.extractor_llm.model_name_or_path = "org/model-a"
+    kv_memory.add([KVCacheItem(memory=make_filled_cache())])
+    kv_memory.dump(str(tmp_path))
+
+    # same store, different weights
+    kv_memory.config.extractor_llm.model_name_or_path = "org/model-b"
+    with caplog.at_level(logging.WARNING, logger="memos.memories.activation.kv"):
+        kv_memory.load(str(tmp_path))
+
+    # getMessage() applies the lazy %-args; record.message only exists after a
+    # formatter has run, which is not guaranteed under caplog.
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("org/model-a" in m and "org/model-b" in m for m in messages), (
+        f"no mismatch warning naming both models; got {messages}"
+    )
+
+
+def test_load_is_quiet_when_model_matches(kv_memory, tmp_path, caplog):
+    """No warning when the cache is loaded under the weights that built it."""
+    kv_memory.config.extractor_llm.model_name_or_path = "org/model-a"
+    kv_memory.add([KVCacheItem(memory=make_filled_cache())])
+    kv_memory.dump(str(tmp_path))
+    with caplog.at_level(logging.WARNING, logger="memos.memories.activation.kv"):
+        kv_memory.load(str(tmp_path))
+    assert not [r for r in caplog.records if "was built with model" in r.getMessage()]
