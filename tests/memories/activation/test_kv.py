@@ -121,6 +121,12 @@ def test_clone_dynamic_cache_copies_legacy_tensors():
     cloned.key_cache[0] = torch.ones(1, 5, 3)
     assert cache.key_cache[0].shape == (1, 2, 3)
 
+    # In-place mutation must not leak either: catches a clone that shares
+    # tensor storage instead of copying.
+    cloned.key_cache[0].fill_(99.0)
+    assert not torch.all(cache.key_cache[0] == 99.0), "clone shares storage with original"
+    assert cache.key_cache[0].shape == (1, 2, 3)
+
 
 def test_clone_dynamic_cache_handles_layers_structure():
     # transformers >= 4.56 exposes DynamicCache.layers with per-layer keys/values.
@@ -145,3 +151,34 @@ def test_clone_dynamic_cache_handles_layers_structure():
 
     cloned.layers[0].keys = torch.ones(2, 2, 3)
     assert cache.layers[0].keys.shape == (1, 2, 3)
+
+    # In-place mutation must not leak either: catches a clone that shares
+    # tensor storage instead of copying.
+    cloned.layers[0].keys.fill_(99.0)
+    assert not torch.all(cache.layers[0].keys == 99.0), "clone shares tensor storage with original"
+    assert cache.layers[0].keys.shape == (1, 2, 3)
+
+
+def test_clone_dynamic_cache_layers_guard_keys_and_values_independently():
+    # A layer may legitimately have only one side populated; the clone must
+    # not crash on the missing side nor fabricate a value for it.
+    class FakeLayer:
+        def __init__(self):
+            self.keys = None
+            self.values = None
+
+    class FakeLayeredCache:
+        pass
+
+    cache = FakeLayeredCache()
+    keys_only = FakeLayer()
+    keys_only.keys = torch.zeros(1, 2, 3)
+    values_only = FakeLayer()
+    values_only.values = torch.zeros(1, 2, 4)
+    cache.layers = [keys_only, values_only]
+
+    cloned = clone_dynamic_cache(cache)
+    assert torch.equal(cloned.layers[0].keys, keys_only.keys)
+    assert cloned.layers[0].values is None
+    assert cloned.layers[1].keys is None
+    assert torch.equal(cloned.layers[1].values, values_only.values)

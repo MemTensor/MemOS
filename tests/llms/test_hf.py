@@ -201,11 +201,17 @@ class TestHFLLM(unittest.TestCase):
 
         def forward(*args, **kwargs):
             # transformers appends the new tokens' K/V to the cache in place.
-            kv = kwargs["past_key_values"]
+            kv = kwargs.get("past_key_values")
+            if kv is None and len(args) > 1:
+                kv = args[1]
             kv.key_cache[0] = torch.cat([kv.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
             kv.value_cache[0] = torch.cat([kv.value_cache[0], torch.ones(1, 1, 3)], dim=-2)
             out = MagicMock()
-            out.logits = torch.ones(1, 1, 100)
+            # Deterministic non-EOS argmax so the loop runs all max_tokens turns
+            # instead of sometimes sampling eos_token_id (2) on the first step.
+            logits = torch.full((1, 1, 100), -1e9)
+            logits[0, 0, 10] = 0.0
+            out.logits = logits
             out.past_key_values = kv
             return out
 
