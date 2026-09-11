@@ -206,7 +206,10 @@ class KVCacheMemory(BaseActMemory):
 
         assert caches, "Need at least one cache"
         if len(caches) == 1:
-            return caches[0]
+            # Return a copy: the stored cache must never be handed out by
+            # reference, because generation appends new K/V tensors to the
+            # cache object it receives and would grow the store every turn.
+            return clone_dynamic_cache(caches[0])
 
         merged = DynamicCache()
 
@@ -253,6 +256,34 @@ class KVCacheMemory(BaseActMemory):
             )
 
         return merged
+
+
+def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
+    """
+    Return an independent copy of a DynamicCache with cloned K/V tensors.
+
+    Generation mutates the cache object it receives in place, so a stored cache
+    must never be handed to a model by reference — hand out a clone instead.
+    Compatible with both old (key_cache/value_cache) and new (layers) structures.
+    """
+    cloned = DynamicCache()
+
+    if hasattr(cache, "layers"):
+        if not hasattr(cloned, "layers"):
+            cloned.layers = []
+
+        for layer in cache.layers:
+            new_layer = type(layer)()
+            if getattr(layer, "keys", None) is not None:
+                new_layer.keys = layer.keys.clone()
+                new_layer.values = layer.values.clone()
+            cloned.layers.append(new_layer)
+    elif hasattr(cache, "key_cache"):
+        for keys, values in zip(cache.key_cache, cache.value_cache):
+            cloned.key_cache.append(keys.clone() if keys is not None else None)
+            cloned.value_cache.append(values.clone() if values is not None else None)
+
+    return cloned
 
 
 def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> DynamicCache:

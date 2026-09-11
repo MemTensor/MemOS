@@ -82,7 +82,14 @@ class HFLLM(BaseLLM):
         if past_key_values is None:
             return self._generate_full(prompt, **kwargs)
         else:
-            return self._generate_with_cache(prompt, past_key_values, **kwargs)
+            from memos.memories.activation.kv import clone_dynamic_cache
+
+            # The model appends new K/V tensors to the cache it receives, so
+            # hand it a clone and keep the caller's cache (e.g. a stored
+            # activation memory) unchanged by this call.
+            return self._generate_with_cache(
+                prompt, clone_dynamic_cache(past_key_values), **kwargs
+            )
 
     def generate_stream(
         self, messages: MessageList, past_key_values: DynamicCache | None = None, **kwargs
@@ -102,7 +109,11 @@ class HFLLM(BaseLLM):
         if past_key_values is None:
             yield from self._generate_full_stream(prompt)
         else:
-            yield from self._generate_with_cache_stream(prompt, past_key_values)
+            from memos.memories.activation.kv import clone_dynamic_cache
+
+            yield from self._generate_with_cache_stream(
+                prompt, clone_dynamic_cache(past_key_values)
+            )
 
     def _generate_full(self, prompt: str, **kwargs) -> str:
         """
