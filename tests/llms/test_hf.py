@@ -182,3 +182,38 @@ class TestHFLLM(unittest.TestCase):
         kv_cache = DynamicCache()
         resp = llm.generate([{"role": "user", "content": "Sampling"}], past_key_values=kv_cache)
         self.assertEqual(resp, self.standard_response)
+
+    def test_generate_with_cache_does_not_mutate_caller_cache(self):
+        """Regression for issue #2301: generation must not append K/V tensors
+        into the caller's stored cache (activation memory grew every turn)."""
+        config = HFLLMConfig(
+            model_name_or_path="qwen3:0.6b",
+            temperature=0.7,
+            max_tokens=3,
+            do_sample=True,
+            add_generation_prompt=True,
+        )
+        llm = self._create_llm(config)
+
+        kv_cache = DynamicCache()
+        kv_cache.key_cache = [torch.zeros(1, 2, 3)]
+        kv_cache.value_cache = [torch.zeros(1, 2, 3)]
+
+        def forward(*args, **kwargs):
+            # transformers appends the new tokens' K/V to the cache in place.
+            kv = kwargs["past_key_values"]
+            kv.key_cache[0] = torch.cat([kv.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
+            kv.value_cache[0] = torch.cat([kv.value_cache[0], torch.ones(1, 1, 3)], dim=-2)
+            out = MagicMock()
+            out.logits = torch.ones(1, 1, 100)
+            out.past_key_values = kv
+            return out
+
+        self.mock_model.side_effect = forward
+        try:
+            llm.generate([{"role": "user", "content": "Hi"}], past_key_values=kv_cache)
+        finally:
+            self.mock_model.side_effect = None
+
+        self.assertEqual(kv_cache.key_cache[0].shape, (1, 2, 3))
+        self.assertEqual(kv_cache.value_cache[0].shape, (1, 2, 3))

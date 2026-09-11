@@ -7,7 +7,7 @@ from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
 from memos.memories.activation.item import KVCacheItem
-from memos.memories.activation.kv import KVCacheMemory
+from memos.memories.activation.kv import KVCacheMemory, clone_dynamic_cache
 
 
 @pytest.fixture
@@ -84,3 +84,64 @@ def test_from_textual_memory(kv_memory):
     item = kv_memory.from_textual_memory(DummyTextualMemory())
     assert isinstance(item, KVCacheItem)
     assert item.metadata["bar"] == 1
+
+def test_get_cache_single_item_returns_independent_copy(kv_memory):
+    # Regression for issue #2301: with a single cache, get_cache used to hand
+    # out the stored object, so generation appended new K/V tensors into the
+    # store and the activation memory grew every turn.
+    item = KVCacheItem(memory=make_filled_cache())
+    kv_memory.add([item])
+
+    merged = kv_memory.get_cache([item.id])
+    assert merged is not item.memory
+
+    # Simulate generation appending to the handed-out cache.
+    merged.key_cache[0] = torch.cat([merged.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
+    assert item.memory.key_cache[0].shape == (1, 2, 3)
+
+
+def test_get_cache_multi_item_merge_does_not_alias_inputs(kv_memory):
+    item1 = KVCacheItem(memory=make_filled_cache())
+    item2 = KVCacheItem(memory=make_filled_cache())
+    kv_memory.add([item1, item2])
+
+    merged = kv_memory.get_cache([item1.id, item2.id])
+    assert merged is not item1.memory
+    assert merged is not item2.memory
+
+
+def test_clone_dynamic_cache_copies_legacy_tensors():
+    cache = make_filled_cache()
+    cloned = clone_dynamic_cache(cache)
+
+    assert cloned is not cache
+    assert cloned.key_cache[0] is not cache.key_cache[0]
+    assert torch.equal(cloned.key_cache[0], cache.key_cache[0])
+
+    cloned.key_cache[0] = torch.ones(1, 5, 3)
+    assert cache.key_cache[0].shape == (1, 2, 3)
+
+
+def test_clone_dynamic_cache_handles_layers_structure():
+    # transformers >= 4.56 exposes DynamicCache.layers with per-layer keys/values.
+    class FakeLayer:
+        def __init__(self):
+            self.keys = None
+            self.values = None
+
+    class FakeLayeredCache:
+        pass
+
+    cache = FakeLayeredCache()
+    cache.layers = [FakeLayer()]
+    cache.layers[0].keys = torch.zeros(1, 2, 3)
+    cache.layers[0].values = torch.zeros(1, 2, 4)
+
+    cloned = clone_dynamic_cache(cache)
+    assert isinstance(cloned, DynamicCache)
+    assert len(cloned.layers) == 1
+    assert cloned.layers[0].keys is not cache.layers[0].keys
+    assert torch.equal(cloned.layers[0].keys, cache.layers[0].keys)
+
+    cloned.layers[0].keys = torch.ones(2, 2, 3)
+    assert cache.layers[0].keys.shape == (1, 2, 3)
