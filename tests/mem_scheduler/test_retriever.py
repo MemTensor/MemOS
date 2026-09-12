@@ -360,6 +360,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         # Should return all memories
         self.assertEqual(result, memories)
         self.assertTrue(success_flag)
+        self.assertTrue(self.llm.generate.called)
 
     def test_combined_filtering_still_filters_a_single_unrelated_memory(self):
         """A lone memory must still go through unrelated filtering.
