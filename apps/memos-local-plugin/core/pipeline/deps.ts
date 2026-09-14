@@ -336,7 +336,12 @@ export function buildPipelineSubscribers(
   const skillHandle = attachSkillSubscriber({
     repos: deps.repos,
     embedder: bgEmbedder,
-    llm: bgLlm,
+    // Skill crystallization / evolution runs on the dedicated
+    // `skillEvolver.*` client when configured, falling back to the main
+    // llm when no distinct config is supplied. Without this, operators
+    // configuring a separate skillEvolver model were silently ignored and
+    // `skillEvolver.lastOkAt` never advanced. See issue #2362.
+    llm: bgReflectLlm ?? bgLlm,
     bus: buses.skill,
     l2Bus: buses.l2,
     rewardBus: buses.reward,
