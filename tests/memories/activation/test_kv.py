@@ -85,6 +85,7 @@ def test_from_textual_memory(kv_memory):
     assert isinstance(item, KVCacheItem)
     assert item.metadata["bar"] == 1
 
+
 def test_get_cache_single_item_returns_independent_copy(kv_memory):
     # Regression for issue #2301: with a single cache, get_cache used to hand
     # out the stored object, so generation appended new K/V tensors into the

@@ -87,9 +87,7 @@ class HFLLM(BaseLLM):
             # The model appends new K/V tensors to the cache it receives, so
             # hand it a clone and keep the caller's cache (e.g. a stored
             # activation memory) unchanged by this call.
-            return self._generate_with_cache(
-                prompt, clone_dynamic_cache(past_key_values), **kwargs
-            )
+            return self._generate_with_cache(prompt, clone_dynamic_cache(past_key_values), **kwargs)
 
     def generate_stream(
         self, messages: MessageList, past_key_values: DynamicCache | None = None, **kwargs
