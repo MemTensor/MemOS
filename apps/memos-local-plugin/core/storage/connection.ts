@@ -62,7 +62,6 @@ export function openDb(opts: OpenDbOptions): StorageDb {
   } else {
     raw.pragma(`busy_timeout = ${busyTimeoutMs}`);
     raw.pragma("foreign_keys = ON");
-    raw.pragma("recursive_triggers = ON");
   }
 
   // We deliberately type the cache as `any` — the upstream Statement type is
