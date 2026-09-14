@@ -9,30 +9,9 @@ from transformers import DynamicCache
 from memos.configs.llm import HFLLMConfig, LLMConfigFactory
 from memos.llms.factory import LLMFactory
 from memos.llms.hf import HFLLM
-
-
-def _make_filled_cache():
-    cache = DynamicCache()
-    if hasattr(cache, "layers"):
-        keys = torch.zeros(1, 2, 3, 4)
-        values = torch.zeros(1, 2, 3, 4)
-        cache.update(keys, values, layer_idx=0)
-    else:
-        cache.key_cache.append(torch.zeros(1, 2, 3))
-        cache.value_cache.append(torch.zeros(1, 2, 3))
-    return cache
-
-
-def _cache_keys(cache):
-    if hasattr(cache, "layers"):
-        return cache.layers[0].keys
-    return cache.key_cache[0]
-
-
-def _cache_values(cache):
-    if hasattr(cache, "layers"):
-        return cache.layers[0].values
-    return cache.value_cache[0]
+from tests.cache_helpers import cache_keys as _cache_keys
+from tests.cache_helpers import cache_values as _cache_values
+from tests.cache_helpers import make_filled_cache as _make_filled_cache
 
 
 @patch("transformers.AutoModelForCausalLM", MagicMock())
@@ -222,6 +201,7 @@ class TestHFLLM(unittest.TestCase):
         kv_cache = _make_filled_cache()
         original_key_shape = _cache_keys(kv_cache).shape
         original_value_shape = _cache_values(kv_cache).shape
+        captured = {}
 
         def forward(*args, **kwargs):
             # transformers appends the new tokens' K/V to the cache in place.
@@ -230,6 +210,7 @@ class TestHFLLM(unittest.TestCase):
             # positional call shape.
             kv = kwargs.get("past_key_values")
             self.assertIsNotNone(kv, "forward() called without past_key_values")
+            captured["kv"] = kv
             if hasattr(kv, "layers"):
                 kv.layers[0].keys = torch.cat([kv.layers[0].keys, torch.ones(1, 2, 1, 4)], dim=-2)
                 kv.layers[0].values = torch.cat(
@@ -255,3 +236,5 @@ class TestHFLLM(unittest.TestCase):
 
         self.assertEqual(_cache_keys(kv_cache).shape, original_key_shape)
         self.assertEqual(_cache_values(kv_cache).shape, original_value_shape)
+        self.assertIsNotNone(captured.get("kv"))
+        self.assertIsNot(captured["kv"], kv_cache)

@@ -314,8 +314,12 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
         # the cache itself.  Keep that state independent of the stored cache;
         # key/value lists are populated from cloned tensors below.
         for attr, value in vars(cache).items():
-            if attr not in {"key_cache", "value_cache"} and not isinstance(value, torch.Tensor):
-                setattr(cloned, attr, copy.deepcopy(value))
+            if attr not in {"key_cache", "value_cache"}:
+                setattr(
+                    cloned,
+                    attr,
+                    value.clone() if isinstance(value, torch.Tensor) else copy.deepcopy(value),
+                )
         for keys, values in zip(cache.key_cache, cache.value_cache, strict=True):
             cloned.key_cache.append(keys.clone() if keys is not None else None)
             cloned.value_cache.append(values.clone() if values is not None else None)
