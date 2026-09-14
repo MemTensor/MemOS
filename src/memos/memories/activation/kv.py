@@ -252,9 +252,7 @@ class KVCacheMemory(BaseActMemory):
                 merged.value_cache.append(torch.cat(vals, dim=-2))
 
         else:
-            raise AttributeError(
-                "DynamicCache object has neither 'layers' nor 'key_cache' attributes"
-            )
+            raise TypeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
 
         return merged
 
@@ -309,11 +307,11 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
         for attr, value in vars(cache).items():
             if attr not in {"key_cache", "value_cache"} and not isinstance(value, torch.Tensor):
                 setattr(cloned, attr, copy.deepcopy(value))
-        for keys, values in zip(cache.key_cache, cache.value_cache, strict=False):
+        for keys, values in zip(cache.key_cache, cache.value_cache, strict=True):
             cloned.key_cache.append(keys.clone() if keys is not None else None)
             cloned.value_cache.append(values.clone() if values is not None else None)
     else:
-        raise AttributeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
+        raise TypeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
 
     return cloned
 

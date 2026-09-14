@@ -147,6 +147,14 @@ def test_clone_dynamic_cache_preserves_legacy_cache_state():
     assert cache._seen_tokens == 2
 
 
+def test_clone_dynamic_cache_rejects_mismatched_legacy_layers():
+    cache = make_filled_cache()
+    cache.value_cache.clear()
+
+    with pytest.raises(ValueError, match=r"zip\(\) argument 2 is shorter than argument 1"):
+        clone_dynamic_cache(cache)
+
+
 def test_clone_dynamic_cache_handles_layers_structure():
     # transformers >= 4.56 exposes DynamicCache.layers with per-layer keys/values.
     class FakeLayer:
@@ -297,7 +305,7 @@ def test_clone_dynamic_cache_rejects_unknown_shape():
     class UnknownCache:
         pass
 
-    with pytest.raises(AttributeError, match="neither 'layers' nor 'key_cache'"):
+    with pytest.raises(TypeError, match="neither 'layers' nor 'key_cache'"):
         clone_dynamic_cache(UnknownCache())
 
 
