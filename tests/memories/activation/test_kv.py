@@ -135,6 +135,18 @@ def test_clone_dynamic_cache_copies_legacy_tensors():
     assert cache.key_cache[0].shape == (1, 2, 3)
 
 
+def test_clone_dynamic_cache_preserves_legacy_cache_state():
+    cache = make_filled_cache()
+    cache._seen_tokens = 2
+
+    cloned = clone_dynamic_cache(cache)
+
+    assert cloned._seen_tokens == 2
+    cloned.update(torch.ones(1, 1, 3), torch.ones(1, 1, 3), layer_idx=0)
+    assert cloned._seen_tokens == 3
+    assert cache._seen_tokens == 2
+
+
 def test_clone_dynamic_cache_handles_layers_structure():
     # transformers >= 4.56 exposes DynamicCache.layers with per-layer keys/values.
     class FakeLayer:
@@ -257,6 +269,28 @@ def test_clone_dynamic_cache_preserves_layer_state():
     cloned.layers[0].update(torch.ones(1, 1, 3), torch.ones(1, 1, 3))
     assert cloned.layers[0].keys.shape == (1, 3, 3)
     assert cloned.layers[0].values.shape == (1, 3, 3)
+
+
+def test_clone_dynamic_cache_copies_mutable_layer_state():
+    class FakeLayer:
+        def __init__(self):
+            self.keys = None
+            self.values = None
+            self.metadata = {"history": ["original"]}
+
+    class FakeLayeredCache:
+        pass
+
+    cache = FakeLayeredCache()
+    cache.layers = [FakeLayer()]
+
+    cloned = clone_dynamic_cache(cache)
+    cloned.layers[0].metadata["history"].append("clone")
+
+    assert cloned.layers[0].metadata == {"history": ["original", "clone"]}
+    assert cache.layers[0].metadata == {"history": ["original"]}
+    assert cloned.layers[0].metadata is not cache.layers[0].metadata
+    assert cloned.layers[0].metadata["history"] is not cache.layers[0].metadata["history"]
 
 
 def test_clone_dynamic_cache_rejects_unknown_shape():

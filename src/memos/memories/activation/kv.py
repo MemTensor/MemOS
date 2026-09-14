@@ -1,3 +1,4 @@
+import copy
 import os
 import pickle
 
@@ -279,7 +280,7 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
             # is_initialized and _seen_tokens, before copying K/V tensors.
             for attr, value in vars(layer).items():
                 if not isinstance(value, torch.Tensor):
-                    setattr(new_layer, attr, value)
+                    setattr(new_layer, attr, copy.deepcopy(value))
             # transformers>=4.56 layers expose keys/values, but some versions
             # instead carry per-layer key_cache/value_cache (see
             # move_dynamic_cache_htod); a clone that skips one shape would
@@ -302,6 +303,12 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
                     new_layer.values = layer.values.clone()
             cloned.layers.append(new_layer)
     elif hasattr(cache, "key_cache"):
+        # Legacy DynamicCache keeps generation state such as _seen_tokens on
+        # the cache itself.  Keep that state independent of the stored cache;
+        # key/value lists are populated from cloned tensors below.
+        for attr, value in vars(cache).items():
+            if attr not in {"key_cache", "value_cache"} and not isinstance(value, torch.Tensor):
+                setattr(cloned, attr, copy.deepcopy(value))
         for keys, values in zip(cache.key_cache, cache.value_cache, strict=False):
             cloned.key_cache.append(keys.clone() if keys is not None else None)
             cloned.value_cache.append(values.clone() if values is not None else None)
