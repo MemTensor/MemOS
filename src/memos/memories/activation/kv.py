@@ -266,14 +266,20 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
     must never be handed to a model by reference — hand out a clone instead.
     Compatible with both old (key_cache/value_cache) and new (layers) structures.
     """
+    import torch
+
     cloned = DynamicCache()
 
     if hasattr(cache, "layers"):
         if not hasattr(cloned, "layers"):
             cloned.layers = []
-
         for layer in cache.layers:
             new_layer = type(layer)()
+            # Preserve non-tensor state used by DynamicLayer.update(), such as
+            # is_initialized and _seen_tokens, before copying K/V tensors.
+            for attr, value in vars(layer).items():
+                if not isinstance(value, torch.Tensor):
+                    setattr(new_layer, attr, value)
             # transformers>=4.56 layers expose keys/values, but some versions
             # instead carry per-layer key_cache/value_cache (see
             # move_dynamic_cache_htod); a clone that skips one shape would
@@ -299,6 +305,8 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
         for keys, values in zip(cache.key_cache, cache.value_cache, strict=False):
             cloned.key_cache.append(keys.clone() if keys is not None else None)
             cloned.value_cache.append(values.clone() if values is not None else None)
+    else:
+        raise AttributeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
 
     return cloned
 

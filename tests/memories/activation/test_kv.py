@@ -156,13 +156,13 @@ def test_clone_dynamic_cache_handles_layers_structure():
     assert cloned.layers[0].keys is not cache.layers[0].keys
     assert torch.equal(cloned.layers[0].keys, cache.layers[0].keys)
 
-    cloned.layers[0].keys = torch.ones(2, 2, 3)
-    assert cache.layers[0].keys.shape == (1, 2, 3)
-
-    # In-place mutation must not leak either: catches a clone that shares
-    # tensor storage instead of copying.
+    # In-place mutation must not leak either: verify storage independence
+    # before replacing the layer attribute.
     cloned.layers[0].keys.fill_(99.0)
     assert not torch.all(cache.layers[0].keys == 99.0), "clone shares tensor storage with original"
+    cloned.layers[0].keys.zero_()
+
+    cloned.layers[0].keys = torch.ones(2, 2, 3)
     assert cache.layers[0].keys.shape == (1, 2, 3)
 
 
@@ -217,6 +217,54 @@ def test_clone_dynamic_cache_handles_per_layer_key_value_cache():
     assert not torch.all(layer.value_cache == 99.0), (
         "clone shares value_cache tensor storage with original"
     )
+
+
+def test_clone_dynamic_cache_preserves_layer_state():
+    # DynamicLayer.update() uses these flags to decide whether to append to or
+    # replace the existing history on its first update.
+    class StatefulLayer:
+        def __init__(self):
+            self.is_initialized = False
+            self._seen_tokens = 0
+            self.keys = None
+            self.values = None
+
+        def update(self, keys, values):
+            if self.is_initialized:
+                self.keys = torch.cat([self.keys, keys], dim=-2)
+                self.values = torch.cat([self.values, values], dim=-2)
+            else:
+                self.keys = keys
+                self.values = values
+                self.is_initialized = True
+            self._seen_tokens += keys.shape[-2]
+
+    class FakeLayeredCache:
+        pass
+
+    cache = FakeLayeredCache()
+    layer = StatefulLayer()
+    layer.keys = torch.zeros(1, 2, 3)
+    layer.values = torch.zeros(1, 2, 3)
+    layer.is_initialized = True
+    layer._seen_tokens = 2
+    cache.layers = [layer]
+
+    cloned = clone_dynamic_cache(cache)
+
+    assert cloned.layers[0].is_initialized is True
+    assert cloned.layers[0]._seen_tokens == 2
+    cloned.layers[0].update(torch.ones(1, 1, 3), torch.ones(1, 1, 3))
+    assert cloned.layers[0].keys.shape == (1, 3, 3)
+    assert cloned.layers[0].values.shape == (1, 3, 3)
+
+
+def test_clone_dynamic_cache_rejects_unknown_shape():
+    class UnknownCache:
+        pass
+
+    with pytest.raises(AttributeError, match="neither 'layers' nor 'key_cache'"):
+        clone_dynamic_cache(UnknownCache())
 
 
 def test_clone_dynamic_cache_prefers_per_layer_cache_attributes():
