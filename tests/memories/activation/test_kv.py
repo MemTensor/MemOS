@@ -34,10 +34,64 @@ def kv_memory(dummy_config):
 
 
 def make_filled_cache():
-    # Create a DynamicCache with at least one dummy tensor layer
+    # Populate through DynamicCache.update so this helper works with both the
+    # legacy key_cache API and transformers >=4.56's layers API.
     cache = DynamicCache()
-    cache.key_cache.append(torch.zeros(1, 2, 3))
-    cache.value_cache.append(torch.zeros(1, 2, 3))
+    if hasattr(cache, "layers"):
+        keys = torch.zeros(1, 2, 3, 4)
+        values = torch.zeros(1, 2, 3, 4)
+        cache.update(keys, values, layer_idx=0)
+    else:
+        cache.key_cache.append(torch.zeros(1, 2, 3))
+        cache.value_cache.append(torch.zeros(1, 2, 3))
+    return cache
+
+
+def cache_keys(cache, layer_idx=0):
+    if hasattr(cache, "layers"):
+        return cache.layers[layer_idx].keys
+    return cache.key_cache[layer_idx]
+
+
+def cache_values(cache, layer_idx=0):
+    if hasattr(cache, "layers"):
+        return cache.layers[layer_idx].values
+    return cache.value_cache[layer_idx]
+
+
+def set_cache_keys(cache, value, layer_idx=0):
+    if hasattr(cache, "layers"):
+        cache.layers[layer_idx].keys = value
+    else:
+        cache.key_cache[layer_idx] = value
+
+
+def cache_layer_count(cache):
+    if hasattr(cache, "layers"):
+        return len(cache.layers)
+    return len(cache.key_cache)
+
+
+def make_real_hybrid_cache(populate=True):
+    if not hasattr(DynamicCache(), "layers"):
+        pytest.skip("requires transformers >=4.56")
+
+    class HybridConfig:
+        num_hidden_layers = 2
+        sliding_window = 4
+
+        def __init__(self):
+            self.layer_types = ["full_attention", "sliding_attention"]
+
+        def get_text_config(self):
+            return self
+
+    cache = DynamicCache(config=HybridConfig())
+    if populate:
+        keys = torch.zeros(1, 2, 3, 4)
+        values = torch.zeros(1, 2, 3, 4)
+        cache.update(keys, values, layer_idx=0)
+        cache.update(keys, values, layer_idx=1)
     return cache
 
 
@@ -59,8 +113,8 @@ def test_get_cache_merge(kv_memory):
     merged = kv_memory.get_cache([item1.id, item2.id])
     assert isinstance(merged, DynamicCache)
     # Check the number of layers in merged key/value cache
-    assert len(merged.key_cache) == 1
-    assert len(merged.value_cache) == 1
+    assert cache_layer_count(merged) == 1
+    assert cache_values(merged) is not None
 
 
 def test_delete_and_get_all(kv_memory):
@@ -95,16 +149,19 @@ def test_get_cache_single_item_returns_independent_copy(kv_memory):
 
     merged = kv_memory.get_cache([item.id])
     assert merged is not item.memory
+    original_shape = cache_keys(item.memory).shape
 
     # In-place mutation must not leak either: verify storage independence
     # before replacing the list slot with generation's appended tensor.
-    merged.key_cache[0].fill_(99.0)
-    assert not torch.all(item.memory.key_cache[0] == 99.0), "get_cache shares storage with store"
-    merged.key_cache[0].zero_()
+    merged_keys = cache_keys(merged)
+    merged_keys.fill_(99.0)
+    assert not torch.all(cache_keys(item.memory) == 99.0), "get_cache shares storage with store"
+    merged_keys.zero_()
 
     # Simulate generation appending to the handed-out cache.
-    merged.key_cache[0] = torch.cat([merged.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
-    assert item.memory.key_cache[0].shape == (1, 2, 3)
+    appended = torch.ones((*merged_keys.shape[:-2], 1, merged_keys.shape[-1]))
+    set_cache_keys(merged, torch.cat([merged_keys, appended], dim=-2))
+    assert cache_keys(item.memory).shape == original_shape
 
 
 def test_get_cache_multi_item_merge_does_not_alias_inputs(kv_memory):
@@ -119,24 +176,29 @@ def test_get_cache_multi_item_merge_does_not_alias_inputs(kv_memory):
 
 def test_clone_dynamic_cache_copies_legacy_tensors():
     cache = make_filled_cache()
+    original_shape = cache_keys(cache).shape
     cloned = clone_dynamic_cache(cache)
 
     assert cloned is not cache
-    assert cloned.key_cache[0] is not cache.key_cache[0]
-    assert torch.equal(cloned.key_cache[0], cache.key_cache[0])
+    assert cache_keys(cloned) is not cache_keys(cache)
+    assert torch.equal(cache_keys(cloned), cache_keys(cache))
 
     # In-place mutation must not leak either: verify storage independence
     # before replacing the list slot.
-    cloned.key_cache[0].fill_(99.0)
-    assert not torch.all(cache.key_cache[0] == 99.0), "clone shares storage with original"
-    cloned.key_cache[0].zero_()
+    cloned_keys = cache_keys(cloned)
+    cloned_keys.fill_(99.0)
+    assert not torch.all(cache_keys(cache) == 99.0), "clone shares storage with original"
+    cloned_keys.zero_()
 
-    cloned.key_cache[0] = torch.ones(1, 5, 3)
-    assert cache.key_cache[0].shape == (1, 2, 3)
+    replacement = torch.ones((*cloned_keys.shape[:-2], 5, cloned_keys.shape[-1]))
+    set_cache_keys(cloned, replacement)
+    assert cache_keys(cache).shape == original_shape
 
 
 def test_clone_dynamic_cache_preserves_legacy_cache_state():
     cache = make_filled_cache()
+    if not hasattr(cache, "key_cache"):
+        pytest.skip("_seen_tokens is legacy DynamicCache state")
     cache._seen_tokens = 2
 
     cloned = clone_dynamic_cache(cache)
@@ -148,10 +210,14 @@ def test_clone_dynamic_cache_preserves_legacy_cache_state():
 
 
 def test_clone_dynamic_cache_rejects_mismatched_legacy_layers():
-    cache = make_filled_cache()
-    cache.value_cache.clear()
+    class LegacyCache:
+        def __init__(self):
+            self.key_cache = [torch.zeros(1, 2, 3)]
+            self.value_cache = []
 
-    with pytest.raises(ValueError, match=r"zip\(\) argument 2 is shorter than argument 1"):
+    cache = LegacyCache()
+
+    with pytest.raises(ValueError):
         clone_dynamic_cache(cache)
 
 
@@ -184,6 +250,38 @@ def test_clone_dynamic_cache_handles_layers_structure():
 
     cloned.layers[0].keys = torch.ones(2, 2, 3)
     assert cache.layers[0].keys.shape == (1, 2, 3)
+
+
+def test_clone_dynamic_cache_preserves_real_hybrid_layers():
+    cache = make_real_hybrid_cache()
+
+    cloned = clone_dynamic_cache(cache)
+
+    assert [type(layer) for layer in cloned.layers] == [type(layer) for layer in cache.layers]
+    assert cloned.layers[1].sliding_window == 4
+    assert cloned.layers[1].cumulative_length == cache.layers[1].cumulative_length
+    assert torch.equal(cloned.layers[0].keys, cache.layers[0].keys)
+    assert torch.equal(cloned.layers[1].values, cache.layers[1].values)
+    assert cloned.layers[1].keys is not cache.layers[1].keys
+
+    cloned.layers[1].update(torch.ones(1, 2, 1, 4), torch.ones(1, 2, 1, 4))
+    assert cloned.layers[1].cumulative_length == 4
+    assert cloned.layers[1].keys.shape[-2] == 3
+    assert cache.layers[1].keys.shape[-2] == 3
+    assert cache.layers[1].cumulative_length == 3
+
+
+def test_clone_dynamic_cache_preserves_uninitialized_real_hybrid_layers():
+    cache = make_real_hybrid_cache(populate=False)
+
+    cloned = clone_dynamic_cache(cache)
+
+    assert [type(layer) for layer in cloned.layers] == [type(layer) for layer in cache.layers]
+    assert cloned.layers[0].keys is None
+    assert cloned.layers[0].values is None
+    assert cloned.layers[1].keys is None
+    assert cloned.layers[1].values is None
+    assert cloned.layers[1].sliding_window == cache.layers[1].sliding_window
 
 
 def test_clone_dynamic_cache_layers_guard_keys_and_values_independently():

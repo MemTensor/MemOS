@@ -273,12 +273,17 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
         if not hasattr(cloned, "layers"):
             cloned.layers = []
         for layer in cache.layers:
-            new_layer = type(layer)()
-            # Preserve non-tensor state used by DynamicLayer.update(), such as
-            # is_initialized and _seen_tokens, before copying K/V tensors.
-            for attr, value in vars(layer).items():
-                if not isinstance(value, torch.Tensor):
-                    setattr(new_layer, attr, copy.deepcopy(value))
+            # Avoid invoking a layer constructor: modern transformers layers
+            # such as DynamicSlidingWindowLayer require constructor metadata.
+            new_layer = copy.copy(layer)
+            layer_attrs = vars(layer)
+            # Preserve layer state and clone every tensor, including K/V tensors.
+            for attr, value in layer_attrs.items():
+                setattr(
+                    new_layer,
+                    attr,
+                    value.clone() if isinstance(value, torch.Tensor) else copy.deepcopy(value),
+                )
             # transformers>=4.56 layers expose keys/values, but some versions
             # instead carry per-layer key_cache/value_cache (see
             # move_dynamic_cache_htod); a clone that skips one shape would
@@ -290,15 +295,19 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
                 getattr(layer, name, None) is not None for name in ("key_cache", "value_cache")
             )
             if has_per_layer_cache:
+                if "keys" in layer_attrs:
+                    new_layer.keys = None
+                if "values" in layer_attrs:
+                    new_layer.values = None
                 if getattr(layer, "key_cache", None) is not None:
                     new_layer.key_cache = layer.key_cache.clone()
                 if getattr(layer, "value_cache", None) is not None:
                     new_layer.value_cache = layer.value_cache.clone()
             else:
-                if getattr(layer, "keys", None) is not None:
-                    new_layer.keys = layer.keys.clone()
-                if getattr(layer, "values", None) is not None:
-                    new_layer.values = layer.values.clone()
+                if "key_cache" in layer_attrs:
+                    new_layer.key_cache = None
+                if "value_cache" in layer_attrs:
+                    new_layer.value_cache = None
             cloned.layers.append(new_layer)
     elif hasattr(cache, "key_cache"):
         # Legacy DynamicCache keeps generation state such as _seen_tokens on

@@ -11,6 +11,30 @@ from memos.llms.factory import LLMFactory
 from memos.llms.hf import HFLLM
 
 
+def _make_filled_cache():
+    cache = DynamicCache()
+    if hasattr(cache, "layers"):
+        keys = torch.zeros(1, 2, 3, 4)
+        values = torch.zeros(1, 2, 3, 4)
+        cache.update(keys, values, layer_idx=0)
+    else:
+        cache.key_cache.append(torch.zeros(1, 2, 3))
+        cache.value_cache.append(torch.zeros(1, 2, 3))
+    return cache
+
+
+def _cache_keys(cache):
+    if hasattr(cache, "layers"):
+        return cache.layers[0].keys
+    return cache.key_cache[0]
+
+
+def _cache_values(cache):
+    if hasattr(cache, "layers"):
+        return cache.layers[0].values
+    return cache.value_cache[0]
+
+
 @patch("transformers.AutoModelForCausalLM", MagicMock())
 @patch("transformers.AutoTokenizer", MagicMock())
 class TestHFLLM(unittest.TestCase):
@@ -195,9 +219,9 @@ class TestHFLLM(unittest.TestCase):
         )
         llm = self._create_llm(config)
 
-        kv_cache = DynamicCache()
-        kv_cache.key_cache = [torch.zeros(1, 2, 3)]
-        kv_cache.value_cache = [torch.zeros(1, 2, 3)]
+        kv_cache = _make_filled_cache()
+        original_key_shape = _cache_keys(kv_cache).shape
+        original_value_shape = _cache_values(kv_cache).shape
 
         def forward(*args, **kwargs):
             # transformers appends the new tokens' K/V to the cache in place.
@@ -205,8 +229,15 @@ class TestHFLLM(unittest.TestCase):
             # resilient to an explicit-None caller without inventing a
             # positional call shape.
             kv = kwargs.get("past_key_values")
-            kv.key_cache[0] = torch.cat([kv.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
-            kv.value_cache[0] = torch.cat([kv.value_cache[0], torch.ones(1, 1, 3)], dim=-2)
+            self.assertIsNotNone(kv, "forward() called without past_key_values")
+            if hasattr(kv, "layers"):
+                kv.layers[0].keys = torch.cat([kv.layers[0].keys, torch.ones(1, 2, 1, 4)], dim=-2)
+                kv.layers[0].values = torch.cat(
+                    [kv.layers[0].values, torch.ones(1, 2, 1, 4)], dim=-2
+                )
+            else:
+                kv.key_cache[0] = torch.cat([kv.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
+                kv.value_cache[0] = torch.cat([kv.value_cache[0], torch.ones(1, 1, 3)], dim=-2)
             out = MagicMock()
             # Deterministic non-EOS argmax so the loop runs all max_tokens turns
             # instead of sometimes sampling eos_token_id (2) on the first step.
@@ -222,5 +253,5 @@ class TestHFLLM(unittest.TestCase):
         finally:
             self.mock_model.side_effect = None
 
-        self.assertEqual(kv_cache.key_cache[0].shape, (1, 2, 3))
-        self.assertEqual(kv_cache.value_cache[0].shape, (1, 2, 3))
+        self.assertEqual(_cache_keys(kv_cache).shape, original_key_shape)
+        self.assertEqual(_cache_values(kv_cache).shape, original_value_shape)
