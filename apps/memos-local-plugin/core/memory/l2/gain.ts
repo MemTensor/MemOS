@@ -60,7 +60,21 @@ export const V7_NEUTRAL_BASELINE = 0.5;
  * samples. Five is roughly "one short episode worth" of signal.
  */
 export const WITHOUT_PRIOR_PSEUDOCOUNT = 5;
-export const MIN_ADAPTIVE_BASELINE = 0.2;
+/**
+ * Protective floor for {@link adaptiveBaseline}. Only guards against a
+ * degenerate near-zero `poolMean` (empty / all-noise pool) — the normal
+ * v2.0.7 backprop V distribution sits in ~0.02–0.5 (see
+ * `core/config/defaults.ts` `minTraceValue` docstring), so the adaptive
+ * branch of `adaptiveBaseline(poolMean) = poolMean` must be reachable
+ * across that entire band. Pre-v2.0.7 this constant was 0.2, which was
+ * appropriate for the old right-to-left decay reward scale where pool
+ * means clustered around 0.5–0.85; after the normalized-credit backprop
+ * rewrite it clamped ~every pool to a stale 0.2 and effectively froze
+ * policy/skill promotion (see issue #2364). 0.005 matches the v2.0.7
+ * `minTraceValue` floor and only kicks in when the pool is truly empty
+ * or all traces sit below the trace-retention threshold.
+ */
+export const MIN_ADAPTIVE_BASELINE = 0.005;
 
 export interface ComputeGainOpts {
   tauSoftmax: number;
