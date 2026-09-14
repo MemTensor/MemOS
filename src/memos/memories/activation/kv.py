@@ -278,17 +278,25 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
             # instead carry per-layer key_cache/value_cache (see
             # move_dynamic_cache_htod); a clone that skips one shape would
             # silently return a content-empty layer.
-            if getattr(layer, "keys", None) is not None:
-                new_layer.keys = layer.keys.clone()
-            if getattr(layer, "values", None) is not None:
-                new_layer.values = layer.values.clone()
-            if getattr(layer, "key_cache", None) is not None:
-                new_layer.key_cache = layer.key_cache.clone()
-            if getattr(layer, "value_cache", None) is not None:
-                new_layer.value_cache = layer.value_cache.clone()
+            # Select one naming scheme, matching move_dynamic_cache_htod's
+            # precedence, while retaining independent guards for asymmetric
+            # test doubles and cache layers.
+            has_per_layer_cache = any(
+                getattr(layer, name, None) is not None for name in ("key_cache", "value_cache")
+            )
+            if has_per_layer_cache:
+                if getattr(layer, "key_cache", None) is not None:
+                    new_layer.key_cache = layer.key_cache.clone()
+                if getattr(layer, "value_cache", None) is not None:
+                    new_layer.value_cache = layer.value_cache.clone()
+            else:
+                if getattr(layer, "keys", None) is not None:
+                    new_layer.keys = layer.keys.clone()
+                if getattr(layer, "values", None) is not None:
+                    new_layer.values = layer.values.clone()
             cloned.layers.append(new_layer)
     elif hasattr(cache, "key_cache"):
-        for keys, values in zip(cache.key_cache, cache.value_cache):
+        for keys, values in zip(cache.key_cache, cache.value_cache, strict=False):
             cloned.key_cache.append(keys.clone() if keys is not None else None)
             cloned.value_cache.append(values.clone() if values is not None else None)
 

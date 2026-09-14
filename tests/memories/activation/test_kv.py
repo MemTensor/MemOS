@@ -96,14 +96,14 @@ def test_get_cache_single_item_returns_independent_copy(kv_memory):
     merged = kv_memory.get_cache([item.id])
     assert merged is not item.memory
 
-    # Simulate generation appending to the handed-out cache.
-    merged.key_cache[0] = torch.cat([merged.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
-    assert item.memory.key_cache[0].shape == (1, 2, 3)
-
-    # In-place mutation must not leak either: a clone sharing tensor storage
-    # would surface here even though the reference swap above passes.
+    # In-place mutation must not leak either: verify storage independence
+    # before replacing the list slot with generation's appended tensor.
     merged.key_cache[0].fill_(99.0)
     assert not torch.all(item.memory.key_cache[0] == 99.0), "get_cache shares storage with store"
+    merged.key_cache[0].zero_()
+
+    # Simulate generation appending to the handed-out cache.
+    merged.key_cache[0] = torch.cat([merged.key_cache[0], torch.ones(1, 1, 3)], dim=-2)
     assert item.memory.key_cache[0].shape == (1, 2, 3)
 
 
@@ -125,13 +125,13 @@ def test_clone_dynamic_cache_copies_legacy_tensors():
     assert cloned.key_cache[0] is not cache.key_cache[0]
     assert torch.equal(cloned.key_cache[0], cache.key_cache[0])
 
-    cloned.key_cache[0] = torch.ones(1, 5, 3)
-    assert cache.key_cache[0].shape == (1, 2, 3)
-
-    # In-place mutation must not leak either: catches a clone that shares
-    # tensor storage instead of copying.
+    # In-place mutation must not leak either: verify storage independence
+    # before replacing the list slot.
     cloned.key_cache[0].fill_(99.0)
     assert not torch.all(cache.key_cache[0] == 99.0), "clone shares storage with original"
+    cloned.key_cache[0].zero_()
+
+    cloned.key_cache[0] = torch.ones(1, 5, 3)
     assert cache.key_cache[0].shape == (1, 2, 3)
 
 
@@ -213,3 +213,36 @@ def test_clone_dynamic_cache_handles_per_layer_key_value_cache():
 
     cloned.layers[0].key_cache.fill_(99.0)
     assert not torch.all(layer.key_cache == 99.0), "clone shares tensor storage with original"
+    cloned.layers[0].value_cache.fill_(99.0)
+    assert not torch.all(layer.value_cache == 99.0), (
+        "clone shares value_cache tensor storage with original"
+    )
+
+
+def test_clone_dynamic_cache_prefers_per_layer_cache_attributes():
+    # A layer exposing both naming schemes must follow the same precedence as
+    # move_dynamic_cache_htod: key_cache/value_cache take priority over keys/values.
+    class FakeLayer:
+        def __init__(self):
+            self.keys = None
+            self.values = None
+            self.key_cache = None
+            self.value_cache = None
+
+    class FakeLayeredCache:
+        pass
+
+    cache = FakeLayeredCache()
+    layer = FakeLayer()
+    layer.keys = torch.zeros(1, 2, 3)
+    layer.values = torch.zeros(1, 2, 3)
+    layer.key_cache = torch.ones(1, 2, 3)
+    layer.value_cache = torch.ones(1, 2, 3)
+    cache.layers = [layer]
+
+    cloned = clone_dynamic_cache(cache)
+
+    assert torch.equal(cloned.layers[0].key_cache, layer.key_cache)
+    assert torch.equal(cloned.layers[0].value_cache, layer.value_cache)
+    assert cloned.layers[0].keys is None
+    assert cloned.layers[0].values is None
