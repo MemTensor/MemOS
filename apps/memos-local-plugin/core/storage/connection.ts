@@ -50,9 +50,19 @@ export function openDb(opts: OpenDbOptions): StorageDb {
     raw.pragma(`busy_timeout = ${busyTimeoutMs}`);
     // Better concurrency: stop readers from blocking writers briefly.
     raw.pragma("wal_autocheckpoint = 1000");
+    // FTS-sync correctness (issue #2363): the row-DELETE that SQLite runs
+    // internally as part of `INSERT OR REPLACE` (used by skills / traces /
+    // policies / world_model repos) only fires AFTER DELETE triggers when
+    // `recursive_triggers` is ON. Without this, every upsert-on-conflict
+    // leaves an orphan row in the paired `*_fts` table because the AFTER
+    // DELETE cleanup trigger is skipped while the AFTER INSERT trigger still
+    // runs. SQLite's default is host-dependent (SQLCipher and several ORMs
+    // set it to 0), so we make it explicit here.
+    raw.pragma("recursive_triggers = ON");
   } else {
     raw.pragma(`busy_timeout = ${busyTimeoutMs}`);
     raw.pragma("foreign_keys = ON");
+    raw.pragma("recursive_triggers = ON");
   }
 
   // We deliberately type the cache as `any` — the upstream Statement type is
