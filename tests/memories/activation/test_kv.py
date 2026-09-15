@@ -8,6 +8,7 @@ from transformers import DynamicCache
 from memos.configs.memory import KVCacheMemoryConfig
 from memos.memories.activation.item import KVCacheItem
 from memos.memories.activation.kv import KVCacheMemory, clone_dynamic_cache
+from tests import cache_helpers
 from tests.cache_helpers import (
     cache_keys,
     cache_layer_count,
@@ -61,6 +62,20 @@ def test_get_cache_merge(kv_memory):
     # Check the number of layers in merged key/value cache
     assert cache_layer_count(merged) == 1
     assert cache_values(merged) is not None
+
+
+def test_make_real_hybrid_cache_skips_update_typeerror(monkeypatch):
+    class IncompatibleCache:
+        def __init__(self, *args, **kwargs):
+            self.layers = []
+
+        def update(self, *args, **kwargs):
+            raise TypeError("hybrid update signature is unsupported")
+
+    monkeypatch.setattr(cache_helpers, "DynamicCache", IncompatibleCache)
+
+    with pytest.raises(pytest.skip.Exception, match=r"DynamicCache\(config=\.\.\.\)"):
+        cache_helpers.make_real_hybrid_cache()
 
 
 def test_delete_and_get_all(kv_memory):

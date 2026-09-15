@@ -53,11 +53,11 @@ def make_real_hybrid_cache(populate=True):
 
     try:
         cache = DynamicCache(config=HybridConfig())
+        if populate:
+            keys = torch.zeros(1, 2, 3, 4)
+            values = torch.zeros(1, 2, 3, 4)
+            cache.update(keys, values, layer_idx=0)
+            cache.update(keys, values, layer_idx=1)
     except TypeError:
         pytest.skip("DynamicCache(config=...) is not supported")
-    if populate:
-        keys = torch.zeros(1, 2, 3, 4)
-        values = torch.zeros(1, 2, 3, 4)
-        cache.update(keys, values, layer_idx=0)
-        cache.update(keys, values, layer_idx=1)
     return cache
