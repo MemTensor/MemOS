@@ -200,4 +200,63 @@ describe("session/episode-manager", () => {
     const all = epm.listForSession("se_a");
     expect(all.map((e) => e.id).sort()).toEqual([s1.id, s2.id].sort());
   });
+
+  // Regression test for #2370: reopen() must clear reward.skipped when setting
+  // rewardDirty so that episodeRewardIsDirty() is not short-circuited by
+  // rewardWasSkipped() and the marker is actually cleared by the rescore path.
+  it("reopen clears reward.skipped when setting rewardDirty (#2370)", () => {
+    const { epm } = makeEpm();
+    const snap = epm.start(
+      { sessionId: "se_a", initialTurn: { role: "user", content: "x" } },
+      intent("task"),
+    );
+    nowTick = 2_000;
+    // Simulate terminal-skip scoring: close the episode and stamp reward.skipped=true.
+    epm.finalize(snap.id);
+    epm.patchMeta(snap.id, {
+      reward: {
+        source: "heuristic",
+        reason: "too_short",
+        scoredAt: 2_000,
+        skipped: true,
+      },
+      closeReason: "abandoned",
+    });
+
+    // Verify the skip is present before reopen.
+    const beforeReopen = episodesFake.rows.get(snap.id)!;
+    expect((beforeReopen.meta.reward as Record<string, unknown>).skipped).toBe(true);
+
+    nowTick = 91_000;
+    // Reopen the episode (e.g. follow_up path).
+    const reopened = epm.reopen(snap.id, "follow_up");
+
+    // rewardDirty must be set so rescore scans pick this episode up.
+    expect(reopened.meta.rewardDirty).toBeTruthy();
+    expect((reopened.meta.rewardDirty as Record<string, unknown>).reason).toBe(
+      "episode_reopened",
+    );
+
+    // reward.skipped must be cleared (undefined) so rewardWasSkipped() returns
+    // false and episodeRewardIsDirty() reaches the hasRewardDirtyMarker check.
+    const reward = reopened.meta.reward as Record<string, unknown> | undefined;
+    expect(reward?.skipped).toBeUndefined();
+
+    // The DB row must also reflect the cleared flag.
+    const dbRow = episodesFake.rows.get(snap.id)!;
+    expect((dbRow.meta.reward as Record<string, unknown> | undefined)?.skipped).toBeUndefined();
+    expect(dbRow.meta.rewardDirty).toBeTruthy();
+  });
+
+  it("reopen does not set rewardDirty when episode was never scored", () => {
+    const { epm } = makeEpm();
+    const snap = epm.start(
+      { sessionId: "se_a", initialTurn: { role: "user", content: "x" } },
+      intent(),
+    );
+    epm.finalize(snap.id);
+    // No reward meta at all — rTask is null, no meta.reward set.
+    const reopened = epm.reopen(snap.id, "follow_up");
+    expect(reopened.meta.rewardDirty).toBeUndefined();
+  });
 });

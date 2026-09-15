@@ -340,6 +340,22 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
                 at: now(),
                 ...previousReward,
               },
+              // If the episode was previously terminal-skipped, clear the skip
+              // flag so episodeRewardIsDirty() can reach hasRewardDirtyMarker.
+              // rewardWasSkipped() short-circuits that check, so a reopened
+              // episode that previously had reward.skipped=true is invisible to
+              // every rescore scan and the rewardDirty marker never clears
+              // (#2370).
+              ...(snap.meta.reward &&
+              typeof snap.meta.reward === "object" &&
+              (snap.meta.reward as { skipped?: unknown }).skipped === true
+                ? {
+                    reward: {
+                      ...(snap.meta.reward as Record<string, unknown>),
+                      skipped: undefined,
+                    },
+                  }
+                : {}),
             }
           : {}),
       };
