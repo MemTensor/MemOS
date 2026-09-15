@@ -93,6 +93,32 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
     return snap;
   }
 
+  /**
+   * Mark `meta.rewardDirty` for removal on a terminal transition
+   * (issue #2370).
+   *
+   * `reopen()` re-sets the marker, so a close that doesn't happen to run
+   * the reward write (e.g. the episode resumes with `rTask != null`, so
+   * the reward fallback is not run) would leave a stale marker on a
+   * fully-resolved episode — indistinguishable from live dirt to
+   * `episodeRewardIsDirty()` and to any consistency check built on
+   * `json_type(meta_json,'$.rewardDirty') IS NOT NULL`.
+   *
+   * `undefined` (rather than `null`, or an omitted key) is deliberate on
+   * both counts:
+   *   - `toJsonText` runs `JSON.stringify`, which omits undefined-valued
+   *     keys, so the key is *absent* from `meta_json` afterwards. `null`
+   *     would leave `json_type(...)` reporting `'null'`, which is still
+   *     `IS NOT NULL` and keeps matching such a check.
+   *   - `episodesRepo.close()` / `updateMeta()` *merge* the patch into
+   *     the existing `meta_json`, so simply omitting the key would leave
+   *     the previous value in place. It has to be overwritten.
+   *
+   * The reward / rescan paths may legitimately re-arm the marker later;
+   * clearing here only drops dirt that predates this transition.
+   */
+  const CLEAR_REWARD_DIRTY = { rewardDirty: undefined } as const;
+
   return {
     start(input: EpisodeStartInput, intent: IntentDecision): EpisodeSnapshot {
       if (!input.initialTurn || !input.initialTurn.content) {
@@ -243,7 +269,12 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       snap.endedAt = endedAt;
       if (input?.rTask !== undefined) snap.rTask = input.rTask;
       if (input?.patchMeta) snap.meta = { ...snap.meta, ...input.patchMeta };
-      snap.meta = { ...snap.meta, topicState: "ended", closeReason: "finalized" };
+      snap.meta = {
+        ...snap.meta,
+        ...CLEAR_REWARD_DIRTY,
+        topicState: "ended",
+        closeReason: "finalized",
+      };
       deps.episodesRepo.close(id, endedAt, snap.rTask ?? undefined, snap.meta);
       log.info("episode.finalized", {
         episodeId: id,
@@ -271,6 +302,7 @@ export function createEpisodeManager(deps: EpisodeManagerDeps): EpisodeManager {
       snap.endedAt = endedAt;
       snap.meta = {
         ...snap.meta,
+        ...CLEAR_REWARD_DIRTY,
         topicState: "ended",
         closeReason: "abandoned",
         abandonReason: reason,
