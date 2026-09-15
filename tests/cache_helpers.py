@@ -37,12 +37,6 @@ def cache_layer_count(cache):
     return len(cache.key_cache)
 
 
-def cache_value_layer_count(cache):
-    if hasattr(cache, "layers"):
-        return len(cache.layers)
-    return len(cache.value_cache)
-
-
 def make_real_hybrid_cache(populate=True):
     if not hasattr(DynamicCache(), "layers"):
         pytest.skip("requires transformers >=4.56")

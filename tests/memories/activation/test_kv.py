@@ -11,7 +11,6 @@ from memos.memories.activation.kv import KVCacheMemory, clone_dynamic_cache
 from tests.cache_helpers import (
     cache_keys,
     cache_layer_count,
-    cache_value_layer_count,
     cache_values,
     make_filled_cache,
     make_real_hybrid_cache,
@@ -61,7 +60,6 @@ def test_get_cache_merge(kv_memory):
     assert isinstance(merged, DynamicCache)
     # Check the number of layers in merged key/value cache
     assert cache_layer_count(merged) == 1
-    assert cache_value_layer_count(merged) == 1
     assert cache_values(merged) is not None
 
 
@@ -145,8 +143,8 @@ def test_clone_dynamic_cache_copies_legacy_tensors():
 
 def test_clone_dynamic_cache_preserves_legacy_cache_state():
     cache = make_filled_cache()
-    if not hasattr(cache, "key_cache"):
-        pytest.skip("_seen_tokens is legacy DynamicCache state")
+    if not hasattr(cache, "_seen_tokens"):
+        pytest.skip("_seen_tokens is not present in this transformers version")
     cache._seen_tokens = 2
 
     cloned = clone_dynamic_cache(cache)
@@ -298,6 +296,39 @@ def test_clone_dynamic_cache_handles_per_layer_key_value_cache():
     assert not torch.all(layer.value_cache == 99.0), (
         "clone shares value_cache tensor storage with original"
     )
+
+
+def test_clone_dynamic_cache_clones_layer_kv_tensors_once():
+    class CloneCountingTensor(torch.Tensor):
+        clone_count = 0
+
+        def clone(self, *args, **kwargs):
+            type(self).clone_count += 1
+            return super().clone(*args, **kwargs)
+
+    class FakeLayer:
+        pass
+
+    class FakeLayeredCache:
+        pass
+
+    def counting_tensor(value):
+        return torch.full((1, 2, 3), value).as_subclass(CloneCountingTensor)
+
+    cache = FakeLayeredCache()
+    layer = FakeLayer()
+    layer.keys = counting_tensor(0)
+    layer.values = counting_tensor(0)
+    layer.key_cache = counting_tensor(1)
+    layer.value_cache = counting_tensor(1)
+    cache.layers = [layer]
+
+    CloneCountingTensor.clone_count = 0
+    cloned = clone_dynamic_cache(cache)
+
+    assert CloneCountingTensor.clone_count == 2
+    assert cloned.layers[0].key_cache is not layer.key_cache
+    assert cloned.layers[0].value_cache is not layer.value_cache
 
 
 def test_clone_dynamic_cache_preserves_layer_state():

@@ -278,7 +278,10 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
             new_layer = copy.copy(layer)
             layer_attrs = vars(layer)
             # Preserve layer state and clone every tensor, including K/V tensors.
+            kv_attrs = {"keys", "values", "key_cache", "value_cache"}
             for attr, value in layer_attrs.items():
+                if attr in kv_attrs:
+                    continue
                 setattr(
                     new_layer,
                     attr,
@@ -308,6 +311,10 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
                     new_layer.key_cache = None
                 if "value_cache" in layer_attrs:
                     new_layer.value_cache = None
+                if getattr(layer, "keys", None) is not None:
+                    new_layer.keys = layer.keys.clone()
+                if getattr(layer, "values", None) is not None:
+                    new_layer.values = layer.values.clone()
             cloned.layers.append(new_layer)
     elif hasattr(cache, "key_cache"):
         # Legacy DynamicCache keeps generation state such as _seen_tokens on
