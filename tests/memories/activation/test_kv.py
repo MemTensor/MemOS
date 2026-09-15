@@ -6,6 +6,7 @@ import torch
 from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
+from memos.memories.activation import kv as kv_module
 from memos.memories.activation.item import KVCacheItem
 from memos.memories.activation.kv import KVCacheMemory, clone_dynamic_cache
 from tests import cache_helpers
@@ -311,6 +312,31 @@ def test_clone_dynamic_cache_handles_per_layer_key_value_cache():
     assert not torch.all(layer.value_cache == 99.0), (
         "clone shares value_cache tensor storage with original"
     )
+
+
+def test_clone_dynamic_cache_replaces_preexisting_destination_layers(monkeypatch):
+    class FakeLayer:
+        pass
+
+    class FakeLayeredCache:
+        pass
+
+    class DestinationCache:
+        def __init__(self):
+            self.layers = [object()]
+
+    source = FakeLayeredCache()
+    layer = FakeLayer()
+    layer.keys = torch.zeros(1, 2, 3)
+    layer.values = torch.zeros(1, 2, 3)
+    source.layers = [layer]
+    monkeypatch.setattr(kv_module, "DynamicCache", DestinationCache)
+
+    cloned = clone_dynamic_cache(source)
+
+    assert len(cloned.layers) == 1
+    assert cloned.layers[0].keys is not layer.keys
+    assert cloned.layers[0].values is not layer.values
 
 
 def test_clone_dynamic_cache_clones_layer_kv_tensors_once():

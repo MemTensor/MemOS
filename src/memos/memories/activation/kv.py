@@ -270,8 +270,7 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
     cloned = DynamicCache()
 
     if hasattr(cache, "layers"):
-        if not hasattr(cloned, "layers"):
-            cloned.layers = []
+        cloned.layers = []
         for layer in cache.layers:
             # Avoid invoking a layer constructor: modern transformers layers
             # such as DynamicSlidingWindowLayer require constructor metadata.
