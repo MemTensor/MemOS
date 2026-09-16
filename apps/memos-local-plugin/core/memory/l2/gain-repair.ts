@@ -76,11 +76,21 @@ export interface GainRepairBudgetState {
 
 /** Namespace-prefixed budget key — one counter per exact owner/namespace. */
 export function gainRepairBudgetKey(owner: GainRepairOwner): string {
-  return `${GAIN_REPAIR_BUDGET_KEY}.${owner.ownerAgentKind}.${owner.ownerProfileId}.${owner.ownerWorkspaceId ?? "default"}`;
+  return `${GAIN_REPAIR_BUDGET_KEY}.${ownerSuffix(owner)}`;
 }
 
 export function gainRepairRescreenKey(owner: GainRepairOwner): string {
-  return `${GAIN_REPAIR_RESCREEN_KEY}.${owner.ownerAgentKind}.${owner.ownerProfileId}.${owner.ownerWorkspaceId ?? "default"}`;
+  return `${GAIN_REPAIR_RESCREEN_KEY}.${ownerSuffix(owner)}`;
+}
+
+/**
+ * Bijective owner suffix for durable kv keys. A delimiter-joined string
+ * would collide across owners whose fields contain the delimiter (or where
+ * a null workspace is indistinguishable from a literal `"default"`); a
+ * compact JSON array keeps every exact owner distinct.
+ */
+function ownerSuffix(owner: GainRepairOwner): string {
+  return JSON.stringify([owner.ownerAgentKind, owner.ownerProfileId, owner.ownerWorkspaceId ?? null]);
 }
 
 interface StoredBudget {

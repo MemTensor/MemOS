@@ -26,6 +26,7 @@ import type {
   EpochMs,
   PolicyId,
   PolicyRow,
+  TraceId,
   TraceRow,
 } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
@@ -88,6 +89,22 @@ export async function runL2(
     trigger: input.trigger,
   });
 
+  // Evidence-link intents recorded during association/induction but written
+  // ONLY after the policy's gain recompute passes in Step 4. If the recompute
+  // skips (no resolved with-evidence), the policy write is aborted — links
+  // must not already be persisted, or the policy is left with orphaned
+  // evidence rows and no gain/support/status advance to match.
+  const pendingLinks = new Map<PolicyId, Array<{ traceId: TraceId; episodeId: EpisodeId }>>();
+  const recordLinkIntent = (
+    policyId: PolicyId,
+    traceId: TraceId,
+    episodeId: EpisodeId,
+  ): void => {
+    const arr = pendingLinks.get(policyId) ?? [];
+    arr.push({ traceId, episodeId });
+    pendingLinks.set(policyId, arr);
+  };
+
   // ─── Step 1: Associate ──────────────────────────────────────────────────
   let associations: AssociationResult[] = [];
   {
@@ -106,19 +123,7 @@ export async function runL2(
     if (!tr) continue;
     a.signature = signatureOf(tr);
     if (a.matchedPolicyId) {
-      try {
-        repos.tracePolicyLinks.link({
-          traceId: a.traceId,
-          policyId: a.matchedPolicyId,
-          episodeId: input.episodeId,
-          now: input.now ?? Date.now(),
-        });
-      } catch (err) {
-        warnings.push(stageWarn("trace-policy-link", err, {
-          traceId: a.traceId,
-          policyId: a.matchedPolicyId,
-        }));
-      }
+      recordLinkIntent(a.matchedPolicyId, a.traceId as TraceId, input.episodeId);
       emit(bus, {
         kind: "l2.trace.associated",
         episodeId: input.episodeId,
@@ -222,16 +227,7 @@ export async function runL2(
         for (const traceId of eligibleEvidenceIds) {
           const trace = traces.find((t) => t.id === traceId);
           if (!trace) continue;
-          try {
-            repos.tracePolicyLinks.link({
-              traceId,
-              policyId: dup.id,
-              episodeId: trace.episodeId,
-              now: input.now ?? Date.now(),
-            });
-          } catch (err) {
-            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: dup.id }));
-          }
+          recordLinkIntent(dup.id, traceId as TraceId, trace.episodeId);
         }
         continue;
       }
@@ -287,19 +283,7 @@ export async function runL2(
         for (const traceId of eligibleEvidenceIds) {
           const trace = traces.find((t) => t.id === traceId);
           if (!trace) continue;
-          try {
-            repos.tracePolicyLinks.link({
-              traceId,
-              policyId: duplicate.id,
-              episodeId: trace.episodeId,
-              now: input.now ?? Date.now(),
-            });
-          } catch (err) {
-            warnings.push(stageWarn("trace-policy-link", err, {
-              traceId,
-              policyId: duplicate.id,
-            }));
-          }
+          recordLinkIntent(duplicate.id, traceId as TraceId, trace.episodeId);
         }
         inductions.push({
           signature: bucket.signature,
@@ -335,19 +319,7 @@ export async function runL2(
         for (const traceId of eligibleEvidenceIds) {
           const trace = traces.find((t) => t.id === traceId);
           if (!trace) continue;
-          try {
-            repos.tracePolicyLinks.link({
-              traceId,
-              policyId: policy.id,
-              episodeId: trace.episodeId,
-              now: input.now ?? Date.now(),
-            });
-          } catch (err) {
-            warnings.push(stageWarn("trace-policy-link", err, {
-              traceId,
-              policyId: policy.id,
-            }));
-          }
+          recordLinkIntent(policy.id, traceId as TraceId, trace.episodeId);
         }
         inductions.push({
           signature: bucket.signature,
@@ -459,6 +431,29 @@ export async function runL2(
             gainVersion,
           }),
       });
+
+      // The gain write committed — flush the deferred evidence links for this
+      // policy now. (When the recompute skips above, `continue` leaves them
+      // un-persisted: no orphaned links for a policy whose state never moved.)
+      const links = pendingLinks.get(policy.id);
+      if (links) {
+        for (const link of links) {
+          try {
+            repos.tracePolicyLinks.link({
+              traceId: link.traceId,
+              policyId: policy.id,
+              episodeId: link.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, {
+              traceId: link.traceId,
+              policyId: policy.id,
+            }));
+          }
+        }
+        pendingLinks.delete(policy.id);
+      }
 
       emit(bus, {
         kind: "l2.policy.updated",

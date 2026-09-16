@@ -463,6 +463,14 @@ export function runGainInference(deps: GainInferenceDeps): GainInferenceReport {
         let stamped = 0;
         let afterMemberId = "";
         for (;;) {
+          // One malformed huge episode can page through tens of thousands of
+          // members; honor the deadline between pages so a single group cannot
+          // overrun the whole boot budget. Partial pages are resumable — the
+          // members already stamped carry the attempt version.
+          if (deadline !== undefined && nowFn() >= deadline) {
+            stoppedEarly = true;
+            break;
+          }
           const members = deps.tracesRepo.listGainRowsForEpisode(id, {
             limit: 2000,
             afterId: afterMemberId,
@@ -532,7 +540,11 @@ export function runGainInference(deps: GainInferenceDeps): GainInferenceReport {
         episodeOwnerWorkspaceId: ep.ownerWorkspaceId,
       });
 
-      if (outcome.status !== "unresolved" && outcome.status !== "legacy_unscaled") {
+      // Every group that receives a numeric gain counts toward
+      // `auditMetaAbsent` when no reward metadata is available — including
+      // legacy groups, which carry no meta by construction. Only genuinely
+      // unresolved groups (no gain at all) are exempt.
+      if (outcome.status !== "unresolved") {
         if (metaReward == null || metaReward.traceIds == null) report.auditMetaAbsent += 1;
       }
 
@@ -653,15 +665,19 @@ export function reconcileGainRepairQueue(
 
   return deps.db.tx(() => {
     const reconciled = deps.gainRepair.reconcileArchivedOrMissing(deps.owner);
-    const stored = deps.kv.get<{ version: number; ownerAgentKind: string; ownerProfileId: string } | null>(
-      GAIN_REPAIR_QUEUE_SEED_KEY,
-      null,
-    );
+    const stored = deps.kv.get<
+      | { version: number; ownerAgentKind: string; ownerProfileId: string; ownerWorkspaceId?: string | null }
+      | null
+    >(GAIN_REPAIR_QUEUE_SEED_KEY, null);
+    // Exact-namespace watermark: the workspace is part of the owner identity,
+    // so two owners that share kind+profile but differ by workspace must not
+    // share the seed watermark (one would skip seeding for the other).
     const alreadySeeded =
       stored != null &&
       stored.version >= version &&
       stored.ownerAgentKind === deps.owner.ownerAgentKind &&
-      stored.ownerProfileId === deps.owner.ownerProfileId;
+      stored.ownerProfileId === deps.owner.ownerProfileId &&
+      (stored.ownerWorkspaceId ?? null) === (deps.owner.ownerWorkspaceId ?? null);
     if (alreadySeeded) return { seeded: 0, reconciled, alreadySeeded: true };
 
     // Derive the seed set from stored state: all member traces stamped at the
@@ -683,6 +699,7 @@ export function reconcileGainRepairQueue(
       version,
       ownerAgentKind: deps.owner.ownerAgentKind,
       ownerProfileId: deps.owner.ownerProfileId,
+      ownerWorkspaceId: deps.owner.ownerWorkspaceId ?? null,
       seededAt: now(),
     });
     return { seeded: policyIds.length, reconciled, alreadySeeded: false };
