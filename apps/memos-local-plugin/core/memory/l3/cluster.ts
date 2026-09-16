@@ -123,6 +123,11 @@ export function clusterPolicies(
   for (const [key, members] of byKey) {
     if (members.length < config.minPolicies) continue;
 
+    if (key === "_|_") {
+      out.push(...clusterUntagged(members, config));
+      continue;
+    }
+
     const vecs: Array<EmbeddingVector | null> = members.map((m) => m.policy.vec ?? null);
     const center = centroid(vecs);
 
@@ -173,9 +178,7 @@ export function clusterPolicies(
     // here is only "strict subset" vs "whole bucket".
     let cohort: PolicyWithMeta[];
     let admission: "strict" | "loose";
-    const requiredPolicies = key === "_|_"
-      ? Math.max(2, config.minPolicies)
-      : config.minPolicies;
+    const requiredPolicies = config.minPolicies;
     if (strict.length >= requiredPolicies) {
       cohort = strict;
       admission = "strict";
@@ -218,4 +221,48 @@ export function clusterPolicies(
     return b.policies.length - a.policies.length;
   });
   return out;
+}
+
+function clusterUntagged(
+  members: readonly PolicyWithMeta[],
+  config: ClusterDeps["config"],
+): PolicyCluster[] {
+  const requiredPolicies = Math.max(2, config.minPolicies);
+  const maxPolicies = Math.max(1, config.maxPoliciesPerCluster ?? 20);
+  const groups: PolicyWithMeta[][] = [];
+
+  for (const member of members
+    .filter((m) => m.policy.vec)
+    .slice()
+    .sort((a, b) => String(a.policy.id).localeCompare(String(b.policy.id)))) {
+    let target: PolicyWithMeta[] | undefined;
+    for (const group of groups) {
+      if (group.length >= maxPolicies) continue;
+      const center = centroid(group.map((m) => m.policy.vec ?? null));
+      if (center && member.policy.vec && cosine(center, member.policy.vec) >= config.clusterMinSimilarity) {
+        target = group;
+        break;
+      }
+    }
+    if (target) target.push(member);
+    else groups.push([member]);
+  }
+
+  return groups
+    .filter((group) => group.length >= requiredPolicies)
+    .map((group) => {
+      const center = centroid(group.map((m) => m.policy.vec ?? null));
+      const cohesion = center
+        ? group.reduce((sum, m) => sum + cosine(center, m.policy.vec!), 0) / group.length
+        : 0;
+      return {
+        key: `_|_:vec:${String(group[0]!.policy.id)}`,
+        policies: group.map((m) => m.policy),
+        domainTags: [],
+        centroidVec: center,
+        avgGain: group.reduce((sum, m) => sum + m.policy.gain, 0) / group.length,
+        cohesion,
+        admission: "strict" as const,
+      };
+    });
 }

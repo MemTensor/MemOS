@@ -250,9 +250,15 @@ if (now − kv.get(key)) < cooldownDays × 86_400_000:
 
 ## 9. Failure policy
 
-* Storage error → propagate. Partial state remains; next run sees the
-  same eligible policies and re-drives.
+* Storage error → warn for the affected cluster and retain retry state.
+  Other clusters continue; a later run re-drives the failed cluster.
 * LLM error → single-cluster skip, reason logged. No cooldown update.
+
+Failed LLM drafts use a persisted retry key scoped by cluster membership. The
+retry delays are 5 minutes, 30 minutes, 2 hours, then 6 hours (capped), so a
+repeated provider failure cannot consume one LLM call per episode. A successful
+world-model insert/update clears the retry key and only then records the normal
+cooldown. Storage failures keep the retry state and do not record success.
   Other clusters continue.
 * Invalid draft (missing `environment/inference/constraints`) →
   treated as LLM error.

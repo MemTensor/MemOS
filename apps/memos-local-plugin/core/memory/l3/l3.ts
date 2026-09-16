@@ -178,7 +178,9 @@ export async function runL3(
     timings.abstract += Date.now() - t0;
 
     if (!draftRes.ok) {
-      recordFailure(cluster, repos.kv, now);
+      if (draftRes.reason === "llm_failed" || draftRes.reason === "draft_invalid") {
+        recordFailure(cluster, repos.kv, now);
+      }
       abstractions.push(skipped(cluster, draftRes.reason, { episodeIds, policyIds: cluster.policies.map((p) => p.id) }));
       emit(bus, {
         kind: "l3.failed",
@@ -195,6 +197,7 @@ export async function runL3(
       lookup: repos.worldModel,
       config,
     });
+    let persisted = false;
 
     if (decision.kind === "update") {
       const patch = mergeForUpdate({
@@ -268,6 +271,7 @@ export async function runL3(
           policyIds: patch.policyIds as PolicyId[],
           confidence: bumped,
         });
+        persisted = true;
       } catch (err) {
         warnings.push(stageWarn("merge", err, { clusterKey: cluster.key }));
       }
@@ -317,13 +321,18 @@ export async function runL3(
           policyIds: wm.policyIds,
           confidence: wm.confidence,
         });
+        persisted = true;
       } catch (err) {
         warnings.push(stageWarn("insert", err, { clusterKey: cluster.key }));
       }
     }
 
-    markCooldown(cluster, repos.kv, now);
-    repos.kv.del(retryKey(cluster));
+    if (persisted) {
+      markCooldown(cluster, repos.kv, now);
+      repos.kv.del(retryKey(cluster));
+    } else {
+      recordFailure(cluster, repos.kv, now);
+    }
     timings.persist += Date.now() - t1;
   }
 

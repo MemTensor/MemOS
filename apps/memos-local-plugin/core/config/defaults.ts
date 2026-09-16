@@ -250,9 +250,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // real usage; 1 lets the candidate→active transition happen
       // immediately on first successful invocation.
       candidateTrials: 1,
-      // Lowered from 6 hours → 0: no cooldown, skills can re-evolve
-      // as soon as new evidence arrives.
-      cooldownMs: 0,
+      // Verification failures are retried after six hours by default;
+      // operators may set this to 0 when immediate re-evaluation is desired.
+      cooldownMs: 6 * 60 * 60 * 1000,
       traceCharCap: 500,
       evidenceLimit: 6,
       useLlm: true,

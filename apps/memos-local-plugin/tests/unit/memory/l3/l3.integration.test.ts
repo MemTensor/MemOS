@@ -38,6 +38,16 @@ import {
 
 const OP = `${L3_ABSTRACTION_PROMPT.id}.v${L3_ABSTRACTION_PROMPT.version}`;
 const log = rootLogger.child({ channel: "core.memory.l3" });
+const validDraft = {
+  title: "Alpine python dependency model",
+  domain_tags: ["docker", "alpine", "pip"],
+  environment: [{ label: "musl libc", description: "no glibc" }],
+  inference: [{ label: "binary wheels fail", description: "compile from source" }],
+  constraints: [],
+  body: "# summary",
+  confidence: 0.75,
+  supersedes_world_ids: [],
+};
 
 function cfg(overrides: Partial<L3Config> = {}): L3Config {
   return {
@@ -237,6 +247,74 @@ describe("memory/l3/integration", () => {
     );
     expect(res.abstractions.every((a) => a.skippedReason === "llm_disabled")).toBe(true);
     expect(handle.repos.worldModel.list().length).toBe(0);
+    expect(handle.repos.kv.all().filter((row) => row.key.startsWith("l3.retry."))).toEqual([]);
+  });
+
+  it("backs off a failed abstraction, retries after expiry, and clears retry state", async () => {
+    seedTriplet();
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: () => {
+          calls++;
+          if (calls === 1) throw new Error("temporary failure");
+          return validDraft;
+        },
+      },
+    });
+    const deps = {
+      repos: {
+        policies: handle.repos.policies,
+        traces: handle.repos.traces,
+        worldModel: handle.repos.worldModel,
+        kv: handle.repos.kv,
+      },
+      llm,
+      log,
+      config: cfg(),
+    };
+
+    const failed = await runL3({ trigger: "manual", now: NOW }, deps);
+    expect(failed.abstractions[0]!.skippedReason).toBe("llm_failed");
+    expect(calls).toBe(1);
+    expect(handle.repos.kv.all().some((row) => row.key.startsWith("l3.retry."))).toBe(true);
+
+    const deferred = await runL3({ trigger: "manual", now: NOW + 299_999 }, deps);
+    expect(deferred.abstractions[0]!.skippedReason).toBe("retry_cooldown");
+    expect(calls).toBe(1);
+
+    const retried = await runL3({ trigger: "manual", now: NOW + 300_000 }, deps);
+    expect(retried.abstractions[0]!.skippedReason).toBeNull();
+    expect(calls).toBe(2);
+    expect(handle.repos.kv.all().filter((row) => row.key.startsWith("l3.retry."))).toEqual([]);
+  });
+
+  it("records retry state instead of success cooldown when persistence fails", async () => {
+    seedTriplet();
+    const worldModel = {
+      ...handle.repos.worldModel,
+      insert: () => {
+        throw new Error("disk full");
+      },
+    };
+    const result = await runL3(
+      { trigger: "manual", now: NOW },
+      {
+        repos: {
+          policies: handle.repos.policies,
+          traces: handle.repos.traces,
+          worldModel,
+          kv: handle.repos.kv,
+        },
+        llm: fakeLlm({ completeJson: { [OP]: validDraft } }),
+        log,
+        config: cfg({ cooldownDays: 1 }),
+      },
+    );
+
+    expect(result.warnings.some((warning) => warning.stage === "insert")).toBe(true);
+    expect(handle.repos.kv.all().some((row) => row.key.startsWith("l3.retry."))).toBe(true);
+    expect(handle.repos.kv.all().some((row) => row.key.startsWith("l3.lastRun."))).toBe(false);
   });
 
   it("adjustConfidence clamps in [0,1] and emits an event", async () => {

@@ -146,6 +146,7 @@ See `algorithm.l3Abstraction` in
 | `traceEvidencePerPolicy`     | `1`     | Evidence traces per policy in the prompt.    |
 | `useLlm`                     | `true`  | Toggle the LLM abstractor off for tests.      |
 | `cooldownDays`               | `1`     | Debounce per domain tag.                       |
+| `maxPoliciesPerCluster`      | `20`    | Cap policies included in one abstraction prompt. |
 | `confidenceDelta`            | `0.05`  | Confidence step per merge / feedback.         |
 | `minConfidenceForRetrieval`  | `0.2`   | Tier-3 hide threshold.                        |
 
