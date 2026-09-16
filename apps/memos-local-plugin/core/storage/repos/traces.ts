@@ -168,6 +168,12 @@ function mapGainRow(r: RawGainRow): TraceGainRow {
   };
 }
 
+// The one provenance value that historical inference/stamping must never
+// overwrite. Defined once so every guarded statement shares the same
+// type-checked literal and its SQL-quoted form stays in sync.
+const LIVE_GAIN_SOURCE: GainValueSource = "live_normalized";
+const SQL_LIVE_GAIN_SOURCE = `'${LIVE_GAIN_SOURCE}'`;
+
 export function makeTracesRepo(db: StorageDb) {
   const insert = db.prepare(buildInsert({ table: "traces", columns: COLUMNS }));
   const upsert = db.prepare(
@@ -178,6 +184,29 @@ export function makeTracesRepo(db: StorageDb) {
   );
   const selectLatestTimestamp = db.prepare<unknown, { ts: number }>(
     `SELECT ts FROM traces ORDER BY ts DESC, id DESC LIMIT 1`,
+  );
+  // Two fixed update statements (base vs. with-gain): prepared once so the
+  // hot scoring loop never rebuilds SQL text or facades per trace.
+  const updateScoreBase = db.prepare<{
+    id: string;
+    value: number;
+    alpha: number;
+    r_human: number | null;
+    priority: number;
+  }>(
+    `UPDATE traces SET value=@value, alpha=@alpha, r_human=@r_human, priority=@priority WHERE id=@id`,
+  );
+  const updateScoreWithGain = db.prepare<{
+    id: string;
+    value: number;
+    alpha: number;
+    r_human: number | null;
+    priority: number;
+    gain_value: number | null;
+    gain_value_source: string | null;
+  }>(
+    `UPDATE traces SET value=@value, alpha=@alpha, r_human=@r_human, priority=@priority,
+            gain_value=@gain_value, gain_value_source=@gain_value_source WHERE id=@id`,
   );
 
   return {
@@ -219,21 +248,31 @@ export function makeTracesRepo(db: StorageDb) {
         gainValueSource?: GainValueSource | null;
       },
     ): void {
-      const sets: string[] = ["value=@value", "alpha=@alpha", "r_human=@r_human", "priority=@priority"];
-      const params: Record<string, unknown> = {
+      // The two gain keys are atomic: writing one without the other would
+      // clear the paired column. Reject the one-sided case up front.
+      const hasGain = scores.gainValue !== undefined || scores.gainValueSource !== undefined;
+      const hasBoth = scores.gainValue !== undefined && scores.gainValueSource !== undefined;
+      if (hasGain && !hasBoth) {
+        throw new Error(
+          "traces.updateScore: gainValue and gainValueSource must be provided together",
+        );
+      }
+      const base = {
         id,
         value: scores.value,
         alpha: scores.alpha,
         r_human: nullable(scores.rHuman ?? null) as number | null,
         priority: scores.priority,
       };
-      if (scores.gainValue !== undefined || scores.gainValueSource !== undefined) {
-        sets.push("gain_value=@gain_value", "gain_value_source=@gain_value_source");
-        params.gain_value = scores.gainValue ?? null;
-        params.gain_value_source = scores.gainValueSource ?? null;
+      if (hasGain) {
+        updateScoreWithGain.run({
+          ...base,
+          gain_value: scores.gainValue ?? null,
+          gain_value_source: scores.gainValueSource ?? null,
+        });
+      } else {
+        updateScoreBase.run(base);
       }
-      const sql = `UPDATE traces SET ${sets.join(", ")} WHERE id=@id`;
-      db.prepare<typeof params>(sql).run(params);
     },
 
     /**
@@ -253,7 +292,7 @@ export function makeTracesRepo(db: StorageDb) {
                   gain_value_source = @gain_value_source,
                   gain_inference_version = @version
             WHERE id = @id
-              AND (gain_value_source IS NULL OR gain_value_source != 'live_normalized')`,
+              AND (gain_value_source IS NULL OR gain_value_source != ${SQL_LIVE_GAIN_SOURCE})`,
         )
         .run({
           id,
@@ -288,7 +327,7 @@ export function makeTracesRepo(db: StorageDb) {
                   gain_value_source = NULL,
                   gain_inference_version = 0
             WHERE id = @id
-              AND (gain_value_source IS NULL OR gain_value_source != 'live_normalized')`,
+              AND (gain_value_source IS NULL OR gain_value_source != ${SQL_LIVE_GAIN_SOURCE})`,
         )
         .run({ id });
       return { changes: Number(res.changes) };

@@ -147,6 +147,11 @@ export interface GainRepairJournalOutcomePatch {
 }
 
 export function makeGainRepairRepo(db: StorageDb) {
+  // Upsert semantics: the INSERT payload's zero/null attempt fields
+  // initialize NEW rows only. The ON CONFLICT clause deliberately omits
+  // attempt_count / last_attempt_at / last_attempt_batch_id, so re-seeding
+  // an already-queued policy PRESERVES its attempt metadata — a re-upsert
+  // never resets the attempt counter.
   const upsertQueue = db.prepare(
     `INSERT INTO gain_repair_queue (${QUEUE_COLUMNS.join(", ")})
      VALUES (${QUEUE_COLUMNS.map((c) => `@${c}`).join(", ")})
@@ -228,7 +233,8 @@ export function makeGainRepairRepo(db: StorageDb) {
             attempt_count=COALESCE(@attempt_count, attempt_count),
             last_attempt_at=COALESCE(@last_attempt_at, last_attempt_at),
             last_attempt_batch_id=COALESCE(@last_attempt_batch_id, last_attempt_batch_id),
-            blocked_reason=COALESCE(@blocked_reason, blocked_reason),
+            blocked_reason=CASE WHEN @state='pending' THEN NULL
+                                ELSE COALESCE(@blocked_reason, blocked_reason) END,
             updated_at=@updated_at
       WHERE policy_id=@policy_id`,
   );
@@ -304,8 +310,8 @@ export function makeGainRepairRepo(db: StorageDb) {
 
     /**
      * Seed a policy directly as blocked (zero resolved with-links,
-     * no attempt, no budget). Writing `blocked` also clears attempt state so a
-     * re-screen generation can flip it back to `pending` cleanly.
+     * no attempt, no budget). Attempt metadata is only initialized for NEW
+     * rows; an existing row keeps its counters (see the upsert clause above).
      */
     upsertBlocked(row: {
       policyId: PolicyId;

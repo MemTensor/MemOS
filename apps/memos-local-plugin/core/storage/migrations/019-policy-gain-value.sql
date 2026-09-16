@@ -101,8 +101,9 @@ CREATE INDEX IF NOT EXISTS idx_gain_repair_journal_owner_ts
 CREATE INDEX IF NOT EXISTS idx_gain_repair_journal_batch
   ON gain_repair_journal(batch_id);
 
--- Folded-in post-write timestamp (former 908): recorded post-write policy
--- `updated_at` for the five-field CAS rollback. NULLABLE so rows that never
--- record it (non-completing outcomes) stay NOT rollback-eligible.
+-- Post-write timestamp used by rollback CAS; nullable for non-completing
+-- outcomes. Records the post-write policy `updated_at` for the five-field CAS
+-- rollback. NULLABLE so rows that never record it (non-completing outcomes)
+-- stay NOT rollback-eligible.
 ALTER TABLE gain_repair_journal
   ADD COLUMN new_updated_at INTEGER;
