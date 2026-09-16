@@ -487,54 +487,55 @@ export function consumeGainRepairRescreen(
     return { consumed: false, requeued: 0, inferenceVersion: version };
   }
 
-  // 1. Un-stamp evidence-integrity blocked entries so the idempotent screening
-  //    pass revisits their episode groups at the current version.
-  const blocked = deps.repos.gainRepair.listBlockedByOwner(deps.owner);
-  const evidenceIds = new Set<string>();
-  const integrityBlocked: PolicyId[] = [];
-  for (const row of blocked) {
-    // Evidence-integrity blocks (`no_resolved_with`) AND rolled-back entries
-    // resume through the same generation: a rollback parks the queue entry as
-    // blocked with `rolled_back` and the next generation bump un-stamps its
-    // evidence, re-screens it and requeues it when resolved. There is no
-    // separate approval/requeue flow. `unknown_owner` blocks are
-    // owner-integrity, not evidence-integrity: untouched and never requeued.
-    if (row.blockedReason !== "no_resolved_with" && row.blockedReason !== "rolled_back") continue;
-    const policy = deps.repos.policies.getById(row.policyId);
-    if (!policy || policy.status === "archived") {
-      // Missing / archived policies are never repair targets — reconcile the
-      // stale entry away (queue-only).
-      deps.repos.gainRepair.removeByPolicy(row.policyId);
-      continue;
-    }
-    integrityBlocked.push(row.policyId);
-    for (const id of deps.repos.tracePolicyLinks.getWithTraceIds(row.policyId)) {
-      evidenceIds.add(String(id));
-    }
-    for (const id of policy.sourceTraceIds ?? []) evidenceIds.add(String(id));
-  }
-  const traceIds = Array.from(evidenceIds);
-  if (traceIds.length > 0) {
-    deps.db.tx(() => {
-      for (const id of traceIds) {
-        deps.repos.traces.unstampGainForRescreen(id as TraceId);
+  // One enclosing transaction: un-stamping, historical screening, eligibility
+  // rechecks, requeue writes and the consumed marker commit or roll back
+  // together. An inference exception (or any write failure) rolls back the
+  // whole re-screen so partial evidence un-stamping / partial requeues are
+  // never observable and the generation is not marked consumed.
+  return deps.db.tx(() => {
+    // 1. Un-stamp evidence-integrity blocked entries so the idempotent
+    //    screening pass revisits their episode groups at the current version.
+    const blocked = deps.repos.gainRepair.listBlockedByOwner(deps.owner);
+    const evidenceIds = new Set<string>();
+    const integrityBlocked: PolicyId[] = [];
+    for (const row of blocked) {
+      // Evidence-integrity blocks (`no_resolved_with`) AND rolled-back entries
+      // resume through the same generation: a rollback parks the queue entry
+      // as blocked with `rolled_back` and the next generation bump un-stamps
+      // its evidence, re-screens it and requeues it when resolved. There is no
+      // separate approval/requeue flow. `unknown_owner` blocks are
+      // owner-integrity, not evidence-integrity: untouched and never requeued.
+      if (row.blockedReason !== "no_resolved_with" && row.blockedReason !== "rolled_back") continue;
+      const policy = deps.repos.policies.getById(row.policyId);
+      if (!policy || policy.status === "archived") {
+        // Missing / archived policies are never repair targets — reconcile the
+        // stale entry away (queue-only).
+        deps.repos.gainRepair.removeByPolicy(row.policyId);
+        continue;
       }
+      integrityBlocked.push(row.policyId);
+      for (const id of deps.repos.tracePolicyLinks.getWithTraceIds(row.policyId)) {
+        evidenceIds.add(String(id));
+      }
+      for (const id of policy.sourceTraceIds ?? []) evidenceIds.add(String(id));
+    }
+    const traceIds = Array.from(evidenceIds);
+    for (const id of traceIds) {
+      deps.repos.traces.unstampGainForRescreen(id as TraceId);
+    }
+
+    // 2. Idempotent historical screening at the current inference version.
+    runGainInference({
+      db: deps.db,
+      kv: deps.repos.kv,
+      episodesRepo: deps.repos.episodes,
+      tracesRepo: deps.repos.traces,
+      owner: deps.owner,
+      inferenceVersion: version,
     });
-  }
 
-  // 2. Idempotent historical screening at the current inference version.
-  runGainInference({
-    db: deps.db,
-    kv: deps.repos.kv,
-    episodesRepo: deps.repos.episodes,
-    tracesRepo: deps.repos.traces,
-    owner: deps.owner,
-    inferenceVersion: version,
-  });
-
-  // 3. Requeue eligible blocked records (queue-only; never policy fields).
-  let requeued = 0;
-  deps.db.tx(() => {
+    // 3. Requeue eligible blocked records (queue-only; never policy fields).
+    let requeued = 0;
     for (const policyId of integrityBlocked) {
       const policy = deps.repos.policies.getById(policyId);
       if (!policy || policy.status === "archived") continue;
@@ -559,8 +560,8 @@ export function consumeGainRepairRescreen(
     }
     // 4. Record consumption in the same transaction as the requeue writes.
     deps.repos.kv.set(key, { generation: gen, inferenceVersion: version, consumedAt: now });
+    return { consumed: true, requeued, inferenceVersion: version };
   });
-  return { consumed: true, requeued, inferenceVersion: version };
 }
 
 // ─── Tick orchestrator (used ONLY by the timer) ──────────────────────────────

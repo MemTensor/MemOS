@@ -444,7 +444,50 @@ export function rollbackGainRepair(
 
   // ── Apply phase: one atomic transaction for the whole batch ──
   const now = deps.now?.() ?? Date.now();
-  const rolledBack = deps.db.tx(() => {
+  const result = deps.db.tx((): GainRollbackResult => {
+    // Re-read every candidate policy inside the write transaction and repeat
+    // the five-field comparisons: a concurrent write that landed between the
+    // compare phase and this transaction would otherwise be silently
+    // overwritten. Any drift aborts the whole batch with zero writes.
+    const driftConflicts: GainRollbackConflict[] = [];
+    for (const c of candidates) {
+      const current = deps.repos.policies.getById(c.policyId);
+      if (!current) {
+        driftConflicts.push({
+          journalId: c.journalId,
+          policyId: String(c.policyId),
+          reason: "policy_missing",
+        });
+        continue;
+      }
+      const cas: Array<{
+        field: NonNullable<GainRollbackConflict["field"]>;
+        current: number | string;
+        recorded: number | string;
+      }> = [
+        { field: "status", current: current.status, recorded: c.newStatus },
+        { field: "support", current: current.support, recorded: c.newSupport },
+        { field: "gain", current: current.gain, recorded: c.newGain },
+        {
+          field: "gain_version",
+          current: current.gainVersion ?? 1,
+          recorded: c.newGainVersion,
+        },
+        { field: "updated_at", current: current.updatedAt, recorded: c.newUpdatedAt },
+      ];
+      const mismatch = cas.find((x) => x.current !== x.recorded);
+      if (mismatch) {
+        driftConflicts.push({
+          journalId: c.journalId,
+          policyId: String(c.policyId),
+          reason: "policy_changed",
+          field: mismatch.field,
+        });
+      }
+    }
+    if (driftConflicts.length > 0) {
+      return { ok: false, batchId, conflicts: driftConflicts };
+    }
     const out: Array<{ journalId: string; policyId: string }> = [];
     for (const c of candidates) {
       deps.repos.policies.updateStats(c.policyId, {
@@ -472,7 +515,7 @@ export function rollbackGainRepair(
       });
       out.push({ journalId: c.journalId, policyId: String(c.policyId) });
     }
-    return out;
+    return { ok: true, batchId, rolledBack: out, rolledBackAt: now };
   });
-  return { ok: true, batchId, rolledBack, rolledBackAt: now };
+  return result;
 }
