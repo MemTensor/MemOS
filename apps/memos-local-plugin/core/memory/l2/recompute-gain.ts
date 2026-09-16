@@ -190,7 +190,8 @@ export function isInductionEligible(
     // finite, in-[-1,1] gainValue can ever be evidence, so an out-of-range
     // score can neither associate nor enter induction evidence / support.
     // minGainValue is then applied to the resolved score.
-    return isResolvedGainValue(trace.gainValue) && trace.gainValue! >= config.minGainValue;
+    const gain = trace.gainValue;
+    return isResolvedGainValue(gain) && gain != null && gain >= config.minGainValue;
   }
   return trace.value >= config.minTraceValue;
 }
@@ -414,6 +415,8 @@ export function recomputePolicyGain(
   if (sourceTraceIds.length > 0) {
     for (const r of deps.traces.getGainRowsByIds(sourceTraceIds)) {
       linkedEpisodeIds.add(String(r.episodeId));
+      // Cache now so the `missing` batch below does not re-fetch these rows.
+      tracesById.set(String(r.id), toEvidenceFromGainRow(r));
     }
   }
 
@@ -447,6 +450,9 @@ export function recomputePolicyGain(
     // Contract: timestamp DESC then ID DESC (matches the final selection sort).
     rows.sort((a, b) => b.ts - a.ts || String(b.id).localeCompare(String(a.id)));
     for (const r of rows.slice(0, NEWEST_PER_EPISODE)) perEpisodeIds.push(String(r.id));
+    // Cache the fetched members now so the `missing` batch does not re-fetch
+    // the pool rows we already have in hand for this linked episode.
+    for (const r of rows) tracesById.set(String(r.id), toEvidenceFromGainRow(r));
   }
 
   const poolIds = dedup([...withIds, ...currentIds, ...perEpisodeIds]);
