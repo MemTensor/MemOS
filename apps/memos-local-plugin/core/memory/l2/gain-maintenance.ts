@@ -103,36 +103,48 @@ export function previewGainRepair(
   const version = deps.inferenceVersion ?? GAIN_INFERENCE_VERSION;
   const namespace = namespaceFromOwner(owner);
 
-  // Repair universe: candidate/active policies of the EXACT namespace.
-  // Added owner-scoped SQL filter to avoid loading 200k rows into memory.
-  const policies = [
-    ...deps.repos.policies.list({
-      status: "candidate",
+  // Repair universe: candidate/active policies of the EXACT namespace, read
+  // in ONE owner-scoped query (statusIn) so the two statuses are atomic —
+  // a policy created between two separate status reads can no longer appear
+  // twice or be silently missed. Total comes from a matching COUNT; both
+  // stay SQL-side so no candidate/active universe is hydrated to page.
+  const ownerFilter = {
+    ownerAgentKind: owner.ownerAgentKind,
+    ownerProfileId: owner.ownerProfileId,
+    ownerWorkspaceId: owner.ownerWorkspaceId ?? null,
+  } as const;
+  const total = deps.repos.policies.count({
+    ...ownerFilter,
+    statusIn: ["candidate", "active"],
+  });
+  const policies = deps.repos.policies
+    .list({
+      ...ownerFilter,
+      statusIn: ["candidate", "active"],
       limit: 100_000,
-      ownerAgentKind: owner.ownerAgentKind,
-      ownerProfileId: owner.ownerProfileId,
-      ownerWorkspaceId: owner.ownerWorkspaceId ?? null,
-    }),
-    ...deps.repos.policies.list({
-      status: "active",
-      limit: 100_000,
-      ownerAgentKind: owner.ownerAgentKind,
-      ownerProfileId: owner.ownerProfileId,
-      ownerWorkspaceId: owner.ownerWorkspaceId ?? null,
-    }),
-  ].filter((p) => isExactOwner(p, owner));
+      offset: 0,
+    })
+    .filter((p) => isExactOwner(p, owner));
 
   const queueByPolicy = new Map<string, GainPreviewPolicyEntry["queue"]>();
-  for (const state of ["pending", "blocked", "claimed"] as const) {
-    for (const row of deps.repos.gainRepair.listByOwnerAndState(owner, state)) {
-      queueByPolicy.set(String(row.policyId), {
-        state,
-        reason: row.reason,
-        blockedReason: row.blockedReason,
-        attemptCount: row.attemptCount,
-        inferenceVersion: row.inferenceVersion,
-      });
-    }
+  let queuePending = 0;
+  let queueBlocked = 0;
+  let queueClaimed = 0;
+  for (const row of deps.repos.gainRepair.listByOwnerAndStates(owner, [
+    "pending",
+    "blocked",
+    "claimed",
+  ])) {
+    queueByPolicy.set(String(row.policyId), {
+      state: row.state,
+      reason: row.reason,
+      blockedReason: row.blockedReason,
+      attemptCount: row.attemptCount,
+      inferenceVersion: row.inferenceVersion,
+    });
+    if (row.state === "pending") queuePending += 1;
+    else if (row.state === "blocked") queueBlocked += 1;
+    else queueClaimed += 1;
   }
 
   const entries: GainPreviewPolicyEntry[] = policies.map((policy) => {
@@ -200,13 +212,13 @@ export function previewGainRepair(
 
   return {
     policies: entries.slice(offset, offset + limit),
-    total: entries.length,
+    total,
     limit,
     offset,
     queue: {
-      pending: deps.repos.gainRepair.countByState(owner, "pending"),
-      blocked: deps.repos.gainRepair.countByState(owner, "blocked"),
-      claimed: deps.repos.gainRepair.countByState(owner, "claimed"),
+      pending: queuePending,
+      blocked: queueBlocked,
+      claimed: queueClaimed,
     },
     budget: readGainRepairBudget(deps.repos.kv, owner, deps.config.gainRepairMaxTotal),
     inferenceVersion: version,
@@ -347,8 +359,9 @@ export function rollbackGainRepair(
 
   // ── Compare phase: every row must prove eligibility + CAS match ──
   const conflicts: GainRollbackConflict[] = [];
-  const candidates: RollbackCandidate[] = [];
+  let candidates: RollbackCandidate[] = [];
   const seenPolicies = new Map<string, string>();
+  const originalRetracted = new Set<string>();
   for (const { journalId, row } of requested) {
     if (!row) {
       conflicts.push({ journalId, policyId: null, reason: "not_found_or_forbidden" });
@@ -381,6 +394,16 @@ export function rollbackGainRepair(
     const policyKey = String(row.policyId);
     const firstSeen = seenPolicies.get(policyKey);
     if (firstSeen !== undefined) {
+      // A policy appears twice in the same request: retract the earlier
+      // candidate AND report the FULL duplicate pair as conflicts so the
+      // caller sees both journal rows, not just the second occurrence.
+      // Only the first retraction reports the original's journal ID; any
+      // further repeats of the same policy add only their own row.
+      if (!originalRetracted.has(policyKey)) {
+        candidates = candidates.filter((c) => String(c.policyId) !== policyKey);
+        conflicts.push({ journalId: firstSeen, policyId: policyKey, reason: "duplicate_policy_entries" });
+        originalRetracted.add(policyKey);
+      }
       conflicts.push({ journalId, policyId: policyKey, reason: "duplicate_policy_entries" });
       continue;
     }

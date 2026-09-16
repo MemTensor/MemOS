@@ -117,7 +117,13 @@ export function makePoliciesRepo(db: StorageDb) {
       const tr = timeRangeWhere(filter, "updated_at");
       const fragments: string[] = [];
       const params: Record<string, unknown> = { ...tr.params };
-      if (filter.status) {
+      if (filter.statusIn && filter.statusIn.length > 0) {
+        const placeholders = filter.statusIn.map((_, i) => `@status_in_${i}`).join(",");
+        fragments.push(`status IN (${placeholders})`);
+        filter.statusIn.forEach((s, i) => {
+          params[`status_in_${i}`] = s;
+        });
+      } else if (filter.status) {
         fragments.push(`status = @status`);
         params.status = filter.status;
       }
@@ -148,7 +154,13 @@ export function makePoliciesRepo(db: StorageDb) {
       const tr = timeRangeWhere(filter, "updated_at");
       const fragments: string[] = [];
       const params: Record<string, unknown> = { ...tr.params };
-      if (filter.status) {
+      if (filter.statusIn && filter.statusIn.length > 0) {
+        const placeholders = filter.statusIn.map((_, i) => `@status_in_${i}`).join(",");
+        fragments.push(`status IN (${placeholders})`);
+        filter.statusIn.forEach((s, i) => {
+          params[`status_in_${i}`] = s;
+        });
+      } else if (filter.status) {
         fragments.push(`status = @status`);
         params.status = filter.status;
       }

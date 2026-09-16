@@ -3596,7 +3596,8 @@ export function createMemoryCore(
         "policies.gainPreview: 'namespace' is required (exact namespace)",
       );
     }
-    activeNamespace = input.namespace;
+    // Read-only preview: never mutates the process default namespace —
+    // `gainMaintenanceDeps(input.namespace)` already scopes every read.
     return previewGainRepairImpl(
       gainMaintenanceDeps(input.namespace),
       { limit: input.limit, offset: input.offset },
@@ -3622,7 +3623,7 @@ export function createMemoryCore(
         "policies.gainRollback: 'namespace' is required (exact namespace)",
       );
     }
-    activeNamespace = input.namespace;
+    // Read-only concerns only; never mutates the process default namespace.
     return rollbackGainRepairImpl(
       gainMaintenanceDeps(input.namespace),
       { batchId: input.batchId, journalIds: input.journalIds },

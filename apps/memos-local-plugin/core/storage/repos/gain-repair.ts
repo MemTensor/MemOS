@@ -438,6 +438,30 @@ export function makeGainRepairRepo(db: StorageDb) {
         .map(mapQueueRow);
     },
 
+    listByOwnerAndStates(
+      owner: { ownerAgentKind: string; ownerProfileId: string; ownerWorkspaceId?: string | null },
+      states: readonly GainRepairQueueState[],
+    ): GainRepairQueueRow[] {
+      if (states.length === 0) return [];
+      const placeholders = states.map((_, i) => `@state_${i}`).join(",");
+      const rows = db
+        .prepare<{ kind: string; profile: string; workspace_id: string | null; [k: string]: unknown }, RawQueueRow>(
+          `SELECT ${QUEUE_COLUMNS.join(", ")} FROM gain_repair_queue
+           WHERE owner_agent_kind=@kind
+             AND owner_profile_id=@profile
+             AND owner_workspace_id IS @workspace_id
+             AND state IN (${placeholders})
+           ORDER BY policy_id`,
+        )
+        .all({
+          kind: owner.ownerAgentKind,
+          profile: owner.ownerProfileId,
+          workspace_id: owner.ownerWorkspaceId ?? null,
+          ...Object.fromEntries(states.map((s, i) => [`state_${i}`, s])),
+        });
+      return rows.map(mapQueueRow);
+    },
+
     listBlockedByOwner(owner: {
       ownerAgentKind: string;
       ownerProfileId: string;
