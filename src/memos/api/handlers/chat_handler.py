@@ -48,6 +48,43 @@ from memos.templates.mos_prompts import (
 from memos.types import MessageList
 
 
+# Fields safe to log for chat requests. Sensitive/bulk content (query,
+# history, system_prompt, filter) and credentials (business_key) are excluded
+# or masked so request logging never leaks memory content or auth keys.
+_CHAT_REQ_LOG_WHITELIST = (
+    "user_id",
+    "manager_user_id",
+    "project_id",
+    "mem_cube_id",
+    "readable_cube_ids",
+    "writable_cube_ids",
+    "session_id",
+    "mode",
+    "top_k",
+    "threshold",
+    "relativity",
+    "pref_top_k",
+    "max_tokens",
+    "temperature",
+    "top_p",
+    "internet_search",
+    "include_preference",
+    "add_message_on_answer",
+)
+
+
+def _safe_chat_req_log(chat_req: Any, prefix: str) -> str:
+    """Build a loggable summary of a chat request without sensitive content."""
+    try:
+        data = chat_req.model_dump()
+    except AttributeError:
+        data = getattr(chat_req, "__dict__", {})
+    safe = {k: v for k, v in data.items() if k in _CHAT_REQ_LOG_WHITELIST}
+    if "business_key" in data:
+        safe["business_key"] = "***" if data.get("business_key") else None
+    return f"{prefix} Chat Req: {safe}"
+
+
 class ChatHandler(BaseHandler):
     """
     Handler for chat operations.
@@ -116,7 +153,7 @@ class ChatHandler(BaseHandler):
         Raises:
             HTTPException: If chat fails
         """
-        self.logger.info(f"[ChatHandler] Chat Req is: {chat_req}")
+        self.logger.info(_safe_chat_req_log(chat_req, "[ChatHandler]"))
         try:
             # Resolve readable cube IDs (for search)
             readable_cube_ids = chat_req.readable_cube_ids or [chat_req.user_id]
@@ -251,7 +288,7 @@ class ChatHandler(BaseHandler):
         Raises:
             HTTPException: If stream initialization fails
         """
-        self.logger.info(f"[ChatHandler] Chat Req is: {chat_req}")
+        self.logger.info(_safe_chat_req_log(chat_req, "[ChatHandler]"))
         try:
 
             def generate_chat_response() -> Generator[str, None, None]:
@@ -436,7 +473,7 @@ class ChatHandler(BaseHandler):
         Raises:
             HTTPException: If stream initialization fails
         """
-        self.logger.info(f"[ChatHandler] Chat Req is: {chat_req}")
+        self.logger.info(_safe_chat_req_log(chat_req, "[ChatHandler]"))
         try:
 
             def generate_chat_response() -> Generator[str, None, None]:
@@ -780,7 +817,7 @@ class ChatHandler(BaseHandler):
         self, chat_req: ChatBusinessRequest
     ) -> StreamingResponse:
         """Chat API for business user."""
-        self.logger.info(f"[ChatBusinessHandler] Chat Req is: {chat_req}")
+        self.logger.info(_safe_chat_req_log(chat_req, "[ChatBusinessHandler]"))
 
         # Validate business_key permission
         business_chat_keys = os.environ.get("BUSINESS_CHAT_KEYS", "[]")

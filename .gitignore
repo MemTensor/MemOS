@@ -1,6 +1,9 @@
 # MemOS home
 .memos/
 
+# FuXi CLI local state
+.fuxi/
+
 # Temporary files
 tmp/
 **/tmp_data/
