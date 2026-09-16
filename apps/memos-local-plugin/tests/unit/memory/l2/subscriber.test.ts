@@ -37,6 +37,12 @@ function cfg(): L2Config {
     minEpisodesForInduction: 5, // keep induction off for this test
     inductionTraceCharCap: 2_000,
     gainEmaAlpha: 0.4,
+    gainV2Enabled: false,
+    minGainValue: 0.02,
+    gainRepairBatchSize: 0,
+    gainRepairIntervalMs: 900_000,
+    gainRepairMaxTotal: null,
+    gainRepairRescreenGeneration: 0,
   };
 }
 

@@ -168,6 +168,8 @@ export type ApplyGainPersist = (args: {
   policyId: PolicyId;
   support: number;
   gain: number;
+  /** gain certification version written with this update. */
+  gainVersion: number;
   status: "candidate" | "active" | "archived";
   updatedAt: number;
 }) => void;
@@ -179,6 +181,8 @@ export function applyGain(args: {
   thresholds: { minSupport: number; minGain: number; archiveGain: number };
   persist: ApplyGainPersist;
   currentSupport: number;
+  /** 2 certifies a shared v2 gainValue calculation; 1 invalidates. */
+  gainVersion?: number;
   now?: number;
 }): { status: "candidate" | "active" | "archived"; support: number; gain: number } {
   const support = Math.max(0, args.currentSupport + args.deltaSupport);
@@ -192,6 +196,7 @@ export function applyGain(args: {
     policyId: args.gain.policyId,
     support,
     gain: args.gain.gain,
+    gainVersion: args.gainVersion ?? 1,
     status,
     updatedAt: args.now ?? Date.now(),
   });

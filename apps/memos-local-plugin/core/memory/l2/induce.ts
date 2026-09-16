@@ -168,6 +168,9 @@ export function buildPolicyRow(args: {
     boundary: args.draft.boundary,
     support: 0,
     gain: 0,
+    // a fresh draft is uncertified until an actual shared v2
+    // gainValue calculation certifies it (never blanket-default to v2).
+    gainVersion: 1,
     status: "candidate",
     sourceEpisodeIds: Array.from(new Set(args.episodeIds)),
     inducedBy: args.inducedBy,

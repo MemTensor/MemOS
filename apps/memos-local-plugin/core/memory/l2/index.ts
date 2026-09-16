@@ -27,6 +27,19 @@ export {
 } from "./similarity.js";
 export { induceDraft, buildPolicyRow, type InduceInput, type InduceDeps } from "./induce.js";
 export { computeGain, nextStatus, applyGain, partition } from "./gain.js";
+export {
+  recomputePolicyGain,
+  selectAndComputeGain,
+  isInductionEligible,
+  reconcileGainRepairQueueFromEvidenceUnion,
+  type GainEvidenceTrace,
+  type RecomputeGainInput,
+  type RecomputeGainMode,
+  type RecomputeGainResult,
+  type RecomputeGainRepos,
+  type RecomputeGainSkipReason,
+  type SelectAndComputeInput,
+} from "./recompute-gain.js";
 export { makeCandidatePool, candidateIdFor, signatureHash } from "./candidate-pool.js";
 export type {
   AssociationResult,

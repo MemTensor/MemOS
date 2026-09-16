@@ -106,6 +106,10 @@ export const RPC_METHODS = {
   HUB_PUBLISH: "hub.publish",
   HUB_PULL: "hub.pull",
 
+  // ── policies (gain maintenance) ──
+  POLICIES_GAIN_PREVIEW: "policies.gainPreview",
+  POLICIES_GAIN_ROLLBACK: "policies.gainRollback",
+
   // ── logs ──
   LOGS_TAIL: "logs.tail",
   /** Notification: forward a log line from a non-TS adapter back into our sinks. */

@@ -313,6 +313,42 @@ const AlgorithmSchema = Type.Object({
     gainEmaAlpha: NumberInRange(0.4, 0, 1),
     /** Archive active policies whose gain dips below this value. */
     archiveGain: NumberInRange(-0.05, -1, 1),
+    /**
+     * use `gainValue` (clamp(N·V, -1, 1)) for L2 gain/induction and
+     * permit configured repair. Disabled keeps legacy `minTraceValue`
+     * semantics on V; disabling v2 after v2 gains are written is not a clean
+     * semantic rollback.
+     */
+    gainV2Enabled: Bool(false),
+    /** resolved `gainValue` induction floor for enabled mode. */
+    minGainValue: NumberInRange(0.02, -1, 1),
+    /**
+     * repair attempts per timer tick (integer 0..25); 0 pauses
+     * repair while retaining v2 scoring.
+     */
+    gainRepairBatchSize: Type.Integer({ default: 0, minimum: 0, maximum: 25 }),
+    /**
+     * timer cadence (integer ms, 60000..86399999); default 15
+     * minutes, always faster than daily.
+     */
+    gainRepairIntervalMs: Type.Integer({ default: 900_000, minimum: 60_000, maximum: 86_399_999 }),
+    /**
+     * durable absolute total-attempt ceiling since initial enable.
+     * `null`/omitted = unlimited; otherwise a nonnegative integer. Raising
+     * it permits more attempts; lowering it below attempted pauses new
+     * attempts; clearing to null removes the ceiling without resetting the
+     * counter. Restarts/pause/resume/enable toggles never reset/refund it.
+     */
+    gainRepairMaxTotal: Type.Union(
+      [Type.Integer({ minimum: 0 }), Type.Null()],
+      { default: null },
+    ),
+    /**
+     * config-driven re-screen generation. A nonnegative integer;
+     * increasing it requests one re-screen of blocked evidence at the current
+     * inference version (consumed once, cannot bypass the attempt budget).
+     */
+    gainRepairRescreenGeneration: Type.Integer({ default: 0, minimum: 0 }),
   }, { default: {} }),
   l3Abstraction: Type.Object({
     /** Minimum number of compatible active L2 policies to trigger an L3 abstraction. */

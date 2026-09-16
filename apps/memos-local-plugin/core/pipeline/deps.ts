@@ -136,6 +136,18 @@ export function extractAlgorithmConfig(
       minEpisodesForInduction: alg.l2Induction.minEpisodesForInduction,
       inductionTraceCharCap: alg.l2Induction.traceCharCap,
       gainEmaAlpha: alg.l2Induction.gainEmaAlpha,
+      // all SIX v2 scoring/repair keys are enumerated explicitly so
+      // runL2 and the shared recompute helper never read past the typed slice
+      // slice, and the repair callers share one L2Config shape.
+      // The repair timer / preview / rollback (Phases C/D) read the full
+      // ResolvedConfig handle instead: handle.config.algorithm.l2Induction,
+      // never handle.algorithm.
+      gainV2Enabled: alg.l2Induction.gainV2Enabled,
+      minGainValue: alg.l2Induction.minGainValue,
+      gainRepairBatchSize: alg.l2Induction.gainRepairBatchSize,
+      gainRepairIntervalMs: alg.l2Induction.gainRepairIntervalMs,
+      gainRepairMaxTotal: alg.l2Induction.gainRepairMaxTotal,
+      gainRepairRescreenGeneration: alg.l2Induction.gainRepairRescreenGeneration,
     },
     l3Abstraction: alg.l3Abstraction,
     skill: alg.skill,

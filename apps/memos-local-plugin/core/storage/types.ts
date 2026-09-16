@@ -99,6 +99,9 @@ export interface PolicyListFilter extends PageOptions, TimeRange {
   status?: "candidate" | "active" | "archived";
   /** Minimum support count. */
   minSupport?: number;
+  ownerAgentKind?: string;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
 }
 
 export interface SkillListFilter extends PageOptions {

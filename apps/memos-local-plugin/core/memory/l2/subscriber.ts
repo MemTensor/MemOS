@@ -24,7 +24,16 @@ import type { L2Config, L2EventBus } from "./types.js";
 
 export interface L2SubscriberDeps {
   db: StorageDb;
-  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "tracePolicyLinks" | "traces">;
+  repos: Pick<
+    Repos,
+    | "candidatePool"
+    | "embeddingRetryQueue"
+    | "episodes"
+    | "gainRepair"
+    | "policies"
+    | "tracePolicyLinks"
+    | "traces"
+  >;
   rewardBus: RewardEventBus;
   l2Bus: L2EventBus;
   llm: LlmClient | null;

@@ -127,6 +127,40 @@ export function defaultOwnerFields(ns?: RuntimeNamespace | null): {
   };
 }
 
+/** Owner triple identifying one exact namespace (workspace NULL-exact). */
+export interface OwnerTriple {
+  ownerAgentKind: string;
+  ownerProfileId: string;
+  ownerWorkspaceId?: string | null;
+}
+
+export type OwnerishRow = {
+  ownerAgentKind?: string | null;
+  ownerProfileId?: string | null;
+  ownerWorkspaceId?: string | null;
+};
+
+/**
+ * Exact-namespace match (union reconcile + preview/rollback).
+ * Callers must NEVER use visibility rules here: a row owned by another
+ * namespace is invisible, not merely hidden.
+ *
+ * NOTE on `??` vs `ownerFieldsFromRaw`'s `||`: this predicate deliberately
+ * does NOT build on `ownerFieldsFromRaw`, which coerces empty strings to
+ * the fallbacks (`||`). Both pre-existing call sites used `??` (empty
+ * string stays an empty string and only matches an identically-owned
+ * namespace), so the shared version preserves that exact semantic.
+ * Workspace stays NULL-exact on both sides (`IS`-style: NULL matches only
+ * NULL, never a wildcard — Gate 2).
+ */
+export function isExactOwner(row: OwnerishRow, owner: OwnerTriple): boolean {
+  return (
+    (row.ownerAgentKind ?? "unknown") === owner.ownerAgentKind &&
+    (row.ownerProfileId ?? "default") === owner.ownerProfileId &&
+    (row.ownerWorkspaceId ?? null) === (owner.ownerWorkspaceId ?? null)
+  );
+}
+
 export function visibilityWhere(ns: RuntimeNamespace, alias = ""): {
   sql: string;
   params: Record<string, unknown>;

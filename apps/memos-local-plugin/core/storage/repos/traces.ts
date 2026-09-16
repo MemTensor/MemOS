@@ -1,7 +1,15 @@
 import type { ToolCallDTO } from "../../../agent-contract/dto.js";
-import type { EmbeddingVector, EpisodeId, SessionId, ShareScope, TraceId, TraceRow } from "../../types.js";
+import type {
+  EmbeddingVector,
+  EpisodeId,
+  GainValueSource,
+  SessionId,
+  ShareScope,
+  TraceId,
+  TraceRow,
+} from "../../types.js";
 import type { StorageDb, TraceListFilter } from "../types.js";
-import { buildInClause, buildInsert, buildUpdate } from "../tx.js";
+import { buildInClause, buildInsert } from "../tx.js";
 import { scanAndTopK, topKCosine, type VectorHit, type VectorRow } from "../vector.js";
 import {
   buildPageClauses,
@@ -44,6 +52,9 @@ const COLUMNS = [
   "shared_at",
   "turn_id",
   "schema_version",
+  "gain_value",
+  "gain_value_source",
+  "gain_inference_version",
 ];
 
 export type TraceSearchMeta = {
@@ -92,16 +103,75 @@ const DEDUP_COLUMNS = [
   "tool_calls_json",
 ] as const;
 
+/**
+ * Narrow projection used by the gain-inference pass. Carries only the
+ * columns screening needs (id, value, r_human, episode/namespace linkage,
+ * timestamps, gain columns) — NEVER the text / `tool_calls_json` /
+ * `vec_summary` / `vec_action` payload columns. A 500k-trace episode reads
+ * kilobytes, not gigabytes.
+ */
+export interface TraceGainRow {
+  id: string;
+  episodeId: string;
+  ownerAgentKind: string;
+  ownerProfileId: string;
+  ownerWorkspaceId: string | null;
+  ts: number;
+  value: number;
+  rHuman: number | null;
+  gainValue: number | null;
+  gainValueSource: GainValueSource | null;
+  gainInferenceVersion: number;
+}
+
+const GAIN_COLUMNS = [
+  "id",
+  "episode_id",
+  "owner_agent_kind",
+  "owner_profile_id",
+  "owner_workspace_id",
+  "ts",
+  "value",
+  "r_human",
+  "gain_value",
+  "gain_value_source",
+  "gain_inference_version",
+] as const;
+
+interface RawGainRow {
+  id: string;
+  episode_id: string;
+  owner_agent_kind: string;
+  owner_profile_id: string;
+  owner_workspace_id: string | null;
+  ts: number;
+  value: number;
+  r_human: number | null;
+  gain_value: number | null;
+  gain_value_source: GainValueSource | null;
+  gain_inference_version: number;
+}
+
+function mapGainRow(r: RawGainRow): TraceGainRow {
+  return {
+    id: r.id,
+    episodeId: r.episode_id,
+    ownerAgentKind: r.owner_agent_kind,
+    ownerProfileId: r.owner_profile_id,
+    ownerWorkspaceId: r.owner_workspace_id,
+    ts: r.ts,
+    value: r.value,
+    rHuman: r.r_human,
+    gainValue: r.gain_value,
+    gainValueSource: r.gain_value_source,
+    gainInferenceVersion: r.gain_inference_version,
+  };
+}
+
 export function makeTracesRepo(db: StorageDb) {
   const insert = db.prepare(buildInsert({ table: "traces", columns: COLUMNS }));
   const upsert = db.prepare(
     buildInsert({ table: "traces", columns: COLUMNS, onConflict: "replace" }),
-  );
-  const updateScalars = db.prepare(
-    buildUpdate({
-      table: "traces",
-      columns: ["id", "value", "alpha", "r_human", "priority"],
-    }),
   );
   const selectById = db.prepare<{ id: string }, RawTraceRow>(
     `SELECT ${COLUMNS.join(", ")} FROM traces WHERE id=@id`,
@@ -119,17 +189,79 @@ export function makeTracesRepo(db: StorageDb) {
       upsert.run(rowToParams(row));
     },
 
+    /**
+     * Update normalized reward credit (V / α / r_human / priority) for a
+     * trace. When `gainValue`/`gainValueSource` are supplied they are written
+     * in the SAME UPDATE statement as V — atomic live-score persistence
+     * There is no window where V is refreshed but gain provenance
+     * is stale. Omitted gain fields are left untouched so non-reward callers
+     * (e.g. explicit trace feedback) never silently clear provenance.
+     *
+     * Live scores intentionally keep `gain_inference_version` at 0: a live
+     * score is not a historical screening attempt, and stamping it would blur
+     * the restart watermark (0 doubles as "never screened", which is exactly
+     * what a live row is). Do NOT stamp here — a sentinel version could
+     * disturb stamp comparisons on the inference path. This stays safe
+     * because the inference pass never selects live rows: candidate
+     * selection only admits NULL/`inferred_normalized`/`legacy_unscaled`
+     * sources, per-row screening skips `live_normalized`, and `stampGain`
+     * refuses to overwrite it — so version 0 needs no source tag to keep
+     * live rows out of historical inference.
+     */
     updateScore(
       id: TraceId,
-      scores: { value: number; alpha: number; rHuman?: number | null; priority: number },
+      scores: {
+        value: number;
+        alpha: number;
+        rHuman?: number | null;
+        priority: number;
+        gainValue?: number | null;
+        gainValueSource?: GainValueSource | null;
+      },
     ): void {
-      updateScalars.run({
+      const sets: string[] = ["value=@value", "alpha=@alpha", "r_human=@r_human", "priority=@priority"];
+      const params: Record<string, unknown> = {
         id,
         value: scores.value,
         alpha: scores.alpha,
         r_human: nullable(scores.rHuman ?? null) as number | null,
         priority: scores.priority,
-      });
+      };
+      if (scores.gainValue !== undefined || scores.gainValueSource !== undefined) {
+        sets.push("gain_value=@gain_value", "gain_value_source=@gain_value_source");
+        params.gain_value = scores.gainValue ?? null;
+        params.gain_value_source = scores.gainValueSource ?? null;
+      }
+      const sql = `UPDATE traces SET ${sets.join(", ")} WHERE id=@id`;
+      db.prepare<typeof params>(sql).run(params);
+    },
+
+    /**
+     * stamp a historical screening attempt on one trace. Writes
+     * gainValue/source and the inference version together, and refuses to
+     * overwrite `live_normalized` provenance (defense in depth — the
+     * inference candidate selection already excludes live rows).
+     */
+    stampGain(
+      id: TraceId,
+      patch: { gainValue: number | null; source: GainValueSource | null; inferenceVersion: number },
+    ): { changes: number } {
+      const res = db
+        .prepare<{ id: string; gain_value: number | null; gain_value_source: string | null; version: number }>(
+          `UPDATE traces
+              SET gain_value = @gain_value,
+                  gain_value_source = @gain_value_source,
+                  gain_inference_version = @version
+            WHERE id = @id
+              AND (gain_value_source IS NULL OR gain_value_source != 'live_normalized')`,
+        )
+        .run({
+          id,
+          gain_value: patch.gainValue,
+          gain_value_source: patch.source,
+          version: patch.inferenceVersion,
+        });
+      return { changes: Number(res.changes) };
     },
 
     getById(id: TraceId): TraceRow | null {
@@ -142,12 +274,91 @@ export function makeTracesRepo(db: StorageDb) {
       return selectLatestTimestamp.get()?.ts ?? null;
     },
 
+    /**
+     * un-stamp one trace so the idempotent screening pass
+     * re-visits its episode group at the current inference version (config-
+     * generation re-screen of blocked inputs). Never touches `live_normalized`
+     * provenance: real live scores always supersede historical inference.
+     */
+    unstampGainForRescreen(id: TraceId): { changes: number } {
+      const res = db
+        .prepare<{ id: string }>(
+          `UPDATE traces
+              SET gain_value = NULL,
+                  gain_value_source = NULL,
+                  gain_inference_version = 0
+            WHERE id = @id
+              AND (gain_value_source IS NULL OR gain_value_source != 'live_normalized')`,
+        )
+        .run({ id });
+      return { changes: Number(res.changes) };
+    },
+
     getManyByIds(ids: readonly TraceId[]): TraceRow[] {
       if (ids.length === 0) return [];
       const placeholders = buildInClause(ids.length);
       const sql = `SELECT ${COLUMNS.join(", ")} FROM traces WHERE id ${placeholders}`;
       const rows = db.prepare<readonly string[], RawTraceRow>(sql).all(ids);
       return rows.map(mapRow);
+    },
+
+    /**
+     * bounded narrow-projection member read for a reward-pass set.
+     * Chunked IN lists keep SQLite under its variable limit regardless of S's
+     * size, and only the screening columns are projected (no text/vector
+     * payloads). Preserves input order and de-duplicates.
+     */
+    getGainRowsByIds(ids: readonly string[], opts: { chunkSize?: number } = {}): TraceGainRow[] {
+      if (ids.length === 0) return [];
+      const dedup = Array.from(new Set(ids));
+      const CHUNK_SIZE = Math.max(1, Math.min(opts.chunkSize ?? 900, 900));
+      const out: TraceGainRow[] = [];
+      for (let i = 0; i < dedup.length; i += CHUNK_SIZE) {
+        const chunk = dedup.slice(i, i + CHUNK_SIZE);
+        const placeholders = buildInClause(chunk.length);
+        const sql = `SELECT ${GAIN_COLUMNS.join(", ")} FROM traces WHERE id ${placeholders}`;
+        const rows = db.prepare<readonly string[], RawGainRow>(sql).all(chunk);
+        for (const r of rows) out.push(mapGainRow(r));
+      }
+      return out;
+    },
+
+    /**
+     * narrow-projection, keyset-paged read of an episode's traces.
+     * Used only for malformed/wrong-shaped `trace_ids_json` groups where no
+     * valid S exists: the existing members are stamped unresolved so a
+     * restart never re-scans them.
+     */
+    listGainRowsForEpisode(
+      episodeId: EpisodeId | string,
+      opts: { limit?: number; afterId?: string } = {},
+    ): TraceGainRow[] {
+      const limit = Math.max(1, Math.min(opts.limit ?? 2000, 5000));
+      const params: Record<string, unknown> = { episode_id: String(episodeId), limit };
+      let after = "";
+      if (opts.afterId) {
+        after = "AND id > @after_id";
+        params.after_id = opts.afterId;
+      }
+      const sql = `SELECT ${GAIN_COLUMNS.join(
+        ", ",
+      )} FROM traces WHERE episode_id = @episode_id ${after} ORDER BY id LIMIT @limit`;
+      return db.prepare<typeof params, RawGainRow>(sql).all(params).map(mapGainRow);
+    },
+
+    /**
+     * every trace id stamped by a given inference version. Feeds the
+     * durable queue reconciliation: the seed set is derived from stored state
+     * (all stamped member traces → affected policies), so a crash between
+     * trace commits and queue seeding leaves no permanently omitted work.
+     */
+    listTraceIdsStampedAt(version: number): string[] {
+      const rows = db
+        .prepare<{ version: number }, { id: string }>(
+          `SELECT id FROM traces WHERE gain_inference_version = @version AND gain_inference_version > 0`,
+        )
+        .all({ version });
+      return rows.map((r) => r.id);
     },
 
     /**
@@ -896,6 +1107,9 @@ interface RawTraceRow {
   shared_at: number | null;
   turn_id: number;
   schema_version: number;
+  gain_value: number | null;
+  gain_value_source: GainValueSource | null;
+  gain_inference_version: number;
 }
 
 function normalizeSignatures(sigs: readonly string[] | undefined): string[] {
@@ -947,6 +1161,9 @@ function rowToParams(row: TraceRow): Record<string, unknown> {
     shared_at: row.share?.sharedAt ?? null,
     turn_id: row.turnId ?? null,
     schema_version: row.schemaVersion,
+    gain_value: row.gainValue ?? null,
+    gain_value_source: row.gainValueSource ?? null,
+    gain_inference_version: row.gainInferenceVersion ?? 0,
   };
 }
 
@@ -981,5 +1198,8 @@ function mapRow(r: RawTraceRow): TraceRow {
         : null,
     turnId: r.turn_id,
     schemaVersion: r.schema_version,
+    gainValue: r.gain_value,
+    gainValueSource: r.gain_value_source,
+    gainInferenceVersion: r.gain_inference_version,
   };
 }

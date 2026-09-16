@@ -46,6 +46,13 @@ algorithm:
     # Production default 0.01 (already low after 2026-04). Demo pushes
     # it lower so even the very first turn's traces feed induction.
     minTraceValue: 0.005
+    # v2 gain scoring stays OFF in the demo (shipping default).
+    gainV2Enabled: false
+    minGainValue: 0.02
+    gainRepairBatchSize: 0        # integer 0..25 attempts per tick; 0 pauses repair
+    gainRepairIntervalMs: 900000  # integer ms, 60000..86399999 (15 minutes)
+    gainRepairMaxTotal: null      # null = unlimited; else nonnegative int ceiling
+    gainRepairRescreenGeneration: 0  # nonnegative int; +1 re-screens blocked evidence
 
   l3Abstraction:
     # Production default 0.6 — works for homogeneous corpora. The demo

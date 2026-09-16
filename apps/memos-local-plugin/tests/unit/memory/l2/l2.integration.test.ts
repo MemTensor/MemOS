@@ -23,6 +23,7 @@ import { rootLogger } from "../../../../core/logger/index.js";
 import type {
   EmbeddingVector,
   EpisodeId,
+  PolicyRow,
   SessionId,
   TraceRow,
 } from "../../../../core/types.js";
@@ -43,6 +44,12 @@ function cfg(): L2Config {
     minEpisodesForInduction: 2,
     inductionTraceCharCap: 2_000,
     gainEmaAlpha: 0.4,
+    gainV2Enabled: false,
+    minGainValue: 0.02,
+    gainRepairBatchSize: 0,
+    gainRepairIntervalMs: 900_000,
+    gainRepairMaxTotal: null,
+    gainRepairRescreenGeneration: 0,
   };
 }
 
@@ -61,6 +68,12 @@ function mkTrace(partial: TraceOverrides): TraceRow {
     id: partial.id as TraceRow["id"],
     episodeId: partial.episodeId as TraceRow["episodeId"],
     sessionId: "s_int" as TraceRow["sessionId"],
+    // Real ownership by default: unknown-owner policies are excluded from
+    // automatic mutation in EVERY mode, so the shared fixtures model owned
+    // traces/policies unless a test deliberately omits the owner.
+    ownerAgentKind: partial.ownerAgentKind ?? "openclaw",
+    ownerProfileId: partial.ownerProfileId ?? "default",
+    ownerWorkspaceId: partial.ownerWorkspaceId,
     ts: NOW as TraceRow["ts"],
     userText: partial.userText ?? "",
     agentText: partial.agentText ?? "",
@@ -75,6 +88,8 @@ function mkTrace(partial: TraceOverrides): TraceRow {
     vecAction: partial.vecAction ?? null,
     turnId: 0 as never,
     schemaVersion: 1,
+    gainValue: partial.gainValue !== undefined ? partial.gainValue : null,
+    gainValueSource: partial.gainValueSource !== undefined ? partial.gainValueSource : null,
   };
 }
 
@@ -254,6 +269,8 @@ describe("memory/l2/integration", () => {
       procedure: "install the matching distro package, then retry pip",
       verification: "pip install succeeds",
       boundary: "non-container environments with libraries already present",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
       support: 0,
       gain: 0,
       status: "active",
@@ -343,6 +360,8 @@ describe("memory/l2/integration", () => {
       procedure: "以简洁、自然的文字回应，但不添加任何emoji或表情符号",
       verification: "回复不包含emoji",
       boundary: "用户明确要求使用emoji时不适用",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
       support: 3,
       gain: 0.2,
       status: "active",
@@ -433,6 +452,8 @@ describe("memory/l2/integration", () => {
       procedure: "1) 从原始数据中提取关键信息字段；2) 按逻辑分类组织信息（如天气按：天气状况/气温/湿度/风速/降水分类）；3) 使用结构化格式呈现（emoji图标+粗体标签+数值，或分段文本）；4) 添加简短的实用性总结或建议",
       verification: "",
       boundary: "",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
       support: 3,
       gain: 0.2,
       status: "active",
@@ -606,6 +627,8 @@ describe("memory/l2/integration", () => {
       procedure: "1) 明确告知用户所有尝试过的工具都已失效及原因（如'搜狗、360、百度全都被封了'）2) 回退到自身知识库，提供最接近的已知信息 3) 明确标注信息的时间戳和时效性限制（如'根据已有知识...2023年底到任'）4) 提醒用户当前时间与信息时间的差距，建议后续通过其他渠道确认",
       verification: "",
       boundary: "",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
       support: 3,
       gain: 0.2,
       status: "active",
@@ -769,6 +792,8 @@ describe("memory/l2/integration", () => {
       procedure: "inspect the error, adjust the input, retry once, then explain fallback",
       verification: "the retry resolves the error or the fallback is explicit",
       boundary: "do not retry when the error is permanent",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
       support: 3,
       gain: 0.1,
       status: "active",
@@ -814,5 +839,691 @@ describe("memory/l2/integration", () => {
     expect(updated.gain).toBeGreaterThan(0);
     expect(updated.gain).toBeLessThan(0.1);
     expect(updated.status).toBe("active");
+  });
+
+  it("gates untouched-candidate promotion on v2 certification and pending inference refresh", async () => {
+    ensureEpisode(handle, "ep_gate", "s_int");
+    const mkCandidate = (id: string, gainVersion: number) => ({
+      id: id as never,
+      title: "gated candidate",
+      trigger: "gated trigger",
+      procedure: "gated procedure",
+      verification: "v",
+      boundary: "b",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      support: 3,
+      gain: 0.5,
+      gainVersion,
+      status: "candidate" as const,
+      sourceEpisodeIds: ["ep_gate" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+    handle.repos.policies.insert(mkCandidate("po_gate_v1", 1));
+    handle.repos.policies.insert(mkCandidate("po_gate_v2", 2));
+
+    const v2cfg = { ...cfg(), gainV2Enabled: true, minGainValue: 0.02 };
+    const deps = {
+      db: handle.db,
+      repos: handle.repos,
+      llm: fakeLlm({ completeJson: {} }),
+      log: rootLogger.child({ channel: "core.memory.l2" }),
+      bus: createL2EventBus(),
+      config: v2cfg,
+      thresholds: { minSupport: 2, minGain: 0.1, archiveGain: -0.05 },
+    };
+    const run = () =>
+      runL2(
+        {
+          episodeId: "ep_gate" as EpisodeId,
+          sessionId: "s_int" as SessionId,
+          traces: [],
+          trigger: "manual",
+          now: NOW,
+        },
+        deps,
+      );
+
+    await run();
+    expect(handle.repos.policies.getById("po_gate_v1" as never)!.status).toBe("candidate");
+    expect(handle.repos.policies.getById("po_gate_v2" as never)!.status).toBe("active");
+
+    // A v2 candidate with a PENDING inference refresh must not be promoted on
+    // stale certification.
+    handle.repos.policies.insert(mkCandidate("po_gate_v2b", 2));
+    handle.repos.gainRepair.upsertPending({
+      policyId: "po_gate_v2b" as never,
+      ownerAgentKind: "unknown",
+      ownerProfileId: "default",
+      reason: "inference_refresh",
+    });
+    await run();
+    expect(handle.repos.policies.getById("po_gate_v2b" as never)!.status).toBe("candidate");
+  });
+
+  it("still archives an active policy when the recomputed v2 gain falls below the archive threshold", async () => {
+    ensureEpisode(handle, "ep_arch", "s_int");
+    // Old with-link carries a resolved but strongly negative gainValue; the
+    // current trace is admission-eligible (gainValue ≥ minGainValue) so it
+    // associates and touches the policy. The blended v2 gain must dip below
+    // archiveGain and archive the active policy under the ordinary rule.
+    const trOld = mkTrace({
+      id: "tr_arch_old",
+      episodeId: "ep_arch",
+      value: 0.5,
+      gainValue: -0.6,
+      gainValueSource: "live_normalized" as const,
+      ts: (NOW - 1) as never,
+      vecSummary: vec([1, 0, 0]),
+    });
+    const trNew = mkTrace({
+      id: "tr_arch_new",
+      episodeId: "ep_arch",
+      value: 0.9,
+      gainValue: 0.1,
+      gainValueSource: "live_normalized" as const,
+      ts: NOW as never,
+      vecSummary: vec([1, 0, 0]),
+    });
+    handle.repos.traces.insert(trOld);
+    handle.repos.traces.insert(trNew);
+    handle.repos.policies.insert({
+      id: "po_arch" as never,
+      title: "archivable v2 policy",
+      trigger: "archivable trigger",
+      procedure: "archivable procedure",
+      verification: "v",
+      boundary: "b",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      support: 2,
+      gain: 0.1,
+      gainVersion: 2,
+      status: "active",
+      sourceEpisodeIds: ["ep_arch" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+    handle.repos.tracePolicyLinks.link({
+      traceId: trOld.id,
+      policyId: "po_arch" as never,
+      episodeId: trOld.episodeId,
+      now: NOW,
+    });
+
+    await runL2(
+      {
+        episodeId: "ep_arch" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [trNew],
+        trigger: "manual",
+        now: NOW + 1,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: { ...cfg(), gainV2Enabled: true, minGainValue: 0.02 },
+        thresholds: { minSupport: 2, minGain: 0.1, archiveGain: -0.05 },
+      },
+    );
+
+    const updated = handle.repos.policies.getById("po_arch" as never)!;
+    expect(updated.status).toBe("archived");
+    expect(updated.gain).toBeLessThan(-0.05);
+    expect(updated.gainVersion).toBe(2);
+  });
+
+  it("bumps support by new evidence only — never by resolved with-count or excluded links", async () => {
+    ensureEpisode(handle, "ep_sup", "s_int");
+    // tr_a is a PERSISTED with-link whose gainValue is unresolved; tr_b is the
+    // current-run association. The recompute resolves tr_b only — support must
+    // bump by exactly 1 (newSupportIds), not by the with-set size or by the
+    // resolved-with count.
+    const trA = mkTrace({
+      id: "tr_sup_a",
+      episodeId: "ep_sup",
+      value: 0.8,
+      gainValue: null,
+      gainValueSource: null,
+      ts: (NOW - 1) as never,
+      vecSummary: vec([1, 0, 0]),
+    });
+    const trB = mkTrace({
+      id: "tr_sup_b",
+      episodeId: "ep_sup",
+      value: 0.9,
+      gainValue: 0.6,
+      gainValueSource: "live_normalized" as const,
+      ts: NOW as never,
+      vecSummary: vec([1, 0, 0]),
+    });
+    handle.repos.traces.insert(trA);
+    handle.repos.traces.insert(trB);
+    handle.repos.policies.insert({
+      id: "po_sup" as never,
+      title: "support semantics",
+      trigger: "support trigger",
+      procedure: "support procedure",
+      verification: "v",
+      boundary: "b",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      support: 5,
+      gain: 0.2,
+      gainVersion: 2,
+      status: "active",
+      sourceEpisodeIds: ["ep_sup" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+    handle.repos.tracePolicyLinks.link({
+      traceId: trA.id,
+      policyId: "po_sup" as never,
+      episodeId: trA.episodeId,
+      now: NOW,
+    });
+
+    await runL2(
+      {
+        episodeId: "ep_sup" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [trA, trB],
+        trigger: "manual",
+        now: NOW + 2,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: { ...cfg(), gainV2Enabled: true, minGainValue: 0.02 },
+        thresholds: { minSupport: 2, minGain: 0.1, archiveGain: -0.05 },
+      },
+    );
+
+    const updated = handle.repos.policies.getById("po_sup" as never)!;
+    // 5 + 1 (tr_b only) — the unresolved tr_a link neither inflates support
+    // nor was deleted (the association added tr_b as a new link).
+    expect(updated.support).toBe(6);
+    const links = handle.repos.tracePolicyLinks.getWithTraceIds("po_sup" as never);
+    expect(links).toContain("tr_sup_a");
+    expect(links).toContain("tr_sup_b");
+  });
+
+  it("carries only filtered eligible evidence through induction bookkeeping (mixed eligible+NULL bucket)", async () => {
+    ensureEpisode(handle, "ep_mix_a", "s_int");
+    ensureEpisode(handle, "ep_mix_b", "s_int");
+    const trOk = mkTrace({
+      id: "tr_mix_ok",
+      episodeId: "ep_mix_a",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      tags: ["docker"],
+      toolCalls: [
+        { name: "pip.install", input: { pkg: "lxml" }, output: "Error: MODULE_NOT_FOUND xmlsec1" },
+      ],
+      value: 0.8,
+      gainValue: 0.6,
+      gainValueSource: "live_normalized" as const,
+      vecSummary: vec([1, 0, 0]),
+    });
+    const trNull = mkTrace({
+      id: "tr_mix_null",
+      episodeId: "ep_mix_b",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      tags: ["docker"],
+      toolCalls: [
+        { name: "pip.install", input: { pkg: "psycopg2" }, output: "Error: MODULE_NOT_FOUND pg_config" },
+      ],
+      value: 0.9,
+      gainValue: null,
+      gainValueSource: null,
+      vecSummary: vec([1, 0, 0]),
+    });
+    handle.repos.traces.insert(trOk);
+    handle.repos.traces.insert(trNull);
+    // Seed the bucket directly (old pool rows created before gainValue existed).
+    const pool = makeCandidatePool({ db: handle.db, repos: handle.repos });
+    const ttlMs = cfg().candidateTtlDays * 24 * 60 * 60 * 1000;
+    pool.addCandidate({ trace: trOk, ttlMs, now: NOW });
+    pool.addCandidate({ trace: trNull, ttlMs, now: NOW });
+
+    const v2cfg = { ...cfg(), gainV2Enabled: true, minGainValue: 0.02, minEpisodesForInduction: 1 };
+    const result = await runL2(
+      {
+        episodeId: "ep_mix_b" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [],
+        trigger: "manual",
+        now: NOW,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({
+          completeJson: {
+            "l2.l2.induction.v2": {
+              title: "mixed bucket induction",
+              trigger: "mixed trigger",
+              procedure: "mixed procedure",
+              verification: "v",
+              boundary: "b",
+              rationale: "r",
+              caveats: [],
+              confidence: 0.8,
+            },
+          },
+        }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: v2cfg,
+        thresholds: { minSupport: 2, minGain: 0.15, archiveGain: -0.05 },
+      },
+    );
+
+    expect(result.inductions).toHaveLength(1);
+    expect(result.inductions[0].skippedReason).toBeNull();
+    // ONLY the eligible trace is reported as induction evidence.
+    expect(result.inductions[0].traceIds).toEqual(["tr_mix_ok"]);
+    const pid = result.inductions[0].policyId!;
+    const persisted = handle.repos.policies.getById(pid)!;
+    // support counts only the eligible evidence (1), not the NULL bucket member.
+    expect(persisted.support).toBe(1);
+    expect(handle.repos.tracePolicyLinks.getWithTraceIds(pid)).toEqual(["tr_mix_ok"]);
+
+    // A bucket whose evidence is ENTIRELY NULL is skipped and reports NO ids.
+    const trOnlyNull = mkTrace({
+      id: "tr_mix_only_null",
+      episodeId: "ep_mix_b",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      tags: ["docker"],
+      toolCalls: [
+        { name: "pip.install", input: { pkg: "Pillow" }, output: "Error: MODULE_NOT_FOUND jpeg" },
+      ],
+      value: 0.9,
+      gainValue: null,
+      gainValueSource: null,
+      vecSummary: vec([1, 0, 0]),
+    });
+    handle.repos.traces.insert(trOnlyNull);
+    pool.addCandidate({ trace: trOnlyNull, ttlMs, now: NOW });
+    const result2 = await runL2(
+      {
+        episodeId: "ep_mix_b" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [],
+        trigger: "manual",
+        now: NOW,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: v2cfg,
+        thresholds: { minSupport: 2, minGain: 0.15, archiveGain: -0.05 },
+      },
+    );
+    expect(result2.inductions.some((i) => i.skippedReason === "too_few_episodes" && i.traceIds.length === 0)).toBe(true);
+  });
+
+  it("does not auto-mutate an unknown-owner policy in v2 mode (ordinary run)", async () => {
+    ensureEpisode(handle, "ep_uo", "s_int");
+    const tr = mkTrace({
+      id: "tr_uo",
+      episodeId: "ep_uo",
+      value: 0.9,
+      gainValue: 0.6,
+      gainValueSource: "live_normalized" as const,
+      vecSummary: vec([1, 0, 0]),
+    });
+    handle.repos.traces.insert(tr);
+    // NO owner fields → ownerAgentKind "unknown" → excluded from auto-mutation.
+    handle.repos.policies.insert({
+      id: "po_uo" as never,
+      title: "unknown owner policy",
+      trigger: "uo trigger",
+      procedure: "uo procedure",
+      verification: "v",
+      boundary: "b",
+      support: 3,
+      gain: 0.2,
+      gainVersion: 2,
+      status: "candidate",
+      sourceEpisodeIds: ["ep_uo" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+    // A second unknown-owner candidate that is NOT touched this run: the
+    // untouched sweep must also refuse to promote it in v2 mode.
+    handle.repos.policies.insert({
+      id: "po_uo_untouched" as never,
+      title: "unknown owner untouched",
+      trigger: "uo2 trigger",
+      procedure: "uo2 procedure",
+      verification: "v",
+      boundary: "b",
+      support: 3,
+      gain: 0.5,
+      gainVersion: 2,
+      status: "candidate",
+      sourceEpisodeIds: ["ep_uo" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+
+    await runL2(
+      {
+        episodeId: "ep_uo" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [tr],
+        trigger: "manual",
+        now: NOW + 1,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: { ...cfg(), gainV2Enabled: true, minGainValue: 0.02 },
+        thresholds: { minSupport: 2, minGain: 0.1, archiveGain: -0.05 },
+      },
+    );
+
+    const after = handle.repos.policies.getById("po_uo" as never)!;
+    // association touched po_uo but the helper rejected auto-mutation: no gain,
+    // no support, no status write.
+    expect(after.support).toBe(3);
+    expect(after.gain).toBe(0.2);
+    expect(after.status).toBe("candidate");
+    expect(after.gainVersion).toBe(2);
+    // untouched sweep refused to promote the unknown-owner candidate
+    expect(handle.repos.policies.getById("po_uo_untouched" as never)!.status).toBe("candidate");
+  });
+
+  it("does not promote an untouched candidate while inference_refresh is blocked", async () => {
+    ensureEpisode(handle, "ep_blk", "s_int");
+    handle.repos.policies.insert({
+      id: "po_blk" as never,
+      title: "blocked refresh candidate",
+      trigger: "blk trigger",
+      procedure: "blk procedure",
+      verification: "v",
+      boundary: "b",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      support: 3,
+      gain: 0.5,
+      gainVersion: 2,
+      status: "candidate",
+      sourceEpisodeIds: ["ep_blk" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+    // Explicit inference invalidation that ended up BLOCKED (e.g. the refresh
+    // attempt found no resolved with-evidence). Promotion must still be
+    // refused: the invalidation is unresolved until a successful refresh.
+    handle.repos.gainRepair.upsertBlocked({
+      policyId: "po_blk" as never,
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      reason: "inference_refresh",
+      blockedReason: "no_resolved_with",
+    });
+
+    await runL2(
+      {
+        episodeId: "ep_blk" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [],
+        trigger: "manual",
+        now: NOW,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: { ...cfg(), gainV2Enabled: true, minGainValue: 0.02 },
+        thresholds: { minSupport: 2, minGain: 0.1, archiveGain: -0.05 },
+      },
+    );
+    expect(handle.repos.policies.getById("po_blk" as never)!.status).toBe("candidate");
+  });
+
+  it("rejects unknown-owner mutation in legacy mode too (touched: no support/gain/status/version write)", async () => {
+    ensureEpisode(handle, "ep_leg_uo", "s_int");
+    const tr = mkTrace({
+      id: "tr_leg_uo",
+      episodeId: "ep_leg_uo",
+      value: 0.9,
+      vecSummary: vec([1, 0, 0]),
+    });
+    handle.repos.traces.insert(tr);
+    // NO owner fields → ownerAgentKind "unknown". gainV2Enabled is FALSE
+    // (shipping default): the mode-independent rule must still refuse the write.
+    handle.repos.policies.insert({
+      id: "po_leg_uo" as never,
+      title: "legacy unknown owner",
+      trigger: "leguo trigger",
+      procedure: "leguo procedure",
+      verification: "v",
+      boundary: "b",
+      support: 2,
+      gain: 0.2,
+      gainVersion: 1,
+      status: "candidate",
+      sourceEpisodeIds: ["ep_leg_uo" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+
+    await runL2(
+      {
+        episodeId: "ep_leg_uo" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [tr],
+        trigger: "manual",
+        now: NOW + 1,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: cfg(), // gainV2Enabled: false — legacy mode
+        thresholds: { minSupport: 2, minGain: 0.1, archiveGain: -0.05 },
+      },
+    );
+
+    const after = handle.repos.policies.getById("po_leg_uo" as never)!;
+    // association touched the policy, but unknown-owner auto-mutation is
+    // rejected in EVERY mode: no support, gain, status or version write.
+    expect(after.support).toBe(2);
+    expect(after.gain).toBe(0.2);
+    expect(after.status).toBe("candidate");
+    expect(after.gainVersion).toBe(1);
+  });
+
+  it("does not promote an unknown-owner candidate via the untouched sweep in legacy mode", async () => {
+    ensureEpisode(handle, "ep_leg_sweep", "s_int");
+    const mkCandidate = (id: string, owner: Partial<PolicyRow> | null) => ({
+      id: id as never,
+      title: `${id} candidate`,
+      trigger: "sweep trigger",
+      procedure: "sweep procedure",
+      verification: "v",
+      boundary: "b",
+      ...(owner ?? {}),
+      support: 3,
+      gain: 0.5,
+      gainVersion: 1,
+      status: "candidate" as const,
+      sourceEpisodeIds: ["ep_leg_sweep" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+    handle.repos.policies.insert(mkCandidate("po_leg_sweep_uo", null));
+    handle.repos.policies.insert(mkCandidate("po_leg_sweep_ok", {
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+    }));
+
+    await runL2(
+      {
+        episodeId: "ep_leg_sweep" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [],
+        trigger: "manual",
+        now: NOW,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({ completeJson: {} }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: cfg(), // gainV2Enabled: false — legacy mode
+        thresholds: { minSupport: 2, minGain: 0.1, archiveGain: -0.05 },
+      },
+    );
+    // Unknown-owner candidate never promoted by the sweep in legacy mode…
+    expect(handle.repos.policies.getById("po_leg_sweep_uo" as never)!.status).toBe("candidate");
+    // …while a known-owner candidate still promotes exactly as before.
+    expect(handle.repos.policies.getById("po_leg_sweep_ok" as never)!.status).toBe("active");
+  });
+
+  it("does not admit out-of-range gainValues: not associated, linked, reported or counted toward support", async () => {
+    ensureEpisode(handle, "ep_oor", "s_int");
+    const trValid = mkTrace({
+      id: "tr_oor_valid",
+      episodeId: "ep_oor",
+      tags: ["docker"],
+      toolCalls: [
+        { name: "pip.install", input: { pkg: "lxml" }, output: "Error: MODULE_NOT_FOUND xmlsec1" },
+      ],
+      value: 0.8,
+      gainValue: 0.6,
+      gainValueSource: "live_normalized" as const,
+      vecSummary: vec([1, 0, 0]),
+    });
+    const trBad = mkTrace({
+      id: "tr_oor_bad",
+      episodeId: "ep_oor",
+      tags: ["docker"],
+      toolCalls: [
+        { name: "pip.install", input: { pkg: "psycopg2" }, output: "Error: MODULE_NOT_FOUND pg_config" },
+      ],
+      value: 0.9,
+      gainValue: 1.5, // out of [-1, 1] — NOT valid resolved evidence
+      gainValueSource: "live_normalized" as const,
+      vecSummary: vec([1, 0, 0]),
+    });
+    handle.repos.traces.insert(trValid);
+    handle.repos.traces.insert(trBad);
+    // Both traces sit in the same candidate bucket (old pooled evidence).
+    const pool = makeCandidatePool({ db: handle.db, repos: handle.repos });
+    const ttlMs = cfg().candidateTtlDays * 24 * 60 * 60 * 1000;
+    pool.addCandidate({ trace: trValid, ttlMs, now: NOW });
+    pool.addCandidate({ trace: trBad, ttlMs, now: NOW });
+
+    handle.repos.policies.insert({
+      id: "po_oor" as never,
+      title: "out-of-range admission gate",
+      trigger: "oor trigger",
+      procedure: "oor procedure",
+      verification: "v",
+      boundary: "b",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "default",
+      support: 5,
+      gain: 0.2,
+      gainVersion: 2,
+      status: "active",
+      sourceEpisodeIds: ["ep_oor" as EpisodeId],
+      inducedBy: "unit-test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: vec([1, 0, 0]),
+      createdAt: NOW as never,
+      updatedAt: NOW as never,
+    });
+
+    const result = await runL2(
+      {
+        episodeId: "ep_oor" as EpisodeId,
+        sessionId: "s_int" as SessionId,
+        traces: [trValid, trBad],
+        trigger: "manual",
+        now: NOW + 1,
+      },
+      {
+        db: handle.db,
+        repos: handle.repos,
+        llm: fakeLlm({
+          completeJson: {
+            "l2.l2.induction.v2": {
+              title: "oor bucket",
+              trigger: "oor bucket trigger",
+              procedure: "oor bucket procedure",
+              verification: "v",
+              boundary: "b",
+              rationale: "r",
+              caveats: [],
+              confidence: 0.8,
+            },
+          },
+        }),
+        log: rootLogger.child({ channel: "core.memory.l2" }),
+        bus: createL2EventBus(),
+        config: { ...cfg(), gainV2Enabled: true, minGainValue: 0.02, minEpisodesForInduction: 1 },
+        thresholds: { minSupport: 2, minGain: 0.1, archiveGain: -0.05 },
+      },
+    );
+
+    // the out-of-range trace never associated
+    expect(result.associations.map((a) => a.traceId)).toEqual(["tr_oor_valid"]);
+    // the bucket's duplicate path reports only eligible evidence
+    expect(result.inductions[0].traceIds).toEqual(["tr_oor_valid"]);
+    const updated = handle.repos.policies.getById("po_oor" as never)!;
+    // support +1 (valid trace only) — the invalid trace never counted
+    expect(updated.support).toBe(6);
+    const links = handle.repos.tracePolicyLinks.getWithTraceIds("po_oor" as never);
+    expect(links).toContain("tr_oor_valid");
+    expect(links).not.toContain("tr_oor_bad");
   });
 });

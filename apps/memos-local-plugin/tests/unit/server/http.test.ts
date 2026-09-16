@@ -71,6 +71,10 @@ function stubCore(): MemoryCore {
     sharePolicy: vi.fn(async (id, share) => ({ id, share } as any)),
     updatePolicy: vi.fn(async (id, patch) => ({ id, ...patch } as any)),
     editPolicyGuidance: vi.fn(async (id) => ({ id } as any)),
+    previewGainRepair: vi.fn(async () => ({ policies: [], total: 0 } as any)),
+    rollbackGainRepair: vi.fn(
+      async () => ({ ok: true, batchId: null, rolledBack: [], rolledBackAt: 0 } as any),
+    ),
     getWorldModel: vi.fn(async () => null),
     listWorldModels: vi.fn(async () => []),
     countWorldModels: vi.fn(async () => 0),
