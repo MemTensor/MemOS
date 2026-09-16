@@ -21,6 +21,47 @@ from memos.utils import timed
 logger = get_logger(__name__)
 
 
+# Relationship types used across the codebase (see tree_text_memory/organize/*,
+# mem_scheduler handlers). Hardcoded allowlist so dynamic `type` values can never
+# be interpolated into Cypher patterns.
+ALLOWED_EDGE_TYPES = (
+    "FOLLOWS",
+    "PARENT",
+    "MERGED_TO",
+    "RELATE",
+    "RELATED",
+    "RELATE_TO",
+    "INFERS",
+    "AGGREGATE_TO",
+    "CAUSE",
+    "CONDITION",
+    "CONFLICT",
+)
+
+
+def _validate_edge_type(type: str) -> str:
+    """Validate a relationship type against the allowlist; return it."""
+    if type != "ANY" and type not in ALLOWED_EDGE_TYPES:
+        raise ValueError(
+            f"Invalid relationship type: {type!r}. "
+            f"Must be one of {ALLOWED_EDGE_TYPES} or 'ANY'."
+        )
+    return type
+
+
+def _cypher_safe_id(value: Any) -> str:
+    """Coerce a node id / user_name to a clean, quote-escaped Cypher literal.
+
+    Empty values are allowed (they simply never match any node), but anything
+    containing a character that could break out of the SQL dollar-quoted body
+    is rejected.
+    """
+    text = str(value or "")
+    if "$" in text or "\\" in text:
+        raise ValueError(f"Invalid identifier for Cypher embedding: {value!r}")
+    return text.replace("'", "''")
+
+
 def _build_lightweight_return_columns(return_fields: list[str]) -> str:
     columns = []
     for field in return_fields:
@@ -949,28 +990,29 @@ class PolarDBGraphDB(BaseGraphDB):
         """Get connected node IDs in a specific direction and relationship type."""
         if direction not in ("in", "out", "both"):
             raise ValueError("Invalid direction. Must be 'in', 'out', or 'both'.")
+        _validate_edge_type(type)
 
         user_name = self._get_config_value("user_name")
-        id_esc = (id or "").replace("'", "''")
-        user_esc = (user_name or "").replace("'", "''")
+        id_safe = _cypher_safe_id(id)
+        user_safe = _cypher_safe_id(user_name)
         type_filter = f":{type}" if type != "ANY" else ""
 
         if direction == "out":
             cypher_body = f"""
             MATCH (a:Memory)-[r{type_filter}]->(b:Memory)
-            WHERE a.id = '{id_esc}' AND a.user_name = '{user_esc}'
+            WHERE a.id = '{id_safe}' AND a.user_name = '{user_safe}'
             RETURN DISTINCT b.id AS neighbor_id
             """
         elif direction == "in":
             cypher_body = f"""
             MATCH (b:Memory)-[r{type_filter}]->(a:Memory)
-            WHERE a.id = '{id_esc}' AND a.user_name = '{user_esc}'
+            WHERE a.id = '{id_safe}' AND a.user_name = '{user_safe}'
             RETURN DISTINCT b.id AS neighbor_id
             """
         else:  # both
             cypher_body = f"""
             MATCH (a:Memory)-[r{type_filter}]-(b:Memory)
-            WHERE a.id = '{id_esc}' AND a.user_name = '{user_esc}'
+            WHERE a.id = '{id_safe}' AND a.user_name = '{user_safe}'
             RETURN DISTINCT b.id AS neighbor_id
             """
         query = f"""
@@ -985,6 +1027,9 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 neighbors = []
                 for row in results:
+                    # Guard against NULL results (e.g. optional match / graph inconsistency)
+                    if row[0] is None:
+                        continue
                     raw = row[0].value if hasattr(row[0], "value") else row[0]
                     if isinstance(raw, str) and raw.startswith('"') and raw.endswith('"'):
                         raw = raw[1:-1]
@@ -1077,17 +1122,17 @@ class PolarDBGraphDB(BaseGraphDB):
     def get_path(self, source_id: str, target_id: str, max_depth: int = 3) -> list[str]:
         """Get the path of nodes from source to target within a limited depth."""
         user_name = self._get_config_value("user_name")
-        source_esc = (source_id or "").replace("'", "''")
-        target_esc = (target_id or "").replace("'", "''")
-        user_esc = (user_name or "").replace("'", "''")
+        source_safe = _cypher_safe_id(source_id)
+        target_safe = _cypher_safe_id(target_id)
+        user_safe = _cypher_safe_id(user_name)
 
         # Variable-length path [*1..N] counts edges; cap at a sane upper bound
         # to avoid unbounded traversal in AGE.
         hops = max(1, min(int(max_depth), 6))
         query = f"""
             SELECT * FROM cypher('{self.db_name}_graph', $cypher$
-                MATCH p = (n:Memory {{id: '{source_esc}'}})-[*1..{hops}]-(m:Memory {{id: '{target_esc}'}})
-                WHERE n.user_name = '{user_esc}' AND m.user_name = '{user_esc}'
+                MATCH p = (n:Memory {{id: '{source_safe}'}})-[*1..{hops}]-(m:Memory {{id: '{target_safe}'}})
+                WHERE n.user_name = '{user_safe}' AND m.user_name = '{user_safe}'
                 RETURN [x IN nodes(p) | x.id] AS path_ids
                 ORDER BY length(p) ASC
                 LIMIT 1
@@ -1101,7 +1146,15 @@ class PolarDBGraphDB(BaseGraphDB):
                     return []
                 raw = row[0].value if hasattr(row[0], "value") else row[0]
                 if isinstance(raw, list):
-                    return [str(x).strip('"') for x in raw]
+                    result = []
+                    for x in raw:
+                        if x is None:
+                            continue
+                        val = x.value if hasattr(x, "value") else x
+                        if isinstance(val, str) and val.startswith('"') and val.endswith('"'):
+                            val = val[1:-1]
+                        result.append(str(val))
+                    return result
                 return []
         except Exception as e:
             logger.error(f"Failed to get path: {e}", exc_info=True)
@@ -2636,7 +2689,14 @@ class PolarDBGraphDB(BaseGraphDB):
         return candidates
 
     def drop_database(self) -> None:
-        """Permanently delete the entire graph this instance is using."""
+        """
+        Permanently delete the entire graph this instance is using.
+
+        Intentionally a no-op: dropping a PolarDB graph is handled by the
+        operator (e.g. dropping the whole database/schema), not by this
+        process, to avoid accidental destructive actions on shared deployment.
+        """
+        pass
 
     def _parse_node(self, node_data: dict[str, Any]) -> dict[str, Any]:
         """Parse node data from database format to standard format."""

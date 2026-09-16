@@ -421,9 +421,14 @@ export async function apply(
           event as unknown as DshSessionEventLike,
         );
       } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
         ctx.logger.warn(
-          `memos-local-memory: session event ignored (${event.type}): ${String(error)}`,
+          `memos-local-memory: session event ignored (${event.type}): ${message}`,
         );
+        if (error instanceof Error && error.stack) {
+          ctx.logger.warn(error.stack);
+        }
       }
     }));
 

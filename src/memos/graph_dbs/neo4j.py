@@ -13,6 +13,35 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
+# Relationship types used across the codebase (see tree_text_memory/organize/*,
+# mem_scheduler handlers). Neo4j does not support parameterized relationship
+# types in MATCH patterns, so any dynamic `type` value must pass this allowlist
+# before being interpolated into Cypher.
+ALLOWED_EDGE_TYPES = (
+    "FOLLOWS",
+    "PARENT",
+    "MERGED_TO",
+    "RELATE",
+    "RELATED",
+    "RELATE_TO",
+    "INFERS",
+    "AGGREGATE_TO",
+    "CAUSE",
+    "CONDITION",
+    "CONFLICT",
+)
+
+
+def _validate_edge_type(type: str) -> str:
+    """Validate a relationship type against the allowlist; return it."""
+    if type != "ANY" and type not in ALLOWED_EDGE_TYPES:
+        raise ValueError(
+            f"Invalid relationship type: {type!r}. "
+            f"Must be one of {ALLOWED_EDGE_TYPES} or 'ANY'."
+        )
+    return type
+
+
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     node_id = item["id"]
     memory = item["memory"]
@@ -675,6 +704,7 @@ class Neo4jGraphDB(BaseGraphDB):
         """
         if direction not in ("in", "out", "both"):
             raise ValueError("Invalid direction. Must be 'in', 'out', or 'both'.")
+        _validate_edge_type(type)
 
         user_name = user_name if user_name else self.config.user_name
         rel_type = "" if type == "ANY" else f":{type}"
@@ -690,7 +720,9 @@ class Neo4jGraphDB(BaseGraphDB):
             where_clause = "a.id = $id AND b.id <> $id"
 
         params = {"id": id}
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
+        if not self.config.use_multi_db:
+            if not user_name:
+                raise ValueError("user_name is required in non-multi-db mode")
             where_clause += " AND a.user_name = $user_name AND b.user_name = $user_name"
             params["user_name"] = user_name
 
@@ -792,18 +824,23 @@ class Neo4jGraphDB(BaseGraphDB):
             Ordered list of node IDs along the path.
         """
         user_name = user_name if user_name else self.config.user_name
-        params = {"source_id": source_id, "target_id": target_id, "max_depth": max_depth}
 
         user_filter = ""
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
+        params = {"source_id": source_id, "target_id": target_id}
+        if not self.config.use_multi_db:
+            if not user_name:
+                raise ValueError("user_name is required in non-multi-db mode")
             user_filter = (
                 "WHERE n.user_name = $user_name AND m.user_name = $user_name "
                 "AND all(x IN nodes(p) WHERE x.user_name = $user_name)"
             )
             params["user_name"] = user_name
 
+        # Neo4j does not allow parameters in variable-length hop bounds; the
+        # literal must be inlined. Cap it to avoid runaway traversal.
+        hops = max(1, min(int(max_depth), 10))
         query = f"""
-                MATCH p = shortestPath((n:Memory {{id: $source_id}})-[*1..$max_depth]-(m:Memory {{id: $target_id}}))
+                MATCH p = shortestPath((n:Memory {{id: $source_id}})-[*1..{hops}]-(m:Memory {{id: $target_id}}))
                 {user_filter}
                 RETURN [x IN nodes(p) | x.id] AS path_ids
                 LIMIT 1
