@@ -7,7 +7,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { makeDispatcher } from "../../../bridge/methods.js";
-import type { MemoryCore } from "../../../agent-contract/memory-core.js";
+import type {
+  GainPreviewResult,
+  GainRollbackResult,
+  MemoryCore,
+} from "../../../agent-contract/memory-core.js";
 import { MemosError } from "../../../agent-contract/errors.js";
 
 function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
@@ -91,6 +95,11 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
     setPolicyStatus: vi.fn(async () => null),
     deletePolicy: vi.fn(async () => ({ deleted: false })),
     editPolicyGuidance: vi.fn(async () => null),
+    previewGainRepair: vi.fn(async () => ({}) as GainPreviewResult),
+    rollbackGainRepair: vi.fn(
+      async () =>
+        ({ ok: true, batchId: null, rolledBack: [], rolledBackAt: 0 }) as GainRollbackResult,
+    ),
     sharePolicy: vi.fn(async () => null),
     updatePolicy: vi.fn(async () => null),
     getWorldModel: vi.fn(async () => null),

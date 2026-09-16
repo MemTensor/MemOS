@@ -13,6 +13,7 @@ import type {
   EpochMs,
   FeedbackId,
   FeedbackRow,
+  GainValueSource,
   SessionId,
   TraceId,
   TraceRow,
@@ -150,6 +151,14 @@ export interface BackpropUpdate {
   alpha: number;
   /** priority ∝ max(V, 0) · decay(Δt). */
   priority: number;
+  /**
+   * contribution-adjusted gain `clamp(N·V_t, -1, 1)` where N
+   * counts nonzero contributions in the reward-pass set. Computed by the
+   * reward runner over the exact live scored set; not produced by backprop.
+   */
+  gainValue?: number;
+  /** `live_normalized` for every live pass. */
+  gainValueSource?: GainValueSource;
 }
 
 export interface BackpropResult {

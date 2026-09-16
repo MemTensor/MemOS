@@ -154,6 +154,97 @@ export interface EmbeddingMaintenanceRunResult {
   error?: string;
 }
 
+// ─── Gain repair maintenance ─────────────────────────────────────────────────
+
+export type GainPreviewProposedTransition =
+  | "promote_to_active"
+  | "retain_candidate"
+  | "retain_active"
+  | "none";
+
+export type GainPreviewSkipReason = "no_resolved_with" | "unknown_owner";
+
+export interface GainPreviewQueueState {
+  state: "pending" | "blocked" | "claimed";
+  reason: string | null;
+  blockedReason: string | null;
+  attemptCount: number;
+  inferenceVersion: number;
+}
+
+export interface GainPreviewPolicyEntry {
+  policyId: string;
+  title: string;
+  status: "candidate" | "active";
+  support: number;
+  /** Currently stored gain / version (the "old" side of a repair). */
+  oldGain: number;
+  oldGainVersion: number;
+  /** RAW (un-smoothed) recomputation — preview cannot rebuild it from a scalar. */
+  rawGain: number;
+  /** EMA-smoothed gain a repair would persist. */
+  newGain: number;
+  newGainVersion: 1 | 2;
+  resolvedWith: number;
+  resolvedWithout: number;
+  provenance: { liveNormalized: number; inferredNormalized: number; legacyUnscaled: number };
+  excluded: {
+    unresolvedWith: number;
+    unresolvedWithout: number;
+    withBeyondLimit: number;
+    withoutBeyondLimit: number;
+  };
+  reported: { danglingIds: number; invalidScores: number; outOfNamespace: number };
+  proposedTransition: GainPreviewProposedTransition;
+  skipReason: GainPreviewSkipReason | null;
+  unknownOwner: boolean;
+  queue: GainPreviewQueueState | null;
+}
+
+export interface GainPreviewResult {
+  policies: GainPreviewPolicyEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  queue: { pending: number; blocked: number; claimed: number };
+  /** Attempted/limit/remaining via the existing durable-budget readback. */
+  budget: { attempted: number; limit: number | null; remaining: number | null; initialized: boolean };
+  inferenceVersion: number;
+  legacy: {
+    groups: number;
+    traces: number;
+    postCutoverGroups: number;
+    postCutoverTraces: number;
+    unknownChronologyGroups: number;
+    unknownChronologyTraces: number;
+  };
+}
+
+export interface GainRollbackConflict {
+  journalId: string;
+  /**
+   * Null when the journal row is missing or belongs to another namespace —
+   * the caller learns nothing about foreign rows.
+   */
+  policyId: string | null;
+  reason:
+    | "not_found_or_forbidden"
+    | "not_rollback_eligible"
+    | "policy_missing"
+    | "policy_changed"
+    | "duplicate_policy_entries";
+  field?: "status" | "support" | "gain" | "gain_version" | "updated_at";
+}
+
+export type GainRollbackResult =
+  | {
+    ok: true;
+    batchId: string | null;
+    rolledBack: Array<{ journalId: string; policyId: string }>;
+    rolledBackAt: number;
+  }
+  | { ok: false; batchId: string | null; conflicts: GainRollbackConflict[] };
+
 // ─── Subscriptions ────────────────────────────────────────────────────────────
 
 export type Unsubscribe = () => void;
@@ -337,6 +428,47 @@ export interface MemoryCore {
     id: string,
     patch: { preference?: string[]; antiPattern?: string[] },
   ): Promise<PolicyDTO | null>;
+  // ── gain repair maintenance ──
+  /**
+   * Read-only repair preview for an EXACT namespace, paginated. Returns the
+   * current stored gain/version alongside the freshly recomputed raw/new
+   * gain, provenance/exclusion counts, the proposed transition (or skip
+   * reason), per-policy queue state, queue totals, the durable budget
+   * readback, the inference version and post-cutover/unknown-chronology
+   * legacy summaries.
+   *
+   * This is a sanity check, NOT a frozen approval artifact: the timer
+   * recomputes from fresh evidence on every tick, so a preview never
+   * authorizes or locks in a future repair. It performs ZERO writes.
+   */
+  previewGainRepair(input: {
+    namespace: RuntimeNamespace;
+    limit?: number;
+    offset?: number;
+  }): Promise<GainPreviewResult>;
+  /**
+   * Policy-field CAS rollback of explicit journal rows (one batch or an
+   * explicit ID list) within an EXACT namespace. Compares ALL requested rows
+   * against the recorded post-write fields (status, support, gain,
+   * gain_version, updated_at) BEFORE any write and rejects the entire batch
+   * on any mismatch. On match it restores the repair-owned gain/version/
+   * status, stamps a fresh updated_at, PRESERVES support and all trace/link
+   * data, and marks the journal rows `rolled_back` + the queue entries
+   * `blocked` atomically. Never restores historical timestamps, never
+   * refunds the budget, never touches evidence.
+   *
+   * Operational preconditions (NOT enforced in code — they are operator
+   * steps): pause repair first (`gainRepairBatchSize: 0`); rolled-back
+   * entries resume through the config re-screen generation (bump
+   * `gainRepairRescreenGeneration`), not a separate approval flow; keep a
+   * WAL-consistent SQLite backup with `quick_check` before first enable as
+   * disaster recovery.
+   */
+  rollbackGainRepair(input: {
+    namespace: RuntimeNamespace;
+    batchId?: string;
+    journalIds?: readonly string[];
+  }): Promise<GainRollbackResult>;
   /** Hard-delete a world-model row. */
   deleteWorldModel(id: string): Promise<{ deleted: boolean }>;
   /**
@@ -588,6 +720,15 @@ export interface MemoryCore {
     worldModels: WorldModelDTO[];
     skills: SkillDTO[];
   }>;
+  /**
+   * Restore a bundle-1 export. Imports never trust supplied policy
+   * certification or manufacture a complete reward-pass set from a partial
+   * bundle — imported traces keep unresolved gain scores and imported
+   * policies stay UNCERTIFIED (`gain_version` 1). Eligible (candidate/active)
+   * imported policies are queued for gain repair without changing their
+   * status/support; the next startup's union reconcile resolves pending vs
+   * blocked from real evidence.
+   */
   importBundle(bundle: {
     version?: number;
     traces?: unknown[];

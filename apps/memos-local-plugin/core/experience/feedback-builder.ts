@@ -118,6 +118,11 @@ export async function runFeedbackExperience(
     boundary: draft.boundary,
     support: 1,
     gain: Math.max(0.02, draft.salience),
+    // feedback-derived salience is NOT a shared v2 gainValue
+    // calculation: the row stays uncertified until a real v2 pass certifies
+    // it. Explicit feedback activation (status above) is distinct from the
+    // L2 evidence gate and is preserved as-is.
+    gainVersion: 1,
     status: draft.salience >= 0.5 ? "active" : "candidate",
     experienceType: draft.type,
     evidencePolarity: draft.polarity,
@@ -400,6 +405,10 @@ function mergePolicy(
     ...existing,
     support: Math.max(1, existing.support) + 1,
     gain: Math.max(existing.gain, draft.salience, 0.02),
+    // a feedback/salience-derived gain overwrite invalidates v2
+    // certification: only an actual shared gainValue calculation certifies v2,
+    // never a blanket merge.
+    gainVersion: 1,
     status: existing.status === "archived" ? existing.status : "active",
     experienceType: skillEligible && polarity === "mixed"
       ? "repair_validated"

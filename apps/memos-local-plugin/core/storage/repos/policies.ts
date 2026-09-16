@@ -27,6 +27,7 @@ const COLUMNS = [
   "boundary",
   "support",
   "gain",
+  "gain_version",
   "status",
   "experience_type",
   "evidence_polarity",
@@ -70,7 +71,7 @@ export function makePoliciesRepo(db: StorageDb) {
   const updateStats = db.prepare(
     buildUpdate({
       table: "policies",
-      columns: ["id", "support", "gain", "status", "updated_at"],
+      columns: ["id", "support", "gain", "gain_version", "status", "updated_at"],
     }),
   );
   const selectById = db.prepare<{ id: string }, RawPolicyRow>(
@@ -91,6 +92,7 @@ export function makePoliciesRepo(db: StorageDb) {
       p: {
         support: number;
         gain: number;
+        gainVersion: number;
         status: PolicyRow["status"];
         updatedAt: number;
       },
@@ -99,6 +101,7 @@ export function makePoliciesRepo(db: StorageDb) {
         id,
         support: p.support,
         gain: p.gain,
+        gain_version: p.gainVersion,
         status: p.status,
         updated_at: p.updatedAt,
       });
@@ -114,13 +117,31 @@ export function makePoliciesRepo(db: StorageDb) {
       const tr = timeRangeWhere(filter, "updated_at");
       const fragments: string[] = [];
       const params: Record<string, unknown> = { ...tr.params };
-      if (filter.status) {
+      if (filter.statusIn && filter.statusIn.length > 0) {
+        const placeholders = filter.statusIn.map((_, i) => `@status_in_${i}`).join(",");
+        fragments.push(`status IN (${placeholders})`);
+        filter.statusIn.forEach((s, i) => {
+          params[`status_in_${i}`] = s;
+        });
+      } else if (filter.status) {
         fragments.push(`status = @status`);
         params.status = filter.status;
       }
       if (filter.minSupport !== undefined) {
         fragments.push(`support >= @min_support`);
         params.min_support = filter.minSupport;
+      }
+      if (filter.ownerAgentKind !== undefined) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId !== undefined) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
+      }
+      if (filter.ownerWorkspaceId !== undefined) {
+        fragments.push(`owner_workspace_id IS @owner_workspace_id`);
+        params.owner_workspace_id = filter.ownerWorkspaceId ?? null;
       }
       if (tr.sql) fragments.push(tr.sql);
       const where = joinWhere(fragments);
@@ -133,13 +154,31 @@ export function makePoliciesRepo(db: StorageDb) {
       const tr = timeRangeWhere(filter, "updated_at");
       const fragments: string[] = [];
       const params: Record<string, unknown> = { ...tr.params };
-      if (filter.status) {
+      if (filter.statusIn && filter.statusIn.length > 0) {
+        const placeholders = filter.statusIn.map((_, i) => `@status_in_${i}`).join(",");
+        fragments.push(`status IN (${placeholders})`);
+        filter.statusIn.forEach((s, i) => {
+          params[`status_in_${i}`] = s;
+        });
+      } else if (filter.status) {
         fragments.push(`status = @status`);
         params.status = filter.status;
       }
       if (filter.minSupport !== undefined) {
         fragments.push(`support >= @min_support`);
         params.min_support = filter.minSupport;
+      }
+      if (filter.ownerAgentKind !== undefined) {
+        fragments.push(`owner_agent_kind = @owner_agent_kind`);
+        params.owner_agent_kind = filter.ownerAgentKind;
+      }
+      if (filter.ownerProfileId !== undefined) {
+        fragments.push(`owner_profile_id = @owner_profile_id`);
+        params.owner_profile_id = filter.ownerProfileId;
+      }
+      if (filter.ownerWorkspaceId !== undefined) {
+        fragments.push(`owner_workspace_id IS @owner_workspace_id`);
+        params.owner_workspace_id = filter.ownerWorkspaceId ?? null;
       }
       if (tr.sql) fragments.push(tr.sql);
       const where = joinWhere(fragments);
@@ -401,6 +440,7 @@ interface RawPolicyRow {
   boundary: string;
   support: number;
   gain: number;
+  gain_version: number;
   status: "candidate" | "active" | "archived";
   experience_type: NonNullable<PolicyRow["experienceType"]> | null;
   evidence_polarity: NonNullable<PolicyRow["evidencePolarity"]> | null;
@@ -454,6 +494,7 @@ function rowToParams(row: PolicyRow): Record<string, unknown> {
     boundary: row.boundary,
     support: row.support,
     gain: row.gain,
+    gain_version: row.gainVersion ?? 1,
     status: row.status,
     experience_type: row.experienceType ?? "success_pattern",
     evidence_polarity: row.evidencePolarity ?? "positive",
@@ -490,6 +531,7 @@ function mapRow(r: RawPolicyRow): PolicyRow {
     boundary: r.boundary,
     support: r.support,
     gain: r.gain,
+    gainVersion: r.gain_version,
     status: r.status,
     experienceType: normalizeExperienceType(r.experience_type),
     evidencePolarity: normalizeEvidencePolarity(r.evidence_polarity),

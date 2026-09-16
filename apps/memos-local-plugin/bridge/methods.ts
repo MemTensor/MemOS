@@ -348,6 +348,58 @@ export function makeDispatcher(
       // but we route it via a notification on the events stream instead.
       // Leaving a branch here would be dead code; we intentionally drop.
 
+      // ── policies (gain maintenance) ──
+      case RPC_METHODS.POLICIES_GAIN_PREVIEW: {
+        const p = asRecord(params, method);
+        const ns = namespaceParam(p);
+        // Exact namespace is mandatory: preview must never guess a namespace
+        // and leak another owner's rows.
+        if (!ns) {
+          throw new MemosError(
+            "invalid_argument",
+            `${method}: 'namespace' is required (exact namespace)`,
+          );
+        }
+        return await core.previewGainRepair({
+          namespace: ns,
+          limit: typeof p.limit === "number" ? p.limit : undefined,
+          offset: typeof p.offset === "number" ? p.offset : undefined,
+        });
+      }
+      case RPC_METHODS.POLICIES_GAIN_ROLLBACK: {
+        const p = asRecord(params, method);
+        const ns = namespaceParam(p);
+        if (!ns) {
+          throw new MemosError(
+            "invalid_argument",
+            `${method}: 'namespace' is required (exact namespace)`,
+          );
+        }
+        const batchId =
+          typeof p.batchId === "string" && p.batchId.length > 0 ? p.batchId : undefined;
+        const journalIds = Array.isArray(p.journalIds)
+          ? (p.journalIds as unknown[]).filter(
+              (id): id is string => typeof id === "string" && id.length > 0,
+            )
+          : undefined;
+        if (batchId !== undefined && journalIds !== undefined) {
+          throw new MemosError(
+            "invalid_argument",
+            `${method}: pass either 'batchId' or 'journalIds', not both`,
+          );
+        }
+        if (batchId !== undefined) {
+          return await core.rollbackGainRepair({ namespace: ns, batchId });
+        }
+        if (journalIds !== undefined && journalIds.length > 0) {
+          return await core.rollbackGainRepair({ namespace: ns, journalIds });
+        }
+        throw new MemosError(
+          "invalid_argument",
+          `${method}: exactly one of 'batchId' / non-empty 'journalIds' is required`,
+        );
+      }
+
       // ── config / hub ──
       case RPC_METHODS.CONFIG_GET:
       case RPC_METHODS.CONFIG_PATCH:

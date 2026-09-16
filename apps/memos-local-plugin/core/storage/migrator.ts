@@ -210,6 +210,15 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     }
     return;
   }
+  if (file.version === 19 && file.name === "policy-gain-value") {
+    // Same guard as 012/018: a partial schema can lack `traces` or `policies`, where
+    // the added columns are meaningless. This file also creates the repair
+    // queue/journal tables, so it is skipped whole rather than half-applied.
+    if (tableExists(db, "traces") && tableExists(db, "policies")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
 }
 

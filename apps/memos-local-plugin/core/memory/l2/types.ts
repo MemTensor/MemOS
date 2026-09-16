@@ -41,7 +41,7 @@ export interface L2Config {
   tauSoftmax: number;
   /** When true, call the LLM to induce new L2 policies; else skip induction. */
   useLlm: boolean;
-  /** Minimum trace V (after reward) to consider for any L2 update. */
+  /** Minimum trace V (after reward) to consider for any L2 update (legacy mode). */
   minTraceValue: number;
   /** Minimum #distinct episodes required to mint a new L2 policy. */
   minEpisodesForInduction: number;
@@ -49,6 +49,26 @@ export interface L2Config {
   inductionTraceCharCap: number;
   /** EMA alpha for gain smoothing. */
   gainEmaAlpha: number;
+  /**
+   * use `gainValue` (clamp(N·V, -1, 1)) for L2 gain/induction and
+   * permit configured repair. Disabled keeps legacy `minTraceValue` semantics
+   * on V; disabling v2 after v2 gains are written is not a clean rollback.
+   */
+  gainV2Enabled: boolean;
+  /** resolved `gainValue` induction floor for enabled mode. */
+  minGainValue: number;
+  /** repair attempts per timer tick (integer 0..25); 0 pauses repair. */
+  gainRepairBatchSize: number;
+  /** timer cadence in ms (integer 60000..86399999). */
+  gainRepairIntervalMs: number;
+  /** durable absolute total-attempt ceiling; null = unlimited. */
+  gainRepairMaxTotal: number | null;
+  /** config-driven re-screen generation (nonnegative integer). */
+  gainRepairRescreenGeneration: number;
+  /** Per-boot historical inference group cap. */
+  gainInferenceBootMaxGroups: number;
+  /** Per-boot historical inference time budget in ms. */
+  gainInferenceBootTimeBudgetMs: number;
 }
 
 // ─── Pattern signature ─────────────────────────────────────────────────────

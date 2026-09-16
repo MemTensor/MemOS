@@ -7,6 +7,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createRewardEventBus } from "../../../core/reward/events.js";
+import { contributionGainValues } from "../../../core/reward/gain-value.js";
+// Force the contribution-gain batch to throw so
+// the persist loop's failure path is exercised. Delegates to the real helper
+// unless the flag is set, so every other test in this file is unaffected.
+const gainFailure = vi.hoisted(() => ({ fail: false }));
+vi.mock("../../../core/reward/gain-value.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../core/reward/gain-value.js")>();
+  return {
+    ...actual,
+    contributionGainValues: (values: readonly number[]) => {
+      if (gainFailure.fail) throw new RangeError("injected gain batch failure");
+      return actual.contributionGainValues(values);
+    },
+  };
+});import { runGainInference } from "../../../core/reward/gain-inference.js";
 import { createRewardRunner } from "../../../core/reward/reward.js";
 import type {
   RewardConfig,
@@ -62,7 +77,12 @@ function seedEpisode(
   sid: string,
   traceIds: string[],
 ): void {
-  seedSession(handle, sid);
+  // Seed the session once per sid: sessions.upsert is INSERT OR REPLACE, and
+  // re-upserting would DELETE the session and cascade-delete every episode/
+  // trace that references it.
+  if (!handle.repos.sessions.getById(sid as unknown as SessionRow["id"])) {
+    seedSession(handle, sid);
+  }
   const row: EpisodeRow & { meta: Record<string, unknown> } = {
     id: eid as unknown as EpisodeRow["id"],
     sessionId: sid as unknown as EpisodeRow["sessionId"],
@@ -439,5 +459,266 @@ describe("reward/integration", () => {
     });
     expect(res.feedbackCount).toBe(2);
     expect(res.rHuman).toBeGreaterThan(0);
+  });
+
+  it("persists gainValue with live_normalized provenance atomically alongside V", async () => {
+    const sid = "s_int_gain";
+    const eid = "ep_int_gain";
+    seedEpisode(handle, eid, sid, ["tr_a", "tr_b", "tr_c"]);
+    seedTrace(handle, "tr_a", eid, sid, { alpha: 1, agentText: "clone repo" });
+    seedTrace(handle, "tr_b", eid, sid, { alpha: 0, agentText: "docker build" });
+    seedTrace(handle, "tr_c", eid, sid, { alpha: 0, agentText: "docker push" });
+    seedFeedback(handle, "fb_gain", eid, { polarity: "positive" });
+
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm: fakeLlm({
+        completeJson: {
+          "reward.reward.r_human.v3": {
+            goal_achievement: 0.9,
+            process_quality: 0.7,
+            user_satisfaction: 0.8,
+            label: "success",
+            reason: "image built + pushed",
+          },
+        },
+      }),
+      bus: createRewardEventBus(),
+      cfg: cfg(),
+      outcomeThresholds: { successThreshold: 0.5, failureThreshold: -0.15 },
+      now: () => NOW,
+    });
+
+    const result = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    const expected = contributionGainValues(result.backprop.updates.map((u) => u.value));
+    for (let i = 0; i < result.backprop.updates.length; i++) {
+      const u = result.backprop.updates[i]!;
+      const row = handle.repos.traces.getById(u.traceId)!;
+      // V and gainValue persisted together, with explicit live provenance.
+      expect(row.value).toBeCloseTo(u.value, 10);
+      expect(row.gainValue).toBeCloseTo(expected[i]!, 10);
+      expect(row.gainValueSource).toBe("live_normalized");
+      // alpha/priority semantics preserved.
+      expect(row.alpha).toBeCloseTo(u.alpha, 10);
+      expect(row.priority).toBeCloseTo(u.priority, 10);
+      // The result also carries the gain so reward.updated subscribers see it.
+      expect(u.gainValue).toBeCloseTo(expected[i]!, 10);
+      expect(u.gainValueSource).toBe("live_normalized");
+    }
+  });
+
+  it("repeat scoring refreshes V and gainValue together", async () => {
+    const sid = "s_int_rescore";
+    const eid = "ep_int_rescore";
+    seedEpisode(handle, eid, sid, ["tr_r"]);
+    seedTrace(handle, "tr_r", eid, sid, { alpha: 1 });
+    seedFeedback(handle, "fb_r1", eid, { polarity: "positive", rationale: "good" });
+
+    // Scripted scorer: first call scores high, second call scores low.
+    let scoreCall = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        "reward.reward.r_human.v3": () => {
+          scoreCall += 1;
+          if (scoreCall === 1) {
+            return {
+              goal_achievement: 0.9,
+              process_quality: 0.7,
+              user_satisfaction: 0.8,
+              label: "success",
+              reason: "ok",
+            };
+          }
+          return {
+            goal_achievement: 0.3,
+            process_quality: 0.2,
+            user_satisfaction: 0.25,
+            label: "success",
+            reason: "weaker outcome",
+          };
+        },
+      },
+    });
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm,
+      bus: createRewardEventBus(),
+      cfg: cfg(),
+      now: () => NOW,
+    });
+
+    await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+    const first = handle.repos.traces.getById("tr_r" as unknown as TraceRow["id"])!;
+    expect(first.gainValueSource).toBe("live_normalized");
+
+    // Second pass with a different reward: V and gain both move.
+    const secondResult = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+    const second = handle.repos.traces.getById("tr_r" as unknown as TraceRow["id"])!;
+    expect(secondResult.rHuman).toBeLessThan(first.rHuman!);
+    expect(second.value).toBeCloseTo(secondResult.rHuman, 5);
+    // gainValue tracks the rescaled V for the same contributor set.
+    expect(second.gainValue).toBeCloseTo(secondResult.rHuman, 5);
+    expect(second.gainValueSource).toBe("live_normalized");
+    expect(second.gainInferenceVersion).toBe(0);
+  });
+
+  it("historical inference cannot overwrite fresh live scores", async () => {
+    // Episode A: scored live (gain written with live provenance).
+    const sid = "s_int_inf";
+    const eidLive = "ep_int_inf_live";
+    const eidHist = "ep_int_inf_hist";
+    seedEpisode(handle, eidLive, sid, ["tr_live"]);
+    seedTrace(handle, "tr_live", eidLive, sid, { alpha: 1 });
+    seedFeedback(handle, "fb_inf", eidLive, { polarity: "positive" });
+
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm: fakeLlm({
+        completeJson: {
+          "reward.reward.r_human.v3": {
+            goal_achievement: 0.9,
+            process_quality: 0.7,
+            user_satisfaction: 0.8,
+            label: "success",
+            reason: "ok",
+          },
+        },
+      }),
+      bus: createRewardEventBus(),
+      cfg: cfg(),
+      now: () => NOW,
+    });
+    const liveResult = await runner.run({
+      episodeId: eidLive as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    // Episode B: historical (pre-gain) group with the same owner.
+    // seedTrace ignores value/rHuman — set them explicitly like a past pass.
+    seedEpisode(handle, eidHist, sid, ["tr_hist"]);
+    seedTrace(handle, "tr_hist", eidHist, sid, { alpha: 1 });
+    handle.repos.traces.updateScore("tr_hist" as unknown as TraceRow["id"], {
+      value: 0.9,
+      alpha: 1,
+      rHuman: 0.9,
+      priority: 0.2,
+    });
+
+    runGainInference({
+      db: handle.db,
+      kv: handle.repos.kv,
+      episodesRepo: handle.repos.episodes,
+      tracesRepo: handle.repos.traces,
+      owner: { ownerAgentKind: "unknown", ownerProfileId: "default", ownerWorkspaceId: null },
+    });
+
+    const live = handle.repos.traces.getById("tr_live" as unknown as TraceRow["id"])!;
+    expect(live.gainValueSource).toBe("live_normalized");
+    expect(live.gainValue).toBeCloseTo(liveResult.backprop.updates[0]!.gainValue ?? -1, 10);
+    expect(live.gainInferenceVersion).toBe(0);
+
+    const hist = handle.repos.traces.getById("tr_hist" as unknown as TraceRow["id"])!;
+    expect(hist.gainValueSource).toBe("inferred_normalized");
+    expect(hist.gainValue).toBeCloseTo(0.9, 10);
+    expect(hist.gainInferenceVersion).toBe(1);
+  });
+
+  it("a failed gain batch omits gain keys so pre-existing live provenance survives", async () => {
+    const sid = "s_int_gainfail";
+    const eid = "ep_int_gainfail";
+    seedEpisode(handle, eid, sid, ["tr_p", "tr_q"]);
+    seedTrace(handle, "tr_p", eid, sid, { alpha: 1 });
+    seedTrace(handle, "tr_q", eid, sid, { alpha: 1 });
+    seedFeedback(handle, "fb_gf", eid, { polarity: "positive" });
+    // Pre-existing live provenance from an earlier successful pass (values
+    // deliberately distinct from anything the new run would compute).
+    handle.repos.traces.updateScore("tr_p" as unknown as TraceRow["id"], {
+      value: 0.1,
+      alpha: 1,
+      rHuman: 0.5,
+      priority: 0.05,
+      gainValue: 0.42,
+      gainValueSource: "live_normalized",
+    });
+    handle.repos.traces.updateScore("tr_q" as unknown as TraceRow["id"], {
+      value: 0.1,
+      alpha: 1,
+      rHuman: 0.5,
+      priority: 0.05,
+      gainValue: -0.17,
+      gainValueSource: "live_normalized",
+    });
+
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      llm: fakeLlm({
+        completeJson: {
+          "reward.reward.r_human.v3": {
+            goal_achievement: 0.9,
+            process_quality: 0.7,
+            user_satisfaction: 0.8,
+            label: "success",
+            reason: "image built + pushed",
+          },
+        },
+      }),
+      bus: createRewardEventBus(),
+      cfg: cfg(),
+      now: () => NOW,
+    });
+
+    gainFailure.fail = true;
+    let result: Awaited<ReturnType<typeof runner.run>>;
+    try {
+      result = await runner.run({
+        episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+        feedback: [],
+        trigger: "implicit_fallback",
+      });
+    } finally {
+      gainFailure.fail = false;
+    }
+
+    // The gain stage warned, but V/alpha still persisted normally.
+    expect(result.warnings.some((w) => w.stage === "persist.traces.gain")).toBe(true);
+    expect(result.backprop.updates).toHaveLength(2);
+    for (const u of result.backprop.updates) {
+      const row = handle.repos.traces.getById(u.traceId)!;
+      expect(row.value).toBeCloseTo(u.value, 10);
+      expect(row.alpha).toBeCloseTo(u.alpha, 10);
+      // Gain keys were omitted (not explicit NULLs): prior provenance is
+      // untouched on every trace in the failed batch.
+      expect(row.gainValueSource).toBe("live_normalized");
+      expect(row.gainInferenceVersion).toBe(0);
+      // No gain attached to the result for reward.updated subscribers either.
+      expect(u.gainValue).toBeUndefined();
+      expect(u.gainValueSource).toBeUndefined();
+    }
+    expect(handle.repos.traces.getById("tr_p" as unknown as TraceRow["id"])!.gainValue)
+      .toBeCloseTo(0.42, 10);
+    expect(handle.repos.traces.getById("tr_q" as unknown as TraceRow["id"])!.gainValue)
+      .toBeCloseTo(-0.17, 10);
   });
 });

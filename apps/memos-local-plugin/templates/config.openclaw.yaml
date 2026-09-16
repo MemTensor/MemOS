@@ -34,6 +34,17 @@ storage:
 algorithm:
   lightweightMemory:
     enabled: true          # true = low-cost summaries only; false = memory self-evolution with tasks/experiences/world models/skills
+  l2Induction:
+    # v2 gain scoring is OFF by default. Flip gainV2Enabled on only
+    # after the schema-only migration + inference pass + gainPreview
+    # inspection (see the rollout notes). Repair stays paused at
+    # gainRepairBatchSize: 0 until the timer phase is enabled.
+    gainV2Enabled: false
+    minGainValue: 0.02
+    gainRepairBatchSize: 0        # integer 0..25 attempts per tick; 0 pauses repair
+    gainRepairIntervalMs: 900000  # integer ms, 60000..86399999 (15 minutes)
+    gainRepairMaxTotal: null      # null = unlimited; else nonnegative int ceiling
+    gainRepairRescreenGeneration: 0  # nonnegative int; +1 re-screens blocked evidence
 
 hub:
   enabled: false

@@ -203,6 +203,16 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       traceCharCap: 3_000,
       gainEmaAlpha: 0.4,
       archiveGain: -0.05,
+      // v2 gain scoring is OFF by default; the operator flips it on
+      // after a schema-only migration + inference pass + preview inspection.
+      gainV2Enabled: false,
+      minGainValue: 0.02,
+      gainRepairBatchSize: 0,
+      gainRepairIntervalMs: 900_000,
+      gainRepairMaxTotal: null,
+      gainRepairRescreenGeneration: 0,
+      gainInferenceBootMaxGroups: 2_000,
+      gainInferenceBootTimeBudgetMs: 30_000,
     },
     l3Abstraction: {
       // Lowered from 3 → 2. The original threshold required THREE

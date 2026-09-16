@@ -54,6 +54,8 @@ import type {
   EmbeddingMaintenanceStats,
   MemoryCore,
   MemorySearchExecutionOptions,
+  GainPreviewResult,
+  GainRollbackResult,
   Unsubscribe,
 } from "../../agent-contract/memory-core.js";
 import type {
@@ -124,6 +126,14 @@ import type {
   TraceCandidate,
 } from "../retrieval/types.js";
 import type { UserFeedback } from "../reward/types.js";
+import { runGainInference, GAIN_INFERENCE_VERSION, GAIN_INFERENCE_BOOT_MAX_GROUPS, GAIN_INFERENCE_BOOT_TIME_BUDGET_MS } from "../reward/gain-inference.js";
+import { reconcileGainRepairQueueFromEvidenceUnion } from "../memory/l2/recompute-gain.js";
+import { runGainRepairTick } from "../memory/l2/gain-repair.js";
+import {
+  previewGainRepair as previewGainRepairImpl,
+  rollbackGainRepair as rollbackGainRepairImpl,
+} from "../memory/l2/gain-maintenance.js";
+import type { L2Config } from "../memory/l2/types.js";
 
 // ─── Public bootstrap helpers ───────────────────────────────────────────────
 
@@ -269,6 +279,70 @@ export async function bootstrapMemoryCoreFull(
     );
   }
   const repos = makeRepos(db);
+
+  // ─── Historical gain inference ──
+  // Idempotent TypeScript pass that runs after migrations and BEFORE recovery
+  // / timer / consumers start, so partially converted groups are never
+  // observable. It never alters V/priority or any policy field; it only
+  // stamps traces.gain_value / gain_value_source / gain_inference_version and
+  // then seeds/reconciles the repair queue for affected candidate/active
+  // policies (archived policies are not repair targets). Restarts never
+  // rescan stamped unresolved groups.
+  {
+    try {
+      const owner = ownerFromNamespace(namespace);
+      // Bounded per-boot inference (review): the pass stays
+      // synchronous in init order — inference before repair scheduling, so
+      // ordinary consumers never observe partially converted groups — but a
+      // large backlog must not run unbounded into the initWatchdogMs kill
+      // (PR #40 precedent). Resume needs no new durable state: every attempt
+      // stamps gain_inference_version (unstamped rows are revisited next
+      // boot) and new stamps clear the queue-seed watermark in the same
+      // transaction. Deliberately NOT gated behind gainV2Enabled (rollout
+      // step 1 requires inference verified while the flag is false), and
+      // unresolved rows stay NULL (never zero) so partial progress degrades
+      // safe.
+      const gainReport = runGainInference({
+        db,
+        kv: repos.kv,
+        episodesRepo: repos.episodes,
+        tracesRepo: repos.traces,
+        owner,
+        maxGroups: config.algorithm.l2Induction.gainInferenceBootMaxGroups ?? GAIN_INFERENCE_BOOT_MAX_GROUPS,
+        timeBudgetMs:
+          config.algorithm.l2Induction.gainInferenceBootTimeBudgetMs ?? GAIN_INFERENCE_BOOT_TIME_BUDGET_MS,
+      });
+      // full queue reconciliation from the evidence union (with
+      // links ∪ source_trace_ids_json induction evidence). The repair queue
+      // is NOT authoritative: every candidate/active policy of the owner is
+      // re-derived, and policies with zero resolved with-links are seeded
+      // directly as blocked (no attempt, no budget spent); the
+      // budget cap is not consumed. Never touches policy fields.
+      const queueResult = reconcileGainRepairQueueFromEvidenceUnion({
+        db,
+        kv: repos.kv,
+        gainRepair: repos.gainRepair,
+        policies: repos.policies,
+        traces: repos.traces,
+        episodes: repos.episodes,
+        tracePolicyLinks: repos.tracePolicyLinks,
+        owner,
+      });
+      if (gainReport.candidateGroups > 0 || gainReport.truncated || queueResult.seeded > 0 || queueResult.blocked > 0 || queueResult.reconciled > 0) {
+        log.info("gain_inference.startup", {
+          report: gainReport,
+          queue: queueResult,
+        });
+      }
+    } catch (err) {
+      // The pass must never prevent bootstrap — a failure leaves traces
+      // unscreened (they will be picked up on a later boot) and the rest of
+      // the pipeline continues untouched.
+      log.warn("gain_inference.startup_failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   // ─── Host LLM bridge ──
   // Register the adapter-supplied bridge BEFORE constructing any
@@ -727,6 +801,117 @@ export function createMemoryCore(
   let startupRecoveryCancelled = false;
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
+
+  // ─── Gain-repair timer (independent of autoRecovery) ──
+  // One periodic timer (default 15 min from gainRepairIntervalMs), unref'd,
+  // cleared on shutdown. It does NOT depend on reward traffic, L2 traffic or
+  // autoRecoveryEnabled; there is NO immediate run at init — the first attempt
+  // happens on the first enabled interval tick. Overlapping ticks are skipped
+  // (single-flight per namespace), and in-flight work is awaited before
+  // storage closes so a mid-attempt shutdown never leaves a torn transaction.
+  let gainRepairTimer: ReturnType<typeof setInterval> | null = null;
+  let gainRepairInFlight: Promise<void> | null = null;
+  /**
+   * shape the current process-loaded `l2Induction` slice (+ reward
+   * knobs) into the shared `L2Config`. Shared by the repair timer and the
+   * two maintenance RPCs so all three always see the same process-loaded
+   * scoring configuration; a config-file edit applies after a daemon
+   * restart. See the NOTE above: per-read freshness within the process,
+   * not a file reload.
+   */
+  function l2ConfigSlice(): L2Config {
+    const raw = handle.config.algorithm.l2Induction;
+    const reward = handle.config.algorithm.reward;
+    return {
+      minSimilarity: raw.minSimilarity,
+      candidateTtlDays: raw.candidateTtlDays,
+      gamma: reward.gamma,
+      tauSoftmax: reward.tauSoftmax,
+      useLlm: raw.useLlm,
+      minTraceValue: raw.minTraceValue,
+      minEpisodesForInduction: raw.minEpisodesForInduction,
+      inductionTraceCharCap: raw.traceCharCap,
+      gainEmaAlpha: raw.gainEmaAlpha,
+      gainV2Enabled: raw.gainV2Enabled,
+      minGainValue: raw.minGainValue,
+      gainRepairBatchSize: raw.gainRepairBatchSize,
+      gainRepairIntervalMs: raw.gainRepairIntervalMs,
+      gainRepairMaxTotal: raw.gainRepairMaxTotal,
+      gainRepairRescreenGeneration: raw.gainRepairRescreenGeneration,
+      gainInferenceBootMaxGroups: raw.gainInferenceBootMaxGroups,
+      gainInferenceBootTimeBudgetMs: raw.gainInferenceBootTimeBudgetMs,
+    };
+  }
+  async function runGainRepairTickSafe(): Promise<void> {
+    try {
+      // Shape the current ResolvedConfig slice into the shared L2Config
+      // (never handle.algorithm, which is a frozen pipeline-build snapshot).
+      // NOTE: "current" means the process-loaded config object — there is no
+      // in-process config reload, so a config-file edit only takes effect
+      // after a daemon restart. The per-tick read simply avoids going stale
+      // within the process lifetime; it does not pick up file changes live.
+      const l2Config = l2ConfigSlice();
+      // Gate here too (the engine also gates): batch size 0 pauses repair;
+      // v2 disabled means repair is not permitted. Gated ticks do nothing.
+      if (!l2Config.gainV2Enabled || l2Config.gainRepairBatchSize <= 0) return;
+      const owner = ownerFromNamespace(handle.namespace);
+      const result = await runGainRepairTick({
+        db: handle.db,
+        repos: handle.repos,
+        config: l2Config,
+        owner,
+        thresholds: {
+          minSupport: handle.config.algorithm.skill.minSupport,
+          minGain: handle.config.algorithm.skill.minGain,
+          archiveGain: handle.config.algorithm.l2Induction.archiveGain,
+        },
+        log: log.child({ channel: "core.memory.l2.gain_repair" }),
+        inferenceVersion: GAIN_INFERENCE_VERSION,
+      });
+      log.info("gain_repair.tick", {
+        batchId: result.batchId,
+        attempted: result.attempted,
+        rescored: result.rescored,
+        promoted: result.promoted,
+        blocked: result.blocked,
+        conflicted: result.conflicted,
+        failed: result.failed,
+        reconciled: result.reconciled,
+        budget: result.budget,
+        durationMs: result.durationMs,
+      });
+    } catch (err) {
+      // Repair errors use a dedicated audit event — NEVER l2.failed and never
+      // a policy_generate/api_log failure row.
+      log.warn("gain_repair.tick.error", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  function startGainRepairTimer(): void {
+    if (gainRepairTimer) {
+      clearInterval(gainRepairTimer);
+      gainRepairTimer = null;
+    }
+    const intervalMs = handle.config.algorithm.l2Induction.gainRepairIntervalMs;
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+    // Scored repairs can silently stay paused if v2 is enabled while the
+    // batch size is zero — surface that once so it is not mistaken for a
+    // healthy idle timer.
+    const live = l2ConfigSlice();
+    if (live.gainV2Enabled && live.gainRepairBatchSize <= 0) {
+      log.warn("gain_repair.timer.paused", {
+        reason: "gainRepairBatchSize is 0 while gainV2Enabled is true",
+      });
+    }
+    gainRepairTimer = setInterval(() => {
+      if (gainRepairInFlight) return; // single-flight: overlapping tick skipped
+      gainRepairInFlight = runGainRepairTickSafe().finally(() => {
+        gainRepairInFlight = null;
+      });
+    }, intervalMs);
+    (gainRepairTimer as unknown as { unref?: () => void }).unref?.();
+  }
   async function autoFinalizeStaleTasks(): Promise<void> {
     if (!autoRecoveryEnabled) return;
     const nowMs = Date.now();
@@ -1273,6 +1458,12 @@ export function createMemoryCore(
       // Mark as unref so the timer doesn't block shutdown
       (rescoreInterval as unknown as { unref?: () => void }).unref?.();
     }
+
+    // independent gain-repair timer. Same setInterval+unref
+    // pattern as the rescore timer, but NOT gated on autoRecoveryEnabled and
+    // NOT on L2/reward traffic. No immediate run at init: the first attempt
+    // happens on the first enabled interval tick.
+    startGainRepairTimer();
 
     // Wire `memory_add` into the api_logs table on EVERY turn so the
     // Logs viewer shows per-turn capture activity. `capture.lite.done`
@@ -2007,6 +2198,21 @@ export function createMemoryCore(
             action: "cancel_and_shutdown_pipeline",
           });
         }
+      }
+      // clear the gain-repair timer and wait for any
+      // in-flight tick so a mid-attempt shutdown never closes storage with
+      // a torn reservation/outcome transaction.
+      if (gainRepairTimer) {
+        clearInterval(gainRepairTimer);
+        gainRepairTimer = null;
+      }
+      if (gainRepairInFlight) {
+        try {
+          await gainRepairInFlight;
+        } catch {
+          /* the tick already logs its own error */
+        }
+        gainRepairInFlight = null;
       }
       try {
         await hubRuntime?.stop();
@@ -3382,6 +3588,79 @@ export function createMemoryCore(
     return updated ? policyRowToDTO(updated) : null;
   }
 
+  /**
+   * `policies.gainPreview`. Read-only, paginated, exact
+   * namespace: recompute every candidate/active policy of the namespace
+   * through the shared helper in preview mode and report gains, counts,
+   * proposed transitions, queue/budget state and legacy summaries. ZERO
+   * database writes — a sanity check, not a frozen approval artifact.
+   */
+  async function previewGainRepair(input: {
+    namespace: RuntimeNamespace;
+    limit?: number;
+    offset?: number;
+  }): Promise<GainPreviewResult> {
+    ensureLive();
+    if (!input?.namespace) {
+      throw new MemosError(
+        "invalid_argument",
+        "policies.gainPreview: 'namespace' is required (exact namespace)",
+      );
+    }
+    // Read-only preview: never mutates the process default namespace —
+    // `gainMaintenanceDeps(input.namespace)` already scopes every read.
+    return previewGainRepairImpl(
+      gainMaintenanceDeps(input.namespace),
+      { limit: input.limit, offset: input.offset },
+    );
+  }
+
+  /**
+   * `policies.gainRollback`. Policy-field CAS rollback of one
+   * journal batch or an explicit journal-ID list within the exact namespace.
+   * See the contract docstring for the compare-before-write, fresh-timestamp,
+   * support/evidence-preservation and no-budget-refund guarantees, and the
+   * pause-before-rollback / re-screen-resumption / backup operational steps.
+   */
+  async function rollbackGainRepair(input: {
+    namespace: RuntimeNamespace;
+    batchId?: string;
+    journalIds?: readonly string[];
+  }): Promise<GainRollbackResult> {
+    ensureLive();
+    if (!input?.namespace) {
+      throw new MemosError(
+        "invalid_argument",
+        "policies.gainRollback: 'namespace' is required (exact namespace)",
+      );
+    }
+    // Read-only concerns only; never mutates the process default namespace.
+    return rollbackGainRepairImpl(
+      gainMaintenanceDeps(input.namespace),
+      { batchId: input.batchId, journalIds: input.journalIds },
+    );
+  }
+
+  /**
+   * shared deps for the two maintenance RPCs: the process-loaded
+   * config slice (same builder the timer uses; a config-file edit applies
+   * after a daemon restart), the exact-namespace owner and the live
+   * promotion thresholds.
+   */
+  function gainMaintenanceDeps(namespace: RuntimeNamespace) {
+    return {
+      db: handle.db,
+      repos: handle.repos,
+      config: l2ConfigSlice(),
+      owner: ownerFromNamespace(namespace),
+      thresholds: {
+        minSupport: handle.config.algorithm.skill.minSupport,
+        minGain: handle.config.algorithm.skill.minGain,
+      },
+      inferenceVersion: GAIN_INFERENCE_VERSION,
+    };
+  }
+
   async function getWorldModel(
     id: string,
     namespace?: RuntimeNamespace,
@@ -4514,6 +4793,12 @@ export function createMemoryCore(
               boundary: dto.boundary,
               support: dto.support ?? 0,
               gain: dto.gain ?? 0,
+              // imports must never trust supplied policy
+              // certification: bundle-v1 has no gainValue provenance on the
+              // trace side, so imported policies stay UNRESOLVED and
+              // UNCERTIFIED (gain_version 1). Eligible (candidate/active)
+              // policies are queued below without changing status/support.
+              gainVersion: 1,
               status: dto.status,
               experienceType: dto.experienceType ?? "success_pattern",
               evidencePolarity: dto.evidencePolarity ?? "positive",
@@ -4534,6 +4819,24 @@ export function createMemoryCore(
               createdAt: dto.createdAt ?? Date.now(),
               updatedAt: dto.updatedAt ?? Date.now(),
             });
+            // queue eligible uncertified imported policies WITHOUT
+            // changing their status/support. The next boot's union reconcile
+            // re-derives pending/blocked from actual resolved evidence
+            // (imported traces are unresolved until screened).
+            try {
+              if (dto.status === "candidate" || dto.status === "active") {
+                handle.repos.gainRepair.upsertPending({
+                  policyId: dto.id,
+                  ownerAgentKind: dto.ownerAgentKind ?? defaultOwner.ownerAgentKind,
+                  ownerProfileId: dto.ownerProfileId ?? defaultOwner.ownerProfileId,
+                  ownerWorkspaceId: dto.ownerWorkspaceId ?? defaultOwner.ownerWorkspaceId,
+                  reason: "inferred_evidence_updated",
+                  inferenceVersion: GAIN_INFERENCE_VERSION,
+                });
+              }
+            } catch {
+              // Queue bookkeeping must never fail the policy import.
+            }
             batchImported++;
           } catch {
             batchSkipped++;
@@ -5245,6 +5548,8 @@ export function createMemoryCore(
     setPolicyStatus,
     deletePolicy,
     editPolicyGuidance,
+    previewGainRepair,
+    rollbackGainRepair,
     getWorldModel,
     listWorldModels,
     countWorldModels,

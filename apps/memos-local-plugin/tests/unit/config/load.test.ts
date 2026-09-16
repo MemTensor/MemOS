@@ -347,6 +347,56 @@ viewer:
   });
 });
 
+describe("algorithm.l2Induction — gain repair keys", () => {
+    it("ships the gain-repair shipping defaults on a bare config", () => {
+      const cfg = resolveConfig({});
+      expect(cfg.algorithm.l2Induction.gainV2Enabled).toBe(false);
+      expect(cfg.algorithm.l2Induction.minGainValue).toBe(0.02);
+      expect(cfg.algorithm.l2Induction.gainRepairBatchSize).toBe(0);
+      expect(cfg.algorithm.l2Induction.gainRepairIntervalMs).toBe(900_000);
+      expect(cfg.algorithm.l2Induction.gainRepairMaxTotal).toBeNull();
+      expect(cfg.algorithm.l2Induction.gainRepairRescreenGeneration).toBe(0);
+    });
+
+    it.each([
+      ["batch_size_0", { gainRepairBatchSize: 0 }],
+      ["batch_size_25", { gainRepairBatchSize: 25 }],
+      ["interval_min", { gainRepairIntervalMs: 60_000 }],
+      ["interval_max", { gainRepairIntervalMs: 86_399_999 }],
+      ["interval_15m", { gainRepairIntervalMs: 900_000 }],
+      ["max_total_0", { gainRepairMaxTotal: 0 }],
+      ["max_total_25", { gainRepairMaxTotal: 25 }],
+      ["max_total_null", { gainRepairMaxTotal: null }],
+      ["rescreen_0", { gainRepairRescreenGeneration: 0 }],
+      ["rescreen_3", { gainRepairRescreenGeneration: 3 }],
+      ["gain_v2_on", { gainV2Enabled: true }],
+      ["min_gain_0", { minGainValue: 0 }],
+    ])("accepts valid %s", (_label, patch: Record<string, unknown>) => {
+      const cfg = resolveConfig({ algorithm: { l2Induction: patch } });
+      for (const [k, v] of Object.entries(patch)) {
+        expect(cfg.algorithm.l2Induction[k as keyof typeof cfg.algorithm.l2Induction]).toBe(v);
+      }
+    });
+
+    it.each([
+      ["batch_size_26", { gainRepairBatchSize: 26 }],
+      ["batch_size_neg", { gainRepairBatchSize: -1 }],
+      ["batch_size_fraction", { gainRepairBatchSize: 0.5 }],
+      ["interval_below_min", { gainRepairIntervalMs: 59_999 }],
+      ["interval_above_max", { gainRepairIntervalMs: 86_400_000 }],
+      ["interval_fraction", { gainRepairIntervalMs: 900_000.5 }],
+      ["max_total_neg", { gainRepairMaxTotal: -1 }],
+      ["max_total_fraction", { gainRepairMaxTotal: 1.5 }],
+      ["rescreen_neg", { gainRepairRescreenGeneration: -1 }],
+      ["rescreen_fraction", { gainRepairRescreenGeneration: 0.5 }],
+      ["min_gain_above_1", { minGainValue: 1.5 }],
+    ])("rejects invalid %s", (_label, patch) => {
+      expect(() =>
+        resolveConfig({ algorithm: { l2Induction: patch } }),
+      ).toThrow(/schema validation/);
+    });
+  });
+
 describe("config/loadConfig MEMOS_HOME override", () => {
   const SAVED = process.env["MEMOS_HOME"];
   beforeEach(() => { delete process.env["MEMOS_HOME"]; });

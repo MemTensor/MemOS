@@ -234,6 +234,7 @@ describe("storage/repos — happy paths", () => {
       repos.policies.updateStats("p_cand", {
         support: 3,
         gain: 0.2,
+        gainVersion: 1,
         status: "candidate",
         updatedAt: 2,
       });

@@ -51,6 +51,23 @@ export interface OwnedRow {
   ownerWorkspaceId?: string | null;
 }
 
+// ─── Gain scores ─────────────────────────────────────────────────────────────
+
+/**
+ * Provenance of a trace's `gainValue`.
+ *
+ * - `live_normalized`: written atomically with V by a real reward pass
+ *   (`clamp(N·V, -1, 1)`); historical inference must NEVER overwrite it.
+ * - `inferred_normalized`: historical screening found a conserving group and
+ *   applied contributor scaling.
+ * - `legacy_unscaled`: historical screening could not conserve reward but all
+ *   integrity checks passed — gainValue equals the historical V as-is.
+ *
+ * `null` gain_value_source means unresolved (NULL gain_value is unresolved,
+ * NOT neutral zero).
+ */
+export type GainValueSource = "live_normalized" | "inferred_normalized" | "legacy_unscaled";
+
 // ─── Embeddings ──────────────────────────────────────────────────────────────
 
 export type EmbeddingVector = Float32Array;
@@ -141,6 +158,20 @@ export interface TraceRow extends OwnedRow {
   turnId: EpochMs;
   /** Schema version that wrote this row (helps with migrations). */
   schemaVersion: number;
+  /**
+   * contribution-adjusted gain (clamp(N·V, -1, 1)). NULL is
+   * unresolved, never neutral zero. Written atomically with `value` by live
+   * reward passes; historical inference stamps it with explicit provenance.
+   */
+  gainValue?: number | null;
+  /** provenance of `gainValue` (see {@link GainValueSource}). */
+  gainValueSource?: GainValueSource | null;
+  /**
+   * inference version of the last historical screening attempt.
+   * 0 = never screened; 1, 2, … stamped on EVERY attempt including unresolved
+   * ones so a restart never rescans stamped groups. Live scoring never stamps.
+   */
+  gainInferenceVersion?: number;
 }
 
 export interface PolicyRow extends OwnedRow {
@@ -153,6 +184,14 @@ export interface PolicyRow extends OwnedRow {
   support: number;
   gain: number;
   status: "candidate" | "active" | "archived";
+  /**
+   * gain certification version. 2 certifies the SHARED gainValue
+   * calculation (clamp(N·V, -1, 1) provenance); 1 (the migration default) is
+   * uncertified. Only actual v2 calculations certify; feedback/salience,
+   * legacy-mode and import writes invalidate certification back to 1. Never
+   * blanket-defaulted to 2 on inserts/upserts.
+   */
+  gainVersion?: number;
   /**
    * User-facing "experience" classification. The Policies tab is the storage
    * backing for the viewer's "经验" surface; these fields distinguish success

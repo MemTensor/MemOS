@@ -52,7 +52,10 @@ describe("traces.listAllForEpisode — uncapped episode fetch (#2076)", () => {
         share_target TEXT,
         shared_at INTEGER,
         turn_id INTEGER NOT NULL DEFAULT 0,
-        schema_version INTEGER NOT NULL DEFAULT 1
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        gain_value REAL,
+        gain_value_source TEXT,
+        gain_inference_version INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX idx_traces_episode_ts ON traces(episode_id, ts);
     `);
@@ -172,7 +175,10 @@ describe("traces.listDedupRowsForEpisode — narrow-projection dedup helper (#20
         share_target TEXT,
         shared_at INTEGER,
         turn_id INTEGER NOT NULL DEFAULT 0,
-        schema_version INTEGER NOT NULL DEFAULT 1
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        gain_value REAL,
+        gain_value_source TEXT,
+        gain_inference_version INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX idx_traces_episode_ts_dedup ON traces(episode_id, ts);
     `);

@@ -26,6 +26,7 @@ import type {
   EpochMs,
   PolicyId,
   PolicyRow,
+  TraceId,
   TraceRow,
 } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
@@ -34,7 +35,8 @@ import { L2_INDUCTION_PROMPT } from "../../llm/prompts/l2-induction.js";
 import { associateTraces } from "./associate.js";
 import { makeCandidatePool } from "./candidate-pool.js";
 import { buildPolicyRow, induceDraft } from "./induce.js";
-import { applyGain, computeGain, nextStatus, smoothGain } from "./gain.js";
+import { applyGain, nextStatus } from "./gain.js";
+import { isInductionEligible, recomputePolicyGain } from "./recompute-gain.js";
 import { signatureOf } from "./signature.js";
 import { tracePolicySimilarity } from "./similarity.js";
 import type {
@@ -48,7 +50,16 @@ import type {
 } from "./types.js";
 
 export interface RunL2Deps {
-  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "tracePolicyLinks" | "traces">;
+  repos: Pick<
+    Repos,
+    | "candidatePool"
+    | "embeddingRetryQueue"
+    | "episodes"
+    | "gainRepair"
+    | "policies"
+    | "tracePolicyLinks"
+    | "traces"
+  >;
   db: Parameters<typeof makeCandidatePool>[0]["db"];
   llm: LlmClient | null;
   log: Logger;
@@ -67,7 +78,9 @@ export async function runL2(
   const warnings: L2ProcessResult["warnings"] = [];
   const timings = { associate: 0, candidate: 0, induce: 0, gain: 0, persist: 0, total: 0 };
 
-  const eligibleTraces = input.traces.filter((t) => t.value >= config.minTraceValue && !!(t.vecSummary ?? t.vecAction));
+  // v2 admission uses the resolved gainValue floor; legacy keeps minTraceValue
+  // on V. Both modes require an embedding for cosine association.
+  const eligibleTraces = input.traces.filter((t) => isInductionEligible(t, config));
   log.info("run.start", {
     episodeId: input.episodeId,
     sessionId: input.sessionId,
@@ -75,6 +88,22 @@ export async function runL2(
     eligibleCount: eligibleTraces.length,
     trigger: input.trigger,
   });
+
+  // Evidence-link intents recorded during association/induction but written
+  // ONLY after the policy's gain recompute passes in Step 4. If the recompute
+  // skips (no resolved with-evidence), the policy write is aborted — links
+  // must not already be persisted, or the policy is left with orphaned
+  // evidence rows and no gain/support/status advance to match.
+  const pendingLinks = new Map<PolicyId, Array<{ traceId: TraceId; episodeId: EpisodeId }>>();
+  const recordLinkIntent = (
+    policyId: PolicyId,
+    traceId: TraceId,
+    episodeId: EpisodeId,
+  ): void => {
+    const arr = pendingLinks.get(policyId) ?? [];
+    arr.push({ traceId, episodeId });
+    pendingLinks.set(policyId, arr);
+  };
 
   // ─── Step 1: Associate ──────────────────────────────────────────────────
   let associations: AssociationResult[] = [];
@@ -94,19 +123,7 @@ export async function runL2(
     if (!tr) continue;
     a.signature = signatureOf(tr);
     if (a.matchedPolicyId) {
-      try {
-        repos.tracePolicyLinks.link({
-          traceId: a.traceId,
-          policyId: a.matchedPolicyId,
-          episodeId: input.episodeId,
-          now: input.now ?? Date.now(),
-        });
-      } catch (err) {
-        warnings.push(stageWarn("trace-policy-link", err, {
-          traceId: a.traceId,
-          policyId: a.matchedPolicyId,
-        }));
-      }
+      recordLinkIntent(a.matchedPolicyId, a.traceId as TraceId, input.episodeId);
       emit(bus, {
         kind: "l2.trace.associated",
         episodeId: input.episodeId,
@@ -166,17 +183,24 @@ export async function runL2(
       now: input.now,
     });
     for (const bucket of ready) {
+      // old candidate-pool entries are revalidated against the
+      // admission floor (gainValue in enabled mode, V in legacy) before they
+      // can serve as induction evidence. No historical bulk replay. ONLY the
+      // filtered eligible IDs may flow into induction evidence bookkeeping,
+      // links, support accounting and reported induction evidence.
       const traces = bucket.evidenceTraceIds
         .map((id) => repos.traces.getById(id))
-        .filter((t): t is TraceRow => !!t);
-      const epIds = bucket.episodeIds as EpisodeId[];
+        .filter((t): t is TraceRow => !!t)
+        .filter((t) => isInductionEligible(t, config));
+      const eligibleEvidenceIds = traces.map((t) => t.id);
+      const epIds = Array.from(new Set(traces.map((t) => t.episodeId))) as EpisodeId[];
       if (traces.length === 0 || epIds.length < config.minEpisodesForInduction) {
         inductions.push({
           signature: bucket.signature,
           policyId: null,
           poolSize: bucket.candidateIds.length,
           episodeIds: epIds,
-          traceIds: bucket.evidenceTraceIds,
+          traceIds: eligibleEvidenceIds,
           skippedReason: "too_few_episodes",
         });
         continue;
@@ -191,35 +215,26 @@ export async function runL2(
           policyId: dup.id,
           poolSize: bucket.candidateIds.length,
           episodeIds: epIds,
-          traceIds: bucket.evidenceTraceIds,
+          traceIds: eligibleEvidenceIds,
           skippedReason: "duplicate_of",
           duplicateOfPolicyId: dup.id,
         });
         pool.promote(bucket.candidateIds, dup.id);
         touched.set(dup.id, dup);
         const evidence = inductionEvidenceByPolicy.get(dup.id) ?? new Set<string>();
-        for (const id of bucket.evidenceTraceIds) evidence.add(id);
+        for (const id of eligibleEvidenceIds) evidence.add(id);
         inductionEvidenceByPolicy.set(dup.id, evidence);
-        for (const traceId of bucket.evidenceTraceIds) {
+        for (const traceId of eligibleEvidenceIds) {
           const trace = traces.find((t) => t.id === traceId);
           if (!trace) continue;
-          try {
-            repos.tracePolicyLinks.link({
-              traceId,
-              policyId: dup.id,
-              episodeId: trace.episodeId,
-              now: input.now ?? Date.now(),
-            });
-          } catch (err) {
-            warnings.push(stageWarn("trace-policy-link", err, { traceId, policyId: dup.id }));
-          }
+          recordLinkIntent(dup.id, traceId as TraceId, trace.episodeId);
         }
         continue;
       }
 
       const draftRes = await induceDraft(
         {
-          evidenceTraces: pickOnePerEpisode(traces),
+          evidenceTraces: pickOnePerEpisode(traces, config),
           episodeIds: epIds,
           signatureLabel: bucket.signature,
           charCap: config.inductionTraceCharCap,
@@ -241,7 +256,7 @@ export async function runL2(
           policyId: null,
           poolSize: bucket.candidateIds.length,
           episodeIds: epIds,
-          traceIds: bucket.evidenceTraceIds,
+          traceIds: eligibleEvidenceIds,
           skippedReason: draftRes.reason,
         });
         continue;
@@ -264,33 +279,18 @@ export async function runL2(
         repos.policies.upsert(merged);
         pool.promote(bucket.candidateIds, duplicate.id);
         touched.set(duplicate.id, merged);
-        inductionEvidenceByPolicy.set(
-          duplicate.id,
-          new Set(bucket.evidenceTraceIds as string[]),
-        );
-        for (const traceId of bucket.evidenceTraceIds) {
+        inductionEvidenceByPolicy.set(duplicate.id, new Set(eligibleEvidenceIds));
+        for (const traceId of eligibleEvidenceIds) {
           const trace = traces.find((t) => t.id === traceId);
           if (!trace) continue;
-          try {
-            repos.tracePolicyLinks.link({
-              traceId,
-              policyId: duplicate.id,
-              episodeId: trace.episodeId,
-              now: input.now ?? Date.now(),
-            });
-          } catch (err) {
-            warnings.push(stageWarn("trace-policy-link", err, {
-              traceId,
-              policyId: duplicate.id,
-            }));
-          }
+          recordLinkIntent(duplicate.id, traceId as TraceId, trace.episodeId);
         }
         inductions.push({
           signature: bucket.signature,
           policyId: duplicate.id,
           poolSize: bucket.candidateIds.length,
           episodeIds: epIds,
-          traceIds: bucket.evidenceTraceIds,
+          traceIds: eligibleEvidenceIds,
           skippedReason: "duplicate_of",
           duplicateOfPolicyId: duplicate.id,
         });
@@ -315,33 +315,18 @@ export async function runL2(
         }
         pool.promote(bucket.candidateIds, policy.id);
         touched.set(policy.id, policy);
-        inductionEvidenceByPolicy.set(
-          policy.id,
-          new Set(bucket.evidenceTraceIds as string[]),
-        );
-        for (const traceId of bucket.evidenceTraceIds) {
+        inductionEvidenceByPolicy.set(policy.id, new Set(eligibleEvidenceIds));
+        for (const traceId of eligibleEvidenceIds) {
           const trace = traces.find((t) => t.id === traceId);
           if (!trace) continue;
-          try {
-            repos.tracePolicyLinks.link({
-              traceId,
-              policyId: policy.id,
-              episodeId: trace.episodeId,
-              now: input.now ?? Date.now(),
-            });
-          } catch (err) {
-            warnings.push(stageWarn("trace-policy-link", err, {
-              traceId,
-              policyId: policy.id,
-            }));
-          }
+          recordLinkIntent(policy.id, traceId as TraceId, trace.episodeId);
         }
         inductions.push({
           signature: bucket.signature,
           policyId: policy.id,
           poolSize: bucket.candidateIds.length,
           episodeIds: epIds,
-          traceIds: bucket.evidenceTraceIds,
+          traceIds: eligibleEvidenceIds,
           skippedReason: null,
         });
         emit(bus, {
@@ -349,7 +334,7 @@ export async function runL2(
           episodeId: input.episodeId,
           policyId: policy.id,
           signature: bucket.signature,
-          evidenceTraceIds: bucket.evidenceTraceIds,
+          evidenceTraceIds: eligibleEvidenceIds,
           evidenceEpisodeIds: epIds,
           title: policy.title,
         });
@@ -385,45 +370,40 @@ export async function runL2(
         for (const id of inductionIds) withIds.add(id);
       }
       const newSupportIds = new Set(withIds);
-      for (const id of repos.tracePolicyLinks.getWithTraceIds(policy.id)) {
-        withIds.add(id);
-      }
 
-      // Gain is computed over ALL traces currently in scope — the
-      // current episode's traces PLUS the induction evidence traces
-      // (which may come from earlier episodes). Previously we only
-      // used `input.traces`, which meant a policy induced from two
-      // past episodes would see an empty `withTraces` and tank its
-      // gain. Pull missing induction traces from the repo.
-      const traceById = new Map<string, TraceRow>();
-      for (const t of input.traces) traceById.set(t.id, t);
-      for (const id of withIds) {
-        if (traceById.has(id)) continue;
-        const t = repos.traces.getById(id as TraceRow["id"]);
-        if (t) traceById.set(t.id, t);
-      }
-      for (const episodeId of repos.tracePolicyLinks.getLinkedEpisodeIds(policy.id)) {
-        for (const t of repos.traces.list({ episodeId, limit: 50, newestFirst: true })) {
-          traceById.set(t.id, t);
-        }
-      }
-      const allTraces = Array.from(traceById.values())
-        .sort((a, b) => b.ts - a.ts || b.id.localeCompare(a.id));
-
-      const withTraces: TraceRow[] = allTraces.filter((t) => withIds.has(t.id)).slice(0, 50);
-      const withoutTraces: TraceRow[] = allTraces.filter((t) => !withIds.has(t.id)).slice(0, 50);
-
-      const rawGain = computeGain(
-        { policyId: policy.id, withTraces, withoutTraces },
-        { tauSoftmax: config.tauSoftmax },
+      // shared evidence selection + gain recomputation.
+      // The helper unions persisted with-links + current associations +
+      // induction evidence, excludes NULL-score traces with separate
+      // counters, and returns raw AND persisted (EMA) gain separately. It
+      // performs no writes and never touches support.
+      const recomputed = recomputePolicyGain(
+        {
+          policy,
+          namespace: namespaceFromPolicy(policy),
+          config,
+          mode: "ordinary",
+          currentTraces: input.traces,
+          withTraceIds: Array.from(withIds),
+        },
+        {
+          episodes: repos.episodes,
+          traces: repos.traces,
+          tracePolicyLinks: repos.tracePolicyLinks,
+        },
       );
-      const smoothedGainValue = smoothGain({
-        newGain: rawGain.gain,
-        currentGain: policy.gain,
-        alpha: config.gainEmaAlpha,
-        isFirst: policy.support === 0,
-      });
-      const gain = { ...rawGain, gain: smoothedGainValue };
+
+      if (recomputed.skipReason !== null) {
+        // No resolved with-evidence → preserve previous policy state: no gain,
+        // no support, no status write. Exclusion (not skip-of-policy) is the
+        // rule whenever at least one resolved with-trace remains.
+        log.info("run.gain.skip", {
+          policyId: policy.id,
+          reason: recomputed.skipReason,
+          unresolvedWith: recomputed.excluded.unresolvedWith,
+          withEvidence: recomputed.withIds.length,
+        });
+        continue;
+      }
 
       // `deltaSupport` must reflect only the *new* positive evidence
       // we just observed — both fresh associations AND the induction
@@ -433,15 +413,47 @@ export async function runL2(
       const deltaSupport = newSupportIds.size;
 
       const persisted = applyGain({
-        gain,
+        gain: { ...recomputed.raw, gain: recomputed.persistedGain },
         deltaSupport,
+        // Only an actual shared v2 gainValue calculation certifies v2; legacy
+        // and unresolved-skip writes never do.
+        gainVersion: recomputed.gainVersion,
         currentStatus: policy.status,
         thresholds,
         currentSupport: policy.support,
         now: input.now ?? Date.now(),
-        persist: ({ policyId, support, gain: g, status, updatedAt }) =>
-          repos.policies.updateStats(policyId, { support, gain: g, status, updatedAt }),
+        persist: ({ policyId, support, gain: g, status, updatedAt, gainVersion }) =>
+          repos.policies.updateStats(policyId, {
+            support,
+            gain: g,
+            status,
+            updatedAt,
+            gainVersion,
+          }),
       });
+
+      // The gain write committed — flush the deferred evidence links for this
+      // policy now. (When the recompute skips above, `continue` leaves them
+      // un-persisted: no orphaned links for a policy whose state never moved.)
+      const links = pendingLinks.get(policy.id);
+      if (links) {
+        for (const link of links) {
+          try {
+            repos.tracePolicyLinks.link({
+              traceId: link.traceId,
+              policyId: policy.id,
+              episodeId: link.episodeId,
+              now: input.now ?? Date.now(),
+            });
+          } catch (err) {
+            warnings.push(stageWarn("trace-policy-link", err, {
+              traceId: link.traceId,
+              policyId: policy.id,
+            }));
+          }
+        }
+        pendingLinks.delete(policy.id);
+      }
 
       emit(bus, {
         kind: "l2.policy.updated",
@@ -465,6 +477,26 @@ export async function runL2(
     const untouchedCandidates = repos.policies.list({ status: "candidate" });
     for (const policy of untouchedCandidates) {
       if (touched.has(policy.id)) continue; // already handled in Step 4
+      // unknown-owner policies are excluded from automatic mutation
+      // in EVERY mode (v2 or legacy): their gain cannot be validated against
+      // real evidence ownership, so they are never promoted by the sweep.
+      if ((policy.ownerAgentKind ?? "unknown") === "unknown") {
+        continue;
+      }
+      // enabled-mode untouched-candidate promotion requires v2
+      // certification AND no unresolved inference invalidation: an
+      // inference-rule/input change enqueues a refresh with an explicit
+      // reason, and stale certification must never promote an untouched
+      // candidate while that refresh is unresolved (any queue state).
+      if (config.gainV2Enabled && !untouchedCandidatePromotionEligible(policy, repos.gainRepair)) {
+        log.info("run.recheck_candidate_promotion_blocked", {
+          policyId: policy.id,
+          reason: (policy.gainVersion ?? 1) !== 2
+            ? "not_v2_certified"
+            : "pending_inference_refresh",
+        });
+        continue;
+      }
       const next = nextStatus({
         currentStatus: policy.status,
         support: policy.support,
@@ -475,6 +507,9 @@ export async function runL2(
         repos.policies.updateStats(policy.id, {
           support: policy.support,
           gain: policy.gain,
+          // The sweep does not recompute gain: preserve the policy's current
+          // certification state instead of blanket-writing a version.
+          gainVersion: policy.gainVersion ?? 1,
           status: next,
           updatedAt: input.now ?? Date.now(),
         });
@@ -536,6 +571,37 @@ function ownerFromTraces(traces: readonly TraceRow[]): {
   };
 }
 
+/**
+ * derive the exact namespace context from the policy's own owner
+ * fields. Ordinary L2 has no ambient namespace; the policy is authoritative
+ * for evidence owner matching inside `recomputePolicyGain`.
+ */
+function namespaceFromPolicy(policy: PolicyRow): import("../../types.js").RuntimeNamespace {
+  return {
+    agentKind: (policy.ownerAgentKind ?? "unknown") as import("../../types.js").RuntimeNamespace["agentKind"],
+    profileId: policy.ownerProfileId ?? "default",
+    ...(policy.ownerWorkspaceId ? { workspaceId: policy.ownerWorkspaceId } : {}),
+  };
+}
+
+/**
+ * Enabled-mode untouched-candidate promotion requires v2
+ * certification AND no unresolved inference invalidation. An inference-rule /
+ * input change enqueues a refresh with the explicit `inference_refresh`
+ * reason; stale certification must never promote an untouched candidate while
+ * that refresh is unresolved — in ANY queue state (pending, claimed or
+ * blocked), since only a successful refreshed calculation removes the entry.
+ */
+function untouchedCandidatePromotionEligible(
+  policy: PolicyRow,
+  gainRepair: RunL2Deps["repos"]["gainRepair"],
+): boolean {
+  if ((policy.gainVersion ?? 1) !== 2) return false;
+  const entry = gainRepair.getByPolicy(policy.id);
+  if (entry && entry.reason === "inference_refresh") return false;
+  return true;
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function emit(bus: L2EventBus | undefined, evt: L2Event): void {
@@ -562,11 +628,15 @@ function policyVectorText(policy: PolicyRow): string {
   ].filter(Boolean).join("\n");
 }
 
-function pickOnePerEpisode(traces: readonly TraceRow[]): TraceRow[] {
+function pickOnePerEpisode(traces: readonly TraceRow[], config: L2Config): TraceRow[] {
   const byEp = new Map<string, TraceRow>();
   for (const t of traces) {
     const cur = byEp.get(t.episodeId);
-    if (!cur || t.value > cur.value) byEp.set(t.episodeId, t);
+    // representative selection uses the evidence score of the
+    // enabled mode (gainValue when v2 is on; the legacy V otherwise).
+    const score = (tr: TraceRow): number =>
+      config.gainV2Enabled ? (tr.gainValue ?? tr.value) : tr.value;
+    if (!cur || score(t) > score(cur)) byEp.set(t.episodeId, t);
   }
   return Array.from(byEp.values());
 }

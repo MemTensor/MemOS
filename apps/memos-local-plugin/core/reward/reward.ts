@@ -21,10 +21,12 @@ import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import type { EpisodeId, EpochMs, TraceRow } from "../types.js";
+import type { StorageDb } from "../storage/index.js";
 import type { makeEpisodesRepo } from "../storage/repos/episodes.js";
 import type { makeFeedbackRepo } from "../storage/repos/feedback.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
 import { backprop } from "./backprop.js";
+import { contributionGainValues } from "./gain-value.js";
 import { scoreHuman } from "./human-scorer.js";
 import { buildTaskSummary } from "./task-summary.js";
 import type {
@@ -46,6 +48,12 @@ export interface RewardDeps {
   llm: LlmClient | null;
   bus: RewardEventBus;
   cfg: RewardConfig;
+  /**
+   * The storage database. When provided, the whole `updateScore` loop for an
+   * episode's traces commits in one transaction so a mid-loop SQL failure can
+   * never leave some of the episode's traces updated and the rest untouched.
+   */
+  db?: StorageDb;
   evaluator?: {
     reflectionProvider?: string;
     reflectionModel?: string;
@@ -232,16 +240,59 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
     });
     tMetrics.backprop = now() - tBackStart;
 
+    // contribution-adjusted gain over the EXACT live scored set
+    // (backprop updates for episode.traceIds, never all episode_id rows).
+    // Attached to the result so reward.updated subscribers see it, then
+    // persisted atomically with V below so the two can never drift.
+    let gainValues: number[] = [];
+    try {
+      gainValues = contributionGainValues(bp.updates.map((u) => u.value));
+      for (let i = 0; i < bp.updates.length; i++) {
+        bp.updates[i]!.gainValue = gainValues[i];
+        bp.updates[i]!.gainValueSource = "live_normalized";
+      }
+    } catch (err) {
+      // V is always finite and within [-1, 1] by construction; treat a
+      // violation as a persist-stage warning rather than crashing the run.
+      warnings.push({
+        stage: "persist.traces.gain",
+        message: "failed to compute contribution gain values",
+        detail: errDetail(err),
+      });
+    }
+
     // Step 4: persist.
+    // Live scores intentionally keep gain_inference_version = 0 (never
+    // screened by historical inference): updateScore writes V + gain but no
+    // stamp. Safe because the inference pass only selects
+    // NULL/inferred_normalized/legacy_unscaled sources and stampGain refuses
+    // live_normalized rows, so a version-0 live row is never revisited.
     const tPersistStart = now();
     try {
-      for (const u of bp.updates) {
-        deps.tracesRepo.updateScore(u.traceId, {
-          value: u.value,
-          alpha: u.alpha,
-          rHuman: humanScore.rHuman,
-          priority: u.priority,
-        });
+      // updateScore leaves gain_value/gain_value_source untouched when BOTH
+      // keys are omitted (undefined) — so a failed gain batch MUST omit them
+      // rather than writing explicit NULLs, or it would clobber pre-existing
+      // live_normalized provenance on every trace in the batch. V/alpha/
+      // priority persist normally either way.
+      const gainOk = gainValues.length === bp.updates.length;
+      const writeScores = (): void => {
+        for (let i = 0; i < bp.updates.length; i++) {
+          const u = bp.updates[i]!;
+          deps.tracesRepo.updateScore(u.traceId, {
+            value: u.value,
+            alpha: u.alpha,
+            rHuman: humanScore.rHuman,
+            priority: u.priority,
+            ...(gainOk
+              ? { gainValue: gainValues[i]! as number, gainValueSource: "live_normalized" as const }
+              : {}),
+          });
+        }
+      };
+      if (deps.db) {
+        deps.db.tx(writeScores);
+      } else {
+        writeScores();
       }
     } catch (err) {
       warnings.push({

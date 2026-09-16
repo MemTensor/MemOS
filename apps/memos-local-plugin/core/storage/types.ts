@@ -97,8 +97,13 @@ export interface TraceListFilter extends PageOptions, TimeRange {
 
 export interface PolicyListFilter extends PageOptions, TimeRange {
   status?: "candidate" | "active" | "archived";
+  /** Alternative to `status`: match any of the listed statuses in one query. */
+  statusIn?: Array<"candidate" | "active" | "archived">;
   /** Minimum support count. */
   minSupport?: number;
+  ownerAgentKind?: string;
+  ownerProfileId?: string;
+  ownerWorkspaceId?: string | null;
 }
 
 export interface SkillListFilter extends PageOptions {

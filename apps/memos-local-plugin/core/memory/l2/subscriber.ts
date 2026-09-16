@@ -15,7 +15,7 @@
 
 import type { LlmClient } from "../../llm/index.js";
 import type { Logger } from "../../logger/types.js";
-import type { EpisodeId, TraceRow } from "../../types.js";
+import type { EpisodeId, TraceId, TraceRow } from "../../types.js";
 import type { Repos } from "../../storage/repos/index.js";
 import type { RewardEventBus, RewardResult } from "../../reward/index.js";
 import type { StorageDb } from "../../storage/types.js";
@@ -24,7 +24,16 @@ import type { L2Config, L2EventBus } from "./types.js";
 
 export interface L2SubscriberDeps {
   db: StorageDb;
-  repos: Pick<Repos, "candidatePool" | "embeddingRetryQueue" | "policies" | "tracePolicyLinks" | "traces">;
+  repos: Pick<
+    Repos,
+    | "candidatePool"
+    | "embeddingRetryQueue"
+    | "episodes"
+    | "gainRepair"
+    | "policies"
+    | "tracePolicyLinks"
+    | "traces"
+  >;
   rewardBus: RewardEventBus;
   l2Bus: L2EventBus;
   llm: LlmClient | null;
@@ -155,7 +164,6 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
       }
     },
     async runOnce(episodeId, opts): Promise<void> {
-      const ep = deps.repos.traces; // just to silence TS unused check
       const traces: TraceRow[] = [];
       const rows = deps.db
         .prepare<{ episode_id: string }, { id: string }>(
@@ -163,7 +171,7 @@ export function attachL2Subscriber(deps: L2SubscriberDeps): L2SubscriberHandle {
         )
         .all({ episode_id: episodeId });
       for (const r of rows) {
-        const t = ep.getById(r.id as unknown as Parameters<typeof ep.getById>[0]);
+        const t = deps.repos.traces.getById(r.id as TraceId);
         if (t) traces.push(t);
       }
       if (traces.length === 0) return;
