@@ -356,24 +356,25 @@ export function createLlmClientWithProvider(
             notifyError: true,
           });
         } catch (hostErr) {
+          const normalizedHostErr = normalizeError(hostErr, ERROR_CODES.LLM_UNAVAILABLE, "host fallback failed");
           failures++;
-          const failAt = markFail(hostErr);
+          const failAt = markFail(normalizedHostErr);
           facadeLog.error("host.fallback_failed", {
             primary: summarizeErr(err),
-            host: summarizeErr(hostErr),
+            host: summarizeErr(normalizedHostErr),
           });
           // Primary AND host bridge both failed. Trip on a terminal
           // primary error (the one the operator typically needs to fix
           // — host bridge failures are usually transient stdio issues).
           if (breakerIsTerminal(err)) breakerTrip(err);
-          notifyOnError(hostErr);
+          notifyOnError(normalizedHostErr);
           notifyStatus({
             status: "error",
             provider: provider.name,
             model: config.model,
-            message: summarizeErrMessage(hostErr),
-            code: hostErr instanceof MemosError ? hostErr.code : undefined,
-            ...extractRetryDiagnostics(hostErr instanceof MemosError ? hostErr.details : undefined),
+            message: summarizeErrMessage(normalizedHostErr),
+            code: normalizedHostErr.code,
+            ...extractRetryDiagnostics(normalizedHostErr.details),
             at: failAt,
             durationMs: Date.now() - startedAt,
             fallbackProvider: "host",
@@ -381,12 +382,7 @@ export function createLlmClientWithProvider(
             episodeId: opts?.episodeId,
             phase: opts?.phase,
           });
-          throw hostErr instanceof MemosError
-            ? hostErr
-            : new MemosError(
-                ERROR_CODES.LLM_UNAVAILABLE,
-                `host fallback failed: ${(hostErr as Error).message ?? String(hostErr)}`,
-              );
+          throw normalizedHostErr;
         }
       }
       failures++;
@@ -840,4 +836,22 @@ function summarizeErrMessage(e: unknown): string {
   if (e instanceof MemosError) return `${e.code}: ${e.message}`;
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+function normalizeError(
+  err: unknown,
+  fallbackCode: (typeof ERROR_CODES)[keyof typeof ERROR_CODES],
+  prefix: string,
+): MemosError {
+  if (err instanceof MemosError) return err;
+  if (err instanceof Error) return new MemosError(fallbackCode, `${prefix}: ${err.message}`);
+  if (typeof err === "object" && err !== null) {
+    const record = err as { code?: unknown; message?: unknown; data?: unknown };
+    const code = typeof record.code === "string" ? record.code : fallbackCode;
+    const message = typeof record.message === "string" ? record.message : String(record.data ?? err);
+    return new MemosError(code as (typeof ERROR_CODES)[keyof typeof ERROR_CODES], `${prefix}: ${message}`, {
+      bridgeError: err as Record<string, unknown>,
+    });
+  }
+  return new MemosError(fallbackCode, `${prefix}: ${String(err)}`);
 }

@@ -79,6 +79,7 @@ export function attachSkillSubscriber(
   };
 
   let inflight: Promise<void> | null = null;
+  let lastRewardRunAt: number | null = null;
   let queued: { trigger: SkillTrigger; hint?: { policyId?: string; skillId?: SkillId } } | null =
     null;
 
@@ -115,6 +116,20 @@ export function attachSkillSubscriber(
     inflight = promise;
   }
 
+  function triggerRewardRun(): void {
+    const cooldownMs = Math.max(0, deps.config.cooldownMs);
+    const at = nowMs();
+    if (cooldownMs > 0 && lastRewardRunAt !== null && at - lastRewardRunAt < cooldownMs) {
+      log.debug("skill.run.cooldown", {
+        trigger: "reward.updated",
+        remainingMs: cooldownMs - (at - lastRewardRunAt),
+      });
+      return;
+    }
+    lastRewardRunAt = at;
+    triggerRun("reward.updated");
+  }
+
   const offInduced = deps.l2Bus.on("l2.policy.induced", (evt: L2Event) => {
     if (evt.kind !== "l2.policy.induced") return;
     log.debug("trigger.l2.policy.induced", { policyId: evt.policyId });
@@ -134,7 +149,7 @@ export function attachSkillSubscriber(
       episodeId: evt.result.episodeId,
     });
     resolveTrialsForReward(evt);
-    triggerRun("reward.updated");
+    triggerRewardRun();
   });
 
   function dispose(): void {

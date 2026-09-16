@@ -48,4 +48,18 @@ describe("skill/events", () => {
     });
     expect(called).toEqual(["second"]);
   });
+
+  it("preserves the policy that produced a verification failure", () => {
+    const bus = createSkillEventBus();
+    const seen: SkillEvent[] = [];
+    bus.on("skill.verification.failed", (event) => seen.push(event));
+    bus.emit({
+      kind: "skill.verification.failed",
+      at: 1,
+      skillId: "sk_1" as SkillId,
+      policyId: "po_1",
+      reason: "resonance=0.00<0.5",
+    });
+    expect(seen[0]).toMatchObject({ policyId: "po_1" });
+  });
 });
