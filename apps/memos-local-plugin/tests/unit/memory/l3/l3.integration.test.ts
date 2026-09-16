@@ -239,6 +239,181 @@ describe("memory/l3/integration", () => {
     expect(handle.repos.worldModel.list().length).toBe(0);
   });
 
+  it("skips the '_|_' untagged cluster before calling the LLM (issue #2374)", async () => {
+    // Seed three policies whose text matches none of the domain regexes,
+    // so they all land in the "_|_" bucket. Historically this cluster
+    // was passed to `abstractDraft` and the LLM's empty `title` tripped
+    // the validator, producing 100% `llm_failed`. The fix pre-filters
+    // `_|_` clusters in `runL3` so no LLM call happens.
+    seedPolicy(handle, {
+      id: "po_u1" as PolicyId,
+      title: "abstract planning heuristic",
+      trigger: "when tasks become complex",
+      procedure: "decompose into subgoals then evaluate",
+      verification: "outcome satisfies goal",
+      boundary: "general reasoning tasks",
+      sourceEpisodeIds: ["ep_u1" as EpisodeId],
+      vec: vec([1, 0, 0]),
+    });
+    seedPolicy(handle, {
+      id: "po_u2" as PolicyId,
+      title: "reflect on past decisions",
+      trigger: "at episode boundary",
+      procedure: "summarise and store lessons",
+      verification: "reflection recorded",
+      boundary: "reflection stage",
+      sourceEpisodeIds: ["ep_u2" as EpisodeId],
+      vec: vec([0.95, 0.05, 0]),
+    });
+    seedPolicy(handle, {
+      id: "po_u3" as PolicyId,
+      title: "prioritise information intake",
+      trigger: "before starting a session",
+      procedure: "review recent context and open questions",
+      verification: "context reviewed",
+      boundary: "session prelude",
+      sourceEpisodeIds: ["ep_u3" as EpisodeId],
+      vec: vec([0.9, 0.1, 0]),
+    });
+
+    const bus = createL3EventBus();
+    const events: L3Event[] = [];
+    bus.onAny((e) => events.push(e));
+
+    let llmCalls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: () => {
+          llmCalls += 1;
+          // If this ever fires, `runL3` failed to pre-filter the bucket.
+          return {
+            title: "should not be called",
+            domain_tags: [],
+            environment: [],
+            inference: [],
+            constraints: [],
+            body: "",
+            confidence: 0.5,
+            supersedes_world_ids: [],
+          };
+        },
+      },
+    });
+
+    const result = await runL3(
+      { trigger: "l2.policy.induced" },
+      {
+        repos: {
+          policies: handle.repos.policies,
+          traces: handle.repos.traces,
+          worldModel: handle.repos.worldModel,
+          kv: handle.repos.kv,
+        },
+        llm,
+        log,
+        bus,
+        config: cfg(),
+      },
+    );
+
+    expect(result.abstractions.length).toBe(1);
+    expect(result.abstractions[0]!.clusterKey).toBe("_|_");
+    expect(result.abstractions[0]!.skippedReason).toBe("untagged_cluster");
+    expect(result.abstractions[0]!.worldModelId).toBeNull();
+    expect(result.abstractions[0]!.policyCount).toBe(3);
+
+    // No LLM call — the pre-filter runs before `abstractDraft`.
+    expect(llmCalls).toBe(0);
+
+    // No WM row was created.
+    expect(handle.repos.worldModel.list().length).toBe(0);
+
+    // No `l3.failed` event — the skip is not a failure.
+    expect(events.some((e) => e.kind === "l3.failed")).toBe(false);
+  });
+
+  it("still processes tagged clusters when mixed with an untagged bucket (issue #2374)", async () => {
+    // Tagged docker+alpine+pip triplet — should still produce a WM.
+    seedTriplet();
+
+    // Additional three untagged policies that would otherwise form a
+    // second (broken) cluster. Only the tagged one should survive.
+    seedPolicy(handle, {
+      id: "po_u1" as PolicyId,
+      title: "abstract planning heuristic",
+      trigger: "when tasks become complex",
+      procedure: "decompose into subgoals then evaluate",
+      verification: "outcome satisfies goal",
+      boundary: "general reasoning tasks",
+      sourceEpisodeIds: ["ep_u1" as EpisodeId],
+      vec: vec([1, 0, 0]),
+    });
+    seedPolicy(handle, {
+      id: "po_u2" as PolicyId,
+      title: "reflect on past decisions",
+      trigger: "at episode boundary",
+      procedure: "summarise and store lessons",
+      verification: "reflection recorded",
+      boundary: "reflection stage",
+      sourceEpisodeIds: ["ep_u2" as EpisodeId],
+      vec: vec([0.95, 0.05, 0]),
+    });
+    seedPolicy(handle, {
+      id: "po_u3" as PolicyId,
+      title: "prioritise information intake",
+      trigger: "before starting a session",
+      procedure: "review recent context and open questions",
+      verification: "context reviewed",
+      boundary: "session prelude",
+      sourceEpisodeIds: ["ep_u3" as EpisodeId],
+      vec: vec([0.9, 0.1, 0]),
+    });
+
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: {
+          title: "Alpine python dependency model",
+          domain_tags: ["docker", "alpine", "pip"],
+          environment: [{ label: "musl", description: "no glibc" }],
+          inference: [{ label: "wheels fail", description: "must build from source" }],
+          constraints: [{ label: "no prebuilt", description: "avoid binary" }],
+          body: "# summary",
+          confidence: 0.75,
+          supersedes_world_ids: [],
+        },
+      },
+    });
+
+    const result = await runL3(
+      { trigger: "l2.policy.induced" },
+      {
+        repos: {
+          policies: handle.repos.policies,
+          traces: handle.repos.traces,
+          worldModel: handle.repos.worldModel,
+          kv: handle.repos.kv,
+        },
+        llm,
+        log,
+        config: cfg(),
+      },
+    );
+
+    // Two clusters seen: one untagged (skipped), one tagged (created).
+    const byKey = new Map(result.abstractions.map((a) => [a.clusterKey, a]));
+    expect(byKey.get("_|_")?.skippedReason).toBe("untagged_cluster");
+    const taggedEntry = Array.from(byKey.values()).find(
+      (a) => a.clusterKey !== "_|_",
+    );
+    expect(taggedEntry?.skippedReason).toBeNull();
+    expect(taggedEntry?.createdNew).toBe(true);
+
+    // Only the tagged WM was inserted.
+    const rows = handle.repos.worldModel.list();
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.title).toBe("Alpine python dependency model");
+  });
+
   it("adjustConfidence clamps in [0,1] and emits an event", async () => {
     const wm = seedWorldModel(handle, { id: "wm_adj" as WorldModelId, confidence: 0.9 });
     const bus = createL3EventBus();

@@ -153,6 +153,7 @@ export interface AbstractionResult {
     | "draft_invalid"
     | "cooldown"
     | "no_centroid"
+    | "untagged_cluster"
     | "duplicate_of";
   /** When `skippedReason === "duplicate_of"`, the existing WM id. */
   duplicateOfWorldId?: WorldModelId | null;
