@@ -349,6 +349,20 @@ const AlgorithmSchema = Type.Object({
      * inference version (consumed once, cannot bypass the attempt budget).
      */
     gainRepairRescreenGeneration: Type.Integer({ default: 0, minimum: 0 }),
+    /**
+     * override for the per-boot historical inference pass's group
+     * cap (`GAIN_INFERENCE_BOOT_MAX_GROUPS` default). Raise on hosts whose
+     * backlog doesn't converge in one restart under the time budget; a large
+     * corpus can need several thousand groups per pass.
+     */
+    gainInferenceBootMaxGroups: Type.Integer({ default: 2_000, minimum: 1 }),
+    /**
+     * override for the per-boot historical inference pass's time
+     * budget in ms (`GAIN_INFERENCE_BOOT_TIME_BUDGET_MS` default). Capped
+     * well under `bridge.initWatchdogMs` so a large backlog still can't stall
+     * startup past the watchdog.
+     */
+    gainInferenceBootTimeBudgetMs: Type.Integer({ default: 30_000, minimum: 1_000, maximum: 300_000 }),
   }, { default: {} }),
   l3Abstraction: Type.Object({
     /** Minimum number of compatible active L2 policies to trigger an L3 abstraction. */

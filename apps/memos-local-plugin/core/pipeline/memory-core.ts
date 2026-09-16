@@ -308,8 +308,9 @@ export async function bootstrapMemoryCoreFull(
         episodesRepo: repos.episodes,
         tracesRepo: repos.traces,
         owner,
-        maxGroups: GAIN_INFERENCE_BOOT_MAX_GROUPS,
-        timeBudgetMs: GAIN_INFERENCE_BOOT_TIME_BUDGET_MS,
+        maxGroups: config.algorithm.l2Induction.gainInferenceBootMaxGroups ?? GAIN_INFERENCE_BOOT_MAX_GROUPS,
+        timeBudgetMs:
+          config.algorithm.l2Induction.gainInferenceBootTimeBudgetMs ?? GAIN_INFERENCE_BOOT_TIME_BUDGET_MS,
       });
       // full queue reconciliation from the evidence union (with
       // links ∪ source_trace_ids_json induction evidence). The repair queue

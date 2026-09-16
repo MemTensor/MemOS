@@ -211,6 +211,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       gainRepairIntervalMs: 900_000,
       gainRepairMaxTotal: null,
       gainRepairRescreenGeneration: 0,
+      gainInferenceBootMaxGroups: 2_000,
+      gainInferenceBootTimeBudgetMs: 30_000,
     },
     l3Abstraction: {
       // Lowered from 3 → 2. The original threshold required THREE
