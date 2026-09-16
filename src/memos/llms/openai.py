@@ -10,6 +10,8 @@ from openai._types import NOT_GIVEN
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall
 
 from memos.configs.llm import AzureLLMConfig, OpenAILLMConfig
+from memos.exceptions import ConfigurationError, LLMRateLimitError
+from memos.llms import rate_limit
 from memos.llms.base import BaseLLM
 from memos.llms.utils import remove_thinking_tags
 from memos.log import get_logger
@@ -99,13 +101,17 @@ class OpenAILLM(BaseLLM):
         logger.info(f"OpenAI LLM Request body: {request_body}")
 
         try:
-            response = self.client.chat.completions.create(**request_body)
+            response = rate_limit.create_completion(
+                self.client, request_body, self.config.rate_limit
+            )
             cost_time = time.perf_counter() - start_time
             logger.info(
                 f"Request body: {request_body}, Response from OpenAI: "
                 f"{response.model_dump_json()}, Cost time: {cost_time}"
             )
             return self._parse_response(response)
+        except (LLMRateLimitError, ConfigurationError):
+            raise
         except Exception as e:
             if not self.use_backup_client:
                 raise
@@ -117,7 +123,9 @@ class OpenAILLM(BaseLLM):
                 **request_body,
                 "model": self.config.backup_model_name_or_path or request_body["model"],
             }
-            backup_response = self.backup_client.chat.completions.create(**backup_body)
+            backup_response = rate_limit.create_completion(
+                self.backup_client, backup_body, self.config.rate_limit
+            )
             cost_time = time.perf_counter() - start_time
             logger.info(
                 f"Backup LLM request succeeded, Response: "
@@ -141,30 +149,32 @@ class OpenAILLM(BaseLLM):
         request_body["stream"] = True
 
         logger.info(f"OpenAI LLM Stream Request body: {request_body}")
-        response = self.client.chat.completions.create(**request_body)
+        response = rate_limit.create_completion(self.client, request_body, self.config.rate_limit)
 
         reasoning_started = False
+        try:
+            for chunk in response:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
 
-        for chunk in response:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
+                if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                    if not reasoning_started and not self.config.remove_think_prefix:
+                        yield "<think>"
+                        reasoning_started = True
+                    yield delta.reasoning_content
+                elif hasattr(delta, "content") and delta.content:
+                    if reasoning_started and not self.config.remove_think_prefix:
+                        yield "</think>"
+                        reasoning_started = False
+                    yield delta.content
 
-            # Support for custom 'reasoning_content' (if present in OpenAI-compatible models like Qwen, DeepSeek)
-            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                if not reasoning_started and not self.config.remove_think_prefix:
-                    yield "<think>"
-                    reasoning_started = True
-                yield delta.reasoning_content
-            elif hasattr(delta, "content") and delta.content:
-                if reasoning_started and not self.config.remove_think_prefix:
-                    yield "</think>"
-                    reasoning_started = False
-                yield delta.content
-
-        # Ensure we close the <think> block if not already done
-        if reasoning_started and not self.config.remove_think_prefix:
-            yield "</think>"
+            if reasoning_started and not self.config.remove_think_prefix:
+                yield "</think>"
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
     def tool_call_parser(self, tool_calls: list[ChatCompletionMessageToolCall]) -> list[dict]:
         """Parse tool calls from OpenAI response."""

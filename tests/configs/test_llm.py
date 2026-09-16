@@ -47,6 +47,7 @@ def test_base_llm_config():
 def test_openai_llm_config():
     check_config_base_class(
         OpenAILLMConfig,
+        factory_fields=["rate_limit"],
         required_fields=["model_name_or_path", "api_key"],
         optional_fields=[
             "temperature",
@@ -150,6 +151,7 @@ def test_hf_llm_config():
 def test_minimax_llm_config():
     check_config_base_class(
         MinimaxLLMConfig,
+        factory_fields=["rate_limit"],
         required_fields=["model_name_or_path", "api_key"],
         optional_fields=[
             "temperature",
