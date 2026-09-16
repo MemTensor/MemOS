@@ -202,6 +202,12 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     }
     return;
   }
+  if (file.version === 13 && file.name === "api-logs-model-status-index") {
+    if (tableExists(db, "api_logs")) {
+      db.exec(fs.readFileSync(file.fullPath, "utf8"));
+    }
+    return;
+  }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));
 }
 

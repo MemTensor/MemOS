@@ -46,6 +46,12 @@ export interface ApiLogFilter {
   offset?: number;
 }
 
+export interface ModelStatusFilter {
+  role: string;
+  provider: string;
+  model: string;
+}
+
 export function makeApiLogsRepo(db: StorageDb) {
   const insert = db.prepare<
     {
@@ -85,6 +91,31 @@ export function makeApiLogsRepo(db: StorageDb) {
      WHERE tool_name = @tool_name
      ORDER BY called_at DESC, id DESC
      LIMIT @limit OFFSET @offset`,
+  );
+
+  /**
+   * Find the single newest `system_model_status` row whose `output_json`
+   * encodes the given role/provider/model triple. Filtering is done in SQL
+   * via `json_extract()` so the query is not bounded by a top-N window —
+   * it scans the whole `api_logs` table but returns at most one row.
+   *
+   * This replaces the previous pattern of fetching the newest 500 rows and
+   * post-filtering in JS, which silently returned `null` whenever the target
+   * slot's most-recent row had been pushed further than 500 positions below
+   * the head by higher-frequency `llm`/`embedding` writes.
+   */
+  const selectLatestModelStatus = db.prepare<
+    { role: string; provider: string; model: string },
+    RawRow
+  >(
+    `SELECT id, tool_name, input_json, output_json, duration_ms, success, called_at
+     FROM api_logs
+     WHERE tool_name = 'system_model_status'
+       AND json_extract(output_json, '$.role')     = @role
+       AND json_extract(output_json, '$.provider') = @provider
+       AND json_extract(output_json, '$.model')    = @model
+     ORDER BY called_at DESC, id DESC
+     LIMIT 1`,
   );
 
   const countByToolNames = (toolNames: readonly string[]): number => {
@@ -157,6 +188,21 @@ export function makeApiLogsRepo(db: StorageDb) {
         ? selectByTool.all({ tool_name: filter.toolName, limit, offset })
         : selectAll.all({ limit, offset });
       return rows.map(mapRow);
+    },
+
+    /**
+     * Return the single newest `system_model_status` row whose
+     * `output_json` matches the given role/provider/model triple, or
+     * `null` if no such row exists. Filtering is done entirely in SQL so
+     * the result is not constrained by any top-N window.
+     */
+    findLatestModelStatus(f: ModelStatusFilter): ApiLogRow | null {
+      const row = selectLatestModelStatus.get({
+        role: f.role,
+        provider: f.provider,
+        model: f.model,
+      });
+      return row ? mapRow(row) : null;
     },
   };
 }
