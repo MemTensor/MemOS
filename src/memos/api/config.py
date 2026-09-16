@@ -240,7 +240,7 @@ class NacosConfigManager:
                 return
             try:
                 data_props = cls.parse_properties(content)
-                logger.info("nacos config:", data_props)
+                logger.info("nacos config: %s", data_props)
                 _update_env_from_dict(data_props)
                 logger.info("✅ parse Nacos setting is Properties ")
             except Exception as e:
@@ -365,7 +365,7 @@ class APIConfig:
 
     @staticmethod
     def vllm_config() -> dict[str, Any]:
-        """Get Qwen configuration."""
+        """Get vLLM configuration."""
         return {
             "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "Qwen/Qwen3-1.7B"),
             "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
@@ -378,7 +378,7 @@ class APIConfig:
 
     @staticmethod
     def get_activation_config() -> dict[str, Any]:
-        """Get Ollama configuration."""
+        """Get activation (kv_cache) configuration."""
         return {
             "backend": "kv_cache",
             "config": {
@@ -547,7 +547,7 @@ class APIConfig:
 
     @staticmethod
     def get_activation_vllm_config() -> dict[str, Any]:
-        """Get Ollama configuration."""
+        """Get activation (vLLM kv_cache) configuration."""
         return {
             "backend": "vllm_kv_cache",
             "config": {
@@ -580,7 +580,7 @@ class APIConfig:
 
     @staticmethod
     def get_reranker_config() -> dict[str, Any]:
-        """Get embedder configuration."""
+        """Get reranker configuration."""
         embedder_backend = os.getenv("MOS_RERANKER_BACKEND", "http_bge")
 
         if embedder_backend in ["http_bge", "http_bge_strategy"]:
@@ -606,7 +606,7 @@ class APIConfig:
 
     @staticmethod
     def get_feedback_reranker_config() -> dict[str, Any]:
-        """Get embedder configuration."""
+        """Get feedback reranker configuration."""
         embedder_backend = os.getenv("MOS_FEEDBACK_RERANKER_BACKEND", "http_bge")
 
         if embedder_backend in ["http_bge", "http_bge_strategy"]:
@@ -827,7 +827,7 @@ class APIConfig:
 
     @staticmethod
     def get_noshared_neo4j_config(user_id) -> dict[str, Any]:
-        """Get Neo4j configuration."""
+        """Get per-user non-shared Neo4j configuration."""
         return {
             "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             "user": os.getenv("NEO4J_USER", "neo4j"),
@@ -840,7 +840,7 @@ class APIConfig:
 
     @staticmethod
     def get_neo4j_shared_config(user_id: str | None = None) -> dict[str, Any]:
-        """Get Neo4j configuration."""
+        """Get shared Neo4j configuration (multi-tenant)."""
         return {
             "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             "user": os.getenv("NEO4J_USER", "neo4j"),
@@ -852,7 +852,9 @@ class APIConfig:
             "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
         }
 
-    def get_milvus_config():
+    @staticmethod
+    def get_milvus_config() -> dict[str, Any]:
+        """Get Milvus vector database configuration."""
         return {
             "collection_name": [
                 "explicit_preference",

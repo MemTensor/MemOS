@@ -4,6 +4,9 @@
 # FuXi CLI local state
 .fuxi/
 
+# Node dependencies
+node_modules/
+
 # Temporary files
 tmp/
 **/tmp_data/
