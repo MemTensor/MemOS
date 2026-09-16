@@ -159,6 +159,7 @@ export async function runL3(
     // an LLM round-trip.
     if (cluster.key === UNTAGGED_CLUSTER_KEY) {
       abstractLog.info("untagged.skipped", {
+        clusterKey: cluster.key,
         clusterPolicyCount: cluster.policies.length,
       });
       abstractions.push(
