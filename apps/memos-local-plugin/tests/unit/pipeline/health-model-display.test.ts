@@ -243,6 +243,109 @@ llm:
     expect(h.embedder?.provider).toBe("gemini");
   });
 
+  /**
+   * Regression test for issue #2380:
+   * findLatestPersistedModelStatus previously fetched the newest 500
+   * api_logs rows and post-filtered in JS. On busy installs the target
+   * slot's row is pushed >500 positions below the head by high-frequency
+   * llm/embedding writes, so the lookup silently returned null and the
+   * Overview card read "Not called yet" even though rows existed.
+   *
+   * The fix uses json_extract() in SQL so the query is not bounded by any
+   * top-N window.
+   */
+  it("finds skillEvolver status row even when >500 higher-frequency rows follow it (#2380)", async () => {
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: `
+version: 1
+llm:
+  provider: openai_compatible
+  endpoint: https://example.test/v1
+  model: gpt-4o-mini
+  apiKey: sk-test
+skillEvolver:
+  provider: anthropic
+  endpoint: https://example.test
+  model: claude-skill-evolver-test
+  apiKey: sk-test-skill
+algorithm:
+  lightweightMemory:
+    enabled: false
+`,
+    });
+
+    // Phase 1: run migrations so the DB file and schema exist, then shut down
+    // cleanly so we can seed rows via a second SQLite connection.
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "seed-2380",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    // Phase 2: seed rows directly — one skillEvolver "ok" row followed by
+    // 600 llm rows. After this the skillEvolver row sits 600 positions below
+    // the table head, well outside the old 500-row scan window.
+    const Sqlite = (await import("better-sqlite3")).default;
+    const seedDb = new Sqlite(home.home.dbFile);
+    const now = 1_700_000_000_000;
+
+    const insertRow = seedDb.prepare(
+      `INSERT INTO api_logs (tool_name, input_json, output_json, duration_ms, success, called_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+
+    insertRow.run(
+      "system_model_status",
+      "{}",
+      JSON.stringify({
+        role: "skillEvolver",
+        provider: "anthropic",
+        model: "claude-skill-evolver-test",
+        status: "ok",
+      }),
+      10,
+      1,
+      now,
+    );
+
+    for (let i = 1; i <= 600; i++) {
+      insertRow.run(
+        "system_model_status",
+        "{}",
+        JSON.stringify({
+          role: "llm",
+          provider: "openai_compatible",
+          model: "gpt-4o-mini",
+          status: "ok",
+        }),
+        10,
+        1,
+        now + i,
+      );
+    }
+
+    seedDb.close();
+
+    // Phase 3: boot the real core and verify health() surfaces the seeded row.
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "check-2380",
+    });
+    await core.init();
+
+    const h = await core.health();
+
+    // Before the fix this was null because the skillEvolver row was outside
+    // the 500-row scan window; with json_extract() filtering it is always found.
+    expect(h.skillEvolver?.lastOkAt).toBe(now);
+  });
+
   it("inherited skillEvolver reflects mid-flight llm changes (no restart yet)", async () => {
     home = await makeTmpHome({
       agent: "openclaw",
