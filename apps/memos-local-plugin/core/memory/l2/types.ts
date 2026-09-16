@@ -65,6 +65,10 @@ export interface L2Config {
   gainRepairMaxTotal: number | null;
   /** config-driven re-screen generation (nonnegative integer). */
   gainRepairRescreenGeneration: number;
+  /** Per-boot historical inference group cap. */
+  gainInferenceBootMaxGroups: number;
+  /** Per-boot historical inference time budget in ms. */
+  gainInferenceBootTimeBudgetMs: number;
 }
 
 // ─── Pattern signature ─────────────────────────────────────────────────────

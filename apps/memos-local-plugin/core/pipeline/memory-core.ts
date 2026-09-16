@@ -838,6 +838,8 @@ export function createMemoryCore(
       gainRepairIntervalMs: raw.gainRepairIntervalMs,
       gainRepairMaxTotal: raw.gainRepairMaxTotal,
       gainRepairRescreenGeneration: raw.gainRepairRescreenGeneration,
+      gainInferenceBootMaxGroups: raw.gainInferenceBootMaxGroups,
+      gainInferenceBootTimeBudgetMs: raw.gainInferenceBootTimeBudgetMs,
     };
   }
   async function runGainRepairTickSafe(): Promise<void> {
@@ -893,6 +895,15 @@ export function createMemoryCore(
     }
     const intervalMs = handle.config.algorithm.l2Induction.gainRepairIntervalMs;
     if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+    // Scored repairs can silently stay paused if v2 is enabled while the
+    // batch size is zero — surface that once so it is not mistaken for a
+    // healthy idle timer.
+    const live = l2ConfigSlice();
+    if (live.gainV2Enabled && live.gainRepairBatchSize <= 0) {
+      log.warn("gain_repair.timer.paused", {
+        reason: "gainRepairBatchSize is 0 while gainV2Enabled is true",
+      });
+    }
     gainRepairTimer = setInterval(() => {
       if (gainRepairInFlight) return; // single-flight: overlapping tick skipped
       gainRepairInFlight = runGainRepairTickSafe().finally(() => {

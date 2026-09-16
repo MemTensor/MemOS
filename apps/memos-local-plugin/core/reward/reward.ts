@@ -21,6 +21,7 @@ import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type { LlmClient } from "../llm/index.js";
 import { rootLogger } from "../logger/index.js";
 import type { EpisodeId, EpochMs, TraceRow } from "../types.js";
+import type { StorageDb } from "../storage/index.js";
 import type { makeEpisodesRepo } from "../storage/repos/episodes.js";
 import type { makeFeedbackRepo } from "../storage/repos/feedback.js";
 import type { makeTracesRepo } from "../storage/repos/traces.js";
@@ -47,6 +48,12 @@ export interface RewardDeps {
   llm: LlmClient | null;
   bus: RewardEventBus;
   cfg: RewardConfig;
+  /**
+   * The storage database. When provided, the whole `updateScore` loop for an
+   * episode's traces commits in one transaction so a mid-loop SQL failure can
+   * never leave some of the episode's traces updated and the rest untouched.
+   */
+  db?: StorageDb;
   evaluator?: {
     reflectionProvider?: string;
     reflectionModel?: string;
@@ -268,17 +275,24 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
       // live_normalized provenance on every trace in the batch. V/alpha/
       // priority persist normally either way.
       const gainOk = gainValues.length === bp.updates.length;
-      for (let i = 0; i < bp.updates.length; i++) {
-        const u = bp.updates[i]!;
-        deps.tracesRepo.updateScore(u.traceId, {
-          value: u.value,
-          alpha: u.alpha,
-          rHuman: humanScore.rHuman,
-          priority: u.priority,
-          ...(gainOk
-            ? { gainValue: gainValues[i]! as number, gainValueSource: "live_normalized" as const }
-            : {}),
-        });
+      const writeScores = (): void => {
+        for (let i = 0; i < bp.updates.length; i++) {
+          const u = bp.updates[i]!;
+          deps.tracesRepo.updateScore(u.traceId, {
+            value: u.value,
+            alpha: u.alpha,
+            rHuman: humanScore.rHuman,
+            priority: u.priority,
+            ...(gainOk
+              ? { gainValue: gainValues[i]! as number, gainValueSource: "live_normalized" as const }
+              : {}),
+          });
+        }
+      };
+      if (deps.db) {
+        deps.db.tx(writeScores);
+      } else {
+        writeScores();
       }
     } catch (err) {
       warnings.push({

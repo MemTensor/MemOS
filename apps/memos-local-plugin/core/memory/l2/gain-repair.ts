@@ -215,7 +215,14 @@ export function reserveGainRepairAttempt(
     const attempted = parseBudgetAttempted(stored);
     if (attempted === null) {
       // Corrupt counter: fail closed (stop the tick) without writing — never
-      // "repair" it into a fresh zero that would re-open spent budget.
+      // "repair" it into a fresh zero that would re-open spent budget. Log
+      // the exact key + owner so the operator can find and clear it.
+      deps.log.warn("gain_repair.budget_corrupt", {
+        budgetKey,
+        ownerAgentKind: owner.ownerAgentKind,
+        ownerProfileId: owner.ownerProfileId,
+        ownerWorkspaceId: owner.ownerWorkspaceId ?? null,
+      });
       return { kind: "budget_exhausted" } as const;
     }
     const limit = deps.config.gainRepairMaxTotal;

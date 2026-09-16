@@ -148,6 +148,8 @@ export function extractAlgorithmConfig(
       gainRepairIntervalMs: alg.l2Induction.gainRepairIntervalMs,
       gainRepairMaxTotal: alg.l2Induction.gainRepairMaxTotal,
       gainRepairRescreenGeneration: alg.l2Induction.gainRepairRescreenGeneration,
+      gainInferenceBootMaxGroups: alg.l2Induction.gainInferenceBootMaxGroups,
+      gainInferenceBootTimeBudgetMs: alg.l2Induction.gainInferenceBootTimeBudgetMs,
     },
     l3Abstraction: alg.l3Abstraction,
     skill: alg.skill,
@@ -287,6 +289,7 @@ export function buildPipelineSubscribers(
     llm: bgLlm,
     bus: buses.reward,
     cfg: algorithm.reward,
+    db: deps.db,
     evaluator: {
       reflectionProvider: bgReflectLlm?.provider,
       reflectionModel: bgReflectLlm?.model,
