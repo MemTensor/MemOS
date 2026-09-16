@@ -310,36 +310,12 @@ function isDiagnosticMode(): boolean {
   return false;
 }
 
-function register(api: OpenClawPluginApi): void {
-  const diagnosticMode = isDiagnosticMode();
-
-  let runtimeLock: OpenClawRuntimeLockHandle;
-  try {
-    runtimeLock = acquireOpenClawRuntimeLock({
-      home: resolveHome("openclaw"),
-      pluginId: PLUGIN_ID,
-      version: PLUGIN_VERSION,
-      viewerPort: OPENCLAW_VIEWER_PORT,
-      skipLock: diagnosticMode,
-    });
-
-    if (diagnosticMode) {
-      api.logger.info("memos-local: running in diagnostic mode (lock acquisition skipped)");
-    }
-  } catch (err) {
-    const duplicate = err instanceof DuplicateOpenClawRuntimeError;
-    api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
-      err: err instanceof Error ? err.message : String(err),
-      code: duplicate ? err.code : (err as { code?: unknown }).code,
-    });
-    throw err;
-  }
-
-  // OpenClaw publishes its clean, command-facing inbound body before
-  // prompt construction. Keep this store independent of core bootstrap
-  // so early messages are not lost while SQLite/providers initialize.
-  const inboundUserText = createOpenClawInboundTextStore();
-
+function registerRuntimeBindings(
+  api: OpenClawPluginApi,
+  ensureRuntime: () => Promise<PluginRuntime | null>,
+  inboundUserText: ReturnType<typeof createOpenClawInboundTextStore>,
+  currentRuntime: () => PluginRuntime | null,
+): void {
   // 1. Memory capability (prompt prelude) — register synchronously so the
   //    host immediately knows who owns the memory slot, even if bootstrap
   //    fails later.
@@ -391,31 +367,6 @@ function register(api: OpenClawPluginApi): void {
       return lines;
     },
   });
-
-  // 2. Kick off core bootstrap. OpenClaw only accepts tool / hook
-  //    registration during the synchronous `register(api)` window, so
-  //    tools register a shell now and wait for runtime inside execute().
-  let runtime: PluginRuntime | null = null;
-  let bootstrapError: Error | null = null;
-  const bootstrapPromise = createRuntime(api, runtimeLock, inboundUserText)
-    .then((r) => {
-      runtime = r;
-      api.logger.info("memos-local: plugin ready");
-    })
-    .catch((err) => {
-      bootstrapError = err instanceof Error ? err : new Error(String(err));
-      const duplicate = err instanceof DuplicateOpenClawRuntimeError;
-      api.logger.error("memos-local: bootstrap failed", {
-        err: bootstrapError.message,
-        code: duplicate ? err.code : (err as { code?: unknown }).code,
-      });
-    });
-
-  const ensureRuntime = async (): Promise<PluginRuntime | null> => {
-    if (runtime) return runtime;
-    await bootstrapPromise;
-    return runtime;
-  };
 
   /**
    * Helper for **void / fire-and-forget** hooks: dispatch `fn` against the
@@ -520,6 +471,7 @@ function register(api: OpenClawPluginApi): void {
   // already sync, so we can invoke it directly when the runtime is
   // ready and return undefined otherwise.
   api.on("tool_result_persist", (event, ctx) => {
+    const runtime = currentRuntime();
     if (!runtime) return; // bootstrap not finished — nothing to inject
     return runtime.bridge.handleToolResultPersist(event, ctx);
   });
@@ -542,6 +494,101 @@ function register(api: OpenClawPluginApi): void {
     void runWhenReady((r) => r.bridge.handleSubagentEnded(event, ctx), "subagent_ended");
   });
 
+}
+
+// OpenClaw may build a separate tool registry in the same process. That
+// registry borrows the full registration's core and never owns its lifecycle.
+interface SharedRuntime {
+  ensureRuntime: () => Promise<PluginRuntime | null>;
+  registerBindings: (api: OpenClawPluginApi) => void;
+}
+// Host registries can reload the module. Keep ownership process-wide while
+// retaining the filesystem lock against genuinely separate gateway processes.
+const runtimeKey = Symbol.for("memos.openclaw.activeRuntimes.v1");
+const processState = globalThis as typeof globalThis & {
+  [runtimeKey]?: Map<string, SharedRuntime>;
+};
+const activeRuntimes = processState[runtimeKey] ??= new Map<string, SharedRuntime>();
+
+function register(api: OpenClawPluginApi): void {
+  const home = resolveHome("openclaw");
+  if (api.registrationMode === "tool-discovery") {
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      getCore: async () => (await activeRuntimes.get(home.root)?.ensureRuntime())?.core ?? null,
+      log: api.logger,
+    });
+    return;
+  }
+  const existing = activeRuntimes.get(home.root);
+  if (existing) {
+    existing.registerBindings(api);
+    api.logger.info("memos-local: reused active runtime for host registry");
+    return;
+  }
+  const diagnosticMode = isDiagnosticMode();
+
+  let runtimeLock: OpenClawRuntimeLockHandle;
+  try {
+    runtimeLock = acquireOpenClawRuntimeLock({
+      home,
+      pluginId: PLUGIN_ID,
+      version: PLUGIN_VERSION,
+      viewerPort: OPENCLAW_VIEWER_PORT,
+      skipLock: diagnosticMode,
+    });
+
+    if (diagnosticMode) {
+      api.logger.info("memos-local: running in diagnostic mode (lock acquisition skipped)");
+    }
+  } catch (err) {
+    const duplicate = err instanceof DuplicateOpenClawRuntimeError;
+    api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
+      err: err instanceof Error ? err.message : String(err),
+      code: duplicate ? err.code : (err as { code?: unknown }).code,
+    });
+    throw err;
+  }
+
+  // OpenClaw publishes its clean, command-facing inbound body before
+  // prompt construction. Keep this store independent of core bootstrap
+  // so early messages are not lost while SQLite/providers initialize.
+  const inboundUserText = createOpenClawInboundTextStore();
+
+  // 2. Kick off core bootstrap. OpenClaw only accepts tool / hook
+  //    registration during the synchronous `register(api)` window, so
+  //    tools register a shell now and wait for runtime inside execute().
+  let runtime: PluginRuntime | null = null;
+  let bootstrapError: Error | null = null;
+  const bootstrapPromise = createRuntime(api, runtimeLock, inboundUserText)
+    .then((r) => {
+      runtime = r;
+      api.logger.info("memos-local: plugin ready");
+    })
+    .catch((err) => {
+      if (activeRuntimes.get(home.root) === sharedRuntime) activeRuntimes.delete(home.root);
+      bootstrapError = err instanceof Error ? err : new Error(String(err));
+      const duplicate = err instanceof DuplicateOpenClawRuntimeError;
+      api.logger.error("memos-local: bootstrap failed", {
+        err: bootstrapError.message,
+        code: duplicate ? err.code : (err as { code?: unknown }).code,
+      });
+    });
+
+  const ensureRuntime = async (): Promise<PluginRuntime | null> => {
+    if (runtime) return runtime;
+    await bootstrapPromise;
+    return runtime;
+  };
+
+  const sharedRuntime: SharedRuntime = {
+    ensureRuntime,
+    registerBindings: (target) => registerRuntimeBindings(target, ensureRuntime, inboundUserText, () => runtime),
+  };
+  activeRuntimes.set(home.root, sharedRuntime);
+
+  sharedRuntime.registerBindings(api);
+
   // 4. Service — lets the host flush + wait for ready and shut us down.
   //
   // OpenClaw's current loader (≥ 2026.4) keys the service registry by
@@ -559,6 +606,8 @@ function register(api: OpenClawPluginApi): void {
       if (bootstrapError) throw bootstrapError;
     },
     async stop() {
+      await bootstrapPromise;
+      if (activeRuntimes.get(home.root) === sharedRuntime) activeRuntimes.delete(home.root);
       if (runtime) await runtime.shutdown();
     },
   });

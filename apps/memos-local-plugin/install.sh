@@ -501,7 +501,14 @@ install_openclaw() {
   GATEWAY_RECOVERY_STATE="inactive"
   if oc_bin="$(find_openclaw_cli)"; then
     step "Stopping OpenClaw gateway"
-    "${oc_bin}" gateway stop >/dev/null 2>&1 || true
+    local stop_help
+    local -a stop_args=(gateway stop)
+    stop_help="$("${oc_bin}" gateway stop --help 2>/dev/null || true)"
+    # New hosts require an explicit non-interactive stop; suppress launchd
+    # respawn during the package swap when the host supports it.
+    if grep -q -- '--force' <<< "${stop_help}"; then stop_args+=(--force); fi
+    if grep -q -- '--disable' <<< "${stop_help}"; then stop_args+=(--disable); fi
+    "${oc_bin}" "${stop_args[@]}" >/dev/null 2>&1 || true
     sleep 1
     success "Gateway stopped"
     GATEWAY_RECOVERY_BIN="${oc_bin}"
@@ -556,18 +563,12 @@ EOF
 
   step "Patching ${config_path}"
   PLUGIN_ID="${PLUGIN_ID}" \
-  INSTALL_PATH="${prefix}" \
-  SOURCE_KIND="${SOURCE_KIND}" \
-  SOURCE_SPEC="${SOURCE_SPEC}" \
-  PLUGIN_VERSION="${plugin_version}" \
   LEGACY_JSON="$(printf '%s,' "${LEGACY_PLUGIN_IDS[@]}")" \
   CONFIG_PATH="${config_path}" \
   node - <<'NODE'
 const fs = require('fs');
 const {
-  CONFIG_PATH: configPath, PLUGIN_ID: pluginId, INSTALL_PATH: installPath,
-  SOURCE_KIND: sourceKind, SOURCE_SPEC: sourceSpec,
-  PLUGIN_VERSION: pluginVersion, LEGACY_JSON: legacyCsv,
+  CONFIG_PATH: configPath, PLUGIN_ID: pluginId, LEGACY_JSON: legacyCsv,
 } = process.env;
 const legacyIds = (legacyCsv || '').split(',').filter(Boolean);
 const MEMOS_TOOL_NAMES = [
@@ -615,7 +616,6 @@ if (!config.plugins.allow.includes(pluginId)) config.plugins.allow.push(pluginId
 // can delete it themselves if desired.
 for (const legacyId of legacyIds) {
   if (config.plugins.entries?.[legacyId]) delete config.plugins.entries[legacyId];
-  if (config.plugins.installs?.[legacyId]) delete config.plugins.installs[legacyId];
   if (Array.isArray(config.plugins.allow)) {
     config.plugins.allow = config.plugins.allow.filter((x) => x !== legacyId);
   }
@@ -646,20 +646,24 @@ if (
 }
 config.plugins.entries[pluginId].hooks.allowConversationAccess = true;
 
-if (!config.plugins.installs || typeof config.plugins.installs !== 'object') config.plugins.installs = {};
-const installsEntry = {
-  source: sourceKind === 'path' ? 'path' : 'npm',
-  installPath,
-  version: pluginVersion,
-  resolvedVersion: pluginVersion,
-  installedAt: new Date().toISOString(),
-};
-if (sourceKind !== 'path') {
-  installsEntry.spec = sourceSpec;
-  installsEntry.resolvedName = '@memtensor/memos-local-plugin';
-  installsEntry.resolvedSpec = sourceSpec;
+// Older OpenClaw releases allow `plugins.installs`; current hosts keep that
+// metadata in machine-managed state instead. The extension already lives
+// in OpenClaw's standard discovery directory, so neither generation requires a
+// hand-written MemOS install record. Remove only records owned by this installer
+// so older OpenClaw releases retain metadata for unrelated plugins.
+if (
+  config.plugins.installs &&
+  typeof config.plugins.installs === 'object' &&
+  !Array.isArray(config.plugins.installs)
+) {
+  delete config.plugins.installs[pluginId];
+  for (const legacyId of legacyIds) delete config.plugins.installs[legacyId];
+  if (Object.keys(config.plugins.installs).length === 0) delete config.plugins.installs;
+} else if (Object.prototype.hasOwnProperty.call(config.plugins, 'installs')) {
+  // A malformed legacy value is invalid on old hosts and cannot carry records
+  // worth preserving.
+  delete config.plugins.installs;
 }
-config.plugins.installs[pluginId] = installsEntry;
 
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 NODE
@@ -669,6 +673,26 @@ NODE
     warn "openclaw CLI not on PATH — restart manually: openclaw gateway start"
     return 1
   fi
+  # Validate before accepting an already-running process: an old process may
+  # still answer while the newly written configuration is invalid.
+  if "${oc_bin}" config --help 2>/dev/null | grep -q 'validate'; then
+    "${oc_bin}" config validate || die "OpenClaw config validation failed; run openclaw doctor --fix and retry."
+  fi
+  # Recent hosts persist capability consent outside openclaw.json. Let their
+  # CLI own that state; older hosts do not expose this flag.
+  # Some older CLIs load configured plugins even for subcommand help. Probe
+  # against an empty, disabled plugin configuration to avoid starting a runtime.
+  local probe_dir enable_help
+  probe_dir="$(mktemp -d)"
+  printf '%s\n' '{"plugins":{"enabled":false}}' > "${probe_dir}/openclaw.json"
+  enable_help="$(OPENCLAW_STATE_DIR="${probe_dir}" OPENCLAW_CONFIG_PATH="${probe_dir}/openclaw.json" \
+    "${oc_bin}" plugins enable --help 2>/dev/null || true)"
+  rm -rf -- "${probe_dir}"
+  if grep -q -- '--accept-capabilities' <<< "${enable_help}"; then
+    step "Enabling MemOS memory tools and conversation hooks"
+    "${oc_bin}" plugins enable "${PLUGIN_ID}" --accept-capabilities \
+      || die "OpenClaw could not enable the MemOS plugin."
+  fi
   step "Starting OpenClaw gateway"
   local start_out
   if ! start_out="$("${oc_bin}" gateway start 2>&1)"; then
@@ -676,8 +700,7 @@ NODE
     # the stop above, making "gateway start" fail with a kickstart
     # conflict. Check if the gateway is actually running before
     # treating this as a real error.
-    if curl -fsS --max-time 2 "http://127.0.0.1:18789" >/dev/null 2>&1 \
-       || (command -v lsof >/dev/null 2>&1 && lsof -i ":18789" -t >/dev/null 2>&1); then
+    if "${oc_bin}" health >/dev/null 2>&1; then
       success "OpenClaw gateway already running"
     else
       # The intended final start already ran and failed; do not repeat the same
