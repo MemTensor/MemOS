@@ -660,14 +660,49 @@ class Neo4jGraphDB(BaseGraphDB):
     ) -> list[str]:
         """
         Get connected node IDs in a specific direction and relationship type.
+
         Args:
             id: Source node ID.
-            type: Relationship type.
+            type: Relationship type to match, or 'ANY' to match all.
             direction: Edge direction to follow ('out', 'in', or 'both').
+                - 'out': nodes connected by edges leaving `id`
+                - 'in':  nodes connected by edges entering `id`
+                - 'both': nodes connected either way (deduplicated)
+            user_name (str, optional): User name for filtering in non-multi-db mode
+
         Returns:
             List of neighboring node IDs.
         """
-        raise NotImplementedError
+        if direction not in ("in", "out", "both"):
+            raise ValueError("Invalid direction. Must be 'in', 'out', or 'both'.")
+
+        user_name = user_name if user_name else self.config.user_name
+        rel_type = "" if type == "ANY" else f":{type}"
+
+        if direction == "out":
+            pattern = f"(a:Memory)-[r{rel_type}]->(b:Memory)"
+            where_clause = "a.id = $id"
+        elif direction == "in":
+            pattern = f"(b:Memory)-[r{rel_type}]->(a:Memory)"
+            where_clause = "a.id = $id"
+        else:  # both
+            pattern = f"(a:Memory)-[r{rel_type}]-(b:Memory)"
+            where_clause = "a.id = $id AND b.id <> $id"
+
+        params = {"id": id}
+        if not self.config.use_multi_db and (self.config.user_name or user_name):
+            where_clause += " AND a.user_name = $user_name AND b.user_name = $user_name"
+            params["user_name"] = user_name
+
+        query = f"""
+                MATCH {pattern}
+                WHERE {where_clause}
+                RETURN DISTINCT b.id AS neighbor_id
+            """
+
+        with self.driver.session(database=self.db_name) as session:
+            result = session.run(query, params)
+            return [record["neighbor_id"] for record in result]
 
     def get_neighbors_by_tag(
         self,
@@ -752,10 +787,32 @@ class Neo4jGraphDB(BaseGraphDB):
             source_id: Starting node ID.
             target_id: Target node ID.
             max_depth: Maximum path length to traverse.
+            user_name (str, optional): User name for filtering in non-multi-db mode
         Returns:
             Ordered list of node IDs along the path.
         """
-        raise NotImplementedError
+        user_name = user_name if user_name else self.config.user_name
+        params = {"source_id": source_id, "target_id": target_id, "max_depth": max_depth}
+
+        user_filter = ""
+        if not self.config.use_multi_db and (self.config.user_name or user_name):
+            user_filter = (
+                "WHERE n.user_name = $user_name AND m.user_name = $user_name "
+                "AND all(x IN nodes(p) WHERE x.user_name = $user_name)"
+            )
+            params["user_name"] = user_name
+
+        query = f"""
+                MATCH p = shortestPath((n:Memory {{id: $source_id}})-[*1..$max_depth]-(m:Memory {{id: $target_id}}))
+                {user_filter}
+                RETURN [x IN nodes(p) | x.id] AS path_ids
+                LIMIT 1
+            """
+
+        with self.driver.session(database=self.db_name) as session:
+            result = session.run(query, params)
+            record = result.single()
+            return record["path_ids"] if record else []
 
     def get_subgraph(
         self,
@@ -834,7 +891,7 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             List of ordered node IDs in the chain.
         """
-        raise NotImplementedError
+        return self.get_neighbors(id, type, "out")
 
     # Search / recall operations
     def search_by_embedding(

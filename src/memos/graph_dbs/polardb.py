@@ -947,7 +947,52 @@ class PolarDBGraphDB(BaseGraphDB):
         self, id: str, type: str, direction: Literal["in", "out", "both"] = "out"
     ) -> list[str]:
         """Get connected node IDs in a specific direction and relationship type."""
-        raise NotImplementedError
+        if direction not in ("in", "out", "both"):
+            raise ValueError("Invalid direction. Must be 'in', 'out', or 'both'.")
+
+        user_name = self._get_config_value("user_name")
+        id_esc = (id or "").replace("'", "''")
+        user_esc = (user_name or "").replace("'", "''")
+        type_filter = f":{type}" if type != "ANY" else ""
+
+        if direction == "out":
+            cypher_body = f"""
+            MATCH (a:Memory)-[r{type_filter}]->(b:Memory)
+            WHERE a.id = '{id_esc}' AND a.user_name = '{user_esc}'
+            RETURN DISTINCT b.id AS neighbor_id
+            """
+        elif direction == "in":
+            cypher_body = f"""
+            MATCH (b:Memory)-[r{type_filter}]->(a:Memory)
+            WHERE a.id = '{id_esc}' AND a.user_name = '{user_esc}'
+            RETURN DISTINCT b.id AS neighbor_id
+            """
+        else:  # both
+            cypher_body = f"""
+            MATCH (a:Memory)-[r{type_filter}]-(b:Memory)
+            WHERE a.id = '{id_esc}' AND a.user_name = '{user_esc}'
+            RETURN DISTINCT b.id AS neighbor_id
+            """
+        query = f"""
+            SELECT * FROM cypher('{self.db_name}_graph', $$
+            {cypher_body.strip()}
+            $$) AS (neighbor_id agtype)
+        """
+        try:
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
+
+                neighbors = []
+                for row in results:
+                    raw = row[0].value if hasattr(row[0], "value") else row[0]
+                    if isinstance(raw, str) and raw.startswith('"') and raw.endswith('"'):
+                        raw = raw[1:-1]
+                    neighbors.append(str(raw))
+                return neighbors
+        except Exception as e:
+            logger.error(f"Failed to get neighbors: {e}", exc_info=True)
+            return []
 
 
     @timed
@@ -1031,7 +1076,36 @@ class PolarDBGraphDB(BaseGraphDB):
 
     def get_path(self, source_id: str, target_id: str, max_depth: int = 3) -> list[str]:
         """Get the path of nodes from source to target within a limited depth."""
-        raise NotImplementedError
+        user_name = self._get_config_value("user_name")
+        source_esc = (source_id or "").replace("'", "''")
+        target_esc = (target_id or "").replace("'", "''")
+        user_esc = (user_name or "").replace("'", "''")
+
+        # Variable-length path [*1..N] counts edges; cap at a sane upper bound
+        # to avoid unbounded traversal in AGE.
+        hops = max(1, min(int(max_depth), 6))
+        query = f"""
+            SELECT * FROM cypher('{self.db_name}_graph', $cypher$
+                MATCH p = (n:Memory {{id: '{source_esc}'}})-[*1..{hops}]-(m:Memory {{id: '{target_esc}'}})
+                WHERE n.user_name = '{user_esc}' AND m.user_name = '{user_esc}'
+                RETURN [x IN nodes(p) | x.id] AS path_ids
+                ORDER BY length(p) ASC
+                LIMIT 1
+            $cypher$) AS (path_ids agtype)
+        """
+        try:
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                row = cursor.fetchone()
+                if row is None:
+                    return []
+                raw = row[0].value if hasattr(row[0], "value") else row[0]
+                if isinstance(raw, list):
+                    return [str(x).strip('"') for x in raw]
+                return []
+        except Exception as e:
+            logger.error(f"Failed to get path: {e}", exc_info=True)
+            return []
 
     @timed
     def get_subgraph(
@@ -1239,7 +1313,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
     def get_context_chain(self, id: str, type: str = "FOLLOWS") -> list[str]:
         """Get the ordered context chain starting from a node."""
-        raise NotImplementedError
+        return self.get_neighbors(id, type, "out")
 
     def _extract_fields_from_properties(
         self, properties: Any, return_fields: list[str]
