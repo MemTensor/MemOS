@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import re
 import textwrap
 import threading
 import time
@@ -50,16 +51,22 @@ def _validate_edge_type(type: str) -> str:
 
 
 def _cypher_safe_id(value: Any) -> str:
-    """Coerce a node id / user_name to a clean, quote-escaped Cypher literal.
+    """Coerce a node id / user_name to a safe Cypher literal.
 
-    Empty values are allowed (they simply never match any node), but anything
-    containing a character that could break out of the SQL dollar-quoted body
-    is rejected.
+    Only allow characters that can appear in real ids / user names
+    (UUID hex, letters, digits, '-', '_', '.'). Anything else — quotes,
+    `$`, backslashes, spaces, `;`, etc. — is rejected outright, so a value
+    can never break out of the dollar-quoted Cypher body or its string
+    literal. Empty values are allowed (they simply never match any node).
+
+    Apache AGE does not treat SQL double-quote-escaping (`''`) as a valid
+    escape inside a Cypher single-quoted string, so we defend by strict
+    character allowlisting instead of escaping.
     """
     text = str(value or "")
-    if "$" in text or "\\" in text:
+    if not re.fullmatch(r"[0-9A-Za-z_.\-]*", text):
         raise ValueError(f"Invalid identifier for Cypher embedding: {value!r}")
-    return text.replace("'", "''")
+    return text
 
 
 def _build_lightweight_return_columns(return_fields: list[str]) -> str:
@@ -992,27 +999,32 @@ class PolarDBGraphDB(BaseGraphDB):
             raise ValueError("Invalid direction. Must be 'in', 'out', or 'both'.")
         _validate_edge_type(type)
 
+        # In multi-db mode user_name may be None (single-tenant databases), so
+        # only apply the tenant filter when one is configured.
         user_name = self._get_config_value("user_name")
         id_safe = _cypher_safe_id(id)
-        user_safe = _cypher_safe_id(user_name)
+        user_clause = ""
+        if user_name:
+            user_safe = _cypher_safe_id(user_name)
+            user_clause = f" AND a.user_name = '{user_safe}'"
         type_filter = f":{type}" if type != "ANY" else ""
 
         if direction == "out":
             cypher_body = f"""
             MATCH (a:Memory)-[r{type_filter}]->(b:Memory)
-            WHERE a.id = '{id_safe}' AND a.user_name = '{user_safe}'
+            WHERE a.id = '{id_safe}'{user_clause}
             RETURN DISTINCT b.id AS neighbor_id
             """
         elif direction == "in":
             cypher_body = f"""
             MATCH (b:Memory)-[r{type_filter}]->(a:Memory)
-            WHERE a.id = '{id_safe}' AND a.user_name = '{user_safe}'
+            WHERE a.id = '{id_safe}'{user_clause}
             RETURN DISTINCT b.id AS neighbor_id
             """
         else:  # both
             cypher_body = f"""
             MATCH (a:Memory)-[r{type_filter}]-(b:Memory)
-            WHERE a.id = '{id_safe}' AND a.user_name = '{user_safe}'
+            WHERE a.id = '{id_safe}'{user_clause}
             RETURN DISTINCT b.id AS neighbor_id
             """
         query = f"""
@@ -1037,7 +1049,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 return neighbors
         except Exception as e:
             logger.error(f"Failed to get neighbors: {e}", exc_info=True)
-            return []
+            raise
 
 
     @timed
@@ -1121,18 +1133,24 @@ class PolarDBGraphDB(BaseGraphDB):
 
     def get_path(self, source_id: str, target_id: str, max_depth: int = 3) -> list[str]:
         """Get the path of nodes from source to target within a limited depth."""
+        if not isinstance(max_depth, int) or isinstance(max_depth, bool):
+            raise TypeError(f"max_depth must be an int, got {type(max_depth).__name__!r}")
+
         user_name = self._get_config_value("user_name")
         source_safe = _cypher_safe_id(source_id)
         target_safe = _cypher_safe_id(target_id)
-        user_safe = _cypher_safe_id(user_name)
+        user_clause = ""
+        if user_name:
+            user_safe = _cypher_safe_id(user_name)
+            user_clause = f"WHERE n.user_name = '{user_safe}' AND m.user_name = '{user_safe}'"
 
         # Variable-length path [*1..N] counts edges; cap at a sane upper bound
         # to avoid unbounded traversal in AGE.
-        hops = max(1, min(int(max_depth), 6))
+        hops = max(1, min(max_depth, 6))
         query = f"""
             SELECT * FROM cypher('{self.db_name}_graph', $cypher$
                 MATCH p = (n:Memory {{id: '{source_safe}'}})-[*1..{hops}]-(m:Memory {{id: '{target_safe}'}})
-                WHERE n.user_name = '{user_safe}' AND m.user_name = '{user_safe}'
+                {user_clause}
                 RETURN [x IN nodes(p) | x.id] AS path_ids
                 ORDER BY length(p) ASC
                 LIMIT 1
@@ -1158,7 +1176,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 return []
         except Exception as e:
             logger.error(f"Failed to get path: {e}", exc_info=True)
-            return []
+            raise
 
     @timed
     def get_subgraph(

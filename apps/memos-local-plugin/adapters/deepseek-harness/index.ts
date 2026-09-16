@@ -423,12 +423,10 @@ export async function apply(
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
         ctx.logger.warn(
-          `memos-local-memory: session event ignored (${event.type}): ${message}`,
+          `memos-local-memory: session event ignored (${event.type}): ${message}${stack}`,
         );
-        if (error instanceof Error && error.stack) {
-          ctx.logger.warn(error.stack);
-        }
       }
     }));
 

@@ -709,6 +709,9 @@ class Neo4jGraphDB(BaseGraphDB):
         user_name = user_name if user_name else self.config.user_name
         rel_type = "" if type == "ANY" else f":{type}"
 
+        # 'both' uses an undirected pattern; Neo4j matches each edge in both
+        # orientations, so it traverses roughly 2x the edges of a directed
+        # query (correctness is preserved by the DISTINCT + b.id <> $id guard).
         if direction == "out":
             pattern = f"(a:Memory)-[r{rel_type}]->(b:Memory)"
             where_clause = "a.id = $id"
@@ -725,6 +728,14 @@ class Neo4jGraphDB(BaseGraphDB):
                 raise ValueError("user_name is required in non-multi-db mode")
             where_clause += " AND a.user_name = $user_name AND b.user_name = $user_name"
             params["user_name"] = user_name
+        else:
+            # Contract: in multi-db mode each database is a single tenant, so
+            # no user filter is applied. This is a security assumption — if a
+            # database ever holds more than one user, tenant isolation breaks.
+            logger.debug(
+                "get_neighbors: use_multi_db=True, assuming per-tenant databases; "
+                "no user_name scoping applied"
+            )
 
         query = f"""
                 MATCH {pattern}
@@ -815,6 +826,11 @@ class Neo4jGraphDB(BaseGraphDB):
     ) -> list[str]:
         """
         Get the path of nodes from source to target within a limited depth.
+
+        Tenant isolation: in multi-db mode each database is expected to hold a
+        single tenant's graph, so no user filter is applied. In non-multi-db
+        mode a `user_name` filter is always applied (and required).
+
         Args:
             source_id: Starting node ID.
             target_id: Target node ID.
@@ -823,6 +839,8 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             Ordered list of node IDs along the path.
         """
+        if not isinstance(max_depth, int) or isinstance(max_depth, bool):
+            raise TypeError(f"max_depth must be an int, got {type(max_depth).__name__!r}")
         user_name = user_name if user_name else self.config.user_name
 
         user_filter = ""
@@ -835,10 +853,18 @@ class Neo4jGraphDB(BaseGraphDB):
                 "AND all(x IN nodes(p) WHERE x.user_name = $user_name)"
             )
             params["user_name"] = user_name
+        else:
+            # Contract: in multi-db mode each database is a single tenant, so
+            # no user filter is applied. This is a security assumption — if a
+            # database ever holds more than one user, paths can cross tenants.
+            logger.debug(
+                "get_path: use_multi_db=True, assuming per-tenant databases; "
+                "no user_name scoping applied"
+            )
 
         # Neo4j does not allow parameters in variable-length hop bounds; the
         # literal must be inlined. Cap it to avoid runaway traversal.
-        hops = max(1, min(int(max_depth), 10))
+        hops = max(1, min(max_depth, 10))
         query = f"""
                 MATCH p = shortestPath((n:Memory {{id: $source_id}})-[*1..{hops}]-(m:Memory {{id: $target_id}}))
                 {user_filter}
