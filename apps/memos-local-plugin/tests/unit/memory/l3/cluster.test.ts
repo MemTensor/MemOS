@@ -61,6 +61,23 @@ describe("memory/l3/cluster", () => {
       expect(tags).toEqual([]);
     });
 
+    it("does not create a cluster from an untagged bucket", () => {
+      const policies = [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ].map((v, n) => mkPolicy({
+        id: `po_u${n}` as PolicyId,
+        title: `中文策略 ${n}`,
+        vec: vec(v),
+      }));
+      const clusters = clusterPolicies(
+        { policies },
+        { config: { clusterMinSimilarity: 0.6, minPolicies: 1, maxPoliciesPerCluster: 20 } },
+      );
+      expect(clusters).toHaveLength(0);
+    });
+
     it("groups network-related text under 'network'", () => {
       const p = mkPolicy({
         id: "po_n" as PolicyId,
@@ -106,6 +123,20 @@ describe("memory/l3/cluster", () => {
       expect(clusters[0]!.domainTags).toEqual(
         expect.arrayContaining(["alpine", "pip"]),
       );
+    });
+
+    it("caps loose clusters before they reach the prompt", () => {
+      const policies = [1, 2, 3].map((n) => mkPolicy({
+        id: `po_n${n}` as PolicyId,
+        title: `network retry ${n}`,
+        trigger: "proxy DNS failure",
+        vec: vec([1, 0, 0]),
+      }));
+      const clusters = clusterPolicies(
+        { policies },
+        { config: { clusterMinSimilarity: 0.99, minPolicies: 1, maxPoliciesPerCluster: 2 } },
+      );
+      expect(clusters[0]!.policies).toHaveLength(2);
     });
 
     it("skips a bucket that doesn't meet minPolicies", () => {

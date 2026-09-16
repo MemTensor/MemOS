@@ -62,6 +62,8 @@ export interface RunL3Deps {
 }
 
 const KV_COOLDOWN_PREFIX = "l3.lastRun.";
+const KV_RETRY_PREFIX = "l3.retry.";
+const FAILURE_BACKOFF_MS = [5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 6 * 60 * 60_000];
 
 // ─── Public entry ──────────────────────────────────────────────────────────
 
@@ -102,6 +104,7 @@ export async function runL3(
         config: {
           clusterMinSimilarity: config.clusterMinSimilarity,
           minPolicies: config.minPolicies,
+          maxPoliciesPerCluster: config.maxPoliciesPerCluster ?? 20,
         },
       },
     );
@@ -150,6 +153,11 @@ export async function runL3(
       abstractions.push(skipped(cluster, "cooldown"));
       continue;
     }
+    const retry = repos.kv.get<{ nextRetryAt: number; failures: number } | null>(retryKey(cluster), null);
+    if (retry && retry.nextRetryAt > now) {
+      abstractions.push(skipped(cluster, "retry_cooldown"));
+      continue;
+    }
 
     const evidenceByPolicy = loadEvidence(cluster, repos, config.traceEvidencePerPolicy);
     const episodeIds = collectEpisodeIds(cluster.policies, evidenceByPolicy);
@@ -170,6 +178,7 @@ export async function runL3(
     timings.abstract += Date.now() - t0;
 
     if (!draftRes.ok) {
+      recordFailure(cluster, repos.kv, now);
       abstractions.push(skipped(cluster, draftRes.reason, { episodeIds, policyIds: cluster.policies.map((p) => p.id) }));
       emit(bus, {
         kind: "l3.failed",
@@ -314,6 +323,7 @@ export async function runL3(
     }
 
     markCooldown(cluster, repos.kv, now);
+    repos.kv.del(retryKey(cluster));
     timings.persist += Date.now() - t1;
   }
 
@@ -439,6 +449,18 @@ function clamp01(n: number): number {
 function cooldownKey(cluster: PolicyCluster): string {
   const primary = cluster.domainTags[0] ?? cluster.key;
   return `${KV_COOLDOWN_PREFIX}${primary}`;
+}
+
+function retryKey(cluster: PolicyCluster): string {
+  const members = cluster.policies.map((p) => String(p.id)).sort().join(",");
+  return `${KV_RETRY_PREFIX}${cluster.key}:${members}`;
+}
+
+function recordFailure(cluster: PolicyCluster, kv: Repos["kv"], now: number): void {
+  const previous = kv.get<{ nextRetryAt: number; failures: number } | null>(retryKey(cluster), null);
+  const failures = Math.min((previous?.failures ?? 0) + 1, FAILURE_BACKOFF_MS.length);
+  const delay = FAILURE_BACKOFF_MS[failures - 1] ?? FAILURE_BACKOFF_MS[FAILURE_BACKOFF_MS.length - 1]!;
+  kv.set(retryKey(cluster), { failures, nextRetryAt: now + delay });
 }
 
 function isInCooldown(

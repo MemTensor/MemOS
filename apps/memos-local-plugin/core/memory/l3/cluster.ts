@@ -27,7 +27,7 @@ export interface ClusterInput {
 }
 
 export interface ClusterDeps {
-  config: Pick<L3Config, "clusterMinSimilarity" | "minPolicies">;
+  config: Pick<L3Config, "clusterMinSimilarity" | "minPolicies" | "maxPoliciesPerCluster">;
 }
 
 // ─── Domain key extraction ─────────────────────────────────────────────────
@@ -173,25 +173,33 @@ export function clusterPolicies(
     // here is only "strict subset" vs "whole bucket".
     let cohort: PolicyWithMeta[];
     let admission: "strict" | "loose";
-    if (strict.length >= config.minPolicies) {
+    const requiredPolicies = key === "_|_"
+      ? Math.max(2, config.minPolicies)
+      : config.minPolicies;
+    if (strict.length >= requiredPolicies) {
       cohort = strict;
       admission = "strict";
-    } else if (members.length >= config.minPolicies) {
+    } else if (key !== "_|_" && members.length >= requiredPolicies) {
       cohort = members;
       admission = "loose";
     } else {
       continue;
     }
 
+    const capped = cohort
+      .slice()
+      .sort((a, b) => String(a.policy.id).localeCompare(String(b.policy.id)))
+      .slice(0, Math.max(1, config.maxPoliciesPerCluster ?? 20));
+    if (capped.length < requiredPolicies) continue;
     const tags = new Set<string>();
-    for (const m of cohort) for (const t of m.tags) tags.add(t);
+    for (const m of capped) for (const t of m.tags) tags.add(t);
 
     const avgGain =
-      cohort.reduce((s, m) => s + m.policy.gain, 0) / Math.max(1, cohort.length);
+      capped.reduce((s, m) => s + m.policy.gain, 0) / Math.max(1, capped.length);
 
     out.push({
       key,
-      policies: cohort.map((m) => m.policy),
+      policies: capped.map((m) => m.policy),
       domainTags: Array.from(tags),
       centroidVec: center,
       avgGain,

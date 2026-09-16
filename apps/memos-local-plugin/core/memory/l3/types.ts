@@ -39,6 +39,8 @@ export interface L3Config {
   minPolicySupport: number;
   /** Cosine floor for two L2s to share a cluster. */
   clusterMinSimilarity: number;
+  /** Maximum policies admitted to one abstraction prompt. */
+  maxPoliciesPerCluster?: number;
   /** Char cap for each L2 body section handed to the prompt. */
   policyCharCap: number;
   /** Char cap for each L1 evidence trace handed to the prompt. */
@@ -152,6 +154,7 @@ export interface AbstractionResult {
     | "llm_failed"
     | "draft_invalid"
     | "cooldown"
+    | "retry_cooldown"
     | "no_centroid"
     | "duplicate_of";
   /** When `skippedReason === "duplicate_of"`, the existing WM id. */

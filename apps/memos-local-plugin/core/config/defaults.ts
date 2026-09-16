@@ -222,6 +222,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // an early-life install can still cluster into a world model;
       // strict 0.6 starved L3 in real usage.
       clusterMinSimilarity: 0.3,
+      maxPoliciesPerCluster: 20,
       policyCharCap: 800,
       traceCharCap: 500,
       traceEvidencePerPolicy: 1,
