@@ -128,9 +128,7 @@ class GeneralTextMemory(BaseTextMemory):
         """
         query_vector = self._embed_one_sentence(query)
         search_results = self.vector_db.search(query_vector, top_k)
-        search_results = sorted(  # make higher score first
-            search_results, key=lambda x: x.score, reverse=True
-        )
+        # Keep the backend's relevance order: distance and similarity scores rank differently.
         result_memories = [
             TextualMemoryItem(**search_item.payload) for search_item in search_results
         ]
