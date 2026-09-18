@@ -126,7 +126,11 @@ strict, high-gain clusters surface first.
 
 ## 4. Evidence packing
 
-Per cluster we assemble a prompt payload:
+Per cluster we assemble one or more prompt payloads. Policies are sorted
+deterministically and split into batches of at most
+`maxPoliciesPerCluster`; the limit bounds prompt size and never discards
+cluster members. Batch drafts are then unioned into one draft before the
+single merge/create decision.
 
 ```
 {
@@ -134,8 +138,8 @@ Per cluster we assemble a prompt payload:
   domain_tags: string[],
   avg_gain: number,
   avg_support: number,
-  policies: PolicyPrompt[],     // up to |cluster|, each capped
-  evidence:  TracePrompt[]      // at most traceEvidencePerPolicy × |cluster|
+  policies: PolicyPrompt[],     // up to maxPoliciesPerCluster, each capped
+  evidence:  TracePrompt[]      // at most traceEvidencePerPolicy × batch size
 }
 ```
 
@@ -144,8 +148,8 @@ Per cluster we assemble a prompt payload:
 * For each policy we fetch the most recent non-redacted supporting
   trace (by `episodeId`) and include up to `traceCharCap` characters of
   `userText + reflection`. Evidence is **read-only**, never mutated.
-* Total token budget is bounded by `policyCharCap × |cluster| +
-  traceCharCap × evidencePerPolicy × |cluster|`, which is deterministic
+* Per-call token budget is bounded by `policyCharCap × batchSize +
+  traceCharCap × evidencePerPolicy × batchSize`, which is deterministic
   and easy to debug.
 
 ---

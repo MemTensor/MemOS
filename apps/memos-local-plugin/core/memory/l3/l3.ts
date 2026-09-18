@@ -43,6 +43,9 @@ import {
 } from "./merge.js";
 import type {
   AbstractionResult,
+  L3AbstractionDraft,
+  L3AbstractionDraftEntry,
+  L3AbstractionDraftResult,
   L3Config,
   L3Event,
   L3EventBus,
@@ -171,10 +174,30 @@ export async function runL3(
     const triggerEpisodeId = input.episodeId ?? episodeIds[0];
 
     const t0 = Date.now();
-    const draftRes = await abstractDraft(
-      { cluster, evidenceByPolicy, episodeId: triggerEpisodeId },
-      { llm: deps.llm, log: abstractLog, config },
-    );
+    const batchSize = Math.max(1, config.maxPoliciesPerCluster ?? 20);
+    const drafts: Array<{ draft: L3AbstractionDraft; policyCount: number }> = [];
+    let draftRes: L3AbstractionDraftResult | null = null;
+    for (let offset = 0; offset < cluster.policies.length; offset += batchSize) {
+      const batchPolicies = cluster.policies.slice(offset, offset + batchSize);
+      const batchPolicyIds = new Set(batchPolicies.map((policy) => policy.id));
+      const batchEvidence = new Map(
+        Array.from(evidenceByPolicy.entries()).filter(([policyId]) => batchPolicyIds.has(policyId)),
+      );
+      const batchCluster: PolicyCluster = {
+        ...cluster,
+        policies: batchPolicies,
+      };
+      const batchResult = await abstractDraft(
+        { cluster: batchCluster, evidenceByPolicy: batchEvidence, episodeId: triggerEpisodeId },
+        { llm: deps.llm, log: abstractLog, config },
+      );
+      if (!batchResult.ok) {
+        draftRes = batchResult;
+        break;
+      }
+      drafts.push({ draft: batchResult.draft, policyCount: batchPolicies.length });
+    }
+    draftRes ??= { ok: true, draft: combineBatchDrafts(drafts) };
     timings.abstract += Date.now() - t0;
 
     if (!draftRes.ok) {
@@ -389,6 +412,52 @@ function stageWarn(
 
 function worldModelVectorText(title: string, body: string): string {
   return [title.trim(), body.trim()].filter(Boolean).join("\n\n") || "(empty)";
+}
+
+function combineBatchDrafts(
+  drafts: readonly { draft: L3AbstractionDraft; policyCount: number }[],
+): L3AbstractionDraft {
+  const first = drafts[0]!;
+  const weightedPolicyCount = drafts.reduce((sum, item) => sum + item.policyCount, 0);
+  return {
+    title: first.draft.title,
+    domainTags: dedupeStrings(drafts.flatMap((item) => item.draft.domainTags)),
+    environment: combineDraftEntries(drafts.flatMap((item) => item.draft.environment)),
+    inference: combineDraftEntries(drafts.flatMap((item) => item.draft.inference)),
+    constraints: combineDraftEntries(drafts.flatMap((item) => item.draft.constraints)),
+    body: dedupeStrings(drafts.map((item) => item.draft.body).filter(Boolean)).join("\n\n---\n\n"),
+    confidence:
+      drafts.reduce(
+        (sum, item) => sum + item.draft.confidence * item.policyCount,
+        0,
+      ) / weightedPolicyCount,
+    supersedesWorldIds: Array.from(
+      new Set(drafts.flatMap((item) => item.draft.supersedesWorldIds ?? [])),
+    ),
+  };
+}
+
+function combineDraftEntries(
+  entries: readonly L3AbstractionDraftEntry[],
+): L3AbstractionDraftEntry[] {
+  const combined = new Map<string, L3AbstractionDraftEntry>();
+  for (const entry of entries) {
+    const key = `${entry.label.trim().toLowerCase()}\u0000${entry.description.trim().toLowerCase()}`;
+    const previous = combined.get(key);
+    if (!previous) {
+      combined.set(key, { ...entry, evidenceIds: dedupeStrings(entry.evidenceIds ?? []) });
+      continue;
+    }
+    previous.evidenceIds = dedupeStrings([
+      ...(previous.evidenceIds ?? []),
+      ...(entry.evidenceIds ?? []),
+    ]);
+  }
+  return Array.from(combined.values());
+}
+
+function dedupeStrings(values: readonly string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function skipped(

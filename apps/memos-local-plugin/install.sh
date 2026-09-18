@@ -135,6 +135,12 @@ Usage:
 "all" keeps its existing meaning: installed OpenClaw + Hermes targets.
 Select DSH explicitly with --agent dsh.
 
+Hermes desktop/custom installs (environment variables):
+  HERMES_INSTALL_DIR  Actual Hermes backend source directory
+  HERMES_PYTHON       Python executable used by that Hermes installation
+  HERMES_HOME         Hermes data/config directory (default: ~/.hermes)
+Paths containing spaces are supported; quote environment variable values.
+
 Each agent runs its viewer on a fixed port:
   openclaw → http://127.0.0.1:${OPENCLAW_PORT}
   hermes   → http://127.0.0.1:${HERMES_PORT}
@@ -229,7 +235,10 @@ HAS_OPENCLAW="false"
 HAS_HERMES="false"
 HAS_DSH="false"
 [[ -d "${HOME}/.openclaw" ]] && HAS_OPENCLAW="true"
-[[ -d "${HOME}/.hermes"   ]] && HAS_HERMES="true"
+if [[ -d "${HERMES_HOME:-${HOME}/.hermes}" || -n "${HERMES_INSTALL_DIR:-}" || -n "${HERMES_PYTHON:-}" ]] \
+   || command -v hermes >/dev/null 2>&1; then
+  HAS_HERMES="true"
+fi
 
 find_openclaw_cli() {
   command -v openclaw 2>/dev/null && return 0
@@ -301,8 +310,15 @@ SOURCE_KIND=""   # "path" for a local file, "npm" otherwise
 SOURCE_SPEC=""
 GATEWAY_RECOVERY_BIN=""
 GATEWAY_RECOVERY_STATE="inactive"
+HERMES_STAGED_PREFIX=""
+HERMES_PREFIX_BACKUP_ROOT=""
+HERMES_LIVE_PREFIX=""
+HERMES_PREFIX_SWAPPED="false"
 
 cleanup_install_state() {
+  if declare -F rollback_hermes_install >/dev/null 2>&1; then
+    rollback_hermes_install
+  fi
   if [[ "${GATEWAY_RECOVERY_STATE:-inactive}" == "needs_recovery" \
         && -n "${GATEWAY_RECOVERY_BIN:-}" ]]; then
     local recovery_out=""
@@ -744,15 +760,263 @@ NODE
   return 1
 }
 
+# Probe only: do not stop processes or write host files until this succeeds.
+# The bootstrap Python uses only the standard library; each candidate is
+# validated in its own interpreter, independently of the bootstrap environment.
+resolve_hermes_environment() {
+  local bootstrap="${HERMES_PYTHON:-$(command -v python3 || true)}"
+  [[ -x "${bootstrap}" ]] || { printf '%s\n' "Cannot run Python: ${bootstrap}. Set HERMES_PYTHON to the Hermes interpreter." >&2; return 1; }
+  "${bootstrap}" - <<'PY'
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+def absolute(value):
+    return Path(os.path.abspath(os.path.expanduser(value)))
+
+
+explicit_root = os.environ.get("HERMES_INSTALL_DIR", "")
+explicit_python = os.environ.get("HERMES_PYTHON", "")
+host_home = absolute(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
+roots = []
+candidates = []
+
+
+def add_root(root):
+    root = absolute(str(root))
+    if root not in roots:
+        roots.append(root)
+
+
+def add_python(python, root=None):
+    # Do not resolve the Python symlink: that would escape its virtualenv.
+    pair = (str(absolute(str(python))), str(root) if root else "")
+    if pair not in candidates:
+        candidates.append(pair)
+
+
+if explicit_root:
+    add_root(explicit_root)
+else:
+    launchers = [shutil.which("hermes"), str(Path.home() / ".local/bin/hermes")]
+    for launcher in launchers:
+        if not launcher or not Path(launcher).is_file():
+            continue
+        entry = Path(launcher).resolve()
+        for parent in entry.parents:
+            if (parent / "hermes_cli").is_dir():
+                add_root(parent)
+                break
+        try:
+            lines = entry.read_text().splitlines()
+        except (OSError, UnicodeError):
+            continue
+        for line in lines:
+            try:
+                words = shlex.split(line[2:] if line.startswith("#!") else line)
+            except ValueError:
+                continue
+            # Recognize literal Python shebangs and official `exec "...python"`
+            # launchers. Never source/eval a wrapper or expand shell expressions.
+            value = words[1] if len(words) > 1 and words[0] == "exec" else (
+                words[0] if words and line.startswith("#!") else ""
+            )
+            if not value.startswith("/") or not Path(value).name.startswith("python"):
+                continue
+            python = absolute(value)
+            root = next((p for p in python.parents if (p / "hermes_cli").is_dir()), None)
+            if root:
+                add_root(root)
+            if not explicit_python:
+                add_python(python, root)
+    add_root(host_home / "hermes-agent")
+
+if explicit_python:
+    candidates = []
+    for root in roots:
+        add_python(explicit_python, root)
+    if not explicit_root:
+        add_python(explicit_python)
+else:
+    for root in roots:
+        for venv in ("venv", ".venv"):
+            for name in ("python", "python3"):
+                add_python(root / venv / "bin" / name, root)
+    # A PATH interpreter is acceptable only if it really imports the host API.
+    # Do not combine a system interpreter with a guessed source checkout.
+    if not explicit_root:
+        for name in ("python3", "python"):
+            value = shutil.which(name)
+            if value:
+                add_python(value)
+
+probe = '''
+import sys
+from pathlib import Path
+if sys.argv[1]:
+    sys.path.insert(0, sys.argv[1])
+import hermes_cli
+import plugins.memory as memory
+from plugins.memory import load_memory_provider
+if not callable(load_memory_provider):
+    raise ImportError("Hermes load_memory_provider is not callable")
+directory = Path(memory.__file__).resolve().parent
+if sys.argv[1] and directory != Path(sys.argv[1]).resolve() / "plugins" / "memory":
+    raise ImportError("Memory API resolved outside the selected Hermes source directory")
+print(directory)
+print(directory.parent.parent)
+'''
+child_env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+for python, root in candidates:
+    if not os.access(python, os.X_OK):
+        print("Not executable: " + python, file=sys.stderr)
+        continue
+    try:
+        result = subprocess.run(
+            [python, "-c", probe, root], env=child_env, cwd="/",
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print("Cannot probe {}: {}".format(python, exc), file=sys.stderr)
+        continue
+    paths = result.stdout.strip().splitlines()
+    if result.returncode == 0 and len(paths) == 2 and Path(paths[0]).is_dir():
+        print(python)
+        print("\n".join(paths))
+        sys.exit(0)
+    print("Hermes import failed using {} (root: {}):\n{}".format(
+        python, root or "interpreter default", result.stderr.strip() or result.stdout.strip()
+    ), file=sys.stderr)
+print("Cannot locate a compatible Hermes environment. Set HERMES_INSTALL_DIR to the actual "
+      "backend source directory and HERMES_PYTHON to its Python executable. "
+      "HERMES_HOME is the data/config directory, not the application bundle. "
+      "If imports still fail, repair/update that Hermes environment first.", file=sys.stderr)
+sys.exit(1)
+PY
+}
+
 # ─── Hermes install ───────────────────────────────────────────────────────
+HERMES_PROVIDER_BACKUP_DIR=""
+HERMES_PROVIDER_BACKUP_TARGETS=()
+HERMES_PROVIDER_BACKUP_PATHS=()
+
+rollback_hermes_install() {
+  if ((${#HERMES_PROVIDER_BACKUP_TARGETS[@]} > 0)); then
+    restore_hermes_provider_targets
+  fi
+  if [[ "${HERMES_PREFIX_SWAPPED}" == "true" \
+        && "${HERMES_LIVE_PREFIX:-}" == "${HOME}/.hermes/memos-plugin" ]]; then
+    if [[ -d "${HERMES_LIVE_PREFIX}" ]]; then
+      rm -rf "${HERMES_LIVE_PREFIX}"
+    fi
+    if [[ -d "${HERMES_PREFIX_BACKUP_ROOT:-}" && -d "${HERMES_PREFIX_BACKUP_ROOT}/live" ]]; then
+      mv "${HERMES_PREFIX_BACKUP_ROOT}/live" "${HERMES_LIVE_PREFIX}" \
+        || warn "Failed to restore the previous Hermes plugin prefix."
+    fi
+  fi
+  if [[ -n "${HERMES_STAGED_PREFIX:-}" && -d "${HERMES_STAGED_PREFIX}" ]]; then
+    rm -rf "${HERMES_STAGED_PREFIX}"
+  fi
+  if [[ -n "${HERMES_PREFIX_BACKUP_ROOT:-}" && -d "${HERMES_PREFIX_BACKUP_ROOT}" ]]; then
+    rm -rf "${HERMES_PREFIX_BACKUP_ROOT}"
+  fi
+  HERMES_STAGED_PREFIX=""
+  HERMES_PREFIX_BACKUP_ROOT=""
+  HERMES_LIVE_PREFIX=""
+  HERMES_PREFIX_SWAPPED="false"
+}
+
+restore_hermes_provider_targets() {
+  local index target backup
+  for ((index=${#HERMES_PROVIDER_BACKUP_TARGETS[@]}-1; index>=0; index--)); do
+    target="${HERMES_PROVIDER_BACKUP_TARGETS[index]}"
+    backup="${HERMES_PROVIDER_BACKUP_PATHS[index]}"
+    if [[ -L "${target}" ]]; then
+      rm -f "${target}"
+    elif [[ -e "${target}" ]]; then
+      warn "Cannot restore Hermes provider target because it changed after installation: ${target}"
+      continue
+    fi
+    if [[ -e "${backup}" || -L "${backup}" ]]; then
+      mv "${backup}" "${target}" || warn "Failed to restore Hermes provider target: ${target}"
+    fi
+  done
+  if [[ -n "${HERMES_PROVIDER_BACKUP_DIR}" && -d "${HERMES_PROVIDER_BACKUP_DIR}" ]]; then
+    rm -rf "${HERMES_PROVIDER_BACKUP_DIR}"
+  fi
+  HERMES_PROVIDER_BACKUP_DIR=""
+  HERMES_PROVIDER_BACKUP_TARGETS=()
+  HERMES_PROVIDER_BACKUP_PATHS=()
+}
+
+prepare_hermes_provider_targets() {
+  local backup_root="$1"
+  shift
+  HERMES_PROVIDER_BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/memos-hermes-provider.XXXXXX")" \
+    || die "Unable to create a Hermes provider rollback directory."
+  local index=0 target backup
+  for target in "$@"; do
+    backup=""
+    if [[ -e "${target}" || -L "${target}" ]]; then
+      backup="${HERMES_PROVIDER_BACKUP_DIR}/target-${index}"
+      mv "${target}" "${backup}" \
+        || { restore_hermes_provider_targets; die "Unable to back up Hermes provider target: ${target}"; }
+    fi
+    HERMES_PROVIDER_BACKUP_TARGETS+=("${target}")
+    HERMES_PROVIDER_BACKUP_PATHS+=("${backup}")
+    ln -sfn "${backup_root}" "${target}" \
+      || { restore_hermes_provider_targets; die "Unable to link Hermes memtensor provider: ${target}"; }
+    success "Symlinked → ${target}"
+    index=$((index + 1))
+  done
+}
+
 install_hermes() {
   STEP_CURRENT=0
   header "Hermes Install"
+  step "Locating and validating Hermes Python environment"
+  local resolved python_bin plugin_dir hermes_source
+  resolved="$(resolve_hermes_environment)" || die "Hermes preflight failed; host files and processes were not changed."
+  python_bin="$(printf '%s\n' "${resolved}" | sed -n '1p')"
+  plugin_dir="$(printf '%s\n' "${resolved}" | sed -n '2p')"
+  hermes_source="$(printf '%s\n' "${resolved}" | sed -n '3p')"
+  success "Python: ${python_bin}"
+  success "plugins/memory: ${plugin_dir}"
+  # Keep all subsequent Python operations in the validated host context.
+  local PYTHONPATH="${hermes_source}" PYTHONHOME=""
+  export PYTHONPATH PYTHONHOME
+  local hermes_host_home="${HERMES_HOME:-${HOME}/.hermes}"
   local prefix="${HOME}/.hermes/memos-plugin"
-  local home="${prefix}"
-  local config_file="${HOME}/.hermes/config.yaml"
-  local adapter_dir="${prefix}/adapters/hermes"
+  local config_file="${hermes_host_home}/config.yaml"
+  HERMES_LIVE_PREFIX="${prefix}"
   mkdir -p "${HOME}/.hermes"
+  HERMES_STAGED_PREFIX="$(mktemp -d "${HOME}/.hermes/.memos-plugin-stage.XXXXXX")" \
+    || die "Unable to create a staged Hermes plugin directory."
+  local staged_prefix="${HERMES_STAGED_PREFIX}"
+  local home="${prefix}"
+  local adapter_dir="${prefix}/adapters/hermes"
+  local staged_adapter_dir="${staged_prefix}/adapters/hermes"
+  deploy_tarball_to_prefix "${staged_prefix}"
+
+  step "Preparing staged Hermes runtime"
+  ensure_runtime_home "hermes" "${staged_prefix}" "${staged_prefix}"
+  local staged_bridge_entry="${staged_prefix}/dist/bridge.cjs"
+  [[ -f "${staged_bridge_entry}" ]] || staged_bridge_entry="${staged_prefix}/bridge.cts"
+  echo "${prefix}/dist/bridge.cjs" > "${staged_adapter_dir}/bridge_path.txt"
+  [[ -f "${staged_adapter_dir}/plugin.yaml" ]] || die "Staged Hermes adapter manifest is missing."
+  local staged_version_sync="${staged_prefix}/scripts/sync-hermes-version.cjs"
+  if [[ -f "${staged_version_sync}" ]]; then
+    node "${staged_version_sync}" "${staged_prefix}" >/dev/null \
+      || die "Failed to synchronize staged Hermes plugin version metadata."
+  else
+    warn "Hermes version sync helper missing; using packaged plugin.yaml as-is."
+  fi
+  cp "${staged_adapter_dir}/plugin.yaml" "${staged_adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null \
+    || die "Failed to prepare the staged memtensor provider."
 
   step "Stopping existing bridge daemon"
   local bridge_pids=""
@@ -792,49 +1056,41 @@ install_hermes() {
     fi
   fi
 
-  deploy_tarball_to_prefix "${prefix}"
-
-  step "Configuring runtime environment"
-  ensure_runtime_home "hermes" "${home}" "${prefix}"
+  # Copy user data only after the host processes are stopped. The old prefix
+  # remains intact until the staged prefix has been handed off successfully.
+  step "Handing off staged Hermes runtime"
+  local preserved_item
+  local preserved_items=(data logs skills daemon .migrations config.yaml .auth.json)
+  mkdir -p "${prefix%/*}"
+  for preserved_item in "${preserved_items[@]}"; do
+    if [[ -e "${prefix}/${preserved_item}" ]]; then
+      rm -rf "${staged_prefix:?}/${preserved_item}"
+      cp -a "${prefix}/${preserved_item}" "${staged_prefix}/${preserved_item}" \
+        || die "Failed to stage Hermes runtime data: ${preserved_item}"
+    fi
+  done
+  HERMES_PREFIX_BACKUP_ROOT="$(mktemp -d "${HOME}/.hermes/.memos-plugin-backup.XXXXXX")" \
+    || die "Unable to create a Hermes rollback directory."
+  if [[ -d "${prefix}" ]]; then
+    mv "${prefix}" "${HERMES_PREFIX_BACKUP_ROOT}/live" \
+      || die "Unable to move the existing Hermes plugin prefix into rollback storage."
+  fi
+  HERMES_PREFIX_SWAPPED="true"
+  mv "${staged_prefix}" "${prefix}" \
+    || { rollback_hermes_install; die "Unable to activate the staged Hermes plugin prefix."; }
+  HERMES_STAGED_PREFIX=""
+  adapter_dir="${prefix}/adapters/hermes"
+  home="${prefix}"
+  staged_bridge_entry=""
+  success "Staged Hermes runtime activated"
 
   local bridge_entry="${prefix}/dist/bridge.cjs"
   [[ -f "${bridge_entry}" ]] || bridge_entry="${prefix}/bridge.cts"
   echo "${bridge_entry}" > "${adapter_dir}/bridge_path.txt"
   success "Bridge path recorded"
 
-  step "Locating Hermes Python environment"
-  local python_bin=""
-  if command -v hermes >/dev/null 2>&1; then
-    local shebang; shebang="$(head -1 "$(command -v hermes)" 2>/dev/null || true)"
-    [[ "${shebang}" == "#!"*python* ]] && python_bin="$(echo "${shebang}" | sed 's/^#!\s*//')"
-  fi
-  if [[ -z "${python_bin}" || ! -x "${python_bin}" ]] \
-     && [[ -x "${HOME}/.hermes/hermes-agent/venv/bin/python3" ]]; then
-    python_bin="${HOME}/.hermes/hermes-agent/venv/bin/python3"
-  fi
-  [[ -z "${python_bin}" || ! -x "${python_bin}" ]] && python_bin="$(command -v python3 || true)"
-  [[ -n "${python_bin}" && -x "${python_bin}" ]] || die "Cannot locate Python for Hermes."
-  success "Python: ${python_bin}"
-
-  local plugin_dir=""
-  plugin_dir="$("${python_bin}" -c "
-from pathlib import Path
-try:
-    import plugins.memory as pm
-    print(Path(pm.__file__).parent)
-except Exception:
-    pass
-" 2>/dev/null || true)"
-  if [[ -z "${plugin_dir}" || ! -d "${plugin_dir}" ]]; then
-    for d in "${HOME}/.hermes/hermes-agent/plugins/memory"; do
-      [[ -d "${d}" && -f "${d}/__init__.py" ]] && { plugin_dir="${d}"; break; }
-    done
-  fi
-  [[ -n "${plugin_dir}" && -d "${plugin_dir}" ]] || die "plugins/memory not found"
-  success "plugins/memory: ${plugin_dir}"
-
   step "Linking memtensor provider"
-  local user_plugin_dir="${HOME}/.hermes/plugins/memory"
+  local user_plugin_dir="${hermes_host_home}/plugins/memory"
   mkdir -p "${user_plugin_dir}"
   local version_sync="${prefix}/scripts/sync-hermes-version.cjs"
   if [[ -f "${version_sync}" ]]; then
@@ -843,20 +1099,13 @@ except Exception:
   else
     warn "Hermes version sync helper missing; using packaged plugin.yaml as-is."
   fi
-  # Ensure the provider directory is fully populated before symlinking so
-  # the second symlink (user-level) already points at a complete tree.
-  cp "${adapter_dir}/plugin.yaml" "${adapter_dir}/memos_provider/plugin.yaml" 2>/dev/null || true
+  # The provider directory was populated while the package was staged, before
+  # any host link was changed.
   local provider_targets=(
     "${plugin_dir}/memtensor"
     "${user_plugin_dir}/memtensor"
   )
-  local target
-  for target in "${provider_targets[@]}"; do
-    # Use `ln -sfn` for atomic, idempotent replace; matches install.hermes.sh.
-    if [[ -e "${target}" && ! -L "${target}" ]]; then rm -rf "${target}"; fi
-    ln -sfn "${adapter_dir}/memos_provider" "${target}"
-    success "Symlinked → ${target}"
-  done
+  prepare_hermes_provider_targets "${adapter_dir}/memos_provider" "${provider_targets[@]}"
 
   step "Verifying provider & patching config"
   local verify
@@ -865,8 +1114,13 @@ from plugins.memory import load_memory_provider
 p = load_memory_provider('memtensor')
 print('OK' if p and p.name == 'memtensor' else 'FAIL')
 " 2>/dev/null || true)"
-  [[ "${verify}" == "OK" ]] && success "Provider verification passed" \
-    || warn "Provider verification didn't return OK"
+  if [[ "${verify}" == "OK" ]]; then
+    success "Provider verification passed"
+  else
+    restore_hermes_provider_targets
+    rollback_hermes_install
+    die "Hermes memtensor provider verification failed. Existing provider targets and plugin prefix were restored."
+  fi
 
   step "Installing Hermes profile defaults hook"
   "${python_bin}" - <<'PYEOF' || warn "Hermes profile defaults hook install failed"
@@ -1015,7 +1269,7 @@ PYEOF
 
   if [[ -f "${config_file}" ]]; then
     local patched_configs
-    patched_configs="$("${python_bin}" - "${HOME}/.hermes" 2>/dev/null <<'PYEOF'
+    patched_configs="$("${python_bin}" - "${hermes_host_home}" 2>/dev/null <<'PYEOF'
 import sys
 from pathlib import Path
 
@@ -1133,6 +1387,20 @@ CFGEOF
   else
     printf "       ${DIM}Next:${NC}      ${BOLD}hermes chat${NC}\n"
   fi
+  # Keep rollback material until the daemon smoke test and all post-swap
+  # configuration work have completed successfully.
+  if [[ -n "${HERMES_PROVIDER_BACKUP_DIR}" ]]; then
+    rm -rf "${HERMES_PROVIDER_BACKUP_DIR}"
+  fi
+  if [[ -n "${HERMES_PREFIX_BACKUP_ROOT}" && -d "${HERMES_PREFIX_BACKUP_ROOT}" ]]; then
+    rm -rf "${HERMES_PREFIX_BACKUP_ROOT}"
+  fi
+  HERMES_PROVIDER_BACKUP_DIR=""
+  HERMES_PROVIDER_BACKUP_TARGETS=()
+  HERMES_PROVIDER_BACKUP_PATHS=()
+  HERMES_PREFIX_BACKUP_ROOT=""
+  HERMES_LIVE_PREFIX=""
+  HERMES_PREFIX_SWAPPED="false"
   return 0
 }
 

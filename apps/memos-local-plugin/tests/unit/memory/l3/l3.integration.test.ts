@@ -165,6 +165,63 @@ describe("memory/l3/integration", () => {
     );
   });
 
+  it("batches a large cluster without dropping policies or creating duplicate world models", async () => {
+    for (let index = 1; index <= 5; index++) {
+      const episodeId = `ep_batch_${index}`;
+      seedPolicy(handle, {
+        id: `po_batch_${index}` as PolicyId,
+        title: `Alpine pip dependency ${index}`,
+        trigger: "pip install fails in Alpine container",
+        procedure: `apk add dependency-${index} then pip install`,
+        sourceEpisodeIds: [episodeId as EpisodeId],
+        vec: vec([1, index * 0.01, 0]),
+      });
+      seedTrace(handle, {
+        id: `tr_batch_${index}`,
+        episodeId,
+        tags: ["docker", "alpine", "pip"],
+      });
+    }
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: () => {
+          calls += 1;
+          return {
+            ...validDraft,
+            environment: [{ label: `batch ${calls}`, description: "covered" }],
+          };
+        },
+      },
+    });
+
+    const result = await runL3(
+      { trigger: "manual" },
+      {
+        repos: {
+          policies: handle.repos.policies,
+          traces: handle.repos.traces,
+          worldModel: handle.repos.worldModel,
+          kv: handle.repos.kv,
+        },
+        llm,
+        log,
+        config: cfg({ minPolicies: 1, maxPoliciesPerCluster: 2 }),
+      },
+    );
+
+    expect(calls).toBe(3);
+    expect(result.abstractions).toHaveLength(1);
+    expect(handle.repos.worldModel.list()).toHaveLength(1);
+    expect(handle.repos.worldModel.list()[0]!.policyIds.map(String).sort()).toEqual([
+      "po_batch_1",
+      "po_batch_2",
+      "po_batch_3",
+      "po_batch_4",
+      "po_batch_5",
+    ]);
+  });
+
   it("merges into an existing WM that covers the same domain", async () => {
     seedTriplet();
     // Seed a prior WM that shares domain tags + vector, so merge kicks in.

@@ -7,10 +7,10 @@
  *   - `l2.policy.induced`        → `runSkill({ trigger, policyId })`
  *   - `l2.policy.status_changed` → `runSkill({ trigger, policyId })` when
  *                                  the new status is `active`
- *   - `reward.updated`           → `runSkill({ trigger: "reward.updated" })`
- *                                  — evaluates every policy referenced by
- *                                  the updated episode. Also drives the η
- *                                  drift adjustment on existing skills.
+ *   - `reward.updated`           → one scoped run per policy linked to the
+ *                                  updated episode. Each policy has its own
+ *                                  cooldown and pending queue entry. Also
+ *                                  drives η adjustment on existing skills.
  *
  * The handle returns `runOnce` for manual runs (used by the CLI / viewer
  * rebuild button) and `applyFeedback` for explicit skill feedback.
@@ -33,7 +33,7 @@ import type {
   SkillFeedbackKind,
   SkillTrigger,
 } from "./types.js";
-import type { SkillId } from "../types.js";
+import type { PolicyId, SkillId } from "../types.js";
 import { now as nowMs } from "../time.js";
 import { IDLE_ARCHIVE_BATCH_LIMIT } from "../storage/repos/skills.js";
 
@@ -79,14 +79,18 @@ export function attachSkillSubscriber(
   };
 
   let inflight: Promise<void> | null = null;
-  let lastRewardRunAt: number | null = null;
-  let queued: { trigger: SkillTrigger; hint?: { policyId?: string; skillId?: SkillId } } | null =
-    null;
+  let disposed = false;
+  let rewardTimer: ReturnType<typeof setTimeout> | null = null;
+  const lastRewardRunAt = new Map<PolicyId, number>();
+  const pendingRewardPolicies = new Set<PolicyId>();
+  const queued: Array<{
+    trigger: SkillTrigger;
+    hint?: { policyId?: PolicyId; skillId?: SkillId };
+  }> = [];
 
   async function drain(): Promise<void> {
-    while (queued) {
-      const next = queued;
-      queued = null;
+    while (queued.length > 0) {
+      const next = queued.shift()!;
       try {
         await runSkill(
           { trigger: next.trigger, policyId: next.hint?.policyId, skillId: next.hint?.skillId },
@@ -103,9 +107,9 @@ export function attachSkillSubscriber(
 
   function triggerRun(
     trigger: SkillTrigger,
-    hint?: { policyId?: string; skillId?: SkillId },
+    hint?: { policyId?: PolicyId; skillId?: SkillId },
   ): void {
-    queued = { trigger, hint };
+    queued.push({ trigger, hint });
     if (inflight) {
       log.debug("skill.run.queued", { trigger });
       return;
@@ -116,18 +120,39 @@ export function attachSkillSubscriber(
     inflight = promise;
   }
 
-  function triggerRewardRun(): void {
+  function scheduleRewardRuns(): void {
+    if (disposed) return;
+    if (rewardTimer) {
+      clearTimeout(rewardTimer);
+      rewardTimer = null;
+    }
     const cooldownMs = Math.max(0, deps.config.cooldownMs);
     const at = nowMs();
-    if (cooldownMs > 0 && lastRewardRunAt !== null && at - lastRewardRunAt < cooldownMs) {
-      log.debug("skill.run.cooldown", {
-        trigger: "reward.updated",
-        remainingMs: cooldownMs - (at - lastRewardRunAt),
-      });
-      return;
+    let nextDelay: number | null = null;
+    for (const policyId of pendingRewardPolicies) {
+      const lastRunAt = lastRewardRunAt.get(policyId);
+      const remainingMs = lastRunAt === undefined ? 0 : cooldownMs - (at - lastRunAt);
+      if (remainingMs > 0) {
+        nextDelay = nextDelay === null ? remainingMs : Math.min(nextDelay, remainingMs);
+        log.debug("skill.run.cooldown", {
+          trigger: "reward.updated",
+          policyId,
+          remainingMs,
+        });
+        continue;
+      }
+      pendingRewardPolicies.delete(policyId);
+      lastRewardRunAt.set(policyId, at);
+      triggerRun("reward.updated", { policyId });
     }
-    lastRewardRunAt = at;
-    triggerRun("reward.updated");
+    if (nextDelay !== null && pendingRewardPolicies.size > 0) {
+      rewardTimer = setTimeout(scheduleRewardRuns, nextDelay);
+    }
+  }
+
+  function triggerRewardRuns(policyIds: readonly PolicyId[]): void {
+    for (const policyId of policyIds) pendingRewardPolicies.add(policyId);
+    scheduleRewardRuns();
   }
 
   const offInduced = deps.l2Bus.on("l2.policy.induced", (evt: L2Event) => {
@@ -149,10 +174,22 @@ export function attachSkillSubscriber(
       episodeId: evt.result.episodeId,
     });
     resolveTrialsForReward(evt);
-    triggerRewardRun();
+    const linkedPolicyIds = deps.repos.tracePolicyLinks.getLinkedPolicyIds(evt.result.episodeId);
+    const sourceEpisodePolicyIds = deps.repos.policies
+      .list({ status: "active", limit: 200 })
+      .filter((policy) => policy.sourceEpisodeIds.includes(evt.result.episodeId))
+      .map((policy) => policy.id);
+    const relatedPolicyIds = Array.from(
+      new Set([...linkedPolicyIds, ...sourceEpisodePolicyIds]),
+    );
+    triggerRewardRuns(relatedPolicyIds);
   });
 
   function dispose(): void {
+    disposed = true;
+    if (rewardTimer) clearTimeout(rewardTimer);
+    rewardTimer = null;
+    pendingRewardPolicies.clear();
     offInduced();
     offStatus();
     offReward();

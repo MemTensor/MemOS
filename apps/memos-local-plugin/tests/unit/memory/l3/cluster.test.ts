@@ -125,7 +125,7 @@ describe("memory/l3/cluster", () => {
       );
     });
 
-    it("caps loose clusters before they reach the prompt", () => {
+    it("preserves every policy so prompt batching can process the full cluster", () => {
       const policies = [1, 2, 3].map((n) => mkPolicy({
         id: `po_n${n}` as PolicyId,
         title: `network retry ${n}`,
@@ -136,7 +136,7 @@ describe("memory/l3/cluster", () => {
         { policies },
         { config: { clusterMinSimilarity: 0.99, minPolicies: 1, maxPoliciesPerCluster: 2 } },
       );
-      expect(clusters[0]!.policies).toHaveLength(2);
+      expect(clusters[0]!.policies).toHaveLength(3);
     });
 
     it("skips a bucket that doesn't meet minPolicies", () => {
@@ -246,7 +246,7 @@ describe("memory/l3/cluster", () => {
       expect(clusters).toEqual([]);
     });
 
-    it("clusters similar untagged policies and enforces the cap", () => {
+    it("clusters similar untagged policies without dropping prompt overflow", () => {
       const policies = [1, 2, 3].map((n) => mkPolicy({
         id: `po_uv${n}` as PolicyId,
         title: `中文策略 ${n}`,
@@ -257,7 +257,7 @@ describe("memory/l3/cluster", () => {
         { config: { clusterMinSimilarity: 0.6, minPolicies: 2, maxPoliciesPerCluster: 2 } },
       );
       expect(clusters).toHaveLength(1);
-      expect(clusters[0]!.policies).toHaveLength(2);
+      expect(clusters[0]!.policies).toHaveLength(3);
       expect(clusters[0]!.admission).toBe("strict");
     });
 

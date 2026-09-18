@@ -189,20 +189,19 @@ export function clusterPolicies(
       continue;
     }
 
-    const capped = cohort
+    const ordered = cohort
       .slice()
-      .sort((a, b) => String(a.policy.id).localeCompare(String(b.policy.id)))
-      .slice(0, Math.max(1, config.maxPoliciesPerCluster ?? 20));
-    if (capped.length < requiredPolicies) continue;
+      .sort((a, b) => String(a.policy.id).localeCompare(String(b.policy.id)));
+    if (ordered.length < requiredPolicies) continue;
     const tags = new Set<string>();
-    for (const m of capped) for (const t of m.tags) tags.add(t);
+    for (const m of ordered) for (const t of m.tags) tags.add(t);
 
     const avgGain =
-      capped.reduce((s, m) => s + m.policy.gain, 0) / Math.max(1, capped.length);
+      ordered.reduce((s, m) => s + m.policy.gain, 0) / Math.max(1, ordered.length);
 
     out.push({
       key,
-      policies: capped.map((m) => m.policy),
+      policies: ordered.map((m) => m.policy),
       domainTags: Array.from(tags),
       centroidVec: center,
       avgGain,
@@ -228,7 +227,6 @@ function clusterUntagged(
   config: ClusterDeps["config"],
 ): PolicyCluster[] {
   const requiredPolicies = Math.max(2, config.minPolicies);
-  const maxPolicies = Math.max(1, config.maxPoliciesPerCluster ?? 20);
   const groups: PolicyWithMeta[][] = [];
 
   for (const member of members
@@ -237,7 +235,6 @@ function clusterUntagged(
     .sort((a, b) => String(a.policy.id).localeCompare(String(b.policy.id)))) {
     let target: PolicyWithMeta[] | undefined;
     for (const group of groups) {
-      if (group.length >= maxPolicies) continue;
       const center = centroid(group.map((m) => m.policy.vec ?? null));
       if (center && member.policy.vec && cosine(center, member.policy.vec) >= config.clusterMinSimilarity) {
         target = group;

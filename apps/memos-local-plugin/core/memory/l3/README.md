@@ -37,8 +37,8 @@ l2.policy.induced  ── triggers ──▶  attachL3Subscriber
    2. cluster by (domainKey, centroid cosine ≥ similarity)
    3. cooldown check per primary domain tag
    4. for each cluster:
-        a. pack policies + a small evidence trace slice
-        b. `l3.abstraction` prompt → draft
+        a. split policies into prompt-sized batches without dropping members
+        b. `l3.abstraction` prompt per batch → one combined draft
         c. gather candidate WMs via findByDomainTag
         d. chooseMergeTarget(cluster, candidates, draft)
              ├── update: mergeForUpdate + updateBody + bump confidence
@@ -60,6 +60,11 @@ No single step blocks reward/L2. Any LLM failure is captured as a
 (`docker|pip`, `node|npm`, …) and then splits each bucket by centroid
 cosine, so policies in the same bucket that are still semantically far
 apart (different sub-environments) end up in separate clusters.
+
+`maxPoliciesPerCluster` is a prompt-size bound, not a retention bound.
+Clusters larger than that value are processed in deterministic policy-id
+batches. Their drafts are merged before persistence, so all source policy
+and episode ids remain attached to a single world model.
 
 ### Merge vs create
 
@@ -146,7 +151,7 @@ See `algorithm.l3Abstraction` in
 | `traceEvidencePerPolicy`     | `1`     | Evidence traces per policy in the prompt.    |
 | `useLlm`                     | `true`  | Toggle the LLM abstractor off for tests.      |
 | `cooldownDays`               | `1`     | Debounce per domain tag.                       |
-| `maxPoliciesPerCluster`      | `20`    | Cap policies included in one abstraction prompt. |
+| `maxPoliciesPerCluster`      | `20`    | Batch size for one abstraction prompt; overflow is retained. |
 | `confidenceDelta`            | `0.05`  | Confidence step per merge / feedback.         |
 | `minConfidenceForRetrieval`  | `0.2`   | Tier-3 hide threshold.                        |
 
