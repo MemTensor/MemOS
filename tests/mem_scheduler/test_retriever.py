@@ -411,3 +411,6 @@ class TestSchedulerRetriever(unittest.TestCase):
 
         self.assertEqual(result, memories)
         self.assertTrue(success_flag)
+        # Without this, the early return would satisfy the assertions above too:
+        # it also returned (memories, True) for a single memory.
+        self.assertTrue(self.llm.generate.called)
