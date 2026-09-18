@@ -234,10 +234,6 @@ class MemoryFilter(BaseSchedulerModule):
             logger.info("No query history provided - keeping all memories")
             return memories, True
 
-        if len(memories) <= 1:
-            logger.info("Only one memory - no filtering needed")
-            return memories, True
-
         logger.info(
             f"Starting combined unrelated and redundant filtering for {len(memories)} memories against {len(query_history)} queries"
         )
