@@ -4,6 +4,8 @@ import uuid
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.llm import LLMConfigFactory
 from memos.configs.memory import GeneralTextMemoryConfig
@@ -14,6 +16,45 @@ from memos.memories.textual.general import GeneralTextMemory
 from memos.memories.textual.item import TextualMemoryItem
 from memos.vec_dbs.factory import QdrantVecDB
 from memos.vec_dbs.item import VecDBItem
+
+
+@pytest.mark.parametrize("distance_metric", ["euclidean", "cosine", "dot"])
+@pytest.mark.parametrize("top_k", [2, 3])
+def test_search_preserves_qdrant_relevance_order(tmp_path, distance_metric, top_k):
+    config = GeneralTextMemoryConfig(
+        extractor_llm={"backend": "ollama", "config": {"model_name_or_path": "test-llm"}},
+        embedder={"backend": "ollama", "config": {"model_name_or_path": "test-embedder"}},
+        vector_db={
+            "backend": "qdrant",
+            "config": {
+                "collection_name": "ranking_test",
+                "vector_dimension": 2,
+                "distance_metric": distance_metric,
+                "path": str(tmp_path / "qdrant"),
+            },
+        },
+    )
+    embeddings = {
+        "query": [1.0, 0.0],
+        "near": [1.0, 0.0],
+        "middle": [0.5, 0.5],
+        "far": [-1.0, 0.0],
+    }
+    embedder = MagicMock()
+    embedder.embed.side_effect = lambda texts: [embeddings[text] for text in texts]
+    with (
+        patch("memos.memories.textual.general.LLMFactory.from_config"),
+        patch("memos.memories.textual.general.EmbedderFactory.from_config", return_value=embedder),
+    ):
+        memory = GeneralTextMemory(config)
+
+    try:
+        memory.add([TextualMemoryItem(memory=text) for text in ["middle", "far", "near"]])
+        assert [item.memory for item in memory.search("query", top_k)] == ["near", "middle", "far"][
+            :top_k
+        ]
+    finally:
+        memory.vector_db.client.close()
 
 
 class TestGeneralTextMemory(unittest.TestCase):
