@@ -8,7 +8,7 @@
 > 全程使用 `openclaw agent` 命令行 + 浏览器打开 `http://127.0.0.1:18799`。
 > 共 **9 轮交互 + 1 轮收官三层召回**，全程约 25 分钟。
 >
-> 阅读建议：先读 [`Reflect2Skill_算法设计核心.md`](./Reflect2Skill_算法设计核心.md) 0 节与 2.6 节，再读 [`DEMO_OpenClaw_Python_演示.md`](./DEMO_OpenClaw_Python_演示.md)，再读本文。
+> 阅读建议：先读 [`Reflect2Skill_算法设计核心.md`](./Reflect2Skill_算法设计核心.md) 0 节与 2.6 节，再读本文。
 >
 
 ---
