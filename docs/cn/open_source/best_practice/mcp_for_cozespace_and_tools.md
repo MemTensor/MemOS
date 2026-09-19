@@ -396,7 +396,7 @@ def chat_handler(args: Args[Input]) -> Output:
 - `writable_cube_ids`: 替代原来的 `mem_cube_id`，支持多个cube
 - Server API运行在8001端口，路径为 `/product/add`
 - 确保与MemOS Server API接口一致，可参考 `examples/api/server_router_api.py` 中的示例
-**IDE配置**<br>在IDE中可以自定义工具的参数、返回值格式等，确保与MemOS API接口一致。 采用此方法完成 search 接口以及用户注册接口的编写，并点点击发布
+**IDE配置**<br>在IDE中可以自定义工具的参数、返回值格式等，确保与MemOS API接口一致。 采用此方法完成 search 接口以及用户注册接口的编写，并点击发布
 ::
 
 ### 发布并使用插件

@@ -3,7 +3,7 @@ title: 多智能体记忆隔离
 ---
 ## 云插件
 
-MemOS Openclaw 云插件支持多个 Agent 之间完全隔离记忆和和消息历史。每个 Agent 都只能看到自己的记忆，不会串台。
+MemOS Openclaw 云插件支持多个 Agent 之间完全隔离记忆和消息历史。每个 Agent 都只能看到自己的记忆，不会串台。
 
 ### 如何使用
 
