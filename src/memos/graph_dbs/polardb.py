@@ -1139,10 +1139,16 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name = self._get_config_value("user_name")
         source_safe = _cypher_safe_id(source_id)
         target_safe = _cypher_safe_id(target_id)
+        # Filter both endpoints *and* every intermediate node on the path so a
+        # variable-length match in a shared graph cannot cross tenants. In
+        # multi-db mode each database is a single tenant, so no filter applies.
         user_clause = ""
         if user_name:
             user_safe = _cypher_safe_id(user_name)
-            user_clause = f"WHERE n.user_name = '{user_safe}' AND m.user_name = '{user_safe}'"
+            user_clause = (
+                f"WHERE n.user_name = '{user_safe}' AND m.user_name = '{user_safe}' "
+                f"AND all(x IN nodes(p) WHERE x.user_name = '{user_safe}')"
+            )
 
         # Variable-length path [*1..N] counts edges; cap at a sane upper bound
         # to avoid unbounded traversal in AGE.

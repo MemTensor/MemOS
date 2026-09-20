@@ -78,20 +78,26 @@ _CHAT_REQ_LOG_WHITELIST = frozenset((
 def _safe_chat_req_log(chat_req: Any, prefix: str) -> str:
     """Build a loggable summary of a chat request without sensitive content."""
     try:
-        data = chat_req.model_dump()
-    except AttributeError:
-        data = getattr(chat_req, "__dict__", {})
-    safe = {k: v for k, v in data.items() if k in _CHAT_REQ_LOG_WHITELIST}
-    if "business_key" in data:
-        safe["business_key"] = "***" if data.get("business_key") else None
-    return f"{prefix} Chat Req: {safe}"
+        # Guard on presence of model_dump, not except AttributeError: the
+        # latter would swallow AttributeErrors raised *inside* model_dump
+        # (e.g. from a computed field) and hide the real bug.
+        if hasattr(chat_req, "model_dump"):
+            data = chat_req.model_dump()
+        else:
+            data = getattr(chat_req, "__dict__", {})
+        safe = {k: v for k, v in data.items() if k in _CHAT_REQ_LOG_WHITELIST}
+        if "business_key" in data:
+            safe["business_key"] = "***" if data.get("business_key") else None
+        return f"{prefix} Chat Req: {safe}"
+    except Exception as exc:  # noqa: BLE001 - logging must never raise
+        return f"{prefix} Chat Req: <serialization error: {exc}>"
 
 
 def _log_chat_req(logger: Any, chat_req: Any, prefix: str) -> None:
     """Emit the safe chat-request log line, skipping expensive serialization
     entirely when INFO logging is disabled."""
     if logger.isEnabledFor(logging.INFO):
-        logger.info(_safe_chat_req_log(chat_req, prefix))
+        logger.info("%s", _safe_chat_req_log(chat_req, prefix))
 
 
 class ChatHandler(BaseHandler):

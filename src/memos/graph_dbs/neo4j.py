@@ -843,15 +843,18 @@ class Neo4jGraphDB(BaseGraphDB):
             raise TypeError(f"max_depth must be an int, got {type(max_depth).__name__!r}")
         user_name = user_name if user_name else self.config.user_name
 
-        user_filter = ""
+        # Push the tenant filter into the endpoint node patterns so shortestPath
+        # constrains traversal to same-tenant endpoints. Applying it only via the
+        # WHERE all(...) below (after the path resolves) would drop the real
+        # same-user path when a shorter cross-tenant path exists, returning [].
+        node_filter = ""
+        all_filter = ""
         params = {"source_id": source_id, "target_id": target_id}
         if not self.config.use_multi_db:
             if not user_name:
                 raise ValueError("user_name is required in non-multi-db mode")
-            user_filter = (
-                "WHERE n.user_name = $user_name AND m.user_name = $user_name "
-                "AND all(x IN nodes(p) WHERE x.user_name = $user_name)"
-            )
+            node_filter = ", user_name: $user_name"
+            all_filter = "WHERE all(x IN nodes(p) WHERE x.user_name = $user_name)"
             params["user_name"] = user_name
         else:
             # Contract: in multi-db mode each database is a single tenant, so
@@ -866,8 +869,8 @@ class Neo4jGraphDB(BaseGraphDB):
         # literal must be inlined. Cap it to avoid runaway traversal.
         hops = max(1, min(max_depth, 10))
         query = f"""
-                MATCH p = shortestPath((n:Memory {{id: $source_id}})-[*1..{hops}]-(m:Memory {{id: $target_id}}))
-                {user_filter}
+                MATCH p = shortestPath((n:Memory {{id: $source_id{node_filter}}})-[*1..{hops}]-(m:Memory {{id: $target_id{node_filter}}}))
+                {all_filter}
                 RETURN [x IN nodes(p) | x.id] AS path_ids
                 LIMIT 1
             """
