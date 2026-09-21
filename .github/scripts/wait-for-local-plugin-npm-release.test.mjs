@@ -226,7 +226,7 @@ test("uses a hard deadline for an unavailable registry version", async () => {
   assert.equal(attempts, 3);
 });
 
-test("uses the six-minute default visibility deadline", async () => {
+test("uses the ten-minute default visibility deadline", async () => {
   let clock = 0;
   let attempts = 0;
   await assert.rejects(
@@ -251,9 +251,9 @@ test("uses the six-minute default visibility deadline", async () => {
         log: () => {},
       },
     ),
-    /not fully visible within 360s/,
+    /not fully visible within 600s/,
   );
-  assert.equal(DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS, 360);
-  assert.equal(clock, 360_000);
-  assert.equal(attempts, 36);
+  assert.equal(DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS, 600);
+  assert.equal(clock, 600_000);
+  assert.equal(attempts, 60);
 });

@@ -842,7 +842,7 @@ test("legacy standalone local-plugin publisher requires an extra non-dry-run con
   assert.match(workflow, /ALLOW_STAGED_TAG_BEFORE_NPM/);
   assert.match(workflow, /audit-local-plugin-package\.mjs/);
   assert.match(workflow, /wait-for-local-plugin-npm-release\.test\.mjs/);
-  assert.match(workflow, /NPM_VISIBILITY_TIMEOUT_SECONDS: "360"/);
+  assert.match(workflow, /NPM_VISIBILITY_TIMEOUT_SECONDS: "600"/);
   assert.match(workflow, /FORCE_PACKAGE_ONLY_RELEASE: \$\{\{ inputs\.tag != 'latest' \|\| contains\(inputs\.version, '-'\) \}\}/);
   assert.match(workflow, /if \[ -n "\$\{DOCS_SYNC_MODE\}" \]; then/);
   assert.doesNotMatch(workflow, /EVENT_NAME: \$\{\{ github\.event_name \}\}/);

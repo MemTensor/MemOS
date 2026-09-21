@@ -121,7 +121,7 @@ if [[ "\${1:-}" == *"wait-for-local-plugin-npm-release.mjs" ]]; then
   printf '%s' "\${count}" > "\${increment_file}"
   case "\${NPM_MOCK_SCENARIO}" in
     always-missing|publish-fails)
-      echo "::error::npm release was not fully visible within \${NPM_VISIBILITY_TIMEOUT_SECONDS:-360}s"
+      echo "::error::npm release was not fully visible within \${NPM_VISIBILITY_TIMEOUT_SECONDS:-600}s"
       exit 1
       ;;
     integrity-mismatch)
@@ -130,7 +130,7 @@ if [[ "\${1:-}" == *"wait-for-local-plugin-npm-release.mjs" ]]; then
       ;;
     *)
       if [ "\${NPM_MOCK_DIST_TAG_VERSION:-\${RELEASE_VERSION}}" != "\${RELEASE_VERSION}" ]; then
-        echo "::error::npm release was not fully visible within \${NPM_VISIBILITY_TIMEOUT_SECONDS:-360}s: dist-tag \${NPM_DIST_TAG} did not point to \${RELEASE_VERSION}"
+        echo "::error::npm release was not fully visible within \${NPM_VISIBILITY_TIMEOUT_SECONDS:-600}s: dist-tag \${NPM_DIST_TAG} did not point to \${RELEASE_VERSION}"
         exit 1
       fi
       echo '{"ok":true,"attempts":3}'
@@ -330,7 +330,7 @@ test("stops before tag creation when publish succeeds but visibility remains del
   assert.equal(result.metadataWaitCount, 1);
   assert.equal(result.packCount, 0);
   assert.match(result.stdout + result.stderr, /Refusing to issue a second publish request/);
-  assert.match(result.stdout + result.stderr, /within 360s/);
+  assert.match(result.stdout + result.stderr, /within 600s/);
 });
 
 test("allows npm publish after a staged paired Draft Release only in npm-only phase", () => {

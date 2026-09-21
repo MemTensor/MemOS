@@ -13,7 +13,7 @@ if [ ! -s "${RELEASE_TARBALL}" ]; then
   exit 2
 fi
 
-npm_visibility_timeout_seconds="${NPM_VISIBILITY_TIMEOUT_SECONDS:-360}"
+npm_visibility_timeout_seconds="${NPM_VISIBILITY_TIMEOUT_SECONDS:-600}"
 npm_visibility_interval_seconds="${NPM_VISIBILITY_INTERVAL_SECONDS:-10}"
 npm_visibility_request_timeout_seconds="${NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS:-8}"
 npm_registry_url="https://registry.npmjs.org"

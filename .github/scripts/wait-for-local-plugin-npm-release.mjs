@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
-export const DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS = 360;
+export const DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS = 600;
 
 function clean(value) {
   return String(value ?? "").trim();
