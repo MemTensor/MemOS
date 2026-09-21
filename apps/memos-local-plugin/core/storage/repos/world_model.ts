@@ -172,6 +172,7 @@ export function makeWorldModelRepo(db: StorageDb) {
         vecColumn: "vec",
         where,
         hardCap: opts.hardCap,
+        orderBy: "updated_at DESC, id DESC",
       });
     },
 

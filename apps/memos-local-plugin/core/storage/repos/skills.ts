@@ -223,6 +223,7 @@ export function makeSkillsRepo(db: StorageDb) {
           where: whereParts.join(" AND "),
           params,
           hardCap: opts.hardCap,
+          orderBy: "updated_at DESC, id DESC",
         },
       );
     },
