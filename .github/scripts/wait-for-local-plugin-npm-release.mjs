@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+export const DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS = 360;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -103,7 +104,7 @@ export async function waitForNpmReleaseVisibility(
     distTag,
     expectedIntegrity,
     registryUrl = "https://registry.npmjs.org",
-    timeoutMs = 150_000,
+    timeoutMs = DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS * 1000,
     intervalMs = 10_000,
     requestTimeoutMs = 8_000,
   } = {},
@@ -208,7 +209,12 @@ export async function run(env = process.env) {
       distTag: env.NPM_DIST_TAG,
       expectedIntegrity,
       registryUrl: env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org",
-      timeoutMs: positiveInteger(env.NPM_VISIBILITY_TIMEOUT_SECONDS, 150, "timeout") * 1000,
+      timeoutMs:
+        positiveInteger(
+          env.NPM_VISIBILITY_TIMEOUT_SECONDS,
+          DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS,
+          "timeout",
+        ) * 1000,
       intervalMs: positiveInteger(env.NPM_VISIBILITY_INTERVAL_SECONDS, 10, "interval") * 1000,
       requestTimeoutMs:
         positiveInteger(env.NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS, 8, "request timeout") * 1000,

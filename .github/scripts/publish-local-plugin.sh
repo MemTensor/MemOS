@@ -13,7 +13,7 @@ if [ ! -s "${RELEASE_TARBALL}" ]; then
   exit 2
 fi
 
-npm_visibility_timeout_seconds="${NPM_VISIBILITY_TIMEOUT_SECONDS:-150}"
+npm_visibility_timeout_seconds="${NPM_VISIBILITY_TIMEOUT_SECONDS:-360}"
 npm_visibility_interval_seconds="${NPM_VISIBILITY_INTERVAL_SECONDS:-10}"
 npm_visibility_request_timeout_seconds="${NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS:-8}"
 npm_registry_url="https://registry.npmjs.org"
@@ -336,7 +336,7 @@ if npm_version_exists; then
   published_version_visible=true
   published_version_preexisting=true
   if [ "${RECOVER_EXISTING_NPM_RELEASE:-false}" != "true" ]; then
-    echo "::error::${PACKAGE_NAME}@${RELEASE_VERSION} already exists. Normal releases require an unused version; enable recovery only after release-owner verification of a partial failure."
+    echo "::error::${PACKAGE_NAME}@${RELEASE_VERSION} already exists. Normal releases require an unused version; inspect npm first and use explicit recovery only after release-owner verification of a partial failure."
     exit 1
   fi
   if remote_tag_exists "${RELEASE_TAG}"; then

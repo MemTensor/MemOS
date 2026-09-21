@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS,
   inspectNpmReleaseVisibility,
   npmPackumentUrl,
   tarballIntegrity,
@@ -223,4 +224,36 @@ test("uses a hard deadline for an unavailable registry version", async () => {
   );
   assert.equal(clock, 30_000);
   assert.equal(attempts, 3);
+});
+
+test("uses the six-minute default visibility deadline", async () => {
+  let clock = 0;
+  let attempts = 0;
+  await assert.rejects(
+    waitForNpmReleaseVisibility(
+      {
+        packageName: "@memtensor/memos-local-plugin",
+        version: "2.0.14",
+        distTag: "latest",
+        expectedIntegrity: integrity,
+        intervalMs: 10_000,
+        requestTimeoutMs: 1_000,
+      },
+      {
+        fetchImpl: async () => {
+          attempts += 1;
+          return response({}, 404);
+        },
+        sleep: async (milliseconds) => {
+          clock += milliseconds;
+        },
+        now: () => clock,
+        log: () => {},
+      },
+    ),
+    /not fully visible within 360s/,
+  );
+  assert.equal(DEFAULT_NPM_VISIBILITY_TIMEOUT_SECONDS, 360);
+  assert.equal(clock, 360_000);
+  assert.equal(attempts, 36);
 });
