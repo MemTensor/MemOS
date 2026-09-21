@@ -186,6 +186,12 @@ describe("memory/l2/integration", () => {
     const persisted = handle.repos.policies.getById(induced.policyId!)!;
     expect(persisted.status).toBe("candidate");
     expect(persisted.sourceEpisodeIds.sort()).toEqual(["ep_A", "ep_B"]);
+    expect(persisted.metadata).toEqual(expect.objectContaining({
+      version: 1,
+      domainTags: ["docker", "pip"],
+      toolNames: ["pip.install"],
+      sourceSignature: "docker|pip|pip.install|MODULE_NOT_FOUND",
+    }));
 
     // ── A third run with a trace that cosine-matches the new policy should
     //    associate (not re-induce) and bump gain/support.

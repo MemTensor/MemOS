@@ -50,13 +50,15 @@ rust|cargo|go|java|maven|gradle|typescript|javascript
 ```
 
 Matches are ordered by the first-hit position so the sweep is
-deterministic, then we pick the top two distinct tokens. We deliberately
-**do not** embed free-form LLM tags here — domain keys must be cheap
-and stable enough to hash.
+deterministic, then we pick the top two distinct tokens. Newly induced L2
+rows also persist trace-derived metadata (language, tags, tool names, error
+codes, and the source signature); that structured metadata is preferred over
+this legacy prose heuristic. We deliberately **do not** embed free-form LLM
+tags here — domain keys must be cheap and stable enough to hash.
 
-Policies with no recognised domain keyword fall into the bucket
-`__generic|` and are still candidates for clustering by vector
-similarity.
+Policies with no recognised domain keyword fall into the generic bucket and
+are only clustered when at least two vector-bearing policies pass the cosine
+gate. This prevents unrelated no-label policies from becoming an L3 prompt.
 
 ---
 
@@ -126,7 +128,11 @@ strict, high-gain clusters surface first.
 
 ## 4. Evidence packing
 
-Per cluster we assemble a prompt payload:
+Per cluster we assemble one or more prompt payloads. Policies are sorted
+deterministically and split into batches of at most
+`maxPoliciesPerCluster`; the limit bounds prompt size and never discards
+cluster members. Batch drafts are then unioned into one draft before the
+single merge/create decision.
 
 ```
 {
@@ -134,8 +140,8 @@ Per cluster we assemble a prompt payload:
   domain_tags: string[],
   avg_gain: number,
   avg_support: number,
-  policies: PolicyPrompt[],     // up to |cluster|, each capped
-  evidence:  TracePrompt[]      // at most traceEvidencePerPolicy × |cluster|
+  policies: PolicyPrompt[],     // up to maxPoliciesPerCluster, each capped
+  evidence:  TracePrompt[]      // at most traceEvidencePerPolicy × batch size
 }
 ```
 
@@ -144,8 +150,8 @@ Per cluster we assemble a prompt payload:
 * For each policy we fetch the most recent non-redacted supporting
   trace (by `episodeId`) and include up to `traceCharCap` characters of
   `userText + reflection`. Evidence is **read-only**, never mutated.
-* Total token budget is bounded by `policyCharCap × |cluster| +
-  traceCharCap × evidencePerPolicy × |cluster|`, which is deterministic
+* Per-call token budget is bounded by `policyCharCap × batchSize +
+  traceCharCap × evidencePerPolicy × batchSize`, which is deterministic
   and easy to debug.
 
 ---
@@ -250,9 +256,15 @@ if (now − kv.get(key)) < cooldownDays × 86_400_000:
 
 ## 9. Failure policy
 
-* Storage error → propagate. Partial state remains; next run sees the
-  same eligible policies and re-drives.
+* Storage error → warn for the affected cluster and retain retry state.
+  Other clusters continue; a later run re-drives the failed cluster.
 * LLM error → single-cluster skip, reason logged. No cooldown update.
+
+Failed LLM drafts use a persisted retry key scoped by cluster membership. The
+retry delays are 5 minutes, 30 minutes, 2 hours, then 6 hours (capped), so a
+repeated provider failure cannot consume one LLM call per episode. A successful
+world-model insert/update clears the retry key and only then records the normal
+cooldown. Storage failures keep the retry state and do not record success.
   Other clusters continue.
 * Invalid draft (missing `environment/inference/constraints`) →
   treated as LLM error.

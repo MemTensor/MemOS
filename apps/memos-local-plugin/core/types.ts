@@ -203,6 +203,17 @@ export interface PolicyRow extends OwnedRow {
   } | null;
   /** Last user edit through the viewer's edit modal (migration 009). */
   editedAt?: EpochMs | null;
+  /** Structured provenance used by L3 clustering; optional for legacy rows. */
+  metadata?: PolicyMetadata;
+}
+
+export interface PolicyMetadata {
+  version: 1;
+  language: "zh" | "en" | "other" | "mixed" | "unknown";
+  domainTags: string[];
+  toolNames: string[];
+  errorCodes: string[];
+  sourceSignature?: string;
 }
 
 /**
