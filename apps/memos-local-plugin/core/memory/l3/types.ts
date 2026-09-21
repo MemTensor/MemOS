@@ -41,6 +41,8 @@ export interface L3Config {
   clusterMinSimilarity: number;
   /** Maximum policies admitted to one abstraction prompt. */
   maxPoliciesPerCluster?: number;
+  /** Hard total character cap for one abstraction prompt. */
+  maxPromptChars?: number;
   /** Char cap for each L2 body section handed to the prompt. */
   policyCharCap: number;
   /** Char cap for each L1 evidence trace handed to the prompt. */
@@ -132,7 +134,11 @@ export interface L3AbstractionDraft {
 
 export type L3AbstractionDraftResult =
   | { ok: true; draft: L3AbstractionDraft }
-  | { ok: false; reason: "llm_disabled" | "llm_failed" | "draft_invalid"; detail?: string };
+  | {
+      ok: false;
+      reason: "llm_disabled" | "llm_failed" | "draft_invalid" | "prompt_too_large";
+      detail?: string;
+    };
 
 // ─── Abstraction outcomes ──────────────────────────────────────────────────
 
@@ -153,6 +159,8 @@ export interface AbstractionResult {
     | "llm_disabled"
     | "llm_failed"
     | "draft_invalid"
+    | "prompt_too_large"
+    | "quarantined"
     | "cooldown"
     | "retry_cooldown"
     | "no_centroid"
@@ -232,6 +240,13 @@ export type L3Event =
       stage: string;
       error: { code: string; message: string };
       clusterKey?: PolicyClusterKey;
+      policyIds?: PolicyId[];
+    }
+  | {
+      kind: "l3.abstraction.skipped";
+      clusterKey: PolicyClusterKey;
+      reason: string;
+      policyIds: PolicyId[];
     };
 
 export type L3EventKind = L3Event["kind"];

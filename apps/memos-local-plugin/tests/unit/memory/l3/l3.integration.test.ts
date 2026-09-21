@@ -346,6 +346,42 @@ describe("memory/l3/integration", () => {
     expect(handle.repos.kv.all().filter((row) => row.key.startsWith("l3.retry."))).toEqual([]);
   });
 
+  it("quarantines a deterministically failing legacy cluster after bounded attempts", async () => {
+    seedTriplet();
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: () => {
+          calls++;
+          throw new Error("malformed legacy response");
+        },
+      },
+    });
+    const deps = {
+      repos: {
+        policies: handle.repos.policies,
+        traces: handle.repos.traces,
+        worldModel: handle.repos.worldModel,
+        kv: handle.repos.kv,
+      },
+      llm,
+      log,
+      config: cfg(),
+    };
+
+    for (const at of [0, 300_000, 2_100_000, 9_300_000]) {
+      const result = await runL3({ trigger: "manual", now: NOW + at }, deps);
+      expect(result.abstractions[0]!.skippedReason).toBe("llm_failed");
+    }
+    expect(calls).toBe(4);
+
+    const quarantined = await runL3({ trigger: "manual", now: NOW + 100_000_000 }, deps);
+    expect(quarantined.abstractions[0]!.skippedReason).toBe("quarantined");
+    expect(calls).toBe(4);
+    const state = handle.repos.kv.all().find((row) => row.key.startsWith("l3.retry."));
+    expect(state?.value).toMatchObject({ version: 2, failures: 4, quarantined: true });
+  });
+
   it("records retry state instead of success cooldown when persistence fails", async () => {
     seedTriplet();
     const worldModel = {

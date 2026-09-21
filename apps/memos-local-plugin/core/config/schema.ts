@@ -328,6 +328,8 @@ const AlgorithmSchema = Type.Object({
     clusterMinSimilarity: NumberInRange(0.6, 0, 1),
     /** Maximum policies included in one L3 abstraction prompt. */
     maxPoliciesPerCluster: NumberInRange(20, 1, 100),
+    /** Hard total character cap for one L3 abstraction prompt. */
+    maxPromptChars: NumberInRange(32_000, 4_000, 128_000),
     /** Chars of L2 body handed to `l3.abstraction`. */
     policyCharCap: NumberInRange(800, 200, 4_000),
     /** Chars of trace body handed per evidence trace. */

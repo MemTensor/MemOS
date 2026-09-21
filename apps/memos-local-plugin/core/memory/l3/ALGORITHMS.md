@@ -50,13 +50,15 @@ rust|cargo|go|java|maven|gradle|typescript|javascript
 ```
 
 Matches are ordered by the first-hit position so the sweep is
-deterministic, then we pick the top two distinct tokens. We deliberately
-**do not** embed free-form LLM tags here — domain keys must be cheap
-and stable enough to hash.
+deterministic, then we pick the top two distinct tokens. Newly induced L2
+rows also persist trace-derived metadata (language, tags, tool names, error
+codes, and the source signature); that structured metadata is preferred over
+this legacy prose heuristic. We deliberately **do not** embed free-form LLM
+tags here — domain keys must be cheap and stable enough to hash.
 
-Policies with no recognised domain keyword fall into the bucket
-`__generic|` and are still candidates for clustering by vector
-similarity.
+Policies with no recognised domain keyword fall into the generic bucket and
+are only clustered when at least two vector-bearing policies pass the cosine
+gate. This prevents unrelated no-label policies from becoming an L3 prompt.
 
 ---
 

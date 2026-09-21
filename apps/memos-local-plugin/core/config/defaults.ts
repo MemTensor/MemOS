@@ -223,6 +223,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // strict 0.6 starved L3 in real usage.
       clusterMinSimilarity: 0.3,
       maxPoliciesPerCluster: 20,
+      maxPromptChars: 32_000,
       policyCharCap: 800,
       traceCharCap: 500,
       traceEvidencePerPolicy: 1,

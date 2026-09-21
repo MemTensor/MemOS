@@ -56,7 +56,9 @@ No single step blocks reward/L2. Any LLM failure is captured as a
 
 `clusterPolicies` (see [`cluster.ts`](./cluster.ts) and
 [`ALGORITHMS.md`](./ALGORITHMS.md)) bucket-sorts policies by a compact
-**domain key** derived from the policy's trigger/procedure text
+**domain key** derived first from trace-derived policy metadata (language,
+tags, tools, error codes, and source signature), with a legacy
+trigger/procedure-text fallback for pre-migration rows
 (`docker|pip`, `node|npm`, …) and then splits each bucket by centroid
 cosine, so policies in the same bucket that are still semantically far
 apart (different sub-environments) end up in separate clusters.
@@ -152,6 +154,7 @@ See `algorithm.l3Abstraction` in
 | `useLlm`                     | `true`  | Toggle the LLM abstractor off for tests.      |
 | `cooldownDays`               | `1`     | Debounce per domain tag.                       |
 | `maxPoliciesPerCluster`      | `20`    | Batch size for one abstraction prompt; overflow is retained. |
+| `maxPromptChars`             | `32000` | Hard total prompt cap; oversized legacy batches are skipped and quarantined. |
 | `confidenceDelta`            | `0.05`  | Confidence step per merge / feedback.         |
 | `minConfidenceForRetrieval`  | `0.2`   | Tier-3 hide threshold.                        |
 
@@ -166,6 +169,11 @@ All L3 work is logged on dedicated channels (see
 * `core.memory.l3.merge` — merge decisions.
 * `core.memory.l3.confidence` — confidence bumps.
 * `core.memory.l3.feedback` — human feedback-driven confidence changes.
+
+Failed legacy clusters use a bounded retry policy (5m/30m/2h/6h). After the
+fourth deterministic failure they are quarantined rather than retried forever;
+clear the `l3.retry.*` record through the L3 retry-state helper after fixing
+the provider or prompt configuration.
 * `core.memory.l3.events` — listener dispatch errors.
 
 ## Tests

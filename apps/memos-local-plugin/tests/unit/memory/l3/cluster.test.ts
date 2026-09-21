@@ -33,6 +33,7 @@ function mkPolicy(partial: Partial<PolicyRow> & { id: PolicyId }): PolicyRow {
     vec: partial.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
+    metadata: partial.metadata,
   };
 }
 
@@ -59,6 +60,46 @@ describe("memory/l3/cluster", () => {
       const { key, tags } = domainKeyOf(p);
       expect(key).toBe("_|_");
       expect(tags).toEqual([]);
+    });
+
+    it("prefers structured trace metadata over English-only policy prose", () => {
+      const p = mkPolicy({
+        id: "po_zh" as PolicyId,
+        title: "处理依赖安装失败",
+        procedure: "执行包管理器并重试",
+        metadata: {
+          version: 1,
+          language: "zh",
+          domainTags: ["python", "alpine"],
+          toolNames: ["pip.install"],
+          errorCodes: ["module_not_found"],
+          sourceSignature: "python|alpine|pip.install|MODULE_NOT_FOUND",
+        },
+      });
+      expect(domainKeyOf(p)).toEqual({
+        key: "python|pip.install",
+        tags: expect.arrayContaining(["python", "alpine", "pip.install", "module_not_found"]),
+      });
+    });
+
+    it("keeps the legacy text fallback when backfilled metadata has no tags", () => {
+      const p = mkPolicy({
+        id: "po_legacy" as PolicyId,
+        title: "修复 Docker 中的 pip 安装失败",
+        trigger: "pip install fails in Alpine container",
+        procedure: "apk add build tools before pip install",
+        metadata: {
+          version: 1,
+          language: "mixed",
+          domainTags: [],
+          toolNames: [],
+          errorCodes: [],
+        },
+      });
+      const { key, tags } = domainKeyOf(p);
+      expect(key).toContain("docker");
+      expect(key).toContain("pip");
+      expect(tags).toEqual(expect.arrayContaining(["docker", "alpine", "pip"]));
     });
 
     it("does not create a cluster from an untagged bucket", () => {

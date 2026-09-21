@@ -49,7 +49,7 @@ export interface AbstractInput {
 export interface AbstractDeps {
   llm: LlmClient | null;
   log: Logger;
-  config: Pick<L3Config, "policyCharCap" | "traceCharCap" | "traceEvidencePerPolicy" | "useLlm">;
+  config: Pick<L3Config, "policyCharCap" | "traceCharCap" | "traceEvidencePerPolicy" | "useLlm" | "maxPromptChars">;
   /** Optional extra validation executed after the base validator. */
   validate?: (d: L3AbstractionDraft) => void;
 }
@@ -74,19 +74,38 @@ export async function abstractDraft(
   }
 
   const userPayload = packPrompt(input, config);
+  const maxPromptChars = Math.max(4_000, Math.floor(config.maxPromptChars ?? 32_000));
+  if (userPayload.length > maxPromptChars) {
+    log.warn("l3.abstract.prompt_too_large", {
+      clusterKey: input.cluster.key,
+      promptChars: userPayload.length,
+      maxPromptChars,
+      policyCount: input.cluster.policies.length,
+    });
+    return {
+      ok: false,
+      reason: "prompt_too_large",
+      detail: `prompt has ${userPayload.length} chars; limit is ${maxPromptChars}`,
+    };
+  }
 
   // Pick the world-model's rendering language from the underlying
   // policies + trace evidence. A Chinese user generating "docker alpine
   // 依赖" policies should see the environment/inference/constraint bullets
   // written in Chinese; an English user should see them in English.
-  const langSamples: Array<string | null | undefined> = [];
+  const policySamples: Array<string | null | undefined> = [];
   for (const p of input.cluster.policies) {
-    langSamples.push(p.title, p.trigger, p.procedure, p.boundary, p.verification);
+    policySamples.push(p.title, p.trigger, p.procedure, p.boundary, p.verification);
   }
+  const evidenceSamples: Array<string | null | undefined> = [];
   for (const traces of input.evidenceByPolicy.values()) {
-    for (const t of traces) langSamples.push(t.userText, t.agentText, t.reflection);
+    for (const t of traces) evidenceSamples.push(t.userText, t.agentText, t.reflection);
   }
-  const evidenceLang = detectDominantLanguage(langSamples);
+  // Evidence language wins over legacy policy prose: old English policies
+  // must not force a Chinese trace cluster back to English.
+  const evidenceLang = detectDominantLanguage(
+    evidenceSamples.some((sample) => sample?.trim()) ? evidenceSamples : policySamples,
+  );
 
   try {
     const rsp = await llm.completeJson<Record<string, unknown>>(

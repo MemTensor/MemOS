@@ -52,6 +52,7 @@ import type {
   L3ProcessInput,
   L3ProcessResult,
   PolicyCluster,
+  PolicyClusterKey,
 } from "./types.js";
 
 // ─── Deps ──────────────────────────────────────────────────────────────────
@@ -67,6 +68,16 @@ export interface RunL3Deps {
 const KV_COOLDOWN_PREFIX = "l3.lastRun.";
 const KV_RETRY_PREFIX = "l3.retry.";
 const FAILURE_BACKOFF_MS = [5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 6 * 60 * 60_000];
+const RETRY_STATE_VERSION = 2;
+const MAX_FAILURE_ATTEMPTS = FAILURE_BACKOFF_MS.length;
+
+interface L3RetryState {
+  version: number;
+  nextRetryAt: number;
+  failures: number;
+  quarantined: boolean;
+  reason?: string;
+}
 
 // ─── Public entry ──────────────────────────────────────────────────────────
 
@@ -145,6 +156,12 @@ export async function runL3(
 
     if (!cluster.centroidVec) {
       abstractions.push(skipped(cluster, "no_centroid"));
+      emit(bus, {
+        kind: "l3.abstraction.skipped",
+        clusterKey: cluster.key,
+        reason: "no_centroid",
+        policyIds: cluster.policies.map((p) => p.id),
+      });
       continue;
     }
 
@@ -156,7 +173,17 @@ export async function runL3(
       abstractions.push(skipped(cluster, "cooldown"));
       continue;
     }
-    const retry = repos.kv.get<{ nextRetryAt: number; failures: number } | null>(retryKey(cluster), null);
+    const retry = readRetryState(repos.kv.get<unknown>(retryKey(cluster), null));
+    if (retry?.quarantined) {
+      abstractions.push(skipped(cluster, "quarantined"));
+      emit(bus, {
+        kind: "l3.abstraction.skipped",
+        clusterKey: cluster.key,
+        reason: "quarantined",
+        policyIds: cluster.policies.map((p) => p.id),
+      });
+      continue;
+    }
     if (retry && retry.nextRetryAt > now) {
       abstractions.push(skipped(cluster, "retry_cooldown"));
       continue;
@@ -201,16 +228,31 @@ export async function runL3(
     timings.abstract += Date.now() - t0;
 
     if (!draftRes.ok) {
-      if (draftRes.reason === "llm_failed" || draftRes.reason === "draft_invalid") {
-        recordFailure(cluster, repos.kv, now);
+      if (
+        draftRes.reason === "llm_failed" ||
+        draftRes.reason === "draft_invalid" ||
+        draftRes.reason === "prompt_too_large"
+      ) {
+        recordFailure(cluster, repos.kv, now, draftRes.reason, draftRes.reason === "prompt_too_large");
       }
-      abstractions.push(skipped(cluster, draftRes.reason, { episodeIds, policyIds: cluster.policies.map((p) => p.id) }));
-      emit(bus, {
-        kind: "l3.failed",
-        stage: "abstract",
-        error: { code: draftRes.reason, message: draftRes.detail ?? "" },
-        clusterKey: cluster.key,
-      });
+      const policyIds = cluster.policies.map((p) => p.id);
+      abstractions.push(skipped(cluster, draftRes.reason, { episodeIds, policyIds }));
+      if (draftRes.reason === "prompt_too_large") {
+        emit(bus, {
+          kind: "l3.abstraction.skipped",
+          clusterKey: cluster.key,
+          reason: draftRes.reason,
+          policyIds,
+        });
+      } else {
+        emit(bus, {
+          kind: "l3.failed",
+          stage: "abstract",
+          error: { code: draftRes.reason, message: draftRes.detail ?? "" },
+          clusterKey: cluster.key,
+          policyIds,
+        });
+      }
       continue;
     }
 
@@ -530,15 +572,59 @@ function cooldownKey(cluster: PolicyCluster): string {
 }
 
 function retryKey(cluster: PolicyCluster): string {
-  const members = cluster.policies.map((p) => String(p.id)).sort().join(",");
-  return `${KV_RETRY_PREFIX}${cluster.key}:${members}`;
+  return retryKeyFor(cluster.key, cluster.policies.map((p) => p.id));
 }
 
-function recordFailure(cluster: PolicyCluster, kv: Repos["kv"], now: number): void {
-  const previous = kv.get<{ nextRetryAt: number; failures: number } | null>(retryKey(cluster), null);
-  const failures = Math.min((previous?.failures ?? 0) + 1, FAILURE_BACKOFF_MS.length);
+function retryKeyFor(clusterKey: PolicyClusterKey, policyIds: readonly PolicyId[]): string {
+  const members = policyIds.map((id) => String(id)).sort().join(",");
+  return `${KV_RETRY_PREFIX}${clusterKey}:${members}`;
+}
+
+/** Clear a retry/quarantine record after a config or prompt fix. */
+export function clearL3RetryState(
+  clusterKey: PolicyClusterKey,
+  policyIds: readonly PolicyId[],
+  kv: Repos["kv"],
+): void {
+  kv.del(retryKeyFor(clusterKey, policyIds));
+}
+
+function recordFailure(
+  cluster: PolicyCluster,
+  kv: Repos["kv"],
+  now: number,
+  reason?: string,
+  quarantine = false,
+): void {
+  const previous = readRetryState(kv.get<unknown>(retryKey(cluster), null));
+  const failures = Math.min((previous?.failures ?? 0) + 1, MAX_FAILURE_ATTEMPTS);
   const delay = FAILURE_BACKOFF_MS[failures - 1] ?? FAILURE_BACKOFF_MS[FAILURE_BACKOFF_MS.length - 1]!;
-  kv.set(retryKey(cluster), { failures, nextRetryAt: now + delay });
+  kv.set<L3RetryState>(retryKey(cluster), {
+    version: RETRY_STATE_VERSION,
+    failures,
+    nextRetryAt: now + delay,
+    quarantined: quarantine || failures >= MAX_FAILURE_ATTEMPTS,
+    ...(reason ? { reason } : {}),
+  });
+}
+
+function readRetryState(raw: unknown): L3RetryState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Record<string, unknown>;
+  const failures = typeof row.failures === "number" && Number.isFinite(row.failures)
+    ? Math.max(0, Math.floor(row.failures))
+    : 0;
+  const nextRetryAt = typeof row.nextRetryAt === "number" && Number.isFinite(row.nextRetryAt)
+    ? row.nextRetryAt
+    : 0;
+  if (failures <= 0 && nextRetryAt <= 0) return null;
+  return {
+    version: typeof row.version === "number" ? row.version : 1,
+    failures,
+    nextRetryAt,
+    quarantined: row.quarantined === true,
+    reason: typeof row.reason === "string" ? row.reason : undefined,
+  };
 }
 
 function isInCooldown(
