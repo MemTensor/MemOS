@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 
 from collections import Counter
 from typing import Any
@@ -12,6 +13,10 @@ import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm.asyncio import tqdm
+
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.pref_classify import classify_error_type
 
 
 load_dotenv()
@@ -176,24 +181,6 @@ Examine the response meticulously and answer. Answer in this exact XML format:
         "explanation": parse_xml_response(api_response, "explanation"),
         "answer": parse_xml_response(api_response, "answer"),
     }
-
-
-def classify_error_type(evaluation_results: dict[str, Any]) -> str:
-    violate = evaluation_results["violate_preference"]["answer"]
-    acknowledge = evaluation_results["acknowledge_preference"]["answer"]
-    hallucinate = evaluation_results["hallucinate_preference"]["answer"]
-    helpful = evaluation_results["helpful_response"]["answer"]
-
-    if violate == "Yes" and acknowledge == "No" and helpful == "Yes":
-        return "Preference-Unaware Violation"
-    elif violate == "Yes" and acknowledge == "Yes" and hallucinate == "Yes" and helpful == "Yes":
-        return "Preference Hallucination Violation"
-    elif violate == "Yes" and acknowledge == "Yes" and hallucinate == "No" and helpful == "Yes":
-        return "Inconsistency Violation"
-    elif violate == "No" and helpful == "No":
-        return "Unhelpful Response"
-    else:
-        return "Personalized Response"
 
 
 async def process_line(line: str, client: OpenAI, semaphore: asyncio.Semaphore) -> dict[str, Any]:
