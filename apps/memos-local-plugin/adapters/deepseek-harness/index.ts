@@ -413,10 +413,21 @@ export async function apply(
     }));
 
     registrations.push(ctx.on("session/event", (session: Session, event: SessionEvent): void => {
-      bridge!.onSessionEvent(
-        session as unknown as DshSessionLike,
-        event as unknown as DshSessionEventLike,
-      );
+      // Memory is an optional enhancement. A malformed/unexpected event shape
+      // must not break the host agent's event loop, so swallow with a warning.
+      try {
+        bridge!.onSessionEvent(
+          session as unknown as DshSessionLike,
+          event as unknown as DshSessionEventLike,
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
+        ctx.logger.warn(
+          `memos-local-memory: session event ignored (${event.type}): ${message}${stack}`,
+        );
+      }
     }));
 
     registrations.push(ctx.on("session/disposed", (session: Session): void => {
