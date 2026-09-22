@@ -72,7 +72,7 @@ LongMemEval gives each question a **question date**; evaluation should use that 
 
 ### PrefEval Evaluation
 Downloading benchmark_dataset/filtered_inter_turns.json from https://github.com/amazon-science/PrefEval/blob/main/benchmark_dataset/filtered_inter_turns.json and save it as `./data/prefeval/filtered_inter_turns.json`.
-To evaluate the **Prefeval** dataset — run the following [script](evaluation/scripts/run_prefeval_eval.sh):
+To evaluate the **Prefeval** dataset — run the following [script](../../../../evaluation/scripts/run_prefeval_eval.sh):
 
 ```bash
 # Edit the configuration in evaluation/scripts/run_prefeval_eval.sh
