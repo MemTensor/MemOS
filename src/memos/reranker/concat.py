@@ -75,7 +75,8 @@ def concat_original_source(
     Merge memory items with original dialogue.
     Args:
         graph_results (list[TextualMemoryItem]): List of memory items with embeddings.
-        merge_field (List[str]): List of fields to merge.
+        rerank_source (str, optional): Comma-separated metadata field names to read
+            the source text from. Defaults to the 'sources' field when None.
     Returns:
         list[str]: List of memory and concat orginal memory.
     """
