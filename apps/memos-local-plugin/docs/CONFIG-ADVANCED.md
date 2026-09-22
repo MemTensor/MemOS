@@ -138,6 +138,8 @@ algorithm:
     minPolicyGain: 0.02            # eligible L2 gain floor (paired with shrinkage-anchored gain)
     minPolicySupport: 1            # eligible L2 support floor
     clusterMinSimilarity: 0.6      # cosine cutoff for cluster-and-merge decisions
+    maxPoliciesPerCluster: 20      # policies per abstraction batch; overflow is retained
+    maxPromptChars: 32000          # hard total prompt cap; oversized legacy batches are quarantined
     policyCharCap: 800             # chars per policy in the prompt
     traceCharCap: 500              # chars per evidence trace in the prompt
     traceEvidencePerPolicy: 1      # evidence traces per policy in the prompt

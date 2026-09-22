@@ -33,6 +33,7 @@ function mkPolicy(partial: Partial<PolicyRow> & { id: PolicyId }): PolicyRow {
     vec: partial.vec ?? vec([1, 0, 0]),
     createdAt: NOW,
     updatedAt: NOW,
+    metadata: partial.metadata,
   };
 }
 
@@ -59,6 +60,63 @@ describe("memory/l3/cluster", () => {
       const { key, tags } = domainKeyOf(p);
       expect(key).toBe("_|_");
       expect(tags).toEqual([]);
+    });
+
+    it("prefers structured trace metadata over English-only policy prose", () => {
+      const p = mkPolicy({
+        id: "po_zh" as PolicyId,
+        title: "处理依赖安装失败",
+        procedure: "执行包管理器并重试",
+        metadata: {
+          version: 1,
+          language: "zh",
+          domainTags: ["python", "alpine"],
+          toolNames: ["pip.install"],
+          errorCodes: ["module_not_found"],
+          sourceSignature: "python|alpine|pip.install|MODULE_NOT_FOUND",
+        },
+      });
+      expect(domainKeyOf(p)).toEqual({
+        key: "python|pip.install",
+        tags: expect.arrayContaining(["python", "alpine", "pip.install", "module_not_found"]),
+      });
+    });
+
+    it("keeps the legacy text fallback when backfilled metadata has no tags", () => {
+      const p = mkPolicy({
+        id: "po_legacy" as PolicyId,
+        title: "修复 Docker 中的 pip 安装失败",
+        trigger: "pip install fails in Alpine container",
+        procedure: "apk add build tools before pip install",
+        metadata: {
+          version: 1,
+          language: "mixed",
+          domainTags: [],
+          toolNames: [],
+          errorCodes: [],
+        },
+      });
+      const { key, tags } = domainKeyOf(p);
+      expect(key).toContain("docker");
+      expect(key).toContain("pip");
+      expect(tags).toEqual(expect.arrayContaining(["docker", "alpine", "pip"]));
+    });
+
+    it("does not create a cluster from an untagged bucket", () => {
+      const policies = [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ].map((v, n) => mkPolicy({
+        id: `po_u${n}` as PolicyId,
+        title: `中文策略 ${n}`,
+        vec: vec(v),
+      }));
+      const clusters = clusterPolicies(
+        { policies },
+        { config: { clusterMinSimilarity: 0.6, minPolicies: 1, maxPoliciesPerCluster: 20 } },
+      );
+      expect(clusters).toHaveLength(0);
     });
 
     it("groups network-related text under 'network'", () => {
@@ -106,6 +164,20 @@ describe("memory/l3/cluster", () => {
       expect(clusters[0]!.domainTags).toEqual(
         expect.arrayContaining(["alpine", "pip"]),
       );
+    });
+
+    it("preserves every policy so prompt batching can process the full cluster", () => {
+      const policies = [1, 2, 3].map((n) => mkPolicy({
+        id: `po_n${n}` as PolicyId,
+        title: `network retry ${n}`,
+        trigger: "proxy DNS failure",
+        vec: vec([1, 0, 0]),
+      }));
+      const clusters = clusterPolicies(
+        { policies },
+        { config: { clusterMinSimilarity: 0.99, minPolicies: 1, maxPoliciesPerCluster: 2 } },
+      );
+      expect(clusters[0]!.policies).toHaveLength(3);
     });
 
     it("skips a bucket that doesn't meet minPolicies", () => {
@@ -184,30 +256,25 @@ describe("memory/l3/cluster", () => {
       expect(keys.some((k) => k.includes("node") || k.includes("npm"))).toBe(true);
     });
 
-    it("falls back to loose admission when strict subset is too small but bucket survives", () => {
-      // All three policies share the same domain key (`python|_`) but
-      // their vectors point in mutually-orthogonal directions, so the
-      // strict (cosine ≥ minSimilarity) subset would be empty. The
-      // bucket itself satisfies minPolicies, so `cluster.ts` should
-      // fall back to admitting the WHOLE bucket as a `loose` cluster.
+    it("does not cluster unrelated untagged policies", () => {
       const policies = [
         mkPolicy({
           id: "po_validate" as PolicyId,
           title: "validate python syntax",
-          trigger: "after writing python files",
-          procedure: "python -m py_compile <file>",
+          trigger: "after writing source files",
+          procedure: "run the syntax checker on the changed file",
           vec: vec([1, 0, 0]),
         }),
         mkPolicy({
           id: "po_cli" as PolicyId,
-          title: "register python CLI subcommand",
+          title: "register a command line subcommand",
           trigger: "adding a new task verb",
           procedure: "register(subparsers) + handler() -> int",
           vec: vec([0, 1, 0]),
         }),
         mkPolicy({
           id: "po_storage" as PolicyId,
-          title: "implement python storage backend",
+          title: "implement a storage backend",
           trigger: "new persistence format requested",
           procedure: "implement load/save with UTF-8",
           vec: vec([0, 0, 1]),
@@ -217,16 +284,22 @@ describe("memory/l3/cluster", () => {
         { policies },
         { config: { clusterMinSimilarity: 0.6, minPolicies: 2 } },
       );
-      expect(clusters.length).toBe(1);
-      const c = clusters[0]!;
-      expect(c.admission).toBe("loose");
-      expect(c.policies.length).toBe(3);
-      // Centroid of three orthogonal unit vectors gives mean cosine
-      // 1/sqrt(3) ≈ 0.577 — strictly less than 0.6 (the strict floor),
-      // confirming we landed in the loose fallback for the right
-      // reason and not because of a bug elsewhere.
-      expect(c.cohesion).toBeLessThan(0.6);
-      expect(c.cohesion).toBeGreaterThan(0.49);
+      expect(clusters).toEqual([]);
+    });
+
+    it("clusters similar untagged policies without dropping prompt overflow", () => {
+      const policies = [1, 2, 3].map((n) => mkPolicy({
+        id: `po_uv${n}` as PolicyId,
+        title: `中文策略 ${n}`,
+        vec: vec([1, n * 0.01, 0]),
+      }));
+      const clusters = clusterPolicies(
+        { policies },
+        { config: { clusterMinSimilarity: 0.6, minPolicies: 2, maxPoliciesPerCluster: 2 } },
+      );
+      expect(clusters).toHaveLength(1);
+      expect(clusters[0]!.policies).toHaveLength(3);
+      expect(clusters[0]!.admission).toBe("strict");
     });
 
     it("filters outliers below clusterMinSimilarity", () => {

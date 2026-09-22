@@ -144,7 +144,7 @@ export interface PipelineDeps {
   repos: Repos;
   llm: LlmClient | null;
   /**
-   * Dedicated LLM for the topic-end reflection + α scoring pass.
+   * Dedicated LLM for L2 induction and skill crystallization.
    * Built from `config.skillEvolver.*` when the user configures a
    * stronger model for skill evolution; falls back to `llm` when
    * absent. Summarization and per-turn lite capture still use `llm`.
@@ -181,7 +181,7 @@ export interface PipelineHandle {
   readonly repos: Repos;
   readonly llm: LlmClient | null;
   /**
-   * Dedicated client for skill-evolution reflection. When the operator
+   * Dedicated client for L2 induction and skill crystallization. When the operator
    * leaves `skillEvolver.*` blank, this is the same instance as `llm`
    * (so call sites can blindly read whichever is non-null). When they
    * configure their own model it carries its own `stats()` so the
