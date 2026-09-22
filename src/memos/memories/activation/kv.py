@@ -1,3 +1,4 @@
+import copy
 import os
 import pickle
 
@@ -206,7 +207,10 @@ class KVCacheMemory(BaseActMemory):
 
         assert caches, "Need at least one cache"
         if len(caches) == 1:
-            return caches[0]
+            # Return a copy: the stored cache must never be handed out by
+            # reference, because generation appends new K/V tensors to the
+            # cache object it receives and would grow the store every turn.
+            return clone_dynamic_cache(caches[0])
 
         merged = DynamicCache()
 
@@ -248,11 +252,87 @@ class KVCacheMemory(BaseActMemory):
                 merged.value_cache.append(torch.cat(vals, dim=-2))
 
         else:
-            raise AttributeError(
-                "DynamicCache object has neither 'layers' nor 'key_cache' attributes"
-            )
+            raise TypeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
 
         return merged
+
+
+def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
+    """
+    Return an independent copy of a DynamicCache with cloned K/V tensors.
+
+    Generation mutates the cache object it receives in place, so a stored cache
+    must never be handed to a model by reference — hand out a clone instead.
+    Compatible with both old (key_cache/value_cache) and new (layers) structures.
+    """
+    import torch
+
+    cloned = DynamicCache()
+
+    if hasattr(cache, "layers"):
+        cloned.layers = []
+        for layer in cache.layers:
+            # Avoid invoking a layer constructor: modern transformers layers
+            # such as DynamicSlidingWindowLayer require constructor metadata.
+            new_layer = copy.copy(layer)
+            layer_attrs = vars(layer)
+            # Preserve layer state and clone every tensor, including K/V tensors.
+            kv_attrs = {"keys", "values", "key_cache", "value_cache"}
+            for attr, value in layer_attrs.items():
+                if attr in kv_attrs:
+                    continue
+                setattr(
+                    new_layer,
+                    attr,
+                    value.clone() if isinstance(value, torch.Tensor) else copy.deepcopy(value),
+                )
+            # transformers>=4.56 layers expose keys/values, but some versions
+            # instead carry per-layer key_cache/value_cache (see
+            # move_dynamic_cache_htod); a clone that skips one shape would
+            # silently return a content-empty layer.
+            # Select one naming scheme, matching move_dynamic_cache_htod's
+            # precedence, while retaining independent guards for asymmetric
+            # test doubles and cache layers.
+            has_per_layer_cache = any(
+                getattr(layer, name, None) is not None for name in ("key_cache", "value_cache")
+            )
+            if has_per_layer_cache:
+                if "keys" in layer_attrs:
+                    new_layer.keys = None
+                if "values" in layer_attrs:
+                    new_layer.values = None
+                if getattr(layer, "key_cache", None) is not None:
+                    new_layer.key_cache = layer.key_cache.clone()
+                if getattr(layer, "value_cache", None) is not None:
+                    new_layer.value_cache = layer.value_cache.clone()
+            else:
+                if "key_cache" in layer_attrs:
+                    new_layer.key_cache = None
+                if "value_cache" in layer_attrs:
+                    new_layer.value_cache = None
+                if getattr(layer, "keys", None) is not None:
+                    new_layer.keys = layer.keys.clone()
+                if getattr(layer, "values", None) is not None:
+                    new_layer.values = layer.values.clone()
+            cloned.layers.append(new_layer)
+    elif hasattr(cache, "key_cache"):
+        # Legacy DynamicCache keeps generation state such as _seen_tokens on
+        # the cache itself.  Keep that state independent of the stored cache;
+        # key/value lists are populated from cloned tensors below.
+        for attr, value in vars(cache).items():
+            if attr not in {"key_cache", "value_cache"}:
+                setattr(
+                    cloned,
+                    attr,
+                    value.clone() if isinstance(value, torch.Tensor) else copy.deepcopy(value),
+                )
+        for keys, values in zip(cache.key_cache, cache.value_cache, strict=True):
+            cloned.key_cache.append(keys.clone() if keys is not None else None)
+            cloned.value_cache.append(values.clone() if values is not None else None)
+    else:
+        raise TypeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
+
+    return cloned
 
 
 def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> DynamicCache:
