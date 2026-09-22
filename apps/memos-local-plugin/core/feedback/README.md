@@ -240,7 +240,7 @@ import {
 ## Persistence
 
 * `decision_repairs` — the primary table; see
-  [`../storage/repos/decision-repairs.ts`](../storage/repos/decision-repairs.ts).
+  [`../storage/repos/decision_repairs.ts`](../storage/repos/decision_repairs.ts).
   * `context_hash` — anchor for cooldown lookups and retrieval.
   * `preference`, `anti_pattern` — the guidance the agent will see.
   * `high_value_trace_ids`, `low_value_trace_ids` — evidence JSON
