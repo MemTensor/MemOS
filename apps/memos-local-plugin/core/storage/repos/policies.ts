@@ -74,6 +74,12 @@ export function makePoliciesRepo(db: StorageDb) {
       columns: ["id", "support", "gain", "status", "updated_at"],
     }),
   );
+  // WHY: the skill-crystallize backoff flips eligibility for a single policy.
+  // updated_at is deliberately left untouched so the rebuild heuristic for
+  // existing skills is not triggered as a side effect.
+  const setSkillEligibleStmt = db.prepare<{ id: string; eligible: number }>(
+    `UPDATE policies SET skill_eligible=@eligible WHERE id=@id`,
+  );
   const selectById = db.prepare<{ id: string }, RawPolicyRow>(
     `SELECT ${COLUMNS.join(", ")} FROM policies WHERE id=@id`,
   );
@@ -103,6 +109,13 @@ export function makePoliciesRepo(db: StorageDb) {
         status: p.status,
         updated_at: p.updatedAt,
       });
+    },
+
+    // WHY: the skill-crystallize backoff needs to close crystallization
+    // eligibility for one policy without bumping updated_at (which would
+    // trigger the rebuild heuristic for an existing skill).
+    setSkillEligible(id: PolicyId, eligible: boolean): void {
+      setSkillEligibleStmt.run({ id, eligible: eligible ? 1 : 0 });
     },
 
     getById(id: PolicyId): PolicyRow | null {

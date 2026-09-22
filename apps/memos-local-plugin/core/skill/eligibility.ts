@@ -66,6 +66,18 @@ function decide(
   existing: SkillRow | null,
   cfg: SkillConfig,
 ): EligibilityDecision {
+  // WHY: skill_eligible=false can mean either the crystallize-failure
+  // backoff (3 consecutive failures) or a manual toggle. Reporting it as
+  // its own skip reason keeps the two sources distinguishable from the
+  // experience-type success-anchor check below.
+  if (policy.skillEligible === false) {
+    return {
+      policy,
+      existingSkill: existing,
+      action: "skip",
+      reason: "policy.skillEligible=false (backoff or manual)",
+    };
+  }
   if (policy.status !== "active") {
     return {
       policy,
@@ -125,7 +137,6 @@ function decide(
 }
 
 function hasSuccessAnchor(policy: PolicyRow): boolean {
-  if (policy.skillEligible === false) return false;
   const type = policy.experienceType ?? "success_pattern";
   if (type === "failure_avoidance" || type === "repair_instruction" || type === "preference") {
     return false;
