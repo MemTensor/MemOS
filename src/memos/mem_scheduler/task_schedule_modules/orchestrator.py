@@ -29,10 +29,7 @@ logger = get_logger(__name__)
 
 class SchedulerOrchestrator(RedisSchedulerModule):
     def __init__(self):
-        """
-        Args:
-            queue: An instance of `SchedulerRedisQueue`.
-        """
+        """Initialize the orchestrator with an empty fetch cache."""
         # Cache of fetched messages grouped by (user_id, mem_cube_id, task_label)
         self._cache = None
         self.tasks_priorities = {}

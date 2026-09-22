@@ -141,10 +141,6 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
     def to_json(self) -> str:
         """Serialize the queue to a JSON string.
 
-        Args:
-            item_serializer: Optional function to serialize individual items.
-                             If not provided, items must be JSON-serializable.
-
         Returns:
             A JSON string representing the queue's content and maxsize.
         """
@@ -160,8 +156,6 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
 
         Args:
             json_str: JSON string created by to_json()
-            item_deserializer: Optional function to reconstruct items from dicts.
-                               If not provided, items are used as-is.
 
         Returns:
             A new AutoDroppingQueue instance with deserialized data.

@@ -61,7 +61,6 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             consumer_group: Name of the consumer group
             consumer_name: Name of the consumer (auto-generated if None)
             max_len: Maximum length of the stream (for memory management)
-            maxsize: Maximum size of the queue (for Queue compatibility, ignored)
             auto_delete_acked: Whether to automatically delete acknowledged messages from stream
         """
         super().__init__()
