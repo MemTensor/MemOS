@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 from memos.configs.vec_db import QdrantVecDBConfig
@@ -54,6 +55,9 @@ class QdrantVecDB(BaseVecDB):
                     "(e.g., via Docker: https://qdrant.tech/documentation/quickstart/)."
                 )
 
+        # Explicit timeout: qdrant-client defaults to 5s, which false-fails
+        # under host load and turns into empty results upstream.
+        client_kwargs["timeout"] = float(os.getenv("QDRANT_CLIENT_TIMEOUT", "30"))
         self.client = QdrantClient(**client_kwargs)
         self.create_collection()
         # Ensure common payload indexes exist (idempotent)
@@ -123,6 +127,34 @@ class QdrantVecDB(BaseVecDB):
         except Exception:
             return False
 
+    def _call_with_backoff(self, fn, desc: str):
+        """Absorb transient congestion: retry timeout/connection errors with
+        exponential backoff + jitter (2s, 5s) instead of failing instantly.
+        Non-transient errors raise immediately."""
+        import random
+        import time
+
+        last = None
+        for attempt in range(3):
+            try:
+                return fn()
+            except Exception as e:
+                last = e
+                msg = str(e).lower()
+                transient = (
+                    "timed out" in msg
+                    or "timeout" in msg
+                    or "connect" in msg
+                    or "503" in msg
+                    or "unavailable" in msg
+                )
+                if not transient or attempt == 2:
+                    raise
+                wait = (2 if attempt == 0 else 5) + random.uniform(0, 1.5)
+                logger.info(f"[VecDB] {desc} transient error, retry in {wait:.1f}s: {e}")
+                time.sleep(wait)
+        raise last
+
     def search(
         self, query_vector: list[float], top_k: int, filter: dict[str, Any] | None = None
     ) -> list[VecDBItem]:
@@ -138,13 +170,16 @@ class QdrantVecDB(BaseVecDB):
             List of search results with distance scores and payloads.
         """
         qdrant_filter = self._dict_to_filter(filter) if filter else None
-        response = self.client.query_points(
-            collection_name=self.config.collection_name,
-            query=query_vector,
-            limit=top_k,
-            query_filter=qdrant_filter,
-            with_vectors=True,
-            with_payload=True,
+        response = self._call_with_backoff(
+            lambda: self.client.query_points(
+                collection_name=self.config.collection_name,
+                query=query_vector,
+                limit=top_k,
+                query_filter=qdrant_filter,
+                with_vectors=True,
+                with_payload=True,
+            ),
+            "search",
         ).points
         logger.info(f"Qdrant search completed with {len(response)} results.")
         return [
@@ -193,11 +228,14 @@ class QdrantVecDB(BaseVecDB):
 
     def get_by_ids(self, ids: list[str]) -> list[VecDBItem]:
         """Get multiple items by their IDs."""
-        response = self.client.retrieve(
-            collection_name=self.config.collection_name,
-            ids=ids,
-            with_payload=True,
-            with_vectors=True,
+        response = self._call_with_backoff(
+            lambda: self.client.retrieve(
+                collection_name=self.config.collection_name,
+                ids=ids,
+                with_payload=True,
+                with_vectors=True,
+            ),
+            f"get_by_ids({len(ids)})",
         )
 
         if not response:
