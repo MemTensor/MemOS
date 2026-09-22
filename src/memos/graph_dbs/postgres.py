@@ -26,16 +26,40 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
+def _normalize_embedding_value(embedding: Any) -> list[float] | None:
+    """Coerce pgvector/psycopg2 embedding values into list[float] for GraphDBNode."""
+    if embedding is None:
+        return None
+    try:
+        if isinstance(embedding, list):
+            return [float(x) for x in embedding]
+        if isinstance(embedding, tuple):
+            return [float(x) for x in embedding]
+        if isinstance(embedding, str):
+            stripped = embedding.strip()
+            if not stripped:
+                return None
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(parsed, list):
+                return [float(x) for x in parsed]
+            return None
+    except (ValueError, TypeError):
+        return None
+    return None
+
+
 def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Ensure metadata has proper datetime fields and normalized types."""
     now = datetime.utcnow().isoformat()
     metadata.setdefault("created_at", now)
     metadata.setdefault("updated_at", now)
 
-    # Normalize embedding type
-    embedding = metadata.get("embedding")
-    if embedding and isinstance(embedding, list):
-        metadata["embedding"] = [float(x) for x in embedding]
+    normalized = _normalize_embedding_value(metadata.get("embedding"))
+    if normalized is not None:
+        metadata["embedding"] = normalized
 
     return metadata
 
@@ -177,6 +201,49 @@ class PostgresGraphDB(BaseGraphDB):
         except Exception as e:
             logger.error(f"Failed to init schema: {e}")
             raise
+        finally:
+            self._put_conn(conn)
+
+    def get_memory_count(self, memory_type: str, user_name: str | None = None) -> int:
+        """Count memory nodes by memory_type for a user."""
+        user_name = user_name or self.user_name
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM {self.schema}.memories
+                    WHERE properties->>'memory_type' = %s
+                      AND user_name = %s
+                """,
+                    (memory_type, user_name),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+        except Exception as e:
+            logger.error("[get_memory_count] Failed: %s", e)
+            return -1
+        finally:
+            self._put_conn(conn)
+
+    def node_not_exist(self, scope: str, user_name: str | None = None) -> bool:
+        """Return True when no activated nodes exist for the given memory_type scope."""
+        user_name = user_name or self.user_name
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT 1
+                    FROM {self.schema}.memories
+                    WHERE properties->>'memory_type' = %s
+                      AND user_name = %s
+                    LIMIT 1
+                """,
+                    (scope, user_name),
+                )
+                return cur.fetchone() is None
         finally:
             self._put_conn(conn)
 
@@ -437,6 +504,11 @@ class PostgresGraphDB(BaseGraphDB):
         }
         if include_embedding and len(row) > 5:
             result["metadata"]["embedding"] = row[5]
+            normalized = _normalize_embedding_value(result["metadata"].get("embedding"))
+            if normalized is not None:
+                result["metadata"]["embedding"] = normalized
+            else:
+                del result["metadata"]["embedding"]
         return result
 
     @staticmethod
@@ -674,20 +746,101 @@ class PostgresGraphDB(BaseGraphDB):
         finally:
             self._put_conn(conn)
 
-    def edge_exists(self, source_id: str, target_id: str, type: str) -> bool:
-        """Check if edge exists."""
+    def edge_exists(
+        self,
+        source_id: str,
+        target_id: str,
+        type: str = "ANY",
+        direction: str = "OUTGOING",
+        user_name: str | None = None,
+    ) -> bool:
+        """Check if an edge exists between two nodes."""
+        user_name = user_name or self.user_name
+        if direction not in ("OUTGOING", "INCOMING", "ANY"):
+            raise ValueError(
+                f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
+            )
+
+        type_clause = "" if type == "ANY" else " AND e.edge_type = %s"
+        params: list[Any] = [user_name, user_name]
+
+        if direction == "OUTGOING":
+            direction_clause = "e.source_id = %s AND e.target_id = %s"
+            params.extend([source_id, target_id])
+        elif direction == "INCOMING":
+            direction_clause = "e.source_id = %s AND e.target_id = %s"
+            params.extend([target_id, source_id])
+        else:
+            direction_clause = (
+                "(e.source_id = %s AND e.target_id = %s) OR (e.source_id = %s AND e.target_id = %s)"
+            )
+            params.extend([source_id, target_id, target_id, source_id])
+
+        if type != "ANY":
+            params.append(type)
+
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT 1 FROM {self.schema}.edges
-                    WHERE source_id = %s AND target_id = %s AND edge_type = %s
+                    SELECT 1
+                    FROM {self.schema}.edges e
+                    JOIN {self.schema}.memories src ON src.id = e.source_id
+                    JOIN {self.schema}.memories tgt ON tgt.id = e.target_id
+                    WHERE src.user_name = %s
+                      AND tgt.user_name = %s
+                      AND ({direction_clause})
+                      {type_clause}
                     LIMIT 1
                 """,
-                    (source_id, target_id, type),
+                    params,
                 )
                 return cur.fetchone() is not None
+        finally:
+            self._put_conn(conn)
+
+    def get_edges(
+        self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str | None = None
+    ) -> list[dict[str, str]]:
+        """Get edges connected to a node, with optional type and direction filter."""
+        user_name = user_name or self.user_name
+        if direction not in ("OUTGOING", "INCOMING", "ANY"):
+            raise ValueError("Invalid direction. Must be 'OUTGOING', 'INCOMING', or 'ANY'.")
+
+        type_clause = "" if type == "ANY" else " AND e.edge_type = %s"
+        params: list[Any] = [user_name, user_name, id]
+
+        if direction == "OUTGOING":
+            node_clause = "e.source_id = %s"
+        elif direction == "INCOMING":
+            node_clause = "e.target_id = %s"
+        else:
+            node_clause = "(e.source_id = %s OR e.target_id = %s)"
+            params.append(id)
+
+        if type != "ANY":
+            params.append(type)
+
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT e.source_id, e.target_id, e.edge_type
+                    FROM {self.schema}.edges e
+                    JOIN {self.schema}.memories src ON src.id = e.source_id
+                    JOIN {self.schema}.memories tgt ON tgt.id = e.target_id
+                    WHERE src.user_name = %s
+                      AND tgt.user_name = %s
+                      AND {node_clause}
+                      {type_clause}
+                """,
+                    params,
+                )
+                return [
+                    {"from": row[0], "to": row[1], "type": row[2]} for row in cur.fetchall()
+                ]
         finally:
             self._put_conn(conn)
 
@@ -957,10 +1110,10 @@ class PostgresGraphDB(BaseGraphDB):
             self._put_conn(conn)
 
     def get_structure_optimization_candidates(
-        self, scope: str, include_embedding: bool = False
+        self, scope: str, include_embedding: bool = False, **kwargs
     ) -> list[dict]:
         """Find isolated nodes (no edges)."""
-        user_name = self.user_name
+        user_name = kwargs.get("user_name") or self.user_name
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
@@ -982,6 +1135,23 @@ class PostgresGraphDB(BaseGraphDB):
                 return [self._parse_row(row, False) for row in cur.fetchall()]
         finally:
             self._put_conn(conn)
+
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsquery_config: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """Stub for TreeTextMemory keyword recall; Postgres fulltext search is not implemented yet."""
+        return []
 
     # =========================================================================
     # Maintenance
