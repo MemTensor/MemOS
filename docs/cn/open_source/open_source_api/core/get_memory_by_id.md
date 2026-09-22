@@ -19,7 +19,7 @@ desc: 通过记忆唯一标识符 (ID) 获取单条记忆的完整元数据，�
 
 | 参数名 | 位置 | 类型 | 必填 | 说明 |
 | :--- | :--- | :--- | :--- | :--- |
-| **`memory_id`** | Path | `str` | 是 | 记忆的唯一标识符（UUID）。您可以从 [**获取记忆列表**](./get_memory_list.md) 或 [**检索**](./search_memory.md) 的结果中获得此 ID。 |
+| **`memory_id`** | Path | `str` | 是 | 记忆的唯一标识符（UUID）。您可以从 [**检索**](./search_memory.md) 或 [**检索**](./search_memory.md) 的结果中获得此 ID。 |
 
 ## 3. 工作原理 (MemoryHandler)
 
