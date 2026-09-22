@@ -53,6 +53,11 @@ event-driven and every triggered run is fully async. Listener errors
 are captured so a bad downstream consumer can never break the
 orchestrator.
 
+For `reward.updated`, the subscriber resolves only policies linked to the
+updated episode (falling back to `sourceEpisodeIds` for legacy rows). Each
+resolved policy receives its own queue entry and cooldown, so unrelated
+policies neither trigger a global scan nor block one another.
+
 ## Key concepts
 
 ### Eligibility
@@ -201,7 +206,7 @@ See `algorithm.skill` in
 | `minSupport`                | `2`     | Min distinct-episode support to crystallize.          |
 | `minGain`                   | `0.02`  | Min policy gain required (paired with the new shrinkage-anchored gain in `core/memory/l2/gain.ts`). |
 | `candidateTrials`           | `3`     | Trials required to transition out of `candidate`. NOTE: legacy docs called this `probationaryTrials`; the schema field is `candidateTrials`. |
-| `cooldownMs`                | `60000` | Debounce between runs triggered by the same policy.   |
+| `cooldownMs`                | `21600000` | Per-policy debounce for reward-triggered runs (6 hours; `0` disables). |
 | `traceCharCap`              | `600`   | Char cap per evidence trace in the crystallize prompt.|
 | `evidenceLimit`             | `4`     | Max evidence traces per crystallize call.             |
 | `useLlm`                    | `true`  | Toggle the LLM off (tests / degraded mode).           |

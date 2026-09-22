@@ -20,6 +20,7 @@ export {
   type MigrationFile,
   type MigrationsResult,
 } from "./migrator.js";
+export { backfillLegacyPolicyMetadata } from "./policy-metadata-backfill.js";
 export {
   withRetry,
   withSavepoint,

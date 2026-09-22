@@ -38,6 +38,16 @@ import {
 
 const OP = `${L3_ABSTRACTION_PROMPT.id}.v${L3_ABSTRACTION_PROMPT.version}`;
 const log = rootLogger.child({ channel: "core.memory.l3" });
+const validDraft = {
+  title: "Alpine python dependency model",
+  domain_tags: ["docker", "alpine", "pip"],
+  environment: [{ label: "musl libc", description: "no glibc" }],
+  inference: [{ label: "binary wheels fail", description: "compile from source" }],
+  constraints: [],
+  body: "# summary",
+  confidence: 0.75,
+  supersedes_world_ids: [],
+};
 
 function cfg(overrides: Partial<L3Config> = {}): L3Config {
   return {
@@ -155,6 +165,63 @@ describe("memory/l3/integration", () => {
     );
   });
 
+  it("batches a large cluster without dropping policies or creating duplicate world models", async () => {
+    for (let index = 1; index <= 5; index++) {
+      const episodeId = `ep_batch_${index}`;
+      seedPolicy(handle, {
+        id: `po_batch_${index}` as PolicyId,
+        title: `Alpine pip dependency ${index}`,
+        trigger: "pip install fails in Alpine container",
+        procedure: `apk add dependency-${index} then pip install`,
+        sourceEpisodeIds: [episodeId as EpisodeId],
+        vec: vec([1, index * 0.01, 0]),
+      });
+      seedTrace(handle, {
+        id: `tr_batch_${index}`,
+        episodeId,
+        tags: ["docker", "alpine", "pip"],
+      });
+    }
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: () => {
+          calls += 1;
+          return {
+            ...validDraft,
+            environment: [{ label: `batch ${calls}`, description: "covered" }],
+          };
+        },
+      },
+    });
+
+    const result = await runL3(
+      { trigger: "manual" },
+      {
+        repos: {
+          policies: handle.repos.policies,
+          traces: handle.repos.traces,
+          worldModel: handle.repos.worldModel,
+          kv: handle.repos.kv,
+        },
+        llm,
+        log,
+        config: cfg({ minPolicies: 1, maxPoliciesPerCluster: 2 }),
+      },
+    );
+
+    expect(calls).toBe(3);
+    expect(result.abstractions).toHaveLength(1);
+    expect(handle.repos.worldModel.list()).toHaveLength(1);
+    expect(handle.repos.worldModel.list()[0]!.policyIds.map(String).sort()).toEqual([
+      "po_batch_1",
+      "po_batch_2",
+      "po_batch_3",
+      "po_batch_4",
+      "po_batch_5",
+    ]);
+  });
+
   it("merges into an existing WM that covers the same domain", async () => {
     seedTriplet();
     // Seed a prior WM that shares domain tags + vector, so merge kicks in.
@@ -237,6 +304,110 @@ describe("memory/l3/integration", () => {
     );
     expect(res.abstractions.every((a) => a.skippedReason === "llm_disabled")).toBe(true);
     expect(handle.repos.worldModel.list().length).toBe(0);
+    expect(handle.repos.kv.all().filter((row) => row.key.startsWith("l3.retry."))).toEqual([]);
+  });
+
+  it("backs off a failed abstraction, retries after expiry, and clears retry state", async () => {
+    seedTriplet();
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: () => {
+          calls++;
+          if (calls === 1) throw new Error("temporary failure");
+          return validDraft;
+        },
+      },
+    });
+    const deps = {
+      repos: {
+        policies: handle.repos.policies,
+        traces: handle.repos.traces,
+        worldModel: handle.repos.worldModel,
+        kv: handle.repos.kv,
+      },
+      llm,
+      log,
+      config: cfg(),
+    };
+
+    const failed = await runL3({ trigger: "manual", now: NOW }, deps);
+    expect(failed.abstractions[0]!.skippedReason).toBe("llm_failed");
+    expect(calls).toBe(1);
+    expect(handle.repos.kv.all().some((row) => row.key.startsWith("l3.retry."))).toBe(true);
+
+    const deferred = await runL3({ trigger: "manual", now: NOW + 299_999 }, deps);
+    expect(deferred.abstractions[0]!.skippedReason).toBe("retry_cooldown");
+    expect(calls).toBe(1);
+
+    const retried = await runL3({ trigger: "manual", now: NOW + 300_000 }, deps);
+    expect(retried.abstractions[0]!.skippedReason).toBeNull();
+    expect(calls).toBe(2);
+    expect(handle.repos.kv.all().filter((row) => row.key.startsWith("l3.retry."))).toEqual([]);
+  });
+
+  it("quarantines a deterministically failing legacy cluster after bounded attempts", async () => {
+    seedTriplet();
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        [OP]: () => {
+          calls++;
+          throw new Error("malformed legacy response");
+        },
+      },
+    });
+    const deps = {
+      repos: {
+        policies: handle.repos.policies,
+        traces: handle.repos.traces,
+        worldModel: handle.repos.worldModel,
+        kv: handle.repos.kv,
+      },
+      llm,
+      log,
+      config: cfg(),
+    };
+
+    for (const at of [0, 300_000, 2_100_000, 9_300_000]) {
+      const result = await runL3({ trigger: "manual", now: NOW + at }, deps);
+      expect(result.abstractions[0]!.skippedReason).toBe("llm_failed");
+    }
+    expect(calls).toBe(4);
+
+    const quarantined = await runL3({ trigger: "manual", now: NOW + 100_000_000 }, deps);
+    expect(quarantined.abstractions[0]!.skippedReason).toBe("quarantined");
+    expect(calls).toBe(4);
+    const state = handle.repos.kv.all().find((row) => row.key.startsWith("l3.retry."));
+    expect(state?.value).toMatchObject({ version: 2, failures: 4, quarantined: true });
+  });
+
+  it("records retry state instead of success cooldown when persistence fails", async () => {
+    seedTriplet();
+    const worldModel = {
+      ...handle.repos.worldModel,
+      insert: () => {
+        throw new Error("disk full");
+      },
+    };
+    const result = await runL3(
+      { trigger: "manual", now: NOW },
+      {
+        repos: {
+          policies: handle.repos.policies,
+          traces: handle.repos.traces,
+          worldModel,
+          kv: handle.repos.kv,
+        },
+        llm: fakeLlm({ completeJson: { [OP]: validDraft } }),
+        log,
+        config: cfg({ cooldownDays: 1 }),
+      },
+    );
+
+    expect(result.warnings.some((warning) => warning.stage === "insert")).toBe(true);
+    expect(handle.repos.kv.all().some((row) => row.key.startsWith("l3.retry."))).toBe(true);
+    expect(handle.repos.kv.all().some((row) => row.key.startsWith("l3.lastRun."))).toBe(false);
   });
 
   it("adjustConfidence clamps in [0,1] and emits an event", async () => {

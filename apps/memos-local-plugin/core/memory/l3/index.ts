@@ -13,7 +13,7 @@
 export { abstractDraft, buildWorldModelRow } from "./abstract.js";
 export { clusterPolicies, domainKeyOf } from "./cluster.js";
 export { createL3EventBus } from "./events.js";
-export { adjustConfidence, runL3 } from "./l3.js";
+export { adjustConfidence, clearL3RetryState, runL3 } from "./l3.js";
 export type { RunL3Deps } from "./l3.js";
 export {
   chooseMergeTarget,

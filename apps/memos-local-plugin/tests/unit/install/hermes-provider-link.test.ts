@@ -8,9 +8,31 @@ describe("Hermes provider install links", () => {
   it("main Unix installer links both checkout-local and user-level provider paths", () => {
     const source = readFileSync(path.join(repoRoot, "install.sh"), "utf8");
 
-    expect(source).toContain('${HOME}/.hermes/plugins/memory');
+    expect(source).toContain('local hermes_host_home="${HERMES_HOME:-${HOME}/.hermes}"');
+    expect(source).toContain('${hermes_host_home}/plugins/memory');
     expect(source).toContain('"${plugin_dir}/memtensor"');
     expect(source).toContain('"${user_plugin_dir}/memtensor"');
+  });
+
+  it("fails closed and restores provider targets when live verification fails", () => {
+    const source = readFileSync(path.join(repoRoot, "install.sh"), "utf8");
+
+    expect(source).toContain("restore_hermes_provider_targets");
+    expect(source).toContain('die "Hermes memtensor provider verification failed.');
+    expect(source).not.toContain('if [[ -e "${target}" && ! -L "${target}" ]]; then rm -rf "${target}"; fi');
+  });
+
+  it("stages the Hermes package before stopping the host and can roll back the prefix", () => {
+    const source = readFileSync(path.join(repoRoot, "install.sh"), "utf8");
+    const hermesStart = source.indexOf("install_hermes() {");
+    const hermesEnd = source.indexOf("# ─── DSH install", hermesStart);
+    const hermesSource = source.slice(hermesStart, hermesEnd);
+
+    expect(hermesSource).toContain('deploy_tarball_to_prefix "${staged_prefix}"');
+    expect(hermesSource).toContain("rollback_hermes_install");
+    expect(hermesSource.indexOf('deploy_tarball_to_prefix "${staged_prefix}"')).toBeLessThan(
+      hermesSource.indexOf('step "Stopping existing bridge daemon"'),
+    );
   });
 
   it("adapter Unix installer keeps a user-level provider link", () => {
@@ -142,12 +164,14 @@ describe("Hermes provider install links", () => {
   it("main Unix installer uses atomic ln -sfn and prepares provider dir first", () => {
     const source = readFileSync(path.join(repoRoot, "install.sh"), "utf8");
 
-    // cp runs BEFORE the loop now so the provider dir is populated before
-    // the second symlink is created.
-    const cpPos = source.indexOf('cp "${adapter_dir}/plugin.yaml"');
+    // The staged provider is populated before any host symlink is created.
+    const cpPos = source.indexOf('cp "${staged_adapter_dir}/plugin.yaml"');
     const loopPos = source.indexOf("provider_targets=(");
     expect(cpPos).toBeGreaterThan(0);
     expect(loopPos).toBeGreaterThan(cpPos);
-    expect(source).toContain('ln -sfn "${adapter_dir}/memos_provider" "${target}"');
+    expect(source).toContain('ln -sfn "${backup_root}" "${target}"');
+    expect(source).toContain(
+      'prepare_hermes_provider_targets "${adapter_dir}/memos_provider" "${provider_targets[@]}"',
+    );
   });
 });
