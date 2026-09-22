@@ -121,6 +121,12 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
             original_memory=cur_working_memory,
             new_memory=new_candidates,
         )
+        # Drop batch references explicitly: scheduler threads are long-lived and
+        # reused, so locals otherwise linger until the next batch overwrites them.
+        del cur_working_memory, new_candidates
+        import gc
+
+        gc.collect()
         logger.debug(
             "[long_memory_update_process] Final working memory size: %s memories for user_id=%s",
             len(new_order_working_memory),
@@ -273,5 +279,15 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
                 item,
                 "\n- ".join([f"{one.id}: {one.memory}" for one in results]),
             )
+            # Strip embeddings from candidates: vectors are retrieval artifacts,
+            # not needed for working-memory replacement decisions. On busy
+            # deployments these lists survive across batches and pile up
+            # (observed ~3.4GB retained across ~900 batches in production).
+            for _r in results:
+                try:
+                    if getattr(_r.metadata, "embedding", None):
+                        _r.metadata.embedding = None
+                except Exception:
+                    pass
             new_candidates.extend(results)
         return cur_working_memory, new_candidates
