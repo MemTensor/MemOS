@@ -29,7 +29,6 @@ def register() -> None:
         stream.writelines(lines)
 
 
-register()
 build_sdist = _backend.build_sdist
 build_wheel = _backend.build_wheel
 get_requires_for_build_sdist = _backend.get_requires_for_build_sdist
