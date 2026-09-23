@@ -19,7 +19,7 @@ This interface uses the standard RESTful path parameter format:
 
 | Parameter | Location | Type | Required | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| **`memory_id`** | Path | `str` | Yes | The unique identifier (UUID) of the memory. You can obtain this ID from the results of the [**Get Memory List**](./get_memory_list.md) or [**Search**](./search_memory.md) interfaces. |
+| **`memory_id`** | Path | `str` | Yes | The unique identifier (UUID) of the memory. You can obtain this ID from the results of the [**Memory Search**](./search_memory.md) or [**Search**](./search_memory.md) interfaces. |
 
 ## 3. How It Works (MemoryHandler)
 
