@@ -1100,48 +1100,121 @@ class PostgresGraphDB(BaseGraphDB):
         finally:
             self._put_conn(conn)
 
-    def export_graph(self, include_embedding: bool = False, **kwargs) -> dict[str, Any]:
-        """Export all data."""
+    def export_graph(
+        self,
+        include_embedding: bool = False,
+        page: int | None = None,
+        page_size: int | None = None,
+        memory_type: list[str] | None = None,
+        status: list[str] | None = None,
+        filter: dict | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Export nodes and edges with optional pagination and filtering.
+
+        Args:
+            include_embedding (bool): Whether to include embedding fields in node metadata.
+            page (int, optional): Page number (starts from 1). If None, exports all data without pagination.
+            page_size (int, optional): Number of items per page. If None, exports all data without pagination.
+            memory_type (list[str], optional): Only export nodes whose ``properties->>'memory_type'`` is in this list.
+            status (list[str], optional): If not provided, only nodes with status != 'deleted' are exported.
+                If a non-empty list is provided, only nodes whose status is in this list are exported.
+            filter (dict, optional): Filter conditions with 'and'/'or' logic, same as :meth:`get_all_memory_items`.
+            **kwargs: Additional keyword arguments, including:
+                - user_name (str, optional): User name for filtering.
+
+        Returns:
+            {
+                "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
+                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ],
+                "total_nodes": int,  # Total number of nodes matching the filters (ignores pagination)
+            }
+
+        Edges are not paginated: every response includes all edges connected to any
+        node matching the filters (resolved via subqueries over the full filtered
+        node set), so iterating pages yields a complete edge set.
+        """
         user_name = kwargs.get("user_name") or self.user_name
+
+        use_pagination = page is not None and page_size is not None
+        if use_pagination:
+            if page < 1:
+                page = 1
+            if page_size < 1:
+                page_size = 10
+            offset = (page - 1) * page_size
+
+        conditions = ["user_name = %s"]
+        params: list[Any] = [user_name]
+
+        if memory_type:
+            conditions.append("properties->>'memory_type' = ANY(%s)")
+            params.append(list(memory_type))
+
+        if status is None:
+            conditions.append(
+                "(properties->>'status' <> 'deleted' OR properties->>'status' IS NULL)"
+            )
+        elif len(status) > 0:
+            conditions.append("properties->>'status' = ANY(%s)")
+            params.append(list(status))
+
+        filter_clause = self._build_filter_where_clause(filter, params)
+        if filter_clause:
+            conditions.append(filter_clause)
+
+        where_clause = " AND ".join(conditions)
+
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                # Get nodes
+                # Count total matching nodes before pagination
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*) FROM {self.schema}.memories
+                    WHERE {where_clause}
+                """,
+                    params,
+                )
+                total_nodes = cur.fetchone()[0]
+
+                # Get nodes (paginated)
                 cols = "id, memory, properties, created_at, updated_at"
                 if include_embedding:
                     cols += ", embedding"
-                cur.execute(
-                    f"""
+                query = f"""
                     SELECT {cols} FROM {self.schema}.memories
-                    WHERE user_name = %s
-                    ORDER BY created_at DESC
-                """,
-                    (user_name,),
-                )
+                    WHERE {where_clause}
+                    ORDER BY created_at DESC, id DESC
+                """
+                query_params = list(params)
+                if use_pagination:
+                    query += " LIMIT %s OFFSET %s"
+                    query_params.extend([page_size, offset])
+                cur.execute(query, query_params)
                 nodes = [self._parse_row(row, include_embedding) for row in cur.fetchall()]
 
-                # Get edges
-                node_ids = [n["id"] for n in nodes]
-                if node_ids:
-                    cur.execute(
-                        f"""
-                        SELECT source_id, target_id, edge_type
-                        FROM {self.schema}.edges
-                        WHERE source_id = ANY(%s) OR target_id = ANY(%s)
-                    """,
-                        (node_ids, node_ids),
-                    )
-                    edges = [
-                        {"source": row[0], "target": row[1], "type": row[2]}
-                        for row in cur.fetchall()
-                    ]
-                else:
-                    edges = []
+                # Get all edges connected to any node matching the filters.
+                # Deliberately not paginated: resolving endpoints against the full
+                # filtered node set keeps the edge set complete and consistent across
+                # pages (page-local ids would drop or duplicate cross-page edges).
+                cur.execute(
+                    f"""
+                    SELECT source_id, target_id, edge_type
+                    FROM {self.schema}.edges
+                    WHERE source_id IN (SELECT id FROM {self.schema}.memories WHERE {where_clause})
+                       OR target_id IN (SELECT id FROM {self.schema}.memories WHERE {where_clause})
+                """,
+                    [*params, *params],
+                )
+                edges = [
+                    {"source": row[0], "target": row[1], "type": row[2]} for row in cur.fetchall()
+                ]
 
                 return {
                     "nodes": nodes,
                     "edges": edges,
-                    "total_nodes": len(nodes),
+                    "total_nodes": total_nodes,
                     "total_edges": len(edges),
                 }
         finally:
