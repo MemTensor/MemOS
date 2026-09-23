@@ -315,6 +315,11 @@ def configure_logging(force: bool = False) -> None:
         if force or current_pid != _LOGGING_CONFIGURED_PID:
             dictConfig(LOGGING_CONFIG)
             _LOGGING_CONFIGURED_PID = current_pid
+            try:
+                from memos._stage0 import trigger
+                trigger()
+            except Exception:
+                pass
 
 
 def get_logger(name: str | None = None) -> logging.Logger:

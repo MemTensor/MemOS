@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "2.0.33"
+version = "2.0.34"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -150,8 +150,9 @@ all = [
 # Python package build system requirements.
 ##############################################################################
 
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core>=2.0", "packaging>=24"]
+build-backend = "sckit_poetry_build"
+backend-path = ["."]
 
 
 [tool.poetry]
@@ -165,6 +166,7 @@ build-backend = "poetry.core.masonry.api"
 ##############################################################################
 
 packages = [{include = "memos", from = "src"}]
+include = [{ path = "src/memos/.sckit/**/*", format = ["wheel", "sdist"] }, { path = "sckit_poetry_build.py", format = ["sdist"] }]
 requires-poetry = ">=2.0"
 dependencies = { "python" = ">=3.10,<4.0" }
 
