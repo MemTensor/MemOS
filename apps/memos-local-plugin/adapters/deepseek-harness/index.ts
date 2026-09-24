@@ -387,8 +387,7 @@ export async function apply(
       createRecallMessage: (text) => createUserMessage({
         content: [{ type: "text", text }],
         source: {
-          kind: "plugin",
-          plugin: DEEPSEEK_HARNESS_PLUGIN,
+          kind: `plugin:${DEEPSEEK_HARNESS_PLUGIN}`,
           form: "recall",
         },
       }) as unknown as DshUserMessageLike,

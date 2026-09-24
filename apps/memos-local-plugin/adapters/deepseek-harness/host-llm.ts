@@ -366,7 +366,7 @@ function toDshMessage(
   if (message.role === "user") {
     return createUserMessage({
       content,
-      source: { kind: "plugin", plugin: HOST_LLM_MESSAGE_SOURCE },
+      source: { kind: `plugin:${HOST_LLM_MESSAGE_SOURCE}` },
     });
   }
   return createAssistantMessage({
