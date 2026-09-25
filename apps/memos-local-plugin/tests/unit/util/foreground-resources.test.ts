@@ -179,4 +179,46 @@ describe("foreground resources", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(providerSignal?.aborted).toBe(true);
   });
+
+  it("ignores already-aborted signals in signalFor to prevent background work failure", async () => {
+    const resources = createForegroundResources();
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort(new Error("turn ended"));
+
+    // signalFor should ignore the already-aborted signal and return only the shutdown signal
+    const combined = resources.signalFor(alreadyAborted.signal);
+
+    // The combined signal should NOT be aborted yet (shutdown hasn't been called)
+    expect(combined.aborted).toBe(false);
+
+    // Now shutdown the pipeline
+    resources.shutdown("test shutdown");
+
+    // Now it should be aborted
+    expect(combined.aborted).toBe(true);
+  });
+
+  it("allows background work to proceed with already-aborted turn signal", async () => {
+    const resources = createForegroundResources({ embeddingConcurrency: 1 });
+    const base = fakeEmbedder({ dimensions: 4 });
+    let callCount = 0;
+    const inner = {
+      ...base,
+      async embedOne(...args: Parameters<typeof base.embedOne>) {
+        callCount++;
+        return base.embedOne(...args);
+      },
+    };
+    const background = prioritizeEmbedder(inner, resources, "background")!;
+
+    // Simulate a turn-scoped signal that has already been aborted
+    const turnSignal = new AbortController();
+    turnSignal.abort(new Error("turn ended"));
+
+    // Background work should still succeed despite the aborted turn signal
+    const result = await background.embedOne("test", { signal: turnSignal.signal });
+
+    expect(callCount).toBe(1);
+    expect(result).toBeInstanceOf(Float32Array);
+  });
 });
