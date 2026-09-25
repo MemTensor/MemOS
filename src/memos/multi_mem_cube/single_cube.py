@@ -232,6 +232,7 @@ class SingleCubeView(MemCubeView):
             "user_id": search_req.user_id,
             "session_id": target_session_id,
             "chat_history": search_req.chat_history,
+            "reference_time": search_req.reference_time,
         }
 
         enhanced_memories = self.searcher.deep_search(
@@ -295,6 +296,7 @@ class SingleCubeView(MemCubeView):
             "user_id": search_req.user_id,
             "session_id": target_session_id,
             "chat_history": search_req.chat_history,
+            "reference_time": search_req.reference_time,
         }
 
         # Fine retrieve
