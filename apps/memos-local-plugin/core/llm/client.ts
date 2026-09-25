@@ -19,6 +19,7 @@ import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
 import { extractRetryDiagnostics } from "../util/retry-after.js";
+import { detachForegroundResources } from "../util/foreground-resources.js";
 import { getHostLlmBridge } from "./host-bridge.js";
 import { buildJsonSystemHint, parseLlmJson } from "./json-mode.js";
 import { AnthropicLlmProvider } from "./providers/anthropic.js";
@@ -287,13 +288,21 @@ export function createLlmClientWithProvider(
   }
 
   function makeCtx(opts: LlmCallOptions | undefined, pLog: LlmProviderLogger): LlmProviderCtx {
+    // Detach aborted signals from foreground context (fixes #2412)
+    // When L3 or retrieval runs in background, they may inherit an
+    // already-aborted signal → all HTTP requests fail with "This operation
+    // was aborted". Replace aborted signals with a fresh one.
+    const sanitizedSignal = opts?.signal?.aborted
+      ? detachForegroundResources({ signal: opts.signal }).signal
+      : opts?.signal;
+
     return {
       config: {
         ...config,
         timeoutMs: opts?.timeoutMs ?? config.timeoutMs,
       },
       log: pLog,
-      signal: opts?.signal,
+      signal: sanitizedSignal,
       deadlineAt: opts?.deadlineAt,
     };
   }

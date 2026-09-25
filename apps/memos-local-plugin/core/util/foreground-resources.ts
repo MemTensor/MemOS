@@ -65,6 +65,12 @@ export function createForegroundResources(
   const shutdownController = new AbortController();
 
   function signalFor(signal?: AbortSignal): AbortSignal {
+    // If the input signal is already aborted (e.g. from a turn that ended),
+    // ignore it and only use the pipeline shutdown signal. Background work
+    // should not inherit turn-scoped abort signals.
+    if (signal?.aborted) {
+      return shutdownController.signal;
+    }
     return signal
       ? AbortSignal.any([signal, shutdownController.signal])
       : shutdownController.signal;
@@ -196,6 +202,25 @@ export function createForegroundResources(
     acquireEmbedding,
     shutdown,
   };
+}
+
+/**
+ * Detach aborted signals from foreground context (fixes #2412).
+ *
+ * When L3 or retrieval runs in background, they may inherit an already-aborted
+ * signal from a completed turn. This function creates a fresh signal to allow
+ * the background work to proceed.
+ *
+ * @param opts - Options containing the signal to sanitize
+ * @returns New options with a fresh signal if the input was aborted
+ */
+export function detachForegroundResources<T extends { signal?: AbortSignal }>(
+  opts: T,
+): T {
+  if (!opts.signal?.aborted) return opts;
+
+  // Create a fresh signal for background work
+  return { ...opts, signal: new AbortController().signal };
 }
 
 /**
