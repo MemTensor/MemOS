@@ -5,7 +5,11 @@ from memos.memories.textual.tree_text_memory.retrieve.task_goal_parser import Ta
 
 
 class MockLLM:
+    def __init__(self):
+        self.messages = []
+
     def generate(self, messages):
+        self.messages.append(messages)
         # Just return a fake JSON string
         return """
         {
@@ -33,6 +37,19 @@ def test_parse_fine_calls_llm_and_parses():
     assert "cats" in result.keys
     assert "animal" in result.tags
     assert result.goal_type == "fact"
+
+
+def test_parse_fine_includes_reference_time_for_temporal_queries():
+    mock_llm = MockLLM()
+    parser = TaskGoalParser(llm=mock_llm)
+
+    parser.parse(
+        "What happened yesterday?",
+        mode="fine",
+        reference_time="2023-04-01T00:00:00Z",
+    )
+
+    assert "2023-04-01T00:00:00Z" in mock_llm.messages[0][0]["content"]
 
 
 def test_parse_response_invalid_json():

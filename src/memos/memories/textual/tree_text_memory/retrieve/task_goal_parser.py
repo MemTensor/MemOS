@@ -96,6 +96,12 @@ class TaskGoalParser:
             prompt = Template(TASK_PARSE_PROMPT).substitute(
                 task=query.strip(), context=context, conversation=conversation_prompt
             )
+            reference_time = kwargs.get("reference_time")
+            if reference_time:
+                prompt += (
+                    "\nReference time for resolving relative dates in the user query: "
+                    f"{reference_time}\n"
+                )
             logger.info(f"Parsing Goal... LLM input is {prompt}")
             response = self.llm.generate(messages=[{"role": "user", "content": prompt}])
             logger.info(f"Parsing Goal... LLM Response is {response}")

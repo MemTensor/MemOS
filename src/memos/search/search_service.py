@@ -31,6 +31,7 @@ def build_search_context(
             "user_id": search_req.user_id,
             "session_id": target_session_id,
             "chat_history": search_req.chat_history,
+            "reference_time": search_req.reference_time,
         },
         plugin=bool(search_req.source is not None and search_req.source == "plugin"),
     )
