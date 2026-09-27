@@ -97,7 +97,7 @@ For Cursor IDE integration with MemOS MCP server, add this configuration to your
       ],
     //   "cwd": "/path/to/your/MemOS pip user is optional",
       "env": {
-        "OPENAI_API_KEY": "sk-your-openai-key-here",
+        "OPENAI_API_KEY": "sk-you...here",
         "OPENAI_API_BASE": "https://api.openai.com/v1",
         "MOS_TEXT_MEM_TYPE": "tree_text",
         "NEO4J_URI": "bolt://localhost:7687",
@@ -108,3 +108,44 @@ For Cursor IDE integration with MemOS MCP server, add this configuration to your
   }
 }
 ```
+
+### Adding Web Search via You.com MCP (Optional)
+
+MemOS agents can also use the You.com MCP server for current web search, URL content extraction, and cited synthesis. This is entirely optional and additive — it runs as a separate remote MCP server alongside the MemOS memory server.
+
+Add the You.com MCP server to the same `mcpServers` object:
+
+```json
+{
+  "mcpServers": {
+    "memos-fastmcp": { ... },
+    "youcom-search": {
+      "url": "https://api.you.com/mcp?profile=free",
+      "type": "remote"
+    }
+  }
+}
+```
+
+The `?profile=free` endpoint is keyless — no API key or registration is needed for basic `you-search` functionality. The server exposes `you-search` (web search with cited results) and `you-contents` (URL content extraction) tools.
+
+For authenticated access (higher rate limits, research and finance tools), set the `YDC_API_KEY` environment variable and use the default endpoint:
+
+```json
+{
+  "mcpServers": {
+    "memos-fastmcp": { ... },
+    "youcom-search": {
+      "url": "https://api.you.com/mcp",
+      "type": "remote",
+      "env": {
+        "YDC_API_KEY": "${YDC_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Get an API key at [you.com/platform/api-keys](https://you.com/platform/api-keys).
+
+After adding the config, agents connected to Cursor (or any MCP-compatible client) can search the web by invoking the You.com tools directly. The integration is gated solely by the `mcpServers` entry — no code changes, no hard dependencies, and no effect on existing MemOS functionality.
