@@ -73,3 +73,23 @@ class TestCleanJsonResponse:
         result = clean_json_response(input_str)
         assert "`example`" in result
         assert result.count("`") == 2  # Only internal backticks remain
+
+
+def test_interior_code_fences_preserved():
+    """The old global replace("```", "") corrupted JSON string values that
+    contain markdown code fences themselves."""
+    src = '```json\n{"text": "```py\\ncode```"}\n```'
+    assert clean_json_response(src) == '{"text": "```py\\ncode```"}'
+
+
+def test_plain_fence_stripped():
+    assert clean_json_response('```json\n{"a": 1}\n```') == '{"a": 1}'
+    assert clean_json_response('```\n{"a": 1}\n```') == '{"a": 1}'
+
+
+def test_no_fence_unchanged():
+    assert clean_json_response('{"a": 1}') == '{"a": 1}'
+
+
+def test_opening_fence_only():
+    assert clean_json_response('```json\n{"a": 1}') == '{"a": 1}'
