@@ -181,7 +181,7 @@ class TestEnvConfigMixin(unittest.TestCase):
         # PEP 604 X | None form, so the noqa below is intentional.
         self.assertEqual(EnvConfigMixin._parse_env_value("42", Optional[int]), 42)  # noqa: UP045
         self.assertEqual(EnvConfigMixin._parse_env_value("3.14", Optional[float]), 3.14)  # noqa: UP045
-        self.assertTrue(EnvConfigMixin._parse_env_value("true", Optional[bool]))  # noqa: UP045
+        self.assertIs(EnvConfigMixin._parse_env_value("true", Optional[bool]), True)  # noqa: UP045
         self.assertEqual(EnvConfigMixin._parse_env_value("hello", Optional[str]), "hello")  # noqa: UP045
         # PEP 604 union syntax
         self.assertEqual(EnvConfigMixin._parse_env_value("7", int | None), 7)
