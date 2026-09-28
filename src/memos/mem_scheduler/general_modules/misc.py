@@ -4,7 +4,7 @@ import os
 from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Full, Queue
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, get_args
 
 from dotenv import load_dotenv
 from pydantic import field_serializer
@@ -68,18 +68,24 @@ class EnvConfigMixin(Generic[T]):
             if field_info.is_required() and env_var not in os.environ:
                 raise ValueError(f"Required environment variable {env_var} is missing")
 
+            # Absent optional fields are simply omitted so that pydantic
+            # applies the model's own default (previously a field whose
+            # default was None crashed with a bare, message-less ValueError).
             if env_var in os.environ:
                 raw_value = os.environ[env_var]
                 field_values[field_name] = cls._parse_env_value(raw_value, field_type)
-            elif field_info.default is not None:
-                field_values[field_name] = field_info.default
-            else:
-                raise ValueError()
         return cls(**field_values)
 
     @classmethod
-    def _parse_env_value(cls, value: str, target_type: type) -> Any:
+    def _parse_env_value(cls, value: str, target_type: Any) -> Any:
         """Converts environment variable string to appropriate type."""
+        # Unwrap Optional[X] / X | None so an optional int or float still
+        # parses as its inner type instead of staying a string.
+        args = get_args(target_type)
+        if type(None) in args:
+            remaining = [arg for arg in args if arg is not type(None)]
+            if len(remaining) == 1:
+                target_type = remaining[0]
         if target_type is bool:
             return value.lower() in ("true", "1", "t", "y", "yes")
         if target_type is int:
