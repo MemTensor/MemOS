@@ -1423,10 +1423,11 @@ def clean_json_response(response: str) -> str:
     stripped = response.strip()
 
     # Opening fence: ``` optionally followed by an info string like "json"
-    # on the same line, then a newline. We only strip the fence when a
-    # matching closing fence is present at the end of the string.
+    # on the same line, then a newline. The closing fence must appear on its
+    # own line (preceded by a newline) — this prevents a trailing ``` that
+    # belongs to a JSON string value from being mistaken for a fence.
     open_match = re.match(r"^```[^\n`]*\n", stripped)
-    if open_match and stripped.endswith("```"):
-        stripped = stripped[open_match.end() : -len("```")]
+    if open_match and stripped.endswith("\n```"):
+        stripped = stripped[open_match.end() : -len("\n```")]
 
     return stripped.strip()

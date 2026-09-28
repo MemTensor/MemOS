@@ -106,3 +106,17 @@ class TestCleanJsonResponse:
         result = clean_json_response(input_str)
         parsed = json.loads(result)
         assert parsed == {"answer": "```code```"}
+
+    def test_clean_json_response_requires_closing_fence_on_own_line(self):
+        """A trailing ``` must be preceded by a newline to count as a fence.
+
+        Guards against a JSON string value that legitimately ends with
+        triple-backticks being mistaken for a closing fence — only a fence
+        on its own line (``\\n``` ``) is recognised.
+        """
+        # Opening fence + JSON whose last value ends in ``` + closing fence
+        # on its own line: interior fence must survive intact.
+        input_str = '```json\n{"a": "x```"}\n```'
+        result = clean_json_response(input_str)
+        parsed = json.loads(result)
+        assert parsed == {"a": "x```"}
