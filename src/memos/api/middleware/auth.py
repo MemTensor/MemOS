@@ -27,6 +27,9 @@ AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
 MASTER_KEY_HASH = os.getenv("MASTER_KEY_HASH")  # SHA-256 hash of master key
 INTERNAL_SERVICE_IPS = {"127.0.0.1", "::1", "memos-mcp", "moltbot", "clawdbot"}
 
+# Allowed characters for the hex portion of an API key (lowercase only)
+_LOWERCASE_HEX = frozenset("0123456789abcdef")
+
 # Connection pool for auth queries (lazy init)
 _auth_pool = None
 
@@ -75,7 +78,7 @@ def validate_key_format(key: str) -> bool:
     if len(hex_part) != 64:
         return False
     # Strict validation: only lowercase hex chars [0-9a-f]
-    return all(c in "0123456789abcdef" for c in hex_part)
+    return all(c in _LOWERCASE_HEX for c in hex_part)
 
 
 def get_key_prefix(key: str) -> str:

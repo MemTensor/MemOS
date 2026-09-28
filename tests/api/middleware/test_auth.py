@@ -34,7 +34,6 @@ class TestValidateKeyFormat:
 
     def test_reject_leading_plus_sign(self):
         """Keys with leading + should be rejected."""
-        # This currently passes but should fail - int('+' + hex, 16) works
         invalid_key = "krlk_" + "+" + "a" * 63
         assert not validate_key_format(invalid_key), "Should reject leading +"
 
@@ -45,13 +44,11 @@ class TestValidateKeyFormat:
 
     def test_reject_0x_prefix(self):
         """Keys with 0x prefix should be rejected."""
-        # This currently passes but should fail - int('0x' + hex, 16) works
         invalid_key = "krlk_" + "0x" + "a" * 62
         assert not validate_key_format(invalid_key), "Should reject 0x prefix"
 
     def test_reject_underscores(self):
         """Keys with underscores in hex should be rejected."""
-        # This currently passes but should fail - int() accepts _ separators
         invalid_key = "krlk_" + "a" * 30 + "_" + "b" * 33
         assert not validate_key_format(invalid_key), "Should reject underscores"
 
