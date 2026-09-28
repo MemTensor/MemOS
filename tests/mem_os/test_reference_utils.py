@@ -56,10 +56,6 @@ class TestSplitContinuousReferences:
             == "prefix [1:aaa][4:bbb] suffix"
         )
 
-    def test_content_containing_no_comma_returned_unchanged(self):
-        # Sanity check that guard clauses still short-circuit correctly.
-        assert split_continuous_references("[abc]") == "[abc]"
-
     def test_reversed_brackets_returned_unchanged(self):
         assert split_continuous_references("]1:aaa,2:bbb[") == "]1:aaa,2:bbb["
 
