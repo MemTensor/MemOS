@@ -43,6 +43,11 @@ def split_continuous_references(text: str) -> str:
     # Check if there's a comma between brackets
     if "," not in content_between_brackets:
         return text
+    # Only reference tags (a numeric id before a colon in every element) are
+    # split; ordinary bracketed text such as "[x, y]" must pass through
+    # untouched.
+    if not re.fullmatch(r"\s*\d+:[^,\s]+(?:,\s*\d+:[^,\s]+)*\s*", content_between_brackets):
+        return text
     # Split on every comma regardless of the whitespace that follows it: LLM
     # output mixes "a, b" and "a,b" freely, and the previous two-pass
     # str.replace handled only one style per call, leaving earlier references

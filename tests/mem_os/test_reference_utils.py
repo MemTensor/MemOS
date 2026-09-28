@@ -28,6 +28,15 @@ class TestSplitContinuousReferences(unittest.TestCase):
             "[1:92ff35fb][4:bfe6f044][7:abcd1234]",
         )
 
+    def test_ordinary_bracketed_text_untouched(self):
+        # "[x, y]" has no reference-tag shape (numeric id + colon); it must
+        # not be rewritten into "[x][y]" on the streaming chat path
+        self.assertEqual(
+            split_continuous_references("interval [x, y] ends"),
+            "interval [x, y] ends",
+        )
+        self.assertEqual(split_continuous_references("cite [1, 2] here"), "cite [1, 2] here")
+
     def test_surrounding_text_preserved(self):
         self.assertEqual(
             split_continuous_references("see refs [1:aaaa, 2:bbbb] for details"),
