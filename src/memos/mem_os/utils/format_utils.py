@@ -1,5 +1,6 @@
 import math
 import random
+import re
 
 from typing import Any
 
@@ -533,7 +534,7 @@ def convert_graph_to_tree_forworkmem(
         node_name = extract_node_name(memory)
         memory_key = node.get("metadata", {}).get("key", node_name)
         usage = node.get("metadata", {}).get("usage", [])
-        frequency = len(usage) if len(usage) < 100 else 100
+        frequency = min(100, len(usage))
         node_map[node["id"]] = {
             "id": node["id"],
             "value": memory,
@@ -1413,4 +1414,8 @@ def clean_json_response(response: str) -> str:
             "failed silently (check timed_with_status / generate() error "
             "handling)."
         )
-    return response.replace("```json", "").replace("```", "").strip()
+    # Only an opening fence (with its optional info string) at the very
+    # start and a closing fence at the very end are markdown markup. A
+    # global replace used to corrupt JSON string values that themselves
+    # contain fenced code, e.g. {"text": "```py\ncode```"}.
+    return re.sub(r"^```[^\n]*\n?|\n?```\s*$", "", response.strip()).strip()
