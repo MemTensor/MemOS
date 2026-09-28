@@ -57,11 +57,15 @@ def _get_client_key(request: Request) -> str:
 
     Uses API key if available, otherwise falls back to IP.
     """
-    # Try to get API key from header
+    # Try to get API key from header. Requests send "Authorization: Bearer
+    # krlk_...", so the Bearer scheme must be stripped before checking the
+    # key prefix; a raw "krlk_..." header keeps working unchanged.
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("krlk_"):
+    scheme, _, credentials = auth_header.partition(" ")
+    key_part = credentials.strip() if scheme.lower() == "bearer" else auth_header
+    if key_part.startswith("krlk_"):
         # Use first 20 chars of key as identifier
-        return f"ratelimit:key:{auth_header[:20]}"
+        return f"ratelimit:key:{key_part[:20]}"
 
     # Fall back to IP address
     client_ip = request.client.host if request.client else "unknown"
