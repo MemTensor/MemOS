@@ -1,3 +1,5 @@
+import re
+
 from memos.memories.textual.item import (
     TextualMemoryItem,
 )
@@ -41,8 +43,14 @@ def split_continuous_references(text: str) -> str:
     # Check if there's a comma between brackets
     if "," not in content_between_brackets:
         return text
-    text = text.replace(content_between_brackets, content_between_brackets.replace(", ", "]["))
-    text = text.replace(content_between_brackets, content_between_brackets.replace(",", "]["))
+    # Split on every comma regardless of the whitespace that follows it: LLM
+    # output mixes "a, b" and "a,b" freely, and the previous two-pass
+    # str.replace handled only one style per call, leaving earlier references
+    # merged when both styles appeared in the same tag.
+    text = text.replace(
+        content_between_brackets,
+        re.sub(r",\s*", "][", content_between_brackets),
+    )
 
     return text
 
@@ -57,8 +65,6 @@ def process_streaming_references_complete(text_buffer: str) -> tuple[str, str]:
     Returns:
         tuple[str, str]: (processed_text, remaining_buffer)
     """
-    import re
-
     # Pattern to match complete reference tags: [refid:memoriesID]
     complete_pattern = r"\[\d+:[^\]]+\]"
 
