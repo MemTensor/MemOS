@@ -38,7 +38,9 @@ def test_get_client_key_with_bearer_token():
 
         key = _get_client_key(request)
 
-        # Should extract the key and use it for rate limiting
+        # The raw token is "krlk_test_key_12345678" (22 chars).
+        # _get_client_key takes [:20] → "krlk_test_key_123456" (20 chars),
+        # keeping Redis keys bounded while preserving per-key isolation.
         assert key == "ratelimit:key:krlk_test_key_123456"
         assert key.startswith("ratelimit:key:")
 
