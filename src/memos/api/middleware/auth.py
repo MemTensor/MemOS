@@ -7,6 +7,7 @@ Keys are validated against SHA-256 hashes stored in PostgreSQL.
 
 import hashlib
 import os
+import re
 import time
 
 from typing import Any
@@ -29,6 +30,11 @@ INTERNAL_SERVICE_IPS = {"127.0.0.1", "::1", "memos-mcp", "moltbot", "clawdbot"}
 
 # Connection pool for auth queries (lazy init)
 _auth_pool = None
+
+# int(hex, 16) also accepts a leading sign, a 0x prefix, underscore
+# separators, and whitespace, so the format gate must match the exact
+# form generate_api_key() produces instead.
+_HEX_KEY_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def _get_auth_pool():
@@ -66,14 +72,7 @@ def validate_key_format(key: str) -> bool:
     """Validate API key format: krlk_<64-hex>."""
     if not key or not key.startswith("krlk_"):
         return False
-    hex_part = key[5:]  # Remove 'krlk_' prefix
-    if len(hex_part) != 64:
-        return False
-    try:
-        int(hex_part, 16)
-        return True
-    except ValueError:
-        return False
+    return _HEX_KEY_RE.fullmatch(key[5:]) is not None
 
 
 def get_key_prefix(key: str) -> str:

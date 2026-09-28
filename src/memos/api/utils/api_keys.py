@@ -5,10 +5,14 @@ Provides functions for generating, validating, and managing API keys.
 """
 
 import hashlib
+import re
 import secrets
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+
+
+_HEX_KEY_RE = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass
@@ -49,7 +53,9 @@ def validate_key_format(key: str) -> bool:
     """
     Validate API key format.
 
-    Valid format: krlk_<64-hex-chars>
+    Valid format: krlk_<64-hex-chars>, exactly the form generate_api_key()
+    produces. int(hex, 16) is not usable here because it also accepts a
+    leading sign, a 0x prefix, underscore separators, and whitespace.
     """
     if not key or not isinstance(key, str):
         return False
@@ -57,15 +63,7 @@ def validate_key_format(key: str) -> bool:
     if not key.startswith("krlk_"):
         return False
 
-    hex_part = key[5:]
-    if len(hex_part) != 64:
-        return False
-
-    try:
-        int(hex_part, 16)
-        return True
-    except ValueError:
-        return False
+    return _HEX_KEY_RE.fullmatch(key[5:]) is not None
 
 
 def generate_master_key() -> tuple[str, str]:
