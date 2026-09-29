@@ -4,9 +4,13 @@ import unittest
 
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
+from typing import Optional
 
+from pydantic import Field
+
+from memos.configs.base import BaseConfig
 from memos.configs.mem_scheduler import AuthConfig, GraphDBAuthConfig, OpenAIConfig, RabbitMQConfig
-from memos.mem_scheduler.general_modules.misc import EnvConfigMixin
+from memos.mem_scheduler.general_modules.misc import DictConversionMixin, EnvConfigMixin
 from memos.mem_scheduler.utils.config_utils import convert_config_to_env, flatten_dict
 
 
@@ -92,6 +96,95 @@ class TestEnvConfigMixin(unittest.TestCase):
 
         # Test string parsing
         self.assertEqual(EnvConfigMixin._parse_env_value("test", str), "test")
+
+    def test_from_env_optional_none_field_uses_default(self):
+        """Regression for #2424: absent optional field with default=None must
+        NOT raise; it should fall back to the declared default (None here)."""
+
+        class _OptionalNoneConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
+            host: str = Field(default="localhost")
+            port: int | None = Field(default=None)
+
+        # Ensure the two env vars are absent, so we exercise the fallback path.
+        prefix = _OptionalNoneConfig.get_env_prefix()
+        saved = {}
+        for suffix in ("HOST", "PORT"):
+            key = f"{prefix}{suffix}"
+            if key in os.environ:
+                saved[key] = os.environ.pop(key)
+        try:
+            config = _OptionalNoneConfig.from_env()
+            self.assertEqual(config.host, "localhost")
+            self.assertIsNone(config.port)
+        finally:
+            for key, value in saved.items():
+                os.environ[key] = value
+
+    def test_from_env_optional_int_env_var_is_parsed_as_int(self):
+        """Regression for #2424 secondary: Optional[int] env var must parse as int."""
+
+        class _OptionalIntConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
+            port: int | None = Field(default=None)
+
+        prefix = _OptionalIntConfig.get_env_prefix()
+        key = f"{prefix}PORT"
+        original = os.environ.get(key)
+        try:
+            os.environ[key] = "5672"
+            config = _OptionalIntConfig.from_env()
+            self.assertIsInstance(config.port, int)
+            self.assertEqual(config.port, 5672)
+        finally:
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
+    def test_from_env_required_field_missing_raises_descriptive_error(self):
+        """Required-field path must still raise with a descriptive message
+        (not the previous bare ValueError())."""
+
+        class _RequiredFieldConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
+            api_key: str = Field(...)  # required, no default
+
+        prefix = _RequiredFieldConfig.get_env_prefix()
+        key = f"{prefix}API_KEY"
+        original = os.environ.pop(key, None)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                _RequiredFieldConfig.from_env()
+            self.assertIn(key, str(ctx.exception))
+        finally:
+            if original is not None:
+                os.environ[key] = original
+
+    def test_from_env_default_factory_field_uses_factory(self):
+        """Non-required field with a default_factory must use the factory
+        rather than raising when env var is absent."""
+
+        class _FactoryConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
+            tags: list[str] = Field(default_factory=list)
+
+        prefix = _FactoryConfig.get_env_prefix()
+        key = f"{prefix}TAGS"
+        original = os.environ.pop(key, None)
+        try:
+            config = _FactoryConfig.from_env()
+            self.assertEqual(config.tags, [])
+        finally:
+            if original is not None:
+                os.environ[key] = original
+
+    def test_parse_env_value_unwraps_optional(self):
+        """_parse_env_value must unwrap Optional[T] before dispatching."""
+        # Deliberately exercise both the legacy typing.Optional[...] form and the
+        # PEP 604 X | None form, so the noqa below is intentional.
+        self.assertEqual(EnvConfigMixin._parse_env_value("42", Optional[int]), 42)  # noqa: UP045
+        self.assertEqual(EnvConfigMixin._parse_env_value("3.14", Optional[float]), 3.14)  # noqa: UP045
+        self.assertIs(EnvConfigMixin._parse_env_value("true", Optional[bool]), True)  # noqa: UP045
+        self.assertEqual(EnvConfigMixin._parse_env_value("hello", Optional[str]), "hello")  # noqa: UP045
+        # PEP 604 union syntax
+        self.assertEqual(EnvConfigMixin._parse_env_value("7", int | None), 7)
 
     def test_env_config_mixin_integration(self):
         """Test EnvConfigMixin integration with actual configuration classes"""
