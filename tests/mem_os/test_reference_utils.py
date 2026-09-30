@@ -28,6 +28,24 @@ class TestSplitContinuousReferences:
             split_continuous_references("prefix [1:aa,2:bb] suffix") == "prefix [1:aa][2:bb] suffix"
         )
 
+    def test_handles_mixed_separator_styles(self):
+        """Regression: mixed ``", "`` and bare ``","`` separators in the same
+        block must all be split (PR #2450 review).
+
+        The previous two-step ``str.replace`` implementation left the bare
+        comma between ``2:bb`` and ``3:cc`` intact, producing
+        ``"[1:aa][2:bb,3:cc]"``.
+        """
+        assert (
+            split_continuous_references("[1:aa, 2:bb,3:cc]") == "[1:aa][2:bb][3:cc]"
+        )
+
+    def test_handles_mixed_separator_styles_reversed(self):
+        """Bare comma first, then ``", "`` — symmetric to the case above."""
+        assert (
+            split_continuous_references("[1:aa,2:bb, 3:cc]") == "[1:aa][2:bb][3:cc]"
+        )
+
     # --- shape guard: non-reference brackets stay untouched ------------------
 
     def test_plain_prose_list_untouched(self):

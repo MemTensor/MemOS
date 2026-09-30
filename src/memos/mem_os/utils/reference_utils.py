@@ -60,10 +60,14 @@ def split_continuous_references(text: str) -> str:
     items = content_between_brackets.split(",")
     if not all(_REFERENCE_ITEM_RE.match(item) for item in items):
         return text
-    text = text.replace(content_between_brackets, content_between_brackets.replace(", ", "]["))
-    text = text.replace(content_between_brackets, content_between_brackets.replace(",", "]["))
-
-    return text
+    # Rebuild the bracketed block in a single pass so mixed separator styles
+    # (``", "`` and bare ``","`` in the same block) are all split correctly.
+    # The previous two-step ``str.replace`` approach was broken: after the
+    # first pass rewrote ``", "`` occurrences, the original substring no
+    # longer existed in ``text`` and the second pass never fired, leaving
+    # bare commas unsplit (PR #2450 review).
+    joined = "][".join(item.strip() for item in items)
+    return text[: open_bracket_pos + 1] + joined + text[close_bracket_pos:]
 
 
 def process_streaming_references_complete(text_buffer: str) -> tuple[str, str]:
