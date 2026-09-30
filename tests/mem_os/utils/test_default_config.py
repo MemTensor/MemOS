@@ -53,6 +53,12 @@ class TestGetDefaultConfigInvalidTextMemType:
     """`get_default_config` accepts the same text_mem_type parameter and should
     validate it symmetrically so both entry points fail with the same clear error
     when they receive garbage input.
+
+    ``get_default_config`` and ``get_default_cube_config`` each call
+    ``_validate_text_mem_type`` independently (they do not share a delegation
+    path), so we mirror the same three regression cases here — a typo, an
+    unknown backend name, and the empty string — to keep coverage symmetric
+    across both entry points for issue #2441.
     """
 
     def test_invalid_text_mem_type_raises_value_error(self):
@@ -66,6 +72,22 @@ class TestGetDefaultConfigInvalidTextMemType:
         assert "tree-text" in message
         assert "tree_text" in message
         assert "general_text" in message
+
+    def test_invalid_text_mem_type_does_not_leak_unbound_local(self):
+        """Unknown backend names must fail with ValueError, not UnboundLocalError."""
+        with pytest.raises(ValueError):
+            get_default_config(
+                openai_api_key="sk-test",
+                text_mem_type="totally_unknown_backend",
+            )
+
+    def test_empty_text_mem_type_raises_value_error(self):
+        """Empty string should also fail loudly, symmetric with the cube helper."""
+        with pytest.raises(ValueError):
+            get_default_config(
+                openai_api_key="sk-test",
+                text_mem_type="",  # type: ignore[arg-type]
+            )
 
 
 class TestGetDefaultCubeConfigValidTextMemType:
