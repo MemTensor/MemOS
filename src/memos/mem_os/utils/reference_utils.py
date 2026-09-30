@@ -158,11 +158,13 @@ def prepare_reference_data(memories_list: list[TextualMemoryItem]) -> list[dict]
             memories_json["metadata"]["id"] = memories.id
             reference.append({"metadata": memories_json["metadata"]})
         else:
-            memories_json = memories
-            metadata = memories_json.get("metadata")
-            if not isinstance(metadata, dict):
-                metadata = {}
-                memories_json["metadata"] = metadata
+            # Shallow-copy the outer dict AND the metadata dict so that our
+            # normalization does not mutate the caller's payload (e.g. a cache
+            # entry or an MCP message being reused across calls). See #2448.
+            memories_json = dict(memories)
+            orig_metadata = memories_json.get("metadata")
+            metadata = dict(orig_metadata) if isinstance(orig_metadata, dict) else {}
+            memories_json["metadata"] = metadata
 
             raw_id = memories_json.get("id")
             if raw_id is None:

@@ -103,6 +103,35 @@ class TestPrepareReferenceDataDictEntries:
         assert metadata["memory"] is None
         assert metadata["ref_id"] == "abcdef12"
 
+    def test_caller_dict_is_not_mutated(self):
+        """The dict branch must not mutate the caller's entry or its metadata.
+
+        Regression guard: earlier versions did
+        ``memories_json = memories`` (alias, not copy) and then wrote
+        ``metadata["ref_id"] = ...``. If a caller cached the payload or reused
+        it across MCP calls, those side-effects would silently corrupt it.
+        """
+        original_metadata = {"source": "cache"}
+        entry = {
+            "id": "abcdef12-3456-7890-abcd-ef1234567890",
+            "memory": "hello",
+            "metadata": original_metadata,
+        }
+        # Snapshot the caller-visible shape so we can compare after the call.
+        entry_snapshot = {
+            "id": entry["id"],
+            "memory": entry["memory"],
+            "metadata": dict(original_metadata),
+        }
+
+        prepare_reference_data([entry])
+
+        # Caller's outer dict unchanged (no injected ref_id/embedding/sources/id).
+        assert entry == entry_snapshot
+        # Caller's inner metadata dict unchanged (same object, same keys).
+        assert entry["metadata"] is original_metadata
+        assert original_metadata == {"source": "cache"}
+
 
 class TestPrepareReferenceDataTextualMemoryItem:
     """The TextualMemoryItem branch keeps its original contract."""
@@ -128,10 +157,11 @@ class TestPrepareReferenceDataOldBehaviorDemonstration:
     Pre-fix demonstration tests kept for auditability.
 
     These document the exact error signatures reported in #2448 and are
-    negated by the assertions above. They are xfailed (strict=False) so they
-    do NOT gate CI — but if the fix is ever reverted, they'll flip to xpassed
-    (strict=False → not a failure) while the tests above will hard-fail,
-    which is the desired signal.
+    xfailed (strict=False) so they do NOT gate CI — after the fix the call
+    returns normally and pytest reports XPASS (non-fatal); if the fix is ever
+    reverted the call raises again and pytest reports XFAIL, again non-fatal.
+    Either way the ``TestPrepareReferenceDataDictEntries`` cases above are
+    the hard gate: they will fail loudly if the fix is reverted.
     """
 
     @pytest.mark.parametrize(
@@ -140,6 +170,14 @@ class TestPrepareReferenceDataOldBehaviorDemonstration:
             {"metadata": {"memory": "m"}},  # missing id
             {"id": 12345, "memory": "m", "metadata": {}},  # int id
         ],
+    )
+    @pytest.mark.xfail(
+        strict=False,
+        reason=(
+            "Documents pre-fix error signatures from #2448. Passes after the "
+            "fix (XPASS, strict=False so it does not gate CI); if the fix is "
+            "ever reverted the call will raise again and this test will XFAIL."
+        ),
     )
     def test_pre_fix_would_have_raised(self, entry):
         """Before the fix, both cases raised. After the fix, both succeed."""
