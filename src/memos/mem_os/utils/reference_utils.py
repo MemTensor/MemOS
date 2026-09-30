@@ -41,6 +41,14 @@ def split_continuous_references(text: str) -> str:
     # Check if there's a comma between brackets
     if "," not in content_between_brackets:
         return text
+    # Every item must look like a reference tag "int:id"; plain bracketed
+    # prose such as "[apple, banana]" must pass through untouched
+    import re
+
+    if not re.fullmatch(
+        r"\s*\d+:[^,\s]+(?:,\s*\d+:[^,\s]+)*\s*", content_between_brackets
+    ):
+        return text
     text = text.replace(content_between_brackets, content_between_brackets.replace(", ", "]["))
     text = text.replace(content_between_brackets, content_between_brackets.replace(",", "]["))
 
