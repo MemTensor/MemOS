@@ -14,6 +14,28 @@ from memos.mem_cube.general import GeneralMemCube
 
 logger = logging.getLogger(__name__)
 
+# Text-memory backends that the default-config helpers know how to wire up.
+# Keep in sync with the Literal type hint on text_mem_type below.
+_SUPPORTED_TEXT_MEM_TYPES: tuple[str, ...] = ("tree_text", "general_text")
+
+
+def _validate_text_mem_type(text_mem_type: str) -> None:
+    """Reject unknown text_mem_type values with a clear ValueError.
+
+    The default-config helpers only wire up a handful of text-memory backends
+    (``tree_text`` and ``general_text``). Historically the helper fell through
+    silently when the caller passed anything else — for example a typo like
+    ``"tree-text"`` coming through the ``MOS_TEXT_MEM_TYPE`` env var or the
+    MCP ``create_cube`` path — and crashed with a bare ``UnboundLocalError``.
+
+    See issue #2441.
+    """
+    if text_mem_type not in _SUPPORTED_TEXT_MEM_TYPES:
+        supported = ", ".join(repr(t) for t in _SUPPORTED_TEXT_MEM_TYPES)
+        raise ValueError(
+            f"Unsupported text_mem_type={text_mem_type!r}. Expected one of: {supported}."
+        )
+
 
 def get_default_config(
     openai_api_key: str,
@@ -45,6 +67,10 @@ def get_default_config(
         mos = MOS(config)
         ```
     """
+    # Validate up front so both MOS and MemCube helpers fail with the same
+    # clear error when the caller (or an env var like MOS_TEXT_MEM_TYPE) hands
+    # in a typo. See issue #2441.
+    _validate_text_mem_type(text_mem_type)
 
     # Base OpenAI configuration
     openai_config = {
@@ -148,6 +174,9 @@ def get_default_cube_config(
     Returns:
         GeneralMemCubeConfig: Complete MemCube configuration object
     """
+    # Fail fast on invalid backends so the caller sees a clear error instead of
+    # an UnboundLocalError deeper in the function (issue #2441).
+    _validate_text_mem_type(text_mem_type)
 
     # Base OpenAI configuration
     openai_config = {
@@ -230,6 +259,14 @@ def get_default_cube_config(
                 "embedder": embedder_config,
             },
         }
+    else:
+        # Defensive: _validate_text_mem_type above rejects anything else, but
+        # keep an explicit branch so future refactors cannot silently reintroduce
+        # the UnboundLocalError this file used to raise (issue #2441).
+        raise ValueError(
+            f"Unsupported text_mem_type={text_mem_type!r}. "
+            f"Expected one of: {', '.join(repr(t) for t in _SUPPORTED_TEXT_MEM_TYPES)}."
+        )
 
     # Configure activation memory if enabled.
     # KV cache activation memory requires a local HuggingFace/vLLM model (it
