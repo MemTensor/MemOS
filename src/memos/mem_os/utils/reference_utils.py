@@ -1,18 +1,31 @@
+import re
+
 from memos.memories.textual.item import (
     TextualMemoryItem,
 )
+
+
+# A single reference item inside a bracketed list looks like ``<int>:<id>``,
+# e.g. ``1:92ff35fb``. The id part is a hex-looking memory id, so we only
+# require it to be non-empty and free of commas / brackets. Surrounding
+# whitespace on either the ref id or the memory id is tolerated.
+_REFERENCE_ITEM_RE = re.compile(r"^\s*\d+:[^,\[\]]+\s*$")
 
 
 def split_continuous_references(text: str) -> str:
     """
     Split continuous reference tags into individual reference tags.
 
-    Converts patterns like [1:92ff35fb, 4:bfe6f044] to [1:92ff35fb] [4:bfe6f044]
+    Converts patterns like [1:92ff35fb, 4:bfe6f044] to [1:92ff35fb][4:bfe6f044].
 
-    Only processes text if:
-    1. '[' appears exactly once
-    2. ']' appears exactly once
-    3. Contains commas between '[' and ']'
+    Only processes text if all of the following hold:
+
+    1. ``[`` appears exactly once
+    2. ``]`` appears exactly once
+    3. There is at least one comma between the brackets
+    4. Every comma-separated item inside the brackets matches ``<int>:<id>``
+       (the reference tag shape). If any item does not, the block is treated
+       as ordinary prose (e.g. ``[apple, banana]``) and returned unchanged.
 
     Args:
         text (str): Text containing reference tags
@@ -41,10 +54,20 @@ def split_continuous_references(text: str) -> str:
     # Check if there's a comma between brackets
     if "," not in content_between_brackets:
         return text
-    text = text.replace(content_between_brackets, content_between_brackets.replace(", ", "]["))
-    text = text.replace(content_between_brackets, content_between_brackets.replace(",", "]["))
-
-    return text
+    # Shape guard: only rewrite when every item looks like a reference tag
+    # (``<int>:<id>``). Otherwise the block is plain bracketed prose and
+    # must be preserved verbatim (issue #2446).
+    items = content_between_brackets.split(",")
+    if not all(_REFERENCE_ITEM_RE.match(item) for item in items):
+        return text
+    # Rebuild the bracketed block in a single pass so mixed separator styles
+    # (``", "`` and bare ``","`` in the same block) are all split correctly.
+    # The previous two-step ``str.replace`` approach was broken: after the
+    # first pass rewrote ``", "`` occurrences, the original substring no
+    # longer existed in ``text`` and the second pass never fired, leaving
+    # bare commas unsplit (PR #2450 review).
+    joined = "][".join(item.strip() for item in items)
+    return text[: open_bracket_pos + 1] + joined + text[close_bracket_pos:]
 
 
 def process_streaming_references_complete(text_buffer: str) -> tuple[str, str]:
