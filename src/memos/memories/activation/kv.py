@@ -6,11 +6,84 @@ from datetime import datetime
 from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
+from memos.log import get_logger
 from memos.dependency import require_python_package
 from memos.llms.factory import LLMFactory
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import KVCacheItem
 from memos.memories.textual.item import TextualMemoryItem
+
+
+
+logger = get_logger(__name__)
+
+
+# RoPE re-rotation for cache merges.
+#
+# transformers applies rotary embedding BEFORE writing to the cache:
+#
+#     query_states, key_states = apply_rotary_pos_emb(query, key, cos, sin)
+#     past_key_value.update(key_states, value_states, ...)
+#
+# so a cached key for token i of a fragment encodes absolute position i OF THAT
+# FRAGMENT. Concatenating fragment 2 behind fragment 1 moves its keys to slots
+# L1..L1+L2-1 while their phase still says 0..L2-1. V is never rotated, which is
+# why a naive merge leaves V bit-exact against a reference while K diverges --
+# the fault is positional phase and nothing else.
+#
+# Fixing it means rotating each fragment forward by the offset it lands at. Per
+# pair the rotation composes exactly, R(a) then R(b) == R(a+b), which is what
+# makes this a rewrite of phase rather than an approximation.
+_COMPOSABLE_ROPE_TYPES = ("default", "linear")
+
+
+def _rope_inv_freq_and_type(model) -> tuple:
+    """(inv_freq, rope_type) for a HF causal LM, or (None, reason) if unavailable.
+
+    Reads the rotary embedding's own buffer rather than recomputing from config,
+    so any scaling already applied at init is respected.
+    """
+    rotary = getattr(getattr(model, "model", None), "rotary_emb", None)
+    if rotary is None:
+        rotary = getattr(model, "rotary_emb", None)
+    if rotary is None or getattr(rotary, "inv_freq", None) is None:
+        return None, "model exposes no rotary_emb.inv_freq"
+    rope_type = getattr(rotary, "rope_type", None)
+    if rope_type is None:
+        params = getattr(getattr(model, "config", None), "rope_parameters", None)
+        rope_type = (params or {}).get("rope_type", "default")
+    return rotary.inv_freq, rope_type
+
+
+def _rope_shift(keys, delta: int, inv_freq):
+    """Rotate already-RoPE'd keys forward by `delta` absolute positions.
+
+    ``keys`` is [..., seq, head_dim] and ``inv_freq`` is [rotary_dim / 2]. Only
+    the first ``rotary_dim`` channels are rotated, so models with a partial
+    rotary factor are handled by construction.
+
+    The delta rotation deliberately uses UNSCALED cos/sin. On a model with
+    ``attention_scaling != 1`` (YaRN-style) the stored key is already ``s * R(m) k``;
+    rotating with the scale reapplied would produce ``s^2``.
+    """
+    import torch
+
+    rotary_dim = int(inv_freq.shape[-1]) * 2
+    if rotary_dim > keys.shape[-1]:
+        raise ValueError(
+            f"inv_freq implies rotary_dim={rotary_dim} but head_dim={keys.shape[-1]}"
+        )
+    rot, passthrough = keys[..., :rotary_dim], keys[..., rotary_dim:]
+
+    freq = inv_freq.to(device=keys.device, dtype=torch.float32) * float(delta)
+    ang = torch.cat([freq, freq], dim=-1)
+    cos, sin = ang.cos().to(keys.dtype), ang.sin().to(keys.dtype)
+
+    half = rotary_dim // 2
+    x1, x2 = rot[..., :half], rot[..., half:]
+    rotated = torch.cat([-x2, x1], dim=-1)
+    out = rot * cos + rotated * sin
+    return out if passthrough.numel() == 0 else torch.cat([out, passthrough], dim=-1)
 
 
 class KVCacheMemory(BaseActMemory):
@@ -197,6 +270,59 @@ class KVCacheMemory(BaseActMemory):
         with open(file_path, "wb") as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
+    def _merge_inv_freq(self):
+        """inv_freq to re-rotate merged fragments with, or None to skip.
+
+        Returns None -- and warns -- when the model is unreachable or uses a rope
+        schedule whose rotations do not compose. Skipping reproduces the previous
+        (incorrect) behaviour rather than raising, so this change cannot break a
+        working deployment; the warning makes the case visible instead of silent.
+        """
+        model = getattr(self.llm, "model", None)
+        if model is None:
+            logger.warning(
+                "Merging %s KV cache fragments without positional re-rotation: the "
+                "configured LLM exposes no local model, so the rotary frequencies "
+                "are unavailable. Merged fragments after the first will carry the "
+                "phase of their original positions.",
+                "multiple",
+            )
+            return None
+
+        inv_freq, rope_type = _rope_inv_freq_and_type(model)
+        if inv_freq is None:
+            logger.warning(
+                "Merging KV cache fragments without positional re-rotation: %s.",
+                rope_type,
+            )
+            return None
+        if rope_type not in _COMPOSABLE_ROPE_TYPES:
+            logger.warning(
+                "Merging KV cache fragments without positional re-rotation: rope_type "
+                "%r recomputes its frequencies as the sequence grows, so a delta "
+                "rotation does not compose and re-rotating would be wrong in a "
+                "different way. Build a single cache for this model instead of "
+                "merging fragments.",
+                rope_type,
+            )
+            return None
+        return inv_freq
+
+    @staticmethod
+    def _rerotate_fragments(keys: list, inv_freq) -> list:
+        """Shift each fragment's keys to the offset it lands at after concat.
+
+        Fragment 0 keeps its phase; fragment k is rotated forward by the summed
+        length of everything before it. A no-op when inv_freq is None.
+        """
+        if inv_freq is None:
+            return keys
+        out, offset = [], 0
+        for frag in keys:
+            out.append(frag if offset == 0 else _rope_shift(frag, offset, inv_freq))
+            offset += frag.shape[-2]
+        return out
+
     def _concat_caches(self, caches: list[DynamicCache]) -> DynamicCache:
         """
         Faster concat merge: for each layer, gather all caches' tensors
@@ -208,6 +334,7 @@ class KVCacheMemory(BaseActMemory):
         if len(caches) == 1:
             return caches[0]
 
+        inv_freq = self._merge_inv_freq()
         merged = DynamicCache()
 
         # Check for new structure (layers)
@@ -231,6 +358,8 @@ class KVCacheMemory(BaseActMemory):
                 # gather all K and V for this layer
                 keys = [c.layers[layer].keys for c in caches]
                 vals = [c.layers[layer].values for c in caches]
+                # re-rotate each fragment to the position it will occupy
+                keys = self._rerotate_fragments(keys, inv_freq)
                 # single concat per layer
                 merged.layers[layer].keys = torch.cat(keys, dim=-2)
                 merged.layers[layer].values = torch.cat(vals, dim=-2)
@@ -243,6 +372,8 @@ class KVCacheMemory(BaseActMemory):
                 # gather all K and V for this layer
                 keys = [c.key_cache[layer] for c in caches]
                 vals = [c.value_cache[layer] for c in caches]
+                # re-rotate each fragment to the position it will occupy
+                keys = self._rerotate_fragments(keys, inv_freq)
                 # single concat per layer
                 merged.key_cache.append(torch.cat(keys, dim=-2))
                 merged.value_cache.append(torch.cat(vals, dim=-2))
