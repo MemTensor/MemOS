@@ -162,9 +162,11 @@ class TestSplitLargeItemSourcesNotDuplicated(unittest.TestCase):
             self.assertEqual(chunk.metadata.internal_info["origin"], "doc")
 
     def test_split_bails_before_marking_when_only_one_chunk(self):
-        """If chunker returns only 1 chunk the split path still returns 1
-        item carrying the original sources — no new source_chunk_index
-        marker required."""
+        """If the chunker returns only 1 chunk the split path still returns
+        1 item carrying the original sources. The single chunk IS the
+        owning chunk (chunk_index=0), so ``source_chunk_index=0`` is also
+        recorded in ``internal_info`` — this makes the owning-chunk marker
+        uniformly discoverable regardless of chunk_total."""
         self.reader.chunker.chunk.return_value = ["only chunk"]
         source = SourceMessage(type="chat", role="user", content="hi")
         parent = _make_fast_item("hi", sources=[source])
@@ -173,6 +175,12 @@ class TestSplitLargeItemSourcesNotDuplicated(unittest.TestCase):
 
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0].metadata.sources, [source])
+        # Single chunk is also the owning chunk — marker must be present
+        # so downstream consumers can locate the source-carrying chunk by
+        # internal_info["source_chunk_index"] without a chunk_total probe.
+        self.assertEqual(
+            chunks[0].metadata.internal_info.get("source_chunk_index"), 0
+        )
 
 
 class TestBuildWindowDedupesSources(unittest.TestCase):
@@ -260,9 +268,56 @@ class TestBuildWindowDedupesSources(unittest.TestCase):
         contents = {s.content for s in window.metadata.sources}
         self.assertEqual(contents, {"first", "second"})
 
+    def test_window_keeps_sources_distinguished_by_extra_fields(self):
+        """SourceMessage declares extra='allow', so two paragraphs from the
+        same document that differ only in an extra locator (page, offset,
+        span, …) must remain distinct after dedup. Both have
+        ``message_id=None`` and identical core fields, so a 6-field
+        signature would collapse them — regressing provenance granularity.
+        See issue #2453 OCR follow-up."""
+        s1 = SourceMessage(
+            type="doc",
+            role=None,
+            content="paragraph body",
+            message_id=None,
+            doc_path="docs/handbook.md",
+            page=12,
+        )
+        s2 = SourceMessage(
+            type="doc",
+            role=None,
+            content="paragraph body",
+            message_id=None,
+            doc_path="docs/handbook.md",
+            page=37,
+        )
+
+        items = [
+            _make_fast_item("first", sources=[s1]),
+            _make_fast_item("second", sources=[s2]),
+        ]
+
+        window = self.reader._build_window_from_items(
+            items, {"user_id": "u1", "session_id": "sess1"}
+        )
+
+        self.assertIsNotNone(window)
+        self.assertEqual(
+            len(window.metadata.sources),
+            2,
+            "Sources that differ only in extra fields (e.g. page) must not "
+            "be collapsed by the signature — provenance granularity lost.",
+        )
+        pages = {getattr(s, "page", None) for s in window.metadata.sources}
+        self.assertEqual(pages, {12, 37})
+
     def test_window_role_detection_still_works_after_dedup(self):
         """Dedup must not break the role-based memory_type assignment
-        (UserMemory when sources only contain `user` role)."""
+        (UserMemory when sources only contain `user` role) AND must retain
+        the owning source. Without the sources-count assertion, a buggy
+        dedup that strips the user-role source entirely would still leave
+        ``roles`` empty — role detection then defaults away from
+        ``assistant`` and the test passes as a false positive."""
         source = SourceMessage(type="chat", role="user", content="hi", message_id="m-1")
         items = [_make_fast_item(f"c{i}", sources=[source]) for i in range(3)]
 
@@ -271,6 +326,11 @@ class TestBuildWindowDedupesSources(unittest.TestCase):
         )
 
         self.assertIsNotNone(window)
+        self.assertEqual(
+            len(window.metadata.sources),
+            1,
+            "Dedup must retain exactly 1 source, not drop all",
+        )
         self.assertEqual(window.metadata.memory_type, "UserMemory")
 
 
@@ -316,12 +376,23 @@ class TestEndToEndSourcesCountInvariant(unittest.TestCase):
         windows = self.reader._concat_multi_modal_memories([parent], max_tokens=10)
 
         self.assertTrue(len(windows) >= 1)
+        # At least one window must carry the owning source. If dedup
+        # over-collapses (or the owning chunk is dropped entirely),
+        # every window ends up with `sources=[]` and the ≤ 1 check
+        # alone would silently pass — defeating the regression guard.
+        windows_with_sources = [w for w in windows if w.metadata.sources]
+        self.assertGreaterEqual(
+            len(windows_with_sources),
+            1,
+            "At least one window must carry the owning source; no window had any "
+            "source — possible regression where the source is being dropped entirely.",
+        )
         for w in windows:
             # The key assertion: no source multiplication.
             self.assertLessEqual(
-                len(w.metadata.sources),
+                len(w.metadata.sources or []),
                 1,
-                f"Window carries {len(w.metadata.sources)} sources; "
+                f"Window carries {len(w.metadata.sources or [])} sources; "
                 "expected ≤ 1 for a single-origin long message.",
             )
 

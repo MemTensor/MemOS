@@ -37,12 +37,21 @@ def _source_signature(source: Any) -> tuple:
     items of a sliding window.
 
     Two sources that reference the same origin message — same role, same
-    content, same locators — collapse to the same signature regardless of
-    object identity. See issue #2453.
+    content, same locators, AND same extra provenance (url, page, offset,
+    span, local_confidence, …) — collapse to the same signature regardless
+    of object identity. See issue #2453.
 
-    For objects that cannot be introspected (unexpected shapes) fall back
-    to Python object identity so a mystery object is at worst treated as
-    unique.
+    `SourceMessage` declares ``model_config = ConfigDict(extra="allow")`` so
+    callers can attach arbitrary provenance attributes. The signature
+    therefore folds in every non-None key returned by ``model_dump`` (not
+    just the six known fields): two paragraphs from the same document that
+    differ only in ``page`` / ``offset`` must remain distinct after dedup.
+
+    For objects that cannot be introspected (unexpected shapes) or that
+    carry unhashable extra values (e.g. a ``dict`` or ``list`` in a
+    provenance field), fall back to Python object identity so a mystery
+    source is at worst treated as unique rather than being incorrectly
+    collapsed with another.
     """
     if hasattr(source, "model_dump"):
         try:
@@ -53,14 +62,14 @@ def _source_signature(source: Any) -> tuple:
         data = source
     else:
         return (id(source),)
-    return (
-        data.get("type"),
-        data.get("role"),
-        data.get("message_id"),
-        data.get("chat_time"),
-        data.get("doc_path"),
-        data.get("content"),
-    )
+    # Fully-deterministic signature across all fields, including extras
+    # allowed by SourceMessage's ConfigDict(extra="allow").
+    try:
+        return tuple(sorted((k, v) for k, v in data.items() if v is not None))
+    except TypeError:
+        # Unhashable value in an extra field (e.g. a dict / list) — fall
+        # back to identity so we never silently collapse distinct sources.
+        return (id(source),)
 
 
 class MultiModalStructMemReader(SimpleStructMemReader):
