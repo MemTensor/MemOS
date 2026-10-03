@@ -54,7 +54,13 @@ def _strip_trailing_commas(text: str) -> str:
     out: list[str] = []
     in_string = False
     escape = False
-    pending_comma_idx: int | None = None  # index into ``out`` of a comma eligible for removal
+    # Indices into ``out`` of every comma that is still a candidate for
+    # removal.  A ``}`` or ``]`` closer flushes the whole run; any other
+    # non-whitespace token invalidates them.  We track *all* pending commas
+    # (not just the latest one) so that runs like ``{"a":1,,}`` collapse to
+    # ``{"a":1}`` in a single pass instead of leaving an earlier comma behind
+    # and failing the subsequent ``json.loads`` silently (issue #2456 OCR).
+    pending_comma_indices: list[int] = []
     for ch in text:
         if in_string:
             out.append(ch)
@@ -68,14 +74,14 @@ def _strip_trailing_commas(text: str) -> str:
 
         # ---- outside string ----
         if ch == '"':
-            pending_comma_idx = None
+            pending_comma_indices.clear()
             in_string = True
             out.append(ch)
             continue
 
         if ch == ",":
             out.append(ch)
-            pending_comma_idx = len(out) - 1
+            pending_comma_indices.append(len(out) - 1)
             continue
 
         if ch in (" ", "\t", "\n", "\r"):
@@ -83,14 +89,16 @@ def _strip_trailing_commas(text: str) -> str:
             out.append(ch)
             continue
 
-        if ch in ("}", "]") and pending_comma_idx is not None:
-            # Drop the pending comma; whitespace between comma and closer stays.
-            out[pending_comma_idx] = ""
-            pending_comma_idx = None
+        if ch in ("}", "]") and pending_comma_indices:
+            # Drop every pending comma in the run (handles ``,,}``, ``, ,}``
+            # etc.); whitespace between the commas and the closer stays.
+            for idx in pending_comma_indices:
+                out[idx] = ""
+            pending_comma_indices.clear()
             out.append(ch)
             continue
 
-        pending_comma_idx = None
+        pending_comma_indices.clear()
         out.append(ch)
 
     return "".join(out)
@@ -147,8 +155,17 @@ def parse_json_result(response_text: str) -> dict:
                     e,
                 )
                 return result
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as repair_err:
+                # The repair modified the text but the result is still not
+                # valid JSON (e.g. multiple orthogonal defects beyond
+                # trailing commas).  Surface at DEBUG so future
+                # investigation has a breadcrumb; the outer WARNING below
+                # still fires with the original error for the operator.
+                logger.debug(
+                    "[JSONParse] Trailing-comma repair did not fully fix "
+                    "JSON: %s",
+                    repair_err,
+                )
 
         logger.warning(
             f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \

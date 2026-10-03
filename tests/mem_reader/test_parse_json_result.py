@@ -69,12 +69,31 @@ class TestParseJsonResultTrailingComma(unittest.TestCase):
         self.assertEqual(parse_json_result(raw), {"msg": "foo,}"})
 
     def test_escaped_quote_inside_string_does_not_confuse_scanner(self):
-        """``\\"`` inside a string must keep the scanner in-string, so a
-        trailing comma that follows (still inside the string) stays."""
-        raw = '{"msg": "he said \\"hi,\\" then left,}"}'
+        """``\\"`` inside a string must keep the scanner in-string so that
+        a trailing comma *outside* the string is still repaired correctly
+        and commas *inside* the string are preserved."""
+        # The outer object has a real trailing comma (triggers repair);
+        # the escaped quotes inside the value must not confuse the scanner
+        # into leaving in-string and treating one of the inner commas as
+        # the one to remove.  Previously the raw string had the trailing
+        # ``,}`` *inside* the quoted value, so ``json.loads`` succeeded on
+        # the first try and the repair branch was never exercised.
+        raw = '{"msg": "he said \\"hi,\\" then left",}'
         self.assertEqual(
             parse_json_result(raw),
-            {"msg": 'he said "hi," then left,}'},
+            {"msg": 'he said "hi," then left'},
+        )
+
+    def test_double_trailing_comma_is_fully_repaired(self):
+        """OCR follow-up to #2456: a run like ``{"a": 1,,}`` must collapse
+        to ``{"a": 1}``.  Earlier revision only removed the *latest*
+        pending comma, leaving ``{"a": 1,}`` which then failed
+        ``json.loads`` silently and surfaced as an empty ``/product/add``
+        response."""
+        self.assertEqual(parse_json_result('{"a": 1,,}'), {"a": 1})
+        self.assertEqual(
+            parse_json_result('{"xs": [1, 2,,,]}'),
+            {"xs": [1, 2]},
         )
 
     def test_valid_json_is_unchanged(self):
