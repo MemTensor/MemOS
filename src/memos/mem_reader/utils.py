@@ -35,6 +35,67 @@ def derive_key(text: str, max_len: int = 80) -> str:
     return (sent[:max_len]).strip()
 
 
+def _strip_trailing_commas(text: str) -> str:
+    """Remove commas that sit immediately before ``}`` or ``]`` (ignoring
+    whitespace in between), but only when the comma is **outside** a quoted
+    string. Respects backslash-escaped quotes inside strings.
+
+    This repairs the single most common malformed-JSON failure mode from
+    permissive LLM output (e.g. ``[{"value": "x"},]`` or ``{"a": 1,}``) that
+    historically caused :func:`parse_json_result` to silently return ``{}``
+    and the ``/product/add`` endpoint to report a success with no stored
+    memories (issue #2456).
+
+    The scanner is deliberately minimal: it does not try to invent missing
+    values, close unmatched braces, or repair arbitrary malformed output.
+    Those jobs stay with the ``_cheap_close`` branch and the final ``{}``
+    return.
+    """
+    out: list[str] = []
+    in_string = False
+    escape = False
+    pending_comma_idx: int | None = None  # index into ``out`` of a comma eligible for removal
+    for ch in text:
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        # ---- outside string ----
+        if ch == '"':
+            pending_comma_idx = None
+            in_string = True
+            out.append(ch)
+            continue
+
+        if ch == ",":
+            out.append(ch)
+            pending_comma_idx = len(out) - 1
+            continue
+
+        if ch in (" ", "\t", "\n", "\r"):
+            # whitespace does not invalidate a pending trailing-comma repair
+            out.append(ch)
+            continue
+
+        if ch in ("}", "]") and pending_comma_idx is not None:
+            # Drop the pending comma; whitespace between comma and closer stays.
+            out[pending_comma_idx] = ""
+            pending_comma_idx = None
+            out.append(ch)
+            continue
+
+        pending_comma_idx = None
+        out.append(ch)
+
+    return "".join(out)
+
+
 def parse_json_result(response_text: str) -> dict:
     s = (response_text or "").strip()
 
@@ -70,6 +131,25 @@ def parse_json_result(response_text: str) -> dict:
         if "Invalid \\escape" in str(e):
             s = s.replace("\\", "\\\\")
             return json.loads(s)
+
+        # Issue #2456: last-chance narrow repair for trailing commas before
+        # ``}`` / ``]`` (outside quoted strings). Many LLMs — glm, kimi,
+        # z.ai gateway — occasionally emit ``[...],]`` which is invalid JSON
+        # and used to be silently dropped as ``{}``, surfacing as an empty
+        # successful ``/product/add``.
+        repaired = _strip_trailing_commas(t)
+        if repaired != t:
+            try:
+                result = json.loads(repaired)
+                logger.warning(
+                    "[JSONParse] Repaired malformed JSON by stripping "
+                    "trailing comma(s) before closer: %s",
+                    e,
+                )
+                return result
+            except json.JSONDecodeError:
+                pass
+
         logger.warning(
             f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \
             json: {s}"
