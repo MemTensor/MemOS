@@ -182,6 +182,31 @@ class RebuildIfStaleRegressionTests(_StaleGuardTestBase):
         self.assertFalse(daemon_manager_mod._rebuild_if_stale())
         self.run_mock.assert_called_once()
 
+    def test_dist_dts_artifacts_do_not_trigger_spurious_rebuild(self) -> None:
+        """OCR regression: `dist/*.d.ts` must not bump `newest_source`.
+
+        `tsconfig.json` has `declaration: true` + `outDir: "dist"`, so a
+        successful build writes `.d.ts` files under `dist/`. If those
+        artifacts are picked up by the `rglob("*.ts")` source scan (they
+        end in `.ts`), a `.d.ts` with mtime > the compiled `.mjs`/`.cjs`
+        would make the guard see sources as newer and rebuild on every
+        startup forever. Fix: exclude the `dist/` subtree from the scan.
+        """
+        source_mtime = 1_000.0
+        compiled_mtime = source_mtime + 10.0
+        # Fresh TS source and compiled entries...
+        _write(self.root / "core" / "types.ts", source_mtime)
+        _write(self.root / "dist" / "bridge.mjs", compiled_mtime)
+        _write(self.root / "dist" / "bridge.cjs", compiled_mtime)
+        # ...and a declaration file written by the previous build whose
+        # mtime happens to be newer than the compiled artifacts (e.g.
+        # the compiler flushed .d.ts after bridge.mjs).
+        _write(self.root / "dist" / "bridge.d.ts", compiled_mtime + 5.0)
+
+        self.assertTrue(daemon_manager_mod._rebuild_if_stale())
+        # No rebuild — the `.d.ts` under dist/ must not count as source.
+        self.run_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

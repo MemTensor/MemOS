@@ -210,8 +210,15 @@ def _rebuild_if_stale() -> bool:
         plugin_root / "dist" / "bridge.cjs",
     )
     existing = [p for p in compiled_candidates if p.exists()]
+    # Exclude the `dist/` subtree from the source scan: `tsconfig.json`
+    # has `"declaration": true` + `"outDir": "dist"`, so each successful
+    # build writes `.d.ts` declaration files under `dist/` whose mtimes
+    # would otherwise be picked up by `rglob("*.ts")` and inflate
+    # `newest_source` past the compiled artifacts, triggering a spurious
+    # rebuild on the very next startup (and so on in a loop).
+    dist_dir = plugin_root / "dist"
     newest_source = max(
-        (p.stat().st_mtime for p in plugin_root.rglob("*.ts")),
+        (p.stat().st_mtime for p in plugin_root.rglob("*.ts") if dist_dir not in p.parents),
         default=0.0,
     )
 
@@ -223,7 +230,10 @@ def _rebuild_if_stale() -> bool:
         # stale.
         if newest_source <= min(compiled_mtimes.values()):
             return True
-        stale_names = sorted(p.name for p, m in compiled_mtimes.items() if m < newest_source)
+        # Mirror the guard's "not fresh" expression (`newest_source <= m`
+        # ⇒ fresh) so the logged `trigger` list stays consistent with the
+        # rebuild decision above.
+        stale_names = sorted(p.name for p, m in compiled_mtimes.items() if not (newest_source <= m))
         trigger = ", ".join(f"dist/{n}" for n in stale_names) or "dist/bridge.*"
         logger.info("MemOS: TypeScript source newer than %s — rebuilding...", trigger)
     else:
