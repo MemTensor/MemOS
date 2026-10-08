@@ -285,8 +285,9 @@ export function makeTracesRepo(db: StorageDb) {
      * multi-GB of embeddings into JS memory.
      *
      * Why an uncapped read exists at all: the paginated
-     * `list({ episodeId })` path silently truncates to
-     * `PageOptions.limit` (default 500). That cap breaks capture-side
+     * `list({ episodeId })` path used to silently truncate to
+     * `PageOptions.limit` (capped at 500 before #2401, when no
+     * `limit` also meant a 500-row page). That cap breaks capture-side
      * dedup (#2076): when an episode grows past the cap, the next
      * runLite / runReflect only sees the newest 500 rows, treats
      * every older step as "novel", and re-inserts the whole tail

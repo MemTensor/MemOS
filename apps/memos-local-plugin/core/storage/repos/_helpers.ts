@@ -48,14 +48,23 @@ export function nullable<T>(v: T | undefined): T | null {
 
 export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string): string {
   const newestFirst = opts?.newestFirst !== false;
-  const limit = clampLimit(opts?.limit ?? 500);
-  const offset = Math.max(opts?.offset ?? 0, 0);
-  return `ORDER BY ${tsColumn} ${newestFirst ? "DESC" : "ASC"} LIMIT ${limit} OFFSET ${offset}`;
+  const order = `ORDER BY ${tsColumn} ${newestFirst ? "DESC" : "ASC"}`;
+  // Omitting `limit` means "all matching rows" (#2401) — the same contract
+  // the episode-scan fix (#2076) pinned for `traces.list({ episodeId })`.
+  // Callers that want a page must pass an explicit limit. Never silently
+  // truncate scan paths (counters, dedup sweeps, clustering) to a page.
+  // (SQLite has no OFFSET without LIMIT, so offset only applies when a
+  // limit is present.)
+  if (opts?.limit === undefined) return order;
+  const offset = Math.max(opts.offset ?? 0, 0);
+  return `${order} LIMIT ${clampLimit(opts.limit)} OFFSET ${offset}`;
 }
 
 export function clampLimit(n: number): number {
+  // Defensive floor for invalid input; explicit limits are honored up to a
+  // high safety ceiling instead of being clamped to a 500-row page (#2401).
   if (!Number.isFinite(n) || n <= 0) return 500;
-  return Math.min(Math.trunc(n), 500);
+  return Math.min(Math.trunc(n), 100_000);
 }
 
 export function timeRangeWhere(
