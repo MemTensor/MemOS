@@ -9,8 +9,12 @@
  * `LlmClient.completeJson` that records the exact `messages` array
  * the summarizer sends, and assert on the system-prompt content.
  *
+ * The last two cases guard against OCR review feedback on PR #2471
+ * (English-only positive example, English-only negative-prefix rule).
+ *
  * If these assertions start failing, the prompt text has drifted;
- * revisit issue #2469 before loosening them.
+ * revisit issue #2469 and the PR #2471 OCR findings before loosening
+ * them.
  */
 
 import { describe, expect, it } from "vitest";
@@ -124,5 +128,43 @@ describe("capture/summarizer SYSTEM_PROMPT (issue #2469)", () => {
     // ambiguous one that triggered this bug. Guard against regressions
     // that silently reintroduce it.
     expect(sys!.content).not.toContain("original language");
+  });
+
+  it("gives the language rule more than one worked example", async () => {
+    // OCR review of PR #2471 flagged that anchoring the language rule on
+    // a single English example may still prime models to default to
+    // English for non-English conversations. The prompt now carries at
+    // least one additional, non-English worked example (currently
+    // French) so no single language dominates the positive rule.
+    const recorder: SpyRecorder = { calls: [] };
+    const summarizer = createSummarizer({ llm: spyLlm(recorder) });
+
+    await summarizer.summarize(makeStep({ userText: "hello" }));
+
+    const sys = recorder.calls[0]!.messages.find((m) => m.role === "system");
+    expect(sys).toBeTruthy();
+    expect(sys!.content).toContain("English USER text");
+    expect(sys!.content).toContain("French USER text");
+  });
+
+  it("extends the negative-prefix rule to languages beyond English", async () => {
+    // OCR review of PR #2471 was concerned that removing the Chinese
+    // "用户说了" example could regress Chinese conversations — the model
+    // might still prepend a Chinese "the user said…" opener because
+    // only the English form was called out. We cover that by making
+    // the rule explicitly language-agnostic rather than by re-adding a
+    // CJK example (the lone CJK anchor was the proven cause of
+    // #2469), so the guard holds for Chinese, Japanese, Korean,
+    // French, and every other language without priming any one of
+    // them.
+    const recorder: SpyRecorder = { calls: [] };
+    const summarizer = createSummarizer({ llm: spyLlm(recorder) });
+
+    await summarizer.summarize(makeStep({ userText: "hello" }));
+
+    const sys = recorder.calls[0]!.messages.find((m) => m.role === "system");
+    expect(sys).toBeTruthy();
+    expect(sys!.content).toContain("The user said");
+    expect(sys!.content.toLowerCase()).toContain("any other language");
   });
 });
