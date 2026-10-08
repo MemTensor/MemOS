@@ -74,7 +74,14 @@ export interface OpenDbOptions {
 // ─── Repository query helpers ─────────────────────────────────────────────────
 
 export interface PageOptions {
-  limit?: number;       // default 50
+  /**
+   * Omit for all matching rows — the repo adds no LIMIT clause (#2401),
+   * mirroring the #2076 episode-scan contract. An invalid value (non-finite,
+   * 0, negative) is treated exactly like an omitted one: no LIMIT clause,
+   * never a substituted page. Explicit positive finite values are honored
+   * up to `MAX_QUERY_LIMIT` (see `clampLimit`).
+   */
+  limit?: number;
   offset?: number;      // default 0
   /** If true, orders DESC by the repo's canonical time column. Default true. */
   newestFirst?: boolean;
