@@ -76,8 +76,10 @@ export interface OpenDbOptions {
 export interface PageOptions {
   /**
    * Omit for all matching rows — the repo adds no LIMIT clause (#2401),
-   * mirroring the #2076 episode-scan contract. Explicit values are honored
-   * up to a high safety ceiling (see `clampLimit`).
+   * mirroring the #2076 episode-scan contract. An invalid value (non-finite,
+   * 0, negative) is treated exactly like an omitted one: no LIMIT clause,
+   * never a substituted page. Explicit positive finite values are honored
+   * up to `MAX_QUERY_LIMIT` (see `clampLimit`).
    */
   limit?: number;
   offset?: number;      // default 0

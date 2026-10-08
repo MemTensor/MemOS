@@ -12,21 +12,26 @@
  *     counting, ...).
  *
  * The contract being pinned here matches #2076's episode-scan fix:
- * an explicit limit is respected (up to a high safety ceiling), and no
- * limit means no LIMIT clause.
+ * an explicit limit is respected (up to the MAX_QUERY_LIMIT safety
+ * ceiling), and no limit — or an invalid one (non-finite, 0, negative) —
+ * means no LIMIT clause at all.
  */
 
 import { describe, it, expect } from "vitest";
 import Database from "better-sqlite3";
 
-import { buildPageClauses, clampLimit } from "../../../core/storage/repos/_helpers.js";
+import {
+  buildPageClauses,
+  clampLimit,
+  MAX_QUERY_LIMIT,
+} from "../../../core/storage/repos/_helpers.js";
 import { makeTracesRepo } from "../../../core/storage/repos/traces.js";
 import { makeTmpDb } from "../../helpers/tmp-db.js";
 import type { PolicyRow, TraceRow } from "../../../core/types.js";
 
 describe("clampLimit — explicit limits are respected (#2401)", () => {
   it("does not cap large explicit limits at 500", () => {
-    expect(clampLimit(100_000)).toBeGreaterThan(500);
+    expect(clampLimit(MAX_QUERY_LIMIT)).toBeGreaterThan(500);
     expect(clampLimit(5_000)).toBe(5_000);
     expect(clampLimit(1_000)).toBe(1_000);
   });
@@ -36,10 +41,19 @@ describe("clampLimit — explicit limits are respected (#2401)", () => {
     expect(clampLimit(1)).toBe(1);
   });
 
-  it("falls back to a sane positive page size for invalid input", () => {
-    expect(clampLimit(0)).toBeGreaterThan(0);
-    expect(clampLimit(-5)).toBeGreaterThan(0);
-    expect(clampLimit(Number.NaN)).toBeGreaterThan(0);
+  it("caps oversized explicit limits at MAX_QUERY_LIMIT", () => {
+    expect(clampLimit(MAX_QUERY_LIMIT + 1)).toBe(MAX_QUERY_LIMIT);
+    expect(clampLimit(1_000_000)).toBe(MAX_QUERY_LIMIT);
+  });
+
+  it("falls back to the ceiling (not a 500-row page) for invalid input", () => {
+    // Defensive floor for direct callers (e.g. episodes.listClosedPage).
+    // Query paths go through buildPageClauses, where an invalid limit
+    // means "no LIMIT clause" instead — see below.
+    expect(clampLimit(0)).toBe(MAX_QUERY_LIMIT);
+    expect(clampLimit(-5)).toBe(MAX_QUERY_LIMIT);
+    expect(clampLimit(Number.NaN)).toBe(MAX_QUERY_LIMIT);
+    expect(clampLimit(Number.POSITIVE_INFINITY)).toBe(MAX_QUERY_LIMIT);
   });
 });
 
@@ -58,12 +72,24 @@ describe("buildPageClauses — no limit means no LIMIT (#2401)", () => {
     expect(sql).toMatch(/ORDER BY ts ASC/);
   });
 
+  it("treats invalid limits (<= 0, non-finite) like an omitted limit", () => {
+    // An invalid limit must not silently substitute a page (#2401 shape):
+    // it means "all matching rows", same as omitting the field.
+    for (const invalid of [0, -1, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const sql = buildPageClauses({ limit: invalid }, "ts");
+      expect(sql, `limit=${invalid}`).not.toMatch(/LIMIT/);
+      expect(sql, `limit=${invalid}`).toMatch(/ORDER BY ts DESC/);
+    }
+  });
+
   it("keeps the LIMIT clause when a limit is given", () => {
     expect(buildPageClauses({ limit: 20 }, "ts")).toMatch(/LIMIT 20 OFFSET 0/);
   });
 
   it("respects a large explicit limit instead of clamping to 500", () => {
-    expect(buildPageClauses({ limit: 100_000 }, "ts")).toMatch(/LIMIT 100000 OFFSET 0/);
+    expect(buildPageClauses({ limit: MAX_QUERY_LIMIT }, "ts")).toMatch(
+      new RegExp(`LIMIT ${MAX_QUERY_LIMIT} OFFSET 0`),
+    );
   });
 });
 

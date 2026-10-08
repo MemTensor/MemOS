@@ -46,6 +46,19 @@ export function nullable<T>(v: T | undefined): T | null {
   return v === undefined ? null : v;
 }
 
+/**
+ * Maximum rows a single paged query may return. Explicit limits are honored
+ * up to this ceiling instead of being clamped to a 500-row page (#2401);
+ * it also bounds the result when a direct `clampLimit` caller passes
+ * invalid input. Tune here, not at call sites.
+ */
+export const MAX_QUERY_LIMIT = 100_000;
+
+/** True only for finite positive numbers — anything else means "all rows". */
+function hasUsableLimit(n: number | undefined): n is number {
+  return n !== undefined && Number.isFinite(n) && n > 0;
+}
+
 export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string): string {
   const newestFirst = opts?.newestFirst !== false;
   const order = `ORDER BY ${tsColumn} ${newestFirst ? "DESC" : "ASC"}`;
@@ -53,18 +66,23 @@ export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string
   // the episode-scan fix (#2076) pinned for `traces.list({ episodeId })`.
   // Callers that want a page must pass an explicit limit. Never silently
   // truncate scan paths (counters, dedup sweeps, clustering) to a page.
+  // An invalid limit (non-finite, 0, negative) is treated the same as an
+  // omitted one — it must not silently substitute a page either.
   // (SQLite has no OFFSET without LIMIT, so offset only applies when a
   // limit is present.)
-  if (opts?.limit === undefined) return order;
+  if (!hasUsableLimit(opts?.limit)) return order;
   const offset = Math.max(opts.offset ?? 0, 0);
   return `${order} LIMIT ${clampLimit(opts.limit)} OFFSET ${offset}`;
 }
 
 export function clampLimit(n: number): number {
-  // Defensive floor for invalid input; explicit limits are honored up to a
-  // high safety ceiling instead of being clamped to a 500-row page (#2401).
-  if (!Number.isFinite(n) || n <= 0) return 500;
-  return Math.min(Math.trunc(n), 100_000);
+  // Explicit limits are honored up to the MAX_QUERY_LIMIT safety ceiling
+  // instead of being clamped to a 500-row page (#2401). For invalid input,
+  // return the ceiling as a defensive floor — query paths never hit this
+  // (buildPageClauses treats invalid limits as "no LIMIT clause"), but
+  // direct callers (e.g. episodes.listClosedPage) still get a sane bound.
+  if (!Number.isFinite(n) || n <= 0) return MAX_QUERY_LIMIT;
+  return Math.min(Math.trunc(n), MAX_QUERY_LIMIT);
 }
 
 export function timeRangeWhere(
