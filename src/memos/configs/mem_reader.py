@@ -59,6 +59,23 @@ class BaseMemReaderConfig(BaseConfig):
     chat_chunker: dict[str, Any] = Field(
         default=None, description="Configuration for the MemReader chat chunk strategy"
     )
+    chat_window_max_tokens: int = Field(
+        default=1024,
+        description=(
+            "Maximum number of tokens per memory item. Items above this size are split "
+            "before embedding. The effective split budget is the minimum of this value "
+            "and the embedder's per-item limit, so texts that the embedder would reject "
+            "are never handed to it whole (issue #2461)."
+        ),
+    )
+
+    @field_validator("chat_window_max_tokens")
+    @classmethod
+    def validate_chat_window_max_tokens(cls, value: int) -> int:
+        """Reject non-positive windows; they would make every item unsplittable."""
+        if value <= 0:
+            raise ValueError("chat_window_max_tokens must be a positive integer")
+        return value
 
 
 class SimpleStructMemReaderConfig(BaseMemReaderConfig):
