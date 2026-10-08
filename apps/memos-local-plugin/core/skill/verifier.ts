@@ -118,13 +118,49 @@ function computeResonance(
   if (draftTokens.size === 0) return 0;
   let hit = 0;
   for (const t of evidence) {
-    const txt = `${t.userText}\n${t.agentText}\n${t.reflection ?? ""}`.toLowerCase();
+    // Tool sub-steps leave `userText`/`agentText` empty on purpose (the
+    // viewer's flattenChat contract — see core/capture/step-extractor.ts),
+    // so their real payload lives in `summary` and `toolCalls`. Include
+    // those in the resonance text or tool-heavy sessions contribute empty
+    // strings and every draft fails with resonance-low. Names + inputs
+    // only — outputs are unbounded. Inputs are capped at the same 300-char
+    // horizon the embedder uses (core/capture/embedder.ts), so an oversized
+    // tool input can neither dominate the token budget nor force spurious
+    // matches on the reward-tick path. Names get a tighter 60-char cap for
+    // the same reason. `ToolCallDTO.name` is typed `string`, but rows
+    // replayed from persistence or older schema versions may carry
+    // null/undefined at runtime, so go through `safeStringify` like the
+    // input field instead of trusting the annotation.
+    const toolTxt = (t.toolCalls ?? [])
+      .map(
+        (tc) =>
+          `${safeStringify(tc.name).slice(0, 60)} ${safeStringify(tc.input).slice(0, 300)}`,
+      )
+      .join(" ");
+    const txt =
+      `${t.userText}\n${t.agentText}\n${t.summary ?? ""}\n${t.reflection ?? ""}\n${toolTxt}`.toLowerCase();
     const toks = tokensOf(txt);
     let overlap = 0;
     for (const tok of draftTokens) if (toks.has(tok)) overlap += 1;
     if (overlap >= 2) hit += 1;
   }
   return hit / evidence.length;
+}
+
+function safeStringify(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    try {
+      return String(v);
+    } catch {
+      // A custom .toString() may throw too — degrade to a sentinel rather
+      // than let verification blow up on a hostile payload.
+      return "[unstringifiable]";
+    }
+  }
 }
 
 function tokensOf(s: string): Set<string> {
