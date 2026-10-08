@@ -362,6 +362,74 @@ describe("llm/fetcher", () => {
     }
   });
 
+  // Real undici shape: *every* network-level failure surfaces as
+  // `TypeError: fetch failed`, with the actual errno on `err.cause`.
+  // See https://github.com/MemTensor/MemOS/issues/2379 — these used to be
+  // classified transient=false and never retried.
+  it("retries a real undici network failure (fetch failed with ECONNREFUSED cause)", async () => {
+    vi.useFakeTimers();
+    const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+      code: "ECONNREFUSED",
+    });
+    const f = mockFetch([
+      new TypeError("fetch failed", { cause }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+
+    const pending = httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 5_000,
+      maxRetries: 1,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(pending).resolves.toMatchObject({ json: { ok: 1 } });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a real undici network failure (fetch failed with ECONNRESET cause)", async () => {
+    vi.useFakeTimers();
+    const cause = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    const f = mockFetch([
+      new TypeError("fetch failed", { cause }),
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    ]);
+
+    const pending = httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 5_000,
+      maxRetries: 1,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(pending).resolves.toMatchObject({ json: { ok: 1 } });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a TLS certificate failure even though undici also reports fetch failed", async () => {
+    const cause = Object.assign(
+      new Error("Hostname/IP does not match certificate's altnames"),
+      { code: "ERR_TLS_CERT_ALTNAME_INVALID" },
+    );
+    const f = mockFetch([new TypeError("fetch failed", { cause })]);
+
+    await expect(
+      httpPostJson({
+        url: "https://x",
+        body: {},
+        timeoutMs: 5_000,
+        maxRetries: 2,
+        provider: "openai_compatible",
+        log: nullLog(),
+      }),
+    ).rejects.toMatchObject({ code: "llm_unavailable" });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
   it("httpPostStream returns a ReadableStream body on 200", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(ctrl) {
