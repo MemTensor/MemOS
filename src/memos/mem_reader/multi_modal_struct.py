@@ -217,21 +217,24 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         """
         raw_texts: list[str] = []
         try:
-            for chunk in self.chunker.chunk(text):
-                # Different chunkers are not fully consistent: some return Chunk-like
-                # objects with `.text`, while others return raw strings.
-                chunk_text = chunk.text if hasattr(chunk, "text") else chunk
-                if not chunk_text or not chunk_text.strip():
-                    continue
-                if self._count_tokens_safe(chunk_text) > max_tokens:
-                    raw_texts.extend(self._hard_split_text(chunk_text, max_tokens))
-                else:
-                    raw_texts.append(chunk_text)
+            # Materialise inside the guard: some chunkers raise lazily while iterating.
+            chunks = list(self.chunker.chunk(text))
         except Exception as e:
             logger.warning(
                 f"[MultiModalStruct] Chunker failed ({e}); falling back to a hard split."
             )
             return self._hard_split_text(text, max_tokens)
+
+        for chunk in chunks:
+            # Different chunkers are not fully consistent: some return Chunk-like
+            # objects with `.text`, while others return raw strings.
+            chunk_text = chunk.text if hasattr(chunk, "text") else chunk
+            if not chunk_text or not chunk_text.strip():
+                continue
+            if self._count_tokens_safe(chunk_text) > max_tokens:
+                raw_texts.extend(self._hard_split_text(chunk_text, max_tokens))
+            else:
+                raw_texts.append(chunk_text)
 
         if not raw_texts:
             # The chunker cannot segment this text at all; hard-split it directly.
@@ -347,7 +350,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Check if adding this item would exceed max_tokens (same logic as _iter_chat_windows)
             # Note: After splitting large items, each item should be <= max_tokens,
             # but we still check to handle edge cases
-            if self._count_tokens(cur_text + line) > max_tokens and cur_text:
+            if self._count_tokens_safe(cur_text + line) > max_tokens and cur_text:
                 # Yield current window
                 window = self._build_window_from_items(buf_items, info)
                 if window:
@@ -357,7 +360,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 # (same logic as _iter_chat_windows)
                 while (
                     buf_items
-                    and self._count_tokens("".join([it.memory or "" for it in buf_items])) > overlap
+                    and self._count_tokens_safe("".join([it.memory or "" for it in buf_items]))
+                    > overlap
                 ):
                     buf_items.pop(0)
                 # Recalculate cur_text from remaining items

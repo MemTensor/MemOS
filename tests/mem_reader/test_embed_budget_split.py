@@ -178,10 +178,27 @@ class TestHardSplit(unittest.TestCase):
 
     def test_split_prefers_punctuation_boundary(self):
         reader = _build_reader(_FakeEmbedder(limit=10_000), window=10)
-        # "。" should be the cut point rather than an arbitrary character position.
-        text = "一二三四五六七八九十。" + "x" * 40
+        # The "。" fits inside the budget-sized prefix, so it must be preferred as the
+        # cut point over an arbitrary character position.
+        text = "一二三四五。六七八九十" + "x" * 40
         pieces = reader._hard_split_text(text, 10)
         self.assertTrue(pieces[0].endswith("。"), pieces[0])
+        self.assertLessEqual(reader._count_tokens(pieces[0]), 10)
+
+    def test_split_index_never_exceeds_budget(self):
+        """A terminator just past the budget must not be kept on the left side.
+
+        Returning ``best + 1`` here produced a prefix of ``budget + 1`` tokens, which the
+        provider rejects outright when the embedder limit is the binding constraint — the
+        item then gets persisted without a vector (issue #2461).
+        """
+        reader = _build_reader(_FakeEmbedder(limit=10_000), window=10)
+        # "。" lands at index 10, one past the fitting prefix (whose length is 10).
+        text = "一二三四五六七八九十" + "。" + "x" * 40
+
+        cut = reader._find_hard_split_index(text, 10)
+
+        self.assertLessEqual(reader._count_tokens(text[:cut]), 10, repr(text[:cut]))
 
     def test_empty_chunker_output_still_gets_split(self):
         """A chunker that yields nothing must not put the over-budget item through as-is.

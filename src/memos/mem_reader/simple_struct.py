@@ -288,13 +288,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             return len(text)
 
         # Prefer the last punctuation boundary within the largest half of the window. The
-        # search walks one position past ``best`` so a terminator that lands just outside
-        # the budget-sized prefix can still be kept on the left side.
-        scan_end = min(best + 1, len(text))
+        # search stays inside the fitting prefix so the returned index never slips a
+        # terminator just past the budget — a +1 overshoot is enough to make the
+        # provider reject the payload (issue #2461).
+        scan_end = min(best, len(text))
         lower_bound = max(best // 2, 1)
         for idx in range(scan_end, lower_bound - 1, -1):
-            if idx <= 0 or idx > len(text):
-                continue
             char = text[idx - 1]
             if char in _SPLIT_PUNCT_CHARS:
                 return idx
