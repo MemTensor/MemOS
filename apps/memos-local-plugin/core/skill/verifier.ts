@@ -126,9 +126,14 @@ function computeResonance(
     // only — outputs are unbounded. Inputs are capped at the same 300-char
     // horizon the embedder uses (core/capture/embedder.ts), so an oversized
     // tool input can neither dominate the token budget nor force spurious
-    // matches on the reward-tick path.
+    // matches on the reward-tick path. Names get a tighter 60-char cap for
+    // the same reason: a malformed/pathological name is still just a
+    // `string` and must not bypass the budget guard.
     const toolTxt = (t.toolCalls ?? [])
-      .map((tc) => `${tc.name} ${safeStringify(tc.input).slice(0, 300)}`)
+      .map(
+        (tc) =>
+          `${tc.name.slice(0, 60)} ${safeStringify(tc.input).slice(0, 300)}`,
+      )
       .join(" ");
     const txt =
       `${t.userText}\n${t.agentText}\n${t.summary ?? ""}\n${t.reflection ?? ""}\n${toolTxt}`.toLowerCase();
@@ -146,7 +151,13 @@ function safeStringify(v: unknown): string {
   try {
     return JSON.stringify(v);
   } catch {
-    return String(v);
+    try {
+      return String(v);
+    } catch {
+      // A custom .toString() may throw too — degrade to a sentinel rather
+      // than let verification blow up on a hostile payload.
+      return "[unstringifiable]";
+    }
   }
 }
 

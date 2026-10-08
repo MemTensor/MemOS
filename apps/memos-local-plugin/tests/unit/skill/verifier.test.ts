@@ -234,6 +234,55 @@ describe("skill/verifier — resonance over tool sub-step evidence (#2460)", () 
     expect(r.ok).toBe(true);
   });
 
+  it("caps tool-name contribution at 60 chars in the resonance text", () => {
+    // A pathologically long tool name must not smuggle tokens past the
+    // 60-char horizon — only the name's head may contribute to resonance,
+    // mirroring the 300-char cap already applied to tc.input.
+    const longName = `${"x".repeat(60)} zwqxalpha zwqxbeta`;
+    const draft = makeDraft({
+      summary: "combine zwqxalpha with zwqxbeta",
+      steps: [{ title: "combine", body: "zwqxalpha plus zwqxbeta" }],
+      tools: [longName],
+    });
+    const evidence = [
+      trace("tr_n1", "", "", [{ name: longName, input: { hello: "world" } }]),
+    ];
+
+    const r = verifyDraft({ draft, evidence }, { log });
+    expect(r.coverage).toBe(1); // coverage still sees the full name
+    expect(r.resonance).toBe(0); // tail tokens past the cap contribute nothing
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("resonance=");
+  });
+
+  it("does not throw when a tool input defeats both stringify and String()", () => {
+    // JSON.stringify fails (cyclic) and the custom toString() throws too —
+    // safeStringify must degrade to a sentinel instead of blowing up
+    // verification.
+    const evil: Record<string, unknown> = {};
+    evil.self = evil;
+    evil.toString = () => {
+      throw new Error("boom");
+    };
+
+    const draft = makeDraft({
+      summary: "check the repository status with git",
+      tools: ["shell"],
+      steps: [{ title: "git status", body: "git -C /repo status" }],
+    });
+    const evidence = [
+      trace("tr_e1", "check repo", "git output follows", [
+        { name: "shell", input: evil },
+      ]),
+    ];
+
+    let r: ReturnType<typeof verifyDraft>;
+    expect(() => {
+      r = verifyDraft({ draft, evidence }, { log });
+    }).not.toThrow();
+    expect(r!.coverage).toBe(1);
+  });
+
   it("still rejects drafts that share no tokens with tool-only evidence", () => {
     // Guard: widening the resonance text must not become a blanket pass.
     // Coverage passes (the tool name matches), but nothing in the tool
