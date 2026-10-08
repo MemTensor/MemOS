@@ -103,10 +103,11 @@ const SYSTEM_PROMPT = `You condense a single agent/user exchange into ONE short 
 
 Rules:
 - Output MUST be a single JSON object: { "summary": "..." }
-- The summary must be ≤ 100 characters, in the user's original language.
+- The summary must be ≤ 100 characters, written in the same language as the
+  USER text (English text gets an English summary).
 - Focus on the *fact worth remembering next time* — a preference, a name, a
   decision, a file path, an error signature, an answer that was confirmed.
-- Do NOT prefix with "The user said" / "用户说了". Just state the fact.
+- Do NOT prefix with "The user said". Just state the fact.
 - Do NOT quote whole sentences. Compress.
 - If nothing is worth remembering, still produce a short summary (e.g. the
   main topic of the exchange) — never return an empty string.`;
