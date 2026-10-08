@@ -11,6 +11,7 @@ function trace(
   userText: string,
   agentText: string,
   toolCalls: Partial<ToolCallDTO>[] = [],
+  summary?: string | null,
 ): TraceRow {
   return {
     id: id as TraceRow["id"],
@@ -27,6 +28,7 @@ function trace(
       endedAt: 0 as ToolCallDTO["endedAt"],
     })),
     reflection: null,
+    summary: summary ?? null,
     value: 0.5,
     alpha: 0.5 as TraceRow["alpha"],
     rHuman: null,
@@ -179,5 +181,77 @@ describe("skill/verifier", () => {
     expect(r.coverage).toBe(1);
     expect(r.resonance).toBeLessThan(0.5);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("skill/verifier — resonance over tool sub-step evidence (#2460)", () => {
+  // Minimal repro from the issue: evidence traces produced by tool
+  // sub-steps carry `userText: ""` / `agentText: ""` (step-extractor leaves
+  // them empty on purpose for the viewer's flattenChat); the turn's real
+  // payload lives in `toolCalls` and `summary`. A draft that faithfully
+  // describes those tool calls used to be rejected with resonance = 0.
+  it("counts toolCalls name/input toward resonance for tool sub-step traces", () => {
+    const draft = makeDraft({
+      summary: "run git commands with an explicit target directory, locally or over ssh",
+      tools: ["shell"],
+      steps: [
+        { title: "check status", body: "git -C /repo status" },
+        { title: "review history", body: "git -C /repo log" },
+      ],
+    });
+    const evidence = [
+      trace("tr_t1", "", "", [{ name: "shell", input: "git -C /repo status" }]),
+      trace("tr_t2", "", "", [{ name: "shell", input: "git -C /repo log" }]),
+    ].map((t) => ({ ...t, reflection: "success" as const }));
+
+    const r = verifyDraft({ draft, evidence }, { log });
+    expect(r.coverage).toBe(1);
+    expect(r.resonance).toBeGreaterThanOrEqual(0.5);
+    expect(r.ok).toBe(true);
+  });
+
+  it("counts a summary-only trace (no user/agent text) as a resonance hit", () => {
+    const draft = makeDraft({
+      summary: "run git commands with an explicit target directory, locally or over ssh",
+      tools: ["shell"],
+      steps: [
+        { title: "check status", body: "git -C /repo status" },
+      ],
+    });
+    const evidence = [
+      trace(
+        "tr_s1",
+        "",
+        "",
+        [{ name: "shell", input: "git -C /repo status" }],
+        "agent inspected /repo status before answering",
+      ),
+    ];
+
+    const r = verifyDraft({ draft, evidence }, { log });
+    expect(r.coverage).toBe(1);
+    expect(r.resonance).toBe(1);
+    expect(r.ok).toBe(true);
+  });
+
+  it("still rejects drafts that share no tokens with tool-only evidence", () => {
+    // Guard: widening the resonance text must not become a blanket pass.
+    // Coverage passes (the tool name matches), but nothing in the tool
+    // inputs overlaps the draft's vocabulary.
+    const draft = makeDraft({
+      summary: "rotate aws credentials through the secrets manager",
+      tools: ["shell"],
+      steps: [
+        { title: "rotate", body: "call secrets rotate with the new key" },
+      ],
+    });
+    const evidence = [
+      trace("tr_g1", "", "", [{ name: "shell", input: "tail -n 200 /var/log/syslog" }]),
+    ];
+
+    const r = verifyDraft({ draft, evidence }, { log });
+    expect(r.coverage).toBe(1);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("resonance=");
   });
 });
