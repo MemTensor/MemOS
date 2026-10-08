@@ -127,12 +127,14 @@ function computeResonance(
     // horizon the embedder uses (core/capture/embedder.ts), so an oversized
     // tool input can neither dominate the token budget nor force spurious
     // matches on the reward-tick path. Names get a tighter 60-char cap for
-    // the same reason: a malformed/pathological name is still just a
-    // `string` and must not bypass the budget guard.
+    // the same reason. `ToolCallDTO.name` is typed `string`, but rows
+    // replayed from persistence or older schema versions may carry
+    // null/undefined at runtime, so go through `safeStringify` like the
+    // input field instead of trusting the annotation.
     const toolTxt = (t.toolCalls ?? [])
       .map(
         (tc) =>
-          `${tc.name.slice(0, 60)} ${safeStringify(tc.input).slice(0, 300)}`,
+          `${safeStringify(tc.name).slice(0, 60)} ${safeStringify(tc.input).slice(0, 300)}`,
       )
       .join(" ");
     const txt =
