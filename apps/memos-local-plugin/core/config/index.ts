@@ -11,7 +11,7 @@
 
 import { promises as fs } from "node:fs";
 
-import { Type } from "@sinclair/typebox";
+import { KindGuard, Type } from "@sinclair/typebox";
 import { Value, type ValueError } from "@sinclair/typebox/value";
 
 import { MemosError } from "../../agent-contract/errors.js";
@@ -340,6 +340,26 @@ function pruneUnknown(
   const known = schemaObjectProperties(schemaNode);
   const freeFormHere = schemaAcceptsAnyKey(schemaNode);
   const out: Record<string, unknown> = {};
+  // Fallback: the schema node at this level is neither a plain `Type.Object`
+  // (so `known` is null) nor a free-form map (so `freeFormHere` is false).
+  // We cannot validate child keys here. Pass them through verbatim and emit
+  // a single diagnostic so the bypass is visible — otherwise a future schema
+  // refactor that puts a `Type.Union`, `Type.Intersect`, or `Type.Any` at a
+  // node `pruneUnknown` recurses into would silently disable validation for
+  // the whole subtree. TypeBox's `Value.Errors` still catches structural
+  // problems at the end of `resolveConfig`; this warning just makes the
+  // bypass easy to discover during debugging. The current schema is entirely
+  // composed of `Type.Object` and `Type.Record` so this branch is dormant
+  // today, but it stops being a latent trap tomorrow.
+  if (known === null && !freeFormHere) {
+    warnings?.push(
+      `config: cannot validate child keys of '${prefix || "<root>"}' ` +
+        `(schema node is neither Type.Object nor a free-form map) — ` +
+        `passing all keys through unchanged`,
+    );
+    for (const [k, v] of Object.entries(raw)) out[k] = v;
+    return out;
+  }
   for (const [k, v] of Object.entries(raw)) {
     const path = prefix ? `${prefix}.${k}` : k;
     // Free-form maps keep every user-defined child key verbatim: TypeBox
@@ -350,12 +370,16 @@ function pruneUnknown(
       out[k] = v;
       continue;
     }
-    if (known && !(k in known)) {
+    // `known` is guaranteed non-null here: the only way `freeFormHere` is
+    // false while `known` is null was handled by the early-return above.
+    // TypeScript can't follow that cross-loop narrowing, so pin it locally.
+    const knownKeys = known as Record<string, unknown>;
+    if (!(k in knownKeys)) {
       warnings?.push(`unknown config key '${path}' (kept as-is for forward compatibility)`);
       out[k] = v;
       continue;
     }
-    const childSchema = known ? known[k] : undefined;
+    const childSchema = knownKeys[k];
     if (isPlainObject(v) && isObjectSchema(childSchema)) {
       out[k] = pruneUnknown(v, childSchema, path, warnings);
     } else {
@@ -365,32 +389,43 @@ function pruneUnknown(
   return out;
 }
 
-/** TypeBox `Type.Object(...)` → the `properties` map; null for anything else. */
+/**
+ * TypeBox `Type.Object(...)` → the `properties` map; null for anything else
+ * (`Type.Record`, `Type.Union`, scalar schemas, non-schema values, …). We go
+ * through `KindGuard.IsObject` rather than hand-rolling a `type === "object"`
+ * check so the introspection stays aligned with TypeBox's own notion of what
+ * is a `TObject` — if TypeBox ever changes its internal representation we
+ * only have to update the import, not three helpers.
+ */
 function schemaObjectProperties(node: unknown): Record<string, unknown> | null {
-  if (!isPlainObject(node)) return null;
-  if ((node as { type?: unknown }).type !== "object") return null;
+  if (!KindGuard.IsObject(node)) return null;
   const props = (node as { properties?: unknown }).properties;
   return isPlainObject(props) ? (props as Record<string, unknown>) : null;
 }
 
 /**
- * TypeBox `Type.Record(...)` surfaces as a `type: "object"` schema with
- * `patternProperties`. We also treat `additionalProperties: true` the
- * same way — nothing in the current schema uses it, but it keeps us
- * aligned with JSON Schema semantics for future flexibility.
+ * TypeBox `Type.Record(...)` surfaces as a schema with `patternProperties`;
+ * `KindGuard.IsRecord` detects it directly. We also treat
+ * `additionalProperties: true` the same way — nothing in the current schema
+ * uses it, but it keeps us aligned with JSON Schema semantics for future
+ * flexibility.
  */
 function schemaAcceptsAnyKey(node: unknown): boolean {
+  if (KindGuard.IsRecord(node)) return true;
   if (!isPlainObject(node)) return false;
-  if ((node as { type?: unknown }).type !== "object") return false;
-  if ("patternProperties" in node) return true;
   const additional = (node as { additionalProperties?: unknown }).additionalProperties;
   return additional === true;
 }
 
-/** Any `type: "object"` schema node (used to decide whether to recurse). */
+/**
+ * A schema node that `pruneUnknown` should recurse into — either a
+ * `Type.Object` (child validation drives the known-key check) or a
+ * `Type.Record` (free-form map handled by `schemaAcceptsAnyKey`). Other
+ * schema shapes (unions, intersections, scalars) are left to TypeBox's
+ * `Value.Errors` to validate.
+ */
 function isObjectSchema(node: unknown): boolean {
-  if (!isPlainObject(node)) return false;
-  return (node as { type?: unknown }).type === "object";
+  return KindGuard.IsObject(node) || KindGuard.IsRecord(node);
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
