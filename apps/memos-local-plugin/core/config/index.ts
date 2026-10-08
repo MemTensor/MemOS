@@ -87,7 +87,7 @@ export async function loadConfig(home: ResolvedHome, agent?: string): Promise<Lo
  * freshly built copy, so callers may pass shared or cached objects safely.
  */
 export function resolveConfig(raw: unknown, warnings?: string[], agent?: string): ResolvedConfig {
-  const cleaned = pruneUnknown(raw, DEFAULT_CONFIG, "", warnings);
+  const cleaned = pruneUnknown(raw, ConfigSchema, "", warnings);
   // Resolve masked/placeholder secret values from the environment before
   // merging. `maskSecrets()` (pipeline/memory-core.ts) rewrites every
   // SECRET_FIELD_PATHS leaf to `__memos_secret__` before the config is
@@ -308,39 +308,89 @@ function deepMerge<T extends Record<string, unknown>>(a: T, b: Record<string, un
 }
 
 /**
- * Walk `raw` against `defaults` shape; record warnings for any keys that
- * have no counterpart (likely from a removed schema). We pass them through
- * anyway so older configs keep working.
+ * Walk `raw` against the TypeBox schema shape at this level; record warnings
+ * for any keys with no counterpart in the schema (likely a typo, or a key
+ * that was renamed/removed). Unknown values are passed through unchanged so
+ * old configs keep loading.
+ *
+ * Why the schema (and not `DEFAULT_CONFIG`) is the source of truth here:
+ * `DEFAULT_CONFIG` only lists fields with a concrete default value. Any
+ * `Type.Optional(...)` field that intentionally has no default (for
+ * example `llm.reasoning` → `ReasoningSchema` — omitting the whole block
+ * is semantically different from "an empty one") would be flagged as
+ * unknown on every boot even though the schema declares it. #2247 /
+ * #2248 (`llm.maxTokens`, `llm.headers`) papered over this by adding
+ * concrete defaults; this walker fixes the whole class of future
+ * optional fields in one place.
+ *
+ * `FREE_FORM_CONFIG_PATHS` is still honoured as an explicit allowlist
+ * for backward compatibility and for the (currently non-existent) case
+ * where an operator wants a plain `Type.Object` branch to accept
+ * arbitrary child keys without declaring them as `patternProperties`.
+ * TypeBox `Type.Record` schemas already advertise themselves via
+ * `patternProperties` and are detected automatically.
  */
 function pruneUnknown(
   raw: unknown,
-  defaults: unknown,
+  schemaNode: unknown,
   prefix: string,
   warnings?: string[],
 ): Record<string, unknown> {
   if (!isPlainObject(raw)) return {};
+  const known = schemaObjectProperties(schemaNode);
+  const freeFormHere = schemaAcceptsAnyKey(schemaNode);
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
     const path = prefix ? `${prefix}.${k}` : k;
-    if (isPlainObject(defaults) && !(k in (defaults as Record<string, unknown>))) {
+    // Free-form maps keep every user-defined child key verbatim: TypeBox
+    // `Type.Record(...)` surfaces as `patternProperties` (detected via
+    // `freeFormHere`), and the explicit allowlist handles any legacy
+    // sections we want to treat the same way.
+    if (freeFormHere || FREE_FORM_CONFIG_PATHS.includes(path)) {
+      out[k] = v;
+      continue;
+    }
+    if (known && !(k in known)) {
       warnings?.push(`unknown config key '${path}' (kept as-is for forward compatibility)`);
       out[k] = v;
       continue;
     }
-    if (isPlainObject(v) && isPlainObject((defaults as Record<string, unknown>)[k])) {
-      if (FREE_FORM_CONFIG_PATHS.includes(path)) {
-        // Explicitly declared free-form maps keep user-defined child keys.
-        // Other empty default objects remain structured config sections and
-        // continue to report unknown nested keys.
-        out[k] = v;
-        continue;
-      }
-      out[k] = pruneUnknown(v, (defaults as Record<string, unknown>)[k], path, warnings);
+    const childSchema = known ? known[k] : undefined;
+    if (isPlainObject(v) && isObjectSchema(childSchema)) {
+      out[k] = pruneUnknown(v, childSchema, path, warnings);
     } else {
       out[k] = v;
     }
   }
   return out;
+}
+
+/** TypeBox `Type.Object(...)` → the `properties` map; null for anything else. */
+function schemaObjectProperties(node: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(node)) return null;
+  if ((node as { type?: unknown }).type !== "object") return null;
+  const props = (node as { properties?: unknown }).properties;
+  return isPlainObject(props) ? (props as Record<string, unknown>) : null;
+}
+
+/**
+ * TypeBox `Type.Record(...)` surfaces as a `type: "object"` schema with
+ * `patternProperties`. We also treat `additionalProperties: true` the
+ * same way — nothing in the current schema uses it, but it keeps us
+ * aligned with JSON Schema semantics for future flexibility.
+ */
+function schemaAcceptsAnyKey(node: unknown): boolean {
+  if (!isPlainObject(node)) return false;
+  if ((node as { type?: unknown }).type !== "object") return false;
+  if ("patternProperties" in node) return true;
+  const additional = (node as { additionalProperties?: unknown }).additionalProperties;
+  return additional === true;
+}
+
+/** Any `type: "object"` schema node (used to decide whether to recurse). */
+function isObjectSchema(node: unknown): boolean {
+  if (!isPlainObject(node)) return false;
+  return (node as { type?: unknown }).type === "object";
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
