@@ -686,6 +686,32 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_chat_window_max_tokens() -> int:
+        """Get the mem_reader per-item token budget.
+
+        Items above this size are split before embedding. Deployments whose embedder has a
+        lower per-item limit than the default (1024) should lower this too, otherwise
+        content in between is stored without a vector (issue #2461).
+        """
+        raw = os.getenv("MEM_READER_CHAT_WINDOW_MAX_TOKENS", "")
+        if not raw.strip():
+            return 1024
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning(
+                "Invalid MEM_READER_CHAT_WINDOW_MAX_TOKENS=%r; falling back to 1024", raw
+            )
+            return 1024
+        if value <= 0:
+            logger.warning(
+                "MEM_READER_CHAT_WINDOW_MAX_TOKENS must be positive (got %r); falling back to 1024",
+                raw,
+            )
+            return 1024
+        return value
+
+    @staticmethod
     def get_oss_config() -> dict[str, Any] | None:
         """Get OSS configuration and validate connection."""
 
@@ -775,6 +801,7 @@ class APIConfig:
                             },
                         },
                         "chat_chunker": reader_config,
+                        "chat_window_max_tokens": APIConfig.get_chat_window_max_tokens(),
                     },
                 },
             },
@@ -1054,6 +1081,7 @@ class APIConfig:
                         },
                     },
                     "chat_chunker": reader_config,
+                    "chat_window_max_tokens": APIConfig.get_chat_window_max_tokens(),
                     "direct_markdown_hostnames": [
                         h.strip()
                         for h in os.getenv(
@@ -1189,6 +1217,7 @@ class APIConfig:
                         },
                     },
                     "chat_chunker": reader_config,
+                    "chat_window_max_tokens": APIConfig.get_chat_window_max_tokens(),
                 },
             },
             "enable_textual_memory": True,
