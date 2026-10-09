@@ -65,6 +65,12 @@ export function createForegroundResources(
   const shutdownController = new AbortController();
 
   function signalFor(signal?: AbortSignal): AbortSignal {
+    // If the input signal is already aborted (e.g. from a turn that ended),
+    // ignore it and only use the pipeline shutdown signal. Background work
+    // should not inherit turn-scoped abort signals.
+    if (signal?.aborted) {
+      return shutdownController.signal;
+    }
     return signal
       ? AbortSignal.any([signal, shutdownController.signal])
       : shutdownController.signal;
