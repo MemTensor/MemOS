@@ -441,22 +441,35 @@ class SingleCubeView(MemCubeView):
                     )
             return edge_mems
 
+        def get_neighbor(chunk_target_id: str | None, neighbor_relativity: float):
+            if not chunk_target_id:
+                return None
+            item_neighbor = self.searcher.graph_store.get_node(chunk_target_id, user_name=user_name)
+            if not item_neighbor:
+                return None
+            item_neighbor_mem = TextualMemoryItem(**item_neighbor)
+            item_neighbor_mem.metadata.relativity = neighbor_relativity
+            self.logger.info("Add neighbor chunk by id: %s", chunk_target_id)
+            return item_neighbor_mem
+
         final_items = []
         if neighbor_discovery:
             for item in search_results:
                 if item.metadata.memory_type == "RawFileMemory":
                     neighbor_relativity = item.metadata.relativity * 0.8
-                    preceding_info = self.searcher.graph_store.get_edges(
-                        item.id, type="PRECEDING", direction="OUTGOING", user_name=user_name
+                    preceding = get_neighbor(
+                        getattr(item.metadata, "preceding_id", None), neighbor_relativity
                     )
-                    final_items.extend(extract_edge_info(preceding_info, neighbor_relativity))
+                    if preceding is not None:
+                        final_items.append(preceding)
 
                     final_items.append(item)
 
-                    following_info = self.searcher.graph_store.get_edges(
-                        item.id, type="FOLLOWING", direction="OUTGOING", user_name=user_name
+                    following = get_neighbor(
+                        getattr(item.metadata, "following_id", None), neighbor_relativity
                     )
-                    final_items.extend(extract_edge_info(following_info, neighbor_relativity))
+                    if following is not None:
+                        final_items.append(following)
 
                 else:
                     final_items.append(item)
@@ -748,7 +761,7 @@ class SingleCubeView(MemCubeView):
                     for memory in flattened_local
                     if memory.metadata.memory_type == "RawFileMemory"
                 ]
-                self.naive_mem_cube.text_mem.add_rawfile_nodes_n_edges(
+                self.naive_mem_cube.text_mem.add_rawfile_nodes(
                     raw_file_mem_group,
                     mem_ids_local,
                     user_id=add_req.user_id,
