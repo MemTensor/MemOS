@@ -182,11 +182,19 @@ export function createLlmClientWithProvider(
     );
   }
 
-  function canUseHostFallback(): boolean {
+  function callerBudgetIsGone(opts: LlmCallOptions | undefined): boolean {
+    return (
+      opts?.signal?.aborted === true ||
+      (opts?.deadlineAt !== undefined && Date.now() >= opts.deadlineAt)
+    );
+  }
+
+  function canUseHostFallback(opts?: LlmCallOptions): boolean {
     return (
       config.fallbackToHost === true &&
       provider.name !== "host" &&
-      getHostLlmBridge() !== null
+      getHostLlmBridge() !== null &&
+      !callerBudgetIsGone(opts)
     );
   }
 
@@ -311,7 +319,7 @@ export function createLlmClientWithProvider(
     // Overview can surface that suppression is happening.
     if (breakerIsOpen()) {
       maybeEmitCircuitOpenStatus(opts, op);
-      if (canUseHostFallback()) {
+      if (canUseHostFallback(opts)) {
         return callHostFallback(makeBreakerOpenError(), messages, input, opts, op, {
           keepBreakerOpen: true,
           notifyError: false,
@@ -347,7 +355,7 @@ export function createLlmClientWithProvider(
       });
       return { completion };
     } catch (err) {
-      if (shouldFallback(err, config, provider.name)) {
+      if (!callerBudgetIsGone(opts) && shouldFallback(err, config, provider.name)) {
         const primaryTerminal = breakerIsTerminal(err);
         if (primaryTerminal) breakerTrip(err);
         try {

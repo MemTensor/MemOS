@@ -105,6 +105,11 @@ we call the host once as a best-effort fallback. The resulting completion's
 `servedBy` is `"host_fallback"` so downstream dashboards can distinguish
 host wins from primary wins.
 
+Fallback is skipped once the caller's abort signal fires or its absolute
+deadline passes. When fallback is still allowed, both cancellation and the
+remaining deadline propagate to the host bridge so the host request cannot
+outlive the caller's budget.
+
 Registering from an adapter:
 
 ```ts
