@@ -43,6 +43,7 @@ export class HostLlmProvider implements LlmProvider {
       temperature: opts.temperature,
       maxTokens: opts.maxTokens,
       timeoutMs: ctx.config.timeoutMs,
+      deadlineAt: ctx.deadlineAt,
       signal: ctx.signal,
     });
     return {
