@@ -1,3 +1,5 @@
+import uuid
+
 from unittest.mock import Mock
 
 from memos.mem_feedback.feedback import MemFeedback
@@ -139,3 +141,21 @@ def test_update_judgement_prompt_omits_memory_text_from_response_schema():
         assert '"reason"' in output_section
         assert '"text"' not in output_section
         assert '"old_memory"' not in output_section
+
+
+def test_retrieve_locks_only_knowledge_summaries_without_edge_queries():
+    feedback = MemFeedback.__new__(MemFeedback)
+    feedback.pref_feedback = False
+    feedback.searcher = Mock()
+    normal = TextualMemoryItem(id=str(uuid.uuid4()), memory="normal")
+    knowledge = TextualMemoryItem(
+        id=str(uuid.uuid4()),
+        memory="knowledge",
+        metadata={"knowledge_material_ids": [str(uuid.uuid4())]},
+    )
+    feedback.searcher.search.return_value = [(normal, 0.9), (knowledge, 0.8)]
+
+    result = feedback._retrieve("query", user_name="cube-1")
+
+    assert result == [normal]
+    feedback.searcher.graph_store.get_edges.assert_not_called()
