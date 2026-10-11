@@ -155,20 +155,55 @@ class GraphStructureReorganizer:
         """
         import schedule
 
-        schedule.every(100).seconds.do(self.optimize_structure, scope="LongTermMemory")
-        schedule.every(100).seconds.do(self.optimize_structure, scope="UserMemory")
+        schedule.every(100).seconds.do(self._optimize_all_users, scope="LongTermMemory")
+        schedule.every(100).seconds.do(self._optimize_all_users, scope="UserMemory")
 
         logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
+            schedule.run_pending()
             if any(self._is_optimizing.values()):
                 time.sleep(1)
                 continue
             if self._reorganize_needed:
                 logger.info("[Reorganizer] Triggering optimize_structure due to new nodes.")
-                self.optimize_structure(scope="LongTermMemory")
-                self.optimize_structure(scope="UserMemory")
+                self._optimize_all_users(scope="LongTermMemory")
+                self._optimize_all_users(scope="UserMemory")
                 self._reorganize_needed = False
             time.sleep(30)
+
+    def _optimize_all_users(self, scope: str, **kwargs) -> None:
+        """
+        Run structure optimization for every tenant present in the graph store.
+
+        Without tenant enumeration, only the configured default tenant (e.g.
+        ``memosdefault``) would ever be optimized, while data written through
+        the API lives under each request's ``user_name``. Backends that cannot
+        enumerate tenants (no ``get_all_user_names``) keep the previous
+        single-tenant behavior. A failure on one tenant is logged and does not
+        abort the remaining tenants.
+        """
+        get_user_names = getattr(self.graph_store, "get_all_user_names", None)
+        try:
+            user_names = get_user_names() if callable(get_user_names) else None
+        except Exception as e:
+            logger.warning(
+                f"[GraphStructureReorganize] Failed to enumerate tenants, "
+                f"falling back to the configured default: {e}"
+            )
+            user_names = None
+
+        if not user_names:
+            self.optimize_structure(scope=scope, **kwargs)
+            return
+
+        for user_name in user_names:
+            try:
+                self.optimize_structure(scope=scope, user_name=user_name, **kwargs)
+            except Exception as e:
+                logger.warning(
+                    f"[GraphStructureReorganize] optimize_structure failed for "
+                    f"user_name={user_name}: {e}, trace: {traceback.format_exc()}"
+                )
 
     def stop(self):
         """
@@ -330,17 +365,20 @@ class GraphStructureReorganizer:
             if len(sub_nodes) < min_cluster_size:
                 continue  # Skip tiny noise
             sub_parent_node = self._summarize_cluster(sub_nodes, scope)
+            if sub_parent_node is None:
+                continue  # LLM output was not a valid JSON object; skip this sub-cluster
             self._create_parent_node(sub_parent_node, user_name=user_name)
             self._link_cluster_nodes(sub_parent_node, sub_nodes, user_name=user_name)
             sub_parents.append(sub_parent_node)
 
         if sub_parents and len(sub_parents) >= min_cluster_size:
             cluster_parent_node = self._summarize_cluster(cluster_nodes, scope)
-            self._create_parent_node(cluster_parent_node, user_name=user_name)
-            for sub_parent in sub_parents:
-                self.graph_store.add_edge(
-                    cluster_parent_node.id, sub_parent.id, "PARENT", user_name=user_name
-                )
+            if cluster_parent_node is not None:
+                self._create_parent_node(cluster_parent_node, user_name=user_name)
+                for sub_parent in sub_parents:
+                    self.graph_store.add_edge(
+                        cluster_parent_node.id, sub_parent.id, "PARENT", user_name=user_name
+                    )
 
         logger.info("Adding relations/reasons")
         nodes_to_check = cluster_nodes
@@ -436,6 +474,12 @@ class GraphStructureReorganizer:
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
         response_json = self._parse_json_result(response_text)
+        if response_json is None:
+            logger.warning(
+                "[GraphStructureReorganize] Skip local sub-clustering: "
+                "LLM returned no valid JSON object."
+            )
+            return []
         assigned_ids = set()
         result_subclusters = []
 
@@ -547,9 +591,14 @@ class GraphStructureReorganizer:
 
         return filtered_clusters
 
-    def _summarize_cluster(self, cluster_nodes: list[GraphDBNode], scope: str) -> GraphDBNode:
+    def _summarize_cluster(
+        self, cluster_nodes: list[GraphDBNode], scope: str
+    ) -> GraphDBNode | None:
         """
         Generate a cluster label using LLM, based on top keys in the cluster.
+
+        Returns ``None`` when the LLM does not return a valid JSON object, so
+        the caller can skip the cluster instead of writing an empty parent node.
         """
         if not cluster_nodes:
             raise ValueError("Cluster nodes cannot be empty.")
@@ -567,6 +616,12 @@ class GraphStructureReorganizer:
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
         response_json = self._parse_json_result(response_text)
+        if response_json is None:
+            logger.warning(
+                "[GraphStructureReorganize] Skip cluster summary: "
+                "LLM returned no valid JSON object."
+            )
+            return None
 
         # Extract fields
         parent_key = response_json.get("key", "").strip()
@@ -595,16 +650,32 @@ class GraphStructureReorganizer:
         )
         return parent_node
 
-    def _parse_json_result(self, response_text):
+    def _parse_json_result(self, response_text) -> dict | None:
+        """
+        Parse the first ``{...}`` JSON object found in an LLM response.
+
+        Returns ``None`` for anything that is not a valid JSON object (empty
+        text, no braces, malformed JSON, or a non-object JSON value such as a
+        list), so callers can skip gracefully instead of crashing the whole
+        optimization round or silently writing empty parent nodes.
+        """
+        if not isinstance(response_text, str) or not response_text.strip():
+            return None
         try:
             response_text = response_text.replace("```", "").replace("json", "")
             response_json = extract_first_to_last_brace(response_text)[1]
-            return response_json
         except json.JSONDecodeError as e:
             logger.warning(
                 f"Failed to parse LLM response as JSON: {e}\nRaw response:\n{response_text}"
             )
-            return {}
+            return None
+        if not isinstance(response_json, dict):
+            logger.warning(
+                f"LLM response is not a JSON object (got {type(response_json).__name__}); "
+                f"raw response:\n{response_text}"
+            )
+            return None
+        return response_json
 
     def _create_parent_node(self, parent_node: GraphDBNode, user_name: str | None = None) -> None:
         """

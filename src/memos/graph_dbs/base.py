@@ -302,3 +302,16 @@ class BaseGraphDB(ABC):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+
+    def get_all_user_names(self) -> list[str]:
+        """
+        List every tenant (user_name) that currently has data in the graph store.
+
+        Default fallback for backends that do not support tenant enumeration:
+        returns only the configured default user_name (if any), preserving the
+        previous single-tenant behavior. Backends with tenant isolation (e.g.
+        Neo4j) override this with a real implementation.
+        """
+        config = getattr(self, "config", None)
+        user_name = getattr(config, "user_name", None)
+        return [user_name] if user_name else []
