@@ -88,7 +88,10 @@ import {
   FLOAT32_BYTES,
 } from "../storage/repos/index.js";
 import type { EmbeddingCountsBucket } from "../storage/repos/index.js";
-import type { ClosedEpisodeCursor } from "../storage/repos/episodes.js";
+import type {
+  ClosedEpisodeCursor,
+  EpisodeMetaRow,
+} from "../storage/repos/episodes.js";
 import { createEmbedder } from "../embedding/embedder.js";
 import { createLlmClient } from "../llm/client.js";
 import {
@@ -1216,7 +1219,11 @@ export function createMemoryCore(
         dirtyClosedForBackground = dirtyClosed;
       }
       } catch (err) {
-        log.debug("init.orphan_scan.failed", {
+        // Issue #2459: a skipped startup classification used to be
+        // invisible at default log levels — the reporter only found it
+        // by diffing kv cursor writes. This failure means zero
+        // collection for the whole boot, so it must be visible.
+        log.warn("init.orphan_scan.failed", {
           err: err instanceof Error ? err.message : String(err),
         });
       }
@@ -1693,31 +1700,54 @@ export function createMemoryCore(
         closedBy: "finalized",
       });
     }
-    await handle.flush();
-    if (startupRecoveryCancelled) return;
-    // After the reward / reflect chain has finished, account for the
-    // outcome: clear `meta.rewardDirty` on episodes that are no longer
-    // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
-    // that still match the dirty predicate (LLM failure / no-op). This
-    // closes the "retried indefinitely" loop reported in issue #1808.
-    const now = Date.now();
-    for (const [episodeId, prevAttempts] of priorFailedAttempts) {
-      const after = handle.repos.episodes.getById(episodeId);
-      if (!after) continue;
-      const stillDirty = episodeRewardIsDirty(after);
-      if (stillDirty) {
-        handle.repos.episodes.updateMeta(episodeId, {
-          rewardDirty: {
-            failedAttempts: prevAttempts + 1,
-            lastFailureAt: now,
-          },
-        });
-      } else if (
-        after.meta &&
-        typeof after.meta === "object" &&
-        "rewardDirty" in after.meta
-      ) {
-        handle.repos.episodes.updateMeta(episodeId, { rewardDirty: undefined });
+    try {
+      await handle.flush();
+    } finally {
+      // After the reward / reflect chain has finished, account for the
+      // outcome: clear `meta.rewardDirty` on episodes that are no longer
+      // dirty (success), bump `failedAttempts + lastFailureAt` on
+      // episodes that still match the dirty predicate (LLM failure /
+      // no-op). This closes the "retried indefinitely" loop reported in
+      // issue #1808.
+      //
+      // Issue #2459 (gap 2): a shutdown cancel mid-drain used to `return`
+      // right after the flush, skipping this settlement for the *whole*
+      // batch — episodes whose chains had already rescored successfully
+      // kept their `rewardDirty` markers and were re-collected + re-run
+      // later (duplicate LLM spend), while failures lost their backoff
+      // counters. Settling is synchronous bookkeeping on rows whose
+      // chains already ran, so it happens even when cancelled (and even
+      // if the flush itself threw mid-teardown) — best-effort, one
+      // try/catch per row so a single late-teardown error cannot drop
+      // the rest of the batch.
+      const now = Date.now();
+      for (const [episodeId, prevAttempts] of priorFailedAttempts) {
+        try {
+          const after = handle.repos.episodes.getById(episodeId);
+          if (!after) continue;
+          const stillDirty = episodeRewardIsDirty(after);
+          if (stillDirty) {
+            handle.repos.episodes.updateMeta(episodeId, {
+              rewardDirty: {
+                failedAttempts: prevAttempts + 1,
+                lastFailureAt: now,
+              },
+            });
+          } else if (
+            after.meta &&
+            typeof after.meta === "object" &&
+            "rewardDirty" in after.meta
+          ) {
+            handle.repos.episodes.updateMeta(episodeId, {
+              rewardDirty: undefined,
+            });
+          }
+        } catch (err) {
+          log.warn("init.dirty_closed_episodes.settle_failed", {
+            episodeId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   }
@@ -1728,10 +1758,36 @@ export function createMemoryCore(
     if (storedCursor !== null && !cursor) {
       handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
     }
-    const page = handle.repos.episodes.listClosedPage({
+    // Issue #2459 (gap 1): the stored cursor only ever moves *away* from
+    // the newest rows, so an episode that becomes dirty after the cursor
+    // paged past its position was not revisited until the walk reached
+    // the end of the closed set and the cursor reset — a full lap of
+    // `ceil(closed / 500) × 10 min` (≈70 min on the reporter's DB,
+    // hours on the 30k+-episode DBs of #1787). Take one bounded page
+    // from the newest end on every scan: freshly closed episodes and
+    // freshly re-marked recent rows are seen immediately, while the
+    // cursor walk below keeps draining the older backlog a page at a
+    // time.
+    const collected = new Map<string, EpisodeRow & EpisodeMetaRow>();
+    const headPage = handle.repos.episodes.listClosedPage({
       limit: DIRTY_CLOSED_SCAN_PAGE_SIZE,
-      before: cursor,
+      before: null,
     });
+    for (const ep of headPage) {
+      collected.set(ep.id, ep);
+    }
+    // Without a stored cursor the head page *is* the walk's first page;
+    // only page again when a cursor is in play.
+    let page = headPage;
+    if (cursor) {
+      page = handle.repos.episodes.listClosedPage({
+        limit: DIRTY_CLOSED_SCAN_PAGE_SIZE,
+        before: cursor,
+      });
+      for (const ep of page) {
+        collected.set(ep.id, ep);
+      }
+    }
     if (page.length === 0) {
       handle.repos.kv.del(DIRTY_CLOSED_SCAN_CURSOR_KEY);
       return [];
@@ -1750,7 +1806,7 @@ export function createMemoryCore(
     // `rewardDirty` marker on short/trivial episodes. The skip is terminal;
     // clean the contradictory marker while this bounded page is already in
     // memory so upgraded installations stop retrying those rows immediately.
-    for (const ep of page) {
+    for (const ep of collected.values()) {
       if (!rewardWasSkipped(ep) || !hasRewardDirtyMarker(ep)) continue;
       try {
         handle.repos.episodes.updateMeta(ep.id as EpisodeId, {
@@ -1767,7 +1823,7 @@ export function createMemoryCore(
         });
       }
     }
-    return page;
+    return [...collected.values()];
   }
 
   function isDirtyClosedScanCursor(value: unknown): value is ClosedEpisodeCursor {
