@@ -441,8 +441,7 @@ def _managed_daemon_gate() -> Literal["spawn", "running", "refuse"]:
         state = _systemd_unit_state(unit)
         if state not in ("active", "activating"):
             logger.info(
-                "MemOS: managed bridge unit %s is no longer %s — proceeding "
-                "with rescue-spawn",
+                "MemOS: managed bridge unit %s is no longer %s — proceeding with rescue-spawn",
                 unit,
                 state or "active/activating",
             )

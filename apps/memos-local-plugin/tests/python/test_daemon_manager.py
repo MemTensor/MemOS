@@ -61,7 +61,9 @@ class ManagedDaemonGateTests(unittest.TestCase):
         """Unit mid-restart + port probes free: no rogue ``--daemon``."""
         with (
             patch.object(daemon_manager_mod, "_probe_viewer", return_value="free"),
-            patch.object(daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True),
+            patch.object(
+                daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True
+            ),
             patch.object(
                 daemon_manager_mod, "_systemd_unit_state", return_value="activating", create=True
             ),
@@ -78,8 +80,12 @@ class ManagedDaemonGateTests(unittest.TestCase):
         """Unit active but :18800 not yet bound (pipeline warming up): no spawn."""
         with (
             patch.object(daemon_manager_mod, "_probe_viewer", return_value="free"),
-            patch.object(daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True),
-            patch.object(daemon_manager_mod, "_systemd_unit_state", return_value="active", create=True),
+            patch.object(
+                daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True
+            ),
+            patch.object(
+                daemon_manager_mod, "_systemd_unit_state", return_value="active", create=True
+            ),
             patch.object(daemon_manager_mod, "MANAGED_UNIT_GRACE_SEC", 0.05, create=True),
             patch.object(daemon_manager_mod, "MANAGED_UNIT_POLL_SEC", 0.01, create=True),
             patch.object(daemon_manager_mod, "_viewer_start_lock", acquired_lock),
@@ -97,7 +103,9 @@ class ManagedDaemonGateTests(unittest.TestCase):
                 "_probe_viewer",
                 side_effect=["free", "free", "running_memos"],
             ),
-            patch.object(daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True),
+            patch.object(
+                daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True
+            ),
             patch.object(
                 daemon_manager_mod,
                 "_systemd_unit_state",
@@ -122,7 +130,9 @@ class ManagedDaemonGateTests(unittest.TestCase):
                 "_probe_viewer",
                 side_effect=["free", "free", "free", "running_memos"],
             ),
-            patch.object(daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True),
+            patch.object(
+                daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True
+            ),
             patch.object(
                 daemon_manager_mod,
                 "_systemd_unit_state",
@@ -133,7 +143,9 @@ class ManagedDaemonGateTests(unittest.TestCase):
             patch.object(daemon_manager_mod, "MANAGED_UNIT_POLL_SEC", 0.01, create=True),
             patch.object(daemon_manager_mod, "_viewer_start_lock", acquired_lock),
             patch.object(daemon_manager_mod, "ensure_bridge_running", return_value=True),
-            patch.object(daemon_manager_mod.subprocess, "Popen", return_value=FakeDaemon()) as popen,
+            patch.object(
+                daemon_manager_mod.subprocess, "Popen", return_value=FakeDaemon()
+            ) as popen,
         ):
             self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
             popen.assert_called_once()
@@ -146,10 +158,14 @@ class ManagedDaemonGateTests(unittest.TestCase):
                 "_probe_viewer",
                 side_effect=["free", "free", "running_memos"],
             ),
-            patch.object(daemon_manager_mod, "_managed_bridge_unit", return_value=None, create=True),
+            patch.object(
+                daemon_manager_mod, "_managed_bridge_unit", return_value=None, create=True
+            ),
             patch.object(daemon_manager_mod, "_viewer_start_lock", acquired_lock),
             patch.object(daemon_manager_mod, "ensure_bridge_running", return_value=True),
-            patch.object(daemon_manager_mod.subprocess, "Popen", return_value=FakeDaemon()) as popen,
+            patch.object(
+                daemon_manager_mod.subprocess, "Popen", return_value=FakeDaemon()
+            ) as popen,
         ):
             self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
             popen.assert_called_once()
@@ -162,11 +178,17 @@ class ManagedDaemonGateTests(unittest.TestCase):
                 "_probe_viewer",
                 side_effect=["free", "free", "running_memos"],
             ),
-            patch.object(daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True),
-            patch.object(daemon_manager_mod, "_systemd_unit_state", return_value="inactive", create=True),
+            patch.object(
+                daemon_manager_mod, "_managed_bridge_unit", return_value=UNIT, create=True
+            ),
+            patch.object(
+                daemon_manager_mod, "_systemd_unit_state", return_value="inactive", create=True
+            ),
             patch.object(daemon_manager_mod, "_viewer_start_lock", acquired_lock),
             patch.object(daemon_manager_mod, "ensure_bridge_running", return_value=True),
-            patch.object(daemon_manager_mod.subprocess, "Popen", return_value=FakeDaemon()) as popen,
+            patch.object(
+                daemon_manager_mod.subprocess, "Popen", return_value=FakeDaemon()
+            ) as popen,
         ):
             self.assertTrue(daemon_manager_mod.ensure_viewer_daemon())
             popen.assert_called_once()
