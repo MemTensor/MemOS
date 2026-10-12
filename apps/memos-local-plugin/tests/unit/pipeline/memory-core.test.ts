@@ -2806,6 +2806,108 @@ algorithm:
     }
   });
 
+  it("does not re-emit episodes that are still mid-drain when the periodic rescan hits (issue #2459 review)", async () => {
+    // The head-page pass re-reads the newest page every 10-minute tick.
+    // Episodes whose drain is still in flight keep their `rewardDirty`
+    // markers until phase-2 settles, so without an in-flight guard the
+    // periodic scan re-collects and re-emits the whole batch — the
+    // duplicate LLM spend gap 2 set out to eliminate. While the first
+    // drain is parked inside the reward chain, a periodic tick must not
+    // queue a second run for the same episodes.
+    const base = Date.now() - 5_000;
+    db!.repos.sessions.upsert({
+      id: "se_inflight",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: base,
+      lastSeenAt: base,
+      meta: {},
+    });
+    for (const suffix of ["a", "b"]) {
+      const id = `ep_inflight_${suffix}`;
+      const startedAt = base + (suffix === "a" ? 0 : 10);
+      db!.repos.episodes.insert({
+        id,
+        sessionId: "se_inflight",
+        ownerAgentKind: "openclaw",
+        ownerProfileId: "main",
+        ownerWorkspaceId: null,
+        startedAt,
+        endedAt: startedAt + 1,
+        traceIds: [`tr_inflight_${suffix}`] as never,
+        rTask: null,
+        status: "closed",
+        meta: { closeReason: "finalized" },
+      });
+      db!.repos.traces.insert({
+        id: `tr_inflight_${suffix}`,
+        episodeId: id,
+        sessionId: "se_inflight",
+        ownerAgentKind: "openclaw",
+        ownerProfileId: "main",
+        ownerWorkspaceId: null,
+        ts: startedAt + 1,
+        userText: "在途防重测试：drain 未结算时周期扫描不得重发。",
+        agentText: "明白，在途行跳过。",
+        summary: null,
+        toolCalls: [],
+        reflection: null,
+        agentThinking: null,
+        value: 0,
+        alpha: 0,
+        rHuman: null,
+        priority: 0.5,
+        tags: [],
+        errorSignatures: [],
+        vecSummary: null,
+        vecAction: null,
+        share: null,
+        turnId: startedAt + 1,
+        schemaVersion: 1,
+      });
+    }
+
+    pipeline = createPipeline(buildDeps(db!));
+    let rewardRuns = 0;
+    let releaseReward!: () => void;
+    const rewardGate = new Promise<void>((resolve) => {
+      releaseReward = resolve;
+    });
+    pipeline.rewardRunner.run = async () => {
+      rewardRuns++;
+      await rewardGate;
+      throw new Error("simulated llm outage during drain");
+    };
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "issue2459-inflight",
+    );
+
+    // Only hijack the 10-minute periodic interval; leave timers used by
+    // the flush chain (setImmediate / setTimeout) on the real clock.
+    vi.useFakeTimers({ toFake: ["setInterval"] });
+    try {
+      await core.init();
+      // First (startup) drain collects both episodes and parks inside
+      // the gated reward chain.
+      await vi.waitFor(() => expect(rewardRuns).toBe(2));
+
+      // One periodic tick while the drain is still in flight.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      // Give a (buggy) second collection time to run its phase-1 + flush
+      // up to the reward gate.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Still exactly one run per episode — no re-emission.
+      expect(rewardRuns).toBe(2);
+    } finally {
+      vi.useRealTimers();
+      releaseReward();
+    }
+  });
+
   it("shutdown() awaits background recovery before tearing down storage (issue #1808)", async () => {
     // If `shutdown()` did not await the background recovery promise we
     // would close SQLite while the reflect / reward listeners were

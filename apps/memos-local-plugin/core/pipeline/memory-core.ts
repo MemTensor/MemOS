@@ -730,6 +730,14 @@ export function createMemoryCore(
   let startupRecoveryCancelled = false;
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
+  // Issue #2459 (review): episode ids whose dirty-rescore drain is still
+  // in flight (phase-1 emitted, phase-2 not yet settled). The head-page
+  // pass re-reads the newest page on every 10-minute tick, and an
+  // in-flight episode still carries `rewardDirty` until settlement —
+  // without this guard the periodic scan re-collected and re-emitted the
+  // whole batch every tick (the duplicate LLM spend gap 2 set out to
+  // eliminate). Cleared per episode as soon as its settlement runs.
+  const dirtyRescoreInFlight = new Set<EpisodeId>();
   async function autoFinalizeStaleTasks(): Promise<void> {
     if (!autoRecoveryEnabled) return;
     const nowMs = Date.now();
@@ -803,7 +811,14 @@ export function createMemoryCore(
     if (handle.algorithm.lightweightMemory.enabled) return;
     try {
       const allDirty = collectDirtyClosedEpisodes()
-        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+        .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep))
+        // Issue #2459 (review): rows whose drain is still mid-flight
+        // keep `rewardDirty` until phase-2 settles — skip them here so a
+        // tick racing an open drain cannot re-emit and re-run the whole
+        // batch (duplicate LLM spend). Freshly dirtied rows are NOT
+        // blocked by this: they are not in flight, so they are still
+        // collected on the very same tick.
+        .filter((ep) => !dirtyRescoreInFlight.has(ep.id as EpisodeId));
       // Apply the same backoff filter as init() so the 10-min periodic
       // scan does not hammer episodes whose LLM call keeps failing.
       const dirtyClosed = allDirty.filter((ep) => dirtyEpisodeBackoffElapsed(ep, nowMs));
@@ -1200,7 +1215,12 @@ export function createMemoryCore(
       } else {
         const nowForDirty = Date.now();
         const allDirty = collectDirtyClosedEpisodes()
-          .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep));
+          .filter((ep) => !isLightweightEpisode(ep) && episodeRewardIsDirty(ep))
+          // Issue #2459 (review): same in-flight guard as the periodic
+          // scan — rows already mid-drain keep `rewardDirty` until
+          // settlement, and re-emitting them here would queue duplicate
+          // reward runs.
+          .filter((ep) => !dirtyRescoreInFlight.has(ep.id as EpisodeId));
         const dirtyClosed: typeof allDirty = [];
         for (const ep of allDirty) {
           if (dirtyEpisodeBackoffElapsed(ep, nowForDirty)) {
@@ -1686,6 +1706,9 @@ export function createMemoryCore(
           ? prevDirty.failedAttempts
           : 0;
       priorFailedAttempts.set(episodeId, prevAttempts);
+      // Mark in-flight BEFORE emitting so a periodic tick racing this
+      // drain cannot queue a duplicate run for the same row.
+      dirtyRescoreInFlight.add(episodeId);
       handle.repos.episodes.updateMeta(episodeId, {
         closeReason: "finalized",
         recoveredAtStartup: endedAt,
@@ -1724,23 +1747,24 @@ export function createMemoryCore(
       for (const [episodeId, prevAttempts] of priorFailedAttempts) {
         try {
           const after = handle.repos.episodes.getById(episodeId);
-          if (!after) continue;
-          const stillDirty = episodeRewardIsDirty(after);
-          if (stillDirty) {
-            handle.repos.episodes.updateMeta(episodeId, {
-              rewardDirty: {
-                failedAttempts: prevAttempts + 1,
-                lastFailureAt: now,
-              },
-            });
-          } else if (
-            after.meta &&
-            typeof after.meta === "object" &&
-            "rewardDirty" in after.meta
-          ) {
-            handle.repos.episodes.updateMeta(episodeId, {
-              rewardDirty: undefined,
-            });
+          if (after) {
+            const stillDirty = episodeRewardIsDirty(after);
+            if (stillDirty) {
+              handle.repos.episodes.updateMeta(episodeId, {
+                rewardDirty: {
+                  failedAttempts: prevAttempts + 1,
+                  lastFailureAt: now,
+                },
+              });
+            } else if (
+              after.meta &&
+              typeof after.meta === "object" &&
+              "rewardDirty" in after.meta
+            ) {
+              handle.repos.episodes.updateMeta(episodeId, {
+                rewardDirty: undefined,
+              });
+            }
           }
         } catch (err) {
           log.warn("init.dirty_closed_episodes.settle_failed", {
@@ -1748,6 +1772,9 @@ export function createMemoryCore(
             err: err instanceof Error ? err.message : String(err),
           });
         }
+        // The chain for this row has reached a terminal state (settled
+        // or un-settleable) — let the next scan consider it again.
+        dirtyRescoreInFlight.delete(episodeId);
       }
     }
   }
