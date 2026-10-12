@@ -173,6 +173,8 @@ In `plugins.entries.memos-cloud-openclaw-plugin.config`:
 - **Add** (`agent_end`)
   - Builds a `/add/message` request with the **last turn** by default (user + assistant).
   - Sends `messages` with `user_id`, `conversation_id`, and optional `tags/info/agent_id/app_id`.
+- Cloud Hub rejects `info` keys named `local_state`, `state`, or `localStats` regardless of value; the plugin strips these reserved keys while preserving other custom `info` fields.
+- Writes are asynchronous by default (`asyncMode: true`). For longer content, keep async mode enabled or increase `timeoutMs` if synchronous processing is explicitly configured.
 
 ## Multi-Agent Support
 The plugin provides native support for multi-agent architectures (via the `agent_id` parameter):
