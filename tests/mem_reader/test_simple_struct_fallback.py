@@ -83,8 +83,8 @@ class TestSimpleStructFallbackKey(unittest.TestCase):
         item even when the LLM emits non-JSON chatter.
         """
         # Realistic Kimi-K2 style failure: LLM wraps response in chatter so
-        # `parse_json_result` returns `{}`, `_safe_parse` returns `None`,
-        # `not response_json` is True and the fallback fires.
+        # `parse_json_result` raises (issue #2456), `_safe_parse` catches the
+        # exception and returns `None`, and the fallback fires.
         self.reader.llm.generate.return_value = (
             "Here is what I extracted: ... unfortunately I cannot output JSON."
         )
