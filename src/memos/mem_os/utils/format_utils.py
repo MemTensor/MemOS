@@ -1,5 +1,6 @@
 import math
 import random
+import re
 
 from typing import Any
 
@@ -1394,11 +1395,16 @@ def clean_json_response(response: str) -> str:
     """
     Remove markdown JSON code block formatting from LLM response.
 
+    Only an opening fence (with optional ``json`` info string) at the very
+    start of the response and a closing fence at the very end are treated as
+    markdown wrappers; any ``` occurrences inside JSON string values are
+    preserved so payloads carrying embedded code fences survive intact.
+
     Args:
-        response: Raw response string that may contain ```json and ```
+        response: Raw response string that may be wrapped in ```json ... ```.
 
     Returns:
-        str: Clean JSON string without markdown formatting
+        str: Clean JSON string without the outer markdown fence.
 
     Raises:
         ValueError: If ``response`` is None. This is almost always an upstream
@@ -1413,4 +1419,15 @@ def clean_json_response(response: str) -> str:
             "failed silently (check timed_with_status / generate() error "
             "handling)."
         )
-    return response.replace("```json", "").replace("```", "").strip()
+
+    stripped = response.strip()
+
+    # Opening fence: ``` optionally followed by an info string like "json"
+    # on the same line, then a newline. The closing fence must appear on its
+    # own line (preceded by a newline) — this prevents a trailing ``` that
+    # belongs to a JSON string value from being mistaken for a fence.
+    open_match = re.match(r"^```[^\n`]*\n", stripped)
+    if open_match and stripped.endswith("\n```"):
+        stripped = stripped[open_match.end() : -len("\n```")]
+
+    return stripped.strip()
