@@ -2,6 +2,7 @@ import json
 import re
 
 from memos import log
+from memos.exceptions import LLMResponseParseError
 
 
 logger = log.get_logger(__name__)
@@ -36,27 +37,41 @@ def derive_key(text: str, max_len: int = 80) -> str:
 
 
 def parse_json_result(response_text: str) -> dict:
-    s = (response_text or "").strip()
+    """Parse a JSON object out of an LLM response.
 
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s, flags=re.I)
+    Returns the parsed ``dict`` when the response contains a parseable JSON
+    object (including a literal ``{}``). Raises ``LLMResponseParseError``
+    on any other input so callers can distinguish "the model produced no
+    memories" from "the model produced output we couldn't parse". Issue
+    #2456.
+    """
+    raw = response_text or ""
+    s = raw.strip()
+
+    if not s:
+        raise LLMResponseParseError("LLM response was empty")
+
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s, flags=re.IGNORECASE)
     s = (m.group(1) if m else s.replace("```", "")).strip()
 
     i = s.find("{")
     if i == -1:
-        return {}
+        raise LLMResponseParseError(f"No JSON object found in LLM response: tail={raw[-200:]!r}")
     s = s[i:].strip()
+
+    last_err: json.JSONDecodeError | None = None
 
     try:
         return json.loads(s)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        last_err = e
 
     j = max(s.rfind("}"), s.rfind("]"))
     if j != -1:
         try:
             return json.loads(s[: j + 1])
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            last_err = e
 
     def _cheap_close(t: str) -> str:
         t += "}" * max(0, t.count("{") - t.count("}"))
@@ -67,14 +82,20 @@ def parse_json_result(response_text: str) -> dict:
     try:
         return json.loads(t)
     except json.JSONDecodeError as e:
+        last_err = e
         if "Invalid \\escape" in str(e):
-            s = s.replace("\\", "\\\\")
-            return json.loads(s)
-        logger.warning(
-            f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \
-            json: {s}"
-        )
-        return {}
+            try:
+                return json.loads(s.replace("\\", "\\\\"))
+            except json.JSONDecodeError as e2:
+                last_err = e2
+
+    logger.warning(
+        f"[JSONParse] Failed to decode JSON: {last_err}\nTail: Raw {response_text} \
+        json: {s}"
+    )
+    raise LLMResponseParseError(
+        f"Failed to decode JSON from LLM response: {last_err}"
+    ) from last_err
 
 
 def parse_rewritten_response(text: str) -> tuple[bool, dict[int, dict]]:
@@ -83,7 +104,7 @@ def parse_rewritten_response(text: str) -> tuple[bool, dict[int, dict]]:
     Returns (success, parsed_dict) with int keys.
     """
     try:
-        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.I)
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
         s = (m.group(1) if m else text).strip()
         data = json.loads(s)
     except Exception:
@@ -127,7 +148,7 @@ def parse_keep_filter_response(text: str) -> tuple[bool, dict[int, dict]]:
     Returns (success, parsed_dict) with int keys.
     """
     try:
-        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.I)
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
         s = (m.group(1) if m else text).strip()
         data = json.loads(s)
     except Exception:

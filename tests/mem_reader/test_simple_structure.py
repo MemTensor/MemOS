@@ -112,11 +112,17 @@ class TestSimpleStructMemReader(unittest.TestCase):
         self.assertIn("summary", result)
 
     def test_parse_json_result_failure(self):
-        """Test failure in JSON parsing."""
-        raw_response = "Invalid JSON string"
-        result = parse_json_result(raw_response)
+        """Test failure in JSON parsing.
 
-        self.assertEqual(result, {})
+        As of issue #2456, ``parse_json_result`` no longer swallows malformed
+        JSON; it raises ``LLMResponseParseError`` so callers can distinguish
+        "no memories produced" from "couldn't parse the response".
+        """
+        from memos.exceptions import LLMResponseParseError
+
+        raw_response = "Invalid JSON string"
+        with self.assertRaises(LLMResponseParseError):
+            parse_json_result(raw_response)
 
     def test_get_llm_response_fallback_key_matches_consumer(self):
         """Regression test for issue #1355.
