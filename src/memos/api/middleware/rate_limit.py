@@ -57,8 +57,13 @@ def _get_client_key(request: Request) -> str:
 
     Uses API key if available, otherwise falls back to IP.
     """
-    # Try to get API key from header
+    # Try to get API key from header. Real clients send a Bearer scheme
+    # per RFC 6750 (``Authorization: Bearer krlk_<hex>``); we strip the
+    # scheme before the prefix check so keyed requests actually land on
+    # a per-key bucket (issue #2428).
     auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        auth_header = auth_header[len("bearer ") :].lstrip()
     if auth_header.startswith("krlk_"):
         # Use first 20 chars of key as identifier
         return f"ratelimit:key:{auth_header[:20]}"
