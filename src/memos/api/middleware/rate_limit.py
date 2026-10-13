@@ -59,6 +59,12 @@ def _get_client_key(request: Request) -> str:
     """
     # Try to get API key from header
     auth_header = request.headers.get("Authorization", "")
+
+    # Strip Bearer scheme if present (case-insensitive)
+    # Standard format is "Bearer <token>" but also support direct key
+    if auth_header.lower().startswith("bearer "):
+        auth_header = auth_header[7:].strip()
+
     if auth_header.startswith("krlk_"):
         # Use first 20 chars of key as identifier
         return f"ratelimit:key:{auth_header[:20]}"
