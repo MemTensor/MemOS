@@ -1,13 +1,21 @@
+import re
+
 from memos.memories.textual.item import (
     TextualMemoryItem,
 )
+
+
+_REFERENCE_SEPARATOR_RE = re.compile(r",\s*")
 
 
 def split_continuous_references(text: str) -> str:
     """
     Split continuous reference tags into individual reference tags.
 
-    Converts patterns like [1:92ff35fb, 4:bfe6f044] to [1:92ff35fb] [4:bfe6f044]
+    Converts patterns like [1:92ff35fb, 4:bfe6f044] to [1:92ff35fb][4:bfe6f044].
+    Every comma between the brackets is treated as a separator regardless of
+    the whitespace that follows it, so mixed styles inside one tag (e.g.
+    ``[1:a,2:b, 3:c]``) all split correctly.
 
     Only processes text if:
     1. '[' appears exactly once
@@ -41,10 +49,11 @@ def split_continuous_references(text: str) -> str:
     # Check if there's a comma between brackets
     if "," not in content_between_brackets:
         return text
-    text = text.replace(content_between_brackets, content_between_brackets.replace(", ", "]["))
-    text = text.replace(content_between_brackets, content_between_brackets.replace(",", "]["))
-
-    return text
+    # Split on every comma (with optional trailing whitespace) in a single pass.
+    # Sequential str.replace calls fail when the tag mixes ", " and "," styles
+    # because the first pass mutates the substring the second pass looks for.
+    split_content = _REFERENCE_SEPARATOR_RE.sub("][", content_between_brackets)
+    return text.replace(content_between_brackets, split_content)
 
 
 def process_streaming_references_complete(text_buffer: str) -> tuple[str, str]:
