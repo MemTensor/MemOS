@@ -41,3 +41,12 @@ class EmbedderError(MemOSError): ...
 
 
 class ParserError(MemOSError): ...
+
+
+class LLMResponseParseError(ParserError):
+    """Raised when an LLM response cannot be parsed into the expected shape.
+
+    Used in place of a silent ``{}`` return so that callers can distinguish
+    "the model produced no memories" from "the model produced output we
+    couldn't parse". Issue #2456.
+    """
