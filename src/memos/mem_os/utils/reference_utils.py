@@ -139,7 +139,14 @@ def process_streaming_references_complete(text_buffer: str) -> tuple[str, str]:
 
 
 def prepare_reference_data(memories_list: list[TextualMemoryItem]) -> list[dict]:
-    # Prepare reference data
+    """Normalize a mixed list of memory entries into reference dicts.
+
+    Accepts both :class:`TextualMemoryItem` objects and pre-serialized dicts
+    (e.g. cached search results or MCP payloads). Dict entries are handled
+    defensively: a missing ``id`` skips ref_id derivation instead of raising
+    ``KeyError``, and a non-string ``id`` (int, uuid.UUID, ...) is stringified
+    before ``.split("-")`` instead of raising ``AttributeError``. See #2448.
+    """
     reference = []
     for memories in memories_list:
         if isinstance(memories, TextualMemoryItem):
@@ -151,12 +158,29 @@ def prepare_reference_data(memories_list: list[TextualMemoryItem]) -> list[dict]
             memories_json["metadata"]["id"] = memories.id
             reference.append({"metadata": memories_json["metadata"]})
         else:
-            memories_json = memories
-            memories_json["metadata"]["ref_id"] = f"{memories_json['id'].split('-')[0]}"
-            memories_json["metadata"]["embedding"] = []
-            memories_json["metadata"]["sources"] = []
-            memories_json["metadata"]["memory"] = memories_json["memory"]
-            memories_json["metadata"]["id"] = memories_json["id"]
-            reference.append({"metadata": memories_json["metadata"]})
+            # Shallow-copy the outer dict AND the metadata dict so that our
+            # normalization does not mutate the caller's payload (e.g. a cache
+            # entry or an MCP message being reused across calls). See #2448.
+            memories_json = dict(memories)
+            orig_metadata = memories_json.get("metadata")
+            metadata = dict(orig_metadata) if isinstance(orig_metadata, dict) else {}
+            memories_json["metadata"] = metadata
+
+            raw_id = memories_json.get("id")
+            if raw_id is None:
+                # Missing id: skip ref_id derivation, keep id slot explicit.
+                metadata["ref_id"] = ""
+                metadata["id"] = None
+            else:
+                # Non-string id (int, uuid.UUID, ...) is coerced for the prefix
+                # split only; the original value is preserved in metadata["id"].
+                str_id = str(raw_id)
+                metadata["ref_id"] = f"{str_id.split('-')[0]}"
+                metadata["id"] = raw_id
+
+            metadata["embedding"] = []
+            metadata["sources"] = []
+            metadata["memory"] = memories_json.get("memory")
+            reference.append({"metadata": metadata})
 
     return reference
