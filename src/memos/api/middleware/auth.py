@@ -17,6 +17,13 @@ from fastapi.security import APIKeyHeader
 import memos.log
 
 
+# Canonical format check; re-exported here so the middleware shares the
+# same logic as ``src/memos/api/utils/api_keys.py``. Keeping one source of
+# truth is what fixes issue #2427 (previously the middleware copy and the
+# utils copy could drift independently).
+from memos.api.utils.api_keys import validate_key_format as validate_key_format_canonical
+
+
 logger = memos.log.get_logger(__name__)
 
 # API key header configuration
@@ -63,17 +70,16 @@ def hash_api_key(key: str) -> str:
 
 
 def validate_key_format(key: str) -> bool:
-    """Validate API key format: krlk_<64-hex>."""
-    if not key or not key.startswith("krlk_"):
-        return False
-    hex_part = key[5:]  # Remove 'krlk_' prefix
-    if len(hex_part) != 64:
-        return False
-    try:
-        int(hex_part, 16)
-        return True
-    except ValueError:
-        return False
+    """Validate API key format: krlk_<64-hex>.
+
+    Re-exported from ``memos.api.utils.api_keys.validate_key_format`` for
+    backwards compatibility with callers that imported this symbol from
+    the middleware path. Issue #2427: the previous copy used ``int(...)``
+    which accepted non-canonical hex (leading signs, ``0x`` prefix, ``_``
+    separators, whitespace) — see the canonical implementation for the
+    fix.
+    """
+    return validate_key_format_canonical(key)
 
 
 def get_key_prefix(key: str) -> str:
