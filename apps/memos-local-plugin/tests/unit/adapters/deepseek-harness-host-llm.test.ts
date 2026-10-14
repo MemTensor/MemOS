@@ -6,6 +6,7 @@ import LlmRuntime, {
   resolveRetryPolicy,
   type GenerateOptions,
   type LlmCallConfig,
+  type LlmFailure,
   type LlmResolvedModelInfo,
   type PreparedLlmCall,
   type StreamChunk,
@@ -702,5 +703,210 @@ describe("DeepSeek Harness host LLM bridge", () => {
       details: { dshCode: "MEMOS_DSH_HOST_LLM_TIMEOUT", timeoutMs: 5 },
     });
     expect(observedSignal?.aborted).toBe(true);
+  });
+
+  describe("bounded retry on transient host LLM failures", () => {
+    /**
+     * One scripted attempt outcome: `undefined` succeeds, an `LlmFailure`
+     * fails the attempt. Each attempt re-prepares a single-use call, so the
+     * recorded attempt count is exactly the number of dispatches.
+     */
+    function scriptedFailures(script: readonly (LlmFailure | undefined)[]): {
+      llm: DeepSeekHarnessLlmLike;
+      attempts: () => number;
+    } {
+      let attempt = 0;
+      const llm: DeepSeekHarnessLlmLike = {
+        resolveModelInfo: (provider, model) => Promise.resolve({
+          provider,
+          id: model,
+          name: model,
+          reasoning: { efforts: [{ id: ReasoningEffortId("off"), name: "Off" }] },
+        }),
+        prepareCall: (config) => {
+          const outcome = script[Math.min(attempt, script.length - 1)];
+          attempt++;
+          return Promise.resolve(preparedCall(config, () => (async function* () {
+            if (outcome) {
+              yield { type: "finish", reason: { kind: "error", failure: outcome } } as StreamChunk;
+              return;
+            }
+            yield { type: "text-delta", index: 0, text: "recovered" } as StreamChunk;
+            yield { type: "finish", reason: { kind: "stop" } } as StreamChunk;
+          })()));
+        },
+      };
+      return { llm, attempts: () => attempt };
+    }
+
+    function completeWith(llm: DeepSeekHarnessLlmLike, timeoutMs?: number) {
+      const routes = new DeepSeekHarnessLlmRouteContext();
+      const bridge = createDeepSeekHarnessHostLlmBridge({ llm, routes });
+      return routes.run(ROUTE, () => bridge.complete({
+        messages: [{ role: "user", content: "hello" }],
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      }));
+    }
+
+    // The gateway 502 the issue reports: an UNAVAILABLE failure carrying a
+    // server-error status. `[502,502,ok]` recovers on the third dispatch.
+    const gateway502: LlmFailure = { message: "DeepSeek Messages request failed (502)", code: "UNAVAILABLE", status: 502 };
+
+    it("retries a transient 502 and succeeds within the attempt bound", async () => {
+      const { llm, attempts } = scriptedFailures([gateway502, gateway502, undefined]);
+
+      const result = await completeWith(llm, 5_000);
+
+      expect(result.text).toBe("recovered");
+      expect(attempts()).toBe(3);
+    });
+
+    it("stops retrying as soon as an attempt succeeds", async () => {
+      const { llm, attempts } = scriptedFailures([gateway502, undefined]);
+
+      const result = await completeWith(llm, 5_000);
+
+      expect(result.text).toBe("recovered");
+      expect(attempts()).toBe(2);
+    });
+
+    it("gives up after the attempt bound and rethrows the last failure", async () => {
+      const { llm, attempts } = scriptedFailures([gateway502, gateway502, gateway502]);
+
+      await expect(completeWith(llm, 5_000)).rejects.toMatchObject({
+        code: "llm_unavailable",
+        details: { dshCode: "UNAVAILABLE", status: 502 },
+      });
+      expect(attempts()).toBe(3);
+    });
+
+    it("does not retry a successful first attempt", async () => {
+      const { llm, attempts } = scriptedFailures([undefined]);
+
+      await expect(completeWith(llm, 5_000)).resolves.toMatchObject({ text: "recovered" });
+      expect(attempts()).toBe(1);
+    });
+
+    it.each([
+      { name: "credential rejection", failure: { message: "unauthorized", code: "AUTH", status: 401 } as LlmFailure },
+      { name: "payment required", failure: { message: "insufficient balance", code: "QUOTA", status: 402 } as LlmFailure },
+      { name: "forbidden", failure: { message: "forbidden", code: "AUTH", status: 403 } as LlmFailure },
+    ])("never retries $name", async ({ failure }) => {
+      const { llm, attempts } = scriptedFailures([failure, undefined]);
+
+      await expect(completeWith(llm, 5_000)).rejects.toMatchObject({
+        code: "llm_unavailable",
+        details: { status: failure.status },
+      });
+      expect(attempts()).toBe(1);
+    });
+
+    it("retries a statusless transient transport failure", async () => {
+      const { llm, attempts } = scriptedFailures([
+        { message: "fetch failed", code: "UNAVAILABLE" },
+        undefined,
+      ]);
+
+      await expect(completeWith(llm, 5_000)).resolves.toMatchObject({ text: "recovered" });
+      expect(attempts()).toBe(2);
+    });
+
+    it("does not retry a rate limit, which carries its own code", async () => {
+      const { llm, attempts } = scriptedFailures([
+        { message: "too many requests", code: "RATE_LIMIT", status: 429 },
+        undefined,
+      ]);
+
+      await expect(completeWith(llm, 5_000)).rejects.toMatchObject({
+        code: "llm_rate_limited",
+        details: { dshCode: "RATE_LIMIT" },
+      });
+      expect(attempts()).toBe(1);
+    });
+
+    it("does not retry malformed output", async () => {
+      let attempt = 0;
+      const llm: DeepSeekHarnessLlmLike = {
+        resolveModelInfo: (provider, model) => Promise.resolve({
+          provider,
+          id: model,
+          name: model,
+          reasoning: { efforts: [{ id: ReasoningEffortId("off"), name: "Off" }] },
+        }),
+        prepareCall: (config) => {
+          attempt++;
+          return Promise.resolve(preparedCall(config, () => (async function* () {
+            yield { type: "finish", reason: { kind: "max-tokens" } } as StreamChunk;
+          })()));
+        },
+      };
+
+      await expect(completeWith(llm, 5_000)).rejects.toMatchObject({
+        code: "llm_output_malformed",
+        details: { dshCode: "MAX_TOKENS" },
+      });
+      expect(attempt).toBe(1);
+    });
+
+    it("does not retry when the bounded deadline aborts the call", async () => {
+      let attempt = 0;
+      const llm: DeepSeekHarnessLlmLike = {
+        resolveModelInfo: (provider, model) => Promise.resolve({ provider, id: model, name: model }),
+        prepareCall(config, signal) {
+          attempt++;
+          return Promise.resolve(preparedCall(config, () => (async function* () {
+            await new Promise<void>((resolve) => {
+              signal?.addEventListener("abort", () => resolve(), { once: true });
+            });
+            yield { type: "text-delta", index: 0, text: "late" } as StreamChunk;
+            yield { type: "finish", reason: { kind: "stop" } } as StreamChunk;
+          })()));
+        },
+      };
+
+      await expect(completeWith(llm, 5)).rejects.toMatchObject({
+        code: "llm_timeout",
+        details: { dshCode: "MEMOS_DSH_HOST_LLM_TIMEOUT" },
+      });
+      expect(attempt).toBe(1);
+    });
+
+    it("does not start a retry when the caller aborts during backoff", async () => {
+      let attempt = 0;
+      const controller = new AbortController();
+      const llm: DeepSeekHarnessLlmLike = {
+        resolveModelInfo: (provider, model) => Promise.resolve({
+          provider,
+          id: model,
+          name: model,
+          reasoning: { efforts: [{ id: ReasoningEffortId("off"), name: "Off" }] },
+        }),
+        prepareCall: (config) => {
+          attempt++;
+          // First (and only) attempt fails fast, leaving the loop in its
+          // 250 ms backoff wait when the caller cancels.
+          return Promise.resolve(preparedCall(config, () => (async function* () {
+            yield { type: "finish", reason: { kind: "error", failure: gateway502 } } as StreamChunk;
+          })()));
+        },
+      };
+      const routes = new DeepSeekHarnessLlmRouteContext();
+      const bridge = createDeepSeekHarnessHostLlmBridge({ llm, routes });
+
+      const abortTimer = setTimeout(
+        () => controller.abort(new Error("caller cancelled during backoff")),
+        50,
+      );
+      try {
+        await expect(routes.run(ROUTE, () => bridge.complete({
+          messages: [{ role: "user", content: "hello" }],
+          signal: controller.signal,
+          timeoutMs: 30_000,
+        }))).rejects.toThrow("caller cancelled during backoff");
+      } finally {
+        clearTimeout(abortTimer);
+      }
+      expect(attempt).toBe(1);
+    });
   });
 });

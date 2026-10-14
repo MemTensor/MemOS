@@ -31,6 +31,19 @@ const HOST_LLM_MESSAGE_SOURCE = "memos-local-memory";
 const NO_REASONING_EFFORT = ReasoningEffortId("off");
 const UNSUPPORTED_REASONING_EFFORT = "UNSUPPORTED_REASONING_EFFORT";
 const MODEL_CAPABILITY_TTL_MS = 10 * 60 * 1_000;
+/**
+ * Bounded retry budget for one auxiliary host LLM call.
+ *
+ * The gateway in front of the host Messages API intermittently answers 502,
+ * which is a transient transport failure, not a logical one. The interactive
+ * chat path retries; auxiliary stages (recall filtering, capture
+ * summarization) silently degrade instead of retrying, so a single blip drops
+ * the whole stage. Retry a bounded number of times, bounded by the caller's
+ * per-call deadline.
+ */
+const HOST_LLM_MAX_ATTEMPTS = 3;
+/** `250 ms × attempt` backoff between auxiliary retries. */
+const HOST_LLM_RETRY_BASE_DELAY_MS = 250;
 
 /** Atomic provider/model route captured from the DSH agent that owns a turn. */
 export interface DeepSeekHarnessLlmRoute {
@@ -148,55 +161,17 @@ export function createDeepSeekHarnessHostLlmBridge(
       );
 
       try {
-        callDeadline.signal.throwIfAborted();
-        const prepared = await prepareAuxiliaryCall(
+        const result = await completeAuxiliaryWithRetry(
           options.llm,
           input,
           route,
           callDeadline.signal,
           capabilityCache,
         );
-        const request = createGenerateOptions(input, route, prepared.config);
-        request.signal = callDeadline.signal;
-        const assembler = new BlockAssembler();
-        for await (const chunk of prepared.stream(request)) {
-          callDeadline.signal.throwIfAborted();
-          assembler.push(chunk);
-        }
-        callDeadline.signal.throwIfAborted();
-
-        assertSuccessfulFinish(assembler.finish);
-        const blocks = assembler.blocks();
-        if (blocks.some((block) => block.type === "tool-call")) {
-          throw outputError(
-            "DeepSeek Harness host LLM returned tool calls for a text-only MemOS request",
-            "TOOL_CALLS",
-          );
-        }
-        if (blocks.some((block) => block.type !== "text" && block.type !== "reasoning")) {
-          throw outputError(
-            "DeepSeek Harness host LLM returned unsupported non-text content",
-            "UNSUPPORTED_CONTENT",
-          );
-        }
-
-        const text = blocks
-          .filter((block): block is Extract<(typeof blocks)[number], { type: "text" }> => (
-            block.type === "text"
-          ))
-          .map((block) => block.text)
-          .join("");
-        if (!text.trim()) {
-          throw outputError(
-            "DeepSeek Harness host LLM produced no text content",
-            "EMPTY_TEXT",
-          );
-        }
-
         return {
-          text,
+          text: result.text,
           model: route.model,
-          ...(assembler.usage === undefined ? {} : { usage: mapUsage(assembler.usage) }),
+          ...(result.usage === undefined ? {} : { usage: result.usage }),
           durationMs: Date.now() - startedAt,
         };
       } catch (error) {
@@ -213,6 +188,124 @@ export function createDeepSeekHarnessHostLlmBridge(
         callDeadline[Symbol.dispose]();
       }
     },
+  };
+}
+
+/**
+ * Dispatch one auxiliary host LLM call, retrying a bounded number of transient
+ * failures.
+ *
+ * A prepared DSH call is single-use, so each attempt re-prepares through the
+ * same registration-bound path (the model-capability lookup is cached, so this
+ * costs no extra round trip). The whole loop is bounded by the caller's
+ * deadline: `signal.throwIfAborted()` before every attempt and a cancellable
+ * backoff make the caller's abort authoritative, so a deadline abort never
+ * turns into another request.
+ */
+async function completeAuxiliaryWithRetry(
+  llm: DeepSeekHarnessLlmLike,
+  input: HostLlmCompleteInput,
+  route: DeepSeekHarnessLlmRoute,
+  signal: AbortSignal,
+  capabilityCache: CapabilityCache,
+): Promise<{ text: string; usage?: LlmUsage }> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= HOST_LLM_MAX_ATTEMPTS; attempt++) {
+    signal.throwIfAborted();
+    try {
+      const prepared = await prepareAuxiliaryCall(llm, input, route, signal, capabilityCache);
+      const request = createGenerateOptions(input, route, prepared.config);
+      request.signal = signal;
+      const assembler = new BlockAssembler();
+      for await (const chunk of prepared.stream(request)) {
+        signal.throwIfAborted();
+        assembler.push(chunk);
+      }
+      signal.throwIfAborted();
+      return assembleAuxiliaryText(assembler);
+    } catch (error) {
+      if (attempt >= HOST_LLM_MAX_ATTEMPTS || !isRetryableAuxiliaryError(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+    await waitForRetryBackoff(HOST_LLM_RETRY_BASE_DELAY_MS * attempt, signal);
+  }
+  // Every iteration returns or throws; this only satisfies the type checker.
+  throw lastError;
+}
+
+/**
+ * Whether an auxiliary-call failure is a transient transport failure worth
+ * retrying.
+ *
+ * Only an unusable provider is retried, and only when it carries no HTTP
+ * status (a transport failure) or a server-error status (`>= 500`). Logical
+ * outcomes are never retried: `401`/`402`/`403` (a bad or exhausted
+ * credential fails identically on every attempt), rate limits and timeouts
+ * (their own codes), malformed output, and deadline aborts.
+ */
+function isRetryableAuxiliaryError(error: unknown): boolean {
+  if (!(error instanceof MemosError) || error.code !== ERROR_CODES.LLM_UNAVAILABLE) {
+    return false;
+  }
+  const status = error.details?.status;
+  if (status === undefined) return true;
+  return typeof status === "number" && status >= 500;
+}
+
+/** Cancellable backoff; rejects with the caller's abort reason if cancelled mid-wait. */
+function waitForRetryBackoff(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("DSH operation aborted", "AbortError"));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new DOMException("DSH operation aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, Math.max(0, delayMs));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Validate one completed attempt's blocks and extract its text. */
+function assembleAuxiliaryText(
+  assembler: BlockAssembler,
+): { text: string; usage?: LlmUsage } {
+  assertSuccessfulFinish(assembler.finish);
+  const blocks = assembler.blocks();
+  if (blocks.some((block) => block.type === "tool-call")) {
+    throw outputError(
+      "DeepSeek Harness host LLM returned tool calls for a text-only MemOS request",
+      "TOOL_CALLS",
+    );
+  }
+  if (blocks.some((block) => block.type !== "text" && block.type !== "reasoning")) {
+    throw outputError(
+      "DeepSeek Harness host LLM returned unsupported non-text content",
+      "UNSUPPORTED_CONTENT",
+    );
+  }
+
+  const text = blocks
+    .filter((block): block is Extract<(typeof blocks)[number], { type: "text" }> => (
+      block.type === "text"
+    ))
+    .map((block) => block.text)
+    .join("");
+  if (!text.trim()) {
+    throw outputError(
+      "DeepSeek Harness host LLM produced no text content",
+      "EMPTY_TEXT",
+    );
+  }
+  return {
+    text,
+    ...(assembler.usage === undefined ? {} : { usage: mapUsage(assembler.usage) }),
   };
 }
 
