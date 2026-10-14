@@ -811,6 +811,21 @@ describe("DeepSeek Harness host LLM bridge", () => {
       expect(attempts()).toBe(2);
     });
 
+    it("does not retry a provider-side abort", async () => {
+      // A provider `aborted` finish maps to LLM_UNAVAILABLE with no status; it
+      // is a cancellation, not a transient failure, and must not be retried.
+      const { llm, attempts } = scriptedFailures([
+        { message: "request cancelled", code: "ABORTED" },
+        undefined,
+      ]);
+
+      await expect(completeWith(llm, 5_000)).rejects.toMatchObject({
+        code: "llm_unavailable",
+        details: { dshCode: "ABORTED" },
+      });
+      expect(attempts()).toBe(1);
+    });
+
     it("does not retry a rate limit, which carries its own code", async () => {
       const { llm, attempts } = scriptedFailures([
         { message: "too many requests", code: "RATE_LIMIT", status: 429 },

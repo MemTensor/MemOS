@@ -242,13 +242,16 @@ async function completeAuxiliaryWithRetry(
  * Only an unusable provider is retried, and only when it carries no HTTP
  * status (a transport failure) or a server-error status (`>= 500`). Logical
  * outcomes are never retried: `401`/`402`/`403` (a bad or exhausted
- * credential fails identically on every attempt), rate limits and timeouts
- * (their own codes), malformed output, and deadline aborts.
+ * credential fails identically on every attempt), provider aborts
+ * (`dshCode: "ABORTED"`, a cancellation), rate limits and timeouts (their own
+ * codes), malformed output, and deadline aborts.
  */
 function isRetryableAuxiliaryError(error: unknown): boolean {
   if (!(error instanceof MemosError) || error.code !== ERROR_CODES.LLM_UNAVAILABLE) {
     return false;
   }
+  // A provider-side abort is a cancellation, not a transient failure.
+  if (error.details?.dshCode === "ABORTED") return false;
   const status = error.details?.status;
   if (status === undefined) return true;
   return typeof status === "number" && status >= 500;
