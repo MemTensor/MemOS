@@ -24,6 +24,7 @@ import type {
   HostLlmCompletion,
 } from "../../core/llm/host-bridge.js";
 import type { LlmMessage, LlmUsage } from "../../core/llm/types.js";
+import { waitForRetry } from "../../core/util/retry-after.js";
 
 const HOST_LLM_BRIDGE_ID = "deepseek-harness.host.v1";
 const HOST_LLM_TIMEOUT_CODE = "MEMOS_DSH_HOST_LLM_TIMEOUT";
@@ -209,6 +210,9 @@ async function completeAuxiliaryWithRetry(
   signal: AbortSignal,
   capabilityCache: CapabilityCache,
 ): Promise<{ text: string; usage?: LlmUsage }> {
+  if (HOST_LLM_MAX_ATTEMPTS <= 0) {
+    throw new Error(`HOST_LLM_MAX_ATTEMPTS must be >= 1, got ${HOST_LLM_MAX_ATTEMPTS}`);
+  }
   let lastError: unknown;
   for (let attempt = 1; attempt <= HOST_LLM_MAX_ATTEMPTS; attempt++) {
     signal.throwIfAborted();
@@ -229,9 +233,10 @@ async function completeAuxiliaryWithRetry(
       }
       lastError = error;
     }
-    await waitForRetryBackoff(HOST_LLM_RETRY_BASE_DELAY_MS * attempt, signal);
+    await waitForRetry(HOST_LLM_RETRY_BASE_DELAY_MS * attempt, signal);
   }
-  // Every iteration returns or throws; this only satisfies the type checker.
+  // Unreachable: the guard at the top of the loop rejects an empty attempt
+  // range, so every iteration either returns or throws before reaching here.
   throw lastError;
 }
 
@@ -255,24 +260,6 @@ function isRetryableAuxiliaryError(error: unknown): boolean {
   const status = error.details?.status;
   if (status === undefined) return true;
   return typeof status === "number" && status >= 500;
-}
-
-/** Cancellable backoff; rejects with the caller's abort reason if cancelled mid-wait. */
-function waitForRetryBackoff(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return Promise.reject(signal.reason ?? new DOMException("DSH operation aborted", "AbortError"));
-  }
-  return new Promise<void>((resolve, reject) => {
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(signal.reason ?? new DOMException("DSH operation aborted", "AbortError"));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, Math.max(0, delayMs));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 /** Validate one completed attempt's blocks and extract its text. */
