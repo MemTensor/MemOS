@@ -177,6 +177,11 @@ const AlgorithmSchema = Type.Object({
      * recall. When enabled, the runtime skips task/reward/L2/L3/skill
      * evolution and keeps only summarize + embedding + retrieval filter.
      * The viewer exposes the inverse as "memory self-evolution".
+     *
+     * This trims the evolution chain only — turn-start retrieval still
+     * plans Tier-2 traces plus Tier-1 skills (a pure storage read, no
+     * model calls); world models (Tier-3) and episodes are not injected
+     * in this mode.
      */
     enabled: Bool(true),
   }, { default: {} }),

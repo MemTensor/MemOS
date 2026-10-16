@@ -444,8 +444,12 @@ describe("retrieval/integration", () => {
     );
 
     expect(res.packet.snippets.length).toBeGreaterThan(0);
-    expect(res.packet.snippets.every((s) => s.refKind === "trace")).toBe(true);
-    expect(res.stats.tier1Count).toBe(0);
+    // Skills are Tier-1 and stay armed in lightweight mode; only episodes /
+    // world models are excluded from the packet.
+    expect(
+      res.packet.snippets.every((s) => s.refKind === "trace" || s.refKind === "skill"),
+    ).toBe(true);
+    expect(res.stats.tier1Count).toBeGreaterThanOrEqual(1);
     expect(res.stats.tier3Count).toBe(0);
     expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
     expect(res.stats.emptyPacket).toBe(false);
@@ -454,6 +458,41 @@ describe("retrieval/integration", () => {
     expect(res.packet.droppedByLlm?.every((snippet) => typeof snippet.score === "number")).toBe(
       true,
     );
+  });
+
+  it("lightweight turn-start keeps Tier-1 armed so imported skills reach the packet (#2501)", async () => {
+    // Recall-path condition: no scheduler plan override (recallTurn passes
+    // none), so the lightweight base plan decides which tiers are planned.
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        config: {
+          ...makeDeps(handle).config,
+          lightweightMemory: true,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s_current" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+    );
+
+    expect(res.stats.plannedTiers).toMatchObject({
+      tier1: true,
+      tier2: true,
+      tier3: false,
+    });
+    expect(res.stats.tier1Count).toBeGreaterThan(0);
+    const skillIds = res.packet.snippets
+      .filter((s) => s.refKind === "skill")
+      .map((s) => String(s.refId));
+    expect(skillIds).toContain("sk_docker");
+    // World models (Tier-3) stay out of the lightweight turn-start packet.
+    expect(res.stats.tier3Count).toBe(0);
+    expect(res.packet.snippets.every((s) => s.refKind !== "world-model")).toBe(true);
   });
 
   it("can defer the local LLM pass for one final merged filter", async () => {
