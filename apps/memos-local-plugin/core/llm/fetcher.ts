@@ -338,7 +338,15 @@ function isTransientError(err: unknown): boolean {
 function isTimeout(err: unknown): boolean {
   if (err instanceof Error) {
     if (err.name === "TimeoutError") return true;
-    if ((err as { code?: string }).code === "ABORT_ERR") return true;
+    // A bare `AbortError` (DOMException code 20) reaching this point can
+    // only come from our own per-attempt `AbortSignal.timeout()`: caller
+    // cancellation is handled separately in `httpPostJson` (checked via
+    // `opts.signal?.aborted` before this classification runs). The legacy
+    // `"ABORT_ERR"` string comparison never matched, because
+    // `DOMException.code` is the *numeric* 20 — see issue #2499.
+    if (err.name === "AbortError") return true;
+    const code: unknown = (err as { code?: unknown }).code;
+    if (code === "ABORT_ERR" || code === 20) return true;
     if (/timeout|ETIMEDOUT/i.test(err.message ?? "")) return true;
   }
   return false;
@@ -374,10 +382,14 @@ function remainingDeadlineMs(deadlineAt?: number, nowMs: number = Date.now()): n
 function mergeSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
   if (!a) return b;
   const ctrl = new AbortController();
-  const forward = () => ctrl.abort();
-  if (a.aborted || b.aborted) ctrl.abort();
-  a.addEventListener("abort", forward, { once: true });
-  b.addEventListener("abort", forward, { once: true });
+  // Forward the abort *reason*: without it, `AbortSignal.timeout()`'s
+  // `TimeoutError` is flattened into a bare `AbortError` and downstream
+  // timeout classification can no longer tell a budget timeout from a
+  // caller cancellation (issue #2499).
+  const forwardFrom = (from: AbortSignal) => () => ctrl.abort(from.reason);
+  if (a.aborted || b.aborted) ctrl.abort(a.aborted ? a.reason : b.reason);
+  a.addEventListener("abort", forwardFrom(a), { once: true });
+  b.addEventListener("abort", forwardFrom(b), { once: true });
   return ctrl.signal;
 }
 
