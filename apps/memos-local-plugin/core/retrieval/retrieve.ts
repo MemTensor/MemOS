@@ -100,12 +100,18 @@ export async function turnStartRetrieve(
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
   if (deps.config.lightweightMemory) {
+    // Tier-1 (skills) is a pure storage read (FTS + vector + pattern over the
+    // repos, no model calls), so it stays armed even in lightweight mode —
+    // otherwise imported skills can never reach the turn-start packet: the
+    // tool-driven path deliberately excludes them to avoid double injection,
+    // and the prompt-time recall path passes no scheduler plan override
+    // (#2501). World models (Tier-3) remain off in lightweight mode.
     return runAll(deps, ctx, opts, applyPlanOverride({
-      wantTier1: false,
+      wantTier1: true,
       wantTier2: true,
       wantTier3: false,
       includeLowValue: false,
-      limit: opts.limit ?? Math.max(1, deps.config.tier2TopK),
+      limit: opts.limit ?? Math.max(1, deps.config.tier1TopK + deps.config.tier2TopK),
       traceOnly: true,
     }, opts.plan));
   }
