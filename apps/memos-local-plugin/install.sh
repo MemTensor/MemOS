@@ -472,6 +472,31 @@ ensure_runtime_home() {
   fi
 }
 
+# ─── Daemon log cap — bound the daemon's stdout/stderr redirect ───────────
+# The bridge daemon's start log is a plain shell redirect, so the rotating
+# file logger inside the plugin never sees it. Without a cap the file grows
+# for the whole life of the install (59 MB / 287,895 lines measured in the
+# field — https://github.com/MemTensor/MemOS/issues/2379). Call this before
+# every daemon launch: if the active log exceeds the cap, roll it to a
+# single `.1` generation so the pair stays bounded at 2× the cap.
+DAEMON_LOG_MAX_BYTES=$((10 * 1024 * 1024))
+rotate_oversized_log() {
+  local log_path="$1"
+  local max_bytes="${2:-${DAEMON_LOG_MAX_BYTES}}"
+  [[ -f "${log_path}" ]] || return 0
+  local size
+  # BSD wc pads its output with spaces; GNU wc does not. Strip whitespace
+  # so the numeric guard holds on both (an unparsable size is a no-op).
+  size="$(wc -c <"${log_path}" 2>/dev/null || true)"
+  size="${size//[[:space:]]/}"
+  [[ "${size}" =~ ^[0-9]+$ ]] || return 0
+  (( size <= max_bytes )) && return 0
+  rm -f "${log_path}.1"
+  mv "${log_path}" "${log_path}.1" 2>/dev/null || return 0
+  : >"${log_path}"
+  return 0
+}
+
 # ─── Wait for viewer — spin until HTTP endpoint actually responds ─────────
 wait_for_viewer() {
   local port="$1"
@@ -745,6 +770,7 @@ NODE
   fi
 
   warn "Memory Viewer did not respond after service start; trying foreground gateway mode."
+  rotate_oversized_log /tmp/openclaw-memos-gateway.log
   nohup "${oc_bin}" gateway >/tmp/openclaw-memos-gateway.log 2>&1 &
   sleep 2
   if wait_for_viewer "${OPENCLAW_PORT}"; then
@@ -1358,6 +1384,7 @@ CFGEOF
     if [[ -n "${node_bin}" && -x "${node_bin}" && -f "${bridge_entry}" && ( "${bridge_entry}" == *.cjs || -f "${tsx_bin}" ) ]]; then
       local daemon_log="${prefix}/logs/daemon-start.log"
       mkdir -p "${prefix}/logs"
+      rotate_oversized_log "${daemon_log}"
       # Launch bridge in --daemon mode (pure HTTP, no stdio).
       # The process stays alive to serve the Memory Viewer.
       if [[ "${bridge_entry}" == *.cjs ]]; then

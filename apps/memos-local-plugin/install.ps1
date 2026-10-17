@@ -523,6 +523,28 @@ function Write-RuntimeHomeMarker {
     Move-Item -Path $TempFile -Destination $MarkerFile -Force
 }
 
+function Reset-OversizedLog {
+    # The daemon's stdout/stderr redirects bypass the plugin's rotating file
+    # logger, so without a cap the start log grows for the whole life of the
+    # install (59 MB measured in the field — MemTensor/MemOS#2379). Call
+    # before every daemon launch: roll an over-cap log to a single `.1`
+    # generation so the pair stays bounded at 2x the cap.
+    param([string]$Path, [long]$MaxBytes = 10MB)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    try {
+        $length = (Get-Item -LiteralPath $Path).Length
+    } catch { return }
+    if ($length -le $MaxBytes) { return }
+    $rotated = "$Path.1"
+    if (Test-Path -LiteralPath $rotated) {
+        Remove-Item -LiteralPath $rotated -Force -ErrorAction SilentlyContinue
+    }
+    try {
+        Move-Item -LiteralPath $Path -Destination $rotated -Force -ErrorAction Stop
+        New-Item -ItemType File -Path $Path -Force | Out-Null
+    } catch { }
+}
+
 function Wait-ForViewer {
     param([int]$Port, [int]$Timeout = 60)
     $Url = "http://127.0.0.1:$Port/"
@@ -854,6 +876,9 @@ memory:
     if ($NodeBin -and (Test-Path $BridgeEntry) -and ($BridgeEntry.EndsWith(".cjs") -or (Test-Path $TsxBin))) {
         $DaemonLog = Join-Path $Prefix "logs\daemon-start.log"
         $DaemonLogErr = Join-Path $Prefix "logs\daemon-start-err.log"
+        New-Item -ItemType Directory -Path (Join-Path $Prefix "logs") -Force | Out-Null
+        Reset-OversizedLog -Path $DaemonLog
+        Reset-OversizedLog -Path $DaemonLogErr
         if ($BridgeEntry.EndsWith(".cjs")) {
             $DaemonArgs = "`"$BridgeEntry`" --agent=hermes --daemon --home=`"$HomeDir`""
             Start-Process -FilePath $NodeBin -ArgumentList $DaemonArgs -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
