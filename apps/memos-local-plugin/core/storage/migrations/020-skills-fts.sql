@@ -22,7 +22,6 @@ CREATE TRIGGER IF NOT EXISTS skills_fts_au AFTER UPDATE ON skills BEGIN
   VALUES (new.id, new.name, new.invocation_guide);
 END;
 
+DELETE FROM skills_fts;
 INSERT INTO skills_fts(skill_id, name, invocation_guide)
-SELECT id, name, invocation_guide
-  FROM skills
- WHERE id NOT IN (SELECT skill_id FROM skills_fts);
+SELECT id, name, invocation_guide FROM skills;

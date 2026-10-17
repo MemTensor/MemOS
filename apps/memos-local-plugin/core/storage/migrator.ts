@@ -242,9 +242,7 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     return;
   }
   if (file.version === 20 && file.name === "skills-fts") {
-    if (tableExists(db, "skills")) {
-      db.exec(fs.readFileSync(file.fullPath, "utf8"));
-    }
+    execIfTable(db, "skills", fs.readFileSync(file.fullPath, "utf8"));
     return;
   }
   db.exec(fs.readFileSync(file.fullPath, "utf8"));

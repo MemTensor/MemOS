@@ -62,6 +62,32 @@ describe("storage/skills-fts-migration", () => {
     expect(indexed()).toEqual([before[0]]);
   });
 
+  it("fully rebuilds a drifted index from the current skills", () => {
+    const { db, cleanup } = makeTmpDb();
+    cleanups.push(cleanup);
+    db.exec(`
+      INSERT INTO skills (id, name, invocation_guide, created_at, updated_at)
+      VALUES ('stale', 'Current deployment', 'Deploy the current service', 1, 1),
+             ('missing', 'Database recovery', 'Restore a database backup', 2, 2);
+      DELETE FROM skills_fts;
+      INSERT INTO skills_fts (skill_id, name, invocation_guide)
+      VALUES ('stale', 'Obsolete deployment', 'Follow the retired procedure'),
+             ('removed', 'Removed skill', 'This skill no longer exists'),
+             (NULL, 'Invalid skill', 'This row has no skill id');
+    `);
+    expect(db.prepare(`SELECT skill_id FROM skills_fts WHERE skills_fts MATCH '"obsolete"'`).all()).toEqual([
+      { skill_id: "stale" },
+    ]);
+
+    const sql = fs.readFileSync(path.join(defaultMigrationsDir(), "020-skills-fts.sql"), "utf8");
+    db.tx(() => db.exec(sql));
+
+    expect(db.prepare(`SELECT skill_id, name, invocation_guide FROM skills_fts ORDER BY skill_id`).all()).toEqual(
+      db.prepare(`SELECT id AS skill_id, name, invocation_guide FROM skills ORDER BY id`).all(),
+    );
+    expect(db.prepare(`SELECT skill_id FROM skills_fts WHERE skills_fts MATCH '"obsolete" OR "retired"'`).all()).toEqual([]);
+  });
+
   it("is a no-op on a fresh database with an already indexed skill", () => {
     const { db, cleanup } = makeTmpDb();
     cleanups.push(cleanup);
