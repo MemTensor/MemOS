@@ -70,7 +70,9 @@ describe("install.sh — rotate_oversized_log behavior", () => {
     try {
       const r = sandbox.run(`rotate_oversized_log "${log}" 32`);
       expect(r.code).toBe(0);
-      expect(readFileSync(`${log}.1`, "utf8")).toHaveLength(64);
+      // The rolled generation keeps only the tail, bounded at the cap —
+      // the pre-rotation file can be arbitrarily larger than the cap.
+      expect(readFileSync(`${log}.1`, "utf8")).toHaveLength(32);
       expect(readFileSync(log, "utf8")).toHaveLength(0);
     } finally {
       rmSync(sandbox.root, { recursive: true, force: true });
@@ -110,7 +112,7 @@ describe("install.sh — rotate_oversized_log behavior", () => {
       // The fresh active file grows past the cap again before the next launch.
       makeLog(sandbox.root, "daemon-start.log", 48);
       sandbox.run(`rotate_oversized_log "${log}" 32`);
-      expect(readFileSync(`${log}.1`, "utf8")).toHaveLength(48);
+      expect(readFileSync(`${log}.1`, "utf8")).toHaveLength(32);
       expect(readFileSync(log, "utf8")).toHaveLength(0);
     } finally {
       rmSync(sandbox.root, { recursive: true, force: true });

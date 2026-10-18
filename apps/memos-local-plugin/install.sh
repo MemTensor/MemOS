@@ -475,10 +475,13 @@ ensure_runtime_home() {
 # ─── Daemon log cap — bound the daemon's stdout/stderr redirect ───────────
 # The bridge daemon's start log is a plain shell redirect, so the rotating
 # file logger inside the plugin never sees it. Without a cap the file grows
-# for the whole life of the install (59 MB / 287,895 lines measured in the
-# field — https://github.com/MemTensor/MemOS/issues/2379). Call this before
-# every daemon launch: if the active log exceeds the cap, roll it to a
-# single `.1` generation so the pair stays bounded at 2× the cap.
+# whole life of a daemon session (59 MB / 287,895 lines measured in the
+# field — https://github.com/MemTensor/MemOS/issues/2379). The launch
+# redirect truncates the active log anyway, so this only bounds retained
+# history at install time: a running daemon can still grow the active log
+# without limit between installs. Call this before every daemon launch:
+# if the active log exceeds the cap, keep only the tail (up to the cap)
+# as a single `.1` generation.
 DAEMON_LOG_MAX_BYTES=$((10 * 1024 * 1024))
 rotate_oversized_log() {
   local log_path="$1"
@@ -493,6 +496,12 @@ rotate_oversized_log() {
   (( size <= max_bytes )) && return 0
   rm -f "${log_path}.1"
   mv "${log_path}" "${log_path}.1" 2>/dev/null || return 0
+  # Keep only the tail of the rolled generation so `.1` itself stays
+  # bounded (the pre-rotation file can be arbitrarily larger than the cap).
+  if [[ "${size}" -gt "${max_bytes}" ]]; then
+    tail -c "${max_bytes}" "${log_path}.1" >"${log_path}.1.tmp" 2>/dev/null \
+      && mv -f "${log_path}.1.tmp" "${log_path}.1" || rm -f "${log_path}.1.tmp"
+  fi
   : >"${log_path}"
   return 0
 }
