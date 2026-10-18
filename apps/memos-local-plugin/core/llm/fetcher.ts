@@ -338,13 +338,13 @@ function isTransientError(err: unknown): boolean {
 function isTimeout(err: unknown): boolean {
   if (err instanceof Error) {
     if (err.name === "TimeoutError") return true;
-    // A bare `AbortError` (DOMException code 20) reaching this point can
-    // only come from our own per-attempt `AbortSignal.timeout()`: caller
-    // cancellation is handled separately in `httpPostJson` (checked via
-    // `opts.signal?.aborted` before this classification runs). The legacy
-    // `"ABORT_ERR"` string comparison never matched, because
-    // `DOMException.code` is the *numeric* 20 — see issue #2499.
-    if (err.name === "AbortError") return true;
+    // An AbortError whose *reason* is a TimeoutError comes from
+    // AbortSignal.timeout(); a plain AbortError without that reason comes
+    // from a caller ctrl.abort() and must NOT be classified as a timeout.
+    if (err.name === "AbortError") {
+      const reason: unknown = (err as { reason?: unknown }).reason;
+      if (reason instanceof Error && reason.name === "TimeoutError") return true;
+    }
     const code: unknown = (err as { code?: unknown }).code;
     if (code === "ABORT_ERR" || code === 20) return true;
     if (/timeout|ETIMEDOUT/i.test(err.message ?? "")) return true;
@@ -387,7 +387,13 @@ function mergeSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
   // timeout classification can no longer tell a budget timeout from a
   // caller cancellation (issue #2499).
   const forwardFrom = (from: AbortSignal) => () => ctrl.abort(from.reason);
-  if (a.aborted || b.aborted) ctrl.abort(a.aborted ? a.reason : b.reason);
+  // Prefer the TimeoutError reason so downstream classification stays accurate
+  // even when both signals fire simultaneously.
+  const immediateReason =
+    (a.aborted && a.reason instanceof Error && a.reason.name === "TimeoutError")
+      ? a.reason
+      : a.aborted ? a.reason : b.reason;
+  if (a.aborted || b.aborted) ctrl.abort(immediateReason);
   a.addEventListener("abort", forwardFrom(a), { once: true });
   b.addEventListener("abort", forwardFrom(b), { once: true });
   return ctrl.signal;
