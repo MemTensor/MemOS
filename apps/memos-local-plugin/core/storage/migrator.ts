@@ -241,6 +241,8 @@ function applyMigration(db: StorageDb, file: MigrationFile): void {
     }
     return;
   }
+  // 001 already declares skills_fts; 020 repairs legacy drift by rebuilding
+  // the table definition and triggers, then backfilling from skills.
   if (file.version === 20 && file.name === "skills-fts") {
     execIfTable(db, "skills", fs.readFileSync(file.fullPath, "utf8"));
     return;
