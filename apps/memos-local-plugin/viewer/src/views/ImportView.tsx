@@ -4,7 +4,7 @@
  *   - Export: `GET /api/v1/export` returns a JSON bundle of every
  *     trace/policy/world-model/skill. We trigger a browser download.
  *   - Import: POST the file back to `/api/v1/import`. The server
- *     preserves existing data and assigns fresh ids to imported rows.
+ *     preserves existing ids and skips duplicates.
  *   - Migrate: `POST /api/v1/migrate/legacy/run` — scans the legacy
  *     SQLite file for the **currently running agent** (openclaw or
  *     hermes — the server picks the right path based on its own
@@ -20,6 +20,7 @@ import { api } from "../api/client";
 import { health } from "../stores/health";
 import { t } from "../stores/i18n";
 import { Icon } from "../components/Icon";
+import type { MemoryImportResult } from "../../../agent-contract/import";
 
 type NativeImportKind = "hermes" | "openclaw";
 
@@ -160,24 +161,36 @@ function ExportCard() {
 
 function ImportCard() {
   const [busy, setBusy] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [ownership, setOwnership] = useState<"preserve" | "target">("preserve");
+  const [targetProfileId, setTargetProfileId] = useState("");
+  const [preview, setPreview] = useState<MemoryImportResult | null>(null);
+  const [result, setResult] = useState<MemoryImportResult | null>(null);
   const [status, setStatus] = useState<{
     kind: "ok" | "error";
     text: string;
   } | null>(null);
 
-  const run = async (file: File) => {
+  const resetPreview = () => { setPreview(null); setResult(null); setStatus(null); };
+  const run = async (file: File, dryRun: boolean) => {
     setBusy(true);
     setStatus(null);
     try {
       const form = new FormData();
       form.append("bundle", file);
-      const r = await api.postRaw<{ imported: number; skipped: number }>(
-        "/api/v1/import",
+      const query = new URLSearchParams({ ownership, dryRun: String(dryRun) });
+      if (ownership === "target" && targetProfileId.trim()) query.set("targetProfileId", targetProfileId.trim());
+      const r = await api.postRaw<MemoryImportResult>(
+        `/api/v1/import?${query}`,
         form,
       );
+      if (dryRun) { setPreview(r); setResult(null); } else { setResult(r); setPreview(null); }
       setStatus({
-        kind: "ok",
-        text: `Imported ${r.imported} / skipped ${r.skipped}`,
+        kind: r.invalid || r.failed ? "error" : "ok",
+        text: t(dryRun ? "import.preview.done" : "import.result.done", {
+          imported: r.imported, duplicates: r.duplicates, invalid: r.invalid, failed: r.failed,
+          visible: r.visible, hidden: r.hidden,
+        }),
       });
     } catch (err) {
       setStatus({ kind: "error", text: (err as Error).message });
@@ -206,6 +219,22 @@ function ImportCard() {
           </div>
         </div>
       </div>
+      <div class="vstack" style="gap:var(--sp-3)">
+        <label>
+          {t("import.ownership")}
+          <select class="select" value={ownership} disabled={busy} onChange={(event) => {
+            setOwnership((event.target as HTMLSelectElement).value as "preserve" | "target"); resetPreview();
+          }}>
+            <option value="preserve">{t("import.ownership.preserve")}</option>
+            <option value="target">{t("import.ownership.target")}</option>
+          </select>
+        </label>
+        {ownership === "target" && <label>
+          {t("import.targetProfile")}
+          <input class="input" value={targetProfileId} disabled={busy} placeholder={t("import.targetProfile.hint")}
+            onInput={(event) => { setTargetProfileId((event.target as HTMLInputElement).value); resetPreview(); }} />
+        </label>}
+        <p class="muted">{t("import.visibility.hint")}</p>
       <label class="btn">
         <Icon name="upload" size={14} />
         {t("import.import.btn")}
@@ -215,11 +244,18 @@ function ImportCard() {
           hidden
           onChange={(e) => {
             const f = (e.target as HTMLInputElement).files?.[0];
-            if (f) void run(f);
+            if (f) { setFile(f); resetPreview(); void run(f, true); }
           }}
           disabled={busy}
         />
       </label>
+        {file && <div class="hstack" style="gap:var(--sp-2)">
+          <span>{file.name}</span>
+          <button class="btn" disabled={busy} onClick={() => void run(file, true)}>{t("import.preview")}</button>
+          <button class="btn btn--primary" disabled={busy || !preview || preview.imported === 0}
+            onClick={() => void run(file, false)}>{t("import.confirm")}</button>
+        </div>}
+      </div>
       {status && (
         <div
           role="status"
@@ -230,7 +266,12 @@ function ImportCard() {
           {status.text}
         </div>
       )}
-      {status?.kind === "ok" && <EmbeddingRepairButton />}
+      {(preview ?? result)?.issues?.length ? <ul>
+        {(preview ?? result)!.issues.map(issue => <li key={`${issue.kind}-${issue.index}`}>
+          {issue.kind}[{issue.index + 1}]{issue.field ? ` · ${issue.field}` : ""}: {issue.message} ({issue.code})
+        </li>)}
+      </ul> : null}
+      {result && result.imported > 0 && <EmbeddingRepairButton />}
     </section>
   );
 }
