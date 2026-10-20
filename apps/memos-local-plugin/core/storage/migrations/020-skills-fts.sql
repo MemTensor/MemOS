@@ -26,6 +26,5 @@ CREATE TRIGGER skills_fts_au AFTER UPDATE OF name, invocation_guide ON skills BE
   VALUES (new.id, new.name, new.invocation_guide);
 END;
 
-DELETE FROM skills_fts;
 INSERT INTO skills_fts(skill_id, name, invocation_guide)
 SELECT id, name, invocation_guide FROM skills;
