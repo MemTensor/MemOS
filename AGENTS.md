@@ -8,7 +8,7 @@
 **MemOS / MemoryOS**: a memory operating system for LLM agents. Python library plus a FastAPI service, providing multiple memory types (textual / tree / preference / skill / KV cache / LoRA parametric) plus scheduling, version management, and vector & graph storage.
 
 - **Repository**: https://github.com/MemTensor/MemOS
-- **Documentation**: https://memos-docs.openmem.net/home/overview/
+- **Documentation**: https://memos-docs.openmem.net/
 - **PyPI**: https://pypi.org/project/MemoryOS/
 - **License**: Apache-2.0
 - **Top-level package**: `src/memos/`. Distribution name `MemoryOS`; import name `memos`.

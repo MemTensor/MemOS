@@ -1,0 +1,39 @@
+name: Docs link check
+
+on:
+  pull_request:
+    paths:
+      - README.md
+      - README_ZH.md
+      - pyproject.toml
+      - AGENTS.md
+      - .github/workflows/docs-link-check.yml
+  schedule:
+    # 每月 1 日 09:00（北京时间）例行巡检，及时发现文档站改版导致的失效链接
+    - cron: '0 1 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  link-check:
+    name: Check links in README and pyproject
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # 动态徽章（shields.io）与 Discord 邀请链接会随外部服务波动，跳过以免误报；
+          # npmjs.com 对非浏览器请求返回 403（反爬），API 端点需鉴权，均为误报来源
+          args: >-
+            --verbose
+            --no-progress
+            --accept 200..299
+            --exclude 'img.shields.io'
+            --exclude 'discord.gg'
+            --exclude 'www.npmjs.com'
+            --exclude 'memos.memtensor.cn/api'
+            README.md README_ZH.md pyproject.toml AGENTS.md
+          fail: true
