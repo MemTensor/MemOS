@@ -57,7 +57,7 @@ repository = "https://github.com/MemTensor/MemOS"
 download = "https://pypi.org/project/MemoryOS/#files"
 changelog = "https://github.com/MemTensor/MemOS/releases"
 releasenotes = "https://github.com/MemTensor/MemOS/releases"
-documentation = "https://memos-docs.openmem.net/home/overview/"
+documentation = "https://memos-docs.openmem.net/"
 issues = "https://github.com/MemTensor/MemOS/issues"
 
 [project.scripts]
