@@ -1,3 +1,4 @@
+import { assertV4RowAdmission, releasedV4SessionFormatCodec } from "@deepseek-ai/dsh-session-format-v3-to-v4";
 import { Context } from "@deepseek-ai/cordis";
 import LlmRuntime, {
   LlmAdapter,
@@ -12,6 +13,7 @@ import LlmRuntime, {
 } from "@deepseek-ai/dsh-llm";
 import { describe, expect, it, vi } from "vitest";
 
+import { dshV4Event } from "../../helpers/deepseek-harness-v4.js";
 import {
   createDeepSeekHarnessHostLlmBridge,
   DeepSeekHarnessLlmRouteContext,
@@ -164,6 +166,13 @@ describe("DeepSeek Harness host LLM bridge", () => {
       maxTokens: 321,
       timeoutMs: 2_000,
     }));
+
+    // Exercise the actual host bridge output; auxiliary messages need no form.
+    const message = request!.messages[0]!;
+    expect(message.source).not.toHaveProperty("form");
+    const event = dshV4Event("user/message", message);
+    expect(() => assertV4RowAdmission(event)).not.toThrow();
+    expect(() => releasedV4SessionFormatCodec.encodeEvent(event)).not.toThrow();
 
     expect(request).toMatchObject({
       provider: "deepseek",

@@ -567,6 +567,25 @@ errors and are not fail-open.
   as untrusted and potentially stale, especially when it contains copied tool
   output or repository text.
 
+## V4 message-source regression tests
+
+From `apps/memos-local-plugin`, run:
+
+```sh
+npm ci
+npx vitest run tests/unit/adapters/deepseek-harness-{bridge,host-llm,runtime}.test.ts
+```
+
+These tests use the published `@deepseek-ai/dsh-session-format-v3-to-v4`
+`0.2.0-rc.2` codec, without a DSH desktop installation, account, or network
+calls during testing. They check real recall and host-LLM messages through
+both `assertV4RowAdmission` and `encodeEvent`, including a pre-step inbox
+batch and rejection of retired `kind: "plugin"` sources. The codec is a dev
+dependency only. Its Cordis peer is satisfied by the development range;
+existing DSH brand/protocol peers remain pinned to the older adapter test
+stack. This validates V4 attribution, not general compatibility with every
+DSH API in the codec's release line.
+
 ## Known limitations
 
 1. **Developer-preview compatibility.** The initial compatibility target is

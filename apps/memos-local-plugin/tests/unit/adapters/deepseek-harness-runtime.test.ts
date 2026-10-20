@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { assertV4RowAdmission, releasedV4SessionFormatCodec } from "@deepseek-ai/dsh-session-format-v3-to-v4";
 
 import type { Context } from "@deepseek-ai/cordis";
 import { describe, expect, it, vi } from "vitest";
@@ -15,16 +16,40 @@ import {
 import type {
   DeepSeekHarnessHostLlmBridge,
 } from "../../../adapters/deepseek-harness/host-llm.js";
+import { dshV4Event } from "../../helpers/deepseek-harness-v4.js";
 import { DEFAULT_CONFIG } from "../../../core/config/index.js";
 
 describe("DeepSeek Harness adapter runtime defaults", () => {
   it("creates producer-owned recall messages admitted by DSH V4", () => {
     const message = createDeepSeekHarnessRecallMessage("synthetic recall");
+    const event = dshV4Event("user/message", message);
+    expect(() => assertV4RowAdmission(event)).not.toThrow();
+    expect(() => releasedV4SessionFormatCodec.encodeEvent(event)).not.toThrow();
     expect(message).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "synthetic recall" }],
       source: { kind: "plugin:memos-local-memory", plugin: "memos-local-memory", form: "recall" },
     });
+  });
+
+  it.each([
+    { kind: "plugin", plugin: "memos-local-memory", form: "recall" },
+    { kind: "plugin", plugin: "memos-local-memory" },
+  ])("rejects retired plugin sources at both V4 gates: %j", (source) => {
+    const message = { ...createDeepSeekHarnessRecallMessage("synthetic recall"), source };
+    const user = { ...message, source: { kind: "user" } };
+    const events = [
+      dshV4Event("user/message", message),
+      dshV4Event("agent/inbox/spliced", { removedCount: 1, inserted: [user, message] }),
+    ];
+    for (const event of events) {
+      expect(() => assertV4RowAdmission(event)).toThrow(
+        "format v4 message requires a producer-owned source kind",
+      );
+      expect(() => releasedV4SessionFormatCodec.encodeEvent(event)).toThrow(
+        "format v4 message requires a producer-owned source kind",
+      );
+    }
   });
 
   it("injects the DSH LLM service and uses it for an otherwise unconfigured MemOS LLM", () => {
