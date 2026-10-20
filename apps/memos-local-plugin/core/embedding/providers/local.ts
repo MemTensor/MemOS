@@ -10,7 +10,11 @@
  * don't normalize again on top of that.
  */
 
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { MemosError } from "../../../agent-contract/errors.js";
 import type {
+  EmbeddingConfig,
   EmbedRole,
   EmbeddingProvider,
   EmbeddingProviderName,
@@ -18,10 +22,16 @@ import type {
 } from "../types.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Extractor = (text: string, options?: Record<string, unknown>) => Promise<any>;
+type Extractor = (
+  text: string,
+  options?: Record<string, unknown>,
+) => Promise<any>;
 
 let extractorPromise: Promise<Extractor> | null = null;
-let currentModel: string | null = null;
+let currentKey: string | null = null;
+// Transformers has a process-wide env. Keep our differently configured loads
+// exclusive until pipeline creation has finished, including background warmup.
+let loadQueue: Promise<void> = Promise.resolve();
 
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("Aborted", "AbortError");
@@ -36,7 +46,10 @@ function abortReason(signal: AbortSignal): unknown {
  * cache for the next request. Attaching both promise handlers also prevents a
  * late native failure from becoming an unhandled rejection.
  */
-function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+function awaitWithAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   if (!signal) return promise;
   if (signal.aborted) return Promise.reject(abortReason(signal));
 
@@ -59,35 +72,159 @@ function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T
   });
 }
 
-async function ensureExtractor(model: string, log: ProviderCallCtx["log"]): Promise<Extractor> {
-  if (extractorPromise && currentModel === model) return extractorPromise;
-  if (extractorPromise && currentModel && currentModel !== model) {
-    log.warn("model.swap", { from: currentModel, to: model });
-    extractorPromise = null;
+function localPath(value?: string): string | undefined {
+  if (!value?.trim()) return undefined;
+  const path = value.trim();
+  return resolve(
+    path === "~"
+      ? homedir()
+      : path.startsWith("~/")
+        ? join(homedir(), path.slice(2))
+        : path,
+  );
+}
+
+function localSettings(config: EmbeddingConfig) {
+  let remoteHost =
+    config.local?.remoteHost?.trim() ||
+    process.env.HF_ENDPOINT?.trim() ||
+    undefined;
+  if (remoteHost) {
+    try {
+      const url = new URL(remoteHost);
+      if (
+        !["https:", "http:"].includes(url.protocol) ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash
+      )
+        throw new Error();
+      remoteHost = url.href.endsWith("/") ? url.href : `${url.href}/`;
+    } catch {
+      throw new MemosError(
+        "config_invalid",
+        "Local model remoteHost/HF_ENDPOINT must be an HTTP(S) base URL without credentials, query or fragment.",
+      );
+    }
   }
-  log.info("loading", { model });
+  return {
+    remoteHost,
+    modelPath: localPath(config.local?.modelPath),
+    cacheDir:
+      localPath(config.local?.cacheDir) ??
+      join(homedir(), ".cache", "memos", "models"),
+    offline: config.local?.offline === true,
+  };
+}
+
+function ensureExtractor(
+  config: EmbeddingConfig,
+  log: ProviderCallCtx["log"],
+): Promise<Extractor> {
+  const { model } = config;
+  const settings = localSettings(config);
+  const key = JSON.stringify([model, settings]);
+  if (extractorPromise && currentKey === key) return extractorPromise;
+  log.info("loading", { model, offline: settings.offline });
   const t0 = Date.now();
-  extractorPromise = (async () => {
-    // Dynamic import keeps the heavy dep out of the hot path for tests that
-    // don't need it.
+  const previous = loadQueue;
+  const pending = previous.then(async () => {
     const mod = await import("@huggingface/transformers");
     const pipeline = (mod as unknown as { pipeline: PipelineFn }).pipeline;
-    const ext = (await pipeline("feature-extraction", model, {
-      dtype: "q8",
-      device: "cpu",
-    })) as unknown as Extractor;
-    log.info("ready", { model, durationMs: Date.now() - t0 });
-    return ext;
-  })().catch((err) => {
-    extractorPromise = null;
+    const env = mod.env;
+    const saved = {
+      remoteHost: env.remoteHost,
+      localModelPath: env.localModelPath,
+      cacheDir: env.cacheDir,
+      allowRemoteModels: env.allowRemoteModels,
+    };
+    if (settings.remoteHost) env.remoteHost = settings.remoteHost;
+    if (settings.modelPath) env.localModelPath = settings.modelPath;
+    if (settings.cacheDir) env.cacheDir = settings.cacheDir;
+    env.allowRemoteModels = !settings.offline;
+    const progressByFile = new Map<string, number>();
+    try {
+      const ext = (await pipeline("feature-extraction", model, {
+        dtype: "q8",
+        device: "cpu",
+        local_files_only: settings.offline,
+        progress_callback: (event: {
+          status?: string;
+          file?: string;
+          progress?: number;
+        }) => {
+          if (
+            event.status !== "progress" ||
+            typeof event.progress !== "number" ||
+            !Number.isFinite(event.progress)
+          )
+            return;
+          const file = event.file ?? "model";
+          const progress = Math.max(
+            0,
+            Math.min(100, Math.floor(event.progress)),
+          );
+          if (
+            progressByFile.get(file) === progress ||
+            (progress < (progressByFile.get(file) ?? -10) + 10 &&
+              progress !== 100)
+          )
+            return;
+          progressByFile.set(file, progress);
+          log.info("download.progress", { model, file, progress });
+        },
+      })) as unknown as Extractor;
+      log.info("ready", { model, durationMs: Date.now() - t0 });
+      return ext;
+    } finally {
+      Object.assign(env, saved);
+    }
+  });
+  const observed = pending.catch((err) => {
+    if (extractorPromise === observed) {
+      extractorPromise = null;
+      currentKey = null;
+    }
     log.error("load_failed", {
       model,
       err: { name: (err as Error).name, message: (err as Error).message },
     });
     throw err;
   });
-  currentModel = model;
-  return extractorPromise;
+  loadQueue = observed.then(
+    () => undefined,
+    () => undefined,
+  );
+  currentKey = key;
+  extractorPromise = observed;
+  return observed;
+}
+
+async function waitForModel(
+  load: Promise<Extractor>,
+  timeoutMs: number,
+): Promise<Extractor> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      load,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new MemosError(
+                "embedding_unavailable",
+                `Local model loading exceeded ${timeoutMs} ms. Check download progress, configure a mirror or local model directory, then retry. Background loading may still complete.`,
+              ),
+            ),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -104,11 +241,21 @@ type PipelineFn = (
 export class LocalEmbeddingProvider implements EmbeddingProvider {
   readonly name: EmbeddingProviderName = "local";
 
-  async embed(texts: string[], _role: EmbedRole, ctx: ProviderCallCtx): Promise<number[][]> {
+  async embed(
+    texts: string[],
+    _role: EmbedRole,
+    ctx: ProviderCallCtx,
+  ): Promise<number[][]> {
     const { config, log } = ctx;
     // Avoid starting a costly lazy model load for an already-expired request.
     if (ctx.signal?.aborted) throw abortReason(ctx.signal);
-    const ext = await awaitWithAbort(ensureExtractor(config.model, log), ctx.signal);
+    const ext = await awaitWithAbort(
+      waitForModel(
+        ensureExtractor(config, log),
+        config.local?.loadTimeoutMs ?? 120_000,
+      ),
+      ctx.signal,
+    );
     const out: number[][] = [];
     for (let i = 0; i < texts.length; i++) {
       if (ctx.signal?.aborted) throw abortReason(ctx.signal);
@@ -128,12 +275,13 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
   async close(): Promise<void> {
     // The transformers pipeline doesn't expose a .close(); GC handles it.
     extractorPromise = null;
-    currentModel = null;
+    currentKey = null;
   }
 }
 
 // Test hook — tests can reset the cached extractor without touching internals.
 export function __resetLocalExtractorForTests(): void {
   extractorPromise = null;
-  currentModel = null;
+  currentKey = null;
+  loadQueue = Promise.resolve();
 }

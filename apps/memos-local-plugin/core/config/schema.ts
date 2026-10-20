@@ -43,6 +43,13 @@ const EmbeddingSchema = Type.Object({
   ], { default: "local" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
+  local: Type.Optional(Type.Object({
+    remoteHost: StringWithDefault(""),
+    modelPath: StringWithDefault(""),
+    cacheDir: StringWithDefault(""),
+    offline: Bool(false),
+    loadTimeoutMs: NumberInRange(120_000, 1, 3_600_000),
+  }, { default: {} })),
   apiKey: StringWithDefault(""),
   /** OpenRouter provider routing — providers to skip. */
   providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
