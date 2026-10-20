@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   configureDeepSeekHarnessHostLlm,
+  createDeepSeekHarnessRecallMessage,
   deepSeekHarnessAutoRecoveryEnabled,
   deepSeekHarnessMemoryGuidance,
   defaultDeepSeekHarnessHome,
@@ -17,6 +18,15 @@ import type {
 import { DEFAULT_CONFIG } from "../../../core/config/index.js";
 
 describe("DeepSeek Harness adapter runtime defaults", () => {
+  it("creates producer-owned recall messages admitted by DSH V4", () => {
+    const message = createDeepSeekHarnessRecallMessage("synthetic recall");
+    expect(message).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "synthetic recall" }],
+      source: { kind: "plugin:memos-local-memory", plugin: "memos-local-memory", form: "recall" },
+    });
+  });
+
   it("injects the DSH LLM service and uses it for an otherwise unconfigured MemOS LLM", () => {
     expect(inject).toContain("llm");
 
