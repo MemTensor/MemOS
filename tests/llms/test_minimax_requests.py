@@ -71,7 +71,10 @@ def test_minimax_default_and_saved_requests(monkeypatch, model, api_base, stream
     body = json.loads(request.content)
     assert body["model"] == expected_model
     assert body["messages"] == messages
-    assert body.get("stream", False) is stream
+    if stream:
+        assert body["stream"] is True
+    else:
+        assert "stream" not in body
     assert "thinking" not in body
     assert "enable_thinking" not in body
     assert "reasoning_effort" not in body
@@ -144,6 +147,7 @@ def test_minimax_explicit_request_preserves_options_and_history(model, extra_bod
     with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
         llm.client = llm.client.with_options(http_client=transport)
         assert llm.generate(messages, model_name_or_path=model, tools=tools) == "Done"
+    assert len(bodies) == 1
     body = bodies[0]
     assert body["model"] == model
     assert body["messages"] == messages
