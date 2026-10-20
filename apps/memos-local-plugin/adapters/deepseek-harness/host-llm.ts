@@ -24,7 +24,7 @@ import type {
   HostLlmCompletion,
 } from "../../core/llm/host-bridge.js";
 import type { LlmMessage, LlmUsage } from "../../core/llm/types.js";
-import { waitForRetry } from "../../core/util/retry-after.js";
+import { planRetry, waitForRetry } from "../../core/util/retry-after.js";
 
 const HOST_LLM_BRIDGE_ID = "deepseek-harness.host.v1";
 const HOST_LLM_TIMEOUT_CODE = "MEMOS_DSH_HOST_LLM_TIMEOUT";
@@ -168,6 +168,7 @@ export function createDeepSeekHarnessHostLlmBridge(
           route,
           callDeadline.signal,
           capabilityCache,
+          input.timeoutMs && input.timeoutMs > 0 ? startedAt + input.timeoutMs : undefined,
         );
         return {
           text: result.text,
@@ -209,11 +210,12 @@ async function completeAuxiliaryWithRetry(
   route: DeepSeekHarnessLlmRoute,
   signal: AbortSignal,
   capabilityCache: CapabilityCache,
+  deadlineAt?: number,
 ): Promise<{ text: string; usage?: LlmUsage }> {
   if (HOST_LLM_MAX_ATTEMPTS <= 0) {
     throw new Error(`HOST_LLM_MAX_ATTEMPTS must be >= 1, got ${HOST_LLM_MAX_ATTEMPTS}`);
   }
-  let lastError: unknown;
+  let lastError: MemosError | undefined;
   for (let attempt = 1; attempt <= HOST_LLM_MAX_ATTEMPTS; attempt++) {
     signal.throwIfAborted();
     try {
@@ -233,7 +235,22 @@ async function completeAuxiliaryWithRetry(
       }
       lastError = error;
     }
-    await waitForRetry(HOST_LLM_RETRY_BASE_DELAY_MS * attempt, signal);
+    // Preserve provider recovery guidance rather than retrying before it is legal.
+    // If it cannot fit this call, let the caller fall back with the original error.
+    const providerRetryAfterMs = lastError.details?.providerRetryAfterMs;
+    const plan = planRetry({
+      attempt,
+      baseMs: HOST_LLM_RETRY_BASE_DELAY_MS,
+      jitterMaxMs: 0,
+      retryAfterMs: typeof providerRetryAfterMs === "number"
+        && Number.isFinite(providerRetryAfterMs) && providerRetryAfterMs > 0
+        ? providerRetryAfterMs
+        : undefined,
+      deadlineAt,
+    });
+    signal.throwIfAborted();
+    if (plan.action === "defer") throw lastError;
+    await waitForRetry(plan.delayMs, signal);
   }
   // Unreachable: the guard at the top of the loop rejects an empty attempt
   // range, so every iteration either returns or throws before reaching here.
@@ -244,19 +261,19 @@ async function completeAuxiliaryWithRetry(
  * Whether an auxiliary-call failure is a transient transport failure worth
  * retrying.
  *
- * Only an unusable provider is retried, and only when it carries no HTTP
- * status (a transport failure) or a server-error status (`>= 500`). Logical
- * outcomes are never retried: `401`/`402`/`403` (a bad or exhausted
- * credential fails identically on every attempt), provider aborts
- * (`dshCode: "ABORTED"`, a cancellation), rate limits and timeouts (their own
- * codes), malformed output, and deadline aborts.
+ * Only known transient provider codes are eligible, with no HTTP status or a
+ * server-error status. Missing HTTP status alone does not imply a transport
+ * failure: authentication, quota, invalid input and cancellation may omit it.
+ * Unknown codes are left to the caller rather than guessed to be transient.
  */
-function isRetryableAuxiliaryError(error: unknown): boolean {
+function isRetryableAuxiliaryError(error: unknown): error is MemosError {
   if (!(error instanceof MemosError) || error.code !== ERROR_CODES.LLM_UNAVAILABLE) {
     return false;
   }
-  // A provider-side abort is a cancellation, not a transient failure.
-  if (error.details?.dshCode === "ABORTED") return false;
+  const dshCode = error.details?.dshCode;
+  if (dshCode !== "UNAVAILABLE" && dshCode !== "TRANSPORT" && dshCode !== "SERVER") {
+    return false;
+  }
   const status = error.details?.status;
   if (status === undefined) return true;
   return typeof status === "number" && status >= 500;

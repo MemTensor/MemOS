@@ -811,6 +811,117 @@ describe("DeepSeek Harness host LLM bridge", () => {
       expect(attempts()).toBe(2);
     });
 
+    it.each([
+      "AUTH", "QUOTA", "INVALID_CREDENTIAL", "MISSING_CREDENTIAL",
+      "CONTEXT_WINDOW_EXCEEDED", "UNKNOWN_PROVIDER_ERROR",
+    ])("does not retry permanent or unknown %s failures without status", async (code) => {
+      const { llm, attempts } = scriptedFailures([
+        { message: "permanent failure", code }, undefined,
+      ]);
+
+      await expect(completeWith(llm, 5_000)).rejects.toMatchObject({
+        details: { dshCode: code },
+      });
+      expect(attempts()).toBe(1);
+    });
+
+    it("does not let a server status override a permanent failure code", async () => {
+      const { llm, attempts } = scriptedFailures([
+        { message: "quota exhausted", code: "QUOTA", status: 503 }, undefined,
+      ]);
+
+      await expect(completeWith(llm, 5_000)).rejects.toMatchObject({
+        details: { dshCode: "QUOTA" },
+      });
+      expect(attempts()).toBe(1);
+    });
+
+    it.each(["TRANSPORT", "SERVER"])("retries a statusless transient %s failure", async (code) => {
+      const { llm, attempts } = scriptedFailures([
+        { message: "transient failure", code }, undefined,
+      ]);
+
+      await expect(completeWith(llm, 5_000)).resolves.toMatchObject({ text: "recovered" });
+      expect(attempts()).toBe(2);
+    });
+
+    it.each([100, 1_000])("honors Retry-After %i ms as a minimum wait", async (providerRetryAfterMs) => {
+      vi.useFakeTimers();
+      try {
+        const { llm, attempts } = scriptedFailures([
+          { ...gateway502, status: 503, providerRetryAfterMs }, undefined,
+        ]);
+        const completion = expect(completeWith(llm, 5_000)).resolves.toMatchObject({ text: "recovered" });
+        const delayMs = Math.max(250, providerRetryAfterMs);
+        await vi.advanceTimersByTimeAsync(delayMs - 1);
+        expect(attempts()).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        await completion;
+        expect(attempts()).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      { providerRetryAfterMs: 1_000, timeoutMs: 500 },
+      { providerRetryAfterMs: 40_000, timeoutMs: undefined },
+    ])("stops when Retry-After cannot fit the deadline or inline budget: %j", async ({ providerRetryAfterMs, timeoutMs }) => {
+      const { llm, attempts } = scriptedFailures([
+        { ...gateway502, status: 503, providerRetryAfterMs }, undefined,
+      ]);
+
+      await expect(completeWith(llm, timeoutMs)).rejects.toMatchObject({
+        details: { status: 503, providerRetryAfterMs },
+      });
+      expect(attempts()).toBe(1);
+    });
+
+    it("accounts for time already spent before planning a retry", async () => {
+      vi.useFakeTimers();
+      try {
+        const { llm, attempts } = scriptedFailures([
+          { ...gateway502, providerRetryAfterMs: 300 }, undefined,
+        ]);
+        const prepareCall = llm.prepareCall.bind(llm);
+        llm.prepareCall = async (config, signal) => {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          return prepareCall(config, signal);
+        };
+        const completion = expect(completeWith(llm, 500)).rejects.toMatchObject({
+          details: { providerRetryAfterMs: 300 },
+        });
+        await vi.advanceTimersByTimeAsync(300);
+        await completion;
+        expect(attempts()).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cancels a provider-directed retry wait without another dispatch", async () => {
+      vi.useFakeTimers();
+      try {
+        const { llm, attempts } = scriptedFailures([
+          { ...gateway502, providerRetryAfterMs: 1_000 }, undefined,
+        ]);
+        const routes = new DeepSeekHarnessLlmRouteContext();
+        const bridge = createDeepSeekHarnessHostLlmBridge({ llm, routes });
+        const controller = new AbortController();
+        const completion = expect(routes.run(ROUTE, () => bridge.complete({
+          messages: [{ role: "user", content: "hello" }],
+          signal: controller.signal, timeoutMs: 5_000,
+        }))).rejects.toThrow("caller cancelled");
+        await vi.advanceTimersByTimeAsync(500);
+        controller.abort(new Error("caller cancelled"));
+        await completion;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(attempts()).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("does not retry a provider-side abort", async () => {
       // A provider `aborted` finish maps to LLM_UNAVAILABLE with no status; it
       // is a cancellation, not a transient failure, and must not be retried.
