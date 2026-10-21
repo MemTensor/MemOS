@@ -425,9 +425,7 @@ def test_single_tenant_vector_search_reads_one_hash_partition(postgres_db):
     assert params[0] == [0.1, 0.2, 0.3]
     assert params[1] == "tenant-a"
     assert params[-1] == 5
-    assert any(
-        "hnsw.iterative_scan" in str(call.args[0]) for call in cursor.execute.call_args_list
-    )
+    assert any("hnsw.iterative_scan" in str(call.args[0]) for call in cursor.execute.call_args_list)
 
 
 def test_cross_shard_vector_search_reads_only_those_partitions(postgres_db):

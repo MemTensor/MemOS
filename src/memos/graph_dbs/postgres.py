@@ -199,9 +199,7 @@ class PostgresGraphDB(BaseGraphDB):
                     (rf"^{re.escape(self.schema)}_graph_[0-9]+$",),
                 )
                 count_row = cur.fetchone()
-                memory_tables = (
-                    count_row[0] if count_row and isinstance(count_row[0], int) else -1
-                )
+                memory_tables = count_row[0] if count_row and isinstance(count_row[0], int) else -1
                 if memory_tables != shard_count:
                     hnsw_m = int(getattr(self.config, "hnsw_m", 16))
                     ef_construction = int(getattr(self.config, "hnsw_ef_construction", 64))
@@ -388,9 +386,7 @@ class PostgresGraphDB(BaseGraphDB):
                 ]
         embedding = fields.pop("embedding", None)
         if not isinstance(embedding, list) or not embedding:
-            embedding = [
-                round(random.uniform(-0.2, 0.2), 6) for _ in range(self._vector_dim())
-            ]
+            embedding = [round(random.uniform(-0.2, 0.2), 6) for _ in range(self._vector_dim())]
         else:
             embedding = [float(item) for item in embedding]
         properties = {
@@ -448,9 +444,7 @@ class PostgresGraphDB(BaseGraphDB):
             return
         memories = self._physical_table("memories", user_name)
         dim = self._vector_dim()
-        values_sql = ",".join(
-            [f"(%s, %s, %s, %s::halfvec({dim}), %s, %s, %s)"] * len(rows)
-        )
+        values_sql = ",".join([f"(%s, %s, %s, %s::halfvec({dim}), %s, %s, %s)"] * len(rows))
         params: list[Any] = [value for row in rows for value in row]
         conn = self._get_conn()
         try:
@@ -1546,9 +1540,7 @@ class PostgresGraphDB(BaseGraphDB):
                 alias = table
         return f"{relation} {alias}" if alias else relation
 
-    def _physical_tables(
-        self, table: str, user_names: list[str] | None, conn=None
-    ) -> list[str]:
+    def _physical_tables(self, table: str, user_names: list[str] | None, conn=None) -> list[str]:
         """Real tables a write can target. A union subquery cannot be updated."""
         names = [name for name in (user_names or []) if name]
         if not names:
@@ -1777,9 +1769,7 @@ class PostgresGraphDB(BaseGraphDB):
         try:
             self._ensure_hnsw_search_settings(conn)
             with conn.cursor() as cur:
-                projected = (
-                    self._projected_field_exprs(return_fields) if light_weight_mode else []
-                )
+                projected = self._projected_field_exprs(return_fields) if light_weight_mode else []
                 if light_weight_mode:
                     inner_columns = "memory, created_at, updated_at, user_name"
                     extra_inner = "".join(
@@ -2680,10 +2670,8 @@ class PostgresGraphDB(BaseGraphDB):
                 user_name=user_name,
             )
 
-
     def close(self):
         """Close connection pool."""
         if not self._pool_closed:
             self._pool_closed = True
             self.pool.closeall()
-
