@@ -24,6 +24,7 @@ from tqdm import tqdm
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.judge import parse_judge_label
 from utils.prompts import LME_JUDGE_MODEL_TEMPLATE
 
 
@@ -174,7 +175,7 @@ def lme_grader(llm_client, question, golden_answer, response):
     )
 
     message_content = response.choices[0].message.content
-    label = json.loads(message_content)["label"]
+    label = parse_judge_label(message_content)
     parsed = LLMGrade(llm_judgment=label, llm_reasoning="")
 
     return parsed.llm_judgment.strip().lower() == "correct"
