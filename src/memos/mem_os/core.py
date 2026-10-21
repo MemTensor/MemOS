@@ -313,7 +313,16 @@ class MOSCore:
         current_messages: list[dict] = [{"role": "system", "content": stable_system}]
         current_messages.extend(chat_history.chat_history)
         if dynamic_ctx:
-            current_messages.append({"role": "system", "content": dynamic_ctx})
+            # Issue #2524 OCR round 2: avoid a mid-conversation
+            # ``{"role": "system"}`` message, which is rejected or
+            # mishandled by several provider APIs. Wrap the per-turn
+            # context in a user-role framing message instead.
+            current_messages.append(
+                {
+                    "role": "user",
+                    "content": "[Context for this turn]\n" + dynamic_ctx,
+                }
+            )
         current_messages.append({"role": "user", "content": query})
         past_key_values = None
 

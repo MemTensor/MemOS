@@ -88,11 +88,20 @@ class SimpleMemChat(BaseMemChat):
                 dynamic_ctx = None
             # Issue #2524: stable system first, then history, then dynamic
             # context, then current user turn — keeps the chat history inside
-            # the provider's shared prefix.
+            # the provider's shared prefix. The dynamic context is delivered
+            # as a user-role framing message (OCR round 2 finding #9): a
+            # mid-conversation ``{"role": "system"}`` message is rejected or
+            # mishandled by several provider APIs, while a user turn with a
+            # "[Context for this turn]" header is unambiguous and portable.
             current_messages: list[dict] = [{"role": "system", "content": stable_system}]
             current_messages.extend(messages)
             if dynamic_ctx:
-                current_messages.append({"role": "system", "content": dynamic_ctx})
+                current_messages.append(
+                    {
+                        "role": "user",
+                        "content": "[Context for this turn]\n" + dynamic_ctx,
+                    }
+                )
             current_messages.append({"role": "user", "content": user_input})
 
             if self.config.enable_activation_memory:

@@ -650,9 +650,12 @@ class TestMOSChat:
         assert "You are a pirate." in system_prompt
         assert "You are a knowledgeable and helpful AI assistant." not in system_prompt
         assert "User memories:" in system_prompt
-        # Memories now live in the dynamic context message (second-to-last).
+        # Memories now live in the dynamic context message (second-to-last),
+        # delivered as a user-role framing turn (OCR round 2 feedback on PR
+        # #2529: mid-conversation ``{"role": "system"}`` is not portable).
         assert messages[-1]["role"] == "user"
-        assert messages[-2]["role"] == "system"
+        assert messages[-2]["role"] == "user"
+        assert messages[-2]["content"].startswith("[Context for this turn]\n")
         assert "I like playing football" in messages[-2]["content"]
         # And they must NOT be inlined into the stable prefix anymore.
         assert "I like playing football" not in system_prompt
@@ -741,9 +744,12 @@ class TestMOSChat:
         assert messages[1] == {"role": "user", "content": "Previous question"}
         assert messages[2] == {"role": "assistant", "content": "Previous answer"}
 
-        # Dynamic context immediately before the final user turn.
+        # Dynamic context immediately before the final user turn, delivered
+        # as a user-role framing message (OCR round 2 feedback: avoid
+        # mid-conversation ``{"role": "system"}``).
         assert messages[-1] == {"role": "user", "content": "What should I eat?"}
-        assert messages[-2]["role"] == "system"
+        assert messages[-2]["role"] == "user"
+        assert messages[-2]["content"].startswith("[Context for this turn]\n")
         assert "I like playing football" in messages[-2]["content"]
 
 

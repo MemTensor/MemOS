@@ -620,10 +620,22 @@ class ChatHandler(BaseHandler):
                     )
 
                     history_info = chat_req.history[-20:] if chat_req.history else []
+                    # Issue #2524 OCR round 2 (finding #6): deliver the per-turn
+                    # dynamic context as a user-role framing message. A
+                    # mid-conversation ``{"role": "system"}`` message is
+                    # ambiguous for several provider APIs and can trigger
+                    # 400s (Azure OpenAI, some Anthropic routers, several
+                    # OpenAI-compatible proxies). Wrapping the context in a
+                    # user turn with an explicit "[Context for this turn]"
+                    # header keeps the shape unambiguous while preserving
+                    # the stable prefix (system + history) for caching.
                     current_messages = [
                         {"role": "system", "content": stable_prompt},
                         *history_info,
-                        {"role": "system", "content": dynamic_ctx},
+                        {
+                            "role": "user",
+                            "content": "[Context for this turn]\n" + dynamic_ctx,
+                        },
                         {"role": "user", "content": chat_req.query},
                     ]
                     # Downstream code still expects a ``system_prompt`` symbol
@@ -1250,7 +1262,16 @@ class ChatHandler(BaseHandler):
         messages: list[dict] = [{"role": "system", "content": stable_system}]
         messages.extend(history_list)
         if dynamic_ctx:
-            messages.append({"role": "system", "content": dynamic_ctx})
+            # Issue #2524 OCR round 2 (finding #6): keep the per-turn
+            # context in a user-role framing message rather than a
+            # mid-conversation system message. See the playground path above
+            # for the full rationale.
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "[Context for this turn]\n" + dynamic_ctx,
+                }
+            )
         messages.append({"role": "user", "content": query})
         return messages
 
@@ -1264,13 +1285,14 @@ class ChatHandler(BaseHandler):
         """Return the stable (cross-turn constant) enhance-mode system prompt."""
         # ``get_memos_prompt`` substitutes ``{date}`` into the body, so the
         # literal string we pass is what the model will see on the "Current
-        # Date" line. Use a short, neutral placeholder that points the model
-        # at the per-turn dynamic context message rather than embedding the
-        # live timestamp (which would change every turn and break the
-        # provider prefix cache). The real date is emitted in the dynamic
-        # context from ``_build_enhance_dynamic_context``.
+        # Date" line. Use a clearly synthetic sentinel so the model does not
+        # mistake the placeholder for a real date value (OCR round 2
+        # finding #5 — "(see dynamic context)" still rendered as a literal
+        # "# Current Date: (see dynamic context)" line). The real date is
+        # emitted in the dynamic context from
+        # ``_build_enhance_dynamic_context`` and takes precedence.
         sys_body = get_memos_prompt(
-            date="(see dynamic context)",
+            date="N/A — see context below",
             tone=tone,
             verbosity=verbosity,
             mode="enhance",

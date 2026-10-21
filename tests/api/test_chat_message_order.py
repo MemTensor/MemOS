@@ -152,8 +152,11 @@ class TestCacheableAssemblyShape:
         assert messages[1] == history[0]
         assert messages[2] == history[1]
 
-        # Dynamic context is the system message right before the user query.
-        assert messages[-2]["role"] == "system"
+        # Dynamic context is a user-role framing message right before the
+        # user query (OCR round 2 feedback: mid-conversation ``system``
+        # messages are not portable across provider APIs).
+        assert messages[-2]["role"] == "user"
+        assert messages[-2]["content"].startswith("[Context for this turn]\n")
         assert "User lives in Shanghai" in messages[-2]["content"]
 
         # Final message is the user turn.
