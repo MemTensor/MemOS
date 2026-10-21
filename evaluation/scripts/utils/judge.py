@@ -14,7 +14,6 @@ implementation and a single error-reporting shape.
 
 from __future__ import annotations
 
-import json
 import re
 
 
@@ -52,8 +51,9 @@ def _preview(message_content: str | None) -> str:
         return "''"
     truncated = message_content[:_PREVIEW_BYTES]
     suffix = "..." if len(message_content) > _PREVIEW_BYTES else ""
-    # Encode newlines so a multi-line reply doesn't break the log line.
-    truncated = truncated.replace("\n", "\\n").replace("\r", "\\r")
+    # ``!r`` already escapes control characters (newlines become ``\\n``, etc.),
+    # so no manual pre-escaping is needed. Doing it manually would double-escape
+    # (a real newline would render as ``\\\\n`` in the log line).
     return f"{truncated!r}{suffix}"
 
 
@@ -68,27 +68,16 @@ def parse_judge_label(message_content: str | None) -> str:
     reason — the root cause the bug report called out as currently
     indistinguishable in the logs.
     """
-    extracted = extract_label_json(message_content)
-    if extracted is None:
+    match = _LABEL_PATTERN.search(message_content) if message_content else None
+    if match is None:
         raise ValueError(
             f'judge reply has no {{"label": ...}} JSON (preview: {_preview(message_content)})'
         )
 
-    # ``extracted`` comes from the regex above. Double-quoted matches are valid
-    # JSON; single-quoted matches are not, so retry after normalising quotes.
-    try:
-        payload = json.loads(extracted)
-    except json.JSONDecodeError:
-        try:
-            payload = json.loads(extracted.replace("'", '"'))
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-            raise ValueError(
-                f"judge reply label JSON failed to parse (preview: {_preview(message_content)})"
-            ) from exc
-
-    try:
-        return str(payload["label"])
-    except (KeyError, TypeError) as exc:  # pragma: no cover - defensive
-        raise ValueError(
-            f"judge reply JSON missing 'label' key (preview: {_preview(message_content)})"
-        ) from exc
+    # Use the regex capture group for the label value rather than running
+    # ``json.loads`` on the raw substring. The pattern already enforces the
+    # ``{"label": "..."}`` shape, so an explicit JSON parse would just repeat
+    # that validation. Reading ``group(1)`` also avoids a global
+    # ``replace("'", '"')`` fallback that would mangle any single quote inside
+    # the label value itself (e.g. ``{"label": "it's CORRECT"}``).
+    return match.group(1)
