@@ -434,7 +434,10 @@ class MOSCore:
                     text_memory = memory.memory
                 else:
                     if not isinstance(memory, str):
-                        logger.error("Unexpected memory type.")
+                        # Skip rather than forward a repr(dict/object) to the
+                        # LLM as a memory entry.
+                        logger.error("Unexpected memory type: %s", type(memory))
+                        continue
                     text_memory = memory
                 rendered.append(f"{i}. {text_memory}")
             memory_text = "\n".join(rendered)

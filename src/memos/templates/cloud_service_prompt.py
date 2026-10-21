@@ -1,3 +1,5 @@
+import re
+
 from datetime import datetime
 
 
@@ -137,19 +139,41 @@ _STABLE_PROMPT_SENTINEL_ZH = "紧跟在最新用户消息之前，会有一条�
 
 def _build_stable_from_cloud_prompt(prompt: str, sentinel: str) -> str:
     """Return the cloud chat prompt with the per-turn placeholders replaced
-    by a short sentinel pointing to the dynamic context message."""
-    # Drop the "# System Context" line that embeds {current_time}.
-    stable = prompt.replace(
-        "- Current Time: {current_time} (Baseline for freshness)",
+    by a short sentinel pointing to the dynamic context message.
+
+    The template surgery is implemented with regular expressions rather than
+    exact-string ``str.replace`` calls so that minor rewording of the
+    surrounding template (extra whitespace, punctuation tweaks, new wording
+    around ``{current_time}`` / ``{memories}``) still produces a correct
+    stable prompt. If a placeholder would survive the surgery we raise
+    ``ValueError`` loudly instead of leaking the raw template token to the
+    model.
+    """
+    # Replace the "- Current Time: {current_time} ..." line (English or
+    # Chinese) with the sentinel. Match the whole line so parenthetical
+    # qualifiers after the placeholder are also removed.
+    stable = re.sub(
+        r"- *(?:Current Time|当前时间)[:：][^\n]*\{current_time\}[^\n]*",
         f"- {sentinel}",
-    ).replace(
-        "- 当前时间: {current_time} (请以此作为判断记忆时效性的基准)",
-        f"- {sentinel}",
+        prompt,
     )
-    # Replace the <memories>{memories}</memories> block with a note.
-    stable = stable.replace("<memories>\n{memories}\n</memories>", sentinel)
-    # Belt and suspenders: strip any stray placeholders.
-    stable = stable.replace("{current_time}", "").replace("{memories}", "")
+    # Replace the <memories>...{memories}...</memories> block (any
+    # whitespace between the tags) with the sentinel on its own line.
+    stable = re.sub(
+        r"<memories>\s*\{memories\}\s*</memories>",
+        sentinel,
+        stable,
+        flags=re.DOTALL,
+    )
+    # Loud failure beats silent leak: if a placeholder survived, the template
+    # has drifted and the derivation needs updating.
+    for leftover in ("{current_time}", "{memories}"):
+        if leftover in stable:
+            raise ValueError(
+                "Cloud chat template drifted: placeholder "
+                f"{leftover!r} was not substituted when building the stable "
+                "system prompt. Update _build_stable_from_cloud_prompt."
+            )
     return stable
 
 
@@ -192,17 +216,17 @@ def get_cloud_chat_dynamic_context(
     if lang == "zh":
         parts = [f"# 当前上下文\n- 当前时间: {stamp}"]
         if memories_section:
-            parts.append("\n# 事实与记忆\n<memories>\n" + memories_section + "\n</memories>")
+            parts.append("# 事实与记忆\n<memories>\n" + memories_section + "\n</memories>")
         if pref_section:
-            parts.append("\n# 偏好\n" + pref_section)
-        return "\n".join(parts)
+            parts.append("# 偏好\n" + pref_section)
+        return "\n\n".join(parts)
 
     if lang == "en":
         parts = [f"# Current Context\n- Current Time: {stamp}"]
         if memories_section:
-            parts.append("\n# Facts & Memories\n<memories>\n" + memories_section + "\n</memories>")
+            parts.append("# Facts & Memories\n<memories>\n" + memories_section + "\n</memories>")
         if pref_section:
-            parts.append("\n# Preferences\n" + pref_section)
-        return "\n".join(parts)
+            parts.append("# Preferences\n" + pref_section)
+        return "\n\n".join(parts)
 
     raise ValueError(f"Invalid language: {lang}")

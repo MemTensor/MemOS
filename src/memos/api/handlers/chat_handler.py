@@ -860,10 +860,14 @@ class ChatHandler(BaseHandler):
                         pref_string=pref_string_for_prompt,
                         base_prompt=chat_req.system_prompt,
                     )
-                    system_prompt = current_messages[0]["content"]
-                    self.logger.info(
-                        f"[ChatBusinessHandler] current_system_prompt: {system_prompt}"
-                    )
+                    if chat_req.need_search:
+                        # Only log the full assembled system prompt when we
+                        # actually ran retrieval; otherwise this fires on
+                        # every no-search request and floods the logs.
+                        system_prompt = current_messages[0]["content"]
+                        self.logger.info(
+                            f"[ChatBusinessHandler] current_system_prompt: {system_prompt}"
+                        )
 
                     # Step 3: Generate streaming response from LLM
                     if (
@@ -1186,7 +1190,12 @@ class ChatHandler(BaseHandler):
         """
         memories_text = self._format_memories_for_dynamic_block(memories)
         pref_text = (pref_string or "").strip()
-        if not memories_text and not pref_text and not include_time:
+        # If there is no memory and no preference content, skip the dynamic
+        # context message entirely — emitting a timestamp-only system
+        # message defeats the ``Optional`` return type and injects noise
+        # with no payload. The ``include_time`` kwarg is kept so callers can
+        # still ask for the stamp when they do have memories/prefs to say.
+        if not memories_text and not pref_text:
             return None
         return get_cloud_chat_dynamic_context(
             memories_block=memories_text,
@@ -1253,10 +1262,15 @@ class ChatHandler(BaseHandler):
         verbosity: str = "mid",
     ) -> str:
         """Return the stable (cross-turn constant) enhance-mode system prompt."""
-        # Keep the ``{date}`` placeholder out of the stable text so this
-        # string is identical across turns.
+        # ``get_memos_prompt`` substitutes ``{date}`` into the body, so the
+        # literal string we pass is what the model will see on the "Current
+        # Date" line. Use a short, neutral placeholder that points the model
+        # at the per-turn dynamic context message rather than embedding the
+        # live timestamp (which would change every turn and break the
+        # provider prefix cache). The real date is emitted in the dynamic
+        # context from ``_build_enhance_dynamic_context``.
         sys_body = get_memos_prompt(
-            date="see the context message immediately before the latest user turn",
+            date="(see dynamic context)",
             tone=tone,
             verbosity=verbosity,
             mode="enhance",
@@ -1284,14 +1298,14 @@ class ChatHandler(BaseHandler):
         )
         parts = [
             header_time,
-            "\n# Memories\n## PersonalMemory (ordered)\n"
+            "# Memories\n## PersonalMemory (ordered)\n"
             + mem_block_p
             + "\n## OuterMemory (from Internet Search, ordered)\n"
             + mem_block_o,
         ]
         if pref_block:
-            parts.append("\n" + pref_block)
-        return "\n".join(parts)
+            parts.append(pref_block)
+        return "\n\n".join(parts)
 
     def _format_mem_block(
         self, memories_all: list, max_items: int = 10, max_chars_each: int = 1600
