@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 import tiktoken
 
@@ -80,6 +81,10 @@ def search_memory_for_line(line_data, mem_client, top_k_value):
     """
 
     i, line = line_data
+    # Pre-declare so the except handler can reuse the already-parsed dict
+    # rather than re-parsing ``line`` (which would discard any intermediate
+    # state already set on ``original_data``).
+    original_data = None
     try:
         original_data = json.loads(line)
 
@@ -112,10 +117,14 @@ def search_memory_for_line(line_data, mem_client, top_k_value):
         pref_string = (
             relevant_memories.get("pref_string", "") if isinstance(relevant_memories, dict) else ""
         )
-        memories_str = (
-            "\n".join(f"- {entry.get('memory', '')}" for entry in text_mem_entries)
-            + f"\n{pref_string}"
-        )
+        # Build the memories blob so an empty ``text_mem`` + empty
+        # ``pref_string`` yields ``""`` instead of a bare ``"\n"``. Downstream
+        # (and plain ``if not memories_str`` truthiness checks) then correctly
+        # treat the "no memories retrieved" case.
+        memory_lines = [f"- {entry.get('memory', '')}" for entry in text_mem_entries]
+        if pref_string:
+            memory_lines.append(pref_string)
+        memories_str = "\n".join(memory_lines).strip()
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
@@ -136,16 +145,32 @@ def search_memory_for_line(line_data, mem_client, top_k_value):
         # the response stage passes it through, and ``retrieved_memories_text``
         # is set to an empty string so the row's downstream contract matches
         # the "no memories retrieved" case the response stage already handles.
-        try:
-            fallback_data = json.loads(line)
-        except Exception:
-            fallback_data = None
+        #
+        # Reuse ``original_data`` whenever the top-level ``json.loads`` already
+        # succeeded (the common case: a ``mem_client.search`` / tokenizer /
+        # metrics-update failure). Only fall back to re-parsing when the parse
+        # itself was the raising statement.
+        if original_data is not None:
+            fallback_data = original_data
+        else:
+            try:
+                fallback_data = json.loads(line)
+            except Exception:
+                fallback_data = None
         user_id_from_data = fallback_data.get("user_id", "N/A") if fallback_data else "N/A"
-        print(f"Error searching memory for line {i + 1} (user_id: {user_id_from_data}): {e}")
+        # Log the full traceback so the originating frame (e.g. ``mem_client``,
+        # ``tokenizer.encode``, ``metrics_dict.update``) is diagnosable even
+        # after the exception has been swallowed into the row's ``error`` field.
+        print(
+            f"Error searching memory for line {i + 1} "
+            f"(user_id: {user_id_from_data}): {e}\n{traceback.format_exc()}"
+        )
         if fallback_data is None:
             return None
         fallback_data.setdefault("metrics", {})["retrieved_memories_text"] = ""
-        fallback_data["error"] = f"search_error: {e}"
+        new_error = f"search_error: {e}"
+        prev_error = fallback_data.get("error")
+        fallback_data["error"] = f"{prev_error}; {new_error}" if prev_error else new_error
         return fallback_data
 
 
@@ -156,6 +181,10 @@ def generate_response_for_line(line_data, openai_client, lib):
     from utils.prompts import PREFEVAL_ANSWER_PROMPT
 
     i, line = line_data
+    # Pre-declare so the except handler can reuse the already-parsed dict
+    # rather than re-parsing ``line`` and losing any intermediate state
+    # (e.g. ``metrics`` fields already populated earlier).
+    original_data = None
     try:
         original_data = json.loads(line)
 
@@ -202,15 +231,31 @@ def generate_response_for_line(line_data, openai_client, lib):
         # so ``pref_eval.py``'s judge still sees it (and classifies the empty
         # response as an Unhelpful Response, the correct accounting for an
         # upstream API failure).
-        try:
-            fallback_data = json.loads(line)
-        except Exception:
-            fallback_data = None
+        #
+        # Reuse ``original_data`` whenever the top-level ``json.loads`` already
+        # succeeded; re-parse ``line`` only if the parse itself was the raising
+        # statement. Reusing the parsed dict preserves intermediate state (for
+        # instance, ``metrics`` that was already populated by the search stage
+        # and read from ``line``).
+        if original_data is not None:
+            fallback_data = original_data
+        else:
+            try:
+                fallback_data = json.loads(line)
+            except Exception:
+                fallback_data = None
         user_id_from_data = fallback_data.get("user_id", "N/A") if fallback_data else "N/A"
-        print(f"Error generating response for line {i + 1} (user_id: {user_id_from_data}): {e}")
+        print(
+            f"Error generating response for line {i + 1} "
+            f"(user_id: {user_id_from_data}): {e}\n{traceback.format_exc()}"
+        )
         if fallback_data is None:
             return None
-        fallback_data["error"] = f"response_error: {e}"
+        new_error = f"response_error: {e}"
+        prev_error = fallback_data.get("error")
+        # Preserve any pre-existing ``error`` (e.g. flagged by the search
+        # stage) instead of silently discarding it.
+        fallback_data["error"] = f"{prev_error}; {new_error}" if prev_error else new_error
         fallback_data.setdefault("response", "")
         return fallback_data
 

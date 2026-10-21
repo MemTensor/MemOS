@@ -53,9 +53,11 @@ def test_search_memory_for_line_returns_sample_when_text_mem_empty():
 
     assert result is not None, "sample must not be dropped when text_mem is empty"
     assert "error" not in result, "empty text_mem is a valid state, not an error"
-    # The format is "<joined memories>\n<pref_string>", so an empty memories
-    # list yields a leading newline followed by the pref_string.
-    assert result["metrics"]["retrieved_memories_text"] == "\npref-A"
+    # Empty text_mem list + pref_string -> just the pref_string (no bare leading
+    # newline). Earlier the join produced "\npref-A"; after whitespace
+    # normalization the leading newline is stripped so downstream truthiness
+    # checks keep working.
+    assert result["metrics"]["retrieved_memories_text"] == "pref-A"
     # Timing / token metrics should still be present.
     assert "search_memories_duration_seconds" in result["metrics"]
     assert result["metrics"]["memory_tokens_used"] >= 0
@@ -63,6 +65,21 @@ def test_search_memory_for_line_returns_sample_when_text_mem_empty():
     assert result["user_id"] == "u1"
     assert result["question"] == "What should I study?"
     assert result["preference"] == "likes math"
+
+
+def test_search_memory_for_line_empty_text_mem_and_empty_pref_string():
+    """Both empty must yield ``""`` so ``if not memories_str`` detects the case."""
+    mem_client = MagicMock()
+    mem_client.search.return_value = {"text_mem": [], "pref_string": ""}
+    payload = {"user_id": "u1", "question": "Q", "metrics": {}}
+
+    result = pref_memos.search_memory_for_line(_line_data(payload), mem_client, top_k_value=10)
+
+    assert result is not None
+    assert "error" not in result
+    assert result["metrics"]["retrieved_memories_text"] == "", (
+        "no-text-mem + no-pref-string must produce empty string, not bare newline"
+    )
 
 
 def test_search_memory_for_line_returns_sample_with_error_on_exception():
@@ -82,6 +99,30 @@ def test_search_memory_for_line_returns_sample_with_error_on_exception():
     assert "boom" in result["error"]
     # Response stage looks for retrieved_memories_text to decide whether to proceed.
     assert result["metrics"]["retrieved_memories_text"] == ""
+
+
+def test_search_memory_for_line_preserves_existing_error_on_exception():
+    """A row that already carries an ``error`` must not have it overwritten.
+
+    The exception-path error is appended, so multi-stage failure history is
+    preserved for the operator reading the JSONL after the fact.
+    """
+    mem_client = MagicMock()
+    mem_client.search.side_effect = RuntimeError("boom")
+    payload = {
+        "user_id": "u1",
+        "question": "Q",
+        "error": "add_error: earlier failure",
+        "metrics": {},
+    }
+
+    result = pref_memos.search_memory_for_line(_line_data(payload), mem_client, top_k_value=10)
+
+    assert result is not None
+    assert "add_error: earlier failure" in result["error"], (
+        "previous error must survive — appending preserves failure history"
+    )
+    assert "search_error: boom" in result["error"]
 
 
 def test_generate_response_for_line_returns_sample_with_error_on_api_failure():
