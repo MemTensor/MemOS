@@ -1034,40 +1034,30 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         logger.info(
             f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
         )
-        print(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
+
+        # Collect the matching node IDs and delete the nodes in ONE statement, so
+        # the IDs that are purged from the vector store are exactly the nodes this
+        # call removed: two separate auto-commit statements would let a concurrent
+        # writer slip nodes in between them, and those nodes' vectors would be
+        # left behind.
+        delete_query = (
+            f"MATCH (n:Memory) WHERE {ids_where} WITH n DETACH DELETE n RETURN n.id AS id"
         )
-
-        # First count matching nodes to get accurate count
-        count_query = f"MATCH (n:Memory) WHERE {ids_where} RETURN count(n) AS node_count"
-        logger.info(f"[delete_node_by_prams] count_query: {count_query}")
-        print(f"[delete_node_by_prams] count_query: {count_query}")
-
-        # Then delete nodes
-        delete_query = f"MATCH (n:Memory) WHERE {ids_where} DETACH DELETE n"
         logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] params: {params}")
 
         deleted_count = 0
+        deleted_ids: list[str] = []
         try:
             with self.driver.session(database=self.db_name) as session:
-                # Count nodes before deletion
-                count_result = session.run(count_query, **params)
-                count_record = count_result.single()
-                expected_count = 0
-                if count_record:
-                    expected_count = count_record["node_count"] or 0
-
-                # Delete nodes
-                session.run(delete_query, **params)
-                # Use the count from before deletion as the actual deleted count
-                deleted_count = expected_count
+                deleted_ids = [record["id"] for record in session.run(delete_query, **params)]
+                # Use the count from the deletion itself
+                deleted_count = len(deleted_ids)
 
         except Exception as e:
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
             raise
 
+        self._delete_vectors_for_deleted_nodes(deleted_ids)
         logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
         return deleted_count
 
