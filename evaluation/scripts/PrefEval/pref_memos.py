@@ -99,12 +99,22 @@ def search_memory_for_line(line_data, mem_client, top_k_value):
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
+
+        # Defensively extract the first text_mem bucket's memories. An empty
+        # ``text_mem`` list (or a bucket without a ``memories`` key) is a
+        # valid "no retrieved text memories" state — not an error — and the
+        # row must still flow to the response/judge stages.
+        text_mem_entries: list = []
+        if isinstance(relevant_memories, dict):
+            text_mem_list = relevant_memories.get("text_mem") or []
+            if text_mem_list and isinstance(text_mem_list[0], dict):
+                text_mem_entries = text_mem_list[0].get("memories") or []
+        pref_string = (
+            relevant_memories.get("pref_string", "") if isinstance(relevant_memories, dict) else ""
+        )
         memories_str = (
-            "\n".join(
-                f"- {entry.get('memory', '')}"
-                for entry in relevant_memories["text_mem"][0]["memories"]
-            )
-            + f"\n{relevant_memories.get('pref_string', '')}"
+            "\n".join(f"- {entry.get('memory', '')}" for entry in text_mem_entries)
+            + f"\n{pref_string}"
         )
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
@@ -121,9 +131,22 @@ def search_memory_for_line(line_data, mem_client, top_k_value):
         return original_data
 
     except Exception as e:
-        user_id_from_data = json.loads(line).get("user_id", "N/A")
+        # Preserve the sample instead of returning ``None`` and letting the
+        # writer gate silently drop it. The row carries an ``error`` field so
+        # the response stage passes it through, and ``retrieved_memories_text``
+        # is set to an empty string so the row's downstream contract matches
+        # the "no memories retrieved" case the response stage already handles.
+        try:
+            fallback_data = json.loads(line)
+        except Exception:
+            fallback_data = None
+        user_id_from_data = fallback_data.get("user_id", "N/A") if fallback_data else "N/A"
         print(f"Error searching memory for line {i + 1} (user_id: {user_id_from_data}): {e}")
-        return None
+        if fallback_data is None:
+            return None
+        fallback_data.setdefault("metrics", {})["retrieved_memories_text"] = ""
+        fallback_data["error"] = f"search_error: {e}"
+        return fallback_data
 
 
 def generate_response_for_line(line_data, openai_client, lib):
@@ -140,12 +163,16 @@ def generate_response_for_line(line_data, openai_client, lib):
         metrics_dict = original_data.get("metrics", {})
         memories_str = metrics_dict.get("retrieved_memories_text")
 
-        # If an error occurred in 'add' or 'search' mode, just pass the line through
+        # If an error occurred in 'add' or 'search' mode, pass the line
+        # through. pref_eval.py reads ``data["response"]`` on every row, so
+        # we guarantee the key exists even for already-flagged failures.
         if original_data.get("error"):
+            original_data.setdefault("response", "")
             return original_data
 
         if not question:
             original_data["error"] = "Question not found in this line."
+            original_data.setdefault("response", "")
             return original_data
 
         # Check for None, as an empty string (no memories found) is a valid result
@@ -154,6 +181,7 @@ def generate_response_for_line(line_data, openai_client, lib):
                 "Error: retrieved_memories_text not found in metrics. "
                 "Please run 'search' mode first."
             )
+            original_data.setdefault("response", "")
             return original_data
 
         system_prompt = PREFEVAL_ANSWER_PROMPT.format(context=memories_str)
@@ -169,9 +197,22 @@ def generate_response_for_line(line_data, openai_client, lib):
         return original_data
 
     except Exception as e:
-        user_id_from_data = json.loads(line).get("user_id", "N/A")
+        # Preserve the sample instead of returning ``None`` and letting the
+        # writer gate silently drop it. The row keeps a ``response`` placeholder
+        # so ``pref_eval.py``'s judge still sees it (and classifies the empty
+        # response as an Unhelpful Response, the correct accounting for an
+        # upstream API failure).
+        try:
+            fallback_data = json.loads(line)
+        except Exception:
+            fallback_data = None
+        user_id_from_data = fallback_data.get("user_id", "N/A") if fallback_data else "N/A"
         print(f"Error generating response for line {i + 1} (user_id: {user_id_from_data}): {e}")
-        return None
+        if fallback_data is None:
+            return None
+        fallback_data["error"] = f"response_error: {e}"
+        fallback_data.setdefault("response", "")
+        return fallback_data
 
 
 def main():
