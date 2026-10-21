@@ -300,14 +300,21 @@ class MOSCore:
                 )
                 memories_all.extend(memories)
             logger.info(f"🧠 [Memory] Searched memories:\n{self._str_memories(memories_all)}\n")
-            system_prompt = self._build_system_prompt(memories_all, base_prompt=base_prompt)
+            # Issue #2524: emit a stable system prompt first, then history,
+            # then a dynamic context message with the retrieved memories,
+            # so provider prefix caches can reuse the history across turns.
+            stable_system, dynamic_ctx = self._build_cacheable_system_parts(
+                memories_all, base_prompt=base_prompt
+            )
         else:
-            system_prompt = self._build_system_prompt(base_prompt=base_prompt)
-        current_messages = [
-            {"role": "system", "content": system_prompt},
-            *chat_history.chat_history,
-            {"role": "user", "content": query},
-        ]
+            stable_system, dynamic_ctx = self._build_cacheable_system_parts(
+                None, base_prompt=base_prompt
+            )
+        current_messages: list[dict] = [{"role": "system", "content": stable_system}]
+        current_messages.extend(chat_history.chat_history)
+        if dynamic_ctx:
+            current_messages.append({"role": "system", "content": dynamic_ctx})
+        current_messages.append({"role": "user", "content": query})
         past_key_values = None
 
         if self.config.enable_activation_memory:
@@ -386,6 +393,54 @@ class MOSCore:
             memory_context_with_header = "\n\n## Memories:\n" + memory_context
             return base_prompt + memory_context_with_header
         return base_prompt
+
+    # Prefix-cache-friendly system split (Issue #2524)
+    def _build_cacheable_system_parts(
+        self,
+        memories: list[TextualMemoryItem] | list[str] | None = None,
+        base_prompt: str | None = None,
+    ) -> tuple[str, str | None]:
+        """Return ``(stable_system, dynamic_context)`` for cache-friendly
+        chat assembly.
+
+        * ``stable_system`` is the same bytes across every turn in one
+          conversation. No memories, no current time.
+        * ``dynamic_context`` carries the per-turn memory text and is
+          ``None`` when there are no memories.
+
+        If ``base_prompt`` contains ``{memories}`` the caller used the
+        legacy single-string pattern; the stable half replaces the slot
+        with an empty string and the dynamic half still carries the memory
+        text so the LLM has the information available.
+        """
+        default_prompt = (
+            "You are a knowledgeable and helpful AI assistant. "
+            "You have access to conversation memories that help you provide more personalized responses. "
+            "Use the memories to understand the user's context, preferences, and past interactions. "
+            "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
+        )
+        if base_prompt is None:
+            stable = default_prompt
+        elif "{memories}" in base_prompt:
+            stable = base_prompt.replace("{memories}", "").rstrip()
+        else:
+            stable = base_prompt
+
+        memory_text = ""
+        if memories:
+            rendered: list[str] = []
+            for i, memory in enumerate(memories, 1):
+                if isinstance(memory, TextualMemoryItem):
+                    text_memory = memory.memory
+                else:
+                    if not isinstance(memory, str):
+                        logger.error("Unexpected memory type.")
+                    text_memory = memory
+                rendered.append(f"{i}. {text_memory}")
+            memory_text = "\n".join(rendered)
+        if not memory_text:
+            return stable, None
+        return stable, "## Memories\n" + memory_text
 
     def _str_memories(
         self, memories: list[TextualMemoryItem], mode: Literal["concise", "full"] = "full"

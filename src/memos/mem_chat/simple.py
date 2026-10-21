@@ -81,14 +81,19 @@ class SimpleMemChat(BaseMemChat):
                 print(
                     f"🧠 [Memory] Searched memories:\n{self._str_memories(memories, mode='concise')}\n"
                 )
-                system_prompt = self._build_system_prompt(memories)
+                stable_system = self._build_stable_system_prompt()
+                dynamic_ctx = self._build_dynamic_memory_context(memories)
             else:
-                system_prompt = self._build_system_prompt()
-            current_messages = [
-                {"role": "system", "content": system_prompt},
-                *messages,
-                {"role": "user", "content": user_input},
-            ]
+                stable_system = self._build_stable_system_prompt()
+                dynamic_ctx = None
+            # Issue #2524: stable system first, then history, then dynamic
+            # context, then current user turn — keeps the chat history inside
+            # the provider's shared prefix.
+            current_messages: list[dict] = [{"role": "system", "content": stable_system}]
+            current_messages.extend(messages)
+            if dynamic_ctx:
+                current_messages.append({"role": "system", "content": dynamic_ctx})
+            current_messages.append({"role": "user", "content": user_input})
 
             if self.config.enable_activation_memory:
                 past_key_values = None
@@ -153,6 +158,30 @@ class SimpleMemChat(BaseMemChat):
             return base_prompt + memory_context
 
         return base_prompt
+
+    # Prefix-cache-friendly split (Issue #2524)
+    def _build_stable_system_prompt(self) -> str:
+        """Return the stable (cross-turn constant) system prompt."""
+        return (
+            "You are a knowledgeable and helpful AI assistant. "
+            "You have access to conversation memories that help you provide more personalized responses. "
+            "Use the memories to understand the user's context, preferences, and past interactions. "
+            "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
+        )
+
+    def _build_dynamic_memory_context(self, memories: list | None) -> str | None:
+        """Return a system message carrying this turn's retrieved memories.
+
+        Returned string is intended to sit immediately before the latest
+        user turn so the chat history that precedes it stays part of the
+        provider's shared prefix.
+        """
+        if not memories:
+            return None
+        lines = ["## Memories"]
+        for i, memory in enumerate(memories, 1):
+            lines.append(f"{i}. ({memory.metadata.memory_time}) {memory.memory}")
+        return "\n".join(lines)
 
     def _str_memories(
         self, memories: list[TextualMemoryItem], mode: Literal["concise", "full"] = "full"

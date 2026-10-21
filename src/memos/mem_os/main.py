@@ -293,19 +293,24 @@ class MOS(MOSCore):
                 search_memories = search_engine.search(
                     original_query, top_k=self.config.top_k, mode="fast"
                 )
-            system_prompt = self._build_system_prompt(
+            # Issue #2524: emit a stable system prompt + per-turn dynamic
+            # context so provider prefix caches can reuse the chat history.
+            stable_system, dynamic_ctx = self._build_cacheable_system_parts(
                 search_memories, base_prompt=base_prompt
-            )  # Use the same system prompt builder
+            )
         else:
-            system_prompt = self._build_system_prompt(base_prompt=base_prompt)
-        current_messages = [
-            {"role": "system", "content": system_prompt + SYNTHESIS_PROMPT.format(qa_text=qa_text)},
-            *chat_history.chat_history,
-            {
-                "role": "user",
-                "content": original_query,
-            },
+            stable_system, dynamic_ctx = self._build_cacheable_system_parts(
+                None, base_prompt=base_prompt
+            )
+
+        synthesis_tail = SYNTHESIS_PROMPT.format(qa_text=qa_text)
+        current_messages: list[dict] = [
+            {"role": "system", "content": stable_system + synthesis_tail}
         ]
+        current_messages.extend(chat_history.chat_history)
+        if dynamic_ctx:
+            current_messages.append({"role": "system", "content": dynamic_ctx})
+        current_messages.append({"role": "user", "content": original_query})
 
         # Handle activation memory if enabled (same as core method)
         past_key_values = None

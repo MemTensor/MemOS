@@ -105,3 +105,104 @@ def get_cloud_chat_prompt(lang: str = "en") -> str:
         )
     else:
         raise ValueError(f"Invalid language: {lang}")
+
+
+# -- Prefix-cache-friendly helpers (Issue #2524) ---------------------------
+#
+# The original ``get_cloud_chat_prompt`` embeds ``{current_time}`` (minute
+# precision) and splices the current turn's retrieval into ``{memories}``.
+# Because the resulting string is sent as the first (system) message of every
+# turn, provider prefix caches cannot match any shared prefix across turns.
+#
+# The helpers below return the two halves separately:
+#
+# * ``get_cloud_chat_stable_prompt(lang)`` -- byte-identical across turns in
+#   one conversation. Safe to use as the leading system message so that the
+#   chat history that follows becomes part of the shared prefix.
+# * ``get_cloud_chat_dynamic_context(...)`` -- per-turn context carrying the
+#   current time, the retrieved memories, and the retrieved preferences. The
+#   caller injects this as a system message immediately before the latest
+#   user turn.
+# ---------------------------------------------------------------------------
+
+
+_STABLE_PROMPT_SENTINEL = (
+    "A system message carrying the current time, retrieved memories, and "
+    "preferences will appear immediately before the latest user turn — "
+    "read it before answering."
+)
+
+_STABLE_PROMPT_SENTINEL_ZH = "紧跟在最新用户消息之前，会有一条系统消息，包含当前时间、检索到的记忆和偏好——回答前请先阅读该消息。"
+
+
+def _build_stable_from_cloud_prompt(prompt: str, sentinel: str) -> str:
+    """Return the cloud chat prompt with the per-turn placeholders replaced
+    by a short sentinel pointing to the dynamic context message."""
+    # Drop the "# System Context" line that embeds {current_time}.
+    stable = prompt.replace(
+        "- Current Time: {current_time} (Baseline for freshness)",
+        f"- {sentinel}",
+    ).replace(
+        "- 当前时间: {current_time} (请以此作为判断记忆时效性的基准)",
+        f"- {sentinel}",
+    )
+    # Replace the <memories>{memories}</memories> block with a note.
+    stable = stable.replace("<memories>\n{memories}\n</memories>", sentinel)
+    # Belt and suspenders: strip any stray placeholders.
+    stable = stable.replace("{current_time}", "").replace("{memories}", "")
+    return stable
+
+
+def get_cloud_chat_stable_prompt(lang: str = "en") -> str:
+    """Return the stable (cross-turn constant) cloud chat prompt.
+
+    The returned string must be identical across turns in one conversation.
+    No current time, no retrieved memories. The template points the model to
+    the dynamic context message that follows the chat history.
+    """
+    if lang == "zh":
+        return _build_stable_from_cloud_prompt(CLOUD_CHAT_PROMPT_ZH, _STABLE_PROMPT_SENTINEL_ZH)
+    if lang == "en":
+        return _build_stable_from_cloud_prompt(CLOUD_CHAT_PROMPT_EN, _STABLE_PROMPT_SENTINEL)
+    raise ValueError(f"Invalid language: {lang}")
+
+
+def get_cloud_chat_dynamic_context(
+    *,
+    memories_block: str,
+    pref_string: str | None = None,
+    now: datetime | None = None,
+    lang: str = "en",
+) -> str:
+    """Return the per-turn dynamic context message.
+
+    Args:
+        memories_block: already-formatted memories (e.g. "1. ...\\n2. ...").
+            Pass an empty string when there are no memories.
+        pref_string: formatted preference string, or ``None``.
+        now: timestamp to use for the "Current Time" line. Defaults to
+            ``datetime.now()``; parameterised to help tests.
+        lang: "en" or "zh".
+    """
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M (%A)")
+
+    memories_section = memories_block.strip()
+    pref_section = (pref_string or "").strip()
+
+    if lang == "zh":
+        parts = [f"# 当前上下文\n- 当前时间: {stamp}"]
+        if memories_section:
+            parts.append("\n# 事实与记忆\n<memories>\n" + memories_section + "\n</memories>")
+        if pref_section:
+            parts.append("\n# 偏好\n" + pref_section)
+        return "\n".join(parts)
+
+    if lang == "en":
+        parts = [f"# Current Context\n- Current Time: {stamp}"]
+        if memories_section:
+            parts.append("\n# Facts & Memories\n<memories>\n" + memories_section + "\n</memories>")
+        if pref_section:
+            parts.append("\n# Preferences\n" + pref_section)
+        return "\n".join(parts)
+
+    raise ValueError(f"Invalid language: {lang}")
