@@ -523,6 +523,46 @@ function Write-RuntimeHomeMarker {
     Move-Item -Path $TempFile -Destination $MarkerFile -Force
 }
 
+function Reset-OversizedLog {
+    # The daemon's stdout/stderr redirects bypass the plugin's rotating file
+    # logger, so without a cap the start log grows for the whole life of a
+    # daemon session (59 MB measured in the field — MemTensor/MemOS#2379).
+    # The launch redirect truncates the active log anyway, so this only
+    # bounds retained history at install time: a running daemon can still
+    # grow the active log without limit between installs. Call before every
+    # daemon launch: keep only the tail (up to the cap) of an over-cap log
+    # as a single `.1` generation.
+    param([string]$Path, [long]$MaxBytes = 10MB)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    try {
+        $length = (Get-Item -LiteralPath $Path).Length
+    } catch { return }
+    if ($length -le $MaxBytes) { return }
+    $rotated = "$Path.1"
+    if (Test-Path -LiteralPath $rotated) {
+        Remove-Item -LiteralPath $rotated -Force -ErrorAction SilentlyContinue
+    }
+    try {
+        Move-Item -LiteralPath $Path -Destination $rotated -Force -ErrorAction Stop
+        # Keep only the tail of the rolled generation so `.1` itself stays
+        # bounded (the pre-rotation file can be arbitrarily larger than the cap).
+        if ((Get-Item -LiteralPath $rotated).Length -gt $MaxBytes) {
+            $Stream = [IO.File]::Open($rotated, 'Open', 'Read')
+            try {
+                $Stream.Seek(-$MaxBytes, 'End') | Out-Null
+                $Tail = New-Object byte[] $MaxBytes
+                [void]$Stream.Read($Tail, 0, $MaxBytes)
+            } finally {
+                $Stream.Close()
+            }
+            [IO.File]::WriteAllBytes($rotated, $Tail)
+        }
+        New-Item -ItemType File -Path $Path -Force | Out-Null
+    } catch {
+        Write-Warn "Could not rotate oversized daemon log: $Path"
+    }
+}
+
 function Wait-ForViewer {
     param([int]$Port, [int]$Timeout = 60)
     $Url = "http://127.0.0.1:$Port/"
@@ -854,6 +894,9 @@ memory:
     if ($NodeBin -and (Test-Path $BridgeEntry) -and ($BridgeEntry.EndsWith(".cjs") -or (Test-Path $TsxBin))) {
         $DaemonLog = Join-Path $Prefix "logs\daemon-start.log"
         $DaemonLogErr = Join-Path $Prefix "logs\daemon-start-err.log"
+        New-Item -ItemType Directory -Path (Join-Path $Prefix "logs") -Force | Out-Null
+        Reset-OversizedLog -Path $DaemonLog
+        Reset-OversizedLog -Path $DaemonLogErr
         if ($BridgeEntry.EndsWith(".cjs")) {
             $DaemonArgs = "`"$BridgeEntry`" --agent=hermes --daemon --home=`"$HomeDir`""
             Start-Process -FilePath $NodeBin -ArgumentList $DaemonArgs -WindowStyle Hidden -RedirectStandardOutput $DaemonLog -RedirectStandardError $DaemonLogErr
