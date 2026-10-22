@@ -17,6 +17,7 @@ import {
   parseTaskStatusFilter,
 } from "../../agent-contract/episode-status.js";
 import type { ServerDeps } from "../types.js";
+import { parseLimitParam } from "./params.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
 /**
@@ -77,9 +78,8 @@ export function registerSessionRoutes(routes: Routes, deps: ServerDeps): void {
     const ownerProfileId = ctx.url.searchParams.get("ownerProfileId") || undefined;
     const q = (ctx.url.searchParams.get("q") || "").trim().toLowerCase();
     const status = parseTaskStatusFilter(ctx.url.searchParams.get("status"));
-    const rawLimit = numberOrUndefined(ctx.url.searchParams.get("limit"));
     const rawOffset = numberOrUndefined(ctx.url.searchParams.get("offset"));
-    const limit = rawLimit && rawLimit > 0 ? rawLimit : 50;
+    const limit = parseLimitParam(ctx.url.searchParams.get("limit"));
     const offset = rawOffset && rawOffset >= 0 ? rawOffset : 0;
 
     // The legacy `?shape=ids` path is unaffected by `status` /

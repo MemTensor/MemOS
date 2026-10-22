@@ -9,6 +9,7 @@
  */
 import type { EpisodeId, SessionId, TraceDTO } from "../../agent-contract/dto.js";
 import type { ServerDeps } from "../types.js";
+import { parseLimitParam } from "./params.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
 export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
@@ -29,9 +30,10 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
    */
   routes.set("GET /api/v1/traces", async (ctx) => {
     const params = ctx.url.searchParams;
-    const parsedLimit = Number(params.get("limit"));
+    // Caller-supplied `limit` is untrusted — cap it at the documented
+    // max (500) instead of relying on the storage layer's bulk ceiling.
+    const limit = parseLimitParam(params.get("limit"));
     const parsedOffset = Number(params.get("offset"));
-    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
     const offset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const sessionId = params.get("sessionId") || undefined;
     const namespace = parseNamespace(params.get("namespace"));
