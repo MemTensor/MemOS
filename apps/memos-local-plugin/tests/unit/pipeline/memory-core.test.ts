@@ -2856,3 +2856,89 @@ algorithm:
     expect(meta.reward?.traceIds).toEqual(["tr_real"]);
   });
 });
+
+// #2401 regression: metrics() reads `traces.list({ limit: 10_000 })` to
+// bucket the viewer's "memory writes per day" chart, but the storage layer
+// used to clamp every explicit limit to the 500-row default page. With 520
+// traces written "now" and 100 three days earlier, the clamped read only
+// saw the newest 500 rows — all from today — so the older day bucketed to
+// 0 (the chart showed nothing but the last ~2 days) and the `sessions`
+// card lost every but the newest session.
+describe("MemoryCore metrics sees beyond the 500-row page (#2401)", () => {
+  it("dailyWrites / sessions cover traces older than the newest 500", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    db!.repos.sessions.upsert({
+      id: "s-today",
+      agent: "openclaw",
+      startedAt: 1,
+      lastSeenAt: 1,
+      meta: {},
+    });
+    db!.repos.sessions.upsert({
+      id: "s-old",
+      agent: "openclaw",
+      startedAt: 1,
+      lastSeenAt: 1,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "e-bulk",
+      sessionId: "s-today",
+      startedAt: 1,
+      endedAt: null,
+      traceIds: [],
+      rTask: null,
+      status: "open",
+    });
+
+    const DAY = 86_400_000;
+    const now = Date.now();
+    const oldTs = now - 3 * DAY;
+    const seed = (i: number, ts: number, sessionId: string): void => {
+      db!.repos.traces.insert({
+        id: `tr-bulk-${i}`,
+        episodeId: "e-bulk",
+        sessionId,
+        ts,
+        userText: `user ${i}`,
+        agentText: `agent ${i}`,
+        summary: `summary ${i}`,
+        toolCalls: [],
+        value: 0,
+        alpha: 0,
+        priority: 0,
+        tags: [],
+        errorSignatures: [],
+        turnId: i,
+        schemaVersion: 1,
+      });
+    };
+    for (let i = 0; i < 520; i++) seed(i, now + i, "s-today");
+    for (let i = 520; i < 620; i++) seed(i, oldTs + i, "s-old");
+
+    const m = await core.metrics({ days: 7, includeAllNamespaces: true });
+
+    // metrics() derives day keys from the trace ts exactly like this
+    // (local midnight, serialized as a UTC ISO date). Mirroring the
+    // formula keeps this test independent of the host timezone.
+    const dayKey = (ms: number): string => {
+      const d = new Date(ms);
+      d.setHours(0, 0, 0, 0);
+      return d.toISOString().slice(0, 10);
+    };
+
+    expect(m.dailyWrites).toHaveLength(7);
+    const oldBucket = m.dailyWrites.find((b) => b.date === dayKey(oldTs));
+    expect(oldBucket?.count).toBe(100);
+    // Both sessions must be visible — the 500-clamped read only ever saw
+    // today's session.
+    expect(m.sessions).toBe(2);
+  });
+});

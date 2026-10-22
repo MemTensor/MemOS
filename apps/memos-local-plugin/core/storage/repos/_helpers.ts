@@ -46,6 +46,17 @@ export function nullable<T>(v: T | undefined): T | null {
   return v === undefined ? null : v;
 }
 
+/**
+ * Hard upper bound for explicitly requested page sizes. Callers that need
+ * bulk windows (e.g. `metrics()` loads 10_000 traces for the viewer's
+ * "memory writes per day" chart, world-model maintenance scans 100_000
+ * rows) must actually receive what they ask for. The previous
+ * `Math.min(n, 500)` silently rewrote every explicit request to the
+ * default page size, which truncated the viewer's analytics to the newest
+ * 500 traces and undercounted `sessions` / `embeddings` (#2401).
+ */
+export const MAX_QUERY_LIMIT = 100_000;
+
 export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string): string {
   const newestFirst = opts?.newestFirst !== false;
   const limit = clampLimit(opts?.limit ?? 500);
@@ -55,7 +66,7 @@ export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string
 
 export function clampLimit(n: number): number {
   if (!Number.isFinite(n) || n <= 0) return 500;
-  return Math.min(Math.trunc(n), 500);
+  return Math.min(Math.trunc(n), MAX_QUERY_LIMIT);
 }
 
 export function timeRangeWhere(
