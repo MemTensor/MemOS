@@ -46,6 +46,11 @@ import type {
 
 const DEFAULT_MAX_TOKENS = 1024;
 
+// Singleton controller for background work that inherited an aborted signal.
+// Creating a fresh controller per call would leak memory; reusing one singleton
+// ensures background LLM calls can proceed without accumulating detached controllers.
+const neverAbortController = new AbortController();
+
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
 export function createLlmClient(config: LlmConfig): LlmClient {
@@ -287,13 +292,22 @@ export function createLlmClientWithProvider(
   }
 
   function makeCtx(opts: LlmCallOptions | undefined, pLog: LlmProviderLogger): LlmProviderCtx {
+    // Detach aborted signals from foreground context (fixes #2412)
+    // When L3 or retrieval runs in background, they may inherit an
+    // already-aborted signal → all HTTP requests fail with "This operation
+    // was aborted". Replace aborted signals with a singleton never-abort
+    // signal so background work can proceed.
+    const sanitizedSignal = opts?.signal?.aborted
+      ? neverAbortController.signal
+      : opts?.signal;
+
     return {
       config: {
         ...config,
         timeoutMs: opts?.timeoutMs ?? config.timeoutMs,
       },
       log: pLog,
-      signal: opts?.signal,
+      signal: sanitizedSignal,
       deadlineAt: opts?.deadlineAt,
     };
   }
