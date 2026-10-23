@@ -80,6 +80,22 @@ class TavilySearchConfig(BaseInternetRetrieverConfig):
     )
 
 
+class KeenableSearchConfig(BaseInternetRetrieverConfig):
+    """Configuration class for the Keenable Search API.
+
+    Keyless by default: the API key is optional. With no key, requests hit the
+    public endpoint (rate-limited); a key lifts the cap.
+    """
+
+    api_key: str | None = Field(
+        default=None, description="Keenable API key (optional; keyless by default)"
+    )
+    search_engine_id: str | None = Field(
+        None, description="Not used for Keenable Search (kept for compatibility)"
+    )
+    max_results: int = Field(default=10, description="Maximum number of results to retrieve")
+
+
 class InternetRetrieverConfigFactory(BaseConfig):
     """Factory class for creating internet retriever configurations."""
 
@@ -96,6 +112,7 @@ class InternetRetrieverConfigFactory(BaseConfig):
         "xinyu": XinyuSearchConfig,
         "bocha": BochaSearchConfig,
         "tavily": TavilySearchConfig,
+        "keenable": KeenableSearchConfig,
     }
 
     @field_validator("backend")
