@@ -27,6 +27,7 @@ import {
   createDeepSeekHarnessBridge,
   DEEPSEEK_HARNESS_AGENT,
   DEEPSEEK_HARNESS_PLUGIN,
+  DEEPSEEK_HARNESS_SOURCE_KIND,
   type DshPreStepDecisionLike,
   type DshPreStepPayloadLike,
   type DshSessionEventLike,
@@ -387,8 +388,7 @@ export async function apply(
       createRecallMessage: (text) => createUserMessage({
         content: [{ type: "text", text }],
         source: {
-          kind: "plugin",
-          plugin: DEEPSEEK_HARNESS_PLUGIN,
+          kind: DEEPSEEK_HARNESS_SOURCE_KIND,
           form: "recall",
         },
       }) as unknown as DshUserMessageLike,
