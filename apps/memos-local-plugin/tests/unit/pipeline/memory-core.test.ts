@@ -2856,3 +2856,164 @@ algorithm:
     expect(meta.reward?.traceIds).toEqual(["tr_real"]);
   });
 });
+
+describe("MemoryCore counts/export with > 500 rows (#2401)", () => {
+  const N = 600;
+  const BASE_TS = 1_700_000_000_000;
+
+  function startCore(): Promise<MemoryCore> {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(pipeline, resolveHome("openclaw", "/tmp/memos-mc-test"), "test");
+    return core.init();
+  }
+
+  function seedPolicy(i: number): void {
+    db!.repos.policies.upsert({
+      id: `p_${i}` as never,
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      title: `policy ${i}`,
+      trigger: "",
+      procedure: "",
+      verification: "",
+      boundary: "",
+      support: 1,
+      gain: 0,
+      status: "active",
+      sourceEpisodeIds: [],
+      inducedBy: "test",
+      decisionGuidance: { preference: [], antiPattern: [] },
+      vec: null,
+      createdAt: BASE_TS + i,
+      updatedAt: BASE_TS + i,
+    });
+  }
+
+  function seedSession(i: number): void {
+    db!.repos.sessions.upsert({
+      id: `se_${i}`,
+      agent: "openclaw",
+      startedAt: BASE_TS + i,
+      lastSeenAt: BASE_TS + i,
+      meta: {},
+    });
+  }
+
+  function seedEpisode(i: number): void {
+    db!.repos.episodes.insert({
+      id: `ep_${i}`,
+      sessionId: `se_${i}`,
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: BASE_TS + i,
+      lastSeenAt: BASE_TS + i,
+      endedAt: BASE_TS + i + 1,
+      traceIds: [],
+      rTask: null,
+      status: "closed",
+      meta: {},
+    });
+  }
+
+  function seedWorldModel(i: number): void {
+    db!.repos.worldModel.upsert({
+      id: `wm_${i}` as never,
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      title: `world model ${i}`,
+      body: `body ${i}`,
+      structure: { environment: [], inference: [], constraints: [] },
+      domainTags: [],
+      confidence: 0.5,
+      policyIds: [],
+      sourceEpisodeIds: [],
+      inducedBy: "test",
+      vec: null,
+      createdAt: BASE_TS + i,
+      updatedAt: BASE_TS + i,
+      version: 1,
+      status: "active",
+    });
+  }
+
+  function seedTrace(i: number, agentText: string): void {
+    const row: TraceRow = {
+      id: `tr_${i}`,
+      episodeId: `ep_${i}`,
+      sessionId: `se_${i}`,
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: BASE_TS + i,
+      userText: `user ${i}`,
+      agentText,
+      summary: null,
+      share: null,
+      toolCalls: [],
+      agentThinking: null,
+      reflection: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      turnId: BASE_TS + i,
+      schemaVersion: 1,
+    };
+    db!.repos.traces.insert(row);
+  }
+
+  it("viewer counters do not cap at 500 when more rows match", async () => {
+    for (let i = 0; i < N; i++) {
+      seedPolicy(i);
+      seedSession(i);
+      seedEpisode(i);
+      seedCoreSkill(`sk_${i}`, `skill ${i}`);
+      seedWorldModel(i);
+    }
+    await startCore();
+
+    await expect(core!.countPolicies()).resolves.toBe(N);
+    await expect(core!.countEpisodes()).resolves.toBe(N);
+    await expect(core!.countSkills()).resolves.toBe(N);
+    await expect(core!.countWorldModels()).resolves.toBe(N);
+  });
+
+  it("countTraces q-substring path walks rows beyond the newest 500", async () => {
+    // 10 needle hits in the oldest 100 rows (outside any newest-500 window)
+    // + 2 hits inside it — the count must see all 12, not just the newest 2.
+    for (let i = 0; i < N; i++) {
+      seedSession(i);
+      seedEpisode(i);
+      const hit = (i >= 7 && i < 17) || i === 500 || i === 501;
+      seedTrace(i, hit ? `needle-2401 hit ${i}` : `agent ${i}`);
+    }
+    await startCore();
+
+    await expect(core!.countTraces({ q: "needle-2401" })).resolves.toBe(12);
+  });
+
+  it("exportBundle exports everything instead of the newest 500 per table", async () => {
+    for (let i = 0; i < N; i++) {
+      seedPolicy(i);
+      seedCoreSkill(`sk_${i}`, `skill ${i}`);
+      seedWorldModel(i);
+      seedSession(i);
+      seedEpisode(i);
+      seedTrace(i, `agent ${i}`);
+    }
+    await startCore();
+
+    const bundle = await core!.exportBundle();
+    expect(bundle.policies).toHaveLength(N);
+    expect(bundle.skills).toHaveLength(N);
+    expect(bundle.worldModels).toHaveLength(N);
+    expect(bundle.traces).toHaveLength(N);
+  });
+});

@@ -3561,10 +3561,7 @@ export function createMemoryCore(
     // `limit` before the visibility filter runs, silently under-filling
     // pages (callers can't tell a short page from end-of-data). Fetch
     // the widest window the repo allows, filter, then page in memory —
-    // same idiom as `listEpisodeRows` / `countEpisodes`. The repo
-    // clamps the fetch window to 500 rows (`clampLimit`), so scoped
-    // paging is exact within the newest 500 episodes; beyond that the
-    // same shared limitation applies to the sibling list/count methods.
+    // same idiom as `listEpisodeRows` / `countEpisodes`.
     return handle.repos.episodes
       .list({ sessionId: input.sessionId, limit: 100_000 })
       .filter((r: EpisodeRow) => visibleToCurrent(r))
