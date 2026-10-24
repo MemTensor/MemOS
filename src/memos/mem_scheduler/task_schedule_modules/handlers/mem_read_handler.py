@@ -328,9 +328,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                         add_meta_legacy: list[dict] = []
                         update_content_legacy: list[dict] = []
                         update_meta_legacy: list[dict] = []
-                        for item_id, item in zip(
-                            enhanced_mem_ids, flattened_memories, strict=False
-                        ):
+                        for item_id, item in zip(enhanced_mem_ids, mem_group, strict=False):
                             key = getattr(item.metadata, "key", None) or transform_name_to_key(
                                 name=item.memory
                             )
