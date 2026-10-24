@@ -779,6 +779,69 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             # Assume object (redis-py 5.x+ PendingMessage)
             return getattr(entry, "message_id", None), getattr(entry, "time_since_delivered", 0)
 
+    def _parse_pending_deliveries(self, entry) -> int:
+        """Extract times_delivered from a pending entry."""
+        if isinstance(entry, dict):
+            return entry.get("times_delivered", 0) or 0
+        elif isinstance(entry, tuple | list):
+            return entry[3] if len(entry) > 3 else 0
+        return getattr(entry, "times_delivered", 0) or 0
+
+    def _filter_poison_messages(
+        self, stream_key: str, claimed: list[tuple[str, dict]]
+    ) -> list[tuple[str, dict]]:
+        """2026-09-14 毒消息隔离（用户批准）：交付次数 > SCHEDULER_MAX_DELIVERIES
+        （默认5）的消息 = 永久失败循环（实证：09-14 daike 批次输入超长 400/20015
+        每轮必败、无限重排，烧判别配额+内存翻滚）。隔离动作：写入死信流
+        scheduler:messages:stream:deadletter（保留证据）+ xack + xdel，
+        不再投回处理器。查询失败时放行（宁多跑一次不错杀）。"""
+        if not claimed or not self._redis_conn:
+            return claimed
+        max_deliveries = int(os.getenv("SCHEDULER_MAX_DELIVERIES", "5"))
+        try:
+            pend = {}
+            for e in self._redis_conn.xpending_range(
+                stream_key, self.consumer_group, "-", "+", 1000
+            ):
+                mid, _ = self._parse_pending_entry(e)
+                if mid:
+                    pend[mid] = self._parse_pending_deliveries(e)
+        except Exception as e:
+            logger.debug(f"[PoisonGuard] xpending query failed on {stream_key}: {e}")
+            return claimed
+        good, dropped = [], []
+        for mid, fields in claimed:
+            deliveries = pend.get(mid, 0)
+            if deliveries > max_deliveries:
+                dropped.append((mid, fields, deliveries))
+            else:
+                good.append((mid, fields))
+        for mid, fields, deliveries in dropped:
+            try:
+                self._redis_conn.xadd(
+                    "scheduler:messages:stream:deadletter",
+                    {
+                        "src_stream": stream_key,
+                        "orig_id": str(mid),
+                        "deliveries": str(deliveries),
+                        "payload": str(fields)[:4000],
+                        "dropped_at": str(time.time()),
+                    },
+                    maxlen=500,
+                    approximate=True,
+                )
+                self._redis_conn.xack(stream_key, self.consumer_group, mid)
+                self._redis_conn.xdel(stream_key, mid)
+            except Exception as e:
+                logger.warning(f"[PoisonGuard] drop failed for {mid}: {e}")
+        if dropped:
+            logger.warning(
+                f"[PoisonGuard] {stream_key}: quarantined {len(dropped)} poisoned message(s) "
+                f"(deliveries>{max_deliveries}) -> deadletter stream"
+            )
+        return good
+
+
     def _manual_xautoclaim(
         self, stream_key: str, min_idle_time: int, count: int
     ) -> tuple[str, list[tuple[str, dict]], list[str]]:
@@ -844,6 +907,9 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                         f"Unexpected xautoclaim response length: {len(claimed_result)}"
                     )
 
+                # Quarantine poison messages (deliveries > limit) to a
+                # dead-letter stream instead of infinite redelivery.
+                claimed = self._filter_poison_messages(stream_key, claimed)
                 return [(stream_key, claimed)] if claimed else []
             except Exception as read_err:
                 err_msg = str(read_err).lower()
@@ -871,7 +937,10 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                             f"Unexpected xautoclaim response length: {len(claimed_result)}"
                         ) from read_err
 
-                    return [(stream_key, claimed)] if claimed else []
+                    # Quarantine poison messages (deliveries > limit) to a
+                # dead-letter stream instead of infinite redelivery.
+                claimed = self._filter_poison_messages(stream_key, claimed)
+                return [(stream_key, claimed)] if claimed else []
                 return []
 
         # Fallback to manual xautoclaim for older Redis versions
@@ -891,6 +960,9 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                     _next, claimed, _deleted = self._manual_xautoclaim(
                         stream_key, min_idle, need_pending_count
                     )
+                    # Quarantine poison messages (deliveries > limit) to a
+                    # dead-letter stream instead of infinite redelivery.
+                    claimed = self._filter_poison_messages(stream_key, claimed)
                     return [(stream_key, claimed)] if claimed else []
                 except Exception:
                     return []
