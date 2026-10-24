@@ -261,6 +261,56 @@ The runtime/config location is resolved in the following priority order:
 4. **`DSH_HOME`** (DSH only) — defaults the DSH memory root to `$DSH_HOME/memos-plugin/`
 5. **Default path** — `~/.hermes/memos-plugin/`, `~/.openclaw/memos-plugin/`, or `~/.dsh/memos-plugin/` based on the agent
 
+### Local embedding model sources
+
+For `embedding.provider: local`, the Viewer Settings page exposes the same
+options as `config.yaml`:
+
+```yaml
+embedding:
+  provider: local
+  model: Xenova/all-MiniLM-L6-v2
+  local:
+    remoteHost: ""     # Optional HTTP(S) mirror base URL
+    modelPath: ""      # Optional local model root containing <model>/ files
+    cacheDir: ""       # Empty: ~/.cache/memos/models, outside installed packages
+    offline: false    # true: load local/cache files only, without downloads
+    loadTimeoutMs: 120000
+```
+
+`local.remoteHost` takes precedence over `HF_ENDPOINT`; leaving both empty uses
+Hugging Face. Use absolute directory paths (a leading `~/` is also supported).
+For offline use, place the model's config, tokenizer and quantized ONNX files
+under `<modelPath>/<model>/`, or point `cacheDir` to an existing Transformers.js
+cache. Changing the model/source settings causes a fresh pipeline load.
+
+The Settings **Test** button uses the form's unsaved local settings and shows a
+loading notice. Logs report `loading`, per-file `download.progress`, `ready`,
+and `load_failed`. The load timeout bounds the caller's wait; Transformers
+loading can continue in the background and warm the next request.
+
+### Bundle import preview and ownership
+
+Choosing a JSON bundle in the Viewer previews it without writing records.
+Choose either preserving original ownership (default) or importing into the
+active agent's current/named profile. Sharing scopes are preserved. Preview
+shows how many candidate rows would be visible to the active profile.
+Existing IDs are skipped, including on a target-profile import; this does not
+change ownership of records already stored.
+
+`POST /api/v1/import` accepts the same JSON or multipart body as before, with
+optional query parameters `dryRun=true`, `ownership=preserve|target` and
+`targetProfileId` (only with `ownership=target`). The response retains
+`imported` and `skipped`, adding `duplicates`, `invalid`, `failed`, `visible`,
+`hidden`, `dryRun` and up to 50 row diagnostics (`kind`, zero-based `index`,
+`field`, `code`, `message`). Timestamps and integer IDs such as `turnId` must
+be safe integers; invalid values are rejected rather than rounded.
+
+Preview counts are estimates: database write failures can only be reported
+on the real import. A rejected trace rolls back its synthetic session and
+episode. Use **Repair embeddings** after import to enable semantic retrieval
+for imported rows; JSON bundles do not contain embedding vectors.
+
 ### Docker Deployment
 
 When running the daemon in a Docker container, you must explicitly specify the config location if it differs from the default path. There are three ways to do this:

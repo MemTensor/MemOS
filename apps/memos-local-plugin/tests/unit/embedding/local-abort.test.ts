@@ -6,6 +6,7 @@ const { pipelineMock } = vi.hoisted(() => ({
 
 vi.mock("@huggingface/transformers", () => ({
   pipeline: pipelineMock,
+  env: { remoteHost: "https://huggingface.co/", localModelPath: "/models", cacheDir: "/cache", allowRemoteModels: true },
 }));
 
 import {
