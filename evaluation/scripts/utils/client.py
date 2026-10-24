@@ -165,13 +165,13 @@ class MemosApiClient:
             )
             response = requests.request("POST", url, data=payload, headers=self.headers)
             assert response.status_code == 200, response.text
-            assert json.loads(response.text)["message"] == "Memory added successfully", (
-                response.text
-            )
+            assert (
+                json.loads(response.text)["message"] == "Memory added successfully"
+            ), response.text
             added_memories += json.loads(response.text)["data"]
         return added_memories
 
-    def search(self, query, user_id, top_k):
+    def search(self, query, user_id, top_k, reference_time=None):
         """Search memories."""
         url = f"{self.memos_url}/product/search"
         payload = json.dumps(
@@ -184,14 +184,15 @@ class MemosApiClient:
                 "mode": os.getenv("SEARCH_MODE", "fast"),
                 "include_preference": True,
                 "pref_top_k": 6,
+                "reference_time": reference_time,
             },
             ensure_ascii=False,
         )
         response = requests.request("POST", url, data=payload, headers=self.headers)
         assert response.status_code == 200, response.text
-        assert json.loads(response.text)["message"] == "Search completed successfully", (
-            response.text
-        )
+        assert (
+            json.loads(response.text)["message"] == "Search completed successfully"
+        ), response.text
         return json.loads(response.text)["data"]
 
 
@@ -225,7 +226,7 @@ class MemosApiOnlineClient:
                     else:
                         raise e
 
-    def search(self, query, user_id, top_k):
+    def search(self, query, user_id, top_k, reference_time=None):
         """Search memories."""
         url = f"{self.memos_url}/search/memory"
         payload = json.dumps(
