@@ -15,8 +15,8 @@ from openai import OpenAI
 from tqdm.asyncio import tqdm
 
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.pref_classify import classify_error_type
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.pref_classify import JUDGE_FAILURE, classify_error_type
 
 
 load_dotenv()
@@ -255,6 +255,7 @@ def generate_excel_summary(
     inconsistency_pct = get_pct("Inconsistency Violation")
     unhelpful_pct = get_pct("Unhelpful Response")
     personalized_pct = get_pct("Personalized Response")
+    judge_failure_pct = get_pct(JUDGE_FAILURE)
 
     data = {
         "Model": [model_name],
@@ -263,6 +264,7 @@ def generate_excel_summary(
         "Inconsistency\n意识到偏好但给出了不一致的回答": [inconsistency_pct / 100],
         "Unhelpful Response\n没帮助的回答": [unhelpful_pct / 100],
         "Personalized Response\n个性化回答": [personalized_pct / 100],
+        "Judge Failure\n评判失败": [judge_failure_pct / 100],
         "context token": [avg_context_tokens],
         "Time添加": [f"{avg_add_time:.2f}s"],
         "Time搜索": [f"{avg_search_time:.2f}s"],
@@ -280,10 +282,10 @@ def generate_excel_summary(
         float_format = workbook.add_format({"num_format": "0.00"})
         wrap_format = workbook.add_format({"text_wrap": True, "align": "center", "valign": "top"})
 
-        worksheet.set_column("B:F", 18, pct_format)
-        worksheet.set_column("G:G", 12, float_format)
-        worksheet.set_column("H:I", 15)
-        worksheet.set_column("A:I", None, wrap_format)
+        worksheet.set_column("A:J", None, wrap_format)
+        worksheet.set_column("B:G", 18, pct_format)
+        worksheet.set_column("H:H", 12, float_format)
+        worksheet.set_column("I:J", 15)
         worksheet.set_row(0, 45)
         bold_pct_format = workbook.add_format({"num_format": "0.0%", "bold": True})
         worksheet.set_column("F:F", 18, bold_pct_format)
