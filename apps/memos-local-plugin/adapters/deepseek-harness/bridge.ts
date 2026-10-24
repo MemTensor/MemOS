@@ -18,7 +18,7 @@ import type { DeepSeekHarnessLlmRoute } from "./host-llm.js";
 import { waitForDeepSeekHarnessDeadline } from "./deadline.js";
 
 export const DEEPSEEK_HARNESS_AGENT = "deepseek-harness";
-export const DEEPSEEK_HARNESS_PLUGIN = "memos-local-memory";
+export { DEEPSEEK_HARNESS_PLUGIN, DEEPSEEK_HARNESS_SOURCE_KIND } from "./source-kind.js";
 
 export interface DshContentBlockLike {
   readonly type: string;

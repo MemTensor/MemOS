@@ -24,8 +24,7 @@ function recallMessage(text: string): DshUserMessageLike {
     role: "user",
     content: [{ type: "text", text }],
     source: {
-      kind: "plugin",
-      plugin: "memos-local-memory",
+      kind: "plugin:memos-local-memory",
       form: "recall",
     },
   };
@@ -539,8 +538,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(first.messages[1]).toMatchObject({
       role: "user",
       source: {
-        kind: "plugin",
-        plugin: "memos-local-memory",
+        kind: "plugin:memos-local-memory",
         form: "recall",
       },
       content: [{
@@ -553,7 +551,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(followUp).toMatchObject({
       kind: "enter",
       messages: [followUpPrompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
   });
@@ -590,7 +588,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(result).toMatchObject({
       kind: "enter",
       messages: [prompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
     expect(core.searchMemory).toHaveBeenCalledTimes(1);
@@ -637,7 +635,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(result).toMatchObject({
       kind: "enter",
       messages: [prompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
   });
@@ -682,7 +680,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(result).toMatchObject({
       kind: "enter",
       messages: [prompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
     expect(core.searchMemory).toHaveBeenCalledTimes(1);
@@ -836,7 +834,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(result).toMatchObject({
       kind: "enter",
       messages: [retry, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
 
@@ -959,7 +957,7 @@ describe("DeepSeek Harness bridge", () => {
     await expect(nextStep).resolves.toMatchObject({
       kind: "enter",
       messages: [secondPrompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
     expect(core.searchMemory).toHaveBeenCalledTimes(2);
@@ -1037,7 +1035,7 @@ describe("DeepSeek Harness bridge", () => {
     await expect(nextStep).resolves.toMatchObject({
       kind: "enter",
       messages: [secondPrompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
     expect(core.searchMemory).toHaveBeenCalledTimes(2);
