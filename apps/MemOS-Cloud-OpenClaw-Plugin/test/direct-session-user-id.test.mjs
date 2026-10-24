@@ -71,6 +71,34 @@ test("buildSearchPayload uses direct session id as user_id for private chats", (
   assert.equal(payload.user_id, "1160853368999247882");
 });
 
+test("buildAddMessagePayload omits Cloud-reserved info keys", () => {
+  const cfg = {
+    userId: "openclaw-user",
+    tags: [],
+    info: {
+      local_state: {},
+      state: null,
+      localStats: "reserved",
+      channel: "webchat",
+    },
+    allowPublic: false,
+    allowKnowledgebaseIds: [],
+    asyncMode: true,
+    conversationId: "",
+    conversationIdPrefix: "",
+    conversationIdSuffix: "",
+    conversationSuffixMode: "none",
+  };
+
+  const payload = buildAddMessagePayload(cfg, [{ role: "user", content: "hi" }], {});
+
+  assert.equal(Object.hasOwn(payload.info, "local_state"), false);
+  assert.equal(Object.hasOwn(payload.info, "state"), false);
+  assert.equal(Object.hasOwn(payload.info, "localStats"), false);
+  assert.equal(payload.info.channel, "webchat");
+  assert.equal(payload.info.source, "openclaw_win");
+});
+
 test("buildAddMessagePayload keeps configured userId for non-direct chats", () => {
   const cfg = {
     userId: "openclaw-user",
