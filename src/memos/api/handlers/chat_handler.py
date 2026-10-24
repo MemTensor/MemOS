@@ -482,12 +482,8 @@ class ChatHandler(BaseHandler):
 
                     yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
 
-                    # Extract memories from search results (first search)
-                    memories_list = []
-                    if search_response.data and search_response.data.get("text_mem"):
-                        text_mem_results = search_response.data["text_mem"]
-                        if text_mem_results and text_mem_results[0].get("memories"):
-                            memories_list = text_mem_results[0]["memories"]
+                    # Extract memories from every searched cube (first search)
+                    memories_list = self._memories_from_cube_results(search_response.data)
 
                     # Filter memories by threshold
                     filtered_memories = self._filter_memories_by_threshold(memories_list)[:5]
@@ -577,12 +573,8 @@ class ChatHandler(BaseHandler):
                         project_id=chat_req.project_id,
                     )
 
-                    # Extract memories from search results (second search)
-                    memories_list = []
-                    if search_response.data and search_response.data.get("text_mem"):
-                        text_mem_results = search_response.data["text_mem"]
-                        if text_mem_results and text_mem_results[0].get("memories"):
-                            memories_list = text_mem_results[0]["memories"]
+                    # Extract memories from every searched cube (second search)
+                    memories_list = self._memories_from_cube_results(search_response.data)
 
                     # Filter memories by threshold, min_num is the min number of memories for playground
                     second_filtered_memories = self._filter_memories_by_threshold(
@@ -1160,6 +1152,14 @@ class ChatHandler(BaseHandler):
                 lines_p.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
 
         return "\n".join(lines_o), "\n".join(lines_p)
+
+    @staticmethod
+    def _memories_from_cube_results(search_data: dict[str, Any] | None) -> list[Any]:
+        """Collect textual memories from every cube in a search response."""
+        memories_list: list[Any] = []
+        for cube_result in (search_data or {}).get("text_mem") or []:
+            memories_list.extend(cube_result.get("memories") or [])
+        return memories_list
 
     def _filter_memories_by_threshold(
         self,
