@@ -212,6 +212,14 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         default_factory=list,
         description="The ids of the files associated with the memory.",
     )
+    knowledge_material_ids: list[str] = Field(
+        default_factory=list,
+        description="RawFileMemory ids that support this knowledge summary.",
+    )
+    knowledge_summary_ids: list[str] = Field(
+        default_factory=list,
+        description="Knowledge summary ids extracted from this raw file memory.",
+    )
 
     @field_validator("sources", mode="before")
     @classmethod

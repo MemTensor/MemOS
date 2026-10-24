@@ -209,7 +209,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                             for memory in flattened_memories
                             if memory.metadata.memory_type == "RawFileMemory"
                         ]
-                        text_mem.add_rawfile_nodes_n_edges(
+                        text_mem.add_rawfile_nodes(
                             raw_file_mem_group,
                             enhanced_mem_ids,
                             user_id=user_id,

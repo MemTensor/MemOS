@@ -48,7 +48,7 @@ git fetch upstream
 git rebase upstream/dev      # 把你的 feat 分支基于最新 dev 重放
 ```
 
-提交更改时请遵循项目的提交规范（参见 [提交规范](commit_guidelines.md)）。
+提交更改时请遵循项目的提交规范（参见 [提交规范](./commit_guidelines.md)）。
 
 #### 推送到你的 Fork 仓库
 
