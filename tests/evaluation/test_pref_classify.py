@@ -75,6 +75,9 @@ def test_case_and_precedence(answers, expected):
         ("", "", "", ""),
         ("Yes", "No", "No", ""),
         ("Maybe", "No", "No", "Yes"),
+        ("Not sure", "No", "No", "Yes"),
+        ("None", "No", "No", "Yes"),
+        ("Yesterday", "No", "No", "Yes"),
         ("Yes", "No", "No", None),
     ],
 )
@@ -92,11 +95,16 @@ def test_missing_judge_key_is_a_failure():
     [
         ("Yes", True),
         ("yes.", True),
+        ("Yes, it follows the preference.", True),
         ("No", False),
         (" no", False),
+        ("No: it does not follow the preference.", False),
         ("", None),
         (None, None),
         ("Unknown", None),
+        ("Not sure", None),
+        ("None", None),
+        ("Yesterday", None),
     ],
 )
 def test_parse_yes_no(answer, expected):

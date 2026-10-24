@@ -4,6 +4,8 @@ Kept free of third-party imports so it can be unit tested without the
 evaluation dependency group.
 """
 
+import re
+
 from typing import Any
 
 
@@ -23,19 +25,15 @@ _JUDGE_KEYS = (
 
 
 def parse_yes_no(answer: str | None) -> bool | None:
-    """Map a judge answer to True (yes) or False (no).
+    """Map a leading Yes or No word to True or False.
 
-    Returns None when the answer is missing or is neither yes nor no, for
-    example the empty string that the judge call returns after an API error.
+    Allow punctuation or an explanation after that word. Return None for a
+    missing answer or other words, such as "Not sure" and "Yesterday".
     """
     if answer is None:
         return None
-    normalized = answer.strip().lower()
-    if normalized.startswith("yes"):
-        return True
-    if normalized.startswith("no"):
-        return False
-    return None
+    match = re.match(r"(yes|no)\b", answer.strip(), re.IGNORECASE)
+    return match.group(1).lower() == "yes" if match else None
 
 
 def classify_error_type(evaluation_results: dict[str, Any]) -> str:
