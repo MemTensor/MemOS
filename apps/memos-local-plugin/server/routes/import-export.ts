@@ -8,11 +8,12 @@
  *                                    non-colliding rows.
  *   GET  /api/v1/import/hermes-native/scan
  *                                → count $HERMES_HOME/memories/MEMORY.md
- *                                    entries when running as Hermes (on
+ *                                    and optional USER.md entries when
+ *                                    running as Hermes (on
  *                                    Windows the default home is under
  *                                    %LOCALAPPDATA%\hermes).
  *   POST /api/v1/import/hermes-native/run
- *                                → import a batch from that file.
+ *                                → import a batch from those files.
  *   GET  /api/v1/import/openclaw-native/scan
  *                                → count OpenClaw agent session JSONL
  *                                    messages when running as OpenClaw.
@@ -27,7 +28,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { TraceDTO } from "../../agent-contract/dto.js";
 import type { ServerOptions } from "../types.js";
@@ -39,10 +40,19 @@ const NATIVE_IMPORT_DEFAULT_BATCH = 25;
 const NATIVE_IMPORT_MAX_BATCH = 200;
 const NATIVE_IMPORT_CACHE_TTL_MS = 5 * 60 * 1000;
 
-interface HermesNativeSource {
-  memories: string[];
-  bytes: number;
+interface HermesNativeMemory {
+  text: string;
+  file: string;
+  /** Position within this file, independent of entries in the other file. */
+  index: number;
+  /** Total number of memories in this specific file. */
+  fileTotal: number;
   mtimeMs: number;
+}
+
+interface HermesNativeSource {
+  memories: HermesNativeMemory[];
+  bytes: number;
 }
 
 interface OpenClawNativeSource {
@@ -51,7 +61,7 @@ interface OpenClawNativeSource {
   sessions: number;
 }
 
-const hermesNativeCache = new Map<string, { source: HermesNativeSource }>();
+const hermesNativeCache = new Map<string, { source: HermesNativeSource; fingerprint: string }>();
 const openClawNativeCache = new Map<string, { source: OpenClawNativeSource; cachedAt: number }>();
 
 export function registerImportExportRoutes(
@@ -177,11 +187,7 @@ export function registerImportExportRoutes(
         };
       }
 
-      const traces = buildHermesNativeTraces(batch, {
-        offset,
-        total,
-        mtimeMs: source.mtimeMs,
-      });
+      const traces = buildHermesNativeTraces(batch);
       const result = await deps.core.importBundle({
         version: 1,
         traces,
@@ -401,23 +407,43 @@ async function readHermesNativeMemories(
   path: string,
   opts: { force?: boolean } = {},
 ): Promise<HermesNativeSource> {
-  const info = await stat(path);
+  const files = [{ path, file: "MEMORY.md", info: await stat(path) }];
+  const userPath = join(dirname(path), "USER.md");
+  try {
+    files.push({ path: userPath, file: "USER.md", info: await stat(userPath) });
+  } catch (err) {
+    // USER.md is optional; failing closed on non-ENOENT errors is required to
+    // prevent silently omitting existing USER.md profile data or caching a partial snapshot.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  // A combined size and maximum mtime can miss same-size edits to the older file.
+  const fingerprint = JSON.stringify(
+    files.map(({ file, info }) => [file, info.size, info.mtimeMs]),
+  );
   const cached = hermesNativeCache.get(path);
-  if (
-    !opts.force &&
-    cached &&
-    cached.source.bytes === info.size &&
-    cached.source.mtimeMs === info.mtimeMs
-  ) {
+  if (!opts.force && cached?.fingerprint === fingerprint) {
     return cached.source;
   }
-  const raw = await readFile(path, "utf8");
-  const source = {
-    memories: splitHermesNativeMemories(raw),
-    bytes: info.size,
-    mtimeMs: info.mtimeMs,
-  };
-  hermesNativeCache.set(path, { source });
+  const contents = await Promise.all(
+    files.map(({ path: filePath }) => readFile(filePath, "utf8")),
+  );
+  const source: HermesNativeSource = { memories: [], bytes: 0 };
+  for (const [fileIndex, { file, info }] of files.entries()) {
+    const raw = contents[fileIndex];
+    const entries = splitHermesNativeMemories(raw);
+    const fileTotal = entries.length;
+    for (const [index, text] of entries.entries()) {
+      source.memories.push({
+        text,
+        file,
+        index,
+        fileTotal,
+        mtimeMs: info.mtimeMs,
+      });
+    }
+    source.bytes += info.size;
+  }
+  hermesNativeCache.set(path, { source, fingerprint });
   return source;
 }
 
@@ -443,25 +469,29 @@ function splitHermesNativeMemories(raw: string): string[] {
 }
 
 function buildHermesNativeTraces(
-  memories: readonly string[],
-  opts: { offset: number; total: number; mtimeMs: number },
+  memories: readonly HermesNativeMemory[],
 ): TraceDTO[] {
-  const baseTs = Number.isFinite(opts.mtimeMs) ? Math.floor(opts.mtimeMs) : Date.now();
-  return memories.map((memory, i) => {
-    const index = opts.offset + i;
+  return memories.map((memory) => {
+    const baseTs = Number.isFinite(memory.mtimeMs) ? Math.floor(memory.mtimeMs) : Date.now();
+    // 1) MEMORY.md must hash `<index>\0<text>` to preserve backward-compatible
+    //    `tr_hm_`/`ep_hm_` IDs for existing installations (avoiding duplicate rows on upgrade).
+    // 2) Using file-local `memory.index` isolates USER.md IDs from MEMORY.md growth
+    //    while still disambiguating identical blocks within the same file.
+    const identity = `${memory.index}\0${memory.text}`;
     const hash = createHash("sha256")
-      .update(`${index}\0${memory}`)
+      .update(memory.file === "MEMORY.md" ? identity : `${memory.file}\0${identity}`)
       .digest("hex")
       .slice(0, 24);
-    const ts = Math.max(0, baseTs - Math.max(1, opts.total - index) * 1000);
+    const ts = Math.max(0, baseTs - Math.max(1, memory.fileTotal - memory.index) * 1000);
     return {
       id: `tr_hm_${hash}` as never,
       episodeId: `ep_hm_${hash}` as never,
       sessionId: "se_hermes_native_memory" as never,
       ts: ts as never,
-      userText: memory,
+      userText: memory.text,
       agentText: "",
-      summary: memory,
+      summary: memory.text,
+      tags: [memory.file],
       toolCalls: [],
       reflection: undefined,
       value: 0.5 as never,
