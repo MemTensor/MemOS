@@ -146,12 +146,19 @@ export async function crystallizeDraft(
   // human-facing fields (display_title, summary, preconditions, steps,
   // examples) come out in the same language the user was using. The
   // `name` slug stays snake_case regardless — enforced by `sanitiseName`.
-  const evidenceLang = detectDominantLanguage([
-    input.policy.title,
-    input.policy.trigger,
-    input.policy.procedure,
-    ...input.evidence.flatMap((t) => [t.userText, t.agentText, t.reflection]),
+  // Trace evidence is authoritative for rendering language. Including an
+  // old English policy here can force a Chinese episode back to English and
+  // recreate the verifier resonance failure during upgrades.
+  const evidenceSamples = input.evidence.flatMap((t) => [
+    t.userText,
+    t.agentText,
+    t.reflection,
   ]);
+  const evidenceLang = detectDominantLanguage(
+    evidenceSamples.some((sample) => sample?.trim())
+      ? evidenceSamples
+      : [input.policy.title, input.policy.trigger, input.policy.procedure],
+  );
 
   try {
     const rsp = await llm.completeJson<Record<string, unknown>>(

@@ -14,6 +14,7 @@ import { createL2EventBus } from "../../../core/memory/l2/index.js";
 import { fakeLlm } from "../../helpers/fake-llm.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import type { EpisodeId, PolicyId, SkillId } from "../../../core/types.js";
+import type { ToolCallDTO } from "../../../agent-contract/dto.js";
 import {
   makeDraft,
   makeSkillConfig,
@@ -92,6 +93,98 @@ function seedFullCandidate(h: TmpDbHandle): {
 }
 
 describe("skill/runSkill (integration)", () => {
+  it("crystallizes a Chinese multi-episode tool workflow without resonance or tool coverage loss", async () => {
+    const h = open();
+    const episodeIds = ["ep_cn_1", "ep_cn_2"] as EpisodeId[];
+    const toolCall: ToolCallDTO = {
+      name: "execute_code",
+      input: '{"code":"print(1)"}',
+    };
+
+    for (const [index, episodeId] of episodeIds.entries()) {
+      const sessionId = `s_cn_${index}`;
+      seedSessionOnly(h, sessionId);
+      seedTrace(h, {
+        episodeId,
+        sessionId,
+        userText: "在 Alpine 镜像中安装 cryptography 失败",
+        agentText: "先执行 apk add openssl-dev，再执行 pip install cryptography",
+        reflection: "先安装系统库，再重试 pip 安装",
+        value: 0.9,
+        tags: ["alpine", "pip"],
+        toolCalls: [toolCall],
+      });
+    }
+
+    const policy = seedPolicy(h, {
+      id: "po_cn_workflow" as PolicyId,
+      title: "Alpine 中先安装系统库再重试 pip",
+      trigger: "Alpine 镜像中的 cryptography 安装失败",
+      procedure: "先执行 apk add openssl-dev，再执行 pip install cryptography",
+      verification: "cryptography 安装成功",
+      boundary: "仅适用于 Alpine 镜像",
+      support: 2,
+      gain: 0.3,
+      sourceEpisodeIds: episodeIds,
+    });
+
+    const prompts: unknown[] = [];
+    const { deps, events } = makeDeps(h, {
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": (input) => {
+            prompts.push(input);
+            return makeDraft({
+              name: "alpine_cryptography_fix",
+              displayTitle: "Alpine cryptography 安装修复",
+              summary: "在 Alpine 中先安装系统库，再重试 pip 安装 cryptography",
+              preconditions: ["当前环境是 Alpine 镜像"],
+              steps: [
+                { title: "检查错误", body: "确认 pip install cryptography 安装失败" },
+                { title: "安装系统库", body: "执行 apk add openssl-dev" },
+                { title: "重新安装", body: "再次执行 pip install cryptography" },
+              ],
+              tools: ["execute_code"],
+              tags: ["alpine", "pip"],
+            });
+          },
+        },
+      }),
+      config: makeSkillConfig({ minSupport: 2, minGain: 0.1 }),
+    });
+
+    const result = await runSkill({ trigger: "manual", policyId: policy.id }, deps);
+
+    expect(result).toMatchObject({ evaluated: 1, crystallized: 1, rejected: 0 });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "skill.crystallized",
+        policyId: policy.id,
+      }),
+    );
+    expect(events.some((event) => event.kind === "skill.verification.failed")).toBe(false);
+
+    const messages = prompts[0] as Array<{ role: string; content: string }>;
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("简体中文"),
+        }),
+      ]),
+    );
+    const userMessage = messages.find((message) => message.role === "user");
+    expect(userMessage).toBeDefined();
+    const payload = JSON.parse(userMessage!.content) as { evidence_tools: string[] };
+    expect(payload.evidence_tools).toEqual(["execute_code"]);
+    expect(payload.evidence_tools).not.toContain('{"code":');
+
+    const stored = h.repos.skills.list()[0]!;
+    expect(stored.status).toBe("candidate");
+    expect(stored.sourcePolicyIds).toContain(policy.id);
+    expect(stored.procedureJson?.steps).toHaveLength(3);
+  });
+
   it("crystallizes a fresh skill for an eligible policy", async () => {
     const h = open();
     const { policyId } = seedFullCandidate(h);

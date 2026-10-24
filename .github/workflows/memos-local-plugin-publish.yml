@@ -30,7 +30,7 @@ on:
         type: boolean
         default: true
       recover_existing_npm_release:
-        description: "Allow reconstructing a missing tag for an existing npm version. Keep false for normal releases."
+        description: "Recover a verified partial publish only; keep false for normal releases."
         required: true
         type: boolean
         default: false
@@ -799,7 +799,7 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.tag }}
           RECOVER_EXISTING_NPM_RELEASE: ${{ inputs.recover_existing_npm_release }}
           RELEASE_METADATA_STATE: ${{ steps.release_state.outputs.state }}
-          NPM_VISIBILITY_TIMEOUT_SECONDS: "150"
+          NPM_VISIBILITY_TIMEOUT_SECONDS: "600"
           NPM_VISIBILITY_INTERVAL_SECONDS: "10"
           NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS: "8"
           ALLOW_STAGED_TAG_BEFORE_NPM: ${{ (inputs.publish_phase || 'full') == 'publish_npm_only' && 'true' || 'false' }}

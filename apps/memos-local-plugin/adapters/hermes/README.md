@@ -25,6 +25,36 @@ keepalive, reconnect generation, and host callback dispatch. All algorithm
 logic (L1/L2/L3, skills, retrieval, feedback, decision repair) remains in the
 shared TypeScript core.
 
+## Desktop and custom Unix installations
+
+Use the backend source directory and Python environment used by the desktop
+app, which may differ from the CLI installation. The Unix installer validates
+`hermes_cli` and `plugins.memory.load_memory_provider` before stopping Hermes
+or deploying the plugin. It checks literal Python/Bash launchers and the default
+backend's `venv` and `.venv` directories.
+
+If auto-detection fails, use the updated `install.sh` with explicit paths:
+
+```bash
+HERMES_INSTALL_DIR="/actual/path/to/hermes-agent" \
+HERMES_PYTHON="/actual/path/to/hermes-agent/venv/bin/python" \
+bash install.sh --agent hermes
+```
+
+`HERMES_INSTALL_DIR` is the backend source directory containing `hermes_cli`
+and `plugins/memory`, not simply the `.app` bundle. `HERMES_PYTHON` must be the
+interpreter that runs that backend. Explicit paths fail with diagnostic output
+instead of falling back to another installation. Paths containing spaces work
+when quoted. For a non-default data/config directory, also set `HERMES_HOME`;
+it defaults to `~/.hermes`. The MemOS package/data location remains
+`~/.hermes/memos-plugin` for compatibility with existing installations.
+
+If the chosen interpreter cannot import the host's memory provider API, repair
+or update that Hermes environment. Creating an empty `plugins/memory` directory
+does not supply the missing API. Restart the desktop app after installation.
+Desktop distributions with unrecognized layouts require explicit paths; these
+options do not imply that every desktop release has been tested.
+
 ## Protocol surface
 
 The adapter calls the following methods on the bridge:

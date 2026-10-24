@@ -50,8 +50,13 @@ export function languageSteeringLine(lang: PromptLanguage): string {
  * Heuristic:
  *   - Count CJK Unified Ideographs (U+4E00..U+9FFF) as `zh`.
  *   - Count ASCII letters A-Z/a-z as `en`.
- *   - If CJK accounts for more than `zhRatioThreshold` of counted
- *     CJK+ASCII signal, pick `zh`.
+ *   - Treat Japanese kana as an explicit non-Chinese signal. This keeps
+ *     Japanese prompts from being mistaken for Chinese just because they
+ *     contain a few shared Han characters.
+ *   - CJK characters carry a small weight because technical identifiers
+ *     (package names, commands, file paths) can contribute many ASCII
+ *     characters inside an otherwise Chinese sentence. If weighted CJK
+ *     accounts for more than `zhRatioThreshold` of the signal, pick `zh`.
  *   - Otherwise pick `en`.
  *
  * This intentionally treats Japanese / Korean prompts with filenames,
@@ -66,18 +71,25 @@ export function detectDominantLanguage(
   samples: ReadonlyArray<string | null | undefined>,
   opts: { zhRatioThreshold?: number } = {},
 ): PromptLanguage {
-  const zhRatioThreshold = opts.zhRatioThreshold ?? 0.7;
+  const zhRatioThreshold = opts.zhRatioThreshold ?? 0.6;
   let zh = 0;
   let en = 0;
+  let kana = 0;
   for (const s of samples) {
     if (!s) continue;
     for (let i = 0; i < s.length; i++) {
       const code = s.charCodeAt(i);
       if (code >= 0x4e00 && code <= 0x9fff) zh++;
+      else if (
+        (code >= 0x3040 && code <= 0x30ff) ||
+        (code >= 0x31f0 && code <= 0x31ff)
+      ) kana++;
       else if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) en++;
     }
   }
+  if (kana > 0) return "en";
   const total = zh + en;
   if (total === 0) return "en";
-  return zh / total > zhRatioThreshold ? "zh" : "en";
+  const weightedZh = zh * 4;
+  return weightedZh / (weightedZh + en) > zhRatioThreshold ? "zh" : "en";
 }

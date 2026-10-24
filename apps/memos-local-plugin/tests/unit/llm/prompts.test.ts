@@ -43,6 +43,13 @@ describe("llm/prompts", () => {
 
   it("detectDominantLanguage only chooses Chinese when CJK dominates", () => {
     expect(detectDominantLanguage(["请修复这个问题，并解释原因"])).toBe("zh");
+    expect(
+      detectDominantLanguage([
+        "在 Alpine 镜像中安装 cryptography 失败",
+        "先执行 apk add openssl-dev，再执行 pip install cryptography",
+        "先安装系统库，再重试 pip 安装",
+      ]),
+    ).toBe("zh");
     expect(detectDominantLanguage(["Excelファイルの欠落値を復元してください"])).toBe("en");
     expect(detectDominantLanguage(["저는 GRPO를 사용하여 모델을 훈련시키고 있습니다"])).toBe("en");
     expect(detectDominantLanguage(["GRPO / TRL / reward_fn.py"])).toBe("en");

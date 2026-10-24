@@ -59,6 +59,31 @@ describe("storage/migrator", () => {
     }
   });
 
+  it("replays the policy metadata migration after an interrupted marker write", () => {
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      runMigrations(db);
+      const metadataColumn = db
+        .prepare<unknown, { name: string }>(`PRAGMA table_info(policies)`)
+        .all()
+        .find((row) => row.name === "metadata_json");
+      expect(metadataColumn).toBeDefined();
+      db.prepare<{ version: number }>(`DELETE FROM schema_migrations WHERE version=@version`)
+        .run({ version: 19 });
+
+      const replay = runMigrations(db);
+      expect(replay.applied.map((m) => m.version)).toContain(19);
+      expect(db
+        .prepare<unknown, { name: string }>(`PRAGMA table_info(policies)`)
+        .all()
+        .filter((row) => row.name === "metadata_json")).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("rejects duplicate migration versions in a custom dir", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memos-mig-dup-"));
     cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));

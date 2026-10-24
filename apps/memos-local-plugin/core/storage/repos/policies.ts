@@ -1,4 +1,4 @@
-import type { EmbeddingVector, PolicyId, PolicyRow, ShareScope } from "../../types.js";
+import type { EmbeddingVector, PolicyId, PolicyMetadata, PolicyRow, ShareScope } from "../../types.js";
 import type { PolicyListFilter, StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
 import { scanAndTopK, type VectorHit } from "../vector.js";
@@ -46,6 +46,7 @@ const COLUMNS = [
   "share_target",
   "shared_at",
   "edited_at",
+  "metadata_json",
 ];
 
 export interface PolicySearchMeta {
@@ -420,6 +421,7 @@ interface RawPolicyRow {
   share_target: string | null;
   shared_at: number | null;
   edited_at: number | null;
+  metadata_json: string | null;
 }
 
 type RawPolicySearchRow = Pick<
@@ -476,6 +478,7 @@ function rowToParams(row: PolicyRow): Record<string, unknown> {
     share_target: row.share?.target ?? null,
     shared_at: row.share?.sharedAt ?? null,
     edited_at: row.editedAt ?? null,
+    metadata_json: row.metadata ? toJsonText(row.metadata) : null,
   };
 }
 
@@ -517,6 +520,30 @@ function mapRow(r: RawPolicyRow): PolicyRow {
           }
         : null,
     editedAt: r.edited_at,
+    metadata: parsePolicyMetadata(r.metadata_json),
+  };
+}
+
+function parsePolicyMetadata(raw: string | null | undefined): PolicyMetadata | undefined {
+  if (!raw) return undefined;
+  const value = fromJsonText<Partial<PolicyMetadata> | null>(raw, null);
+  if (!value || value.version !== 1) return undefined;
+  const language = value.language;
+  if (!['zh', 'en', 'other', 'mixed', 'unknown'].includes(String(language))) return undefined;
+  const list = (input: unknown): string[] =>
+    Array.isArray(input)
+      ? Array.from(new Set(input.filter((v): v is string => typeof v === 'string' && !!v.trim()).map((v) => v.trim().slice(0, 64))))
+      : [];
+  const sourceSignature = typeof value.sourceSignature === 'string' && value.sourceSignature.trim()
+    ? value.sourceSignature.trim().slice(0, 256)
+    : undefined;
+  return {
+    version: 1,
+    language: language as PolicyMetadata['language'],
+    domainTags: list(value.domainTags),
+    toolNames: list(value.toolNames),
+    errorCodes: list(value.errorCodes),
+    ...(sourceSignature ? { sourceSignature } : {}),
   };
 }
 

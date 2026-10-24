@@ -222,6 +222,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // an early-life install can still cluster into a world model;
       // strict 0.6 starved L3 in real usage.
       clusterMinSimilarity: 0.3,
+      maxPoliciesPerCluster: 20,
+      maxPromptChars: 32_000,
       policyCharCap: 800,
       traceCharCap: 500,
       traceEvidencePerPolicy: 1,
@@ -249,9 +251,9 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // real usage; 1 lets the candidate→active transition happen
       // immediately on first successful invocation.
       candidateTrials: 1,
-      // Lowered from 6 hours → 0: no cooldown, skills can re-evolve
-      // as soon as new evidence arrives.
-      cooldownMs: 0,
+      // Verification failures are retried after six hours by default;
+      // operators may set this to 0 when immediate re-evaluation is desired.
+      cooldownMs: 6 * 60 * 60 * 1000,
       traceCharCap: 500,
       evidenceLimit: 6,
       useLlm: true,
