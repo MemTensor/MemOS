@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 import os
-import re
+import sys
 import time
 
 import nltk
@@ -21,6 +21,14 @@ from rouge_score import rouge_scorer
 from scipy.spatial.distance import cosine
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
+
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ``extract_label_json`` is re-exported for callers that imported it from this
+# module before the shared helper existed; new code should import from
+# ``utils.judge`` directly. See GitHub issue #2525 for the regression this
+# consolidation prevents.
+from utils.judge import extract_label_json, parse_judge_label  # noqa: F401
 
 
 logging.basicConfig(level=logging.CRITICAL)
@@ -46,29 +54,6 @@ except Exception as e:
 class LLMGrade(BaseModel):
     llm_judgment: str = Field(description="CORRECT or WRONG")
     llm_reasoning: str = Field(description="Explain why the answer is correct or incorrect.")
-
-
-def extract_label_json(text: str) -> str | None:
-    """
-    Extracts a JSON object of the form {"label": "VALUE"} from a given text string.
-    This function is designed to handle cases where the LLM response contains
-    natural language alongside a final JSON snippet, ensuring robust parsing.
-
-    Supports both single and double quotes around the label value.
-    Ignores surrounding whitespace and formatting.
-
-    Returns:
-        The full matching JSON string (e.g., '{"label": "CORRECT"}') if found.
-        None if no valid label JSON is found.
-    """
-    # Regex pattern to match: { "label": "value" } with optional whitespace
-    # Matches both single and double quotes, allows spaces around keys and values
-    pattern = r'\{\s*"label"\s*:\s*["\']([^"\']*)["\']\s*\}'
-    match = re.search(pattern, text)
-    if match:
-        # Return the complete matched JSON string for safe json.loads()
-        return match.group(0)
-    return None
 
 
 async def locomo_grader(llm_client, question: str, gold_answer: str, response: str) -> bool:
@@ -111,8 +96,7 @@ async def locomo_grader(llm_client, question: str, gold_answer: str, response: s
             temperature=0,
         )
         message_content = response.choices[0].message.content
-        message_content = extract_label_json(text=message_content)
-        label = json.loads(message_content)["label"]
+        label = parse_judge_label(message_content)
         parsed = LLMGrade(llm_judgment=label, llm_reasoning="")
         return parsed.llm_judgment.strip().lower() == "correct"
     except Exception as e:
