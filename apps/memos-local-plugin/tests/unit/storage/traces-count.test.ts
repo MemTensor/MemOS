@@ -71,13 +71,15 @@ describe("traces count with > 500 items", () => {
     const count = repo.count();
     expect(count).toBe(600);
 
-    // Verify list with no limit still caps at 500
+    // Verify list with no limit still caps at 500 (default page)
     const listed = repo.list({});
     expect(listed.length).toBe(500);
 
-    // Verify list with explicit high limit also caps at 500
+    // Verify an explicit high limit is honored up to MAX_QUERY_LIMIT
+    // (#2401) — bulk callers (metrics, maintenance sweeps) must see every
+    // row they asked for instead of the 500-row default page.
     const listedWithLimit = repo.list({ limit: 10000 });
-    expect(listedWithLimit.length).toBe(500);
+    expect(listedWithLimit.length).toBe(600);
   });
 
   it("countTurns() should return accurate count > 500", () => {
