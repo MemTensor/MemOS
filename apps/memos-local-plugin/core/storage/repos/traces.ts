@@ -144,9 +144,23 @@ export function makeTracesRepo(db: StorageDb) {
 
     getManyByIds(ids: readonly TraceId[]): TraceRow[] {
       if (ids.length === 0) return [];
-      const placeholders = buildInClause(ids.length);
-      const sql = `SELECT ${COLUMNS.join(", ")} FROM traces WHERE id ${placeholders}`;
-      const rows = db.prepare<readonly string[], RawTraceRow>(sql).all(ids);
+      // De-duplicate first so a repeated id never yields a duplicate row,
+      // matching the single-statement semantics this method replaces
+      // (see the `countExisting` note below) — and so the duplicate can't
+      // land in two different chunks.
+      const dedup = Array.from(new Set(ids));
+      // Process in chunks to avoid hitting parameter limits — one statement
+      // with a placeholder per id overflows SQLite's bound-parameter cap
+      // once an episode's trace_ids_json grows large
+      // (https://github.com/MemTensor/MemOS/issues/2509).
+      const CHUNK_SIZE = 900;
+      const rows: RawTraceRow[] = [];
+      for (let i = 0; i < dedup.length; i += CHUNK_SIZE) {
+        const chunk = dedup.slice(i, i + CHUNK_SIZE);
+        const placeholders = buildInClause(chunk.length);
+        const sql = `SELECT ${COLUMNS.join(", ")} FROM traces WHERE id ${placeholders}`;
+        rows.push(...db.prepare<readonly string[], RawTraceRow>(sql).all(chunk));
+      }
       return rows.map(mapRow);
     },
 
