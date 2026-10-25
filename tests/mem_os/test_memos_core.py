@@ -636,7 +636,12 @@ class TestMOSChat:
         custom_prompt = "You are a pirate. Answer as such. User memories: {memories}"
         mos.chat("What do I like?", base_prompt=custom_prompt)
 
-        # Verify that the system prompt passed to the LLM is the custom one
+        # Verify that the system prompt passed to the LLM is the custom one.
+        # Issue #2524: with the cache-friendly split the stable system prompt
+        # is base_prompt with ``{memories}`` stripped, and the per-turn
+        # retrieved memories move into a separate system message immediately
+        # before the final user turn so the chat history that follows the
+        # stable prompt stays part of the provider's shared prefix.
         mock_llm.generate.assert_called_once()
         call_args = mock_llm.generate.call_args[0]
         messages = call_args[0]
@@ -645,7 +650,15 @@ class TestMOSChat:
         assert "You are a pirate." in system_prompt
         assert "You are a knowledgeable and helpful AI assistant." not in system_prompt
         assert "User memories:" in system_prompt
-        assert "I like playing football" in system_prompt  # Check if memory is interpolated
+        # Memories now live in the dynamic context message (second-to-last),
+        # delivered as a user-role framing turn (OCR round 2 feedback on PR
+        # #2529: mid-conversation ``{"role": "system"}`` is not portable).
+        assert messages[-1]["role"] == "user"
+        assert messages[-2]["role"] == "user"
+        assert messages[-2]["content"].startswith("[Context for this turn]\n")
+        assert "I like playing football" in messages[-2]["content"]
+        # And they must NOT be inlined into the stable prefix anymore.
+        assert "I like playing football" not in system_prompt
 
     @patch("memos.mem_os.core.UserManager")
     @patch("memos.mem_os.core.MemReaderFactory")
@@ -681,6 +694,63 @@ class TestMOSChat:
 
         # Verify response
         assert response == "This is a test response from the assistant."
+
+    @patch("memos.mem_os.core.UserManager")
+    @patch("memos.mem_os.core.MemReaderFactory")
+    @patch("memos.mem_os.core.LLMFactory")
+    def test_chat_places_history_before_dynamic_context_issue_2524(
+        self,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+        mock_mem_cube,
+    ):
+        """Issue #2524: chat_history must sit between the stable system
+        message and the per-turn dynamic context so provider prefix caches
+        can reuse the history across turns."""
+        mock_llm_factory.from_config.return_value = mock_llm
+        mock_reader_factory.from_config.return_value = mock_mem_reader
+        mock_user_manager_class.return_value = mock_user_manager
+
+        mos = MOSCore(MOSConfig(**mock_config))
+        mos.mem_cubes["test_cube_1"] = mock_mem_cube
+        mos.mem_cubes["test_cube_2"] = mock_mem_cube
+
+        # Seed chat history with a prior exchange.
+        if mos.user_id not in mos.chat_history_manager:
+            mos._register_chat_history(mos.user_id)
+        chat_history = mos.chat_history_manager[mos.user_id]
+        chat_history.chat_history.extend(
+            [
+                {"role": "user", "content": "Previous question"},
+                {"role": "assistant", "content": "Previous answer"},
+            ]
+        )
+
+        mos.chat("What should I eat?")
+
+        call_args = mock_llm.generate.call_args[0]
+        messages = call_args[0]
+
+        # Stable system first.
+        assert messages[0]["role"] == "system"
+        assert "I like playing football" not in messages[0]["content"]
+
+        # Prior history inside the shared prefix.
+        assert messages[1] == {"role": "user", "content": "Previous question"}
+        assert messages[2] == {"role": "assistant", "content": "Previous answer"}
+
+        # Dynamic context immediately before the final user turn, delivered
+        # as a user-role framing message (OCR round 2 feedback: avoid
+        # mid-conversation ``{"role": "system"}``).
+        assert messages[-1] == {"role": "user", "content": "What should I eat?"}
+        assert messages[-2]["role"] == "user"
+        assert messages[-2]["content"].startswith("[Context for this turn]\n")
+        assert "I like playing football" in messages[-2]["content"]
 
 
 # TODO: test clear message
