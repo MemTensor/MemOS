@@ -33,6 +33,13 @@ def test_should_keep_update_rejects_large_rewrite():
     assert not should_keep_update("zzzzzzzzzz", "aaaaaaaaaa")
 
 
+def test_should_keep_update_rejects_reordered_text_with_same_characters():
+    old_text = "alpha bravo charlie delta echo foxtrot golf hotel india juliet"
+    new_text = "juliet india hotel golf foxtrot echo delta charlie bravo alpha x"
+
+    assert not should_keep_update(new_text, old_text)
+
+
 def test_general_split_into_chunks_groups_small_items():
     chunks = general_split_into_chunks(
         [{"text": "short"}, {"text": "also short"}],
