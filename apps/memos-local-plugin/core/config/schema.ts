@@ -587,6 +587,17 @@ const AlgorithmSchema = Type.Object({
      */
     llmFilterCandidateBodyChars: NumberInRange(500, 120, 2000),
     /**
+     * Wall-clock budget (ms) for one LLM relevance-filter call. The
+     * filter always runs inside the retrieval deadline, so this value
+     * is additionally clamped by the remaining deadline. Default 2000
+     * (2 s) fits hosted models; self-hosted OpenAI-compatible
+     * endpoints on consumer hardware regularly need more — with the
+     * old hard-coded cap the local call was aborted every turn and
+     * replayed on the host model
+     * (https://github.com/MemTensor/MemOS/issues/2499).
+     */
+    llmFilterTimeoutMs: NumberInRange(2_000, 100, 30_000),
+    /**
      * Tier-2 vector scan time-window bound (ms). When > 0, the
      * vector scan path (`scanAndTopK` in `core/storage/vector.ts`)
      * only considers traces written within the last
