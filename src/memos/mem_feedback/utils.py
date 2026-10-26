@@ -44,7 +44,18 @@ def should_keep_update(new_text: str, old_text: str) -> bool:
         # Compare character order as well as content. A character-set score
         # treats a complete reordering of facts as unchanged, which can let a
         # destructive feedback update pass the small-edit guard.
-        return SequenceMatcher(None, text1, text2).ratio()
+        character_similarity = SequenceMatcher(None, text1, text2).ratio()
+
+        # Word-level matching catches fact reordering that still shares many
+        # character subsequences. For text without whitespace (for example,
+        # Chinese), the character-level score remains the useful signal.
+        words1 = text1.split()
+        words2 = text2.split()
+        if len(words1) > 1 and len(words2) > 1:
+            word_similarity = SequenceMatcher(None, words1, words2).ratio()
+            return min(character_similarity, word_similarity)
+
+        return character_similarity
 
     similarity = calculate_similarity(old_text, new_text)
     change_ratio = 1 - similarity

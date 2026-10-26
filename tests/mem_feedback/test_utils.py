@@ -35,7 +35,7 @@ def test_should_keep_update_rejects_large_rewrite():
 
 def test_should_keep_update_rejects_reordered_text_with_same_characters():
     old_text = "alpha bravo charlie delta echo foxtrot golf hotel india juliet"
-    new_text = "juliet india hotel golf foxtrot echo delta charlie bravo alpha x"
+    new_text = "juliet india hotel golf foxtrot echo delta charlie bravo alpha"
 
     assert not should_keep_update(new_text, old_text)
 
