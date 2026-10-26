@@ -264,6 +264,54 @@ class PostgresGraphDBConfig(BaseConfig):
         return self
 
 
+class OpenGaussGraphDBConfig(BaseConfig):
+    """Connection and isolation settings for the openGauss enterprise AGE backend.
+
+    Shared-database mode requires a logical scope. Physical isolation may omit
+    it; explicitly supplied scopes are preserved without normalization.
+    """
+
+    host: str = Field(..., min_length=1, description="Database host")
+    port: int = Field(default=5432, ge=1, le=65535, description="Database port")
+    user: str = Field(..., min_length=1, description="Database login user")
+    password: str = Field(..., min_length=1, repr=False, description="Database password")
+    db_name: str = Field(..., min_length=1, description="Target openGauss database")
+    user_name: str | None = Field(
+        default=None,
+        description="Logical tenant or Cube scope; required in shared-database mode",
+    )
+    use_multi_db: bool = Field(
+        default=False,
+        description="Use physical database isolation instead of a required logical scope",
+    )
+    embedding_dimension: int = Field(default=1024, ge=1, description="Embedding dimension")
+    minconn: int = Field(default=1, ge=1, description="Minimum pooled connections")
+    maxconn: int = Field(default=20, ge=1, description="Maximum pooled connections")
+    connect_timeout: int = Field(
+        default=10, ge=1, le=3600, description="Database connection timeout in seconds"
+    )
+    connection_wait_timeout: int = Field(
+        default=30, ge=1, le=3600, description="Maximum wait for a pooled connection in seconds"
+    )
+
+    @field_validator("host", "user", "password", "db_name", "user_name")
+    @classmethod
+    def validate_non_blank(cls, value: str | None) -> str | None:
+        """Reject blank values while preserving valid connection and scope strings."""
+        if value is not None and not value.strip():
+            raise ValueError("must not be empty or whitespace")
+        return value
+
+    @model_validator(mode="after")
+    def validate_config(self) -> "OpenGaussGraphDBConfig":
+        """Require shared-database isolation and an ordered connection-pool range."""
+        if not self.use_multi_db and self.user_name is None:
+            raise ValueError("In shared-database mode, `user_name` must be provided")
+        if self.minconn > self.maxconn:
+            raise ValueError("`minconn` must be <= `maxconn`")
+        return self
+
+
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
     config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
