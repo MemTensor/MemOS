@@ -1,6 +1,8 @@
 import json
 import re
 
+from difflib import SequenceMatcher
+
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 
 
@@ -39,14 +41,21 @@ def should_keep_update(new_text: str, old_text: str) -> bool:
     old_len = estimate_tokens(old_text)
 
     def calculate_similarity(text1: str, text2: str) -> float:
-        set1 = set(text1)
-        set2 = set(text2)
-        if not set1 and not set2:
-            return 1.0
+        # Compare character order as well as content. A character-set score
+        # treats a complete reordering of facts as unchanged, which can let a
+        # destructive feedback update pass the small-edit guard.
+        character_similarity = SequenceMatcher(None, text1, text2).ratio()
 
-        intersection = len(set1.intersection(set2))
-        union = len(set1.union(set2))
-        return intersection / union if union > 0 else 0.0
+        # Word-level matching catches fact reordering that still shares many
+        # character subsequences. For text without whitespace (for example,
+        # Chinese), the character-level score remains the useful signal.
+        words1 = text1.split()
+        words2 = text2.split()
+        if len(words1) > 1 and len(words2) > 1:
+            word_similarity = SequenceMatcher(None, words1, words2).ratio()
+            return min(character_similarity, word_similarity)
+
+        return character_similarity
 
     similarity = calculate_similarity(old_text, new_text)
     change_ratio = 1 - similarity
