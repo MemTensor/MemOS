@@ -289,6 +289,56 @@ loading notice. Logs report `loading`, per-file `download.progress`, `ready`,
 and `load_failed`. The load timeout bounds the caller's wait; Transformers
 loading can continue in the background and warm the next request.
 
+### Windows native-library isolation
+
+On Windows, local embedding inference runs in a separate Node process so the
+plugin's Transformers/Sharp/libvips libraries cannot occupy DLL names in the
+host process. The model process is shared, starts lazily, and stops when its
+last provider closes or after five minutes without requests. Cancelling one
+request does not cancel other callers. A crashed child is restarted on the
+next request; failures are reported as `embedding_unavailable`, without
+falling back to loading these libraries inside the host. macOS/Linux keep
+the existing in-process embedding path.
+
+Electron hosts must support `ELECTRON_RUN_AS_NODE`/`child_process.fork`.
+The child reuses the host executable, clears inherited `NODE_OPTIONS` and
+`NODE_PATH` preloads, and sends only model settings/text/vectors and model
+logs over IPC. No DLL replacement or host Sharp version pin is required.
+
+To verify the native collision fix on Windows, build this branch and run
+`scripts/verify-windows-dll-isolation.mjs` against the **host's** Sharp package.
+For a DSH installation whose JavaScript is inside `app.asar`, use its Electron
+executable so ASAR paths remain readable (replace the example install paths):
+
+```powershell
+npm ci
+npm run build:package
+$DshExe = "C:\path\to\DeepSeek Harness.exe"
+$HostSharp = "C:\path\to\resources\app.asar\dsh\node_modules\sharp"
+$ModelCache = "$env:USERPROFILE\.cache\memos\models"
+$PreviousRunAsNode = $env:ELECTRON_RUN_AS_NODE
+$env:ELECTRON_RUN_AS_NODE = "1"
+try {
+  & $DshExe .\scripts\verify-windows-dll-isolation.mjs --host-sharp $HostSharp --cache-dir $ModelCache --offline
+} finally {
+  $env:ELECTRON_RUN_AS_NODE = $PreviousRunAsNode
+}
+```
+
+Use an existing Transformers model cache with `--offline`; omit that flag to
+allow downloading (including through `HF_ENDPOINT`). Each of the two load
+orders runs in a fresh process: plugin model before host Sharp, and host
+Sharp before plugin model. Both must return a 384-dimensional vector and
+successfully encode a PNG with host Sharp; model inference must add no
+Sharp/libvips/ONNX libraries to the parent process. The script reports the
+separate host/worker PIDs and host library versions.
+
+Then restart DSH completely, enable this plugin build and the local model,
+and verify both a new conversation and a long conversation that previously
+failed, including any image processing path. Windows DLL behavior requires
+this native check; passing the cross-platform IPC tests alone does not prove
+that the original Windows failure is resolved.
+
 ### Bundle import preview and ownership
 
 Choosing a JSON bundle in the Viewer previews it without writing records.

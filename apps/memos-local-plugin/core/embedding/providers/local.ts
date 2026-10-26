@@ -10,7 +10,11 @@
  * don't normalize again on top of that.
  */
 
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
+import {
+  acquireLocalEmbeddingProcess,
+  releaseLocalEmbeddingProcess,
+} from "./local-process.js";
 import { join, resolve } from "node:path";
 import { MemosError } from "../../../agent-contract/errors.js";
 import type {
@@ -238,7 +242,7 @@ type PipelineFn = (
   options?: Record<string, unknown>,
 ) => Promise<unknown>;
 
-export class LocalEmbeddingProvider implements EmbeddingProvider {
+export class InProcessLocalEmbeddingProvider implements EmbeddingProvider {
   readonly name: EmbeddingProviderName = "local";
 
   async embed(
@@ -276,6 +280,33 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
     // The transformers pipeline doesn't expose a .close(); GC handles it.
     extractorPromise = null;
     currentKey = null;
+  }
+}
+
+/** Windows native DLLs must remain outside the host process. */
+export class LocalEmbeddingProvider implements EmbeddingProvider {
+  readonly name: EmbeddingProviderName = "local";
+  private inProcess = new InProcessLocalEmbeddingProvider();
+  private isolated?: ReturnType<typeof acquireLocalEmbeddingProcess>;
+
+  embed(
+    texts: string[],
+    role: EmbedRole,
+    ctx: ProviderCallCtx,
+  ): Promise<number[][]> {
+    if (ctx.signal?.aborted) return Promise.reject(abortReason(ctx.signal));
+    if (platform() !== "win32") return this.inProcess.embed(texts, role, ctx);
+    this.isolated ??= acquireLocalEmbeddingProcess();
+    return this.isolated.embed(texts, ctx);
+  }
+
+  async close(): Promise<void> {
+    if (this.isolated) {
+      releaseLocalEmbeddingProcess(this.isolated);
+      this.isolated = undefined;
+    } else {
+      await this.inProcess.close();
+    }
   }
 }
 
