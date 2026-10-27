@@ -35,6 +35,17 @@ class TestCleanJsonResponse:
         expected = '{"key": "value"}'
         assert clean_json_response(input_str) == expected
 
+    def test_clean_json_response_removes_single_line_fence(self):
+        """A single-line fenced payload (no newline after the opening fence)
+        must keep its JSON intact. A greedy info-string class swallowed the
+        whole payload here before the pattern was tightened."""
+        assert clean_json_response('```{"a": 1}```') == '{"a": 1}'
+
+    def test_clean_json_response_removes_single_line_fence_with_info_string(self):
+        """Same regression with an info string followed by a space instead
+        of a newline."""
+        assert clean_json_response('```json {"key": "value"}```') == '{"key": "value"}'
+
     def test_clean_json_response_strips_whitespace(self):
         """Test that leading/trailing whitespace is stripped."""
         input_str = '  \n  {"key": "value"}  \n  '
