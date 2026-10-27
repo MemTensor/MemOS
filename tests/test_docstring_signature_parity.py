@@ -27,11 +27,10 @@ from memos.reranker.concat import concat_original_source
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _function_def_in_class(func, file_path: Path) -> ast.FunctionDef | None:
+def _function_def_in_class(func, file_path: Path) -> ast.FunctionDef:
     """Parse the source file and return the ``__init__``/``def`` whose name
-    matches ``func.__name__``. For class methods the search is scoped to the
-    class whose name matches ``func.__qualname__.split('.')[-2]``; for module
-    functions it falls back to module-scope search.
+    matches ``func.__name__``, scoped to the class whose name matches
+    ``func.__qualname__.split('.')[-2]``.
     """
     tree = ast.parse(file_path.read_text(encoding="utf-8"))
     qualname_parts = func.__qualname__.split(".")
@@ -44,15 +43,10 @@ def _function_def_in_class(func, file_path: Path) -> ast.FunctionDef | None:
                 for item in node.body:
                     if isinstance(item, ast.FunctionDef) and item.name == target_name:
                         return item
-        return None
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == target_name:
-            return node
     return None
 
 
-def _function_def_for_module_func(func, file_path: Path) -> ast.FunctionDef | None:
+def _function_def_for_module_func(func, file_path: Path) -> ast.FunctionDef:
     """Locate a module-level function by name."""
     tree = ast.parse(file_path.read_text(encoding="utf-8"))
     for node in tree.body:
@@ -78,7 +72,13 @@ def _signature_param_names(func) -> set[str]:
     else:
         node = _function_def_for_module_func(func, file_path)
     if node is None:
-        return set()
+        # A silent empty-set return here would make both diff sets empty by
+        # construction, so the parity assertions below could never fail —
+        # the opposite of the "fail loudly" contract in the module docstring.
+        raise AssertionError(
+            f"Could not locate an AST definition for {func.__qualname__} in {file_path}; "
+            "docstring/signature parity was not actually verified"
+        )
     args = node.args
     params: set[str] = set()
     params.update(p.arg for p in args.posonlyargs)
@@ -92,7 +92,9 @@ def _signature_param_names(func) -> set[str]:
 
 def _docstring_param_names(func) -> set[str]:
     doc = func.__doc__ or ""
-    args_match = re.search(r"Args:\s*\n(.*?)(?:\n\s*\n|\n\s*Returns:|\n\s*Raises:|\Z)", doc, re.DOTALL)
+    args_match = re.search(
+        r"Args:\s*\n(.*?)(?:\n\s*\n|\n\s*Returns:|\n\s*Raises:|\Z)", doc, re.DOTALL
+    )
     if not args_match:
         return set()
     block = args_match.group(1)
