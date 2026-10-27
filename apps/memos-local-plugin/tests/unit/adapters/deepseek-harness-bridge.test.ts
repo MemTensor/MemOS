@@ -110,6 +110,61 @@ const session: DshSessionLike = {
 };
 
 describe("DeepSeek Harness bridge", () => {
+  it.each([undefined, "standard", "research"])(
+    "uses the configured memory profile for recall and capture with preset %s",
+    async (preset) => {
+      const core = makeCore();
+      const bridge = makeBridge(core);
+      const current = {
+        id: `preset-${preset ?? "headless"}`,
+        header: {
+          cwd: "/workspace/project",
+          ...(preset ? { agentPreset: preset } : {}),
+        },
+      };
+      bridge.onSessionEvent(current, {
+        type: "turn/start",
+        seq: 0,
+        time: 100,
+        data: { turn: 1 },
+      });
+      const prompt = userMessage("Synthetic memory lookup");
+      await bridge.beforeStep(
+        {
+          agent: { id: current.id, session: current },
+          messages: [prompt],
+          turn: 1,
+          step: 1,
+          signal: new AbortController().signal,
+        },
+        async () => ({ kind: "enter", messages: [prompt] }),
+      );
+      bridge.onSessionEvent(current, {
+        type: "assistant/message",
+        seq: 1,
+        time: 110,
+        data: {
+          turn: 1,
+          message: { content: [{ type: "text", text: "Synthetic answer" }] },
+        },
+      });
+      bridge.onSessionEvent(current, {
+        type: "turn/end",
+        seq: 2,
+        time: 120,
+        data: { turn: 1, reason: { kind: "completed" } },
+      });
+      await bridge.flush(current.id);
+      const scoped = expect.objectContaining({
+        namespace: expect.objectContaining({ profileId: "web" }),
+      });
+      expect(core.searchMemory).toHaveBeenCalledWith(scoped, expect.anything());
+      expect(core.prepareTurn).toHaveBeenCalledWith(scoped);
+      expect(core.onTurnEnd).toHaveBeenCalledWith(scoped);
+      await bridge.closeSession(current);
+    },
+  );
+
   it("prefers the persisted request route and falls back to agent defaults", () => {
     const routedSession: DshSessionLike = {
       id: "route-session",

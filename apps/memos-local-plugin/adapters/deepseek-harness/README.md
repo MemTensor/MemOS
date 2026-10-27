@@ -320,7 +320,7 @@ deep-merging keys, so keep every field when overriding one.
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Mount or disable the adapter. |
-| `profileId` | `default` | Fallback namespace; a non-empty session `agentPreset` overrides it consistently for recall, capture, and tools. |
+| `profileId` | `default` | Stable memory namespace for recall, capture, tools and Viewer; independent of session `agentPreset`. |
 | `home` | `''` | Empty means `$DSH_HOME/memos-plugin` (default `~/.dsh/memos-plugin`); otherwise an absolute or `~`-relative runtime root. |
 | `recallEnabled` | `true` | Run one automatic recall for every accepted, non-empty direct-user turn. Re-entry within the same logical turn is de-duplicated; there is no greeting or restored-session exception. |
 | `captureEnabled` | `true` | Capture completed DSH turns and tool outcomes. |
@@ -487,14 +487,46 @@ rephrased, or explicitly scoped follow-up lookup. Automatic recall and
 `memos_search` use the same absolute deadline (`min(recallTimeoutMs, 3000)` ms)
 and DSH-specific no-malformed-retry filter policy. When tools
 are disabled, the system-prompt guidance omits the tool suggestion. Automatic
-recall, capture, and all explicit tools use the same `agentPreset`-aware
-namespace resolver.
+recall, capture, and all explicit tools use the configured `profileId` through
+the same namespace resolver. Changing `agentPreset` changes agent behavior,
+not memory ownership, so Web UI and headless sessions can recall each other's
+memories when configured with the same memory profile.
 
-The default runtime home is shared across DSH profiles and the fallback
-`profileId` is `default`. If multiple profiles point at that same home and a
-session has no distinct `agentPreset`, they intentionally share a namespace.
-Set a unique `profileId` per profile (or a separate `home`) when that sharing is
-not desired.
+The default runtime home is shared across DSH profiles and the default memory
+`profileId` is `default`. Profiles using the same home and memory profile ID
+intentionally share memories. Set a unique `profileId` per profile (or a
+separate `home`) when that sharing is not desired.
+
+### Legacy preset ownership
+
+Earlier versions treated the session's `agentPreset` (e.g. `standard`) as the
+memory profile. Those records remain in their original namespace after this
+fix; they are not automatically shared or moved. If that namespace was meant
+to be separate, keep it separate by configuring its explicit `profileId`.
+
+To reunite accidental preset partitions, stop DSH and **all** other writers to
+the same database, then run the packaged repair tool from the plugin directory:
+
+```sh
+# Read-only counts for exactly one source profile; no changes or backup yet.
+node scripts/migrate-dsh-preset-profile.mjs --db /path/to/memos.db --from standard --to default
+# Apply only after checking the source/target. The backup path must not exist.
+node scripts/migrate-dsh-preset-profile.mjs --db /path/to/memos.db --from standard --to default --apply --backup /path/to/memos-before-preset-repair.db
+```
+
+Use the actual configured memory profile as `--to`; do not blindly merge every
+profile into `default`. The tool changes only DSH-owned records from the named
+source profile. It uses SQLite backup (including committed WAL data), then one
+transaction across ownership tables, preserving IDs, vectors, sharing scopes
+and references. Routing metadata in sessions/episodes is updated too. Any
+constraint conflict, such as an existing skill name, rolls back all changes
+and leaves the backup intact. Historical audit payload text is not rewritten.
+
+Use a runtime compatible with the installed `better-sqlite3` binary. For a
+DSH install compiled for Electron, run the script with DSH's executable and
+`ELECTRON_RUN_AS_NODE=1`, as shown in the package README's Windows validation
+example. Restart DSH after a successful repair. To revert, stop all writers
+and restore the backup as the database; do not mix it with newer WAL/SHM files.
 
 ## Failure behavior
 

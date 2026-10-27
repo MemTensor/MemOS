@@ -15,6 +15,7 @@ import type {
 } from "../../agent-contract/dto.js";
 import type { MemoryCore } from "../../agent-contract/memory-core.js";
 import type { DeepSeekHarnessLlmRoute } from "./host-llm.js";
+import { deepSeekHarnessNamespace } from "./namespace.js";
 import { waitForDeepSeekHarnessDeadline } from "./deadline.js";
 
 export const DEEPSEEK_HARNESS_AGENT = "deepseek-harness";
@@ -386,17 +387,7 @@ export class DeepSeekHarnessBridge {
   }
 
   namespaceFor(session: DshSessionLike): RuntimeNamespace {
-    const preset = session.header?.["agentPreset"];
-    const profileId = typeof preset === "string" && preset.trim()
-      ? preset.trim()
-      : this.profileId;
-    return {
-      agentKind: DEEPSEEK_HARNESS_AGENT,
-      profileId,
-      profileLabel: profileId,
-      workspacePath: session.header?.cwd,
-      sessionKey: session.id,
-    };
+    return deepSeekHarnessNamespace(session, this.profileId);
   }
 
   async flush(sessionId?: string): Promise<void> {

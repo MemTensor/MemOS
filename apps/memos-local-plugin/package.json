@@ -39,6 +39,7 @@
     "templates/README.user.md",
     "viewer/dist",
     "scripts/postinstall.cjs",
+    "scripts/migrate-dsh-preset-profile.mjs",
     "scripts/sync-hermes-version.cjs",
     "install.sh",
     "install.ps1",
