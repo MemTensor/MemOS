@@ -170,6 +170,45 @@ function validationIssue(
       };
     }
   }
+  if (kind === "worldModel" && row.structure != null) {
+    const structure = row.structure as RecordRow;
+    if (typeof structure !== "object" || Array.isArray(structure)) {
+      return {
+        field: "structure",
+        code: "invalid_field",
+        message: "structure must be an object.",
+      };
+    }
+    for (const facet of ["environment", "inference", "constraints"]) {
+      const entries = structure[facet];
+      if (entries === undefined) continue;
+      if (
+        !Array.isArray(entries) ||
+        entries.some((entry) => {
+          // Earlier exports used plain strings. Preserve those as well as the
+          // current labelled entries rather than silently discarding evidence.
+          if (typeof entry === "string") return false;
+          if (!entry || typeof entry !== "object" || Array.isArray(entry))
+            return true;
+          return (
+            typeof entry.label !== "string" ||
+            typeof entry.description !== "string" ||
+            (entry.evidenceIds !== undefined &&
+              (!Array.isArray(entry.evidenceIds) ||
+                entry.evidenceIds.some(
+                  (id: unknown) => typeof id !== "string",
+                )))
+          );
+        })
+      ) {
+        return {
+          field: `structure.${facet}`,
+          code: "invalid_field",
+          message: `structure.${facet} must contain strings or labelled entries with optional string evidenceIds.`,
+        };
+      }
+    }
+  }
   if (row.share != null) {
     const share = row.share as RecordRow;
     if (
@@ -206,6 +245,50 @@ function ownerFor(
     ownerWorkspaceId:
       (row.ownerWorkspaceId as string | null) ?? fallback.ownerWorkspaceId,
   };
+}
+
+type ParentState = {
+  sessions: Map<string, Owner>;
+  episodes: Map<string, Owner & { sessionId: string }>;
+};
+
+function conflictingParent(
+  row: RecordRow & Owner,
+  repos: Repos,
+  planned: ParentState,
+): Omit<MemoryImportIssue, "index" | "kind"> | undefined {
+  const sessionId = row.sessionId as string;
+  const episodeId = row.episodeId as string;
+  const episode =
+    planned.episodes.get(episodeId) ??
+    repos.episodes.getById(episodeId as EpisodeId);
+  if (episode && episode.sessionId !== sessionId) {
+    return {
+      field: "sessionId",
+      code: "conflicting_parent",
+      message: "sessionId does not match the existing episode's session.",
+    };
+  }
+  const session =
+    planned.sessions.get(sessionId) ??
+    repos.sessions.getById(sessionId as TraceDTO["sessionId"]);
+  for (const [field, parent] of [
+    ["sessionId", session],
+    ["episodeId", episode],
+  ] as const) {
+    if (
+      parent &&
+      ((parent.ownerAgentKind ?? "unknown") !== row.ownerAgentKind ||
+        (parent.ownerProfileId ?? "default") !== row.ownerProfileId)
+    ) {
+      return {
+        field,
+        code: "conflicting_parent",
+        message: `${field} belongs to another memory owner.`,
+      };
+    }
+  }
+  return undefined;
 }
 
 /** Import each row atomically; a rejected trace must not leave synthetic parents behind. */
@@ -268,6 +351,7 @@ export async function importMemoryBundle(
     dryRun: options.dryRun === true,
     issues: [],
   };
+  const planned: ParentState = { sessions: new Map(), episodes: new Map() };
   const issue = (value: MemoryImportIssue) => {
     if (result.issues.length < 50) result.issues.push(value);
   };
@@ -321,10 +405,29 @@ export async function importMemoryBundle(
             continue;
           }
           const owner = ownerFor(raw, fallback, options);
-          const row = { ...raw, ...owner };
+          const row: RecordRow & Owner = { ...raw, ...owner };
+          const conflict =
+            kind === "trace"
+              ? conflictingParent(row, repos, planned)
+              : undefined;
+          if (conflict) {
+            result.invalid++;
+            result.skipped++;
+            issue({ kind, index, ...conflict });
+            continue;
+          }
           try {
             if (!options.dryRun) db.tx(() => insertRow(kind, row, repos));
             ids.add(id);
+            if (kind === "trace") {
+              // Preview must resolve later rows against the same accepted
+              // parents as a real import, including across batch boundaries.
+              planned.sessions.set(row.sessionId as string, owner);
+              planned.episodes.set(row.episodeId as string, {
+                ...owner,
+                sessionId: row.sessionId as string,
+              });
+            }
             result.imported++;
             if (isVisibleTo(row, namespace)) result.visible++;
             else result.hidden++;
@@ -477,7 +580,11 @@ function insertRow(kind: Kind, raw: RecordRow & Owner, repos: Repos): void {
       id: dto.id,
       title: dto.title,
       body: dto.body,
-      structure: { environment: [], inference: [], constraints: [] },
+      structure: {
+        environment: dto.structure?.environment ?? [],
+        inference: dto.structure?.inference ?? [],
+        constraints: dto.structure?.constraints ?? [],
+      },
       domainTags: [],
       confidence: 0.5,
       policyIds: dto.policyIds ?? [],

@@ -360,6 +360,13 @@ Preview counts are estimates: database write failures can only be reported
 on the real import. A rejected trace rolls back its synthetic session and
 episode. Use **Repair embeddings** after import to enable semantic retrieval
 for imported rows; JSON bundles do not contain embedding vectors.
+API callers should use `POST /api/v1/embeddings/rebuild` with
+`{"mode":"repair","limit":100}` and repeat batches until `done` is true;
+`Repair embeddings` is the Viewer button label, not an `/embeddings/repair` route.
+
+DSH memory ownership follows the configured `profileId`, independently of
+agent presets. See [legacy preset ownership repair](adapters/deepseek-harness/README.md#legacy-preset-ownership)
+for explicitly migrating older `standard`/other preset partitions after backup.
 
 ### Docker Deployment
 
