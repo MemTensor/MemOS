@@ -4,21 +4,24 @@ import re
 
 from typing import Any
 
-
-# Strip the outer markdown fences from an LLM JSON response. The opening
-# fence may include any info string (``json`` or otherwise); the closing
-# fence is bare. Both patterns are anchored so interior triple-backtick
-# sequences inside a JSON string value are preserved verbatim (issue
-# #2420 — suggestions/responses that contained code snippets were being
-# silently corrupted before ``json.loads``).
-_JSON_FENCE_OPEN_RE = re.compile(r"^```[^\n`]*\n?")
-_JSON_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
-
 from memos.log import get_logger
 from memos.memories.activation.item import KVCacheItem
 
 
 logger = get_logger(__name__)
+
+
+# Strip the outer markdown fences from an LLM JSON response. The opening
+# fence may include a short info string (``json`` or otherwise) optionally
+# surrounded by blanks; the closing fence is bare. Both patterns are
+# anchored so interior triple-backtick sequences inside a JSON string value
+# are preserved verbatim (issue #2420 — suggestions/responses that
+# contained code snippets were being silently corrupted before
+# ``json.loads``). The info string is restricted to a real identifier so a
+# single-line fenced payload (````` ```{"a": 1}``` `````, no newline after
+# the fence) is not swallowed by a greedy character class.
+_JSON_FENCE_OPEN_RE = re.compile(r"^```[ \t]*[A-Za-z0-9_+-]*[ \t]*\n?")
+_JSON_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
 
 
 def extract_node_name(memory: str) -> str:
