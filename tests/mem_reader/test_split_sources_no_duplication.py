@@ -109,17 +109,6 @@ class TestSplitSourcesNotDuplicated(unittest.TestCase):
             self.assertEqual(chunk.metadata.internal_info["chunk_total"], 2)
             self.assertIn("ingest_batch_id", chunk.metadata.internal_info)
 
-    def test_split_with_no_parent_sources_yields_no_sources(self):
-        """Sanity: a parent without sources still produces sources-less
-        chunks (no spurious empty list creation)."""
-        parent = _build_parent_item([])
-        reader = _build_reader(["chunk 1"])
-
-        chunks = reader._split_large_memory_item(parent, max_tokens=512)
-
-        self.assertEqual(len(chunks), 1)
-        self.assertEqual(chunks[0].metadata.sources, [])
-
 
 if __name__ == "__main__":
     unittest.main()

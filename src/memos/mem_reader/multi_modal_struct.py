@@ -160,8 +160,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     "chunk_total": chunk_total,
                 }
                 # Create a new memory item for each chunk, preserving original
-                # metadata. We drop the parent's ``sources`` list deliberately:
-                # the parent already carries those source messages, and chunks
+                # metadata. We pass an empty ``sources`` list deliberately: the
+                # parent already carries those source messages, and chunks
                 # are *derived* fragments — not original messages — so they
                 # should not multiply the full source list (issue #2453, which
                 # produced N byte-identical ``SourceMessage`` copies per chunk
@@ -175,6 +175,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     memory_type=item.metadata.memory_type,
                     tags=item.metadata.tags or [],
                     key=item.metadata.key,
+                    sources=[],
                     background=item.metadata.background or "",
                     need_embed=False,
                 )
