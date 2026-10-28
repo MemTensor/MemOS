@@ -41,13 +41,19 @@ interface SpawnResult {
 
 function spawnBridge(
   args: readonly string[],
-  options: { home: string; timeoutMs: number },
+  options: {
+    home: string;
+    timeoutMs: number;
+    /** Extra environment overrides (e.g. MEMOS_HOME). */
+    env?: Record<string, string>;
+  },
 ): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [BRIDGE_MJS, ...args], {
       env: {
         ...process.env,
         HOME: options.home,
+        ...options.env,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -123,6 +129,52 @@ describe("Issue #1736 — bridge ESM entry boots without CJS 'exports' error", (
         reachedEsmPath,
         `bridge did not reach the post-trampoline path; stderr was:\n${result.stderr}`,
       ).toBe(true);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+describe("Issue #2399 — ESM bridge entry initializes file logging sinks", () => {
+  it("dist/bridge.mjs startup creates the config.logging file sinks under <home>/logs", async () => {
+    // The build step is a precondition for this test (same contract as the
+    // #1736 case above): skip silently when the artifact is missing.
+    if (!fs.existsSync(BRIDGE_MJS)) {
+      return;
+    }
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "memos-2399-"));
+    try {
+      // Pass the runtime home explicitly and pin it through both channels —
+      // MEMOS_HOME is what clobbers any developer shell export, and it
+      // outranks the --home flag in resolveHome's precedence (see
+      // core/config/paths.ts) — so the assertion target is deterministic:
+      // resolveHome("hermes", home).root === home, hence
+      // home.logsDir === <home>/logs.
+      const result = await spawnBridge(
+        ["--agent=hermes", "--no-viewer", `--home=${home}`],
+        { home, timeoutMs: 8_000, env: { MEMOS_HOME: home } },
+      );
+
+      // Environment tolerance, mirroring the #1736 test above: a missing
+      // better-sqlite3 native binding kills the bridge in a clean sandbox
+      // and is unrelated to this issue.
+      const combined = `${result.stdout}\n${result.stderr}`;
+      if (combined.includes("Could not locate the bindings file")) {
+        return;
+      }
+
+      // The standalone ESM entry owns its stdio and must therefore bootstrap
+      // the global logger from config.logging — the legacy CJS entry
+      // (bridge.cts) already passes `initLogging: true`, but bridge.mts never
+      // did. Because the transports open their files eagerly during
+      // initLogger (before any downstream work), the sinks are a
+      // deterministic post-fix marker: no timing sensitivity.
+      expect(
+        fs.existsSync(path.join(home, "logs", "memos.log")),
+        `expected a file sink at ${path.join(home, "logs", "memos.log")} after startup; stderr:\n${result.stderr}`,
+      ).toBe(true);
+      expect(fs.existsSync(path.join(home, "logs", "error.log"))).toBe(true);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
