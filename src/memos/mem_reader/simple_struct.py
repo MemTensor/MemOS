@@ -86,6 +86,13 @@ SceneDataInput: TypeAlias = (
 
 
 logger = log.get_logger(__name__)
+
+# Sentence terminators used when picking a hard-split boundary. CJK terminators are
+# included because the default ``sentence`` chunker (chonkie) does not recognise them,
+# so long Chinese paragraphs can reach this fallback intact.
+_SPLIT_PUNCT_CHARS = frozenset("。！？；!?;\n…")
+_SPLIT_TRAILING_CHARS = frozenset("\"'”’）)】」』]")
+
 PROMPT_DICT = {
     "chat": {
         "en": SIMPLE_STRUCT_MEM_READER_PROMPT,
@@ -217,6 +224,118 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     def set_searcher(self, searcher: "Searcher | None") -> None:
         self.searcher = searcher
 
+    def _count_tokens_safe(self, text: str) -> int:
+        """Token-count helper that tolerates partially-mocked readers.
+
+        Tests and embedders sometimes construct a reader without a live tokenizer; falling
+        back to a cheap character estimate keeps the budget logic usable instead of
+        raising ``AttributeError``.
+        """
+        counter = getattr(self, "_count_tokens", None)
+        if counter is None:
+            return len(text or "")
+        return counter(text)
+
+    def _get_embed_budget(self) -> int:
+        """Return the largest token count that is safe to hand to the embedder.
+
+        The split budget is the minimum of the configured chat window and the embedder's
+        own per-item limit. Without this, an item in the
+        ``(embedder limit, chat_window_max_tokens]`` band is neither split nor embeddable
+        and ends up stored without a vector (issue #2461).
+
+        The embedder limit is only honoured when it is a real positive integer, which keeps
+        mocked embedders (``MagicMock``) behaving as if no limit were configured.
+        """
+        window = getattr(self, "chat_window_max_tokens", None)
+        budget = window if isinstance(window, int) and window > 0 else 1024
+
+        embedder_config = getattr(self.embedder, "config", None)
+        embedder_limit = getattr(embedder_config, "max_tokens", None)
+        if (
+            isinstance(embedder_limit, int)
+            and not isinstance(embedder_limit, bool)
+            and embedder_limit > 0
+        ):
+            budget = min(budget, embedder_limit)
+        return budget
+
+    def _find_hard_split_index(self, text: str, budget: int) -> int:
+        """Return the length of the first piece of ``text`` that fits within ``budget``.
+
+        Binary-searches the largest prefix whose token count is ``<= budget``, then prefers
+        to cut at the last sentence terminator inside that prefix so the split lands on a
+        natural boundary instead of mid-word. Always returns a value in ``[1, len(text))``
+        so callers make progress and terminate.
+        """
+        if budget <= 0:
+            return 1
+
+        low, high = 1, len(text)
+        best = 0
+        while low <= high:
+            mid = (low + high) // 2
+            if self._count_tokens_safe(text[:mid]) <= budget:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        if best <= 0:
+            # Even one character exceeds the budget; still make progress.
+            return 1
+        if best >= len(text):
+            return len(text)
+
+        # Prefer the last punctuation boundary within the largest half of the window. The
+        # search stays inside the fitting prefix so the returned index never slips a
+        # terminator just past the budget — a +1 overshoot is enough to make the
+        # provider reject the payload (issue #2461).
+        scan_end = min(best, len(text))
+        lower_bound = max(best // 2, 1)
+        for idx in range(scan_end, lower_bound - 1, -1):
+            char = text[idx - 1]
+            if char in _SPLIT_PUNCT_CHARS:
+                return idx
+            # Trailing quote/bracket right after a terminator: keep it on the left side.
+            if char in _SPLIT_TRAILING_CHARS and idx >= 2 and text[idx - 2] in _SPLIT_PUNCT_CHARS:
+                return idx
+        return best
+
+    def _hard_split_text(self, text: str, budget: int) -> list[str]:
+        """Split ``text`` into pieces each within ``budget`` tokens.
+
+        This is the last-resort guarantee behind :meth:`_split_large_memory_item`: it makes
+        no assumption about the chunker having honoured the budget. Pieces are cut at
+        punctuation where possible and by binary-searched character window otherwise.
+        """
+        if not text:
+            return []
+        budget = budget if budget and budget > 0 else 1
+
+        pieces: list[str] = []
+        remaining = text
+        # Each iteration consumes at least one character, so this terminates.
+        while remaining:
+            if self._count_tokens_safe(remaining) <= budget:
+                pieces.append(remaining)
+                break
+            cut = self._find_hard_split_index(remaining, budget)
+            cut = max(1, min(cut, len(remaining) - 1))
+            pieces.append(remaining[:cut])
+            remaining = remaining[cut:]
+
+        return [piece for piece in pieces if piece.strip()]
+
+    def _truncate_to_budget(self, text: str, budget: int) -> str:
+        """Truncate ``text`` to at most ``budget`` tokens (best-effort prefix)."""
+        if not text or budget <= 0:
+            return text
+        if self._count_tokens_safe(text) <= budget:
+            return text
+        cut = self._find_hard_split_index(text, budget)
+        return text[: max(1, cut)]
+
     def _make_memory_item(
         self,
         value: str,
@@ -244,7 +363,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 status="activated",
                 tags=tags or [],
                 key=key if key is not None else derive_key(value),
-                embedding=self.embedder.embed([value])[0] if need_embed else None,
+                embedding=self._embed_text(value) if need_embed else None,
                 usage=[],
                 sources=sources or [],
                 background=background,
@@ -255,7 +374,38 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             ),
         )
 
+    def _embed_text(self, value: str) -> list[float] | None:
+        """Embed a single text, truncating it to the embedder budget first.
+
+        Returns ``None`` when the embedder fails even on the truncated text, so callers
+        store the item without a vector instead of raising. The truncation is a safety net
+        for texts that slipped past the splitter; it is logged so the degradation is
+        observable rather than silent (issue #2461).
+        """
+        text = value or ""
+        budget = self._get_embed_budget()
+        payload = self._truncate_to_budget(text, budget)
+        if payload != text:
+            logger.warning(
+                "[EMBED_TRUNCATE] text exceeded embedder budget (%d tokens > budget %d); "
+                "embedding truncated prefix of %d chars",
+                self._count_tokens_safe(text),
+                budget,
+                len(payload),
+            )
+        try:
+            return self.embedder.embed([payload])[0]
+        except Exception as e:
+            logger.error(
+                "[EMBED_FAIL] Failed to embed text of %d tokens (budget %d): %s",
+                self._count_tokens_safe(text),
+                budget,
+                e,
+            )
+            return None
+
     def _safe_generate(self, messages: list[dict]) -> str | None:
+        """Generate a response, swallowing provider errors as ``None``."""
         try:
             return self.llm.generate(messages)
         except Exception:
