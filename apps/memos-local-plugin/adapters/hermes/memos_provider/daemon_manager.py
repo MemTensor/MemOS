@@ -185,25 +185,60 @@ def _bridge_command(*, daemon: bool, runtime_home: Path | None = None) -> list[s
 
 
 def _rebuild_if_stale() -> bool:
-    """Run `npm run build` if any TypeScript source is newer than dist/bridge.cjs.
+    """Run ``npm run build`` if any compiled bridge entry is older than its sources.
 
-    Returns True if the binary is current or the build succeeded.
-    Returns False if the build failed — caller should continue with
-    the existing binary rather than blocking gateway startup.
+    The compiled candidates mirror :func:`_bridge_script`'s precedence
+    (``dist/bridge.mjs`` and ``dist/bridge.cjs``). The guard rebuilds
+    when any compiled entry that currently exists on disk is older than
+    the newest ``*.ts`` source under ``_plugin_root()``, so a partial
+    build that only refreshed one artifact — or a stale ESM entry next
+    to a fresh CJS entry (issue #2470) — no longer slips through. A
+    missing ``dist/`` is also treated as stale.
+
+    Returns True if every compiled entry is current or the build
+    succeeded. Returns False if the build failed — callers should
+    continue with the existing binary rather than blocking gateway
+    startup.
     """
     plugin_root = _plugin_root()
-    compiled = plugin_root / "dist" / "bridge.cjs"
+    # Keep this tuple in sync with the compiled candidates in
+    # `_bridge_script()` / `bridge_client._bridge_script()`. The source
+    # entries (`bridge.mts`, `bridge.cts`) are intentionally excluded —
+    # they are development inputs, not artifacts the build produces.
+    compiled_candidates = (
+        plugin_root / "dist" / "bridge.mjs",
+        plugin_root / "dist" / "bridge.cjs",
+    )
+    existing = [p for p in compiled_candidates if p.exists()]
+    # Exclude the `dist/` subtree from the source scan: `tsconfig.json`
+    # has `"declaration": true` + `"outDir": "dist"`, so each successful
+    # build writes `.d.ts` declaration files under `dist/` whose mtimes
+    # would otherwise be picked up by `rglob("*.ts")` and inflate
+    # `newest_source` past the compiled artifacts, triggering a spurious
+    # rebuild on the very next startup (and so on in a loop).
+    dist_dir = plugin_root / "dist"
+    newest_source = max(
+        (p.stat().st_mtime for p in plugin_root.rglob("*.ts") if dist_dir not in p.parents),
+        default=0.0,
+    )
 
-    if compiled.exists():
-        compiled_mtime = compiled.stat().st_mtime
-        newest_source = max(
-            (p.stat().st_mtime for p in plugin_root.rglob("*.ts")),
-            default=0.0,
-        )
-        if newest_source <= compiled_mtime:
+    if existing:
+        compiled_mtimes = {p: p.stat().st_mtime for p in existing}
+        # Rebuild when *any* existing compiled entry is older than the
+        # newest source — the stricter variant from issue #2470 covers
+        # partial builds that leave one artifact fresh and the other
+        # stale.
+        if newest_source <= min(compiled_mtimes.values()):
             return True
+        # Mirror the guard's "not fresh" expression (`newest_source <= m`
+        # ⇒ fresh) so the logged `trigger` list stays consistent with the
+        # rebuild decision above.
+        stale_names = sorted(p.name for p, m in compiled_mtimes.items() if not (newest_source <= m))
+        trigger = ", ".join(f"dist/{n}" for n in stale_names) or "dist/bridge.*"
+        logger.info("MemOS: TypeScript source newer than %s — rebuilding...", trigger)
+    else:
+        logger.info("MemOS: no compiled bridge entry under dist/ — building...")
 
-    logger.info("MemOS: TypeScript source newer than dist/bridge.cjs — rebuilding...")
     npm = shutil.which("npm")
     if not npm:
         logger.warning("MemOS: npm not found on PATH; skipping bridge rebuild")
