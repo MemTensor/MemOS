@@ -1,0 +1,54 @@
+name: OpenClaw Cloud Plugin — Historical Dry Run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  # Historical integration may use Doc Agent secrets only from the protected
+  # default branch and never receives a write-capable token.
+  contents: read
+
+jobs:
+  historical-dry-run:
+    name: ${{ matrix.expected_previous_tag }}..${{ matrix.expected_current_ref }}
+    if: ${{ github.repository == 'MemTensor/MemOS-Cloud-OpenClaw-Plugin' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: "0.1.15"
+            expected_previous_tag: "v0.1.14"
+            expected_current_ref: "v0.1.15"
+          - version: "0.1.16"
+            expected_previous_tag: "v0.1.15"
+            expected_current_ref: "v0.1.16"
+          - version: "0.1.17"
+            expected_previous_tag: "v0.1.16"
+            expected_current_ref: "v0.1.17"
+          - version: "0.1.18"
+            expected_previous_tag: "v0.1.17"
+            expected_current_ref: "v0.1.18"
+          - version: "0.1.19"
+            expected_previous_tag: "v0.1.18"
+            expected_current_ref: "v0.1.19"
+    uses: ./.github/workflows/release-dry-run.yml
+    with:
+      version: ${{ matrix.version }}
+      tag: "latest"
+      git_ref: ""
+      release_notes: ""
+      dry_run: true
+      recover_existing_npm_release: false
+      enforce_source_version: false
+      artifact_name: openclaw-cloud-plugin-release-inspection-${{ matrix.version }}
+      expected_previous_tag: ${{ matrix.expected_previous_tag }}
+      expected_current_ref: ${{ matrix.expected_current_ref }}
+    secrets:
+      DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL }}
+      DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
+      DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
+      MEMOS_ARMS_ENDPOINT: ${{ secrets.MEMOS_ARMS_ENDPOINT }}
+      MEMOS_ARMS_PID: ${{ secrets.MEMOS_ARMS_PID }}
+      MEMOS_ARMS_ENV: ${{ secrets.MEMOS_ARMS_ENV }}

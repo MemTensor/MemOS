@@ -18,6 +18,7 @@
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import { rootLogger } from "../logger/index.js";
 import type { Logger } from "../logger/types.js";
+import { extractRetryDiagnostics } from "../util/retry-after.js";
 import { getHostLlmBridge } from "./host-bridge.js";
 import { buildJsonSystemHint, parseLlmJson } from "./json-mode.js";
 import { AnthropicLlmProvider } from "./providers/anthropic.js";
@@ -260,12 +261,28 @@ export function createLlmClientWithProvider(
     return [{ role: "system", content: systemInsert }, ...messages];
   }
 
+  function ensureJsonWordInUserMessage(messages: LlmMessage[]): LlmMessage[] {
+    const lastUserIdx = messages.map((m) => m.role).lastIndexOf("user");
+    if (lastUserIdx < 0) return [...messages, { role: "user", content: "Return valid json only." }];
+
+    const msg = messages[lastUserIdx];
+    if (/\bjson\b/i.test(msg.content)) return messages;
+
+    const out = messages.slice();
+    out[lastUserIdx] = {
+      ...msg,
+      content: `${msg.content}\n\nReturn valid json only.`,
+    };
+    return out;
+  }
+
   function buildCallInput(opts: LlmCallOptions | undefined, jsonMode: boolean): ProviderCallInput {
     return {
       temperature: opts?.temperature ?? config.temperature,
       maxTokens: opts?.maxTokens ?? config.maxTokens ?? DEFAULT_MAX_TOKENS,
       jsonMode,
       stop: opts?.stop,
+      op: opts?.op,
     };
   }
 
@@ -277,6 +294,7 @@ export function createLlmClientWithProvider(
       },
       log: pLog,
       signal: opts?.signal,
+      deadlineAt: opts?.deadlineAt,
     };
   }
 
@@ -338,23 +356,25 @@ export function createLlmClientWithProvider(
             notifyError: true,
           });
         } catch (hostErr) {
+          const normalizedHostErr = normalizeError(hostErr, ERROR_CODES.LLM_UNAVAILABLE, "host fallback failed");
           failures++;
-          const failAt = markFail(hostErr);
+          const failAt = markFail(normalizedHostErr);
           facadeLog.error("host.fallback_failed", {
             primary: summarizeErr(err),
-            host: summarizeErr(hostErr),
+            host: summarizeErr(normalizedHostErr),
           });
           // Primary AND host bridge both failed. Trip on a terminal
           // primary error (the one the operator typically needs to fix
           // — host bridge failures are usually transient stdio issues).
           if (breakerIsTerminal(err)) breakerTrip(err);
-          notifyOnError(hostErr);
+          notifyOnError(normalizedHostErr);
           notifyStatus({
             status: "error",
             provider: provider.name,
             model: config.model,
-            message: summarizeErrMessage(hostErr),
-            code: hostErr instanceof MemosError ? hostErr.code : undefined,
+            message: summarizeErrMessage(normalizedHostErr),
+            code: normalizedHostErr.code,
+            ...extractRetryDiagnostics(normalizedHostErr.details),
             at: failAt,
             durationMs: Date.now() - startedAt,
             fallbackProvider: "host",
@@ -362,12 +382,7 @@ export function createLlmClientWithProvider(
             episodeId: opts?.episodeId,
             phase: opts?.phase,
           });
-          throw hostErr instanceof MemosError
-            ? hostErr
-            : new MemosError(
-                ERROR_CODES.LLM_UNAVAILABLE,
-                `host fallback failed: ${(hostErr as Error).message ?? String(hostErr)}`,
-              );
+          throw normalizedHostErr;
         }
       }
       failures++;
@@ -380,6 +395,7 @@ export function createLlmClientWithProvider(
         model: config.model,
         message: summarizeErrMessage(err),
         code: err instanceof MemosError ? err.code : undefined,
+        ...extractRetryDiagnostics(err instanceof MemosError ? err.details : undefined),
         at: failAt,
         durationMs: Date.now() - startedAt,
         op,
@@ -410,6 +426,7 @@ export function createLlmClientWithProvider(
         message: summarizeErrMessage(err),
         code: err instanceof MemosError ? err.code : undefined,
         at: Date.now(),
+        ...extractRetryDiagnostics(err instanceof MemosError ? err.details : undefined),
       });
     } catch {
       /* sink errors are non-fatal */
@@ -429,6 +446,10 @@ export function createLlmClientWithProvider(
     op?: string;
     episodeId?: string;
     phase?: string;
+    retryAfterMs?: number;
+    retryAt?: number;
+    retryDecision?: "wait" | "defer" | "stop";
+    retryReason?: string;
   }): void {
     if (!config.onStatus) return;
     try {
@@ -463,7 +484,7 @@ export function createLlmClientWithProvider(
   ): Promise<LlmCompletion> {
     const messages = normalizeMessages(input);
     const msgsWithJsonHint = opts?.jsonMode
-      ? inject(messages, buildJsonSystemHint())
+      ? ensureJsonWordInUserMessage(inject(messages, buildJsonSystemHint()))
       : messages;
     const call = buildCallInput(opts, opts?.jsonMode === true);
     const { completion } = await callWithFallback(msgsWithJsonHint, call, opts, opts?.op ?? "complete");
@@ -476,7 +497,7 @@ export function createLlmClientWithProvider(
   ): Promise<LlmJsonCompletion<T>> {
     const messages = normalizeMessages(input);
     const systemHint = buildJsonSystemHint(opts.schemaHint);
-    const msgs = inject(messages, systemHint);
+    const msgs = ensureJsonWordInUserMessage(inject(messages, systemHint));
     const call = buildCallInput(opts, true);
     const op = opts.op ?? "complete.json";
     const maxMalformedRetries = Math.max(0, opts.malformedRetries ?? 1);
@@ -601,6 +622,7 @@ export function createLlmClientWithProvider(
         model: config.model,
         message: summarizeErrMessage(err),
         code: err instanceof MemosError ? err.code : undefined,
+        ...extractRetryDiagnostics(err instanceof MemosError ? err.details : undefined),
         at: failAt,
         durationMs: Date.now() - start,
         op: opts?.op ?? "stream",
@@ -654,6 +676,7 @@ export function createLlmClientWithProvider(
       model: config.model,
       message: summarizeErrMessage(primaryErr),
       code: primaryErr instanceof MemosError ? primaryErr.code : undefined,
+      ...extractRetryDiagnostics(primaryErr instanceof MemosError ? primaryErr.details : undefined),
       at: fallbackAt,
       durationMs: completion.durationMs,
       fallbackProvider: "host",
@@ -813,4 +836,22 @@ function summarizeErrMessage(e: unknown): string {
   if (e instanceof MemosError) return `${e.code}: ${e.message}`;
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+function normalizeError(
+  err: unknown,
+  fallbackCode: (typeof ERROR_CODES)[keyof typeof ERROR_CODES],
+  prefix: string,
+): MemosError {
+  if (err instanceof MemosError) return err;
+  if (err instanceof Error) return new MemosError(fallbackCode, `${prefix}: ${err.message}`);
+  if (typeof err === "object" && err !== null) {
+    const record = err as { code?: unknown; message?: unknown; data?: unknown };
+    const code = typeof record.code === "string" ? record.code : fallbackCode;
+    const message = typeof record.message === "string" ? record.message : String(record.data ?? err);
+    return new MemosError(code as (typeof ERROR_CODES)[keyof typeof ERROR_CODES], `${prefix}: ${message}`, {
+      bridgeError: err as Record<string, unknown>,
+    });
+  }
+  return new MemosError(fallbackCode, `${prefix}: ${String(err)}`);
 }

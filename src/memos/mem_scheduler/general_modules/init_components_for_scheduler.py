@@ -87,12 +87,17 @@ def build_llm_config() -> dict[str, Any]:
     Returns:
         Validated LLM configuration dictionary
     """
-    return LLMConfigFactory.model_validate(
-        {
-            "backend": "openai",
-            "config": APIConfig.get_openai_config(),
-        }
-    )
+    return LLMConfigFactory.model_validate(APIConfig.get_scheduler_llm_config())
+
+
+def build_feedback_llm_config() -> dict[str, Any]:
+    """
+    Build feedback LLM configuration.
+
+    Returns:
+        Validated feedback LLM configuration dictionary
+    """
+    return LLMConfigFactory.model_validate(APIConfig.get_feedback_llm_config())
 
 
 def build_chat_llm_config() -> list[dict[str, Any]]:
@@ -257,6 +262,7 @@ def init_components() -> dict[str, Any]:
     # Build component configurations
     graph_db_config = build_graph_db_config()
     llm_config = build_llm_config()
+    feedback_llm_config = build_feedback_llm_config()
     embedder_config = build_embedder_config()
     nli_client_config = build_nli_client_config()
     mem_reader_config = build_mem_reader_config()
@@ -269,6 +275,7 @@ def init_components() -> dict[str, Any]:
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
     llm = LLMFactory.from_config(llm_config)
+    feedback_llm = LLMFactory.from_config(feedback_llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
 
     plugin_manager.discover()
@@ -337,7 +344,7 @@ def init_components() -> dict[str, Any]:
     )
     # Initialize feedback server
     feedback_server = SimpleMemFeedback(
-        llm=llm,
+        llm=feedback_llm,
         embedder=embedder,
         graph_store=graph_db,
         memory_manager=memory_manager,

@@ -27,7 +27,7 @@ export interface ClusterInput {
 }
 
 export interface ClusterDeps {
-  config: Pick<L3Config, "clusterMinSimilarity" | "minPolicies">;
+  config: Pick<L3Config, "clusterMinSimilarity" | "minPolicies" | "maxPoliciesPerCluster">;
 }
 
 // ─── Domain key extraction ─────────────────────────────────────────────────
@@ -60,6 +60,32 @@ const TOOL_REGEXES: Array<{ re: RegExp; tag: string }> = [
 ];
 
 export function domainKeyOf(policy: PolicyRow): { key: PolicyClusterKey; tags: string[] } {
+  // New policies carry structured provenance from their L1 traces. Prefer it
+  // over English-only regexes so Chinese/Japanese policies and tool-heavy
+  // traces do not collapse into the generic `_|_` bucket.
+  if (policy.metadata) {
+    const tags = uniqueLower([
+      ...(policy.metadata.domainTags ?? []),
+      ...(policy.metadata.toolNames ?? []),
+      ...(policy.metadata.errorCodes ?? []),
+    ]);
+    const signature = policy.metadata.sourceSignature?.split("|") ?? [];
+    const primary = firstUseful(
+      policy.metadata.domainTags,
+      signature[0] && signature[0] !== "_" ? [signature[0]] : [],
+    );
+    const tool = firstUseful(
+      policy.metadata.toolNames,
+      signature[2] && signature[2] !== "_" ? [signature[2]] : [],
+    );
+    // Legacy backfill can only provide language (and an empty tag set) when
+    // traces were already compacted. Preserve the old text heuristics in that
+    // case instead of turning every such policy into the generic `_|_` bucket.
+    if (primary || tool || tags.length > 0) {
+      return { key: `${primary ?? "_"}|${tool ?? "_"}`, tags };
+    }
+  }
+
   const haystack = [policy.title, policy.trigger, policy.procedure, policy.boundary]
     .filter(Boolean)
     .join(" \n ");
@@ -85,6 +111,24 @@ export function domainKeyOf(policy: PolicyRow): { key: PolicyClusterKey; tags: s
     key: `${primary}|${tool}`,
     tags: Array.from(tags),
   };
+}
+
+function uniqueLower(values: readonly string[] | undefined): string[] {
+  return Array.from(
+    new Set(
+      (values ?? [])
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ).slice(0, 64);
+}
+
+function firstUseful(...groups: Array<readonly string[] | undefined>): string | undefined {
+  for (const group of groups) {
+    const value = group?.find((item) => item.trim() && item.trim() !== "_");
+    if (value) return value.trim().toLowerCase();
+  }
+  return undefined;
 }
 
 // ─── Clustering ────────────────────────────────────────────────────────────
@@ -122,6 +166,11 @@ export function clusterPolicies(
   const out: PolicyCluster[] = [];
   for (const [key, members] of byKey) {
     if (members.length < config.minPolicies) continue;
+
+    if (key === "_|_") {
+      out.push(...clusterUntagged(members, config));
+      continue;
+    }
 
     const vecs: Array<EmbeddingVector | null> = members.map((m) => m.policy.vec ?? null);
     const center = centroid(vecs);
@@ -173,25 +222,30 @@ export function clusterPolicies(
     // here is only "strict subset" vs "whole bucket".
     let cohort: PolicyWithMeta[];
     let admission: "strict" | "loose";
-    if (strict.length >= config.minPolicies) {
+    const requiredPolicies = config.minPolicies;
+    if (strict.length >= requiredPolicies) {
       cohort = strict;
       admission = "strict";
-    } else if (members.length >= config.minPolicies) {
+    } else if (key !== "_|_" && members.length >= requiredPolicies) {
       cohort = members;
       admission = "loose";
     } else {
       continue;
     }
 
+    const ordered = cohort
+      .slice()
+      .sort((a, b) => String(a.policy.id).localeCompare(String(b.policy.id)));
+    if (ordered.length < requiredPolicies) continue;
     const tags = new Set<string>();
-    for (const m of cohort) for (const t of m.tags) tags.add(t);
+    for (const m of ordered) for (const t of m.tags) tags.add(t);
 
     const avgGain =
-      cohort.reduce((s, m) => s + m.policy.gain, 0) / Math.max(1, cohort.length);
+      ordered.reduce((s, m) => s + m.policy.gain, 0) / Math.max(1, ordered.length);
 
     out.push({
       key,
-      policies: cohort.map((m) => m.policy),
+      policies: ordered.map((m) => m.policy),
       domainTags: Array.from(tags),
       centroidVec: center,
       avgGain,
@@ -210,4 +264,46 @@ export function clusterPolicies(
     return b.policies.length - a.policies.length;
   });
   return out;
+}
+
+function clusterUntagged(
+  members: readonly PolicyWithMeta[],
+  config: ClusterDeps["config"],
+): PolicyCluster[] {
+  const requiredPolicies = Math.max(2, config.minPolicies);
+  const groups: PolicyWithMeta[][] = [];
+
+  for (const member of members
+    .filter((m) => m.policy.vec)
+    .slice()
+    .sort((a, b) => String(a.policy.id).localeCompare(String(b.policy.id)))) {
+    let target: PolicyWithMeta[] | undefined;
+    for (const group of groups) {
+      const center = centroid(group.map((m) => m.policy.vec ?? null));
+      if (center && member.policy.vec && cosine(center, member.policy.vec) >= config.clusterMinSimilarity) {
+        target = group;
+        break;
+      }
+    }
+    if (target) target.push(member);
+    else groups.push([member]);
+  }
+
+  return groups
+    .filter((group) => group.length >= requiredPolicies)
+    .map((group) => {
+      const center = centroid(group.map((m) => m.policy.vec ?? null));
+      const cohesion = center
+        ? group.reduce((sum, m) => sum + cosine(center, m.policy.vec!), 0) / group.length
+        : 0;
+      return {
+        key: `_|_:vec:${String(group[0]!.policy.id)}`,
+        policies: group.map((m) => m.policy),
+        domainTags: [],
+        centroidVec: center,
+        avgGain: group.reduce((sum, m) => sum + m.policy.gain, 0) / group.length,
+        cohesion,
+        admission: "strict" as const,
+      };
+    });
 }

@@ -58,11 +58,17 @@ class FakeProvider implements LlmProvider {
 
 class StreamingProvider implements LlmProvider {
   readonly name: LlmProviderName = "openai_compatible";
+  public lastInput: ProviderCallInput | null = null;
+
   async complete(): Promise<ProviderCompletion> {
     return { text: "full", durationMs: 1 };
   }
   // eslint-disable-next-line require-yield
-  async *stream(): AsyncGenerator<LlmStreamChunk> {
+  async *stream(
+    _messages: LlmMessage[],
+    opts: ProviderCallInput,
+  ): AsyncGenerator<LlmStreamChunk> {
+    this.lastInput = opts;
     yield { delta: "he", done: false };
     yield { delta: "llo", done: false };
     yield {
@@ -96,12 +102,14 @@ describe("llm/client", () => {
     expect(fake.lastMessages).toEqual([{ role: "user", content: "hi there" }]);
   });
 
-  it("injects a json system hint when jsonMode=true", async () => {
+  it("injects json hints into system and user messages when jsonMode=true", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: '{"ok":1}', durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
     await client.complete("do it", { jsonMode: true });
     expect(fake.lastMessages?.[0]?.role).toBe("system");
     expect(fake.lastMessages?.[0]?.content).toMatch(/single valid JSON value/i);
+    expect(fake.lastMessages?.at(-1)?.role).toBe("user");
+    expect(fake.lastMessages?.at(-1)?.content).toMatch(/valid json only/i);
     expect(fake.lastInput?.jsonMode).toBe(true);
   });
 
@@ -135,6 +143,19 @@ describe("llm/client", () => {
     expect(r.value.x).toBe(1);
     expect(client.stats().retries).toBe(1);
     expect(fake.invocations).toBe(2);
+  });
+
+  it("completeJson makes only one request when malformedRetries is zero", async () => {
+    const fake = new FakeProvider(
+      "openai_compatible",
+      () => ({ text: "still bad", durationMs: 1 }),
+    );
+    const client = createLlmClientWithProvider(cfg(), fake);
+
+    await expect(client.completeJson("ask", { malformedRetries: 0 }))
+      .rejects.toMatchObject({ code: ERROR_CODES.LLM_OUTPUT_MALFORMED });
+    expect(fake.invocations).toBe(1);
+    expect(client.stats().retries).toBe(0);
   });
 
   it("completeJson throws LLM_OUTPUT_MALFORMED when retries exhausted", async () => {
@@ -270,13 +291,108 @@ describe("llm/client", () => {
     expect(fake.lastMessages?.[0]?.role).toBe("system");
     expect(fake.lastMessages?.[0]?.content).toMatch(/You are strict\./);
     expect(fake.lastMessages?.[0]?.content).toMatch(/single valid JSON value/);
-    expect(fake.lastMessages?.[1]).toEqual({ role: "user", content: "go" });
+    expect(fake.lastMessages?.[1]?.role).toBe("user");
+    expect(fake.lastMessages?.[1]?.content).toMatch(/^go/);
+    expect(fake.lastMessages?.[1]?.content).toMatch(/valid json only/i);
   });
 
   it("rejects empty messages array", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: "", durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
     await expect(client.complete([] as LlmMessage[])).rejects.toBeInstanceOf(MemosError);
+  });
+
+  it("preserves deferred retry diagnostics in error and status sinks", async () => {
+    const errors: Array<Record<string, unknown>> = [];
+    const statuses: LlmStatusDetail[] = [];
+    const retryAt = Date.now() + 120_000;
+    const provider = new ThrowingProvider(
+      new MemosError(ERROR_CODES.LLM_RATE_LIMITED, "provider cooldown", {
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    const client = createLlmClientWithProvider(
+      cfg({
+        onError: (detail) => errors.push(detail as unknown as Record<string, unknown>),
+        onStatus: (detail) => statuses.push(detail),
+      }),
+      provider,
+    );
+
+    await expect(client.complete("x")).rejects.toBeInstanceOf(MemosError);
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: "error",
+        retryAt,
+        retryDecision: "defer",
+      }),
+    );
+  });
+
+  // ─── op propagation to providers (issue #2308) ────────────────────────
+  //
+  // The facade must forward `opts.op` onto the `ProviderCallInput` handed to
+  // `provider.complete()` / `provider.stream()` so per-op provider behavior
+  // (e.g. request-body tweaks, routing overrides, reasoning kill-switches
+  // keyed on `capture.summarize`) can fire. Dropping it silently makes
+  // those switches unreachable.
+  describe("op propagation (issue #2308)", () => {
+    it("complete forwards opts.op onto the provider input", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.complete("hi", { op: "capture.summarize" });
+      expect(fake.lastInput?.op).toBe("capture.summarize");
+    });
+
+    it("completeJson forwards opts.op onto the provider input", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({
+        text: '{"a":1}',
+        durationMs: 1,
+      }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.completeJson<{ a: number }>("score", { op: "retrieval.filter" });
+      expect(fake.lastInput?.op).toBe("retrieval.filter");
+    });
+
+    it("stream forwards opts.op onto the provider input (non-streaming provider)", async () => {
+      // FakeProvider has no stream(); the facade wraps complete() in a
+      // single-chunk iterable, which still exercises buildCallInput.
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "one", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      const parts: string[] = [];
+      for await (const c of client.stream("x", { op: "skill.evolve" })) {
+        if (!c.done) parts.push(c.delta);
+      }
+      expect(fake.lastInput?.op).toBe("skill.evolve");
+    });
+
+    it("stream forwards opts.op onto a native streaming provider", async () => {
+      const provider = new StreamingProvider();
+      const client = createLlmClientWithProvider(cfg(), provider);
+      for await (const _chunk of client.stream("x", { op: "capture.summarize" })) {
+        // Consume the stream so the provider receives the cooked input.
+      }
+      expect(provider.lastInput?.op).toBe("capture.summarize");
+    });
+
+    it("leaves op undefined when the caller supplies no op", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.complete("hi");
+      expect(fake.lastInput?.op).toBeUndefined();
+    });
   });
 
   // ─── Circuit breaker (issue #1897) ──────────────────────────────────────

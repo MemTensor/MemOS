@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { parse } from "yaml";
 
+import { MemosError } from "../../../agent-contract/errors.js";
 import { DEFAULT_CONFIG, loadConfig, resolveConfig, resolveHome } from "../../../core/config/index.js";
+import { ConfigSchema } from "../../../core/config/schema.js";
 import { makeTmpHome } from "../../helpers/tmp-home.js";
 
 describe("config/loadConfig", () => {
@@ -19,6 +22,118 @@ describe("config/loadConfig", () => {
     expect(result.warnings.some((w) => w.includes("not found"))).toBe(true);
     expect(result.config.viewer.port).toBe(DEFAULT_CONFIG.viewer.port);
     expect(result.config.embedding.provider).toBe(DEFAULT_CONFIG.embedding.provider);
+  });
+
+  it("defaults logging.timezone to UTC and accepts custom IANA zones", () => {
+    expect(resolveConfig({}).logging.timezone).toBe("UTC");
+    const cfg = resolveConfig({ logging: { timezone: "America/Los_Angeles" } });
+    expect(cfg.logging.timezone).toBe("America/Los_Angeles");
+  });
+
+  it("defaults skill idle archival to 30 days and accepts an override", () => {
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const sixHoursMs = 6 * 60 * 60 * 1000;
+    expect(resolveConfig({}).algorithm.skill.idleArchiveMs).toBe(thirtyDaysMs);
+    expect(resolveConfig({
+      algorithm: { skill: { idleArchiveMs: sixHoursMs } },
+    }).algorithm.skill.idleArchiveMs).toBe(sixHoursMs);
+  });
+
+  it("rejects skill idle archival outside the supported one-hour-to-365-day range", () => {
+    const oneHourMs = 60 * 60 * 1000;
+    const overOneYearMs = 365 * 24 * 60 * 60 * 1000 + 1;
+    expect(resolveConfig({
+      algorithm: { skill: { idleArchiveMs: oneHourMs } },
+    }).algorithm.skill.idleArchiveMs).toBe(oneHourMs);
+    expect(() => resolveConfig({
+      algorithm: { skill: { idleArchiveMs: 0 } },
+    })).toThrow(/schema validation/);
+    expect(() => resolveConfig({
+      algorithm: { skill: { idleArchiveMs: oneHourMs - 1 } },
+    })).toThrow(/schema validation/);
+    expect(() => resolveConfig({
+      algorithm: { skill: { idleArchiveMs: overOneYearMs } },
+    })).toThrow(/schema validation/);
+  });
+
+  it("rejects invalid logging.timezone with config_invalid", () => {
+    expect(() => resolveConfig({ logging: { timezone: "Not/AZone" } })).toThrow(MemosError);
+    try {
+      resolveConfig({ logging: { timezone: "Not/AZone" } });
+      throw new Error("expected resolveConfig to reject invalid timezone");
+    } catch (err) {
+      expect(MemosError.is(err)).toBe(true);
+      expect((err as MemosError).code).toBe("config_invalid");
+      expect((err as MemosError).message).toContain("invalid logging.timezone");
+    }
+  });
+
+  it("defaults OpenRouter provider routing lists to empty arrays", () => {
+    const cfg = resolveConfig({});
+    expect(cfg.llm.providerIgnore).toEqual([]);
+    expect(cfg.llm.providerOrder).toEqual([]);
+    expect(cfg.skillEvolver.providerIgnore).toEqual([]);
+    expect(cfg.skillEvolver.providerOrder).toEqual([]);
+    expect(cfg.l3Llm.providerIgnore).toEqual([]);
+    expect(cfg.l3Llm.providerOrder).toEqual([]);
+    expect(cfg.embedding.providerIgnore).toEqual([]);
+    expect(cfg.embedding.providerOrder).toEqual([]);
+    expect(cfg.llm.openRouter).toBe(false);
+    expect(cfg.skillEvolver.openRouter).toBe(false);
+    expect(cfg.l3Llm.openRouter).toBe(false);
+    expect(cfg.embedding.openRouter).toBe(false);
+    expect(cfg.embedding.maxInputTokens).toBe(1_024);
+    expect(cfg.embedding.batchSize).toBe(32);
+  });
+
+  it("accepts operator-controlled embedding input and provider batch limits", () => {
+    const cfg = resolveConfig({
+      embedding: {
+        maxInputTokens: 3_072,
+        batchSize: 4,
+      },
+    });
+
+    expect(cfg.embedding.maxInputTokens).toBe(3_072);
+    expect(cfg.embedding.batchSize).toBe(4);
+  });
+
+  it("documents the zero-value maxInputTokens sentinel in JSON Schema", () => {
+    const schema = ConfigSchema as unknown as {
+      properties: {
+        embedding: {
+          properties: { maxInputTokens: { description?: string } };
+        };
+      };
+    };
+
+    expect(schema.properties.embedding.properties.maxInputTokens.description).toContain("0");
+    expect(schema.properties.embedding.properties.maxInputTokens.description).toContain(
+      "client-side chunking",
+    );
+  });
+
+  it("ships new agent installations with a safe embedding input limit", async () => {
+    for (const template of ["config.openclaw.yaml", "config.hermes.yaml"]) {
+      const raw = await fs.readFile(join(__dirname, "../../../templates", template), "utf8");
+      const cfg = resolveConfig(parse(raw));
+      expect(cfg.embedding.maxInputTokens, template).toBe(1_024);
+    }
+  });
+
+  it("keeps long-input chunking disabled for existing configs that predate the setting", async () => {
+    const ctx = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: "version: 1\nembedding:\n  provider: local\n",
+    });
+    cleanup = ctx.cleanup;
+
+    expect(ctx.config.embedding.maxInputTokens).toBe(0);
+  });
+
+  it("rejects invalid embedding input and provider batch limits", () => {
+    expect(() => resolveConfig({ embedding: { maxInputTokens: -1 } })).toThrow(MemosError);
+    expect(() => resolveConfig({ embedding: { batchSize: 0 } })).toThrow(MemosError);
   });
 
   it("merges YAML over defaults and preserves unspecified branches", async () => {
@@ -40,6 +155,63 @@ algorithm:
     expect(ctx.config.llm.model).toBe("gpt-4o-mini");
     expect(ctx.config.algorithm.reward.gamma).toBe(0.5);
     expect(ctx.config.algorithm.skill.minSupport).toBe(DEFAULT_CONFIG.algorithm.skill.minSupport);
+  });
+
+  it("accepts OpenRouter provider routing fields on LLM config branches", () => {
+    const cfg = resolveConfig({
+      llm: {
+        providerIgnore: ["together", "deepinfra"],
+        providerOrder: ["google", "anthropic"],
+        openRouter: true,
+      },
+      skillEvolver: {
+        providerIgnore: ["novita"],
+        providerOrder: ["openai"],
+        openRouter: true,
+      },
+      l3Llm: {
+        providerIgnore: ["novita"],
+        providerOrder: ["openai"],
+        openRouter: true,
+      },
+      embedding: {
+        providerIgnore: ["deepinfra"],
+        providerOrder: ["openai"],
+        openRouter: true,
+      },
+    });
+    expect(cfg.llm.providerIgnore).toEqual(["together", "deepinfra"]);
+    expect(cfg.llm.providerOrder).toEqual(["google", "anthropic"]);
+    expect(cfg.skillEvolver.providerIgnore).toEqual(["novita"]);
+    expect(cfg.skillEvolver.providerOrder).toEqual(["openai"]);
+    expect(cfg.l3Llm.providerIgnore).toEqual(["novita"]);
+    expect(cfg.l3Llm.providerOrder).toEqual(["openai"]);
+    expect(cfg.embedding.providerIgnore).toEqual(["deepinfra"]);
+    expect(cfg.embedding.providerOrder).toEqual(["openai"]);
+    expect(cfg.llm.openRouter).toBe(true);
+    expect(cfg.skillEvolver.openRouter).toBe(true);
+    expect(cfg.l3Llm.openRouter).toBe(true);
+    expect(cfg.embedding.openRouter).toBe(true);
+  });
+
+  it("accepts OpenRouter reasoning effort aliases", () => {
+    const cfg = resolveConfig({
+      llm: { reasoning: { effort: "xhigh" } },
+    });
+    expect(cfg.llm.reasoning?.effort).toBe("xhigh");
+  });
+
+  it("keeps an empty OpenRouter reasoning block free of overrides", () => {
+    const cfg = resolveConfig({
+      llm: { reasoning: {} },
+    });
+    expect(cfg.llm.reasoning).toEqual({});
+  });
+
+  it("rejects a non-positive OpenRouter reasoning token budget", () => {
+    expect(() => resolveConfig({
+      llm: { reasoning: { maxTokens: 0 } },
+    })).toThrow(/schema validation/);
   });
 
   it("rejects invalid types with a helpful error", async () => {

@@ -6,6 +6,9 @@ const APP = {
 
 const knownKeys = new Set(APP.fieldDefinitions.map((field) => field.key));
 let remoteState = null;
+let updateStatus = null;
+let updateStatusChecked = false;
+let updateStatusLoading = false;
 let draft = null;
 let baselineSnapshot = "";
 
@@ -41,6 +44,8 @@ const elements = {
   languageOptionZh: document.getElementById("languageOptionZh"),
   statusRow: document.getElementById("statusRow"),
   metaRow: document.getElementById("metaRow"),
+  updateCheckButton: document.getElementById("updateCheckButton") || document.createElement("button"),
+  updateNotice: document.getElementById("updateNotice"),
   banner: document.getElementById("banner"),
   floatingTools: document.getElementById("floatingTools"),
   floatingNavLabel: document.getElementById("floatingNavLabel"),
@@ -128,6 +133,7 @@ const UI_TEXT = {
     bannerAuthWaiting: "Config session expired. Waiting for the gateway to finish restarting before retrying...",
     bannerAuthFailed: "Config session expired. Refresh this page to reconnect.",
     bannerCopied: "The config file path was copied to your clipboard.",
+    bannerUpdateCommandCopied: "The update command was copied to your clipboard.",
     bannerClipboardFailed: "Clipboard access failed. Copy the address from your browser bar instead.",
     bannerSaved: "The plugin config was saved.",
     bannerRestartLaunched: "Restart requested. Refresh this page in a few seconds if it does not recover automatically.",
@@ -135,12 +141,21 @@ const UI_TEXT = {
     bannerWaitingBack: "Restart requested. Refresh this page in a few seconds if it does not recover automatically.",
     bannerRestartRefreshHint: "Restart requested. Refresh this page in a few seconds if it does not recover automatically.",
     pillPlugin: "Plugin",
+    pillVersion: "Version",
     pillRuntime: "Runtime",
     pillEntry: "Entry",
     pillPageUrl: "Page URL",
-    pillRevision: "Revision",
+    pillRevision: "Config revision",
     pillConfigFile: "Config file",
     pillInclude: "Include",
+    checkUpdates: "Check for updates",
+    checkingUpdates: "Checking...",
+    updateTitle: "Plugin update available",
+    updateBody: "Current version {current}; latest version {latest}. Update and restart with:",
+    updateCopyCommand: "Copy Update And Restart Command",
+    upToDateTitle: "Already up to date",
+    upToDateBody: "Current version {current} is the latest version.",
+    updateCheckFailed: "Version check failed: {error}",
     pillEntryPresent: "present",
     pillEntryMissing: "missing",
     pillConfigFound: "found",
@@ -209,6 +224,7 @@ const UI_TEXT = {
     bannerAuthWaiting: "配置页会话已过期，正在等待 Gateway 完成重启后再恢复...",
     bannerAuthFailed: "配置页会话已过期，请刷新页面后重新连接。",
     bannerCopied: "配置文件路径已复制到剪贴板。",
+    bannerUpdateCommandCopied: "更新命令已复制到剪贴板。",
     bannerClipboardFailed: "复制失败，请直接从浏览器地址栏复制。",
     bannerSaved: "插件配置已保存。",
     bannerRestartLaunched: "已请求重启。如果页面没有自动恢复，请过几秒刷新重试。",
@@ -216,12 +232,21 @@ const UI_TEXT = {
     bannerWaitingBack: "已请求重启。如果页面没有自动恢复，请过几秒刷新重试。",
     bannerRestartRefreshHint: "已请求重启。如果页面没有自动恢复，请过几秒刷新重试。",
     pillPlugin: "插件",
+    pillVersion: "版本",
     pillRuntime: "运行时",
     pillEntry: "配置项",
     pillPageUrl: "页面地址",
-    pillRevision: "版本标识",
+    pillRevision: "配置标识",
     pillConfigFile: "配置文件",
     pillInclude: "包含",
+    checkUpdates: "检查更新",
+    checkingUpdates: "检查中...",
+    updateTitle: "插件有新版本",
+    updateBody: "当前版本 {current}；最新版本 {latest}。可使用以下命令更新并重启：",
+    updateCopyCommand: "复制更新并重启命令",
+    upToDateTitle: "已是最新版本",
+    upToDateBody: "当前版本 {current} 已经是最新版本。",
+    updateCheckFailed: "版本检查失败：{error}",
     pillEntryPresent: "已存在",
     pillEntryMissing: "不存在",
     pillConfigFound: "已找到",
@@ -307,6 +332,14 @@ function uiText(key) {
   return UI_TEXT[lang][key] ?? UI_TEXT.en[key] ?? key;
 }
 
+function formatUiText(key, values) {
+  let text = uiText(key);
+  for (const [name, value] of Object.entries(values || {})) {
+    text = text.split(`{${name}}`).join(String(value ?? ""));
+  }
+  return text;
+}
+
 function localizedGroup(group) {
   const lang = getCurrentLanguage();
   const translated = GROUP_TRANSLATIONS[lang]?.[group.id];
@@ -340,6 +373,10 @@ function applyLanguageUi() {
   elements.copyPathButton.setAttribute("aria-label", uiText("copyPath"));
   elements.copyPathButton.setAttribute("title", uiText("copyPath"));
   elements.saveButton.textContent = uiText("save");
+  elements.updateCheckButton.id = "updateCheckButton";
+  elements.updateCheckButton.type = "button";
+  elements.updateCheckButton.className = "pill update-check-button";
+  updateCheckButtonUi();
   
   elements.reloadButton.textContent = uiText("reload");
   elements.overlayTitle.textContent = uiText("overlayTitle");
@@ -350,6 +387,22 @@ function applyLanguageUi() {
   elements.languageOptionEn.textContent = "EN";
   elements.languageOptionZh.textContent = "中文";
   updateLanguageDropdownUi();
+  renderUpdateNotice();
+}
+
+function updateCheckButtonUi() {
+  if (!elements.updateCheckButton) return;
+  const version = remoteState?.pluginVersion || "unknown";
+  const action = updateStatusLoading ? uiText("checkingUpdates") : uiText("checkUpdates");
+  elements.updateCheckButton.innerHTML =
+    "<strong>" +
+    escapeHtml(uiText("pillVersion")) +
+    "</strong><span>" +
+    escapeHtml(version + " · " + action) +
+    "</span>";
+  elements.updateCheckButton.setAttribute("aria-label", uiText("pillVersion") + " " + version + ", " + action);
+  elements.updateCheckButton.setAttribute("title", action);
+  elements.updateCheckButton.disabled = updateStatusLoading;
 }
 
 function updateFloatingNavToggleUi() {
@@ -722,11 +775,16 @@ function renderStatus() {
   elements.statusRow.innerHTML = "";
   elements.metaRow.innerHTML = "";
   elements.pathBox.textContent = remoteState ? remoteState.configPath : "";
+  if (elements.updateCheckButton && !elements.updateCheckButton.parentElement) {
+    elements.updateCheckButton.remove();
+  }
   if (!remoteState) return;
 
   elements.statusRow.appendChild(
     createPill(remoteState.enabled ? "ok" : "warn", uiText("pillPlugin"), remoteState.enabled ? uiText("enabled") : uiText("disabled")),
   );
+  updateCheckButtonUi();
+  elements.statusRow.appendChild(elements.updateCheckButton);
   elements.statusRow.appendChild(createPill("", uiText("pillRuntime"), remoteState.runtimeDisplayName));
   elements.statusRow.appendChild(
     createPill(remoteState.entryExists ? "" : "warn", uiText("pillEntry"), remoteState.entryExists ? uiText("pillEntryPresent") : uiText("pillEntryMissing")),
@@ -741,6 +799,70 @@ function renderStatus() {
       createPill("warn", uiText("pillInclude"), uiText("pillIncludeValue")),
     );
   }
+}
+
+function renderUpdateNotice() {
+  if (!elements.updateNotice) return;
+
+  if (updateStatusLoading) {
+    elements.updateNotice.hidden = false;
+    elements.updateNotice.className = "update-notice info show";
+    elements.updateNotice.innerHTML =
+      '<div class="update-title">' +
+      escapeHtml(uiText("checkingUpdates")) +
+      "</div>";
+    return;
+  }
+
+  if (!updateStatusChecked || !updateStatus) {
+    elements.updateNotice.hidden = true;
+    elements.updateNotice.className = "update-notice";
+    elements.updateNotice.innerHTML = "";
+    return;
+  }
+
+  elements.updateNotice.hidden = false;
+  elements.updateNotice.className = "update-notice " + (updateStatus.ok === false ? "error show" : updateStatus.updateAvailable ? "show" : "ok show");
+
+  if (updateStatus.updateAvailable) {
+    const command = getUpdateAndRestartCommand(updateStatus);
+    elements.updateNotice.innerHTML =
+      '<div class="update-copy">' +
+      '<div><div class="update-title">' +
+      escapeHtml(uiText("updateTitle")) +
+      '</div><div class="update-body">' +
+      escapeHtml(formatUiText("updateBody", { current: updateStatus.currentVersion, latest: updateStatus.latestVersion })) +
+      '</div></div>' +
+      '<button class="inline-btn update-copy-button" type="button">' +
+      escapeHtml(uiText("updateCopyCommand")) +
+      "</button></div>" +
+      '<code class="update-command">' +
+      escapeHtml(command) +
+      "</code>";
+
+    elements.updateNotice.querySelector(".update-copy-button")?.addEventListener("click", () => {
+      void copyUpdateCommand(command);
+    });
+    return;
+  }
+
+  if (updateStatus.ok === false) {
+    elements.updateNotice.innerHTML = escapeHtml(formatUiText("updateCheckFailed", { error: updateStatus.error || "Unknown error" }));
+    return;
+  }
+
+  elements.updateNotice.innerHTML =
+    '<div class="update-title">' +
+    escapeHtml(uiText("upToDateTitle")) +
+    '</div><div class="update-body">' +
+    escapeHtml(formatUiText("upToDateBody", { current: updateStatus.currentVersion || remoteState?.pluginVersion || "unknown" })) +
+    "</div>";
+}
+
+function getUpdateAndRestartCommand(status) {
+  const cliName = status?.cliName || "openclaw";
+  const updateCommand = status?.updateCommand || `${cliName} plugins update memos-cloud-openclaw-plugin`;
+  return `${updateCommand} && ${cliName} gateway restart`;
 }
 
 function renderEnabledField() {
@@ -1096,6 +1218,35 @@ async function checkHeartbeat() {
   return response.json();
 }
 
+async function loadUpdateStatus(options = {}) {
+  const manual = options.manual === true;
+  if (manual) {
+    updateStatusChecked = true;
+    updateStatusLoading = true;
+    updateCheckButtonUi();
+    renderUpdateNotice();
+  }
+
+  try {
+    updateStatus = await api("/api/update-status" + (options.force ? "?force=1" : ""));
+    updateStatusChecked = true;
+  } catch (error) {
+    if (error?.status === 403) {
+      void recoverFromAuthError();
+      return;
+    }
+    updateStatusChecked = true;
+    updateStatus = {
+      ok: false,
+      error: String(error.message || error),
+    };
+  } finally {
+    updateStatusLoading = false;
+    updateCheckButtonUi();
+    renderUpdateNotice();
+  }
+}
+
 function handleHeartbeatState(heartbeat) {
   if (!heartbeat || typeof heartbeat !== "object") return;
 
@@ -1240,6 +1391,16 @@ async function copyConfigPath() {
   }
 }
 
+async function copyUpdateCommand(command) {
+  if (!command) return;
+  try {
+    await navigator.clipboard.writeText(command);
+    setBanner("info", uiText("bannerUpdateCommandCopied"));
+  } catch {
+    setBanner("error", uiText("bannerClipboardFailed"));
+  }
+}
+
 elements.languageSelectButton.addEventListener("click", () => {
   setLanguageMenuOpen(!languageMenuOpen);
 });
@@ -1272,6 +1433,9 @@ elements.overlayRefreshButton.addEventListener("click", () => {
   window.location.reload();
 });
 elements.copyPathButton.addEventListener("click", () => void copyConfigPath());
+elements.updateCheckButton?.addEventListener("click", () => {
+  void loadUpdateStatus({ manual: true, force: true });
+});
 elements.floatingToggleButton.addEventListener("click", () => {
   setNavCollapsed(!navCollapsed);
 });

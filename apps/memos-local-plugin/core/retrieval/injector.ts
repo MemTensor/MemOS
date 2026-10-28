@@ -101,6 +101,17 @@ export function toPacket(input: InjectorInput): InjectorResult {
     });
     if (!snippet) continue;
     snippet.score = round(r.score, 4);
+    snippet.scoreDetails = r.scoreDetails
+      ? {
+          ...r.scoreDetails,
+          semantic: round(r.scoreDetails.semantic, 4),
+          tierBoost: round(r.scoreDetails.tierBoost, 4),
+          rrfBoost: round(r.scoreDetails.rrfBoost, 4),
+          relevance: round(r.scoreDetails.relevance, 4),
+          redundancy: round(r.scoreDetails.redundancy, 4),
+          finalScore: round(r.scoreDetails.finalScore, 4),
+        }
+      : undefined;
     mapping.push({
       snippet,
       tier: r.candidate.tier,

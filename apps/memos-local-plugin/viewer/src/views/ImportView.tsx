@@ -10,7 +10,7 @@
  *     hermes — the server picks the right path based on its own
  *     `options.agent`) and copies rows into the V7 store.
  *   - Hermes native import: when this viewer is attached to Hermes,
- *     batch-imports `~/.hermes/memories/MEMORY.md` entries separated
+ *     batch-imports `$HERMES_HOME/memories/MEMORY.md` entries separated
  *     by a single `§` line.
  *   - OpenClaw native import: when attached to OpenClaw, batch-imports
  *     OpenClaw agent session JSONL user/assistant messages.
@@ -103,7 +103,9 @@ export function ImportView() {
         <ImportCard />
         {health.value?.agent === "hermes" && <NativeImportCard kind="hermes" />}
         {health.value?.agent === "openclaw" && <NativeImportCard kind="openclaw" />}
-        <MigrateCard />
+        {(health.value?.agent === "openclaw" || health.value?.agent === "hermes") && (
+          <MigrateCard />
+        )}
       </div>
     </>
   );

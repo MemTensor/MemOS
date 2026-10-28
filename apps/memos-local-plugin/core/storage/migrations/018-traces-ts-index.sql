@@ -1,0 +1,26 @@
+-- Speed up unfiltered newest-first trace reads (health endpoint + boot replay).
+--
+-- `latestTraceTs()` runs `SELECT ... FROM traces ORDER BY ts DESC, id DESC
+-- LIMIT 1` several times per `/api/v1/health` request, and the pipeline's
+-- recent-events replay issues the same shape at bootstrap. Every existing
+-- `traces` index leads with `owner_*`, `share_scope`, `session_id`, or
+-- `episode_id` -- none is usable for an UNFILTERED newest-first read, so each
+-- call degenerated into a full table scan plus a temp B-tree sort
+-- (`SCAN traces` / `USE TEMP B-TREE FOR ORDER BY`). Because better-sqlite3
+-- executes statements synchronously on the JS event loop, that scan blocks
+-- the whole daemon: HTTP connections were accepted by the kernel backlog but
+-- never answered while it ran.
+--
+-- Observed impact on an install whose `traces` table reached ~30k rows
+-- (~235 MB with embedding blobs and tool-call JSON): boot took 40-60s of
+-- near-100% CPU inside the scan, and every liveness probe timed out before
+-- the daemon could answer -- so a 60s watchdog restarted the daemon roughly
+-- every 3 minutes, forever (300+ restarts/day). Each doomed generation
+-- re-ran the scan at boot and was killed mid-scan, making the storm
+-- self-sustaining.
+--
+-- A bare `(ts DESC, id DESC)` index turns the lookup into a single index
+-- seek: ~0.7ms warm instead of ~700ms warm / tens-of-seconds cold. Build cost
+-- is ~1s per 100k rows and `IF NOT EXISTS` keeps re-application free.
+
+CREATE INDEX IF NOT EXISTS idx_traces_ts ON traces(ts DESC, id DESC);

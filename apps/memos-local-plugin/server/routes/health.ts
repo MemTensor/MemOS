@@ -6,12 +6,17 @@
  * expected to be O(1) (cached).
  */
 
-import type { ServerDeps } from "../types.js";
+import type { ServerDeps, ServerOptions } from "../types.js";
 import type { RouteContext, Routes } from "./registry.js";
 
-export function registerHealthRoutes(routes: Routes, deps: ServerDeps): void {
+export function registerHealthRoutes(
+  routes: Routes,
+  deps: ServerDeps,
+  options: ServerOptions = {},
+): void {
   const serviceIdentity = {
     service: "memos-local-plugin",
+    instanceId: options.instanceId,
   };
   routes.set("GET /api/v1/health", async () => {
     const health = await deps.core.health();

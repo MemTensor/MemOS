@@ -56,6 +56,8 @@ export interface SerializedLogError {
 export interface LogRecord {
   /** Unix epoch milliseconds (UTC). */
   ts: number;
+  /** IANA timezone used for display formatting. Canonical event time remains `ts`. */
+  tz?: string;
   level: LogLevel;
   kind: LogKind;
   channel: string;

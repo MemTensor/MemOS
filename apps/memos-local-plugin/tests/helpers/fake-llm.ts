@@ -20,7 +20,7 @@ export interface FakeLlmScript {
   complete?: Record<string, string | ((input: unknown) => string | Promise<string>)>;
   completeJson?: Record<
     string,
-    unknown | ((input: unknown) => unknown | Promise<unknown>)
+    unknown | ((input: unknown, opts?: unknown) => unknown | Promise<unknown>)
   >;
   /** Override the served-by identifier. */
   servedBy?: LlmProviderName | "host_fallback";
@@ -64,7 +64,7 @@ export function fakeLlm(script: FakeLlmScript = {}): LlmClient {
         throw new Error(`fakeLlm: no completeJson mock for op="${op}"`);
       }
       const value = (typeof entry === "function"
-        ? await (entry as (x: unknown) => unknown)(input)
+        ? await (entry as (x: unknown, o?: unknown) => unknown)(input, opts)
         : entry) as T;
       if (o?.validate) o.validate(value);
       return {

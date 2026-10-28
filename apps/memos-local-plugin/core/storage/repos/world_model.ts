@@ -230,30 +230,34 @@ export function makeWorldModelRepo(db: StorageDb) {
         k: Math.max(1, Math.min(200, Math.floor(k))),
       };
       const ors: string[] = [];
-      dedup.slice(0, 16).forEach((t, i) => {
+      const matchScores: string[] = [];
+      const limitedTerms = dedup.slice(0, 16);
+      limitedTerms.forEach((t, i) => {
         const key = `pat_${i}`;
         const escaped = t.replace(/[\\%_]/g, (m) => `\\${m}`);
         params[key] = `%${escaped}%`;
-        ors.push(
-          `(title LIKE @${key} ESCAPE '\\' OR body LIKE @${key} ESCAPE '\\' OR COALESCE(domain_tags_json,'') LIKE @${key} ESCAPE '\\')`,
-        );
+        const match =
+          `(title LIKE @${key} ESCAPE '\\' OR body LIKE @${key} ESCAPE '\\' OR COALESCE(domain_tags_json,'') LIKE @${key} ESCAPE '\\')`;
+        ors.push(match);
+        matchScores.push(`CASE WHEN ${match} THEN 1 ELSE 0 END`);
       });
       const whereParts: string[] = [`(${ors.join(" OR ")})`];
       if (opts.minConfidence !== undefined) {
         whereParts.push(`confidence >= ${Number(opts.minConfidence)}`);
       }
       const sql = `
-        SELECT id, title, owner_agent_kind, owner_profile_id, owner_workspace_id
+        SELECT id, title, owner_agent_kind, owner_profile_id, owner_workspace_id,
+               (${matchScores.join(" + ")}) AS pattern_matches
           FROM world_model
          WHERE ${whereParts.join(" AND ")}
-         ORDER BY updated_at DESC
+         ORDER BY pattern_matches DESC, updated_at DESC
          LIMIT @k`;
       const rows = db
-        .prepare<typeof params, { id: string; title: string; owner_agent_kind: string; owner_profile_id: string; owner_workspace_id: string | null }>(sql)
+        .prepare<typeof params, { id: string; title: string; owner_agent_kind: string; owner_profile_id: string; owner_workspace_id: string | null; pattern_matches: number }>(sql)
         .all(params);
-      return rows.map((r, idx) => ({
+      return rows.map((r) => ({
         id: r.id,
-        score: 1 / (idx + 1),
+        score: r.pattern_matches / limitedTerms.length,
         meta: { title: r.title, owner_agent_kind: r.owner_agent_kind, owner_profile_id: r.owner_profile_id, owner_workspace_id: r.owner_workspace_id },
       }));
     },

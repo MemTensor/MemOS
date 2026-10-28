@@ -25,7 +25,8 @@ class BaseMemReaderConfig(BaseConfig):
         return value
 
     llm: LLMConfigFactory = Field(
-        ..., description="LLM configuration for chat/doc memory extraction (fine-tuned model)"
+        ...,
+        description="Main LLM configuration for standard text/chat memory extraction",
     )
     general_llm: LLMConfigFactory | None = Field(
         default=None,
@@ -35,6 +36,10 @@ class BaseMemReaderConfig(BaseConfig):
     image_parser_llm: LLMConfigFactory | None = Field(
         default=None,
         description="Vision LLM for image parsing. Falls back to general_llm if not set.",
+    )
+    document_parser_llm: LLMConfigFactory | None = Field(
+        default=None,
+        description="Dedicated LLM for document content extraction",
     )
     preference_extractor_llm: LLMConfigFactory | None = Field(
         default=None,

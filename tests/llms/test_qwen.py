@@ -1,13 +1,38 @@
 import unittest
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from memos.configs.llm import QwenLLMConfig
 from memos.llms.qwen import QwenLLM
 
 
 class TestQwenLLM(unittest.TestCase):
+    def test_qwen_llm_adds_dashscope_wait_timeout_header(self):
+        """Test QwenLLM adds DashScope server-side queue wait timeout header."""
+        config = QwenLLMConfig.model_validate(
+            {
+                "model_name_or_path": "qwen-test",
+                "api_key": "sk-test",
+                "api_base": "https://dashscope.aliyuncs.com/api/v1",
+                "default_headers": {"X-Custom-Header": "custom"},
+            }
+        )
+
+        with patch("memos.llms.openai.openai.Client") as mock_client:
+            QwenLLM(config)
+
+        default_headers = mock_client.call_args.kwargs["default_headers"]
+        self.assertEqual(default_headers["X-DashScope-Wait-Timeout"], "30")
+        self.assertEqual(default_headers["X-Custom-Header"], "custom")
+
+        config_without_headers = config.model_copy(update={"default_headers": None})
+        with patch("memos.llms.openai.openai.Client") as mock_client:
+            QwenLLM(config_without_headers)
+
+        default_headers = mock_client.call_args.kwargs["default_headers"]
+        self.assertEqual(default_headers["X-DashScope-Wait-Timeout"], "30")
+
     def test_qwen_llm_generate_with_and_without_think_prefix(self):
         """Test QwenLLM non-streaming response generation with and without <think> prefix removal."""
 

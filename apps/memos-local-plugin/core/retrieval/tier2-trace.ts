@@ -25,7 +25,6 @@
  */
 
 import { rootLogger } from "../logger/index.js";
-import { priorityFor } from "../reward/backprop.js";
 import type { EmbeddingVector, EpisodeId, SessionId, TraceId } from "../types.js";
 import type {
   ChannelRank,
@@ -33,6 +32,7 @@ import type {
   RetrievalChannel,
   RetrievalConfig,
   RetrievalEmbedder,
+  RetrievalProfile,
   RetrievalRepos,
   TraceCandidate,
   TraceVecKind,
@@ -64,13 +64,33 @@ export interface Tier2Input {
   ftsMatch?: string | null;
   /** Pattern terms (2-char ASCII / CJK bigrams). */
   patternTerms?: readonly string[];
+  /** Full identifiers searched independently from generic pattern terms. */
+  exactIdentifiers?: readonly string[];
   /** Whether `decision_repair` forced `includeLowValue`. */
   includeLowValue?: boolean;
   /**
-   * When set, trace search excludes rows from this session (cross-session
-   * turn-start retrieval should not repeat the current chat window).
+   * The portion of the current durable session that the host model can
+   * still see. Rows inside this window are filtered before channel Top-K;
+   * rows older than `startTs` remain eligible after host compaction.
+   *
+   * `userTexts` is a bounded exact-text fallback for hosts whose visible
+   * messages do not carry timestamps. It is intentionally not semantic:
+   * embedding similarity belongs to MMR, not context-window dedupe.
+   */
+  visibleContext?: {
+    sessionId: SessionId;
+    startTs?: number;
+    userTexts?: readonly string[];
+  };
+  /**
+   * Legacy fallback for hosts that cannot report their visible context.
+   * New adapters should send `visibleContext` instead.
    */
   excludeSessionId?: SessionId;
+  /** Query-specific policy; personal facts use summary vectors first. */
+  profile?: RetrievalProfile;
+  /** Controlled second pass may add the action channel for personal facts. */
+  includeActionVector?: boolean;
 }
 
 export interface Tier2Result {
@@ -98,24 +118,36 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
 
     // ─── Vector channels ──────────────────────────────────────────────
     if (input.queryVec && input.queryVec.length > 0) {
-      const summaryHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
-        kind: "summary",
-        anyOfTags: tagsForStorage,
-        where: vectorFilters.where,
-        params: vectorFilters.params,
-        hardCap: vecPoolSize * 4,
-      });
-      mergeChannelHits(blended, summaryHits, "vec_summary", input.queryVec);
-
-      if (!config.lightweightMemory) {
-        const actionHits = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
-          kind: "action",
+      const summaryHits = filterVectorHits(
+        repos.traces.searchByVector(input.queryVec, vecPoolSize, {
+          kind: "summary",
           anyOfTags: tagsForStorage,
           where: vectorFilters.where,
           params: vectorFilters.params,
           hardCap: vecPoolSize * 4,
-        });
-        mergeChannelHits(blended, actionHits, "vec_action", input.queryVec);
+        }),
+        config,
+        input.profile,
+      );
+      mergeChannelHits(blended, summaryHits, "vec_summary");
+
+      if (
+        !config.lightweightMemory &&
+        (input.profile !== "personal_fact" || input.includeActionVector === true)
+      ) {
+        const actionHits = filterVectorHits(
+          repos.traces.searchByVector(input.queryVec, vecPoolSize, {
+            kind: "action",
+            anyOfTags: tagsForStorage,
+            where: vectorFilters.where,
+            params: vectorFilters.params,
+            hardCap: vecPoolSize * 4,
+          }),
+          config,
+          input.profile,
+          "action",
+        );
+        mergeChannelHits(blended, actionHits, "vec_action");
       }
 
       // If both vector channels came back empty AND tag filtering is
@@ -124,13 +156,17 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
       // traces.
       if (blended.size === 0 && tagsForStorage && config.tagFilter === "auto") {
         log.debug("tag_filter_relaxed", { tags: tagsForStorage });
-        const retry = repos.traces.searchByVector(input.queryVec, vecPoolSize, {
-          kind: "summary",
-          where: vectorFilters.where,
-          params: vectorFilters.params,
-          hardCap: vecPoolSize * 4,
-        });
-        mergeChannelHits(blended, retry, "vec_summary", input.queryVec);
+        const retry = filterVectorHits(
+          repos.traces.searchByVector(input.queryVec, vecPoolSize, {
+            kind: "summary",
+            where: vectorFilters.where,
+            params: vectorFilters.params,
+            hardCap: vecPoolSize * 4,
+          }),
+          config,
+          input.profile,
+        );
+        mergeChannelHits(blended, retry, "vec_summary");
       }
     }
 
@@ -140,7 +176,7 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
         where: searchFilters.where,
         params: searchFilters.params,
       });
-      mergeChannelHits(blended, ftsHits, "fts", input.queryVec ?? null);
+      mergeChannelHits(blended, ftsHits, "fts");
     }
 
     // ─── Pattern (LIKE) channel ───────────────────────────────────────
@@ -153,7 +189,31 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
         where: searchFilters.where,
         params: searchFilters.params,
       });
-      mergeChannelHits(blended, patternHits, "pattern", input.queryVec ?? null);
+      mergeChannelHits(blended, patternHits, "pattern");
+    }
+
+    // ─── Exact-identifier channel ─────────────────────────────────────
+    // Reuse the escaped LIKE repository path, but search only the concrete
+    // identifiers. This channel is proof of an exact substring match; generic
+    // CJK pattern terms must never be promoted into it.
+    if (
+      input.exactIdentifiers &&
+      input.exactIdentifiers.length > 0 &&
+      repos.traces.searchByPattern
+    ) {
+      const exactHits = repos.traces.searchByPattern(
+        input.exactIdentifiers,
+        keywordPoolSize,
+        {
+          where: searchFilters.where,
+          params: searchFilters.params,
+        },
+      );
+      mergeChannelHits(
+        blended,
+        exactHits.map((hit) => ({ ...hit, score: 1 })),
+        "exact_identifier",
+      );
     }
 
     // ─── Structural error-signature channel ───────────────────────────
@@ -193,7 +253,7 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
           // still edge it out.
           cosine: 0.9,
           ts: row.ts,
-          vec: input.queryVec ?? null,
+          vec: null,
           value: row.value,
           priority: row.priority,
           episodeId: row.episodeId,
@@ -233,6 +293,10 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
       if (!row) continue;
       traces.push({
         ...cand,
+        vec:
+          cand.vecKind === "action"
+            ? (row.vecAction ?? row.vecSummary)
+            : (row.vecSummary ?? row.vecAction),
         value: row.value,
         priority: row.priority,
         userText: row.userText,
@@ -243,24 +307,26 @@ export async function runTier2(deps: Tier2Deps, input: Tier2Input): Promise<Tier
       });
     }
 
-    // Sort by blended score (cosine + priority + multi-channel boost) descending.
-    traces.sort((a, b) => blendScore(b, deps) - blendScore(a, deps));
-    const topTraces = traces.slice(0, config.tier2TopK);
+    // Preserve the expanded pool for the global ranker. Value/priority is
+    // deliberately absent here; the ranker adds it exactly once.
+    traces.sort((a, b) => preRankScore(b) - preRankScore(a));
+    const candidateCap = Math.max(vecPoolSize, keywordPoolSize);
+    const pooledTraces = traces.slice(0, candidateCap);
 
     // Roll up to episode-level summaries.
     const episodes = config.lightweightMemory
       ? []
-      : rollupEpisodes(topTraces, deps).slice(0, config.tier2TopK);
+      : rollupEpisodes(pooledTraces, deps).slice(0, config.tier2TopK);
 
     log.info("done", {
-      traceCount: topTraces.length,
+      traceCount: pooledTraces.length,
       episodeCount: episodes.length,
       keywordPoolSize,
       vecPoolSize,
       latencyMs: Date.now() - startedAt,
     });
 
-    return { traces: topTraces, episodes };
+    return { traces: pooledTraces, episodes };
   } catch (err) {
     log.error("failed", {
       err: { message: err instanceof Error ? err.message : String(err) },
@@ -280,7 +346,36 @@ function buildTraceSearchFilters(
   const params: Record<string, unknown> = {};
   const includeLow = input.includeLowValue ?? deps.config.includeLowValue;
   if (!includeLow) parts.push("priority > 0");
-  if (input.excludeSessionId) {
+  const visible = input.visibleContext;
+  if (
+    visible &&
+    typeof visible.startTs === "number" &&
+    Number.isFinite(visible.startTs)
+  ) {
+    parts.push(
+      "(session_id != @visible_context_session_id OR ts < @visible_context_start_ts)",
+    );
+    params.visible_context_session_id = visible.sessionId;
+    params.visible_context_start_ts = visible.startTs;
+  } else if (visible) {
+    const texts = Array.from(
+      new Set(
+        (visible.userTexts ?? [])
+          .map((text) => String(text).trim())
+          .filter(Boolean),
+      ),
+    ).slice(-128);
+    if (texts.length > 0) {
+      const placeholders = texts.map((_, index) => `@visible_user_text_${index}`);
+      texts.forEach((text, index) => {
+        params[`visible_user_text_${index}`] = text;
+      });
+      parts.push(
+        `(session_id != @visible_context_session_id OR user_text NOT IN (${placeholders.join(", ")}))`,
+      );
+      params.visible_context_session_id = visible.sessionId;
+    }
+  } else if (input.excludeSessionId) {
     parts.push("session_id != @exclude_session_id");
     params.exclude_session_id = input.excludeSessionId;
   }
@@ -332,6 +427,24 @@ function resolveTagFilter(
   return tags;
 }
 
+function filterVectorHits<T extends { score: number }>(
+  hits: readonly T[],
+  config: RetrievalConfig,
+  profile: RetrievalProfile | undefined,
+  channel: "summary" | "action" = "summary",
+): T[] {
+  if (hits.length === 0) return [];
+  const topScore = Math.max(...hits.map((hit) => hit.score));
+  const adaptiveRatio =
+    profile === "personal_fact"
+      ? channel === "action"
+        ? 0.65
+        : 0.55
+      : 0.45;
+  const floor = Math.max(config.minTraceSim, topScore * adaptiveRatio);
+  return hits.filter((hit) => hit.score >= floor);
+}
+
 function mergeChannelHits(
   into: Map<TraceId, TraceCandidate>,
   hits: Array<{
@@ -347,7 +460,6 @@ function mergeChannelHits(
     };
   }>,
   channel: RetrievalChannel,
-  queryVec: EmbeddingVector | null,
 ): void {
   hits.forEach((h, idx) => {
     const id = h.id as TraceId;
@@ -376,7 +488,9 @@ function mergeChannelHits(
       // and depend on RRF for ranking.
       cosine: isVec ? h.score : 0,
       ts: meta.ts,
-      vec: queryVec,
+      // The vector search API returns only ids/scores. Hydration below
+      // replaces this with the candidate row's actual stored vector.
+      vec: null,
       value: meta.value,
       priority: meta.priority,
       episodeId: meta.episode_id,
@@ -392,10 +506,11 @@ function mergeChannelHits(
   });
 }
 
-function blendScore(c: TraceCandidate, deps: Tier2Deps): number {
-  // Re-derive priority so we respect any time elapsed between write and
-  // retrieval (keeps old high-V traces sinking over the half-life).
-  const livePriority = priorityFor(c.value, c.ts, deps.config.decayHalfLifeDays, deps.now());
+function preRankScore(c: TraceCandidate): number {
+  const semantic = Math.max(
+    c.cosine,
+    ...(c.channels ?? []).map((channel) => channel.score),
+  );
   const channelCount = c.channels?.length ?? 0;
   const channelLift =
     channelCount > 1
@@ -403,11 +518,7 @@ function blendScore(c: TraceCandidate, deps: Tier2Deps): number {
         // a 5-channel match doesn't become 5× anything.
         Math.min(0.15, 0.04 * (channelCount - 1))
       : 0;
-  return (
-    deps.config.weightCosine * c.cosine +
-    deps.config.weightPriority * livePriority +
-    channelLift
-  );
+  return semantic + channelLift;
 }
 
 /**

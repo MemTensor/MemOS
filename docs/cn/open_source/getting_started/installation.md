@@ -67,6 +67,9 @@ touch .env
 OPENAI_API_KEY=sk-xxx
 # OpenAI API 基础 URL
 OPENAI_API_BASE=http://xxx:3000/v1
+# Qwen 共享凭据；模型名以 "qwen" 开头的任务类 LLM 会自动使用这里的配置
+QWEN_API_KEY=sk-xxx
+QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 # 默认模型名称
 MOS_CHAT_MODEL=qwen3-max
 
@@ -76,6 +79,14 @@ MEMRADER_MODEL=qwen3-max
 MEMRADER_API_KEY=sk-xxx
 # Memory Reader API 基础 URL
 MEMRADER_API_BASE=http://xxx:3000/v1
+
+# 任务类 LLM 模型，只配置模型名；系统会根据模型名自动选择
+# QWEN_API_KEY/QWEN_API_BASE 或 OPENAI_API_KEY/OPENAI_API_BASE。
+MEMREADER_GENERAL_MODEL=qwen3-max
+PREFERENCE_EXTRACTOR_MODEL=qwen3-max
+FEEDBACK_MODEL=qwen3-max
+SUGGESTION_MODEL=qwen3-max
+MEMSCHEDULER_MODEL=qwen3-max
 
 # Embedder 模型名称
 MOS_EMBEDDER_MODEL=text-embedding-v4
@@ -101,7 +112,7 @@ NEO4J_DB_NAME=neo4j
 MOS_NEO4J_SHARED_DB=false
 
 # 是否使用 redis 的调度器
-DEFAULT_USE_REDIS_QUEUE=false
+MEMSCHEDULER_USE_REDIS_QUEUE=false
 
 # 启用聊天 API
 ENABLE_CHAT_API=true
@@ -118,6 +129,9 @@ CHAT_MODEL_LIST=[{"backend": "qwen", "api_base": "https://xxx/v1", "api_key": "s
 OPENAI_API_KEY=you_bailian_api_key
 # OpenAI API 基础 URL
 OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+# Qwen 共享凭据；模型名以 "qwen" 开头的任务类 LLM 会自动使用这里的配置
+QWEN_API_KEY=you_bailian_api_key
+QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 # 默认模型名称
 MOS_CHAT_MODEL=qwen3-max
 
@@ -127,6 +141,14 @@ MEMRADER_MODEL=qwen3-max
 MEMRADER_API_KEY=you_bailian_api_key
 # Memory Reader API 基础 URL
 MEMRADER_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+
+# 任务类 LLM 模型，只配置模型名；系统会根据模型名自动选择
+# QWEN_API_KEY/QWEN_API_BASE 或 OPENAI_API_KEY/OPENAI_API_BASE。
+MEMREADER_GENERAL_MODEL=qwen3-max
+PREFERENCE_EXTRACTOR_MODEL=qwen3-max
+FEEDBACK_MODEL=qwen3-max
+SUGGESTION_MODEL=qwen3-max
+MEMSCHEDULER_MODEL=qwen3-max
 
 # Embedder模型名称可以参考下面链接
 # https://bailian.console.aliyun.com/?spm=a2c4g.11186623.0.0.2f2165b08fRk4l&tab=api#/api/?type=model&url=2846066
@@ -153,7 +175,7 @@ NEO4J_DB_NAME=neo4j
 MOS_NEO4J_SHARED_DB=false
 
 # 是否使用 redis 的调度器
-DEFAULT_USE_REDIS_QUEUE=false
+MEMSCHEDULER_USE_REDIS_QUEUE=false
 
 # 启用聊天 API
 ENABLE_CHAT_API=true

@@ -168,6 +168,20 @@ describe("memory/l3/abstract", () => {
     expect(res.reason).toBe("llm_disabled");
   });
 
+  it("skips oversized legacy batches before calling the LLM", async () => {
+    const llm = fakeLlm({ completeJson: { [OP]: {} } });
+    const cluster = mkCluster();
+    cluster.policies[0]!.procedure = "x".repeat(5_000);
+    const res = await abstractDraft(
+      { cluster, evidenceByPolicy: new Map() },
+      { llm, log, config: cfg({ maxPromptChars: 4_000, policyCharCap: 4_000 }) },
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe("prompt_too_large");
+    expect(llm.stats().requests).toBe(0);
+  });
+
   it("returns llm_failed when the LLM throws — never rethrows", async () => {
     const llm = throwingLlm(new Error("boom"));
     const res = await abstractDraft(
@@ -227,4 +241,3 @@ describe("memory/l3/abstract", () => {
     expect(row.body).toContain("Environment");
   });
 });
-

@@ -60,6 +60,8 @@ export interface StartEpisodeInput {
   /** Adapter-provided event time for the first user turn. */
   ts?: EpochMs;
   meta?: Record<string, unknown>;
+  /** Foreground cancellation propagated to intent classification. */
+  signal?: AbortSignal;
 }
 
 export interface SessionManager {
@@ -267,6 +269,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManager {
     const episodeId = (input.id ?? ids.episode()) as EpisodeId;
     const intent = await deps.intentClassifier.classify(input.userMessage, {
       episodeId,
+      signal: input.signal,
     });
 
     // Wrap the write+emit in a log context so downstream listeners inherit

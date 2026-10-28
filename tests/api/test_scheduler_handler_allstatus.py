@@ -2,7 +2,7 @@
 in-memory message queue (no Redis).
 
 Reproduces the symptom from issue #1395: under Docker + uvicorn with
-``DEFAULT_USE_REDIS_QUEUE=false`` the consumer thread is alive and dispatches
+``MEMSCHEDULER_USE_REDIS_QUEUE=false`` the consumer thread is alive and dispatches
 messages, but ``GET /product/scheduler/allstatus`` always returns
 ``{waiting:0, in_progress:0, pending:0, …}``. Root cause is that
 ``handle_scheduler_allstatus`` only aggregates per-stream entries whose key

@@ -18,13 +18,20 @@
  *      base-score band — not a dominant term that washes out the RRF
  *      signal.
  *
- *   4. **Multi-channel bypass.** Any candidate surfaced by ≥ 2 channels
- *      is exempt from the relative-threshold drop (it can still lose in
- *      MMR on redundancy). This is the backstop that guarantees a
- *      keyword-only hit confirmed by vector can never be silently
- *      dropped because a noisy topRelevance dragged the floor up.
+ *   4. **Hard eligibility before destructive selection.** Long-identifier
+ *      queries reject ordinary vector-only memories before dedupe/MMR while
+ *      preserving the existing skill/world-model exemption.
  *
- *   5. **Smart-seed MMR.** Phase A seeds at most one candidate per tier,
+ *   5. **Two-stage repeated-question hard dedupe.** Before the threshold,
+ *      exact duplicates collapse only within the same bypass-capability
+ *      partition. After eligibility is resolved, surviving variants collapse
+ *      again so duplicate text still consumes one Top-K slot.
+ *
+ *   6. **Strong multi-channel bypass.** Candidates surfaced through at least
+ *      two channels, with one strong primary signal, may bypass the relative
+ *      threshold but still participate normally in MMR.
+ *
+ *   7. **Smart-seed MMR.** Phase A seeds at most one candidate per tier,
  *      and only if its relevance is within `smartSeedRatio` of the pool
  *      top. Prevents "force-inject an irrelevant Tier-1 / Tier-3 just
  *      because the tier had a candidate".
@@ -33,14 +40,18 @@
  */
 
 import { cosinePrenormed, norm2 } from "../storage/vector.js";
+import type { InjectionScoreDetails } from "../../agent-contract/dto.js";
 import type { EmbeddingVector } from "../types.js";
 import { priorityFor } from "../reward/backprop.js";
+import { normalizeIdentifierText } from "../storage/keyword.js";
+import { dedupeRepeatedQuestionCandidates } from "./candidate-dedupe.js";
 import type {
   ChannelRank,
   EpisodeCandidate,
   ExperienceCandidate,
   RetrievalChannel,
   RetrievalConfig,
+  RetrievalProfile,
   SkillCandidate,
   TierCandidate,
   TierKind,
@@ -58,6 +69,9 @@ export interface RankerInput {
   limit: number;
   config: RetrievalConfig;
   now: number;
+  profile?: RetrievalProfile;
+  /** Concrete long identifiers requiring exact confirmation. */
+  exactIdentifiers?: readonly string[];
 }
 
 export interface RankedCandidate {
@@ -77,6 +91,8 @@ export interface RankedCandidate {
   /** True when this candidate was allowed past the threshold via the
    *  multi-channel bypass (useful for logs / "why did this survive?"). */
   bypassedThreshold?: boolean;
+  /** Structured explanation copied into logs with the final snippet. */
+  scoreDetails?: InjectionScoreDetails;
 }
 
 export interface RankerResult {
@@ -89,6 +105,12 @@ export interface RankerResult {
   topRelevance: number;
   /** Number of candidates the relative-threshold cut. */
   droppedByThreshold: number;
+  /** Repeated-question trace candidates removed before MMR. */
+  dedupedBeforeMmr: number;
+  /** Subset of `dedupedBeforeMmr` removed after threshold eligibility. */
+  dedupedAfterThreshold: number;
+  /** Candidates rejected by long-identifier keyword confirmation. */
+  droppedByKeywordConfirmation: number;
   /** Absolute floor applied (`topRelevance · floor`). */
   thresholdFloor: number;
   /** Channel hit counts aggregated across all candidates. */
@@ -141,16 +163,81 @@ export function rank(input: RankerInput): RankerResult {
       kept,
       topRelevance: 0,
       droppedByThreshold: 0,
+      dedupedBeforeMmr: 0,
+      dedupedAfterThreshold: 0,
+      droppedByKeywordConfirmation: 0,
       thresholdFloor: 0,
       channelHits,
     };
   }
 
   assignChannelRrf(bag, input.config.rrfConstant);
-  for (const c of bag) c.relevance += RRF_WEIGHT * c.rrf;
+  for (const c of bag) {
+    const semantic = bestChannelScore(c.candidate);
+    const tierBoost = c.relevance - semantic;
+    const rrfBoost = RRF_WEIGHT * c.rrf;
+    c.relevance += rrfBoost;
+    c.scoreDetails = {
+      profile: input.profile ?? "default",
+      semantic,
+      tierBoost,
+      rrfBoost,
+      relevance: c.relevance,
+      mmrLambda: 0,
+      redundancy: 0,
+      finalScore: c.relevance,
+      channels: (c.candidate.channels ?? []).map((channel) => channel.channel),
+      bypassedThreshold: false,
+    };
+  }
 
-  // ─── 2. Relative threshold cut (with multi-channel bypass) ────────────────
-  const topRelevance = bag.reduce((m, c) => Math.max(m, c.relevance), 0);
+  // ─── 2. Query-specific hard eligibility ───────────────────────────────────
+  // Long identifiers are unsafe to match through embedding similarity or
+  // generic short-pattern hits alone. Apply exact confirmation before any
+  // irreversible dedupe/MMR choice.
+  const exactIdentifiers = input.exactIdentifiers ?? [];
+  const keywordEligible = exactIdentifiers.length > 0
+    ? bag.filter((candidate) =>
+        isIdentifierEligible(candidate.candidate, exactIdentifiers)
+      )
+    : bag;
+  const droppedByKeywordConfirmation = bag.length - keywordEligible.length;
+
+  if (keywordEligible.length === 0) {
+    return {
+      ranked: [],
+      tierSizes,
+      kept,
+      topRelevance: 0,
+      droppedByThreshold: 0,
+      dedupedBeforeMmr: 0,
+      dedupedAfterThreshold: 0,
+      droppedByKeywordConfirmation,
+      thresholdFloor: 0,
+      channelHits,
+    };
+  }
+
+  // ─── 3. High-confidence hard dedupe ───────────────────────────────────────
+  // Relevance and RRF are already available, so exact duplicate evidence keeps
+  // its strongest representative. Dedupe happens before deriving the relative
+  // threshold so repeated high-scoring chatter cannot inflate the cutoff.
+  //
+  // Bypass-capable and ordinary variants remain in separate partitions until
+  // the threshold has been evaluated. Otherwise a slightly higher ordinary
+  // duplicate could erase the only variant entitled to bypass the floor.
+  const deduped = dedupeRepeatedQuestionCandidates(keywordEligible, {
+    capabilityKey: (candidate) =>
+      canBypassRelativeThreshold(candidate.candidate, input.config)
+        ? "threshold-bypass"
+        : "normal",
+  });
+
+  // ─── 4. Relative threshold cut (with multi-channel bypass) ────────────────
+  const topRelevance = deduped.kept.reduce(
+    (maximum, candidate) => Math.max(maximum, candidate.relevance),
+    0,
+  );
   const floorRatio =
     input.config.relativeThresholdFloor ?? DEFAULT_RELATIVE_THRESHOLD;
   const cutoff = topRelevance > 0 ? topRelevance * floorRatio : 0;
@@ -158,10 +245,12 @@ export function rank(input: RankerInput): RankerResult {
 
   let droppedByThreshold = 0;
   const survivors: RankedCandidate[] = [];
-  for (const c of bag) {
-    const channels = c.candidate.channels ?? [];
-    const multiChannel = bypassEnabled && channels.length >= 2;
+  for (const c of deduped.kept) {
+    const multiChannel =
+      bypassEnabled &&
+      canBypassRelativeThreshold(c.candidate, input.config);
     if (multiChannel) c.bypassedThreshold = true;
+    if (c.scoreDetails) c.scoreDetails.bypassedThreshold = multiChannel;
     if (cutoff > 0 && c.relevance < cutoff && !multiChannel) {
       droppedByThreshold += 1;
       continue;
@@ -176,18 +265,31 @@ export function rank(input: RankerInput): RankerResult {
       kept,
       topRelevance,
       droppedByThreshold,
+      dedupedBeforeMmr: deduped.dropped.length,
+      dedupedAfterThreshold: 0,
+      droppedByKeywordConfirmation,
       thresholdFloor: cutoff,
       channelHits,
     };
   }
 
-  // ─── 3. MMR-style greedy pick ─────────────────────────────────────────────
-  const λ = clamp(input.config.mmrLambda, 0, 1);
+  // ─── 5. Collapse capability variants after threshold eligibility ──────────
+  // Once every survivor has cleared the normal floor or its bypass, capability
+  // variants are equivalent again. Collapse them before MMR so duplicate text
+  // still consumes only one Top-K slot.
+  const postThresholdDeduped =
+    dedupeRepeatedQuestionCandidates(survivors);
+
+  // ─── 6. MMR-style greedy pick ─────────────────────────────────────────────
+  const λ =
+    input.profile === "personal_fact"
+      ? 0.85
+      : clamp(input.config.mmrLambda, 0, 1);
   const out: RankedCandidate[] = [];
   const selectedVecs: EmbeddingVector[] = [];
   const selectedNorms: number[] = [];
-  const pool = [...survivors];
-  const limit = Math.min(input.limit, survivors.length);
+  const pool = [...postThresholdDeduped.kept];
+  const limit = Math.min(input.limit, postThresholdDeduped.kept.length);
   const smartSeed = input.config.smartSeed !== false;
   const seedRatio = smartSeed
     ? input.config.smartSeedRatio ?? DEFAULT_SMART_SEED_RATIO
@@ -222,6 +324,7 @@ export function rank(input: RankerInput): RankerResult {
     if (tierBestRel < seedCutoff) continue;
     const c = pool.splice(bestIdx, 1)[0]!;
     c.score = bestScore;
+    finaliseScoreDetails(c, selectedVecs, selectedNorms, λ);
     out.push(c);
     kept[tk] += 1;
     pushVec(selectedVecs, selectedNorms, c);
@@ -242,6 +345,7 @@ export function rank(input: RankerInput): RankerResult {
     if (bestIdx < 0) break;
     const [picked] = pool.splice(bestIdx, 1);
     picked!.score = bestScore;
+    finaliseScoreDetails(picked!, selectedVecs, selectedNorms, λ);
     out.push(picked!);
     kept[picked!.candidate.tier] += 1;
     pushVec(selectedVecs, selectedNorms, picked!);
@@ -256,9 +360,25 @@ export function rank(input: RankerInput): RankerResult {
     kept,
     topRelevance,
     droppedByThreshold,
+    dedupedBeforeMmr:
+      deduped.dropped.length + postThresholdDeduped.dropped.length,
+    dedupedAfterThreshold: postThresholdDeduped.dropped.length,
+    droppedByKeywordConfirmation,
     thresholdFloor: cutoff,
     channelHits,
   };
+}
+
+function finaliseScoreDetails(
+  candidate: RankedCandidate,
+  selected: readonly EmbeddingVector[],
+  selectedNorms: readonly number[],
+  lambda: number,
+): void {
+  if (!candidate.scoreDetails) return;
+  candidate.scoreDetails.mmrLambda = lambda;
+  candidate.scoreDetails.redundancy = maxCos(candidate, selected, selectedNorms);
+  candidate.scoreDetails.finalScore = candidate.score;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -294,7 +414,7 @@ function relevanceFor(c: TierCandidate, input: RankerInput): number {
       input.config.decayHalfLifeDays,
       input.now,
     );
-    const blend = priorityBlendFor(input.config);
+    const blend = priorityBlendFor(input.config, input.profile);
     return base + blend * live;
   }
   if (c.refKind === "episode") {
@@ -305,7 +425,7 @@ function relevanceFor(c: TierCandidate, input: RankerInput): number {
       input.config.decayHalfLifeDays,
       input.now,
     );
-    const blend = priorityBlendFor(input.config);
+    const blend = priorityBlendFor(input.config, input.profile);
     return base + blend * live;
   }
   if (c.refKind === "experience") {
@@ -326,13 +446,82 @@ function relevanceFor(c: TierCandidate, input: RankerInput): number {
  * 0.3). Configs that explicitly set `weightPriority` higher than that
  * still work — their intent "priority matters more" is preserved.
  */
-function priorityBlendFor(config: RetrievalConfig): number {
+function priorityBlendFor(
+  config: RetrievalConfig,
+  profile: RetrievalProfile | undefined,
+): number {
+  if (profile === "personal_fact") return 0;
   const w = config.weightPriority;
   if (w == null || w <= 0) return 0;
   // Cap the effective blend so priority can't single-handedly push a
   // V=1 trace above a channel-confirmed keyword hit — priority is a
   // tie-breaker, not a dominant term.
   return Math.min(w, DEFAULT_PRIORITY_BLEND);
+}
+
+function canBypassRelativeThreshold(
+  candidate: TierCandidate,
+  config: RetrievalConfig,
+): boolean {
+  const channels = candidate.channels ?? [];
+  if (config.multiChannelBypass === false || channels.length < 2) return false;
+  return (candidate.channels ?? []).some((channel) => {
+    if (
+      channel.channel === "vec" ||
+      channel.channel === "vec_summary" ||
+      channel.channel === "vec_action"
+    ) {
+      return channel.score >= config.minTraceSim;
+    }
+    if (channel.channel === "structural") return channel.score >= 0.8;
+    return channel.score >= 0.75;
+  });
+}
+
+function isIdentifierEligible(
+  candidate: TierCandidate,
+  exactIdentifiers: readonly string[],
+): boolean {
+  if (
+    candidate.refKind === "skill" ||
+    candidate.refKind === "world-model"
+  ) {
+    return true;
+  }
+  if (
+    (candidate.channels ?? []).some(
+      (channel) => channel.channel === "exact_identifier",
+    )
+  ) {
+    return true;
+  }
+  const body = normalizeIdentifierText(identifierSearchText(candidate));
+  return exactIdentifiers.some((identifier) =>
+    body.includes(normalizeIdentifierText(identifier))
+  );
+}
+
+function identifierSearchText(candidate: TierCandidate): string {
+  if (candidate.refKind === "trace") {
+    return [
+      candidate.userText,
+      candidate.agentText,
+      candidate.summary,
+      candidate.reflection,
+      ...candidate.tags,
+    ].filter(Boolean).join("\n");
+  }
+  if (candidate.refKind === "episode") return candidate.summary;
+  if (candidate.refKind === "experience") {
+    return [
+      candidate.title,
+      candidate.trigger,
+      candidate.procedure,
+      candidate.verification,
+      candidate.boundary,
+    ].filter(Boolean).join("\n");
+  }
+  return "";
 }
 
 function bestChannelScore(c: TierCandidate): number {
@@ -392,9 +581,17 @@ function maxCos(
   if (candNorm === 0) return 0;
   let m = 0;
   for (let i = 0; i < selected.length; i += 1) {
+    const selectedVec = selected[i]!;
+    // Embedding migrations can leave the candidate pool temporarily
+    // heterogeneous (for example, legacy 384-dim rows mixed with current
+    // 1024-dim rows recalled through FTS/pattern channels). Those vectors
+    // do not share a coordinate space, so their redundancy is undefined.
+    // Keep both candidates and skip only this pairwise comparison instead
+    // of aborting the entire retrieval packet.
+    if (vec.length !== selectedVec.length) continue;
     const sn = Math.sqrt(selectedNorms[i]!);
     if (sn === 0) continue;
-    const sim = cosinePrenormed(vec, candNorm, selected[i]!, selectedNorms[i]!);
+    const sim = cosinePrenormed(vec, candNorm, selectedVec, selectedNorms[i]!);
     if (sim > m) m = sim;
   }
   return m;

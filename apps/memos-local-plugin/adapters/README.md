@@ -2,8 +2,8 @@
 
 The `core/` package implements the Reflect2Evolve V7 algorithm as a
 single agent-agnostic library. Adapters translate between a specific
-agent host (OpenClaw, Hermes, potentially others) and the public
-`MemoryCore` facade defined in `agent-contract/memory-core.ts`.
+agent host (OpenClaw, Hermes, DeepSeek Harness, potentially others) and the
+public `MemoryCore` facade defined in `agent-contract/memory-core.ts`.
 
 Each adapter owns:
 
@@ -28,6 +28,13 @@ adapters/
 │   ├── bridge.ts             # OpenClaw events ↔ MemoryCore DTOs
 │   ├── tools.ts              # memos_search, memos_get, … tool registrations
 │   └── index.ts              # register(api) — plugin entry point
+├── deepseek-harness/          # DSH bundle (TypeScript, in-process Cordis)
+│   ├── README.md
+│   ├── cordis.patch.yml       # bundle layer installed by dsh plugin
+│   ├── bridge.ts              # DSH lifecycle events ↔ MemoryCore DTOs
+│   ├── host-llm.ts             # per-turn DSH LLM delegation + route isolation
+│   ├── tools.ts               # six model-facing memory tools
+│   └── index.ts               # Cordis plugin + Viewer lifecycle entry point
 └── hermes/                   # hermes-agent plugin (Python, out-of-process)
     ├── README.md
     ├── plugin.yaml
@@ -45,13 +52,20 @@ Adapters speak to `MemoryCore` in one of two ways:
 
 ```
 ┌──────────────────────┐   direct call   ┌──────────────────────┐
-│  OpenClaw plugin     │ ──────────────▶ │  MemoryCore          │
-│  (adapters/openclaw) │                 │  (core/pipeline)     │
+│ OpenClaw / DSH plugin│ ──────────────▶ │  MemoryCore          │
+│ (in-process adapters)│                 │  (core/pipeline)     │
 └──────────────────────┘                 └──────────────────────┘
 ```
 
-The OpenClaw adapter runs inside the OpenClaw host's Node process, so
-it imports the `MemoryCore` implementation and invokes it synchronously.
+The OpenClaw and DeepSeek Harness adapters run inside their host Node process,
+so they import `MemoryCore` directly. DSH discovers its adapter through the
+package's `dsh.bundle.patch`; its MemOS auxiliary model calls use DSH's public
+LLM service without copying host credentials. When enabled, the DSH adapter
+also serves the shared MemOS HTTP/SSE Viewer from the same process on
+`127.0.0.1:18801` by default. The DSH integration rejects non-loopback Viewer
+binds and does not start the JSON-RPC bridge or a sidecar daemon. Lifecycle
+details and installation are in the
+[DSH adapter guide](./deepseek-harness/README.md).
 
 ### Out-of-process (Python)
 
@@ -82,5 +96,6 @@ pipes using line-delimited JSON-RPC 2.0 messages.
 ## See also
 
 - [`adapters/openclaw/README.md`](./openclaw/README.md)
+- [`adapters/deepseek-harness/README.md`](./deepseek-harness/README.md)
 - [`adapters/hermes/README.md`](./hermes/README.md)
 - [`ALGORITHMS.md`](./ALGORITHMS.md) — invariants enforced by the adapter layer

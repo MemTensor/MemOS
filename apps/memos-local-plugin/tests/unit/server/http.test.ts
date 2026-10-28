@@ -65,6 +65,7 @@ function stubCore(): MemoryCore {
     shareTrace: vi.fn(async (id) => ({ id, share: { scope: "public" } } as any)),
     getPolicy: vi.fn(async (id) => ({ id, title: "p", status: "active" } as any)),
     listPolicies: vi.fn(async () => []),
+    countPolicies: vi.fn(async () => 0),
     setPolicyStatus: vi.fn(async (id, status) => ({ id, status } as any)),
     deletePolicy: vi.fn(async () => ({ deleted: false })),
     sharePolicy: vi.fn(async (id, share) => ({ id, share } as any)),
@@ -72,6 +73,7 @@ function stubCore(): MemoryCore {
     editPolicyGuidance: vi.fn(async (id) => ({ id } as any)),
     getWorldModel: vi.fn(async () => null),
     listWorldModels: vi.fn(async () => []),
+    countWorldModels: vi.fn(async () => 0),
     deleteWorldModel: vi.fn(async () => ({ deleted: false })),
     shareWorldModel: vi.fn(async (id, share) => ({ id, status: "active", share } as any)),
     updateWorldModel: vi.fn(async (id, patch) => ({ id, status: "active", ...patch } as any)),
@@ -233,8 +235,40 @@ describe("HTTP server — REST routes", () => {
     const r = await fetch(`${handle.url}/api/v1/health`);
     expect(r.status).toBe(200);
     const body = await r.json();
-    expect(body).toMatchObject({ ok: true, version: "test" });
+    expect(body).toMatchObject({
+      ok: true,
+      version: "test",
+      instanceId: expect.any(String),
+    });
     expect(core.health).toHaveBeenCalled();
+  });
+
+  it("close drains an in-flight ordinary HTTP handler", async () => {
+    let markStarted!: () => void;
+    let resolveHealth!: (value: unknown) => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const pendingHealth = new Promise<unknown>((resolve) => { resolveHealth = resolve; });
+    (core.health as any).mockImplementationOnce(() => {
+      markStarted();
+      return pendingHealth;
+    });
+
+    const responsePromise = fetch(`${handle.url}/api/v1/health`);
+    await started;
+
+    const closePromise = handle.close();
+    const earlyClose = await Promise.race([
+      closePromise.then(() => "closed" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 50)),
+    ]);
+    expect(earlyClose).toBe("pending");
+
+    resolveHealth({ ok: true, version: "delayed", agent: "openclaw" });
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, version: "delayed" });
+    await closePromise;
+    expect(handle.closed).toBe(true);
   });
 
   it("strips /memos reverse-proxy prefix before route dispatch", async () => {
@@ -470,7 +504,8 @@ describe("HTTP server — REST routes", () => {
     expect(Array.isArray(body.traces)).toBe(true);
     expect(body.traces[0]?.id).toBe("tr-1");
     expect(body.traces[0]?.summary).toBe("greeted");
-    // The route must forward the query string into the core call.
+    // The route must forward the query string into the core call, and
+    // pin the viewer to all-namespace reads (#2131 drift regression).
     expect(core.listTraces).toHaveBeenCalledWith({
       limit: 25,
       offset: 0,
@@ -479,6 +514,7 @@ describe("HTTP server — REST routes", () => {
       groupByTurn: false,
       ownerAgentKind: undefined,
       ownerProfileId: undefined,
+      includeAllNamespaces: true,
     });
   });
 
@@ -518,6 +554,20 @@ describe("HTTP server — REST routes", () => {
     const body = (await r.json()) as { total: number; dailyWrites: unknown[] };
     expect(body.total).toBe(0);
     expect(Array.isArray(body.dailyWrites)).toBe(true);
+  });
+
+  it("GET /api/v1/metrics/tools scopes both data feeds to all namespaces", async () => {
+    const r = await fetch(`${handle.url}/api/v1/metrics/tools?minutes=60`);
+    expect(r.status).toBe(200);
+    // The tool panel folds api_logs entries and trace tool-calls into
+    // one aggregation; both feeds must be pinned to all-namespace reads
+    // or the chart under-reports after a namespace flip (#2131).
+    expect(core.listApiLogs).toHaveBeenCalledWith(
+      expect.objectContaining({ includeAllNamespaces: true }),
+    );
+    expect(core.listTraces).toHaveBeenCalledWith(
+      expect.objectContaining({ includeAllNamespaces: true }),
+    );
   });
 
   it("GET /api/v1/config returns resolved config", async () => {
@@ -646,8 +696,10 @@ describe("HTTP server — REST routes", () => {
 
   it("imports Hermes native MEMORY.md in batches", async () => {
     const oldHome = process.env.HOME;
+    const oldHermesHome = process.env.HERMES_HOME;
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "memos-hermes-native-"));
-    const nativeDir = path.join(tmpHome, ".hermes", "memories");
+    const hermesHome = path.join(tmpHome, "configured-hermes-home");
+    const nativeDir = path.join(hermesHome, "memories");
     fs.mkdirSync(nativeDir, { recursive: true });
     fs.writeFileSync(
       path.join(nativeDir, "MEMORY.md"),
@@ -655,6 +707,7 @@ describe("HTTP server — REST routes", () => {
       "utf8",
     );
     process.env.HOME = tmpHome;
+    process.env.HERMES_HOME = hermesHome;
 
     const importBundle = core.importBundle as unknown as ReturnType<typeof vi.fn>;
     importBundle.mockImplementation(async (bundle: { traces?: unknown[] }) => ({
@@ -669,7 +722,7 @@ describe("HTTP server — REST routes", () => {
       const scanBody = (await scan.json()) as { found: boolean; total: number; path: string };
       expect(scanBody.found).toBe(true);
       expect(scanBody.total).toBe(2);
-      expect(scanBody.path).toMatch(/\.hermes\/memories\/MEMORY\.md$/);
+      expect(scanBody.path).toBe(path.join(hermesHome, "memories", "MEMORY.md"));
 
       const run = await fetch(`${local.url}/api/v1/import/hermes-native/run`, {
         method: "POST",
@@ -707,6 +760,11 @@ describe("HTTP server — REST routes", () => {
         delete process.env.HOME;
       } else {
         process.env.HOME = oldHome;
+      }
+      if (oldHermesHome === undefined) {
+        delete process.env.HERMES_HOME;
+      } else {
+        process.env.HERMES_HOME = oldHermesHome;
       }
       fs.rmSync(tmpHome, { recursive: true, force: true });
     }

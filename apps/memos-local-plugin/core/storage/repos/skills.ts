@@ -14,6 +14,11 @@ import {
   toJsonText,
 } from "./_helpers.js";
 
+export const IDLE_ARCHIVE_BATCH_LIMIT = 500;
+
+const IDLE_ARCHIVE_PREDICATE =
+  "status = 'active' AND eta < @min_eta AND COALESCE(last_used_at, created_at) <= @cutoff";
+
 const COLUMNS = [
   "id",
   "owner_agent_kind",
@@ -85,6 +90,42 @@ export function makeSkillsRepo(db: StorageDb) {
 
     setStatus(id: SkillId, status: SkillRow["status"], updatedAt: number): void {
       updateStatus.run({ id, status, updated_at: updatedAt });
+    },
+
+    /**
+     * Atomically select and archive one oldest-first batch. Keeping candidate
+     * selection and the conditional transition in one SQLite statement
+     * removes the read/update race and avoids hundreds of UPDATE round-trips.
+     */
+    archiveNextIdleBatch(input: {
+      minEtaForRetrieval: number;
+      cutoff: number;
+      updatedAt: number;
+      limit?: number;
+    }): SkillRow[] {
+      const requestedLimit = Number.isFinite(input.limit)
+        ? Math.floor(input.limit!)
+        : IDLE_ARCHIVE_BATCH_LIMIT;
+      const params = {
+        min_eta: input.minEtaForRetrieval,
+        cutoff: input.cutoff,
+        updated_at: input.updatedAt,
+        limit: Math.max(1, Math.min(IDLE_ARCHIVE_BATCH_LIMIT, requestedLimit)),
+      };
+      const sql = `
+        WITH candidates AS (
+          SELECT id
+            FROM skills
+           WHERE ${IDLE_ARCHIVE_PREDICATE}
+           ORDER BY COALESCE(last_used_at, created_at) ASC
+           LIMIT @limit
+        )
+        UPDATE skills
+           SET status = 'archived', updated_at = @updated_at
+         WHERE id IN (SELECT id FROM candidates)
+           AND ${IDLE_ARCHIVE_PREDICATE}
+        RETURNING ${COLUMNS.join(", ")}`;
+      return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
     },
 
     bumpTrial(
@@ -251,13 +292,16 @@ export function makeSkillsRepo(db: StorageDb) {
         k: Math.max(1, Math.min(200, Math.floor(k))),
       };
       const ors: string[] = [];
-      dedup.slice(0, 16).forEach((t, i) => {
+      const matchScores: string[] = [];
+      const limitedTerms = dedup.slice(0, 16);
+      limitedTerms.forEach((t, i) => {
         const key = `pat_${i}`;
         const escaped = t.replace(/[\\%_]/g, (m) => `\\${m}`);
         params[key] = `%${escaped}%`;
-        ors.push(
-          `(name LIKE @${key} ESCAPE '\\' OR invocation_guide LIKE @${key} ESCAPE '\\')`,
-        );
+        const match =
+          `(name LIKE @${key} ESCAPE '\\' OR invocation_guide LIKE @${key} ESCAPE '\\')`;
+        ors.push(match);
+        matchScores.push(`CASE WHEN ${match} THEN 1 ELSE 0 END`);
       });
       const whereParts: string[] = [`(${ors.join(" OR ")})`];
       if (opts.statusIn && opts.statusIn.length > 0) {
@@ -268,17 +312,18 @@ export function makeSkillsRepo(db: StorageDb) {
         });
       }
       const sql = `
-        SELECT id, name, status, eta, gain, owner_agent_kind, owner_profile_id, owner_workspace_id
+        SELECT id, name, status, eta, gain, owner_agent_kind, owner_profile_id,
+               owner_workspace_id, (${matchScores.join(" + ")}) AS pattern_matches
           FROM skills
          WHERE ${whereParts.join(" AND ")}
-         ORDER BY updated_at DESC
+         ORDER BY pattern_matches DESC, updated_at DESC
          LIMIT @k`;
       const rows = db
-        .prepare<typeof params, { id: string; name: string; status: SkillRow["status"]; eta: number; gain: number; owner_agent_kind: string; owner_profile_id: string; owner_workspace_id: string | null }>(sql)
+        .prepare<typeof params, { id: string; name: string; status: SkillRow["status"]; eta: number; gain: number; owner_agent_kind: string; owner_profile_id: string; owner_workspace_id: string | null; pattern_matches: number }>(sql)
         .all(params);
-      return rows.map((r, idx) => ({
+      return rows.map((r) => ({
         id: r.id,
-        score: 1 / (idx + 1),
+        score: r.pattern_matches / limitedTerms.length,
         meta: { name: r.name, status: r.status, eta: r.eta, gain: r.gain, owner_agent_kind: r.owner_agent_kind, owner_profile_id: r.owner_profile_id, owner_workspace_id: r.owner_workspace_id },
       }));
     },

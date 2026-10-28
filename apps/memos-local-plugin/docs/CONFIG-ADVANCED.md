@@ -57,6 +57,32 @@ storage:
 words and mixed ASCII+CJK terms searchable in the keyword channel, which helps
 queries such as `早报`, `配置`, and `API配置`.
 
+For OpenRouter-backed OpenAI-compatible models, you can ask OpenRouter to
+skip providers that are unreliable for reflection/scoring prompts:
+
+```yaml
+llm:
+  provider: openai_compatible
+  endpoint: https://openrouter.ai/api/v1
+  model: google/gemini-2.5-flash-lite
+  apiKey: sk-or-v1-...
+  providerIgnore:
+    - together
+    - deepinfra
+    - novita
+  # providerOrder:
+  #   - google
+  #   - anthropic
+  #   - openai
+```
+
+The same `providerIgnore` and `providerOrder` fields are accepted on
+`skillEvolver`, `l3Llm`, and `embedding` config blocks.
+They map to OpenRouter's `provider.ignore` and `provider.order` request
+fields and are omitted when empty or when the endpoint is not OpenRouter.
+OpenRouter is detected from the normalized `openrouter.ai` hostname. For a
+reverse proxy or CNAME, set `openRouter: true` on that config block to opt in.
+
 ### `algorithm`
 Direct mapping to the V7 spec (γ, support, gain, top-K, etc.). Change only
 if you know what you're doing — defaults are calibrated for the paper.
@@ -112,6 +138,8 @@ algorithm:
     minPolicyGain: 0.02            # eligible L2 gain floor (paired with shrinkage-anchored gain)
     minPolicySupport: 1            # eligible L2 support floor
     clusterMinSimilarity: 0.6      # cosine cutoff for cluster-and-merge decisions
+    maxPoliciesPerCluster: 20      # policies per abstraction batch; overflow is retained
+    maxPromptChars: 32000          # hard total prompt cap; oversized legacy batches are quarantined
     policyCharCap: 800             # chars per policy in the prompt
     traceCharCap: 500              # chars per evidence trace in the prompt
     traceEvidencePerPolicy: 1      # evidence traces per policy in the prompt
@@ -130,6 +158,7 @@ algorithm:
     etaDelta: 0.1                  # η step per user.positive/user.negative thumbs
     archiveEta: 0.25               # η floor; crossing archives
     minEtaForRetrieval: 0.5        # η gate for Tier-1 retrieval + auto-promotion
+    idleArchiveMs: 2592000000      # archive low-η skills after 30d without retrieval (minimum 1h)
   feedback:
     failureThreshold: 3            # failures in `failureWindow` that trigger a burst (V7 §6.3)
     failureWindow: 5               # rolling tool-call window per (toolId, context)

@@ -53,6 +53,11 @@ event-driven and every triggered run is fully async. Listener errors
 are captured so a bad downstream consumer can never break the
 orchestrator.
 
+For `reward.updated`, the subscriber resolves only policies linked to the
+updated episode (falling back to `sourceEpisodeIds` for legacy rows). Each
+resolved policy receives its own queue entry and cooldown, so unrelated
+policies neither trigger a global scan nor block one another.
+
 ## Key concepts
 
 ### Eligibility
@@ -201,13 +206,18 @@ See `algorithm.skill` in
 | `minSupport`                | `2`     | Min distinct-episode support to crystallize.          |
 | `minGain`                   | `0.02`  | Min policy gain required (paired with the new shrinkage-anchored gain in `core/memory/l2/gain.ts`). |
 | `candidateTrials`           | `3`     | Trials required to transition out of `candidate`. NOTE: legacy docs called this `probationaryTrials`; the schema field is `candidateTrials`. |
-| `cooldownMs`                | `60000` | Debounce between runs triggered by the same policy.   |
+| `cooldownMs`                | `21600000` | Per-policy debounce for reward-triggered runs (6 hours; `0` disables). |
 | `traceCharCap`              | `600`   | Char cap per evidence trace in the crystallize prompt.|
 | `evidenceLimit`             | `4`     | Max evidence traces per crystallize call.             |
 | `useLlm`                    | `true`  | Toggle the LLM off (tests / degraded mode).           |
 | `etaDelta`                  | `0.1`   | η step per `user.positive`/`user.negative`.           |
 | `retireEta`                 | `0.25`  | η floor; crossing retires.                            |
 | `minEtaForRetrieval`        | `0.5`   | η gate for Tier-1 retrieval + auto-promotion.         |
+| `idleArchiveMs`             | `2592000000` | Archive low-η active skills after 30 days without use (minimum 1 hour). |
+
+Idle archival is maintained by a single-flight background worker that runs
+at startup and at most hourly. Manually reactivating a Skill starts a fresh
+idle grace period.
 
 ## Logging
 
@@ -232,7 +242,7 @@ log (`logs/audit.jsonl`, never deleted) via the `skill` channel.
 * `tests/unit/skill/crystallize.test.ts` — LLM draft normalization + failures.
 * `tests/unit/skill/verifier.test.ts` — coverage + resonance checks.
 * `tests/unit/skill/packager.test.ts` — row shape, invocation guide, embedder failure.
-* `tests/unit/skill/lifecycle.test.ts` — trial counter, thumbs, retire on drift.
+* `tests/unit/skill/lifecycle.test.ts` — trial counter, thumbs, reward drift, and idle archive decisions.
 * `tests/unit/skill/events.test.ts` — bus contract.
 * `tests/unit/skill/skill.integration.test.ts` — end-to-end against real SQLite.
 * `tests/unit/skill/subscriber.test.ts` — event-driven trigger + runOnce + flush.

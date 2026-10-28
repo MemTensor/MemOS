@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, it, expect } from "vitest";
 
 import { createFeedbackEventBus } from "../../../core/feedback/events.js";
@@ -207,6 +208,128 @@ describe("feedback/subscriber", () => {
     const hashes = new Set(stored.map((r) => r.contextHash));
     expect(hashes.has(contextHashOf("pip.install", "alpine"))).toBe(true);
     expect(hashes.has(contextHashOf("pip.build", "alpine"))).toBe(true);
+    sub.dispose();
+  });
+
+  it("drains a repair enqueued while the previous drain hands off to idle", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    const { sessionId } = seedScenario(h, "s_idle_handoff");
+    const bus = createFeedbackEventBus();
+    const sub = attachFeedbackSubscriber(deps(h, { bus }));
+    const emitBurst = (toolId: string) => {
+      for (let step = 1; step <= 3; step += 1) {
+        sub.recordToolFailure({
+          toolId,
+          context: "alpine",
+          step,
+          reason: "boom",
+          sessionId: sessionId as SessionId,
+        });
+      }
+    };
+    let scheduledSecond = false;
+    bus.onAny((event) => {
+      if (event.kind !== "repair.persisted" || scheduledSecond) return;
+      scheduledSecond = true;
+      // Land the second enqueue after drain() has observed an empty queue but
+      // before its finally handler releases `inflight`.
+      queueMicrotask(() => {
+        queueMicrotask(() => {
+          queueMicrotask(() => emitBurst("pip.build"));
+        });
+      });
+    });
+
+    emitBurst("pip.install");
+    await sub.flush();
+
+    const hashes = new Set(
+      h.repos.decisionRepairs.list().map((repair) => repair.contextHash),
+    );
+    expect(hashes).toEqual(new Set([
+      contextHashOf("pip.install", "alpine"),
+      contextHashOf("pip.build", "alpine"),
+    ]));
+    sub.dispose();
+  });
+
+  it("restores each session's async route for queued repairs", async () => {
+    handle = makeTmpDb();
+    const h = handle;
+    for (const [sessionId, episodeId] of [
+      ["route-a", "ep-route-a"],
+      ["route-b", "ep-route-b"],
+    ] as const) {
+      seedTrace(h, {
+        episodeId,
+        sessionId,
+        agentText: "pip.install succeeded",
+        value: 0.9,
+      });
+      seedTrace(h, {
+        episodeId,
+        sessionId,
+        agentText: "pip.install failed",
+        value: -0.7,
+      });
+    }
+
+    const route = new AsyncLocalStorage<string>();
+    const observed: string[] = [];
+    let markFirstStarted!: () => void;
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const llm = {
+      completeJson: async () => {
+        const callNumber = observed.push(route.getStore() ?? "missing");
+        if (callNumber === 1) {
+          markFirstStarted();
+          await firstGate;
+        }
+        return {
+          value: {
+            preference: "prefer the successful install path",
+            anti_pattern: "avoid repeating the failed install path",
+            severity: "warn",
+            confidence: 0.9,
+          },
+        };
+      },
+    } as unknown as NonNullable<FeedbackSubscriberDeps["llm"]>;
+    const sub = attachFeedbackSubscriber(deps(h, {
+      llm,
+      config: makeFeedbackConfig({
+        useLlm: true,
+        cooldownMs: 0,
+        failureThreshold: 3,
+        failureWindow: 5,
+      }),
+    }));
+    const emitBurst = (sessionId: string, context: string) => {
+      for (let step = 1; step <= 3; step += 1) {
+        sub.recordToolFailure({
+          toolId: "pip.install",
+          context,
+          step,
+          reason: "boom",
+          sessionId: sessionId as SessionId,
+        });
+      }
+    };
+
+    route.run("route-a", () => emitBurst("route-a", "context-a"));
+    await firstStarted;
+    route.run("route-b", () => emitBurst("route-b", "context-b"));
+    releaseFirst();
+    await sub.flush();
+
+    expect(observed).toEqual(["route-a", "route-b"]);
     sub.dispose();
   });
 

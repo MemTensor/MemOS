@@ -1,6 +1,6 @@
 from memos.configs.embedder import ArkEmbedderConfig
 from memos.dependency import require_python_package
-from memos.embedders.base import BaseEmbedder
+from memos.embedders.base import BaseEmbedder, log_embedding_call
 from memos.log import get_logger
 
 
@@ -35,6 +35,7 @@ class ArkEmbedder(BaseEmbedder):
         # Initialize ark client
         self.client = Ark(api_key=self.config.api_key, base_url=self.config.api_base)
 
+    @log_embedding_call
     def embed(self, texts: list[str]) -> list[list[float]]:
         """
         Generate embeddings for the given texts.

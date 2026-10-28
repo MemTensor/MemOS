@@ -20,6 +20,8 @@ viewer:
 embedding:
   provider: local         # local | openai_compatible | gemini | cohere | voyage | mistral
   apiKey: ""              # required for cloud providers
+  maxInputTokens: 1024    # conservative per-input limit; 0 disables client-side chunking
+  batchSize: 32           # maximum texts sent in one embedding-provider request
 
 llm:
   provider: host          # host | local_only | openai_compatible | anthropic | gemini | bedrock

@@ -20,6 +20,7 @@ export interface Tier2ExperienceInput {
   queryVec: EmbeddingVector | null;
   ftsMatch?: string | null;
   patternTerms?: string[];
+  exactIdentifiers?: string[];
 }
 
 export async function runTier2Experience(
@@ -46,7 +47,11 @@ export async function runTier2Experience(
     const haveFts = !!input.ftsMatch && !!repo.searchByText;
     const havePattern =
       !!input.patternTerms && input.patternTerms.length > 0 && !!repo.searchByPattern;
-    if (!haveVec && !haveFts && !havePattern) {
+    const haveExact =
+      !!input.exactIdentifiers &&
+      input.exactIdentifiers.length > 0 &&
+      !!repo.searchByPattern;
+    if (!haveVec && !haveFts && !havePattern && !haveExact) {
       return [];
     }
 
@@ -63,7 +68,6 @@ export async function runTier2Experience(
           channel: "vec",
           rank: idx,
           score: hit.score,
-          vec: input.queryVec!,
         });
       });
     }
@@ -76,7 +80,6 @@ export async function runTier2Experience(
           channel: "fts",
           rank: idx,
           score: hit.score,
-          vec: input.queryVec ?? null,
         });
       });
     }
@@ -89,7 +92,22 @@ export async function runTier2Experience(
           channel: "pattern",
           rank: idx,
           score: hit.score,
-          vec: input.queryVec ?? null,
+        });
+      });
+    }
+
+    if (haveExact) {
+      const hits = repo.searchByPattern!(
+        input.exactIdentifiers!,
+        keywordPoolSize,
+        { statusIn },
+      );
+      hits.forEach((hit, idx) => {
+        upsertCandidate(merged, hit.id as PolicyId, {
+          cosine: 0,
+          channel: "exact_identifier",
+          rank: idx,
+          score: 1,
         });
       });
     }
@@ -107,7 +125,7 @@ export async function runTier2Experience(
         refId: row.id as PolicyId,
         cosine: state.cosine,
         ts: row.updatedAt ?? Date.now(),
-        vec: row.vec ?? state.vec,
+        vec: row.vec ?? null,
         channels: state.channels,
         title: row.title,
         trigger: row.trigger ?? "",
@@ -143,6 +161,7 @@ export async function runTier2Experience(
         vec: haveVec,
         fts: haveFts,
         pattern: havePattern,
+        exactIdentifier: haveExact,
       },
       latencyMs: Date.now() - startedAt,
     });
@@ -159,7 +178,6 @@ export async function runTier2Experience(
 interface CandidateState {
   cosine: number;
   channels: ChannelRank[];
-  vec: EmbeddingVector | null;
 }
 
 function upsertCandidate(
@@ -170,7 +188,6 @@ function upsertCandidate(
     channel: RetrievalChannel;
     rank: number;
     score: number;
-    vec: EmbeddingVector | null;
   },
 ): void {
   const curr = map.get(id);
@@ -183,13 +200,11 @@ function upsertCandidate(
     map.set(id, {
       cosine: hit.cosine,
       channels: [channel],
-      vec: hit.vec,
     });
     return;
   }
   curr.cosine = Math.max(curr.cosine, hit.cosine);
   curr.channels.push(channel);
-  if (!curr.vec && hit.vec) curr.vec = hit.vec;
 }
 
 function bestChannelScore(c: ExperienceCandidate): number {

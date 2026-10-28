@@ -24,6 +24,12 @@ export function makeTracePolicyLinksRepo(db: StorageDb) {
       WHERE policy_id=@policy_id
       ORDER BY episode_id`,
   );
+  const selectPolicyIds = db.prepare<{ episode_id: EpisodeId }, { policy_id: PolicyId }>(
+    `SELECT DISTINCT policy_id
+       FROM trace_policy_links
+      WHERE episode_id=@episode_id
+      ORDER BY policy_id`,
+  );
 
   return {
     link(args: {
@@ -46,6 +52,10 @@ export function makeTracePolicyLinksRepo(db: StorageDb) {
 
     getLinkedEpisodeIds(policyId: PolicyId): EpisodeId[] {
       return selectEpisodeIds.all({ policy_id: policyId }).map((r) => r.episode_id);
+    },
+
+    getLinkedPolicyIds(episodeId: EpisodeId): PolicyId[] {
+      return selectPolicyIds.all({ episode_id: episodeId }).map((r) => r.policy_id);
     },
   };
 }

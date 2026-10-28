@@ -115,6 +115,18 @@ export interface SessionRoutingConfig {
    * new-episode boundary even for revision/follow_up verdicts.
    */
   mergeMaxGapMs: number;
+  /**
+   * Hard cap on turns in a merged episode. Once reached, the next turn
+   * forces a topic boundary before appending to keep topic-end work bounded.
+   */
+  maxTurnsPerEpisode: number;
+  /**
+   * Max time to wait for relation classification before defaulting to
+   * a conservative new-task boundary.
+   */
+  classifyTimeoutMs: number;
+  /** Shared LLM concurrency budget for async background subscribers. */
+  bgLlmConcurrency: number;
 }
 
 // ─── Dependency graph ─────────────────────────────────────────────────────
@@ -132,7 +144,7 @@ export interface PipelineDeps {
   repos: Repos;
   llm: LlmClient | null;
   /**
-   * Dedicated LLM for the topic-end reflection + α scoring pass.
+   * Dedicated LLM for L2 induction and skill crystallization.
    * Built from `config.skillEvolver.*` when the user configures a
    * stronger model for skill evolution; falls back to `llm` when
    * absent. Summarization and per-turn lite capture still use `llm`.
@@ -169,7 +181,7 @@ export interface PipelineHandle {
   readonly repos: Repos;
   readonly llm: LlmClient | null;
   /**
-   * Dedicated client for skill-evolution reflection. When the operator
+   * Dedicated client for L2 induction and skill crystallization. When the operator
    * leaves `skillEvolver.*` blank, this is the same instance as `llm`
    * (so call sites can blindly read whichever is non-null). When they
    * configure their own model it carries its own `stats()` so the
@@ -213,6 +225,15 @@ export interface PipelineHandle {
 
   // Orchestrator entry points (turn lifecycle).
   onTurnStart(input: TurnInputDTO): Promise<InjectionPacket>;
+  /** Pure prompt-time turn-start retrieval; does not route or mutate episodes. */
+  recallTurn(input: TurnInputDTO, signal?: AbortSignal): Promise<InjectionPacket>;
+  /** Mark an adapter-owned retrieval as foreground until the returned release runs. */
+  enterForeground(): () => void;
+  /** Background relation/intent routing; does not run retrieval. */
+  prepareTurn(input: TurnInputDTO): Promise<{
+    sessionId: SessionId;
+    episodeId: EpisodeId;
+  }>;
   consumeRetrievalStats(packetId: string): RetrievalResult["stats"] | null;
   onTurnEnd(result: TurnResultDTO): Promise<TurnEndResult>;
 
@@ -227,10 +248,17 @@ export interface PipelineHandle {
 
   // Imperative helpers.
   flush(): Promise<void>;
-  shutdown(reason?: string): Promise<void>;
+  shutdown(reason?: string, options?: PipelineShutdownOptions): Promise<void>;
 
   /** Compose a retrieval-deps instance scoped to this pipeline. Used by tests. */
   retrievalDeps(): RetrievalDeps;
+}
+
+export interface PipelineShutdownOptions {
+  /** Grace before aborting provider calls and queued background work. */
+  flushGraceMs?: number;
+  /** Final drain window after abort before subscribers are detached. */
+  abortWaitMs?: number;
 }
 
 export interface PipelineBuses {

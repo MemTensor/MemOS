@@ -5,7 +5,7 @@ Official plugin maintained by MemTensor.
 A minimal OpenClaw lifecycle plugin that **recalls** memories from MemOS Cloud before each run and **adds** new messages to MemOS Cloud after each run.
 
 ## Features
-- **Recall**: `before_agent_start` → `/search/memory`
+- **Recall**: `before_prompt_build` (`before_agent_start` on older OpenClaw hosts) → `/search/memory`
 - **Add**: `agent_end` → `/add/message`
 - **Config UI**: starting the gateway also starts a local plugin config page for editing `plugins.entries.memos-cloud-openclaw-plugin.config`
 - Uses **Token** auth (`Authorization: Token <MEMOS_API_KEY>`)
@@ -164,7 +164,7 @@ In `plugins.entries.memos-cloud-openclaw-plugin.config`:
 ```
 
 ## How it Works
-- **Recall** (`before_agent_start`)
+- **Recall** (`before_prompt_build`; falls back to `before_agent_start` on older OpenClaw hosts)
   - Builds a `/search/memory` request using `user_id`, `query` (= prompt + optional prefix), and optional filters.
   - Default **global recall**: when `recallGlobal=true`, it does **not** pass `conversation_id`.
   - Optional second-pass filtering: if `recallFilterEnabled=true`, candidates are sent to your configured model and only returned `keep` items are injected.

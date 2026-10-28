@@ -399,10 +399,13 @@ class TreeTextMemory(BaseTextMemory):
         )
         return graph_output
 
-    def delete(self, memory_ids: list[str], user_name: str | None = None) -> None:
+    def delete(self, memory_ids: str | list[str], user_name: str | None = None) -> None:
         """Hard delete: permanently remove nodes and their edges from the graph."""
         if not memory_ids:
             return
+        if isinstance(memory_ids, str):
+            memory_ids = [memory_ids]
+        self._unlink_knowledge_relations(memory_ids, user_name=user_name)
         for mid in memory_ids:
             try:
                 self.graph_store.delete_node(mid, user_name=user_name)
@@ -412,6 +415,7 @@ class TreeTextMemory(BaseTextMemory):
     def delete_by_memory_ids(self, memory_ids: list[str]) -> None:
         """Delete memories by memory_ids."""
         try:
+            self._unlink_knowledge_relations(memory_ids)
             self.graph_store.delete_node_by_prams(memory_ids=memory_ids)
         except Exception as e:
             logger.error(f"An error occurred while deleting memories by memory_ids: {e}")
@@ -432,9 +436,70 @@ class TreeTextMemory(BaseTextMemory):
         filter: dict | None = None,
     ) -> None:
         """Delete memories by filter."""
+        if file_ids:
+            user_names = writable_cube_ids or [None]
+            for user_name in user_names:
+                memory_ids: set[str] = set()
+                for file_id in file_ids:
+                    memory_ids.update(
+                        self.graph_store.get_by_metadata(
+                            [{"field": "file_ids", "op": "contains", "value": file_id}],
+                            user_name=user_name,
+                        )
+                    )
+                self._unlink_knowledge_relations(list(memory_ids), user_name=user_name)
         self.graph_store.delete_node_by_prams(
             writable_cube_ids=writable_cube_ids, file_ids=file_ids, filter=filter
         )
+
+    @staticmethod
+    def _node_metadata(node: dict[str, Any] | TextualMemoryItem) -> dict[str, Any]:
+        if isinstance(node, TextualMemoryItem):
+            return node.metadata.model_dump()
+        return node.get("metadata") or {}
+
+    def _get_node_map(
+        self, memory_ids: list[str] | set[str], user_name: str | None = None
+    ) -> dict[str, dict[str, Any] | TextualMemoryItem]:
+        if not memory_ids:
+            return {}
+        nodes = self.graph_store.get_nodes(ids=list(memory_ids), user_name=user_name) or []
+        return {
+            node.id if isinstance(node, TextualMemoryItem) else node["id"]: node for node in nodes
+        }
+
+    def _unlink_knowledge_relations(
+        self, memory_ids: list[str], user_name: str | None = None
+    ) -> None:
+        """Remove reverse knowledge ids before deleting or deactivating nodes."""
+        deleting_ids = set(memory_ids)
+        deleting_nodes = self._get_node_map(deleting_ids, user_name=user_name)
+        removals: dict[str, dict[str, set[str]]] = {}
+
+        for memory_id, node in deleting_nodes.items():
+            metadata = self._node_metadata(node)
+            for material_id in metadata.get("knowledge_material_ids") or []:
+                if material_id not in deleting_ids:
+                    removals.setdefault(material_id, {}).setdefault(
+                        "knowledge_summary_ids", set()
+                    ).add(memory_id)
+            for summary_id in metadata.get("knowledge_summary_ids") or []:
+                if summary_id not in deleting_ids:
+                    removals.setdefault(summary_id, {}).setdefault(
+                        "knowledge_material_ids", set()
+                    ).add(memory_id)
+
+        related_nodes = self._get_node_map(set(removals), user_name=user_name)
+        for related_id, fields in removals.items():
+            node = related_nodes.get(related_id)
+            if node is None:
+                continue
+            metadata = self._node_metadata(node)
+            updates = {
+                field: [value for value in metadata.get(field) or [] if value not in removed_ids]
+                for field, removed_ids in fields.items()
+            }
+            self.graph_store.update_node(related_id, updates, user_name=user_name)
 
     def load(self, dir: str, user_name: str | None = None) -> None:
         try:
@@ -593,6 +658,109 @@ class TreeTextMemory(BaseTextMemory):
             f"[RawFile] Time taken to add edges: {end_time - start_time} seconds for {len(from_ids)} edges"
         )
 
+    def add_rawfile_nodes(
+        self,
+        raw_file_mem_group: list[TextualMemoryItem],
+        mem_ids: list[str],
+        user_id: str | None = None,
+        user_name: str | None = None,
+    ) -> None:
+        """Persist raw-file nodes and their knowledge relationships without graph edges."""
+        valid_summary_ids = set(mem_ids)
+        summary_to_material_ids: dict[str, list[str]] = {}
+
+        for raw_file_mem in raw_file_mem_group:
+            summary_ids = list(
+                dict.fromkeys(
+                    summary_id
+                    for summary_id in getattr(raw_file_mem.metadata, "summary_ids", []) or []
+                    if summary_id in valid_summary_ids
+                )
+            )
+            raw_file_mem.metadata.knowledge_summary_ids = summary_ids
+            for summary_id in summary_ids:
+                summary_to_material_ids.setdefault(summary_id, []).append(raw_file_mem.id)
+
+        self.add(raw_file_mem_group, user_name=user_name)
+        summary_nodes = self._get_node_map(set(summary_to_material_ids), user_name=user_name)
+
+        merged_from_by_summary: dict[str, list[str]] = {}
+        old_summary_ids: set[str] = set()
+        for summary_id, node in summary_nodes.items():
+            info = self._node_metadata(node).get("info") or {}
+            merged_from = info.get("merged_from") or []
+            if isinstance(merged_from, str):
+                merged_from = [merged_from]
+            merged_from_by_summary[summary_id] = list(dict.fromkeys(merged_from))
+            old_summary_ids.update(merged_from)
+
+        old_summary_nodes = self._get_node_map(old_summary_ids, user_name=user_name)
+        material_relinks: dict[str, dict[str, Any]] = {}
+
+        for summary_id, direct_material_ids in summary_to_material_ids.items():
+            summary_node = summary_nodes.get(summary_id)
+            if summary_node is None:
+                logger.warning(
+                    "Knowledge summary %s was not found after raw-file write", summary_id
+                )
+                continue
+
+            metadata = self._node_metadata(summary_node)
+            merged_from = merged_from_by_summary.get(summary_id, [])
+            inherited_material_ids: list[str] = []
+            for old_summary_id in merged_from:
+                old_summary = old_summary_nodes.get(old_summary_id)
+                if old_summary is not None:
+                    inherited_material_ids.extend(
+                        self._node_metadata(old_summary).get("knowledge_material_ids") or []
+                    )
+
+            material_ids = list(
+                dict.fromkeys(
+                    [
+                        *(metadata.get("knowledge_material_ids") or []),
+                        *direct_material_ids,
+                        *inherited_material_ids,
+                    ]
+                )
+            )
+            self.graph_store.update_node(
+                summary_id,
+                {"knowledge_material_ids": material_ids},
+                user_name=user_name,
+            )
+
+            for material_id in inherited_material_ids:
+                relink = material_relinks.setdefault(material_id, {"remove": set(), "add": []})
+                relink["remove"].update(merged_from)
+                relink["add"].append(summary_id)
+
+        material_nodes = self._get_node_map(set(material_relinks), user_name=user_name)
+        for material_id, relink in material_relinks.items():
+            material_node = material_nodes.get(material_id)
+            if material_node is None:
+                continue
+            current_summary_ids = (
+                self._node_metadata(material_node).get("knowledge_summary_ids") or []
+            )
+            updated_summary_ids = [
+                summary_id
+                for summary_id in current_summary_ids
+                if summary_id not in relink["remove"]
+            ]
+            updated_summary_ids.extend(relink["add"])
+            self.graph_store.update_node(
+                material_id,
+                {"knowledge_summary_ids": list(dict.fromkeys(updated_summary_ids))},
+                user_name=user_name,
+            )
+
+        logger.info(
+            "[RawFile] Added %s chunks with ID mappings for user %s",
+            len(raw_file_mem_group),
+            user_id,
+        )
+
     def add_graph_edges(
         self, from_ids: list[str], to_ids: list[str], types: list[str], user_name: str | None = None
     ) -> None:
@@ -624,6 +792,7 @@ class TreeTextMemory(BaseTextMemory):
         user_name: str,
         evolve_to_ids: list[str] | None = None,
     ) -> None:
+        self._unlink_knowledge_relations(memory_ids, user_name=user_name)
         # for ruff check...
         if not evolve_to_ids:
             update_fields = {"status": "deleted"}

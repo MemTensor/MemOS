@@ -26,6 +26,18 @@ warn() { printf "\033[1;33m[install:hermes]\033[0m %s\n" "$*" >&2; }
 
 cd "$PREFIX"
 
+# Keep the Hermes manifest aligned with the npm package before exposing the
+# provider directory to the host. Older local source layouts may not contain
+# the helper, so retain the packaged manifest as a compatibility fallback.
+VERSION_SYNC_SCRIPT="$PREFIX/scripts/sync-hermes-version.cjs"
+if command -v node >/dev/null 2>&1 && [[ -f "$VERSION_SYNC_SCRIPT" ]]; then
+  node "$VERSION_SYNC_SCRIPT" "$PREFIX" >/dev/null
+else
+  warn "Hermes version sync helper unavailable; using packaged plugin.yaml as-is."
+fi
+cp "$PREFIX/adapters/hermes/plugin.yaml" \
+  "$PREFIX/adapters/hermes/memos_provider/plugin.yaml"
+
 # ── 1. node_modules ───────────────────────────────────────────────────────────
 if command -v npm >/dev/null 2>&1; then
   command -v node > .memos-node-bin

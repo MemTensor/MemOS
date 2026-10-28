@@ -657,11 +657,6 @@ class MemFeedback(BaseMemFeedback):
     def _retrieve(self, query: str, info=None, top_k=20, user_name=None):
         """Retrieve memory items"""
 
-        def check_has_edges(mem_item: TextualMemoryItem) -> tuple[TextualMemoryItem, bool]:
-            """Check if a memory item has edges."""
-            edges = self.searcher.graph_store.get_edges(mem_item.id, user_name=user_name)
-            return (mem_item, len(edges) == 0)
-
         logger.info(f"[feedback _retrieve] query: {query}, user_name: {user_name}")
         text_mems = self.searcher.search(
             query=query,
@@ -686,22 +681,16 @@ class MemFeedback(BaseMemFeedback):
             pref_mems = [item[0] for item in pref_mems if float(item[1]) > 0.01]
             text_mems.extend(pref_mems)
 
-        # Memory with edges is not modified by feedback
-        retrieved_mems = []
-        with ContextThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(check_has_edges, item): item for item in text_mems}
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    mem_item, has_no_edges = future.result()
-                    if has_no_edges:
-                        retrieved_mems.append(mem_item)
-                except Exception as e:
-                    logger.error(f"[0107 Feedback Core: _retrieve] Error checking edges: {e}")
+        retrieved_mems = [
+            item
+            for item in text_mems
+            if not (getattr(item.metadata, "knowledge_material_ids", None) or [])
+        ]
 
         if len(retrieved_mems) < len(text_mems):
             logger.info(
                 f"[0107 Feedback Core: _retrieve] {len(text_mems) - len(retrieved_mems)} "
-                f"text memories are not modified by feedback due to edges."
+                f"knowledge memories are not modified by feedback."
             )
 
         return retrieved_mems
@@ -859,9 +848,15 @@ class MemFeedback(BaseMemFeedback):
 
                 if not should_keep_update(data["text"], data["old_memory"]):
                     logger.warning(
-                        f"[0107 Feedback Core: correct_item] Due to the excessive proportion of changes, skip update: {data}"
+                        "[0107 Feedback Core: correct_item] Due to the excessive proportion "
+                        "of changes, downgrade update to add: %s",
+                        data,
                     )
-                    return None
+                    return {
+                        "operation": "ADD",
+                        "text": data["text"],
+                        "_downgraded_from_update": True,
+                    }
 
                 # id dehallucination
                 original_id = data["id"]
@@ -892,11 +887,14 @@ class MemFeedback(BaseMemFeedback):
         add_texts = []
         llm_operations = []
         for item in dehalluded_operations:
-            if item["operation"].lower() == "add" and "text" in item and item["text"]:
-                if item["text"] in add_texts:
+            if item["operation"].lower() == "add":
+                add_text = item.get("text")
+                if not add_text:
+                    continue
+                if add_text in add_texts:
                     continue
                 llm_operations.append(item)
-                add_texts.append(item["text"])
+                add_texts.append(add_text)
             elif item["operation"].lower() == "update":
                 llm_operations.append(item)
         logger.info(
@@ -907,10 +905,15 @@ class MemFeedback(BaseMemFeedback):
         has_update = any(item.get("operation").lower() == "update" for item in llm_operations)
         if has_update:
             filtered_items = [
-                item for item in llm_operations if item.get("operation").lower() == "add"
+                item
+                for item in llm_operations
+                if item.get("operation").lower() == "add"
+                and not item.get("_downgraded_from_update")
             ]
             update_items = [
-                item for item in llm_operations if item.get("operation").lower() != "add"
+                item
+                for item in llm_operations
+                if item.get("operation").lower() != "add" or item.get("_downgraded_from_update")
             ]
             if filtered_items:
                 logger.info(

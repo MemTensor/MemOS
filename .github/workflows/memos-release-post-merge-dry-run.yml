@@ -1,0 +1,164 @@
+name: MemOS Release — Post-Merge Dry Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/memos-release-publish.yml"
+      - ".github/workflows/memos-release-publish-main.yml"
+      - ".github/workflows/memos-release-publish-paired-local-plugin.yml"
+      - ".github/workflows/memos-release-prepare.yml"
+      - ".github/workflows/memos-local-plugin-publish.yml"
+      - ".github/workflows/memos-release-pre-merge-dry-run.yml"
+      - ".github/workflows/memos-release-post-merge-dry-run.yml"
+      - ".github/scripts/memos-version.mjs"
+      - ".github/scripts/memos-version.test.mjs"
+      - ".github/scripts/prepare-memos-release.mjs"
+      - ".github/scripts/prepare-memos-release.test.mjs"
+      - ".github/scripts/publish-local-plugin.sh"
+      - ".github/scripts/publish-local-plugin.test.mjs"
+      - ".github/scripts/publish-paired-local-plugin-release.mjs"
+      - ".github/scripts/retry.sh"
+      - "apps/memos-local-plugin/package.json"
+      - "pyproject.toml"
+      - "src/memos/__init__.py"
+
+concurrency:
+  group: memos-release-post-merge-dry-run-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    if: ${{ github.repository == 'MemTensor/MemOS' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch release refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Read stable package version for preview
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_output="${RUNNER_TEMP}/memos-package-version.out"
+          : > "${version_output}"
+          GITHUB_OUTPUT="${version_output}" node .github/scripts/memos-version.mjs inspect
+          version="$(sed -n 's/^version=//p' "${version_output}")"
+          if [ -z "${version}" ]; then
+            echo "::error::Cannot read the stable MemOS package version."
+            exit 1
+          fi
+          latest="$(
+            git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --merged origin/main --sort=-v:refname |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+              head -n 1
+          )"
+          if [ -z "${latest}" ]; then
+            echo "::error::Cannot infer the latest MemOS stable tag from origin/main."
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "latest_tag=${latest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run release workflow tests
+        shell: bash
+        run: node --test .github/scripts/*.test.mjs
+
+      - name: Prepare offline release inspection
+        id: prepare
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          TARGET_REF: ${{ github.sha }}
+          DRY_RUN: true
+          GITHUB_TOKEN: ${{ github.token }}
+          # Post-merge smoke check fallback. Manual publish still requires GitHub/Doc Agent validation.
+          ALLOW_OFFLINE_DOCS_PREVIEW: true
+        run: |
+          bash .github/scripts/retry.sh --attempts 2 --label "prepare offline MemOS release inspection" -- \
+            node .github/scripts/prepare-memos-release.mjs
+
+      - name: Upload release inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: memos-release-inspection
+          path: ${{ steps.prepare.outputs.inspection_dir }}
+          if-no-files-found: error
+
+      - name: Summarize inspection
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          LATEST_TAG: ${{ steps.version.outputs.latest_tag }}
+          CURRENT_TAG: ${{ steps.prepare.outputs.current_tag }}
+          PREVIOUS_TAG: ${{ steps.prepare.outputs.previous_tag }}
+          LOCAL_PLUGIN_VERSION: ${{ steps.prepare.outputs.local_plugin_version }}
+          LOCAL_PLUGIN_PREVIOUS_VERSION: ${{ steps.prepare.outputs.local_plugin_previous_version }}
+          LOCAL_PLUGIN_VERSION_CHANGED: ${{ steps.prepare.outputs.local_plugin_version_changed }}
+          LOCAL_PLUGIN_VERSION_REQUIRED: ${{ steps.prepare.outputs.local_plugin_version_required }}
+          LOCAL_PLUGIN_VERSION_SOURCE: ${{ steps.prepare.outputs.local_plugin_version_source }}
+          LOCAL_PLUGIN_VERSION_AUTO_INCREMENTED: ${{ steps.prepare.outputs.local_plugin_version_auto_incremented }}
+          LOCAL_PLUGIN_VERSION_INPUT_IGNORED: ${{ steps.prepare.outputs.local_plugin_version_input_ignored }}
+          LOCAL_PLUGIN_VERSION_INPUT_IGNORED_REASON: ${{ steps.prepare.outputs.local_plugin_version_input_ignored_reason }}
+          LOCAL_PLUGIN_PACKAGE_VERSION: ${{ steps.prepare.outputs.local_plugin_package_version }}
+          LOCAL_PLUGIN_PACKAGE_PREVIOUS_VERSION: ${{ steps.prepare.outputs.local_plugin_package_previous_version }}
+          LOCAL_PLUGIN_PACKAGE_VERSION_CHANGED: ${{ steps.prepare.outputs.local_plugin_package_version_changed }}
+          EXISTING_TAG_STATUS: ${{ steps.prepare.outputs.existing_tag_status }}
+          EXISTING_TAG_SHA: ${{ steps.prepare.outputs.existing_tag_sha }}
+          PUBLISH_BLOCKED: ${{ steps.prepare.outputs.publish_blocked }}
+          PUBLISH_BLOCK_REASON: ${{ steps.prepare.outputs.publish_block_reason }}
+          HAS_PRODUCT_CHANGES: ${{ steps.prepare.outputs.has_product_changes }}
+          HAS_USER_FACING_PRODUCT_CHANGES: ${{ steps.prepare.outputs.has_user_facing_product_changes }}
+          DOCS_ACTION: ${{ steps.prepare.outputs.docs_action }}
+          SKIP_REASON: ${{ steps.prepare.outputs.skip_reason }}
+          RELEASE_NOTES_SOURCE: ${{ steps.prepare.outputs.release_notes_source }}
+        run: |
+          {
+            echo "## MemOS release post-merge dry run"
+            echo ""
+            echo "- inferred_version: ${VERSION}"
+            echo "- latest_tag_on_main: ${LATEST_TAG}"
+            echo "- current_tag: ${CURRENT_TAG}"
+            echo "- previous_tag: ${PREVIOUS_TAG}"
+            echo "- local_plugin_version: ${LOCAL_PLUGIN_VERSION}"
+            echo "- local_plugin_previous_version: ${LOCAL_PLUGIN_PREVIOUS_VERSION}"
+            echo "- local_plugin_version_changed: ${LOCAL_PLUGIN_VERSION_CHANGED}"
+            echo "- local_plugin_version_required: ${LOCAL_PLUGIN_VERSION_REQUIRED}"
+            echo "- local_plugin_version_source: ${LOCAL_PLUGIN_VERSION_SOURCE}"
+            echo "- local_plugin_version_auto_incremented: ${LOCAL_PLUGIN_VERSION_AUTO_INCREMENTED}"
+            echo "- local_plugin_version_input_ignored: ${LOCAL_PLUGIN_VERSION_INPUT_IGNORED}"
+            echo "- local_plugin_version_input_ignored_reason: ${LOCAL_PLUGIN_VERSION_INPUT_IGNORED_REASON:-n/a}"
+            echo "- local_plugin_package_version: ${LOCAL_PLUGIN_PACKAGE_VERSION}"
+            echo "- local_plugin_package_previous_version: ${LOCAL_PLUGIN_PACKAGE_PREVIOUS_VERSION}"
+            echo "- local_plugin_package_version_changed: ${LOCAL_PLUGIN_PACKAGE_VERSION_CHANGED}"
+            echo "- existing_tag_status: ${EXISTING_TAG_STATUS}"
+            echo "- existing_tag_sha: ${EXISTING_TAG_SHA:-n/a}"
+            echo "- publish_blocked: ${PUBLISH_BLOCKED}"
+            echo "- publish_block_reason: ${PUBLISH_BLOCK_REASON:-n/a}"
+            echo "- release_notes_source: ${RELEASE_NOTES_SOURCE}"
+            echo "- offline_docs_preview: true"
+            echo "- doc_agent_validation: skipped in post-merge smoke fallback; production publish does not set ALLOW_OFFLINE_DOCS_PREVIEW"
+            echo "- local_plugin_changed: ${HAS_PRODUCT_CHANGES}"
+            echo "- local_plugin_user_facing_changed: ${HAS_USER_FACING_PRODUCT_CHANGES}"
+            echo "- docs_action: ${DOCS_ACTION}"
+            echo "- skip_reason: ${SKIP_REASON:-n/a}"
+            echo ""
+            echo "This post-merge check never creates tags, GitHub Releases, docs PRs, or deployments."
+          } >> "${GITHUB_STEP_SUMMARY}"

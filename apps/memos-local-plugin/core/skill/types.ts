@@ -118,6 +118,8 @@ export interface SkillConfig {
   archiveEta: number;
   /** Below this η, skills never surface in Tier-1 — matches retrieval config. */
   minEtaForRetrieval: number;
+  /** Archive a low-η active skill after it has not been retrieved for this long. */
+  idleArchiveMs: number;
 }
 
 /**
@@ -212,6 +214,7 @@ export interface SkillVerificationPassedEvent
 export interface SkillVerificationFailedEvent
   extends SkillEventBase<"skill.verification.failed"> {
   skillId: SkillId;
+  policyId: string;
   reason: string;
 }
 

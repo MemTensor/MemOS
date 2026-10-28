@@ -1,4 +1,6 @@
 import type { SessionId, EpisodeId } from "../../agent-contract/dto.js";
+import { classifyRetrievalProfile } from "../retrieval/profile.js";
+import type { RetrievalProfile } from "../retrieval/types.js";
 import type { IntentDecision, TurnRelation } from "../session/types.js";
 
 export type InjectionScenarioId =
@@ -20,6 +22,7 @@ export interface SchedulerContext {
 
 export interface RetrievePlan {
   scenarioId: InjectionScenarioId;
+  profile: RetrievalProfile;
   entry: "turn_start" | "turn_start_skip";
   wantTier1: boolean;
   wantTier2: boolean;
@@ -43,6 +46,14 @@ export function scheduleInjection(ctx: SchedulerContext): RetrievePlan {
   }
 
   if (intent.kind === "memory_probe") {
+    const profile = classifyRetrievalProfile(ctx.userText);
+    if (profile === "personal_fact") {
+      return retrievePlan(
+        "MEMORY_PROBE",
+        { tier1: false, tier2: true, tier3: false },
+        profile,
+      );
+    }
     return retrievePlan("MEMORY_PROBE", intent.retrieval);
   }
 
@@ -64,6 +75,7 @@ export function scheduleInjection(ctx: SchedulerContext): RetrievePlan {
 function skipPlan(scenarioId: Extract<InjectionScenarioId, "CHITCHAT" | "META">): RetrievePlan {
   return {
     scenarioId,
+    profile: "default",
     entry: "turn_start_skip",
     wantTier1: false,
     wantTier2: false,
@@ -75,9 +87,11 @@ function skipPlan(scenarioId: Extract<InjectionScenarioId, "CHITCHAT" | "META">)
 function retrievePlan(
   scenarioId: Exclude<InjectionScenarioId, "CHITCHAT" | "META">,
   retrieval: IntentDecision["retrieval"],
+  profile: RetrievalProfile = "default",
 ): RetrievePlan {
   return {
     scenarioId,
+    profile,
     entry: "turn_start",
     wantTier1: retrieval.tier1,
     wantTier2: retrieval.tier2,

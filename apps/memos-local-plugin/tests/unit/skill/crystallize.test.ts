@@ -5,6 +5,7 @@ import {
   defaultDraftValidator,
 } from "../../../core/skill/crystallize.js";
 import { rootLogger } from "../../../core/logger/index.js";
+import type { Logger } from "../../../core/logger/types.js";
 import type { LlmClient, LlmJsonCompletion } from "../../../core/llm/types.js";
 import type { PolicyRow, TraceRow } from "../../../core/types.js";
 import { fakeLlm, throwingLlm } from "../../helpers/fake-llm.js";
@@ -58,6 +59,22 @@ function mkTrace(id: string, userText: string): TraceRow {
 }
 
 const log = rootLogger.child({ channel: "core.skill.crystallize" });
+
+function loggerRecordingWarnings(
+  warnings: Array<{ message: string; data?: Record<string, unknown> }>,
+): Logger {
+  return new Proxy(log, {
+    get(target, prop, receiver) {
+      if (prop === "warn") {
+        return (message: string, data?: Record<string, unknown>) => {
+          warnings.push({ message, data });
+        };
+      }
+      const value = Reflect.get(target, prop, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
 
 function refusalLlm(raw: string): LlmClient {
   return {
@@ -156,7 +173,7 @@ describe("skill/crystallize", () => {
 
     const r = await crystallizeDraft(
       { policy, evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
-      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+      { llm, log, config: makeSkillConfig() },
     );
 
     expect(r.ok).toBe(true);
@@ -230,7 +247,10 @@ describe("skill/crystallize", () => {
     expect(r.modelRefusal?.content).toContain("I cannot process this request");
   });
 
-  it("rejects drafts that the validator flags as invalid", async () => {
+  it("repairs missing summary and steps from grounded policy fields (issue #2143)", async () => {
+    // A draft with an empty summary AND no steps used to be rejected with
+    // skill.crystallize.invalid: missing summary / missing steps. The runtime
+    // now repairs both from grounded draft/policy fields before validation.
     const llm = fakeLlm({
       completeJson: {
         "skill.crystallize": makeDraft({ steps: [], summary: "" }) as unknown,
@@ -240,6 +260,151 @@ describe("skill/crystallize", () => {
       { policy: mkPolicy(), evidence: [mkTrace("tr_1", "x")], namingSpace: [] },
       { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
     );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.draft.summary).not.toBe("");
+      expect(r.draft.steps).toEqual([
+        {
+          title: "install system libs before pip",
+          body: "1. detect 2. apk add 3. retry",
+        },
+      ]);
+      expect(r.draft.steps[0]!.title).not.toBe("Execute the fix");
+    }
+  });
+
+  it("normalises only explicit summary and step aliases", async () => {
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": {
+          ...makeDraft(),
+          summary: "   ",
+          description: "Install Alpine dependencies before retrying pip.",
+          steps: [
+            "Inspect the pip error",
+            {
+              title: "   ",
+              name: "Install packages",
+              body: "   ",
+              instruction: "Run apk add for the missing libraries",
+            },
+          ],
+        },
+      },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.summary).toBe("Install Alpine dependencies before retrying pip.");
+    expect(r.draft.steps).toEqual([
+      { title: "Inspect the pip error", body: "Inspect the pip error" },
+      { title: "Install packages", body: "Run apk add for the missing libraries" },
+    ]);
+  });
+
+  it("retries once when the draft has no steps and policy has no grounded procedure", async () => {
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": () => {
+          calls += 1;
+          return calls === 1 ? makeDraft({ steps: [] }) : makeDraft();
+        },
+      },
+    });
+    const policy = { ...mkPolicy(), procedure: "" };
+
+    const r = await crystallizeDraft(
+      { policy, evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig() },
+    );
+
+    expect(r.ok).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it("retries once when the parsed JSON root has the wrong shape", async () => {
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": () => {
+          calls += 1;
+          return calls === 1 ? "not-an-object" : makeDraft();
+        },
+      },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
+    expect(r.ok).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it("rejects after one retry when neither response nor policy has procedure steps", async () => {
+    let calls = 0;
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": () => {
+          calls += 1;
+          return makeDraft({ steps: [] });
+        },
+      },
+    });
+    const policy = { ...mkPolicy(), procedure: "" };
+
+    const r = await crystallizeDraft(
+      { policy, evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      { llm, log, config: makeSkillConfig(), validate: defaultDraftValidator },
+    );
+
     expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.skippedReason).toMatch(/missing steps/);
+    expect(calls).toBe(2);
+  });
+
+  it("logs only shape metadata when repairing a malformed draft", async () => {
+    const warnings: Array<{ message: string; data?: Record<string, unknown> }> = [];
+    const sensitive = "SENSITIVE-CONTENT-MUST-NOT-BE-LOGGED";
+    const llm = fakeLlm({
+      completeJson: {
+        "skill.crystallize": {
+          ...makeDraft({ steps: [] }),
+          unexpected: sensitive,
+        },
+      },
+    });
+
+    const r = await crystallizeDraft(
+      { policy: mkPolicy(), evidence: [mkTrace("tr_1", "pip fails")], namingSpace: [] },
+      {
+        llm,
+        log: loggerRecordingWarnings(warnings),
+        config: makeSkillConfig(),
+        validate: defaultDraftValidator,
+      },
+    );
+
+    expect(r.ok).toBe(true);
+    const shapeLog = warnings.find((entry) => entry.message === "skill.crystallize.shape_repaired");
+    expect(shapeLog?.data).toMatchObject({
+      repairedFields: ["steps"],
+      shape: {
+        summaryType: "string",
+        stepsType: "array",
+        rawStepCount: 0,
+        normalisedStepCount: 0,
+        unknownFieldCount: 1,
+      },
+    });
+    expect(JSON.stringify(shapeLog)).not.toContain(sensitive);
   });
 });

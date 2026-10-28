@@ -61,6 +61,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
+        self.name = "MultiModalStructMemReader"
         self.memory_version_switch = getattr(config, "memory_version_switch", "off")
 
         # Image parser LLM (requires vision model)
@@ -70,12 +71,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if config.image_parser_llm is not None
             else self.general_llm
         )
+        # Document parser LLM (separate from the fine-tuned chat extractor)
+        self.document_parser_llm = (
+            LLMFactory.from_config(config.document_parser_llm)
+            if config.document_parser_llm is not None
+            else None
+        )
         # Initialize MultiModalParser for routing to different parsers
-        # Pass image_parser_llm for image parsing
+        # Pass dedicated image/document LLMs to their corresponding parsers
         self.multi_modal_parser = MultiModalParser(
             embedder=self.embedder,
             llm=self.llm,
             image_parser_llm=self.image_parser_llm,
+            document_parser_llm=self.document_parser_llm,
             parser=None,
             direct_markdown_hostnames=direct_markdown_hostnames,
         )
@@ -377,7 +385,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if aggregated_file_ids:
             extra_kwargs["file_ids"] = aggregated_file_ids
 
-        # Propagate manager_user_id and project_id from constituent items
+        # Propagate manager_user_id, project_id, and related_id from constituent items
         for item in items:
             metadata = getattr(item, "metadata", None)
             if metadata is not None:
@@ -761,30 +769,52 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 except Exception as e:
                     logger.error(f"[MultiModalFine] parse error: {e}")
 
-            # save rawfile node
-            if self.save_rawfile and prompt_type == "doc" and len(fine_items) > 0:
-                rawfile_chunk = mem_str
-                file_info = fine_items[0].metadata.sources[0].file_info
-                source = self.multi_modal_parser.file_content_parser.create_source(
-                    message={"file": file_info},
-                    info=info_per_item,
-                    chunk_index=chunk_idx,
-                    chunk_total=total_chunks,
-                    chunk_content="",
-                )
-                rawfile_node = self._make_memory_item(
-                    value=rawfile_chunk,
-                    info=info_per_item,
-                    memory_type="RawFileMemory",
-                    tags=[
-                        "mode:fine",
-                        "multimodal:file",
-                        f"chunk:{chunk_idx + 1}/{total_chunks}",
-                    ],
-                    sources=[source],
-                )
-                rawfile_node.metadata.summary_ids = [mem_node.id for mem_node in fine_items]
-                fine_items.append(rawfile_node)
+            # Save the original file chunk independently from prompt selection.
+            file_source = next(
+                (
+                    source
+                    for source in sources
+                    if (
+                        source.get("type")
+                        if isinstance(source, dict)
+                        else getattr(source, "type", None)
+                    )
+                    == "file"
+                ),
+                None,
+            )
+            if self.save_rawfile and file_source is not None and fine_items:
+                if isinstance(file_source, dict):
+                    file_info = file_source.get("file_info") or {}
+                    file_content = file_source.get("content")
+                else:
+                    file_info = file_source.file_info or {}
+                    file_content = file_source.content
+
+                rawfile_chunk = file_content or file_info.get("file_data", "")
+                if rawfile_chunk:
+                    source = self.multi_modal_parser.file_content_parser.create_source(
+                        message={"file": file_info},
+                        info=info_per_item,
+                        chunk_index=chunk_idx,
+                        chunk_total=total_chunks,
+                        chunk_content=rawfile_chunk,
+                    )
+                    rawfile_node = self._make_memory_item(
+                        value=rawfile_chunk,
+                        info=info_per_item,
+                        memory_type="RawFileMemory",
+                        tags=[
+                            "mode:fine",
+                            "multimodal:file",
+                            f"chunk:{chunk_idx + 1}/{total_chunks}",
+                        ],
+                        sources=[source],
+                    )
+                    rawfile_node.metadata.summary_ids = [mem_node.id for mem_node in fine_items]
+                    fine_items.append(rawfile_node)
+                else:
+                    logger.warning("[RawFile] File source has no content; skipping raw-file node")
             enriched_items = trigger_hook(
                 H.MEMORY_ITEMS_AFTER_FINE_EXTRACT,
                 items=fine_items,

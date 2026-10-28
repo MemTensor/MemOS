@@ -158,6 +158,14 @@ export interface EmbeddingMaintenanceRunResult {
 
 export type Unsubscribe = () => void;
 
+/** Non-serializable execution controls used only by in-process adapters. */
+export interface MemorySearchExecutionOptions {
+  /** Abort when the owning host turn/tool is cancelled. */
+  signal?: AbortSignal;
+  /** Block admission of new background LLM work while this search is active. */
+  foreground?: boolean;
+}
+
 export interface MemoryCore {
   // ── lifecycle ──
   init(): Promise<void>;
@@ -201,6 +209,16 @@ export interface MemoryCore {
   // ── pipeline (per turn) ──
   /** Called *before* the agent acts. Returns the context to inject. */
   onTurnStart(turn: TurnInputDTO): Promise<RetrievalResultDTO>;
+  /**
+   * Optional capability: resolve relation/intent routing and open the durable
+   * episode without running retrieval. Hosts with an eventually-consistent
+   * lifecycle can run this after the agent turn, off the prompt-time critical
+   * path.
+   */
+  prepareTurn?(turn: TurnInputDTO): Promise<{
+    sessionId: SessionId;
+    episodeId: EpisodeId;
+  }>;
   /** Called *after* the agent acts. Persists the trace, schedules induction, etc. */
   onTurnEnd(result: TurnResultDTO): Promise<{ traceId: string; episodeId: EpisodeId }>;
   /** Called when the user gives task-level feedback (or implicit signals fire). */
@@ -221,7 +239,10 @@ export interface MemoryCore {
   ): Promise<{ traceId: string; episodeId: EpisodeId }>;
 
   // ── memory queries ──
-  searchMemory(query: RetrievalQueryDTO): Promise<RetrievalResultDTO>;
+  searchMemory(
+    query: RetrievalQueryDTO,
+    execution?: MemorySearchExecutionOptions,
+  ): Promise<RetrievalResultDTO>;
   getTrace(id: string, namespace?: RuntimeNamespace): Promise<TraceDTO | null>;
   /**
    * Mutate a single trace's user-facing fields (role / summary /
@@ -369,7 +390,7 @@ export interface MemoryCore {
   archiveWorldModel(id: string): Promise<WorldModelDTO | null>;
   /** Reverse of {@link archiveWorldModel}. */
   unarchiveWorldModel(id: string): Promise<WorldModelDTO | null>;
-  listEpisodes(input: { sessionId?: SessionId; limit?: number; offset?: number }): Promise<EpisodeId[]>;
+  listEpisodes(input: { sessionId?: SessionId; limit?: number; offset?: number; includeAllNamespaces?: boolean }): Promise<EpisodeId[]>;
   /**
    * Like `listEpisodes` but returns rich per-row metadata the viewer
    * needs to render its task list without a second round trip
@@ -435,6 +456,20 @@ export interface MemoryCore {
     toolNames?: readonly string[];
     limit?: number;
     offset?: number;
+    /**
+     * When true, ignore the (turn-scoped) active namespace and return
+     * rows from every namespace. Viewer callers set this so the Logs
+     * page and metrics aggregations stay stable across profile flips
+     * (#2131); matches the pattern already used by `listTraces` /
+     * `listSkills` / `listPolicies`.
+     *
+     * Note: the write path currently does not stamp per-namespace
+     * owner columns on `api_logs`, so this flag is a no-op today —
+     * every listing is effectively cross-namespace. Keeping the
+     * parameter formalises the contract now so a future per-namespace
+     * write can be added without breaking viewer callers.
+     */
+    includeAllNamespaces?: boolean;
   }): Promise<{ logs: ApiLogDTO[]; total: number }>;
 
   // ── skills ──
@@ -504,7 +539,7 @@ export interface MemoryCore {
    * Aggregate counts for the viewer's Analytics tab. `days` controls
    * the window the `dailyWrites` histogram covers.
    */
-  metrics(input?: { days?: number }): Promise<{
+  metrics(input?: { days?: number; includeAllNamespaces?: boolean }): Promise<{
     total: number;
     writesToday: number;
     sessions: number;

@@ -1,0 +1,366 @@
+name: MemOS Release — Prepare
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Stable MemOS version without leading v (for example 2.0.30)"
+        required: true
+        type: string
+
+concurrency:
+  group: memos-release-prepare
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prepare:
+    if: ${{ github.repository == 'MemTensor/MemOS' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Require the default-branch workflow
+        shell: bash
+        env:
+          SELECTED_REF: ${{ github.ref }}
+          SELECTED_REF_TYPE: ${{ github.ref_type }}
+          SELECTED_BRANCH: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          expected_ref="refs/heads/${DEFAULT_BRANCH}"
+          if [ "${SELECTED_REF_TYPE}" != branch ] || [ "${SELECTED_REF}" != "${expected_ref}" ] || [ "${SELECTED_BRANCH}" != "${DEFAULT_BRANCH}" ]; then
+            echo "::error::Use workflow from must be branch ${expected_ref}; received ${SELECTED_REF}."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Test version automation
+        run: node --test .github/scripts/memos-version.test.mjs
+
+      - name: Preserve trusted version automation
+        shell: bash
+        run: cp .github/scripts/memos-version.mjs "${RUNNER_TEMP}/memos-version.mjs"
+
+      - name: Validate release request and fetch source
+        id: request
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          output_file="${RUNNER_TEMP}/memos-version-request.out"
+          : > "${output_file}"
+          RELEASE_VERSION="${RELEASE_VERSION}" GITHUB_OUTPUT="${output_file}" \
+            node "${RUNNER_TEMP}/memos-version.mjs" plan
+
+          version="$(sed -n 's/^version=//p' "${output_file}")"
+          source_branch="$(sed -n 's/^source_branch=//p' "${output_file}")"
+          release_branch="$(sed -n 's/^release_branch=//p' "${output_file}")"
+          if [ -z "${version}" ] || [ -z "${source_branch}" ] || [ -z "${release_branch}" ]; then
+            echo "::error::Version automation did not return the expected release request."
+            exit 1
+          fi
+          {
+            echo "version=${version}"
+            echo "source_branch=${source_branch}"
+            echo "release_branch=${release_branch}"
+          } >> "${GITHUB_OUTPUT}"
+
+          git fetch --no-tags origin \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" \
+            "+refs/heads/${source_branch}:refs/remotes/origin/${source_branch}"
+          if git ls-remote --exit-code --heads origin "refs/heads/${release_branch}" >/dev/null 2>&1; then
+            git fetch --no-tags origin \
+              "+refs/heads/${release_branch}:refs/remotes/origin/${release_branch}"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null 2>&1; then
+            echo "::error::Tag v${version} already exists; refusing to prepare an already tagged release."
+            exit 1
+          fi
+
+      - name: Create or verify release branch
+        id: branch
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          SOURCE_BRANCH: ${{ steps.request.outputs.source_branch }}
+          RELEASE_BRANCH: ${{ steps.request.outputs.release_branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          source_ref="refs/remotes/origin/${SOURCE_BRANCH}"
+          release_ref="refs/remotes/origin/${RELEASE_BRANCH}"
+          main_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+          source_sha="$(git rev-parse --verify "${source_ref}^{commit}")"
+          main_sha="$(git rev-parse --verify "${main_ref}^{commit}")"
+          expected_files="$(printf '%s\n' pyproject.toml src/memos/__init__.py)"
+          expected_commit="chore: change version number to v${RELEASE_VERSION}"
+          already_merged=false
+          branch_status=missing
+          release_exists=false
+          release_is_ancestor_main=false
+
+          materialize_ref_version() {
+            local ref="$1"
+            local root="${2:-${RUNNER_TEMP}/memos-version-assert}"
+            mkdir -p "${root}/src/memos"
+            git show "${ref}:pyproject.toml" > "${root}/pyproject.toml"
+            git show "${ref}:src/memos/__init__.py" > "${root}/src/memos/__init__.py"
+          }
+
+          inspect_ref_version() {
+            local ref="$1"
+            local output="${RUNNER_TEMP}/memos-version-inspect.out"
+            materialize_ref_version "${ref}"
+            : > "${output}"
+            MEMOS_VERSION_ROOT="${RUNNER_TEMP}/memos-version-assert" GITHUB_OUTPUT="${output}" \
+              node "${RUNNER_TEMP}/memos-version.mjs" inspect >&2
+            sed -n 's/^version=//p' "${output}"
+          }
+
+          assert_ref_version() {
+            local ref="$1"
+            materialize_ref_version "${ref}"
+            MEMOS_VERSION_ROOT="${RUNNER_TEMP}/memos-version-assert" RELEASE_VERSION="${RELEASE_VERSION}" \
+              node "${RUNNER_TEMP}/memos-version.mjs" assert
+          }
+
+          assert_release_matches_trusted_update() {
+            local release_sha="$1"
+            local expected_root="${RUNNER_TEMP}/memos-version-expected"
+            local actual_root="${RUNNER_TEMP}/memos-version-actual"
+            local expected_output="${RUNNER_TEMP}/memos-version-expected.out"
+            materialize_ref_version "${source_sha}" "${expected_root}"
+            : > "${expected_output}"
+            MEMOS_VERSION_ROOT="${expected_root}" RELEASE_VERSION="${RELEASE_VERSION}" GITHUB_OUTPUT="${expected_output}" \
+              node "${RUNNER_TEMP}/memos-version.mjs" update
+            materialize_ref_version "${release_sha}" "${actual_root}"
+            if ! cmp -s "${expected_root}/pyproject.toml" "${actual_root}/pyproject.toml" || \
+              ! cmp -s "${expected_root}/src/memos/__init__.py" "${actual_root}/src/memos/__init__.py"; then
+              echo "::error::${RELEASE_BRANCH} version files do not exactly match the trusted update of ${SOURCE_BRANCH}."
+              exit 1
+            fi
+          }
+
+          if git rev-parse --verify "${release_ref}^{commit}" >/dev/null 2>&1; then
+            release_exists=true
+            branch_status=existing
+            release_sha="$(git rev-parse --verify "${release_ref}^{commit}")"
+            if ! git merge-base --is-ancestor "${source_sha}" "${release_sha}"; then
+              echo "::error::${RELEASE_BRANCH} does not contain the current ${SOURCE_BRANCH} tip. Refusing to rewrite it."
+              exit 1
+            fi
+            release_commit_count="$(git rev-list --count "${source_sha}..${release_sha}")"
+            changed_files="$(git diff --name-only "${source_sha}..${release_sha}")"
+            if [ "${release_commit_count}" = 0 ]; then
+              if [ -n "${changed_files}" ]; then
+                echo "::error::${RELEASE_BRANCH} has an invalid zero-commit diff."
+                exit 1
+              fi
+            elif [ "${release_commit_count}" = 1 ]; then
+              if [ "${changed_files}" != "${expected_files}" ]; then
+                echo "::error::${RELEASE_BRANCH} must change exactly the two MemOS version files."
+                printf 'Expected:\n%s\nActual:\n%s\n' "${expected_files}" "${changed_files}"
+                exit 1
+              fi
+              actual_commit="$(git show -s --format=%s "${release_sha}")"
+              if [ "${actual_commit}" != "${expected_commit}" ]; then
+                echo "::error::${RELEASE_BRANCH} has an unexpected release commit."
+                exit 1
+              fi
+            else
+              echo "::error::${RELEASE_BRANCH} contains ${release_commit_count} commits beyond ${SOURCE_BRANCH}; expected at most one version commit."
+              exit 1
+            fi
+            assert_ref_version "${release_sha}"
+            assert_release_matches_trusted_update "${release_sha}"
+            if git merge-base --is-ancestor "${release_sha}" "${main_sha}"; then
+              release_is_ancestor_main=true
+            fi
+          fi
+
+          main_version="$(inspect_ref_version "${main_sha}")"
+          if [ "${main_version}" = "${RELEASE_VERSION}" ]; then
+            if [ "${release_exists}" = true ] && [ "${release_is_ancestor_main}" = true ]; then
+              already_merged=true
+              branch_status=merged
+            elif [ "${release_exists}" = false ] && git merge-base --is-ancestor "${source_sha}" "${main_sha}"; then
+              release_sha="${main_sha}"
+              already_merged=true
+              branch_status=merged_branch_deleted
+            else
+              echo "::error::${DEFAULT_BRANCH} already declares v${RELEASE_VERSION}, but it does not contain the validated release source. Review repository history before publishing."
+              exit 1
+            fi
+          else
+            CURRENT_MEMOS_VERSION="${main_version}" RELEASE_VERSION="${RELEASE_VERSION}" \
+              node "${RUNNER_TEMP}/memos-version.mjs" require-newer
+            if [ "${release_is_ancestor_main}" = true ]; then
+              echo "::error::${RELEASE_BRANCH} is already merged, but ${DEFAULT_BRANCH} now declares ${main_version} instead of ${RELEASE_VERSION}."
+              exit 1
+            fi
+          fi
+
+          if [ "${release_exists}" = false ] && [ "${already_merged}" = false ]; then
+            git switch --detach "${source_sha}"
+            update_output="${RUNNER_TEMP}/memos-version-update.out"
+            : > "${update_output}"
+            RELEASE_VERSION="${RELEASE_VERSION}" GITHUB_OUTPUT="${update_output}" \
+              node "${RUNNER_TEMP}/memos-version.mjs" update
+            changed="$(sed -n 's/^changed=//p' "${update_output}")"
+            changed_files="$(git diff --name-only)"
+            if [ "${changed}" = true ]; then
+              if [ "${changed_files}" != "${expected_files}" ]; then
+                echo "::error::Version preparation must change exactly the two MemOS version files."
+                printf 'Expected:\n%s\nActual:\n%s\n' "${expected_files}" "${changed_files}"
+                exit 1
+              fi
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add pyproject.toml src/memos/__init__.py
+              git commit -m "${expected_commit}"
+            elif [ "${changed}" = false ]; then
+              if [ -n "${changed_files}" ]; then
+                echo "::error::Version automation reported no change but left a dirty worktree."
+                exit 1
+              fi
+            else
+              echo "::error::Version automation returned an invalid changed state."
+              exit 1
+            fi
+            release_sha="$(git rev-parse HEAD)"
+
+            remote_source_sha="$(git ls-remote --heads origin "refs/heads/${SOURCE_BRANCH}" | awk '{print $1}')"
+            if [ "${remote_source_sha}" != "${source_sha}" ]; then
+              echo "::error::${SOURCE_BRANCH} moved while the release was being prepared. Rerun to include its latest commit."
+              exit 1
+            fi
+            git push origin "HEAD:refs/heads/${RELEASE_BRANCH}"
+            remote_release_sha="$(git ls-remote --heads origin "refs/heads/${RELEASE_BRANCH}" | awk '{print $1}')"
+            if [ "${remote_release_sha}" != "${release_sha}" ]; then
+              echo "::error::Remote ${RELEASE_BRANCH} does not match the validated release commit."
+              exit 1
+            fi
+            branch_status=created
+          fi
+
+          remote_source_sha="$(git ls-remote --heads origin "refs/heads/${SOURCE_BRANCH}" | awk '{print $1}')"
+          if [ "${remote_source_sha}" != "${source_sha}" ]; then
+            echo "::error::${SOURCE_BRANCH} moved during validation. Rerun to include its latest commit."
+            exit 1
+          fi
+          if [ "${release_exists}" = true ]; then
+            remote_release_sha="$(git ls-remote --heads origin "refs/heads/${RELEASE_BRANCH}" | awk '{print $1}')"
+            if [ "${remote_release_sha}" != "${release_sha}" ]; then
+              echo "::error::${RELEASE_BRANCH} moved during validation. Rerun before creating or reviewing its PR."
+              exit 1
+            fi
+          fi
+
+          {
+            echo "source_sha=${source_sha}"
+            echo "release_sha=${release_sha}"
+            echo "already_merged=${already_merged}"
+            echo "branch_status=${branch_status}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Locate existing release PR
+        if: ${{ steps.branch.outputs.already_merged != 'true' }}
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          SOURCE_BRANCH: ${{ steps.request.outputs.source_branch }}
+          RELEASE_BRANCH: ${{ steps.request.outputs.release_branch }}
+          RELEASE_SHA: ${{ steps.branch.outputs.release_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          pr_url="$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state open \
+            --base "${DEFAULT_BRANCH}" \
+            --head "${RELEASE_BRANCH}" \
+            --json url,headRefOid,headRepositoryOwner \
+            --jq '[.[] | select(.headRepositoryOwner.login == "MemTensor")][0].url // ""')"
+          pr_head_sha="$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state open \
+            --base "${DEFAULT_BRANCH}" \
+            --head "${RELEASE_BRANCH}" \
+            --json headRefOid,headRepositoryOwner \
+            --jq '[.[] | select(.headRepositoryOwner.login == "MemTensor")][0].headRefOid // ""')"
+          closed_url="$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state closed \
+            --base "${DEFAULT_BRANCH}" \
+            --head "${RELEASE_BRANCH}" \
+            --json url,mergedAt,headRepositoryOwner \
+            --jq '[.[] | select(.mergedAt == null and .headRepositoryOwner.login == "MemTensor")][0].url // ""')"
+          if [ -n "${pr_url}" ] && [ "${pr_head_sha}" != "${RELEASE_SHA}" ]; then
+            echo "::error::The open release PR head ${pr_head_sha} does not match validated branch ${RELEASE_SHA}."
+            exit 1
+          fi
+          if [ -z "${pr_url}" ] && [ -n "${closed_url}" ]; then
+            echo "::error::A release PR for ${RELEASE_BRANCH} was closed without merging (${closed_url}). Review it before retrying."
+            exit 1
+          fi
+          if [ -z "${pr_url}" ]; then
+            compare_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${DEFAULT_BRANCH}...${RELEASE_BRANCH}?expand=1"
+          else
+            compare_url=""
+          fi
+          {
+            echo "url=${pr_url}"
+            echo "compare_url=${compare_url}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Summarize release preparation
+        if: ${{ steps.branch.outcome == 'success' && (steps.branch.outputs.already_merged == 'true' || steps.pr.outcome == 'success') }}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.request.outputs.version }}
+          SOURCE_BRANCH: ${{ steps.request.outputs.source_branch }}
+          RELEASE_BRANCH: ${{ steps.request.outputs.release_branch }}
+          SOURCE_SHA: ${{ steps.branch.outputs.source_sha }}
+          RELEASE_SHA: ${{ steps.branch.outputs.release_sha }}
+          ALREADY_MERGED: ${{ steps.branch.outputs.already_merged }}
+          BRANCH_STATUS: ${{ steps.branch.outputs.branch_status }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          COMPARE_URL: ${{ steps.pr.outputs.compare_url }}
+        run: |
+          {
+            echo "## MemOS v${RELEASE_VERSION} prepared"
+            echo
+            echo "- Source: \`${SOURCE_BRANCH}\` at \`${SOURCE_SHA}\`"
+            if [ "${BRANCH_STATUS}" = merged_branch_deleted ]; then
+              echo "- Release commit: \`${RELEASE_SHA}\` (the merged release branch was automatically deleted)"
+            else
+              echo "- Release branch: \`${RELEASE_BRANCH}\` at \`${RELEASE_SHA}\`"
+            fi
+            if [ "${ALREADY_MERGED}" = true ]; then
+              echo "- Status: already merged into the default branch"
+            elif [ -n "${PR_URL}" ]; then
+              echo "- Release PR: ${PR_URL}"
+            else
+              echo "- Create release PR: ${COMPARE_URL}"
+              echo "- PR title: \`chore: prepare release v${RELEASE_VERSION}\`"
+              echo "- The PR is intentionally opened by a maintainer so GitHub runs the required pull-request checks."
+            fi
+            echo
+            echo "After review, required checks, and merge, **MemOS Release — Publish** starts automatically from the trusted main workflow. Its manual main-branch entry remains available for dry runs and recovery."
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -68,6 +68,69 @@ class FailingSessionOpenBridge(FakeBridge):
 
 
 class HermesProviderPipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch = patch.dict(
+            "os.environ",
+            {"MEMOS_HERMES_BRIDGE_MODE": "legacy"},
+        )
+        self._mode_patch.start()
+
+    def tearDown(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch.stop()
+
+    def test_plugin_version_matches_package_version(self) -> None:
+        package_json = _ADAPTER_ROOT.parent.parent / "package.json"
+        package_version = json.loads(package_json.read_text(encoding="utf-8"))["version"]
+
+        self.assertEqual(memos_provider.PLUGIN_VERSION, package_version)
+
+    def test_module_imports_cleanly(self) -> None:
+        """Regression guard for #2096: asserts that ``MemosHttpClient`` is
+        NOT present in ``memos_provider``, since the class was referenced
+        before it was ever committed (see issue #2096).
+
+        Note: the import itself is already validated at collection time —
+        the ``import memos_provider`` at the top of this file will raise
+        ``ImportError`` if a dangling reference is reintroduced, causing
+        the entire test file to fail to load. This test body only adds:
+
+        * the explicit negative guard on ``MemosHttpClient`` below (unique
+          to this test), which covers both the ``memos_provider``
+          re-export surface *and* ``bridge_client`` itself so a partial
+          re-add of the class only in ``bridge_client`` (with no
+          matching re-export) still fails the guard, and
+        * positive checks on ``MemTensorProvider`` (the class the Hermes
+          host actually instantiates) and on ``bridge_client``'s real
+          contract (``MemosBridgeClient`` / ``BridgeError``), rather than
+          on their incidental re-exports through ``memos_provider`` — the
+          latter only appear on the package namespace because
+          ``__init__.py`` uses a bare ``from bridge_client import ...``,
+          which is an implementation detail we don't want the test to
+          lock in.
+        """
+        import importlib
+
+        # MemTensorProvider is the class hermes-agent host instantiates.
+        self.assertTrue(hasattr(memos_provider, "MemTensorProvider"))
+
+        # Assert the actual contract on bridge_client directly rather
+        # than on its re-exports through memos_provider.
+        bc = importlib.import_module("bridge_client")
+        self.assertTrue(hasattr(bc, "MemosBridgeClient"))
+        self.assertTrue(hasattr(bc, "BridgeError"))
+
+        # ``MemosHttpClient`` was referenced by name in a half-merged HTTP
+        # bridge feature (see #2096). It must not reappear until the class
+        # itself is committed in ``bridge_client``. Guard both the
+        # ``memos_provider`` re-export (which is what the original
+        # ImportError travelled through) and ``bridge_client`` itself —
+        # otherwise a partial re-add of the class in ``bridge_client``
+        # without a matching re-export would slip past this test.
+        self.assertFalse(hasattr(memos_provider, "MemosHttpClient"))
+        self.assertFalse(hasattr(bc, "MemosHttpClient"))
+
     def test_lifecycle_persists_turn_and_closes_real_episode(self) -> None:
         bridge = FakeBridge()
         with (
@@ -141,7 +204,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch(
                 "memos_provider.MemosBridgeClient",
-                side_effect=lambda: bridge_attempts.pop(0),
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
             ),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -206,7 +269,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
             patch(
                 "memos_provider.MemosBridgeClient",
-                side_effect=lambda: bridge_attempts.pop(0),
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
             ),
         ):
             provider = memos_provider.MemTensorProvider()
@@ -227,7 +290,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         recovered_bridge = FakeBridge()
         bridge_attempts = [failed_bridge, recovered_bridge]
 
-        def bridge_factory() -> FakeBridge:
+        def bridge_factory(**_kwargs: object) -> FakeBridge:
             return bridge_attempts.pop(0)
 
         with (
@@ -263,7 +326,10 @@ class HermesProviderPipelineTests(unittest.TestCase):
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
             patch("memos_provider.ensure_viewer_daemon", return_value=True),
-            patch("memos_provider.MemosBridgeClient", side_effect=lambda: bridge_attempts.pop(0)),
+            patch(
+                "memos_provider.MemosBridgeClient",
+                side_effect=lambda **_kwargs: bridge_attempts.pop(0),
+            ),
         ):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("slow-parent-session")
@@ -334,7 +400,7 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertFalse(any(method == "turn.start" for method, _ in bridge.calls))
         self.assertFalse(any(method == "turn.end" for method, _ in bridge.calls))
 
-    def test_on_pre_compress_reuses_last_user_text_for_snapshot(self) -> None:
+    def test_on_pre_compress_reuses_cached_prefetch_without_starting_turn(self) -> None:
         bridge = FakeBridge()
         with (
             patch("memos_provider.ensure_bridge_running", return_value=True),
@@ -344,13 +410,144 @@ class HermesProviderPipelineTests(unittest.TestCase):
             provider = memos_provider.MemTensorProvider()
             provider.initialize("compress-session")
             provider.on_turn_start(2, "compress HERMES_MEMOS_E2E_0428 context")
+            provider.prefetch("compress HERMES_MEMOS_E2E_0428 context")
+            episode_id = provider._episode_id
+            turn_starts_before = sum(method == "turn.start" for method, _ in bridge.calls)
 
             snapshot = provider.on_pre_compress([{"role": "user", "content": "x"}])
+            repeated = provider.on_pre_compress([{"role": "user", "content": "x"}])
 
         self.assertIn("MemOS memory snapshot", snapshot)
         self.assertIn("remembered HERMES_MEMOS_E2E_0428", snapshot)
-        self.assertEqual(bridge.calls[-1][0], "turn.start")
-        self.assertIn("HERMES_MEMOS_E2E_0428", bridge.calls[-1][1]["userText"])
+        self.assertEqual(repeated, snapshot)
+        self.assertEqual(provider._episode_id, episode_id)
+        self.assertEqual(
+            sum(method == "turn.start" for method, _ in bridge.calls),
+            turn_starts_before,
+        )
+
+    def test_on_pre_compress_without_cached_prefetch_is_read_only(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("compress-session")
+            provider.on_turn_start(1, "first turn")
+
+            snapshot = provider.on_pre_compress([{"role": "user", "content": "first turn"}])
+
+        self.assertEqual(snapshot, "")
+        self.assertFalse(any(method == "turn.start" for method, _ in bridge.calls))
+
+    def test_compression_boundary_is_forwarded_to_next_turn_retrieval(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider.time.time", return_value=1_700_000_123.456),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("compress-session")
+            provider.on_pre_compress([{"role": "user", "content": "old visible turn"}])
+            provider.on_turn_start(3, "what did we discuss before compression?")
+            provider.prefetch("what did we discuss before compression?")
+
+        turn_start = next(
+            payload for method, payload in reversed(bridge.calls) if method == "turn.start"
+        )
+        self.assertEqual(
+            turn_start["contextHints"]["visibleContextStartTs"],
+            1_700_000_123_456,
+        )
+        self.assertTrue(turn_start["contextHints"]["visibleContextKnown"])
+
+    def test_prefetch_passes_stable_turn_key_to_bridge(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("turn-key-session")
+            provider.on_turn_start(7, "continue the task")
+            provider.prefetch("continue the task")
+
+        turn_start = next(params for method, params in bridge.calls if method == "turn.start")
+        self.assertEqual(turn_start["turnKey"], "turn-key-session:7")
+
+    def test_prefetch_uses_a_dedicated_budget_and_forwards_absolute_deadline(self) -> None:
+        bridge = FakeBridge()
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider._PREFETCH_RPC_TIMEOUT", 6.0),
+            patch("memos_provider.time.time", return_value=1_700_000_000.0),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("budget-session")
+            provider.on_turn_start(1, "recall the build decision")
+            with patch.object(
+                provider,
+                "_bridge_request_with_retry",
+                wraps=provider._bridge_request_with_retry,
+            ) as request:
+                provider.prefetch("recall the build decision")
+
+        turn_start = next(params for method, params in bridge.calls if method == "turn.start")
+        self.assertEqual(turn_start["deadlineAt"], 1_700_000_005_750)
+        request.assert_called_once()
+        self.assertLessEqual(request.call_args.kwargs["timeout"], 6.0)
+        self.assertIn("deadline_monotonic", request.call_args.kwargs)
+
+    def test_prefetch_budget_includes_bridge_ensure_time(self) -> None:
+        bridge = FakeBridge()
+        monotonic_now = [100.0]
+
+        def ensure_bridge(_session_id: str, *, timeout: float) -> bool:
+            self.assertAlmostEqual(timeout, 6.0, places=3)
+            monotonic_now[0] += 2.5
+            return True
+
+        with (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+            patch("memos_provider._PREFETCH_RPC_TIMEOUT", 6.0),
+            patch("memos_provider.time.time", return_value=1_700_000_000.0),
+            patch("memos_provider.time.monotonic", side_effect=lambda: monotonic_now[0]),
+        ):
+            provider = memos_provider.MemTensorProvider()
+            provider.initialize("budget-session")
+            provider.on_turn_start(1, "recall the build decision")
+            with (
+                patch.object(provider, "_ensure_bridge", side_effect=ensure_bridge),
+                patch.object(
+                    provider,
+                    "_bridge_request_with_retry",
+                    wraps=provider._bridge_request_with_retry,
+                ) as request,
+            ):
+                provider.prefetch("recall the build decision")
+
+        self.assertLessEqual(request.call_args.kwargs["timeout"], 3.5)
+        turn_start = next(params for method, params in bridge.calls if method == "turn.start")
+        self.assertEqual(turn_start["deadlineAt"], 1_700_000_005_750)
+
+    def test_prefetch_timeout_config_rejects_non_positive_values(self) -> None:
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "0"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 6.0)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "nan"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 6.0)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "4.5"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 4.5)
+        with patch.dict("os.environ", {"MEMOS_HERMES_PREFETCH_RPC_TIMEOUT": "30"}):
+            self.assertEqual(memos_provider._prefetch_rpc_timeout_default(), 7.0)
 
     def test_prefetch_suppresses_memory_injection_for_explicit_delegation(self) -> None:
         bridge = FakeBridge()
@@ -732,6 +929,296 @@ class HermesProviderPipelineTests(unittest.TestCase):
         self.assertEqual(turn_end["toolCalls"][0]["thinkingBefore"], "先列计划，再查机票。")
         self.assertIn("PVG-CPH", turn_end["toolCalls"][1]["output"])
         self.assertEqual(turn_end["toolCalls"][1]["thinkingBefore"], "先列计划，再查机票。")
+
+
+class ChineseToolResultBridge(FakeBridge):
+    """Fake bridge whose read-path responses embed Chinese characters.
+
+    Used by ``HandleToolCallEnsureAsciiTests`` to prove that every
+    ``json.dumps`` inside ``handle_tool_call`` passes
+    ``ensure_ascii=False`` so Chinese memory content is returned to the
+    host LLM as readable UTF-8 rather than ``\\uXXXX`` escapes (#2255).
+    """
+
+    _CH_REFLECTION = "用户提供了 Tushare KEY，需要在后续查询中携带。"
+    _CH_SNIPPET = "记忆命中：北京晚高峰的地铁调度策略。"
+    _CH_POLICY_TITLE = "策略：夜间批任务错峰"
+    _CH_POLICY_BODY = "在凌晨 02:00 之后触发全量导入，避开在线读写高峰。"
+    _CH_WORLD_TITLE = "世界模型：城市晚高峰"
+    _CH_WORLD_BODY = "工作日 17:30-19:30 主干道车流密集，通勤需绕行。"
+    _CH_SKILL_TITLE = "技能：中文摘要"
+    _CH_SKILL_PROCEDURE = "先分段抽取关键句，再融合成 3 句摘要。"
+
+    def request(self, method: str, params: dict | None = None, **_kwargs: object) -> dict:
+        payload = params or {}
+        self.calls.append((method, payload))
+        if method == "session.open":
+            return {"sessionId": payload.get("sessionId") or "hermes:test-session"}
+        if method == "core.health":
+            return {"ok": True}
+        if method == "memory.search":
+            return {
+                "hits": [
+                    {
+                        "id": "trace-cn-1",
+                        "refId": "trace-cn-1",
+                        "refKind": "trace",
+                        "tier": 1,
+                        "score": 0.87,
+                        "snippet": self._CH_SNIPPET,
+                        "reflection": self._CH_REFLECTION,
+                    },
+                    {
+                        "id": "world-cn-1",
+                        "refId": "world-cn-1",
+                        "refKind": "world_model",
+                        "tier": 3,
+                        "score": 0.71,
+                        "snippet": f"{self._CH_WORLD_TITLE}\n{self._CH_WORLD_BODY}",
+                    },
+                ]
+            }
+        if method == "memory.get_trace":
+            return {
+                "id": payload.get("id"),
+                "episodeId": "ep-cn-1",
+                "agentText": "已按用户请求完成中文摘要生成。",
+                "userText": "帮我把上面的中文材料压缩成 3 句摘要。",
+                "reflection": self._CH_REFLECTION,
+                "ts": "2026-08-16T02:50:22Z",
+                "toolCalls": [],
+                "value": 0.9,
+            }
+        if method == "memory.get_policy":
+            return {
+                "id": payload.get("id"),
+                "title": self._CH_POLICY_TITLE,
+                "procedure": self._CH_POLICY_BODY,
+                "trigger": "夜间空闲窗口",
+                "verification": "首屏读取 P95 无回退",
+                "boundary": "仅离线批任务",
+                "gain": "峰值 QPS 下降 30%",
+                "support": 12,
+                "status": "active",
+            }
+        if method == "memory.get_world":
+            return {
+                "id": payload.get("id"),
+                "title": self._CH_WORLD_TITLE,
+                "body": self._CH_WORLD_BODY,
+                "policyIds": ["policy-cn-1"],
+            }
+        if method == "memory.timeline":
+            return {
+                "traces": [
+                    {
+                        "id": "trace-cn-1",
+                        "snippet": self._CH_SNIPPET,
+                        "reflection": self._CH_REFLECTION,
+                    }
+                ]
+            }
+        if method == "memory.list_world_models":
+            return {
+                "worldModels": [
+                    {
+                        "id": "world-cn-1",
+                        "title": self._CH_WORLD_TITLE,
+                        "body": self._CH_WORLD_BODY,
+                        "policyIds": ["policy-cn-1"],
+                    }
+                ]
+            }
+        if method == "skill.list":
+            return {
+                "skills": [
+                    {
+                        "id": "skill-cn-1",
+                        "title": self._CH_SKILL_TITLE,
+                        "summary": self._CH_SKILL_PROCEDURE,
+                    }
+                ]
+            }
+        if method == "skill.get":
+            return {
+                "id": payload.get("id"),
+                "title": self._CH_SKILL_TITLE,
+                "procedure": self._CH_SKILL_PROCEDURE,
+            }
+        if method in {"episode.close", "session.close", "subagent.record"}:
+            return {"ok": True}
+        raise AssertionError(f"unexpected bridge method: {method}")
+
+
+class HandleToolCallEnsureAsciiTests(unittest.TestCase):
+    """Regression guard for #2255.
+
+    Every ``json.dumps`` in ``MemTensorProvider.handle_tool_call`` must
+    pass ``ensure_ascii=False`` so Chinese (and other non-ASCII) memory
+    content reaches the host LLM as readable UTF-8. Without the flag,
+    Python's default serialization escapes each non-ASCII code point to
+    ``\\uXXXX``, dramatically increasing token load and making tool
+    results unreadable for humans debugging the Hermes side.
+    """
+
+    def setUp(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch = patch.dict(
+            "os.environ",
+            {"MEMOS_HERMES_BRIDGE_MODE": "legacy"},
+        )
+        self._mode_patch.start()
+
+    def tearDown(self) -> None:
+        memos_provider.SHARED_BRIDGE_REGISTRY.close_all()
+        self._mode_patch.stop()
+
+    def _make_provider(self, bridge: ChineseToolResultBridge) -> object:
+        patches = (
+            patch("memos_provider.ensure_bridge_running", return_value=True),
+            patch("memos_provider.ensure_viewer_daemon", return_value=True),
+            patch("memos_provider.MemosBridgeClient", return_value=bridge),
+        )
+        for p in patches:
+            self.addCleanup(p.stop)
+            p.start()
+        provider = memos_provider.MemTensorProvider()
+        provider.initialize(
+            "hermes:2255",
+            hermes_home="/tmp/hermes-2255-home",
+            platform="cli",
+            agent_identity="hermes-2255",
+        )
+        self.addCleanup(provider.shutdown)
+        return provider
+
+    # -- individual tools -------------------------------------------------
+    #
+    # Each test proves ``ensure_ascii=False`` by asserting that the raw
+    # serialized string contains the Chinese literal verbatim. That
+    # guarantee is stronger than searching for the two-character sequence
+    # ``\\u`` in the output: with ``ensure_ascii=True`` Python would emit
+    # ``\uXXXX`` escapes and the raw Chinese literal would NOT appear, so
+    # ``assertIn(_CH_..., raw)`` alone catches the regression while
+    # avoiding false positives on legitimate values that just happen to
+    # contain a backslash followed by ``u`` (e.g. Windows paths, regex
+    # patterns, or unrelated escape sequences in future fields).
+
+    def test_memos_search_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_search", {"query": "中文摘要"})
+
+        self.assertIn(ChineseToolResultBridge._CH_REFLECTION, raw)
+        parsed = json.loads(raw)
+        self.assertEqual(
+            parsed["hits"][0]["reflection"],
+            ChineseToolResultBridge._CH_REFLECTION,
+        )
+
+    def test_memos_get_trace_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_get", {"id": "trace-cn-1", "kind": "trace"})
+
+        self.assertIn(ChineseToolResultBridge._CH_REFLECTION, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["found"])
+        self.assertEqual(parsed["meta"]["reflection"], ChineseToolResultBridge._CH_REFLECTION)
+
+    def test_memos_get_policy_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_get", {"id": "policy-cn-1", "kind": "policy"})
+
+        self.assertIn(ChineseToolResultBridge._CH_POLICY_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertIn(ChineseToolResultBridge._CH_POLICY_BODY, parsed["body"])
+
+    def test_memos_get_world_model_returns_utf8_chinese(self) -> None:
+        """Regression guard for the ``world_model`` branch of ``memos_get``.
+
+        Without this case a future accidental removal of
+        ``ensure_ascii=False`` from the ``world_model`` branch of
+        ``memos_get`` (routed via ``memory.get_world``) would go
+        undetected — the other ``memos_get`` tests only exercise the
+        ``trace`` and ``policy`` kinds.
+        """
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_get", {"id": "world-cn-1", "kind": "world_model"})
+
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["found"])
+        self.assertEqual(parsed["kind"], "world_model")
+        self.assertEqual(parsed["meta"]["title"], ChineseToolResultBridge._CH_WORLD_TITLE)
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_BODY, parsed["body"])
+
+    def test_memos_timeline_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_timeline", {"episodeId": "ep-cn-1"})
+
+        self.assertIn(ChineseToolResultBridge._CH_SNIPPET, raw)
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["traces"][0]["snippet"], ChineseToolResultBridge._CH_SNIPPET)
+
+    def test_memos_skill_list_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_skill_list", {"limit": 5})
+
+        self.assertIn(ChineseToolResultBridge._CH_SKILL_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertEqual(
+            parsed["skills"][0]["title"],
+            ChineseToolResultBridge._CH_SKILL_TITLE,
+        )
+
+    def test_memos_environment_list_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_environment", {"limit": 5})
+
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_BODY, raw)
+        parsed = json.loads(raw)
+        self.assertFalse(parsed["queried"])
+        self.assertEqual(
+            parsed["worldModels"][0]["title"],
+            ChineseToolResultBridge._CH_WORLD_TITLE,
+        )
+
+    def test_memos_environment_query_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_environment", {"query": "晚高峰", "limit": 5})
+
+        self.assertIn(ChineseToolResultBridge._CH_WORLD_TITLE, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["queried"])
+
+    def test_memos_skill_get_returns_utf8_chinese(self) -> None:
+        bridge = ChineseToolResultBridge()
+        provider = self._make_provider(bridge)
+
+        raw = provider.handle_tool_call("memos_skill_get", {"id": "skill-cn-1"})
+
+        self.assertIn(ChineseToolResultBridge._CH_SKILL_PROCEDURE, raw)
+        parsed = json.loads(raw)
+        self.assertTrue(parsed["found"])
+        self.assertEqual(
+            parsed["skill"]["procedure"],
+            ChineseToolResultBridge._CH_SKILL_PROCEDURE,
+        )
 
 
 if __name__ == "__main__":

@@ -41,36 +41,47 @@ Both endpoints share the following query parameters:
 
 ## 4. Quick Start
 
-Use the open-source SDK for a blocking wait:
+These endpoints are served directly by the open-source Server (`server_api`, router prefix `/product`) and can be called with plain HTTP requests. Note that `user_name`, `timeout_seconds`, and `poll_interval` are query parameters, not a request body. The example below performs a blocking wait:
 
 ```python
-from memos.api.client import MemOSClient
+import json
 
-client = MemOSClient(api_key="...", base_url="...")
+import requests
+
+# Address of your self-hosted MemOS Server (add an Authorization header if auth is enabled)
+base_url = "http://localhost:8000"
 user_name = "dev_user_01"
 
 # Scenario A: blocking wait, commonly used in Python automation scripts.
 print(f"Waiting for user {user_name}'s task queue to drain...")
-res = client.wait_until_idle(
-    user_name=user_name,
-    timeout_seconds=300,
-    poll_interval=2
+resp = requests.post(
+    f"{base_url}/product/scheduler/wait",
+    params={"user_name": user_name, "timeout_seconds": 300, "poll_interval": 2},
+    timeout=310,  # HTTP timeout should be larger than timeout_seconds
 )
-if res and res.code == 200:
+resp.raise_for_status()
+result = resp.json()  # {"message": "idle" | "timeout", "data": {...}}
+if result["message"] == "idle":
     print("All tasks have completed.")
+else:
+    print(f"Timed out with {result['data']['running_tasks']} task(s) still running.")
 
 # Scenario B: streaming progress, commonly used by frontend progress bars.
 print("Listening to the live task progress stream...")
-# The SSE endpoint usually returns a generator from the SDK.
-progress_stream = client.stream_scheduler_progress(
-    user_name=user_name,
-    timeout_seconds=300
-)
-
-for event in progress_stream:
-    # Print the remaining queued tasks in real time.
-    print(f"Remaining queued tasks: {event['remaining_tasks_count']}")
-    if event['status'] == 'idle':
-        print("Scheduler is idle")
-        break
+with requests.get(
+    f"{base_url}/product/scheduler/wait/stream",
+    params={"user_name": user_name, "timeout_seconds": 300},
+    stream=True,
+    timeout=310,
+) as resp:
+    resp.raise_for_status()
+    for line in resp.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        event = json.loads(line.removeprefix("data:").strip())
+        # Print the number of active tasks in real time.
+        print(f"Active tasks: {event['active_tasks']}, status: {event['status']}")
+        if event["status"] in ("idle", "timeout"):
+            print("Scheduler is idle" if event["status"] == "idle" else "Stream timed out")
+            break
 ```

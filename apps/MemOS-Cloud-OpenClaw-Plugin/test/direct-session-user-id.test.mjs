@@ -92,3 +92,34 @@ test("buildAddMessagePayload keeps configured userId for non-direct chats", () =
   const payload = buildAddMessagePayload(cfg, [{ role: "user", content: "hi" }], ctx);
   assert.equal(payload.user_id, "openclaw-user");
 });
+
+test("MEMOS_SOURCE is correctly appended with platform suffix", () => {
+  const expectedSource = (() => {
+    const platform = process.platform;
+    if (platform === "win32") return "openclaw_win";
+    if (platform === "darwin") return "openclaw_mac";
+    if (platform === "linux") return "openclaw_linux";
+    return "openclaw";
+  })();
+  const cfg = {
+    userId: "openclaw-user",
+    useDirectSessionUserId: false,
+    queryPrefix: "",
+    maxQueryChars: 0,
+    recallGlobal: true,
+    knowledgebaseIds: [],
+    memoryLimitNumber: 6,
+    includePreference: true,
+    preferenceLimitNumber: 6,
+    includeToolMemory: false,
+    toolMemoryLimitNumber: 0,
+    relativity: 0.45,
+    multiAgentMode: false,
+  };
+  const ctx = {};
+  const searchPayload = buildSearchPayload(cfg, "query", ctx);
+  assert.equal(searchPayload.source, expectedSource);
+
+  const addPayload = buildAddMessagePayload(cfg, [], ctx);
+  assert.equal(addPayload.source, expectedSource);
+});

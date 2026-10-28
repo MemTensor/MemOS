@@ -236,6 +236,32 @@ can't take down a well-trialled skill. If the blend drives η under
 `retireEta` we still retire; the skill can rehab later via positive
 signals.
 
+### Idle archive scan
+
+The existing lifecycle tick also archives an active skill when both
+conditions hold:
+
+```
+η < minEtaForRetrieval
+now - (lastUsedAt ?? createdAt) >= idleArchiveMs
+```
+
+Configuration validation enforces a one-hour minimum for `idleArchiveMs` to
+prevent an accidental zero value from archiving every low-η active Skill on
+the next lifecycle tick.
+
+`lastUsedAt` is updated by the existing recorded-use path. A never-used
+skill falls back to `createdAt`; unrelated metadata updates therefore do
+not reset its idle clock. Manual reactivation records a fresh use timestamp,
+giving the skill a complete grace period before it can be archived again.
+
+A single-flight lifecycle worker runs once at startup, at most hourly while
+the process remains alive, and opportunistically after turn completion. It
+does not drain the capture/reward/L2/L3 chain. Each tick atomically selects
+and updates at most ten 500-row batches, yielding between full batches; any
+remaining backlog is deferred so a large archive queue cannot monopolize the
+event loop.
+
 ---
 
 ## 7. Retrieval surface
@@ -259,7 +285,10 @@ still under trial.
 
 `cooldownMs` debounces repeat runs for the same policy triggered by
 rapid-fire upstream events (e.g. a burst of `reward.updated`). The
-subscriber holds a simple in-memory `{policyId → lastRunAt}` table.
+subscriber holds an in-memory `{policyId → lastRunAt}` table plus a pending
+policy set. A reward event received during cooldown is coalesced and drained
+when that policy becomes eligible; it is not silently discarded. Different
+policies have independent cooldowns and queue entries.
 
 If `cooldownMs === 0` (as in unit tests), every event triggers a run.
 

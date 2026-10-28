@@ -128,6 +128,11 @@ export function createRewardRunner(deps: RewardDeps): RewardRunner {
             trigger: input.trigger,
             skipped: true,
           },
+          // A trivial/short episode is a terminal, intentional skip rather
+          // than a failed reward run. Clear any recovery marker inherited
+          // from an earlier capture/reward attempt so automatic rescans do
+          // not keep reflecting the same trace forever.
+          rewardDirty: undefined,
         });
       } catch (err) {
         warnings.push({

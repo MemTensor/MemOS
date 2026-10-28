@@ -1,14 +1,12 @@
-import asyncio
 import os
-import time
 
 from openai import AzureOpenAI as AzureClient
+from openai import BadRequestError
 from openai import OpenAI as OpenAIClient
 
 from memos.configs.embedder import UniversalAPIEmbedderConfig
-from memos.embedders.base import BaseEmbedder
+from memos.embedders.base import BaseEmbedder, log_embedding_call
 from memos.log import get_logger
-from memos.utils import timed_with_status
 
 
 logger = get_logger(__name__)
@@ -58,70 +56,92 @@ class UniversalAPIEmbedder(BaseEmbedder):
                 else None,
             )
 
-    @timed_with_status(
-        log_prefix="model_timed_embedding",
-        log_extra_args=lambda self, texts: {
-            "model_name_or_path": "text-embedding-3-large",
-            "text_len": len(texts),
-            "text_content": texts,
-        },
-    )
+    @staticmethod
+    def _build_embedding_kwargs(model: str, texts: list[str], embedding_dims: int | None) -> dict:
+        kwargs = {"model": model, "input": texts}
+        if embedding_dims is not None:
+            kwargs["dimensions"] = embedding_dims
+        return kwargs
+
+    @staticmethod
+    def _is_dimensions_unsupported(error: BadRequestError) -> bool:
+        body = getattr(error, "body", None)
+        details = body.get("error", body) if isinstance(body, dict) else {}
+        if isinstance(details, dict):
+            param = str(details.get("param") or "").lower()
+            code = str(details.get("code") or "").lower()
+            if param == "dimensions" and any(
+                marker in code for marker in ("unsupported", "unknown", "unrecognized")
+            ):
+                return True
+
+        messages = [str(error)]
+        if isinstance(details, dict) and isinstance(details.get("message"), str):
+            messages.append(details["message"])
+        message = " ".join(messages).lower()
+        unsupported_markers = (
+            "dimensions is not supported",
+            "dimensions not supported",
+            "does not support dimensions",
+            "unsupported parameter: dimensions",
+            "unknown parameter: dimensions",
+            "does not support matryoshka",
+            "changing output dimensions is unsupported",
+            "changing output dimensions will lead",
+        )
+        return any(marker in message for marker in unsupported_markers)
+
+    def _call_embeddings_api(
+        self, client, model: str, texts: list[str], timeout: int
+    ) -> list[list[float]]:
+        embedding_dims = getattr(self.config, "embedding_dims", None)
+        kwargs = self._build_embedding_kwargs(model, texts, embedding_dims)
+
+        try:
+            response = client.embeddings.create(**kwargs, timeout=timeout)
+        except BadRequestError as error:
+            if embedding_dims is None or not self._is_dimensions_unsupported(error):
+                raise
+
+            logger.warning(
+                "Embedding provider rejected dimensions=%d; retrying without dimensions",
+                embedding_dims,
+            )
+            fallback_kwargs = self._build_embedding_kwargs(model, texts, None)
+            response = client.embeddings.create(**fallback_kwargs, timeout=timeout)
+
+        return [item.embedding for item in response.data]
+
+    @log_embedding_call
     def embed(self, texts: list[str]) -> list[list[float]]:
         if isinstance(texts, str):
             texts = [texts]
-        # Sanitize Unicode to prevent encoding errors with emoji/surrogates
         texts = [_sanitize_unicode(t) for t in texts]
-        # Truncate texts if max_tokens is configured
         texts = self._truncate_texts(texts)
-        logger.info(f"Embeddings request with input: {texts}")
         if self.provider == "openai" or self.provider == "azure":
+            timeout = int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5))
             try:
-
-                async def _create_embeddings():
-                    return self.client.embeddings.create(
-                        model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
-                        input=texts,
-                    )
-
-                init_time = time.time()
-                response = asyncio.run(
-                    asyncio.wait_for(
-                        _create_embeddings(), timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5))
-                    )
-                )
-                logger.info(f"Embeddings request succeeded with {time.time() - init_time} seconds")
-                return [r.embedding for r in response.data]
+                model = getattr(self.config, "model_name_or_path", "text-embedding-3-large")
+                return self._call_embeddings_api(self.client, model, texts, timeout)
             except Exception as e:
                 if self.use_backup_client:
                     logger.warning(
-                        f"Embeddings request ended with {type(e).__name__} error: {e}, try backup client"
+                        "Embedding request failed error_type=%s; trying backup client",
+                        type(e).__name__,
                     )
                     try:
-
-                        async def _create_embeddings_backup():
-                            return self.backup_client.embeddings.create(
-                                model=getattr(
-                                    self.config,
-                                    "backup_model_name_or_path",
-                                    "text-embedding-3-large",
-                                ),
-                                input=texts,
-                            )
-
-                        init_time = time.time()
-                        response = asyncio.run(
-                            asyncio.wait_for(
-                                _create_embeddings_backup(),
-                                timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5)),
-                            )
+                        backup_model = getattr(
+                            self.config,
+                            "backup_model_name_or_path",
+                            "text-embedding-3-large",
                         )
-                        logger.info(
-                            f"Backup embeddings request succeeded with {time.time() - init_time} seconds"
+                        return self._call_embeddings_api(
+                            self.backup_client, backup_model, texts, timeout
                         )
-                        logger.info(f"Backup embeddings request response: {response}")
-                        return [r.embedding for r in response.data]
-                    except Exception as e:
-                        raise ValueError(f"Backup embeddings request ended with error: {e}") from e
+                    except Exception as e_backup:
+                        raise ValueError(
+                            f"Backup embeddings request ended with error: {e_backup}"
+                        ) from e_backup
                 else:
                     raise ValueError(f"Embeddings request ended with error: {e}") from e
         else:

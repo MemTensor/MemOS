@@ -23,6 +23,42 @@ type Extractor = (text: string, options?: Record<string, unknown>) => Promise<an
 let extractorPromise: Promise<Extractor> | null = null;
 let currentModel: string | null = null;
 
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("Aborted", "AbortError");
+}
+
+/**
+ * Stop awaiting native Transformers work when the caller's request expires.
+ *
+ * The pipeline API does not accept an AbortSignal, so the underlying model
+ * load/inference may still finish in the background. Keeping that work alive
+ * is intentional: a timed-out first request can still warm the shared model
+ * cache for the next request. Attaching both promise handlers also prevents a
+ * late native failure from becoming an unhandled rejection.
+ */
+function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 async function ensureExtractor(model: string, log: ProviderCallCtx["log"]): Promise<Extractor> {
   if (extractorPromise && currentModel === model) return extractorPromise;
   if (extractorPromise && currentModel && currentModel !== model) {
@@ -70,11 +106,16 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
 
   async embed(texts: string[], _role: EmbedRole, ctx: ProviderCallCtx): Promise<number[][]> {
     const { config, log } = ctx;
-    const ext = await ensureExtractor(config.model, log);
+    // Avoid starting a costly lazy model load for an already-expired request.
+    if (ctx.signal?.aborted) throw abortReason(ctx.signal);
+    const ext = await awaitWithAbort(ensureExtractor(config.model, log), ctx.signal);
     const out: number[][] = [];
     for (let i = 0; i < texts.length; i++) {
-      if (ctx.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      const result = await ext(texts[i]!, { pooling: "mean", normalize: true });
+      if (ctx.signal?.aborted) throw abortReason(ctx.signal);
+      const result = await awaitWithAbort(
+        ext(texts[i]!, { pooling: "mean", normalize: true }),
+        ctx.signal,
+      );
       const arr = (result as { data?: Float32Array }).data;
       if (!arr) {
         throw new Error("[embedding.local] extractor returned no .data");

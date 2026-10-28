@@ -7,6 +7,7 @@ import type { ResolvedHome } from "../../core/config/index.js";
 const LOCK_DIRNAME = "openclaw-runtime.lock";
 const OWNER_FILENAME = "owner.json";
 const UNWRITTEN_OWNER_STALE_MS = 30_000;
+const heldRuntimeLockDirs = new Set<string>();
 
 export interface OpenClawRuntimeLockOwner {
   pluginId: string;
@@ -101,7 +102,12 @@ export function acquireOpenClawRuntimeLock(
       if (e.code !== "EEXIST") throw err;
 
       const owner = readOwner(ownerFile);
-      if (owner && pidIsAlive(owner.pid)) {
+      if (heldRuntimeLockDirs.has(lockDir)) {
+        throw new DuplicateOpenClawRuntimeError(lockDir, owner);
+      }
+      // A live self PID without a locally held lock can only be a stale owner
+      // from an earlier process lifecycle whose PID was recycled by the OS.
+      if (owner && owner.pid !== pid && pidIsAlive(owner.pid)) {
         throw new DuplicateOpenClawRuntimeError(lockDir, owner);
       }
       if (!owner && !lockLooksStale(lockDir, now(), unwrittenOwnerStaleMs)) {
@@ -128,11 +134,13 @@ export function acquireOpenClawRuntimeLock(
     fs.rmSync(lockDir, { recursive: true, force: true });
     throw err;
   }
+  heldRuntimeLockDirs.add(lockDir);
 
   let released = false;
   const releaseSync = () => {
     if (released) return;
     released = true;
+    heldRuntimeLockDirs.delete(lockDir);
     const current = readOwner(ownerFile);
     if (current?.token !== owner.token) return;
     fs.rmSync(lockDir, { recursive: true, force: true });

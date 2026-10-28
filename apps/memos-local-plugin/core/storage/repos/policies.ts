@@ -1,4 +1,4 @@
-import type { EmbeddingVector, PolicyId, PolicyRow, ShareScope } from "../../types.js";
+import type { EmbeddingVector, PolicyId, PolicyMetadata, PolicyRow, ShareScope } from "../../types.js";
 import type { PolicyListFilter, StorageDb } from "../types.js";
 import { buildInsert, buildUpdate } from "../tx.js";
 import { scanAndTopK, type VectorHit } from "../vector.js";
@@ -46,6 +46,7 @@ const COLUMNS = [
   "share_target",
   "shared_at",
   "edited_at",
+  "metadata_json",
 ];
 
 export interface PolicySearchMeta {
@@ -257,13 +258,16 @@ export function makePoliciesRepo(db: StorageDb) {
         k: Math.max(1, Math.min(200, Math.floor(k))),
       };
       const ors: string[] = [];
-      dedup.slice(0, 16).forEach((t, i) => {
+      const matchScores: string[] = [];
+      const limitedTerms = dedup.slice(0, 16);
+      limitedTerms.forEach((t, i) => {
         const key = `pat_${i}`;
         const escaped = t.replace(/[\\%_]/g, (m) => `\\${m}`);
         params[key] = `%${escaped}%`;
-        ors.push(
-          `(title LIKE @${key} ESCAPE '\\' OR trigger LIKE @${key} ESCAPE '\\' OR procedure LIKE @${key} ESCAPE '\\' OR verification LIKE @${key} ESCAPE '\\' OR boundary LIKE @${key} ESCAPE '\\' OR decision_guidance_json LIKE @${key} ESCAPE '\\')`,
-        );
+        const match =
+          `(title LIKE @${key} ESCAPE '\\' OR trigger LIKE @${key} ESCAPE '\\' OR procedure LIKE @${key} ESCAPE '\\' OR verification LIKE @${key} ESCAPE '\\' OR boundary LIKE @${key} ESCAPE '\\' OR decision_guidance_json LIKE @${key} ESCAPE '\\')`;
+        ors.push(match);
+        matchScores.push(`CASE WHEN ${match} THEN 1 ELSE 0 END`);
       });
       const whereParts: string[] = [`(${ors.join(" OR ")})`];
       if (opts.statusIn && opts.statusIn.length > 0) {
@@ -285,17 +289,18 @@ export function makePoliciesRepo(db: StorageDb) {
                confidence,
                owner_agent_kind,
                owner_profile_id,
-               owner_workspace_id
+               owner_workspace_id,
+               (${matchScores.join(" + ")}) AS pattern_matches
           FROM policies
          WHERE ${whereParts.join(" AND ")}
-         ORDER BY updated_at DESC
+         ORDER BY pattern_matches DESC, updated_at DESC
          LIMIT @k`;
       const rows = db
-        .prepare<typeof params, RawPolicySearchRow>(sql)
+        .prepare<typeof params, RawPolicySearchRow & { pattern_matches: number }>(sql)
         .all(params);
-      return rows.map((r, idx) => ({
+      return rows.map((r) => ({
         id: r.id,
-        score: 1 / (idx + 1),
+        score: r.pattern_matches / limitedTerms.length,
         meta: policySearchMeta(r),
       }));
     },
@@ -416,6 +421,7 @@ interface RawPolicyRow {
   share_target: string | null;
   shared_at: number | null;
   edited_at: number | null;
+  metadata_json: string | null;
 }
 
 type RawPolicySearchRow = Pick<
@@ -472,6 +478,7 @@ function rowToParams(row: PolicyRow): Record<string, unknown> {
     share_target: row.share?.target ?? null,
     shared_at: row.share?.sharedAt ?? null,
     edited_at: row.editedAt ?? null,
+    metadata_json: row.metadata ? toJsonText(row.metadata) : null,
   };
 }
 
@@ -513,6 +520,30 @@ function mapRow(r: RawPolicyRow): PolicyRow {
           }
         : null,
     editedAt: r.edited_at,
+    metadata: parsePolicyMetadata(r.metadata_json),
+  };
+}
+
+function parsePolicyMetadata(raw: string | null | undefined): PolicyMetadata | undefined {
+  if (!raw) return undefined;
+  const value = fromJsonText<Partial<PolicyMetadata> | null>(raw, null);
+  if (!value || value.version !== 1) return undefined;
+  const language = value.language;
+  if (!['zh', 'en', 'other', 'mixed', 'unknown'].includes(String(language))) return undefined;
+  const list = (input: unknown): string[] =>
+    Array.isArray(input)
+      ? Array.from(new Set(input.filter((v): v is string => typeof v === 'string' && !!v.trim()).map((v) => v.trim().slice(0, 64))))
+      : [];
+  const sourceSignature = typeof value.sourceSignature === 'string' && value.sourceSignature.trim()
+    ? value.sourceSignature.trim().slice(0, 256)
+    : undefined;
+  return {
+    version: 1,
+    language: language as PolicyMetadata['language'],
+    domainTags: list(value.domainTags),
+    toolNames: list(value.toolNames),
+    errorCodes: list(value.errorCodes),
+    ...(sourceSignature ? { sourceSignature } : {}),
   };
 }
 

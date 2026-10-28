@@ -17,7 +17,7 @@ from tqdm.asyncio import tqdm
 load_dotenv()
 
 API_KEY = os.getenv("OPENAI_API_KEY")
-API_URL = os.getenv("OPENAI_BASE_URL")
+API_URL = os.getenv("OPENAI_API_BASE")
 
 
 async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:

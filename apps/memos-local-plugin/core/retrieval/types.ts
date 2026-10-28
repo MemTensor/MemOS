@@ -36,6 +36,9 @@ import type {
 /** The three cost/benefit tiers; internal use only. */
 export type TierKind = "tier1" | "tier2" | "tier3";
 
+/** Query-specific retrieval policy. Existing callers use `default`. */
+export type RetrievalProfile = "default" | "personal_fact";
+
 /** Which `vec_*` column on `traces` a Tier-2 hit came from. */
 export type TraceVecKind = "summary" | "action";
 
@@ -56,6 +59,7 @@ export type RetrievalChannel =
   | "vec"
   | "fts"
   | "pattern"
+  | "exact_identifier"
   | "structural";
 
 /** Per-channel rank carried on a candidate, used by the RRF pass. */
@@ -399,6 +403,7 @@ export interface RetrievalRepos {
       procedureJson?: unknown;
       decisionGuidance?: { preference: string[]; antiPattern: string[] };
       eta: number;
+      vec: EmbeddingVector | null;
       sourcePolicyIds?: PolicyId[];
       updatedAt?: EpochMs;
     } | null;
@@ -542,6 +547,7 @@ export interface RetrievalRepos {
       title: string;
       body: string;
       policyIds: string[];
+      vec: EmbeddingVector | null;
     } | null;
   };
 
@@ -673,7 +679,11 @@ export interface RetrievalRepos {
 
 /** Abstract embedder surface consumed by retrieval. Mirrors `Embedder`. */
 export interface RetrievalEmbedder {
-  embed: (text: string, role?: "query" | "document") => Promise<EmbeddingVector>;
+  embed: (
+    text: string,
+    role?: "query" | "document",
+    options?: { signal?: AbortSignal; deadlineAt?: number },
+  ) => Promise<EmbeddingVector>;
 }
 
 export interface RetrievalDeps {
@@ -704,6 +714,10 @@ export interface RetrievalStats {
   reason: RetrievalReason;
   /** Injection scheduler scenario, when turn-start routing was planned. */
   scenarioId?: string;
+  /** Query-specific retrieval policy used by routing/ranking. */
+  profile?: RetrievalProfile;
+  /** One normally; two when controlled widening ran. */
+  retrievalPasses?: number;
   agent: AgentKind;
   sessionId: SessionId;
   episodeId?: EpisodeId;
@@ -719,6 +733,8 @@ export interface RetrievalStats {
   totalLatencyMs: number;
   queryTokens: number;
   queryTags: string[];
+  /** Count only; concrete identifiers are intentionally not logged. */
+  exactIdentifierCount?: number;
   emptyPacket: boolean;
   /** Query embedding status. `degraded=true` means vector recall was unavailable. */
   embedding?: {
@@ -737,6 +753,11 @@ export interface RetrievalStats {
    */
   rawCandidateCount?: number;
   droppedByThresholdCount?: number;
+  dedupedBeforeMmrCount?: number;
+  /** Capability variants merged after threshold eligibility was resolved. */
+  dedupedAfterThresholdCount?: number;
+  /** Vector-only candidates rejected for long-identifier queries. */
+  droppedByKeywordConfirmationCount?: number;
   thresholdFloor?: number;
   topRelevance?: number;
   rankedCount?: number;
@@ -749,6 +770,7 @@ export interface RetrievalStats {
     | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
+    | "llm_filtered_empty"
     | "llm_filtered_refilled"
     | "llm_failed_safe_cutoff";
   llmFilterSufficient?: boolean;
@@ -766,6 +788,7 @@ export interface RetrievalStats {
     | "vec"
     | "fts"
     | "pattern"
+    | "exact_identifier"
     | "structural",
     number
   >>;

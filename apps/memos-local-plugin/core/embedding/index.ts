@@ -5,6 +5,7 @@
 export {
   createEmbedder,
   createEmbedderWithProvider,
+  estimateEmbeddingTokens,
   makeProviderFor,
 } from "./embedder.js";
 export {
@@ -19,6 +20,7 @@ export { l2Normalize, enforceDim, postProcess, toFloat32 } from "./normalize.js"
 export { createEmbeddingRetryWorker, systemErrorEvent } from "./retry-worker.js";
 export type { EmbeddingRetryWorker } from "./retry-worker.js";
 export type {
+  EmbedCallOptions,
   EmbedInput,
   EmbedRole,
   EmbedStats,
@@ -26,6 +28,7 @@ export type {
   EmbeddingConfig,
   EmbeddingProvider,
   EmbeddingProviderName,
+  EmbeddingSettledResult,
   ProviderCallCtx,
   ProviderLogger,
 } from "./types.js";

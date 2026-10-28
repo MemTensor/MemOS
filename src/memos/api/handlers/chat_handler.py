@@ -92,6 +92,7 @@ class ChatHandler(BaseHandler):
 
         self.chat_llms = chat_llms
         self.playground_chat_llms = playground_chat_llms or chat_llms
+        self.suggestion_llm = getattr(dependencies, "suggestion_llm", dependencies.llm)
         self.search_handler = search_handler
         self.add_handler = add_handler
         self.online_bot = online_bot
@@ -481,12 +482,8 @@ class ChatHandler(BaseHandler):
 
                     yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
 
-                    # Extract memories from search results (first search)
-                    memories_list = []
-                    if search_response.data and search_response.data.get("text_mem"):
-                        text_mem_results = search_response.data["text_mem"]
-                        if text_mem_results and text_mem_results[0].get("memories"):
-                            memories_list = text_mem_results[0]["memories"]
+                    # Extract memories from every searched cube (first search)
+                    memories_list = self._memories_from_cube_results(search_response.data)
 
                     # Filter memories by threshold
                     filtered_memories = self._filter_memories_by_threshold(memories_list)[:5]
@@ -576,12 +573,8 @@ class ChatHandler(BaseHandler):
                         project_id=chat_req.project_id,
                     )
 
-                    # Extract memories from search results (second search)
-                    memories_list = []
-                    if search_response.data and search_response.data.get("text_mem"):
-                        text_mem_results = search_response.data["text_mem"]
-                        if text_mem_results and text_mem_results[0].get("memories"):
-                            memories_list = text_mem_results[0]["memories"]
+                    # Extract memories from every searched cube (second search)
+                    memories_list = self._memories_from_cube_results(search_response.data)
 
                     # Filter memories by threshold, min_num is the min number of memories for playground
                     second_filtered_memories = self._filter_memories_by_threshold(
@@ -1112,7 +1105,7 @@ class ChatHandler(BaseHandler):
         )
 
     def _format_mem_block(
-        self, memories_all: list, max_items: int = 20, max_chars_each: int = 320
+        self, memories_all: list, max_items: int = 10, max_chars_each: int = 1600
     ) -> tuple[str, str]:
         """
         Format memory block for prompt.
@@ -1159,6 +1152,14 @@ class ChatHandler(BaseHandler):
                 lines_p.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
 
         return "\n".join(lines_o), "\n".join(lines_p)
+
+    @staticmethod
+    def _memories_from_cube_results(search_data: dict[str, Any] | None) -> list[Any]:
+        """Collect textual memories from every cube in a search response."""
+        memories_list: list[Any] = []
+        for cube_result in (search_data or {}).get("text_mem") or []:
+            memories_list.extend(cube_result.get("memories") or [])
+        return memories_list
 
     def _filter_memories_by_threshold(
         self,
@@ -1232,7 +1233,7 @@ class ChatHandler(BaseHandler):
                 },
                 {"role": "user", "content": further_suggestion_prompt},
             ]
-            response = self.llm.generate(message_list)
+            response = self.suggestion_llm.generate(message_list)
             clean_response = clean_json_response(response)
             response_json = json.loads(clean_response)
             return response_json["query"]

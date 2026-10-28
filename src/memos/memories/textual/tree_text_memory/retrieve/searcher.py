@@ -3,13 +3,11 @@ import importlib
 import re
 import traceback
 
-from concurrent.futures import as_completed
-
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
-from memos.log import get_logger
+from memos.log import get_logger, summarize_textual_memories
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -277,13 +275,7 @@ class Searcher:
             dedup=dedup,
         )
 
-        logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
-        res_results = ""
-        for _num_i, result in enumerate(final_results):
-            res_results += "\n" + (
-                result.id + "|" + result.metadata.memory_type + "|" + result.memory
-            )
-        logger.info(f"[SEARCH] Results. {res_results}")
+        logger.info("[SEARCH] Result summary: %s", summarize_textual_memories(final_results))
         return final_results
 
     @timed
@@ -1288,7 +1280,7 @@ class Searcher:
     @timed
     def _deduplicate_rawfile_results(self, results, user_name: str | None = None):
         """
-        Deduplicate rawfile related memories by edge
+        Deduplicate raw-file results using their persisted summary ids.
         """
         if not results:
             return results
@@ -1298,29 +1290,10 @@ class Searcher:
         if not rawfile_items:
             return results
 
-        with ContextThreadPoolExecutor(max_workers=min(len(rawfile_items), 10)) as executor:
-            futures = [
-                executor.submit(
-                    self.graph_store.get_edges,
-                    rawfile_item.id,
-                    type="SUMMARY",
-                    direction="OUTGOING",
-                    user_name=user_name,
-                )
-                for rawfile_item in rawfile_items
-            ]
-            for future in as_completed(futures):
-                try:
-                    edges = future.result()
-                    for edge in edges:
-                        summary_target_id = edge.get("to")
-                        if summary_target_id:
-                            summary_ids_to_remove.add(summary_target_id)
-                            logger.debug(
-                                f"[DEDUP] Marking summary node {summary_target_id} for removal (pointed by RawFileMemory)"
-                            )
-                except Exception as e:
-                    logger.warning(f"[DEDUP] Failed to get summary target ids: {e}")
+        for rawfile_item in rawfile_items:
+            summary_ids_to_remove.update(
+                getattr(rawfile_item.metadata, "knowledge_summary_ids", None) or []
+            )
 
         filtered_results = []
         for item in results:

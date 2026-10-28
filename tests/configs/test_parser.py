@@ -1,3 +1,5 @@
+import warnings
+
 from memos.configs.parser import BaseParserConfig, MarkItDownParserConfig, ParserConfigFactory
 from tests.utils import (
     check_config_base_class,
@@ -52,3 +54,20 @@ def test_parser_config_factory():
     )
 
     check_config_instantiation_invalid(ParserConfigFactory)
+
+
+def test_parser_config_factory_dump_without_serializer_warning():
+    config = ParserConfigFactory.model_validate(
+        {
+            "backend": "markitdown",
+            "config": {},
+        }
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        dumped = config.model_dump()
+
+    assert dumped == {"backend": "markitdown", "config": {}}
+    assert isinstance(config.config, MarkItDownParserConfig)
+    assert not any("PydanticSerializationUnexpectedValue" in str(item.message) for item in caught)

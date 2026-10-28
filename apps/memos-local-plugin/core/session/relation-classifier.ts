@@ -306,7 +306,11 @@ export function createRelationClassifier(
       // Step 2: LLM classification.
       if (!llmDisabled && opts.llm) {
         try {
-          const result = await withTimeout(callLlm(opts.llm, input), timeoutMs, "relation.llm.timeout");
+          const result = await withTimeout(
+            callLlm(opts.llm, input, timeoutMs),
+            timeoutMs,
+            "relation.llm.timeout",
+          );
           log.debug("llm.ok", {
             relation: result.relation,
             confidence: result.confidence,
@@ -326,7 +330,7 @@ export function createRelationClassifier(
             });
             try {
               const arb = await withTimeout(
-                callArbitration(opts.llm, input),
+                callArbitration(opts.llm, input, timeoutMs),
                 timeoutMs,
                 "relation.arbitration.timeout",
               );
@@ -516,7 +520,11 @@ function buildLlmUserContent(input: RelationInput): string {
   return parts.join("\n\n");
 }
 
-async function callLlm(llm: LlmClient, input: RelationInput): Promise<LlmRelationAnswer> {
+async function callLlm(
+  llm: LlmClient,
+  input: RelationInput,
+  timeoutMs?: number,
+): Promise<LlmRelationAnswer> {
   const userContent = buildLlmUserContent(input);
 
   const rsp = await llm.completeJson<{ relation: unknown; confidence: unknown; reason: unknown }>(
@@ -528,6 +536,8 @@ async function callLlm(llm: LlmClient, input: RelationInput): Promise<LlmRelatio
       op: "session.relation.classify",
       phase: "session",
       episodeId: input.prevEpisodeId,
+      timeoutMs,
+      signal: input.signal,
       schemaHint: `{"relation":"revision"|"follow_up"|"new_task"|"unknown","confidence":0..1,"reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;
@@ -581,7 +591,11 @@ When in doubt, choose follow_up.
 
 Reply JSON ONLY: {"relation":"follow_up"|"new_task","reason":"..."}`;
 
-async function callArbitration(llm: LlmClient, input: RelationInput): Promise<TurnRelation> {
+async function callArbitration(
+  llm: LlmClient,
+  input: RelationInput,
+  timeoutMs?: number,
+): Promise<TurnRelation> {
   const userContent = [
     `CURRENT TASK CONTEXT:\n${(input.prevUserText ?? "").slice(0, 600)}`,
     `ASSISTANT REPLY:\n${(input.prevAssistantText ?? "").slice(0, 800)}`,
@@ -597,6 +611,8 @@ async function callArbitration(llm: LlmClient, input: RelationInput): Promise<Tu
       op: "session.relation.arbitrate",
       phase: "session",
       episodeId: input.prevEpisodeId,
+      timeoutMs,
+      signal: input.signal,
       schemaHint: `{"relation":"follow_up"|"new_task","reason":"..."}`,
       validate: (v) => {
         const o = v as Record<string, unknown>;

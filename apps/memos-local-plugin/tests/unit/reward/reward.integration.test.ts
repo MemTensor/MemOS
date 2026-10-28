@@ -284,6 +284,70 @@ describe("reward/integration", () => {
     expect(t.priority).toBe(0);
   });
 
+  it("treats a triviality skip as terminal and clears an inherited dirty marker", async () => {
+    const sid = "s_int_skipped";
+    const eid = "ep_int_skipped";
+    seedEpisode(handle, eid, sid, ["tr_short"]);
+    seedTrace(handle, "tr_short", eid, sid, {
+      userText: "我喜欢玩的游戏呢",
+      agentText: "你喜欢马里奥。",
+    });
+    handle.repos.episodes.updateMeta(eid as unknown as EpisodeRow["id"], {
+      closeReason: "finalized",
+      rewardDirty: {
+        failedAttempts: 7,
+        lastFailureAt: NOW - 1_000,
+      },
+    });
+
+    const shortSnapshot: EpisodeSnapshot = {
+      ...rewardSnapshot(eid, sid, ["tr_short"]),
+      turnCount: 1,
+      turns: [
+        {
+          role: "user",
+          content: "我喜欢玩的游戏呢",
+          ts: NOW,
+          meta: {},
+        },
+        {
+          role: "assistant",
+          content: "你喜欢马里奥。",
+          ts: NOW,
+          meta: {},
+        },
+      ],
+    };
+    const runner = createRewardRunner({
+      tracesRepo: handle.repos.traces,
+      episodesRepo: handle.repos.episodes,
+      feedbackRepo: handle.repos.feedback,
+      getEpisodeSnapshot: () => shortSnapshot,
+      llm: null,
+      bus: createRewardEventBus(),
+      cfg: {
+        ...cfg(),
+        minExchangesForCompletion: 2,
+        minContentCharsForCompletion: 80,
+      },
+      now: () => NOW,
+    });
+
+    const result = await runner.run({
+      episodeId: eid as unknown as Parameters<typeof runner.run>[0]["episodeId"],
+      feedback: [],
+      trigger: "implicit_fallback",
+    });
+
+    expect(result.rHuman).toBe(0);
+    const episode = handle.repos.episodes.getById(
+      eid as unknown as EpisodeRow["id"],
+    )!;
+    expect(episode.rTask).toBeNull();
+    expect(episode.meta?.reward).toMatchObject({ skipped: true });
+    expect(episode.meta?.rewardDirty).toBeUndefined();
+  });
+
   it("episodes with no traces still score R_human but skip backprop", async () => {
     const sid = "s_int_3";
     const eid = "ep_int_3";

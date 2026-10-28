@@ -16,35 +16,37 @@ from memos.memories.textual.item import (
 
 def test_product_default_config_wires_preference_extractor_model(monkeypatch):
     monkeypatch.setenv("PREFERENCE_EXTRACTOR_MODEL", "pref-model")
-    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_BASE", "https://pref.example/v1")
-    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_KEY", "pref-key")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://openai.example/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
 
     config = APIConfig.get_product_default_config()["mem_reader"]["config"]
 
     pref_config = config["preference_extractor_llm"]
     assert pref_config["backend"] == "openai"
     assert pref_config["config"]["model_name_or_path"] == "pref-model"
-    assert pref_config["config"]["api_base"] == "https://pref.example/v1"
-    assert pref_config["config"]["api_key"] == "pref-key"
+    assert pref_config["config"]["api_base"] == "https://openai.example/v1"
+    assert pref_config["config"]["api_key"] == "openai-key"
 
 
 def test_preference_extractor_qwen35_disables_thinking(monkeypatch):
     monkeypatch.setenv("PREFERENCE_EXTRACTOR_MODEL", "qwen3.5-flash")
-    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_BASE", "https://dashscope.example/v1")
-    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_KEY", "pref-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
 
     pref_config = APIConfig.get_preference_extractor_llm_config()
 
+    assert pref_config["backend"] == "qwen"
     assert pref_config["config"]["extra_body"] == {"enable_thinking": False}
 
 
 def test_preference_extractor_qwen36_disables_thinking(monkeypatch):
     monkeypatch.setenv("PREFERENCE_EXTRACTOR_MODEL", "qwen3.6-flash")
-    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_BASE", "https://dashscope.example/v1")
-    monkeypatch.setenv("PREFERENCE_EXTRACTOR_API_KEY", "pref-key")
+    monkeypatch.setenv("QWEN_API_BASE", "https://dashscope.example/v1")
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
 
     pref_config = APIConfig.get_preference_extractor_llm_config()
 
+    assert pref_config["backend"] == "qwen"
     assert pref_config["config"]["extra_body"] == {"enable_thinking": False}
 
 

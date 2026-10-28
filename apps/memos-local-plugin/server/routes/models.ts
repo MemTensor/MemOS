@@ -19,6 +19,7 @@
  * unsaved, and we don't want to accidentally persist a bad API key.
  * The test runs with values from the request body only.
  */
+import { createEmbedder, type Embedder } from "../../core/embedding/index.js";
 import type { ServerDeps } from "../types.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
@@ -153,6 +154,42 @@ async function resolveSecrets(
 
 // ─── Embedding probe ─────────────────────────────────────────────────────
 
+const DEFAULT_LOCAL_EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
+
+type LocalProbeEmbedder = Pick<Embedder, "embedOne">;
+type LocalProbeEmbedderFactory = (model: string) => LocalProbeEmbedder;
+
+function createLocalProbeEmbedder(model: string): LocalProbeEmbedder {
+  return createEmbedder({
+    provider: "local",
+    model,
+    dimensions: 384,
+    openRouter: false,
+    cache: { enabled: false, maxItems: 0 },
+  });
+}
+
+/**
+ * Load the local model and execute a real embedding. The transformer pipeline
+ * is process-global, so intentionally keep it warm after a successful probe.
+ */
+export async function probeLocalEmbedding(
+  model: string,
+  create: LocalProbeEmbedderFactory = createLocalProbeEmbedder,
+): Promise<number> {
+  const resolvedModel = model.trim() || DEFAULT_LOCAL_EMBEDDING_MODEL;
+  try {
+    const vector = await create(resolvedModel).embedOne("ping");
+    if (vector.length === 0) throw new Error("no embedding vector returned");
+    return vector.length;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Local embedding model download/load failed; check access to Hugging Face: ${message}`,
+    );
+  }
+}
+
 async function probeEmbedding(req: TestRequest): Promise<number> {
   const provider = req.provider ?? "";
   const endpoint = normUrl(req.endpoint ?? "");
@@ -244,10 +281,7 @@ async function probeEmbedding(req: TestRequest): Promise<number> {
       return first.length;
     }
     case "local":
-      // Local embedder requires the model file in-process; skip the
-      // HTTP probe and just acknowledge — the lifecycle check at
-      // `core.init` already validated the local provider.
-      return 0;
+      return probeLocalEmbedding(model);
     default:
       throw new Error(`unsupported embedding provider: ${provider}`);
   }

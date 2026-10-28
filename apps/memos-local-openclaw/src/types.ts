@@ -177,6 +177,12 @@ export interface ProviderConfig {
   headers?: Record<string, string>;
   timeoutMs?: number;
   temperature?: number;
+  /** OpenRouter provider routing — providers to skip. */
+  providerIgnore?: string[];
+  /** OpenRouter provider routing — preferred order. */
+  providerOrder?: string[];
+  /** Explicitly enable OpenRouter fields for a reverse proxy or CNAME. */
+  openRouter?: boolean;
   capabilities?: SharingCapabilities;
 }
 

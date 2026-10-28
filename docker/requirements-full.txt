@@ -8,7 +8,7 @@ attrs==25.3.0
 authlib==1.6.0
 beautifulsoup4==4.13.4
 cachetools==6.2.1
-certifi==2025.7.14
+certifi==2026.10.19
 cffi==1.17.1
 charset-normalizer==3.4.2
 chonkie==1.1.1

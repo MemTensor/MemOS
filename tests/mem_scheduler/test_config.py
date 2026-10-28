@@ -97,8 +97,9 @@ class TestEnvConfigMixin(unittest.TestCase):
         """Test EnvConfigMixin integration with actual configuration classes"""
         # Set complete test environment variables
         test_env_vars = {
-            f"{ENV_PREFIX}OPENAI_API_KEY": "test-api-key-12345",
-            f"{ENV_PREFIX}OPENAI_DEFAULT_MODEL": "gpt-4",
+            "OPENAI_API_KEY": "test-api-key-12345",
+            "OPENAI_API_BASE": "https://api.test.openai.com/v1",
+            "MEMSCHEDULER_MODEL": "gpt-4",
             f"{ENV_PREFIX}RABBITMQ_HOST_NAME": "localhost",
             f"{ENV_PREFIX}RABBITMQ_PORT": "5672",
             f"{ENV_PREFIX}RABBITMQ_USER_NAME": "guest",
@@ -122,6 +123,7 @@ class TestEnvConfigMixin(unittest.TestCase):
             # Test various configuration classes
             openai_config = OpenAIConfig.from_env()
             self.assertEqual(openai_config.api_key, "test-api-key-12345")
+            self.assertEqual(openai_config.base_url, "https://api.test.openai.com/v1")
             self.assertEqual(openai_config.default_model, "gpt-4")
 
             rabbitmq_config = RabbitMQConfig.from_env()
@@ -145,6 +147,7 @@ class TestSchedulerConfig(unittest.TestCase):
     def setUp(self):
         self.env_backup = dict(os.environ)
         self._clear_prefixed_env_vars()
+        self._clear_unified_openai_env_vars()
 
     def tearDown(self):
         os.environ.clear()
@@ -154,6 +157,16 @@ class TestSchedulerConfig(unittest.TestCase):
         for key in list(os.environ.keys()):
             if key.startswith(ENV_PREFIX):
                 del os.environ[key]
+
+    def _clear_unified_openai_env_vars(self):
+        for key in [
+            "OPENAI_API_KEY",
+            "OPENAI_API_BASE",
+            "QWEN_API_KEY",
+            "QWEN_API_BASE",
+            "MEMREADER_GENERAL_MODEL",
+        ]:
+            os.environ.pop(key, None)
 
     def test_loads_all_configs_from_env(self):
         """Test loading all configurations from prefixed environment variables"""
@@ -167,9 +180,9 @@ class TestSchedulerConfig(unittest.TestCase):
                 f"{ENV_PREFIX}RABBITMQ_ERASE_ON_CONNECT": "false",
                 f"{ENV_PREFIX}RABBITMQ_PORT": "5673",
                 # OpenAI configs
-                f"{ENV_PREFIX}OPENAI_API_KEY": "test_api_key",
-                f"{ENV_PREFIX}OPENAI_BASE_URL": "https://api.test.openai.com",
-                f"{ENV_PREFIX}OPENAI_DEFAULT_MODEL": "gpt-test",
+                "OPENAI_API_KEY": "test_api_key",
+                "OPENAI_API_BASE": "https://api.test.openai.com/v1",
+                "MEMSCHEDULER_MODEL": "gpt-test",
                 # GraphDBAuthConfig configs - NOTE THE CORRECT PREFIX!
                 f"{ENV_PREFIX}GRAPHDBAUTH_URI": "bolt://test.db:7687",
                 f"{ENV_PREFIX}GRAPHDBAUTH_USER": "test_neo4j",
@@ -188,6 +201,23 @@ class TestSchedulerConfig(unittest.TestCase):
         self.assertEqual(config.graph_db.db_name, "test_db")
         self.assertFalse(config.graph_db.auto_create)
 
+    def test_openai_config_does_not_fall_back_to_chat_model(self):
+        os.environ.pop("MEMREADER_GENERAL_MODEL", None)
+        os.environ.pop("MEMRADER_MODEL", None)
+        os.environ.update(
+            {
+                "MOS_CHAT_MODEL": "gpt-chat",
+                "OPENAI_API_KEY": "openai-key",
+                "OPENAI_API_BASE": "https://openai.example/v1",
+            }
+        )
+
+        config = OpenAIConfig.from_env()
+
+        self.assertEqual(config.api_key, "openai-key")
+        self.assertEqual(config.base_url, "https://openai.example/v1")
+        self.assertEqual(config.default_model, "")
+
     def test_uses_default_values_when_env_not_set(self):
         """Test that default values are used when prefixed environment variables are not set"""
         os.environ.update(
@@ -195,7 +225,7 @@ class TestSchedulerConfig(unittest.TestCase):
                 # RabbitMQ
                 f"{ENV_PREFIX}RABBITMQ_HOST_NAME": "rabbit.test.com",
                 # OpenAI
-                f"{ENV_PREFIX}OPENAI_API_KEY": "test_api_key",
+                "OPENAI_API_KEY": "test_api_key",
                 # GraphDB - with correct prefix and valid password length
                 f"{ENV_PREFIX}GRAPHDBAUTH_URI": "bolt://test.db:7687",
                 f"{ENV_PREFIX}GRAPHDBAUTH_PASSWORD": "default_pass",  # 11 chars (valid)
@@ -242,7 +272,7 @@ class TestSchedulerConfig(unittest.TestCase):
                 f"{ENV_PREFIX}RABBITMQ_PORT": "1234",
                 f"{ENV_PREFIX}RABBITMQ_ERASE_ON_CONNECT": "yes",
                 # OpenAI
-                f"{ENV_PREFIX}OPENAI_API_KEY": "test_api_key",
+                "OPENAI_API_KEY": "test_api_key",
                 # GraphDB - correct prefix and valid password
                 f"{ENV_PREFIX}GRAPHDBAUTH_URI": "bolt://test.db:7687",
                 f"{ENV_PREFIX}GRAPHDBAUTH_PASSWORD": "type_conv_pass",  # 13 chars (valid)
@@ -279,7 +309,8 @@ class TestSchedulerConfig(unittest.TestCase):
             os.environ.update(
                 {
                     f"{ENV_PREFIX}RABBITMQ_HOST_NAME": "env.rabbit.com",
-                    f"{ENV_PREFIX}OPENAI_API_KEY": "env_api_key",
+                    "OPENAI_API_KEY": "env_api_key",
+                    "MEMSCHEDULER_MODEL": "gpt-4o-mini",
                     f"{ENV_PREFIX}GRAPHDBAUTH_USER": "env_user",
                     f"{ENV_PREFIX}GRAPHDBAUTH_PASSWORD": "env_db_pass",  # 11 chars (valid)
                 }

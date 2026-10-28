@@ -161,7 +161,7 @@ export function buildRoutes(
   options: ServerOptions,
 ): Routes {
   const routes = new Routes();
-  registerHealthRoutes(routes, deps);
+  registerHealthRoutes(routes, deps, options);
   registerOverviewRoutes(routes, deps);
   registerSessionRoutes(routes, deps);
   registerMemoryRoutes(routes, deps, options);

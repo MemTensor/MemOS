@@ -23,7 +23,7 @@ examples/mem_reader/
 
 ### 1. Configuration
 
-Before running the examples, ensure you have configured your environment variables. Copy the `.env.example` file in the project root to `.env` and fill in the necessary API keys.
+Before running the examples, ensure you have configured your environment variables. Copy `docker/.env.example` to `.env` in the project root and fill in the necessary API keys.
 
 The `settings.py` file loads these configurations. Key variables include:
 - `OPENAI_API_KEY`: For LLM and Embeddings.

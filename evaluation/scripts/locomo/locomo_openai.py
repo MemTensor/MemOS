@@ -65,7 +65,7 @@ class OpenAIPredict:
     def __init__(self, model="gpt-4o-mini"):
         self.model = model
         self.openai_client = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL")
+            api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE")
         )
         self.results = defaultdict(list)
 

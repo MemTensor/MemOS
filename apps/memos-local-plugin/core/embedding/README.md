@@ -47,15 +47,15 @@ Return type: `Float32Array` of length `config.embedding.dimensions`.
   inputs ─▶ normalize(input list → role-tagged {text})
             │
             ▼
-       sha256(provider|model|role|text) → cache lookup (LRU)
-            │             ├── hit  ──────────────────────────┐
-            ▼             └── miss → batched by role          │
-     batch k texts ──▶ provider.embed()                        │
-            │                  │                              │
-            ▼                  ▼                              ▼
-     dim-enforce + L2-normalize (Float32Array) ──────▶ interleave in input order
+       sha256(provider|model|role|full text) → cache lookup (LRU)
+            │             ├── hit  ────────────────────────────┐
+            ▼             └── miss → token estimate + sampling │
+     physical chunks ──▶ role grouping + provider batchSize    │
+            │                  │                               │
+            ▼                  ▼                               ▼
+     dim-enforce + normalize → pool chunks ────────▶ logical input order
             │
-            └── cache.set(key, vec)
+            └── cache.set(full-text key, vec)
 ```
 
 The cache is indexed by `sha256(provider|model|role|text)` in hex. Duplicate
@@ -68,6 +68,19 @@ trip and populate all matching output slots.
 are grouped by `role` first, then chunked into batches. That way a mixed
 list (some `query`, some `document`) still yields two role-correct round trips
 instead of one role-ambiguous one.
+
+`maxInputTokens` (default 1024; set 0 to disable) is an operator-supplied
+per-input model limit for providers that do not expose capability metadata
+(especially custom `openai_compatible` endpoints). When enabled, the facade uses a conservative
+dependency-free token estimate, keeps a safety margin, and represents an
+over-limit logical input with at most four uniformly sampled chunks. Chunk
+vectors are token-weighted and pooled back to the one-vector public contract.
+
+HTTP 400/413/422 failures on a multi-input provider request trigger bounded
+divide-and-conquer splitting. `embedManySettled` exposes the resulting
+per-logical-input success/error values so a rejected input does not discard
+valid neighbours; authentication, rate-limit, server, and network failures are
+not recursively split.
 
 ### 2.2 Normalization
 

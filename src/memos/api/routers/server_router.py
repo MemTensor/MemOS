@@ -97,6 +97,7 @@ cube_handler = CubeHandler(dependencies)
 # (These can be accessed from the components dict without unpacking all of them)
 mem_scheduler: BaseScheduler = components["mem_scheduler"]
 llm = components["llm"]
+suggestion_llm = components.get("suggestion_llm", llm)
 naive_mem_cube = components["naive_mem_cube"]
 redis_client = components["redis_client"]
 status_tracker = TaskStatusTracker(redis_client=redis_client)
@@ -327,7 +328,7 @@ def get_suggestion_queries(suggestion_req: SuggestionRequest):
         user_id=suggestion_req.mem_cube_id,
         language=suggestion_req.language,
         message=suggestion_req.message,
-        llm=llm,
+        llm=suggestion_llm,
         naive_mem_cube=naive_mem_cube,
     )
 
