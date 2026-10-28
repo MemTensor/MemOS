@@ -20,6 +20,7 @@ import {
   type RetryPlan,
   waitForRetry,
 } from "../util/retry-after.js";
+import { isTransientNetworkError } from "../util/network-error.js";
 import type { LlmProviderLogger, LlmProviderName } from "./types.js";
 
 export interface HttpPostOpts<TBody> {
@@ -168,7 +169,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
           { provider: opts.provider, url: opts.url, cancelled: true },
         );
       }
-      const transient = isTransientError(err);
+      const transient = isTransientNetworkError(err);
       const timedOut = isTimeout(err) || opts.signal?.aborted === true;
       opts.log.warn("http.exception", {
         attempt,
@@ -328,12 +329,9 @@ function truncateLogBody(text: string | undefined): string | undefined {
   return text?.slice(0, 512);
 }
 
-function isTransientError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message ?? "";
-  if (/ECONNRESET|EAI_AGAIN|socket hang up/i.test(msg)) return true;
-  return false;
-}
+// isTransientError moved to `core/util/network-error.ts` (isTransientNetworkError)
+// so the LLM and embedding fetchers share one classification; it walks the
+// undici `cause` chain instead of only the top-level message (issue #2379).
 
 function isTimeout(err: unknown): boolean {
   if (err instanceof Error) {
