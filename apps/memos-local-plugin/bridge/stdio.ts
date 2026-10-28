@@ -64,7 +64,7 @@ export interface StdioServerHandle {
   serverRequest<R = unknown>(
     method: string,
     params?: unknown,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<R>;
 }
 
@@ -91,8 +91,21 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
       resolve: (value: unknown) => void;
       reject: (err: unknown) => void;
       timer: ReturnType<typeof setTimeout> | null;
+      signal?: AbortSignal;
+      abortHandler?: () => void;
     }
   >();
+
+  function takeServerPending(id: string) {
+    const entry = serverPending.get(id);
+    if (!entry) return undefined;
+    serverPending.delete(id);
+    if (entry.timer) clearTimeout(entry.timer);
+    if (entry.signal && entry.abortHandler) {
+      entry.signal.removeEventListener("abort", entry.abortHandler);
+    }
+    return entry;
+  }
 
   const eventsUnsubscribe = options.core.subscribeEvents((e) => {
     writeNotification(RPC_METHODS.EVENTS_NOTIFY, e);
@@ -114,10 +127,8 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
     } catch {
       /* ignore */
     }
-    for (const [id, entry] of serverPending) {
-      if (entry.timer) clearTimeout(entry.timer);
-      entry.reject(err ?? new Error("stdio bridge closed"));
-      serverPending.delete(id);
+    for (const id of serverPending.keys()) {
+      takeServerPending(id)?.reject(err ?? new Error("stdio bridge closed"));
     }
   }
 
@@ -179,10 +190,8 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
       (raw.result !== undefined || raw.error !== undefined)
     ) {
       const id = raw.id as string;
-      const pending = serverPending.get(id);
+      const pending = takeServerPending(id);
       if (pending) {
-        serverPending.delete(id);
-        if (pending.timer) clearTimeout(pending.timer);
         if (raw.error != null) {
           pending.reject(raw.error);
         } else {
@@ -260,8 +269,12 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
   function serverRequest<R = unknown>(
     method: string,
     params?: unknown,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<R> {
+    const signal = options?.signal;
+    if (signal?.aborted) {
+      return Promise.reject(signal.reason ?? new Error(`serverRequest ${method} aborted`));
+    }
     const id = `srv-${++serverRequestSeq}`;
     const timeoutMs = options?.timeoutMs ?? 60_000;
     return new Promise<R>((resolve, reject) => {
@@ -270,15 +283,29 @@ export function startStdioServer(options: StdioServerOptions): StdioServerHandle
         return;
       }
       const timer = setTimeout(() => {
-        if (serverPending.delete(id)) {
-          reject(new Error(`serverRequest ${method} timed out after ${timeoutMs}ms`));
-        }
+        takeServerPending(id)?.reject(
+          new Error(`serverRequest ${method} timed out after ${timeoutMs}ms`),
+        );
       }, timeoutMs);
+      const abortHandler = signal
+        ? () => {
+            takeServerPending(id)?.reject(
+              signal.reason ?? new Error(`serverRequest ${method} aborted`),
+            );
+          }
+        : undefined;
       serverPending.set(id, {
         resolve: resolve as (value: unknown) => void,
         reject,
         timer,
+        signal,
+        abortHandler,
       });
+      if (signal && abortHandler) {
+        signal.addEventListener("abort", abortHandler, { once: true });
+      }
+      if (signal?.aborted) abortHandler?.();
+      if (!serverPending.has(id)) return;
       writeLine({ jsonrpc: "2.0", id, method, params });
     });
   }

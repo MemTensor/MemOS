@@ -18,6 +18,8 @@ export interface HostLlmCompleteInput {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  /** Absolute caller deadline; adapters must not outlive it. */
+  deadlineAt?: number;
   signal?: AbortSignal;
 }
 

@@ -197,6 +197,9 @@ async function main(): Promise<void> {
   const { startStdioServer, waitForShutdown } = (await importEsm(
     runtimeModule("bridge/stdio.ts", "dist/bridge/stdio.js")
   )) as typeof import("./bridge/stdio.js");
+  const { createStdioHostLlmBridge } = (await importEsm(
+    runtimeModule("bridge/host-llm.ts", "dist/bridge/host-llm.js")
+  )) as typeof import("./bridge/host-llm.js");
   const { memoryBuffer, rootLogger } = (await importEsm(
     runtimeModule("core/logger/index.ts", "dist/core/logger/index.js")
   )) as typeof import("./core/logger/index.js");
@@ -237,47 +240,10 @@ async function main(): Promise<void> {
   // independent `currentBridge` slots. Registering inside bootstrap
   // forces both ends to share the same module instance.
   let stdio: import("./bridge/stdio.js").StdioServerHandle | null = null;
-  const lazyHostLlmBridge: import("./core/llm/host-bridge.js").HostLlmBridge =
-    {
-      id: `stdio.host.${args.agent}.v1`,
-      async complete(input) {
-        if (!stdio) {
-          throw new Error(
-            "host LLM bridge invoked before stdio server was ready",
-          );
-        }
-        const result = (await stdio.serverRequest(
-          "host.llm.complete",
-          {
-            messages: input.messages,
-            model: input.model,
-            temperature: input.temperature,
-            maxTokens: input.maxTokens,
-            timeoutMs: input.timeoutMs,
-          },
-          { timeoutMs: (input.timeoutMs ?? 60_000) + 5_000 },
-        )) as {
-          text?: string;
-          model?: string;
-          usage?: {
-            promptTokens?: number;
-            completionTokens?: number;
-            totalTokens?: number;
-          };
-          durationMs?: number;
-        };
-        return {
-          text: typeof result?.text === "string" ? result.text : "",
-          model:
-            typeof result?.model === "string"
-              ? result.model
-              : input.model ?? "",
-          usage: result?.usage,
-          durationMs:
-            typeof result?.durationMs === "number" ? result.durationMs : 0,
-        };
-      },
-    };
+  const lazyHostLlmBridge = createStdioHostLlmBridge(
+    `stdio.host.${args.agent}.v1`,
+    () => stdio,
+  );
 
   const { Telemetry } = (await importEsm(
     runtimeModule("core/telemetry/index.ts", "dist/core/telemetry/index.js")

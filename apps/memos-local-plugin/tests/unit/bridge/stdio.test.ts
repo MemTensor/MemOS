@@ -7,7 +7,7 @@
  *   • request → error response with stable `code`.
  *   • notifications (events + logs) stream back unordered.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PassThrough } from "node:stream";
 
 import {
@@ -100,10 +100,12 @@ function wire() {
     logToStderr: false,
   });
   const client = createStdioClient(serverOut, clientOut);
-  return { core, server, client, clientOut };
+  return { core, server, client, clientOut, serverOut };
 }
 
 describe("stdio transport", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("round-trips a successful request", async () => {
     const { client } = wire();
     const res = await client.request<{ ok: boolean }>("core.init", {});
@@ -158,5 +160,55 @@ describe("stdio transport", () => {
     expect(finished).toBe(true);
     expect(server.connected).toBe(false);
     expect(core.shutdown).toHaveBeenCalled();
+  });
+
+  it("cancels a pending server request when its signal aborts", async () => {
+    const { server } = wire();
+    const controller = new AbortController();
+    const request = server.serverRequest(
+      "host.llm.complete",
+      {},
+      { timeoutMs: 1_000, signal: controller.signal },
+    );
+
+    controller.abort(new Error("caller cancelled"));
+
+    await expect(request).rejects.toThrow("caller cancelled");
+  });
+
+  it("does not send a server request when its signal is already aborted", async () => {
+    const { server, serverOut } = wire();
+    const controller = new AbortController();
+    controller.abort(new Error("deadline passed"));
+
+    await expect(
+      server.serverRequest(
+        "host.llm.complete",
+        {},
+        { timeoutMs: 1_000, signal: controller.signal },
+      ),
+    ).rejects.toThrow("deadline passed");
+    expect(serverOut.read()).toBeNull();
+  });
+
+  it("cleans up concurrent cancelled server requests", async () => {
+    vi.useFakeTimers();
+    const { server } = wire();
+    const controllers = Array.from({ length: 128 }, () => new AbortController());
+    const requests = controllers.map((controller) =>
+      server.serverRequest("host.llm.complete", {}, {
+        timeoutMs: 10_000,
+        signal: controller.signal,
+      }),
+    );
+
+    for (const controller of controllers) {
+      controller.abort(new Error("caller cancelled"));
+    }
+
+    const results = await Promise.allSettled(requests);
+    expect(results).toHaveLength(128);
+    expect(results.every((result) => result.status === "rejected")).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
