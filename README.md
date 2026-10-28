@@ -57,7 +57,7 @@
   MemOS now brings persistent memory to **DeepSeek Harness** through both local and cloud plugins. DSH can automatically recall relevant context before a task and retain new experience after a successful turn, without modifying its core.
 
 - **2026-07-02** · 🏆 **MemOS Advances Agent and User Memory Benchmarks**
-  With MemOS, **OpenClaw** improves average task completion from **36.63% to 50.87%** across five agent tasks. MemOS also achieves **88.83 on LoCoMo** and **89.20 on LongMemEval**, and leads in **OmniMemEval**, a unified evaluation of 14 commercial memory products across ten datasets.
+  With MemOS, **OpenClaw** improves average task completion from **36.63% to 50.07%** across five agent tasks. MemOS also achieves **88.83 on LoCoMo** and **89.20 on LongMemEval**, and leads in **OmniMemEval**, a unified evaluation of 14 commercial memory products across ten datasets.
 
 - **2026-05-09** · 🧠 **memos-local-plugin 2.0**
   Official local memory plugin for **Hermes Agent** and **OpenClaw**. One core powers self-evolving memory across L1 traces, L2 policies, L3 world models, and crystallized Skills, with local-first storage and feedback-driven retrieval.
