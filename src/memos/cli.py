@@ -42,7 +42,10 @@ def download_examples(dest: str) -> bool:
     print(f"📥 Downloading examples from {zip_url}...")
 
     try:
-        response = requests.get(zip_url)
+        # Without an explicit timeout a stalled connection hangs the CLI
+        # forever; requests retries neither, and a dead download should fail
+        # into the RequestException handler below instead.
+        response = requests.get(zip_url, timeout=60)
         response.raise_for_status()
 
         with zipfile.ZipFile(BytesIO(response.content)) as z:
