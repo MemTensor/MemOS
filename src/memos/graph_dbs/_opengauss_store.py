@@ -434,6 +434,168 @@ class OpenGaussNodeStore:
         )
         return sorted({edge["to"] if edge["from"] == id else edge["from"] for edge in edges})
 
+    @staticmethod
+    def _validate_depth(depth: int) -> None:
+        if type(depth) is not int or not 1 <= depth <= 5:
+            raise ValueError("depth must be an integer from 1 to 5")
+
+    def get_path(
+        self, source_id: str, target_id: str, max_depth: int = 3, user_name: str | None = None
+    ) -> list[str]:
+        """Find the lexicographically first shortest directed path within 1-5 hops."""
+        self._pool.ensure_open()
+        scope = self._scope(user_name)
+        self._validate_id(source_id)
+        self._validate_id(target_id)
+        self._validate_depth(max_depth)
+        with self._pool.transaction() as connection, connection.cursor() as cursor:
+            endpoints = {source_id, target_id}
+            cursor.execute(
+                f"SELECT business_id FROM ONLY {_TABLE} WHERE scope = %s AND business_id = ANY(%s)",
+                (scope, sorted(endpoints)),
+            )
+            if {row[0] for row in cursor.fetchall()} != endpoints:
+                return []
+            if source_id == target_id:
+                return [source_id]
+            paths = {source_id: [source_id]}
+            frontier = [source_id]
+            for _ in range(max_depth):
+                edges = self._read_edges(cursor, "a.id IN $ids", {"scope": scope, "ids": frontier})
+                adjacency: dict[str, set[str]] = {}
+                for edge in edges:
+                    adjacency.setdefault(edge["from"], set()).add(edge["to"])
+                following = []
+                # Discovery order preserves lexicographic order of full paths.
+                for source in frontier:
+                    for target in sorted(adjacency.get(source, set())):
+                        if target in paths:
+                            continue
+                        paths[target] = [*paths[source], target]
+                        if target == target_id:
+                            return paths[target]
+                        following.append(target)
+                frontier = following
+                if not frontier:
+                    break
+        return []
+
+    def get_subgraph(
+        self,
+        center_id: str,
+        depth: int = 2,
+        center_status: str | None = "activated",
+        user_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Return full scoped nodes and the induced edges within a two-way radius."""
+        self._pool.ensure_open()
+        scope = self._scope(user_name)
+        self._validate_id(center_id)
+        self._validate_depth(depth)
+        if center_status is not None and not isinstance(center_status, str):
+            raise ValueError("center_status must be a string or None")
+        empty = {"core_node": None, "neighbors": [], "edges": []}
+        with self._pool.transaction() as connection, connection.cursor() as cursor:
+            core = self._read_nodes(cursor, [center_id], scope).get(center_id)
+            if core is None or (
+                center_status and core["metadata"].get("status", "activated") != center_status
+            ):
+                return empty
+            reached = {center_id}
+            frontier = [center_id]
+            for _ in range(depth):
+                edges = self._read_edges(
+                    cursor,
+                    "(a.id IN $ids OR b.id IN $ids)",
+                    {"scope": scope, "ids": frontier},
+                )
+                following = {edge[key] for edge in edges for key in ("from", "to")} - reached
+                if not following:
+                    break
+                reached.update(following)
+                frontier = sorted(following)
+            neighbors = self._read_nodes(cursor, sorted(reached - {center_id}), scope)
+            present = {center_id, *neighbors}
+            edges = self._read_edges(
+                cursor,
+                "a.id IN $ids AND b.id IN $ids",
+                {"scope": scope, "ids": sorted(present)},
+            )
+            return {
+                "core_node": core,
+                "neighbors": [neighbors[node_id] for node_id in sorted(neighbors)],
+                "edges": [
+                    {"source": edge["from"], "target": edge["to"], "type": edge["type"]}
+                    for edge in edges
+                ],
+            }
+
+    @staticmethod
+    def _validate_string_list(values: list[str], name: str) -> None:
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            raise ValueError(f"{name} must be a list of nonblank strings")
+
+    @staticmethod
+    def _node_tags(value: Any) -> set[str]:
+        if value is None:
+            return set()
+        try:
+            tags = json.loads(value) if isinstance(value, str) else value
+            if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+                raise ValueError("Invalid tag list")
+            return set(tags)
+        except (TypeError, ValueError) as exc:
+            raise GraphDBError("Invalid AGE node tags") from exc
+
+    def get_neighbors_by_tag(
+        self,
+        tags: list[str],
+        exclude_ids: list[str],
+        top_k: int = 5,
+        min_overlap: int = 1,
+        include_embedding: bool = False,
+        user_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Rank active, non-reasoning/non-working scoped nodes by unique tag overlap."""
+        self._pool.ensure_open()
+        scope = self._scope(user_name)
+        self._validate_string_list(tags, "tags")
+        self._validate_string_list(exclude_ids, "exclude_ids")
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k must be a nonnegative integer")
+        if type(min_overlap) is not int or min_overlap < 1:
+            raise ValueError("min_overlap must be a positive integer")
+        if not isinstance(include_embedding, bool):
+            raise ValueError("include_embedding must be a bool")
+        if not tags or top_k == 0:
+            return []
+        requested = set(tags)
+        vector_column = "embedding::text" if include_embedding else "NULL"
+        with self._pool.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT business_id, memory, properties, {vector_column} FROM ONLY {_TABLE} "
+                "WHERE scope = %s AND NOT (business_id = ANY(%s))",
+                (scope, exclude_ids),
+            )
+            ranked = []
+            for row in cursor.fetchall():
+                node = self._decode_node(row, scope, include_embedding)
+                metadata = node["metadata"]
+                if (
+                    metadata.get("status", "activated") != "activated"
+                    or metadata.get("type") == "reasoning"
+                    or metadata.get("node_type") == "reasoning"
+                    or metadata.get("memory_type") == "WorkingMemory"
+                ):
+                    continue
+                overlap = len(requested & self._node_tags(metadata.get("tags")))
+                if overlap >= min_overlap:
+                    ranked.append((overlap, node))
+        ranked.sort(key=lambda item: (-item[0], item[1]["id"]))
+        return [node for _, node in ranked[:top_k]]
+
     def close(self) -> None:
         """Close owned connections; repeated successful close is harmless."""
         self._pool.close()

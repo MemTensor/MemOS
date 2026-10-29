@@ -815,3 +815,226 @@ def test_age_maximum_type_length_and_native_graph_after_sql_delete(stores, datab
     assert db.get_edges("one") == []
     db.add_edge("one", "two", edge_type)
     assert db.edge_exists("one", "two", edge_type)
+
+
+def _traversal_fixture(db):
+    db.add_nodes_batch([{"id": name, "memory": "memory " + name} for name in [*"abcdefg", "z"]])
+    db.add_nodes_batch([{"id": name, "memory": "B " + name} for name in "abcdefg"], user_name="B")
+    for source, target, kind in [
+        ("a", "b", "R"),
+        ("a", "c", "R"),
+        ("b", "d", "R"),
+        ("c", "d", "R"),
+        ("d", "a", "R"),
+        ("e", "a", "R"),
+        ("b", "c", "SIDE"),
+        ("a", "b", "OTHER"),
+        ("b", "b", "SELF"),
+        ("d", "f", "R"),
+        ("f", "g", "R"),
+    ]:
+        db.add_edge(source, target, kind)
+    db.add_edge("a", "g", "R", user_name="B")
+
+
+@pytest.mark.parametrize(
+    "source,target,depth,expected",
+    [
+        ("a", "d", 1, []),
+        ("a", "d", 2, ["a", "b", "d"]),
+        ("a", "g", 3, []),
+        ("a", "g", 4, ["a", "b", "d", "f", "g"]),
+        ("a", "a", 1, ["a"]),
+        ("a", "e", 5, []),
+        ("a", "z", 5, []),
+        ("missing", "a", 3, []),
+        ("a", "missing", 3, []),
+        ("missing", "missing", 3, []),
+    ],
+)
+def test_age_bounded_shortest_path(stores, source, target, depth, expected):
+    db = stores()
+    _traversal_fixture(db)
+    assert db.get_path(source, target, depth) == expected
+    assert db.get_path("a", "g", 1, user_name="B") == ["a", "g"]
+
+
+def test_age_traversal_reaches_fifth_hop_and_stops_at_configured_bound(stores):
+    db = stores()
+    db.add_nodes_batch([{"id": str(i), "memory": str(i)} for i in range(7)])
+    for i in range(6):
+        db.add_edge(str(i), str(i + 1), "R")
+    db.add_edge("6", "0", "R")
+    assert db.get_path("0", "5", 5) == ["0", "1", "2", "3", "4", "5"]
+    assert db.get_path("0", "6", 5) == []
+    assert [n["id"] for n in db.get_subgraph("0", 1)["neighbors"]] == ["1", "6"]
+    with pytest.raises(ValueError, match="depth"):
+        db.get_path("0", "6", 6)
+    with pytest.raises(ValueError, match="depth"):
+        db.get_subgraph("0", 0)
+
+
+def test_age_subgraph_preserves_full_nodes_and_induced_edge_shape(stores, database):
+    db = stores()
+    _traversal_fixture(db)
+    result = db.get_subgraph("a", 1)
+    assert result == {
+        "core_node": {"id": "a", "memory": "memory a", "metadata": {}},
+        "neighbors": [
+            {"id": name, "memory": "memory " + name, "metadata": {}}
+            for name in ["b", "c", "d", "e"]
+        ],
+        "edges": [
+            {"source": "a", "target": "b", "type": "OTHER"},
+            {"source": "a", "target": "b", "type": "R"},
+            {"source": "a", "target": "c", "type": "R"},
+            {"source": "b", "target": "b", "type": "SELF"},
+            {"source": "b", "target": "c", "type": "SIDE"},
+            {"source": "b", "target": "d", "type": "R"},
+            {"source": "c", "target": "d", "type": "R"},
+            {"source": "d", "target": "a", "type": "R"},
+            {"source": "e", "target": "a", "type": "R"},
+        ],
+    }
+    assert [n["id"] for n in db.get_subgraph("a", 2)["neighbors"]] == ["b", "c", "d", "e", "f"]
+    assert db.get_subgraph("z") == {
+        "core_node": {"id": "z", "memory": "memory z", "metadata": {}},
+        "neighbors": [],
+        "edges": [],
+    }
+    admin, _ = database
+    assert _query(admin, 'SELECT count(*) FROM memos_graph."Memory"') == [(15,)]
+    assert _query(admin, "SELECT count(*) FROM memos_graph._ag_label_edge") == [(12,)]
+
+
+def test_age_subgraph_center_status_and_missing_center(stores):
+    db = stores()
+    db.add_node("a", "center", {"status": "archived", "embedding": [1, 0, 0]})
+    db.add_node("b", "neighbor", {"status": "deleted", "info": {"nested": [1]}})
+    db.add_edge("a", "b", "R")
+    empty = {"core_node": None, "neighbors": [], "edges": []}
+    assert db.get_subgraph("missing") == db.get_subgraph("a") == empty
+    for status in ("archived", "", None):
+        assert db.get_subgraph("a", center_status=status) == {
+            "core_node": {"id": "a", "memory": "center", "metadata": {"status": "archived"}},
+            "neighbors": [
+                {
+                    "id": "b",
+                    "memory": "neighbor",
+                    "metadata": {"status": "deleted", "info": {"nested": [1]}},
+                }
+            ],
+            "edges": [{"source": "a", "target": "b", "type": "R"}],
+        }
+
+
+def test_age_traversal_cannot_bridge_scopes_through_external_edges(stores, database):
+    db = stores()
+    _traversal_fixture(db)
+    admin, _ = database
+    _query(
+        admin,
+        "SELECT * FROM ag_catalog.cypher('memos_graph',$$"
+        "MATCH (a:Memory {id:'a',user_name:'A'}),(b:Memory {id:'b',user_name:'B'}),"
+        "(z:Memory {id:'z',user_name:'A'}) CREATE (a)-[:BRIDGE]->(b)-[:BRIDGE]->(z)"
+        "$$) AS (result agtype)",
+    )
+    assert db.get_path("a", "z", 5) == []
+    assert [n["id"] for n in db.get_subgraph("a", 5)["neighbors"]] == list("bcdefg")
+    assert all(e["type"] != "BRIDGE" for e in db.get_subgraph("a", 5)["edges"])
+
+
+@pytest.mark.parametrize("physical", [False, True])
+def test_age_traversal_preserves_special_ids_and_scope(stores, physical):
+    scope = None if physical else " 范围 $memos$ ' \n"
+    db = stores(use_multi_db=physical, user_name=scope)
+    source, target = '"中文 $memos$ ; --\n"', "目标 $$ ' \\\n"
+    db.add_node(source, "source", {"tags": ["标签 ' $$"]})
+    db.add_node(target, "target", {"tags": ["标签 ' $$"]})
+    db.add_edge(source, target, "R")
+    assert db.get_path(source, target, 1) == [source, target]
+    assert db.get_subgraph(source, 1)["edges"] == [
+        {"source": source, "target": target, "type": "R"}
+    ]
+    assert [n["id"] for n in db.get_neighbors_by_tag(["标签 ' $$"], [target])] == [source]
+
+
+def test_age_tag_neighbors_rank_visibility_and_optional_embeddings(stores):
+    db = stores()
+    for node_id, metadata in [
+        ("b", {"tags": ["red", "blue", "blue"]}),
+        ("a", {"tags": '["red", "blue"]', "embedding": [1, 0, 0]}),
+        ("c", {"tags": ["red"]}),
+        ("archive", {"status": "archived", "tags": ["red"]}),
+        ("reason", {"type": "reasoning", "tags": ["red"]}),
+        ("legacy", {"node_type": "reasoning", "tags": ["red"]}),
+        ("working", {"memory_type": "WorkingMemory", "tags": ["red"]}),
+        ("empty", {"tags": None}),
+    ]:
+        db.add_node(node_id, "memory " + node_id, metadata)
+    db.add_node("foreign", "B", {"tags": ["red", "blue"]}, user_name="B")
+    assert db.get_neighbors_by_tag(["red", "blue", "red"], [], top_k=2) == [
+        {"id": "a", "memory": "memory a", "metadata": {"tags": '["red", "blue"]'}},
+        {"id": "b", "memory": "memory b", "metadata": {"tags": ["red", "blue", "blue"]}},
+    ]
+    assert [n["id"] for n in db.get_neighbors_by_tag(["red"], ["a"])] == ["b", "c"]
+    assert db.get_neighbors_by_tag(["red", "red"], [], min_overlap=2) == []
+    assert db.get_neighbors_by_tag(["blue"], [], top_k=1, include_embedding=True)[0]["metadata"][
+        "embedding"
+    ] == [1, 0, 0]
+    assert db.get_neighbors_by_tag(["red"], [], user_name="B") == [
+        {"id": "foreign", "memory": "B", "metadata": {"tags": ["red", "blue"]}}
+    ]
+    assert (
+        db.get_neighbors_by_tag(["red"], ["a"], include_embedding=True)[0]["metadata"]["embedding"]
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "method,args",
+    [
+        ("get_path", ("a", "b")),
+        ("get_subgraph", ("a",)),
+        ("get_neighbors_by_tag", (["red"], [])),
+    ],
+)
+def test_age_traversal_select_failure_rolls_back_and_recovers(stores, database, method, args):
+    db = stores(maxconn=1)
+    db.add_node("a", "center", {"tags": ["red"]})
+    db.add_node("b", "neighbor", {})
+    db.add_edge("a", "b", "R")
+    admin, config = database
+    _query(
+        admin,
+        sql.SQL('REVOKE SELECT ON memos_graph."Memory" FROM {}').format(
+            sql.Identifier(config.user)
+        ),
+    )
+    try:
+        with pytest.raises(GraphDBError) as error:
+            getattr(db, method)(*args)
+        assert error.value.__cause__.pgcode == "42501"
+    finally:
+        _query(
+            admin,
+            sql.SQL('GRANT SELECT ON memos_graph."Memory" TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    assert db.get_path("a", "b") == ["a", "b"]
+    assert db.get_subgraph("a")["neighbors"] == [{"id": "b", "memory": "neighbor", "metadata": {}}]
+    assert db.get_neighbors_by_tag(["red"], []) == [
+        {"id": "a", "memory": "center", "metadata": {"tags": ["red"]}}
+    ]
+
+
+def test_age_bad_tag_data_fails_without_poisoning_the_connection(stores):
+    db = stores(maxconn=1)
+    db.add_node("a", "invalid tags", {"tags": "not-json"})
+    with pytest.raises(GraphDBError, match="tags"):
+        db.get_neighbors_by_tag(["red"], [])
+    db.update_node("a", {"tags": ["red"]})
+    assert db.get_neighbors_by_tag(["red"], []) == [
+        {"id": "a", "memory": "invalid tags", "metadata": {"tags": ["red"]}}
+    ]
