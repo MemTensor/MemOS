@@ -1,5 +1,69 @@
 # @memtensor/memos-local-plugin
 
+> **Runtime compatibility change:** this development version requires Node.js
+> **22 or newer in the actual host process**, including Electron's embedded Node.
+> It pins `better-sqlite3` to `13.0.3`, using packaged Node-API prebuilds instead
+> of per-Node/Electron ABI rebuilds. Node 20 users must keep their previously
+> installed compatible release until upgrading the host; this version rejects
+> Node 20 before opening storage. This is a breaking runtime requirement and
+> must be called out in the release version/notes; no database schema migration
+> is introduced by this dependency change.
+
+### Reproducible dependency maintenance
+
+Use npm **11.17.0** and pnpm **11.7.0** with a supported Node runtime. These are
+our installation-policy validation versions; installing a different package
+manager version must not silently regenerate the release locks.
+
+From `apps/memos-local-plugin`, after a reviewed dependency edit:
+
+```sh
+npm install --package-lock-only --ignore-scripts
+npm run lock:normalize
+pnpm import
+npm run lock:check
+```
+
+`--ignore-scripts` is only for lock generation, not the release installation.
+`lock:normalize` repairs npm's SQLite install-metadata inference only for the
+reviewed 13.0.3 tarball URL and integrity. It refuses unknown artifacts and is
+never invoked during end-user installation. Commit both lockfiles together.
+`pnpm import` can change peer layouts; inspect every version change rather than
+assuming a one-to-one conversion. The release validation command checks the
+SQLite lock metadata, and the installation contract tests compare both locks.
+
+Validate `npm ci` and `pnpm install --frozen-lockfile` in separate clean checkouts
+with independent `node_modules`. Both must load SQLite, create a table, write,
+query and close under the actual Node/Electron runtime. Repeat lock generation
+and normalization to check that it leaves the committed locks unchanged.
+Runtime tarballs installed by DSH use the profile owner's dependency graph;
+the source checkout locks alone do not establish the packed-install result.
+
+### Dependency install-script policy
+
+npm policy lives in this package's `allowScripts`; `.npmrc` enables engine and
+script strictness for source/CI installs. pnpm 11 uses the separate
+`pnpm-workspace.yaml#allowBuilds` policy. Reviewed esbuild and Sharp versions
+may run scripts; SQLite 13.0.3, protobufjs, optional fsevents, and the ONNX CUDA
+downloader are denied. CPU ONNX and SQLite prebuilds must pass runtime smoke
+checks even when these scripts are denied. New versions require review.
+
+These policies belong to the installing root, not arbitrary transitive
+packages. For DSH, prepare the equivalent policy in the selected profile before
+the first add. Do not overwrite another plugin's settings or an explicit script
+denial. The installer rejects unknown pending builds instead of approving them.
+Direct host-managed installs must configure the host's policy as well.
+Do not bypass this with `--dangerously-allow-all-scripts`, blanket approval or
+`--ignore-scripts`. Older npm versions have different policy behavior and are
+not the release installation validation path.
+
+A failed prebuilt probe is an installation failure, not permission to invoke
+node-gyp automatically. Preserve the old deployment and diagnose the actual
+host/runtime and binary resolution. Standard installs do not require MSVC,
+Python or Electron headers. Windows Desktop must be revalidated with the final
+package; isolated dependency-smoke results do not replace integration tests.
+
+
 > Reflect2Evolve memory plugin for AI agents.
 > One algorithm core, with adapters for OpenClaw, Hermes Agent, and DeepSeek
 > Harness.

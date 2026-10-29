@@ -225,6 +225,10 @@ export async function bootstrapMemoryCore(
 export async function bootstrapMemoryCoreFull(
   options: BootstrapOptions,
 ): Promise<BootstrapResult> {
+  const nodeMajor = Number(process.versions.node.split(".")[0]);
+  if (!Number.isInteger(nodeMajor) || nodeMajor < 22) {
+    throw new MemosError("config_invalid", `MemOS requires Node.js >=22 in the actual host runtime (received ${process.versions.node}). Upgrade the host before installing this version.`);
+  }
   const home = options.home ?? resolveHome(options.agent);
   const configResult = options.config
     ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }

@@ -48,7 +48,7 @@ if command -v npm >/dev/null 2>&1; then
     npm install --no-audit --no-fund --prefer-offline
   fi
 else
-  warn "npm not found on PATH; the bridge runtime requires Node.js ≥ 20."
+  warn "npm not found on PATH; the bridge runtime requires Node.js ≥ 22."
 fi
 
 # ── 2. viewer bundle ──────────────────────────────────────────────────────────

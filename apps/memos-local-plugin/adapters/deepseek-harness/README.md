@@ -117,7 +117,7 @@ Prerequisites:
 
 - A Node.js version accepted by the DSH release. DSH `0.1.0-rc.5` requires
   Node.js `^22.19.0 || >=24.0.0`; this stricter host requirement takes
-  precedence over the MemOS package's standalone `>=20` engine.
+  precedence over the MemOS package's standalone `>=22` engine.
 - A working DSH installation. The recommended one-command installer prepares
   an isolated `pnpm@11.7.0` for the install when pnpm is absent. Lower-level
   direct `dsh plugin` commands still require pnpm on `PATH`.
@@ -206,34 +206,35 @@ approve only the dependencies you trust. `dsh plugin` forwards this command to
 dsh plugin --profile web approve-builds
 ```
 
-For the tested `2.0.16-beta.1` package, pnpm reported `better-sqlite3`,
-`esbuild`, `onnxruntime-node`, `protobufjs`, `sharp`, and the MemOS package's
-own postinstall hint. Review found that the
-required set was `better-sqlite3`, `esbuild`, `onnxruntime-node`, and `sharp`;
-`protobufjs` and the package's own postinstall hint were not needed. The
-equivalent reviewed profile policy was:
+This candidate requires Node **22+** in the host, pins SQLite to **13.0.3**,
+and uses its packaged Node-API prebuild. Do not carry over the previous
+`better-sqlite3: true` rebuild policy. For the current locked dependencies the
+reviewed profile policy is:
 
 ```yaml
-# $DSH_HOME/profiles/web/pnpm-workspace.yaml
+# $DSH_HOME/profiles/<actual-profile>/pnpm-workspace.yaml
+strictDepBuilds: true
 allowBuilds:
   '@memtensor/memos-local-plugin': false
-  better-sqlite3: true
-  esbuild: true
-  onnxruntime-node: true
+  better-sqlite3: false
+  esbuild@0.27.7: true
+  esbuild@0.21.5: true
+  sharp@0.34.5: true
+  onnxruntime-node: false
   protobufjs: false
-  sharp: true
 ```
 
-Dependency sets can change by package version and platform, so use pnpm's
-current output as the source of truth; do not use `approve-builds --all` or
-copy this allowlist blindly. Install scripts execute with the current user's
-permissions, outside the agent tool sandbox. After approval, rerun the same
-`dsh plugin --profile web add ...` command so DSH can finish installation and
-reconcile the bundle layer.
+Prepare policy before the first installation. The ONNX CPU backend is bundled;
+the optional CUDA download is not needed for local CPU embeddings. A clean
+profile must still pass the CPU runtime smoke check. Preserve unrelated policy
+entries and stop for review when an existing denial conflicts with a required
+script or a new version requires approval. Do not approve all scripts.
 
-The one-command installer automates this exact reviewed policy only when the
-pending set contains no other package. Direct `dsh plugin add` users retain the
-manual review flow above.
+The one-command installer merges this reviewed policy before calling DSH.
+Unknown pending scripts stop installation. A SQLite smoke failure is reported
+without attempting source compilation. Profile package-manager policy is
+separate from npm's source-checkout `allowScripts`; see the package README for
+both lockfile maintenance and the fixed npm/pnpm validation versions.
 
 This branch pins Transformers.js to `4.2.0`; the tested lock and DSH profile
 resolve Transformers.js 4.2.0 with `onnxruntime-node` 1.24.3. The earlier
