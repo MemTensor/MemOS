@@ -20,6 +20,19 @@ from memos.utils import timed
 
 logger = get_logger(__name__)
 
+_LIGHTWEIGHT_IDENTIFIER_FIELDS = frozenset(
+    {
+        "user_id",
+        "user_name",
+        "session_id",
+        "mem_cube_id",
+        "dialog_id",
+        "working_binding",
+        "project_id",
+        "manager_user_id",
+    }
+)
+
 
 def _build_lightweight_return_columns(return_fields: list[str]) -> str:
     columns = []
@@ -38,17 +51,7 @@ def _decode_lightweight_return_value(value: Any, field: str | None = None) -> An
         value = value.value
     # Drivers may return agtype identifiers as already-decoded scalar strings.
     # Parsing a numeric ID again would change its type.
-    identifier_fields = {
-        "user_id",
-        "user_name",
-        "session_id",
-        "mem_cube_id",
-        "dialog_id",
-        "working_binding",
-        "project_id",
-        "manager_user_id",
-    }
-    if field in identifier_fields:
+    if field in _LIGHTWEIGHT_IDENTIFIER_FIELDS:
         if isinstance(value, str):
             try:
                 decoded = json.loads(value)
