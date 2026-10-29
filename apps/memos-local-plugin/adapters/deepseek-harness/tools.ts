@@ -1,7 +1,7 @@
 /** Read-oriented MemOS tools exposed through DeepSeek Harness. */
 
 import type { Context } from "@deepseek-ai/cordis";
-import { defineTool, type JsonValue } from "@deepseek-ai/dsh-tools";
+import { defineTool } from "@deepseek-ai/dsh-tools";
 
 import type {
   RetrievalQueryDTO,
@@ -25,6 +25,12 @@ import {
   isDeepSeekHarnessTimeout,
   waitForDeepSeekHarnessDeadline,
 } from "./deadline.js";
+
+// DSH 0.2 moved JsonValue out of dsh-tools. Keep this structural output
+// boundary local so the adapter compiles with both the 0.1 and 0.2 APIs.
+type JsonValue = null | boolean | number | string | JsonValue[] | {
+  [key: string]: JsonValue;
+};
 
 export interface DeepSeekHarnessToolsOptions {
   core: MemoryCore;
