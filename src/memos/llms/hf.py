@@ -82,7 +82,7 @@ class HFLLM(BaseLLM):
         if past_key_values is None:
             return self._generate_full(prompt, **kwargs)
         else:
-            return self._generate_with_cache(prompt, past_key_values, **kwargs)
+            return self._generate_with_cache(prompt, self._clone_cache(past_key_values), **kwargs)
 
     def generate_stream(
         self, messages: MessageList, past_key_values: DynamicCache | None = None, **kwargs
@@ -102,7 +102,36 @@ class HFLLM(BaseLLM):
         if past_key_values is None:
             yield from self._generate_full_stream(prompt)
         else:
-            yield from self._generate_with_cache_stream(prompt, past_key_values)
+            yield from self._generate_with_cache_stream(prompt, self._clone_cache(past_key_values))
+
+    @staticmethod
+    def _clone_cache(cache: DynamicCache) -> DynamicCache:
+        """
+        Copy a KV cache before it is handed to the model.
+
+        ``transformers`` appends the generated key/value tensors to the cache
+        object in place, so the cache that is stored in the activation memory
+        would otherwise grow with every turn and the growth would be written
+        back to disk on the next dump.
+
+        The copy is the price of keeping the stored cache untouched: one extra
+        copy of the activation cache is alive while the model generates. That
+        is the same order as the prefill work itself, and it is preferred over
+        cropping the stored cache back to its original length afterwards,
+        which would mutate the stored cache during the generation and leave
+        it grown whenever the generation is interrupted.
+
+        Args:
+            cache (DynamicCache): The cache provided by the caller.
+
+        Returns:
+            DynamicCache: A copy that does not share any tensor with ``cache``.
+        """
+        # Imported lazily: memos.llms.factory imports this module, so a
+        # module-level import of memos.memories.activation.kv would be circular.
+        from memos.memories.activation.kv import clone_dynamic_cache
+
+        return clone_dynamic_cache(cache)
 
     def _generate_full(self, prompt: str, **kwargs) -> str:
         """

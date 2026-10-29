@@ -1,7 +1,9 @@
+import copy
 import os
 import pickle
 
 from datetime import datetime
+from typing import Any
 
 from transformers import DynamicCache
 
@@ -206,7 +208,9 @@ class KVCacheMemory(BaseActMemory):
 
         assert caches, "Need at least one cache"
         if len(caches) == 1:
-            return caches[0]
+            # Hand out an independent copy: the stored cache must stay read-only,
+            # otherwise the model appends the generated tokens to it in place.
+            return clone_dynamic_cache(caches[0])
 
         merged = DynamicCache()
 
@@ -253,6 +257,78 @@ class KVCacheMemory(BaseActMemory):
             )
 
         return merged
+
+
+def _clone_tensor(tensor: Any) -> Any:
+    """Clone a cache tensor, keeping ``None`` as ``None``."""
+    if tensor is None:
+        return None
+    return tensor.clone()
+
+
+def _clone_cache_layer(layer: Any) -> Any:
+    """
+    Copy a single cache layer without sharing any tensor with the original.
+
+    The layer object itself is shallow-copied so that all non-tensor state
+    (e.g. the cumulative sequence length tracked by newer ``transformers``
+    versions) is preserved, while every key/value tensor is replaced by an
+    independent clone.
+    """
+    cloned = copy.copy(layer)
+    for attribute in ("keys", "key_cache", "values", "value_cache"):
+        tensor = getattr(layer, attribute, None)
+        if tensor is not None:
+            setattr(cloned, attribute, _clone_tensor(tensor))
+    return cloned
+
+
+def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
+    """
+    Return an independent copy of a ``DynamicCache``.
+
+    ``transformers`` appends the newly generated key/value tensors **in place**
+    to the cache object it is given (``DynamicLayer.update`` rebinds
+    ``keys``/``values`` on the very same layer object). When the cache handed
+    to the model is the object stored in the activation memory, every chat turn
+    permanently grows the stored activation memory, and the growth is written
+    back to disk on the next dump.
+
+    The returned cache shares no tensor with the original, so it can safely be
+    passed to the model. Both cache layouts are supported:
+
+    * ``transformers < 4.55``: ``key_cache`` / ``value_cache`` lists;
+    * ``transformers >= 4.55``: a ``layers`` list whose layers carry either
+      ``keys`` / ``values`` or ``key_cache`` / ``value_cache``.
+
+    Args:
+        cache: The cache to copy.
+
+    Returns:
+        DynamicCache: A copy that does not share any tensor with ``cache``.
+    """
+    layers = getattr(cache, "layers", None)
+    if layers is not None:
+        # The modern layout. The check is on the attribute itself and not on
+        # its content: an empty cache still has to be copied into an
+        # independent one, because the model appends its first layer to the
+        # cache it receives.
+        cloned = copy.copy(cache)
+        cloned.layers = [_clone_cache_layer(layer) for layer in layers]
+        return cloned
+
+    key_cache = getattr(cache, "key_cache", None)
+    value_cache = getattr(cache, "value_cache", None)
+    if key_cache is not None or value_cache is not None:
+        # The legacy layout, where the tensors live in two flat lists.
+        cloned = copy.copy(cache)
+        if key_cache is not None:
+            cloned.key_cache = [_clone_tensor(tensor) for tensor in key_cache]
+        if value_cache is not None:
+            cloned.value_cache = [_clone_tensor(tensor) for tensor in value_cache]
+        return cloned
+
+    raise AttributeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
 
 
 def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> DynamicCache:
