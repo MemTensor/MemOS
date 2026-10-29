@@ -103,7 +103,7 @@ def _read_workbook(path):
     )
     cell_styles = styles.findall("s:cellXfs/s:xf", XML_NS)
     fonts = styles.findall("s:fonts/s:font", XML_NS)
-    values, formats, bold_cells = {}, {}, set()
+    values, formats, bold_cells, wrapped_cells = {}, {}, set(), set()
     for cell in sheet.findall("s:sheetData/s:row/s:c", XML_NS):
         address = cell.attrib["r"]
         value = cell.find("s:v", XML_NS).text
@@ -112,7 +112,10 @@ def _read_workbook(path):
         formats[address] = number_formats[int(style.attrib["numFmtId"])]
         if fonts[int(style.attrib["fontId"])].find("s:b", XML_NS) is not None:
             bold_cells.add(address)
-    return values, formats, bold_cells
+        alignment = style.find("s:alignment", XML_NS)
+        if alignment is not None and alignment.get("wrapText") == "1":
+            wrapped_cells.add(address)
+    return values, formats, bold_cells, wrapped_cells
 
 
 @pytest.mark.parametrize(
@@ -141,7 +144,8 @@ def test_excel_summary_preserves_all_categories_and_metrics(pref_eval, tmp_path,
         model_name="test-model",
     )
 
-    values, formats, bold_cells = _read_workbook(output)
+    values, formats, bold_cells, wrapped_cells = _read_workbook(output)
+    assert all(f"{column}1" in wrapped_cells for column in "ABCDEFGHIJ")
     assert values["G1"] == "Judge Failure\n评判失败"
     assert values["A2"] == "test-model"
     percentages = [values[f"{column}2"] for column in "BCDEFG"]

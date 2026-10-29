@@ -282,6 +282,7 @@ def generate_excel_summary(
         float_format = workbook.add_format({"num_format": "0.00"})
         wrap_format = workbook.add_format({"text_wrap": True, "align": "center", "valign": "top"})
 
+        worksheet.write_row(0, 0, df.columns, wrap_format)
         worksheet.set_column("A:J", None, wrap_format)
         worksheet.set_column("B:G", 18, pct_format)
         worksheet.set_column("H:H", 12, float_format)
