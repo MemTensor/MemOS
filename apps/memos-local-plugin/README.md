@@ -1,5 +1,69 @@
 # @memtensor/memos-local-plugin
 
+> **Runtime compatibility change:** this development version requires Node.js
+> **22 or newer in the actual host process**, including Electron's embedded Node.
+> It pins `better-sqlite3` to `13.0.3`, using packaged Node-API prebuilds instead
+> of per-Node/Electron ABI rebuilds. Node 20 users must keep their previously
+> installed compatible release until upgrading the host; this version rejects
+> Node 20 before opening storage. This is a breaking runtime requirement and
+> must be called out in the release version/notes; no database schema migration
+> is introduced by this dependency change.
+
+### Reproducible dependency maintenance
+
+Use npm **11.17.0** and pnpm **11.7.0** with a supported Node runtime. These are
+our installation-policy validation versions; installing a different package
+manager version must not silently regenerate the release locks.
+
+From `apps/memos-local-plugin`, after a reviewed dependency edit:
+
+```sh
+npm install --package-lock-only --ignore-scripts
+npm run lock:normalize
+pnpm import
+npm run lock:check
+```
+
+`--ignore-scripts` is only for lock generation, not the release installation.
+`lock:normalize` repairs npm's SQLite install-metadata inference only for the
+reviewed 13.0.3 tarball URL and integrity. It refuses unknown artifacts and is
+never invoked during end-user installation. Commit both lockfiles together.
+`pnpm import` can change peer layouts; inspect every version change rather than
+assuming a one-to-one conversion. The release validation command checks the
+SQLite lock metadata, and the installation contract tests compare both locks.
+
+Validate `npm ci` and `pnpm install --frozen-lockfile` in separate clean checkouts
+with independent `node_modules`. Both must load SQLite, create a table, write,
+query and close under the actual Node/Electron runtime. Repeat lock generation
+and normalization to check that it leaves the committed locks unchanged.
+Runtime tarballs installed by DSH use the profile owner's dependency graph;
+the source checkout locks alone do not establish the packed-install result.
+
+### Dependency install-script policy
+
+npm policy lives in this package's `allowScripts`; `.npmrc` enables engine and
+script strictness for source/CI installs. pnpm 11 uses the separate
+`pnpm-workspace.yaml#allowBuilds` policy. Reviewed esbuild and Sharp versions
+may run scripts; SQLite 13.0.3, protobufjs, optional fsevents, and the ONNX CUDA
+downloader are denied. CPU ONNX and SQLite prebuilds must pass runtime smoke
+checks even when these scripts are denied. New versions require review.
+
+These policies belong to the installing root, not arbitrary transitive
+packages. For DSH, prepare the equivalent policy in the selected profile before
+the first add. Do not overwrite another plugin's settings or an explicit script
+denial. The installer rejects unknown pending builds instead of approving them.
+Direct host-managed installs must configure the host's policy as well.
+Do not bypass this with `--dangerously-allow-all-scripts`, blanket approval or
+`--ignore-scripts`. Older npm versions have different policy behavior and are
+not the release installation validation path.
+
+A failed prebuilt probe is an installation failure, not permission to invoke
+node-gyp automatically. Preserve the old deployment and diagnose the actual
+host/runtime and binary resolution. Standard installs do not require MSVC,
+Python or Electron headers. Windows Desktop must be revalidated with the final
+package; isolated dependency-smoke results do not replace integration tests.
+
+
 > Reflect2Evolve memory plugin for AI agents.
 > One algorithm core, with adapters for OpenClaw, Hermes Agent, and DeepSeek
 > Harness.
@@ -260,6 +324,113 @@ The runtime/config location is resolved in the following priority order:
 3. **Adapter-specific explicit home** — the DSH Cordis `home` field or the `--home` bridge flag
 4. **`DSH_HOME`** (DSH only) — defaults the DSH memory root to `$DSH_HOME/memos-plugin/`
 5. **Default path** — `~/.hermes/memos-plugin/`, `~/.openclaw/memos-plugin/`, or `~/.dsh/memos-plugin/` based on the agent
+
+### Local embedding model sources
+
+For `embedding.provider: local`, the Viewer Settings page exposes the same
+options as `config.yaml`:
+
+```yaml
+embedding:
+  provider: local
+  model: Xenova/all-MiniLM-L6-v2
+  local:
+    remoteHost: ""     # Optional HTTP(S) mirror base URL
+    modelPath: ""      # Optional local model root containing <model>/ files
+    cacheDir: ""       # Empty: ~/.cache/memos/models, outside installed packages
+    offline: false    # true: load local/cache files only, without downloads
+    loadTimeoutMs: 120000
+```
+
+`local.remoteHost` takes precedence over `HF_ENDPOINT`; leaving both empty uses
+Hugging Face. Use absolute directory paths (a leading `~/` is also supported).
+For offline use, place the model's config, tokenizer and quantized ONNX files
+under `<modelPath>/<model>/`, or point `cacheDir` to an existing Transformers.js
+cache. Changing the model/source settings causes a fresh pipeline load.
+
+The Settings **Test** button uses the form's unsaved local settings and shows a
+loading notice. Logs report `loading`, per-file `download.progress`, `ready`,
+and `load_failed`. The load timeout bounds the caller's wait; Transformers
+loading can continue in the background and warm the next request.
+
+### Windows native-library isolation
+
+On Windows, local embedding inference runs in a separate Node process so the
+plugin's Transformers/Sharp/libvips libraries cannot occupy DLL names in the
+host process. The model process is shared, starts lazily, and stops when its
+last provider closes or after five minutes without requests. Cancelling one
+request does not cancel other callers. A crashed child is restarted on the
+next request; failures are reported as `embedding_unavailable`, without
+falling back to loading these libraries inside the host. macOS/Linux keep
+the existing in-process embedding path.
+
+Electron hosts must support `ELECTRON_RUN_AS_NODE`/`child_process.fork`.
+The child reuses the host executable, clears inherited `NODE_OPTIONS` and
+`NODE_PATH` preloads, and sends only model settings/text/vectors and model
+logs over IPC. No DLL replacement or host Sharp version pin is required.
+
+To verify the native collision fix on Windows, build this branch and run
+`scripts/verify-windows-dll-isolation.mjs` against the **host's** Sharp package.
+For a DSH installation whose JavaScript is inside `app.asar`, use its Electron
+executable so ASAR paths remain readable (replace the example install paths):
+
+```powershell
+npm ci
+npm run build:package
+$DshExe = "C:\path\to\DeepSeek Harness.exe"
+$HostSharp = "C:\path\to\resources\app.asar\dsh\node_modules\sharp"
+$ModelCache = "$env:USERPROFILE\.cache\memos\models"
+$PreviousRunAsNode = $env:ELECTRON_RUN_AS_NODE
+$env:ELECTRON_RUN_AS_NODE = "1"
+try {
+  & $DshExe .\scripts\verify-windows-dll-isolation.mjs --host-sharp $HostSharp --cache-dir $ModelCache --offline
+} finally {
+  $env:ELECTRON_RUN_AS_NODE = $PreviousRunAsNode
+}
+```
+
+Use an existing Transformers model cache with `--offline`; omit that flag to
+allow downloading (including through `HF_ENDPOINT`). Each of the two load
+orders runs in a fresh process: plugin model before host Sharp, and host
+Sharp before plugin model. Both must return a 384-dimensional vector and
+successfully encode a PNG with host Sharp; model inference must add no
+Sharp/libvips/ONNX libraries to the parent process. The script reports the
+separate host/worker PIDs and host library versions.
+
+Then restart DSH completely, enable this plugin build and the local model,
+and verify both a new conversation and a long conversation that previously
+failed, including any image processing path. Windows DLL behavior requires
+this native check; passing the cross-platform IPC tests alone does not prove
+that the original Windows failure is resolved.
+
+### Bundle import preview and ownership
+
+Choosing a JSON bundle in the Viewer previews it without writing records.
+Choose either preserving original ownership (default) or importing into the
+active agent's current/named profile. Sharing scopes are preserved. Preview
+shows how many candidate rows would be visible to the active profile.
+Existing IDs are skipped, including on a target-profile import; this does not
+change ownership of records already stored.
+
+`POST /api/v1/import` accepts the same JSON or multipart body as before, with
+optional query parameters `dryRun=true`, `ownership=preserve|target` and
+`targetProfileId` (only with `ownership=target`). The response retains
+`imported` and `skipped`, adding `duplicates`, `invalid`, `failed`, `visible`,
+`hidden`, `dryRun` and up to 50 row diagnostics (`kind`, zero-based `index`,
+`field`, `code`, `message`). Timestamps and integer IDs such as `turnId` must
+be safe integers; invalid values are rejected rather than rounded.
+
+Preview counts are estimates: database write failures can only be reported
+on the real import. A rejected trace rolls back its synthetic session and
+episode. Use **Repair embeddings** after import to enable semantic retrieval
+for imported rows; JSON bundles do not contain embedding vectors.
+API callers should use `POST /api/v1/embeddings/rebuild` with
+`{"mode":"repair","limit":100}` and repeat batches until `done` is true;
+`Repair embeddings` is the Viewer button label, not an `/embeddings/repair` route.
+
+DSH memory ownership follows the configured `profileId`, independently of
+agent presets. See [legacy preset ownership repair](adapters/deepseek-harness/README.md#legacy-preset-ownership)
+for explicitly migrating older `standard`/other preset partitions after backup.
 
 ### Docker Deployment
 

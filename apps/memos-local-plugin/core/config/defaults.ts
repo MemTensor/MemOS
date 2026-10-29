@@ -36,6 +36,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     provider: "local",
     endpoint: "",
     model: "Xenova/all-MiniLM-L6-v2",
+    local: { remoteHost: "", modelPath: "", cacheDir: "", offline: false, loadTimeoutMs: 120_000 },
     apiKey: "",
     providerIgnore: [],
     providerOrder: [],

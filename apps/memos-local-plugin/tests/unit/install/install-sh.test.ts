@@ -232,7 +232,7 @@ exit 64
 `,
   );
 
-  const firstAdd = options.firstAdd ?? "ignored-builds";
+  const firstAdd = options.firstAdd ?? "success";
   const approval = options.approval ?? "success";
   const secondAdd = options.secondAdd ?? "success";
   const dump = options.dump ?? "success";
@@ -375,8 +375,6 @@ describe("install.sh — CLI surface", () => {
       const calls = readFileSync(fixture.log, "utf8").trim().split("\n");
       expect(calls).toEqual([
         `plugin --profile web add ${tarball}`,
-        "plugin --profile web approve-builds better-sqlite3 esbuild sharp !onnxruntime-node !protobufjs !@memtensor/memos-local-plugin",
-        `plugin --profile web add ${tarball}`,
         "--profile web --dump-config",
       ]);
       expect(readFileSync(fixture.nativeProbeLog, "utf8").trim().split("\n")).toEqual([
@@ -385,11 +383,9 @@ describe("install.sh — CLI surface", () => {
       ]);
       expect(readFileSync(fixture.dshEnvLog, "utf8").trim().split("\n")).toEqual([
         "skip",
-        "skip",
-        "skip",
       ]);
       expect(readFileSync(fixture.profileWorkspace, "utf8")).toContain(
-        "onnxruntime-node: false",
+        '"onnxruntime-node": false',
       );
       expect(r.stdout).toContain("DeepSeek Harness install complete");
       expect(r.stdout).toContain("http://127.0.0.1:18801");
@@ -446,7 +442,7 @@ exit 90
       expect(calls).toHaveLength(2);
       expect(readFileSync(fixture.dshEnvLog, "utf8").trim()).toBe("skip");
       expect(readFileSync(fixture.profileWorkspace, "utf8")).toContain(
-        "onnxruntime-node: false",
+        '"onnxruntime-node": false',
       );
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
@@ -520,101 +516,26 @@ exit 90
     }
   });
 
-  it("does not retry installation when reviewed build approval fails", () => {
-    const fixture = makeDshFixture({ approval: "error" });
+  it("does not auto-approve unexpected pending builds", () => {
+    const fixture = makeDshFixture({ firstAdd: "ignored-builds" });
     try {
-      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
-      writeFileSync(tarball, "fixture", "utf8");
-      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
-
+      const r = run(["--agent", "dsh", "--version", "2.0.16-beta.1"], fixture.env);
       expect(r.code).not.toBe(0);
-      const calls = readFileSync(fixture.log, "utf8").trim().split("\n");
-      expect(calls).toHaveLength(2);
-      expect(calls[1]).toContain("approve-builds");
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
+      expect(readFileSync(fixture.log, "utf8")).not.toContain("approve-builds");
+      expect(`${r.stdout}\n${r.stderr}`).toContain("Review the package versions");
+    } finally { rmSync(fixture.root, { recursive: true, force: true }); }
   });
 
-  it("repairs a missing DSH better-sqlite3 binding before reporting success", () => {
-    const fixture = makeDshFixture({
-      firstAdd: "success",
-      sqliteProbe: "repairable",
-    });
+  it.each(["repairable", "error"] as const)("fails without rebuilding a %s SQLite prebuilt", (sqliteProbe) => {
+    const fixture = makeDshFixture({ firstAdd: "success", sqliteProbe });
     try {
-      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
-      writeFileSync(tarball, "fixture", "utf8");
-
-      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
-
-      expect(r.code).toBe(0);
-      expect(readFileSync(fixture.pnpmActionLog, "utf8").trim()).toBe(
-        "rebuild better-sqlite3",
-      );
-      expect(readFileSync(fixture.nativeProbeLog, "utf8").trim().split("\n")).toEqual([
-        "better-sqlite3",
-        "better-sqlite3",
-        "onnxruntime-node",
-      ]);
-      expect(r.stdout).toContain("better-sqlite3 native binding repaired");
-      expect(r.stdout).toContain("DeepSeek Harness install complete");
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
-
-  it("fails DSH installation when the targeted better-sqlite3 rebuild fails", () => {
-    const fixture = makeDshFixture({
-      firstAdd: "success",
-      sqliteProbe: "repairable",
-      rebuild: "error",
-    });
-    try {
-      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
-      writeFileSync(tarball, "fixture", "utf8");
-
-      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
-
+      const r = run(["--agent", "dsh", "--version", "2.0.16-beta.1"], fixture.env);
       expect(r.code).not.toBe(0);
-      expect(readFileSync(fixture.pnpmActionLog, "utf8").trim()).toBe(
-        "rebuild better-sqlite3",
-      );
-      expect(`${r.stdout}\n${r.stderr}`).toContain(
-        "better-sqlite3 rebuild failed",
-      );
+      expect(existsSync(fixture.pnpmActionLog)).toBe(false);
+      expect(readFileSync(fixture.nativeProbeLog, "utf8").trim()).toBe("better-sqlite3");
+      expect(`${r.stdout}\n${r.stderr}`).toContain("no source rebuild was attempted");
       expect(r.stdout).not.toContain("DeepSeek Harness install complete");
-      expect(r.stdout).not.toContain("MemOS Local installed successfully");
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
-
-  it("fails DSH installation when better-sqlite3 remains unusable after rebuild", () => {
-    const fixture = makeDshFixture({
-      firstAdd: "success",
-      sqliteProbe: "error",
-    });
-    try {
-      const tarball = path.join(fixture.root, "memos-local-plugin.tgz");
-      writeFileSync(tarball, "fixture", "utf8");
-
-      const r = run(["--agent", "dsh", "--version", tarball], fixture.env);
-
-      expect(r.code).not.toBe(0);
-      expect(readFileSync(fixture.pnpmActionLog, "utf8").trim()).toBe(
-        "rebuild better-sqlite3",
-      );
-      expect(readFileSync(fixture.nativeProbeLog, "utf8").trim().split("\n")).toEqual([
-        "better-sqlite3",
-        "better-sqlite3",
-      ]);
-      expect(`${r.stdout}\n${r.stderr}`).toContain(
-        "better-sqlite3 native binding is not loadable",
-      );
-      expect(r.stdout).not.toContain("DeepSeek Harness install complete");
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
+    } finally { rmSync(fixture.root, { recursive: true, force: true }); }
   });
 
   it("fails DSH installation when the bundled ONNX CPU backend cannot load", () => {

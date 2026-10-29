@@ -19,6 +19,7 @@ import {
   type DshAgentLike,
   type DshSessionLike,
 } from "./bridge.js";
+import { deepSeekHarnessNamespace } from "./namespace.js";
 import type { DeepSeekHarnessLlmRoute } from "./host-llm.js";
 import {
   isDeepSeekHarnessTimeout,
@@ -451,17 +452,7 @@ function namespaceFor(
   session: DshSessionLike | undefined,
   profileId: string,
 ): RuntimeNamespace {
-  const preset = session?.header?.["agentPreset"];
-  const resolvedProfileId = typeof preset === "string" && preset.trim()
-    ? preset.trim()
-    : profileId;
-  return {
-    agentKind: DEEPSEEK_HARNESS_AGENT,
-    profileId: resolvedProfileId,
-    profileLabel: resolvedProfileId,
-    workspacePath: session?.header?.cwd,
-    sessionKey: session?.id,
-  };
+  return deepSeekHarnessNamespace(session, profileId);
 }
 
 function requireText(value: unknown, field: string): string {

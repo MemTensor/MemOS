@@ -39,6 +39,7 @@
     "templates/README.user.md",
     "viewer/dist",
     "scripts/postinstall.cjs",
+    "scripts/migrate-dsh-preset-profile.mjs",
     "scripts/sync-hermes-version.cjs",
     "install.sh",
     "install.ps1",
@@ -51,7 +52,9 @@
     "!**/.gitkeep",
     "!**/*.map",
     "!dist/tests",
-    "!dist/tests/**"
+    "!dist/tests/**",
+    "scripts/normalize-sqlite-lock.cjs",
+    "scripts/verify-native-runtime.cjs"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-runtime-assets.cjs",
@@ -60,7 +63,7 @@
     "prepack": "npm run check:hermes-version && npm run build:package",
     "sync:hermes-version": "node scripts/sync-hermes-version.cjs",
     "check:hermes-version": "node scripts/sync-hermes-version.cjs --check",
-    "release:validate": "npm run check:hermes-version && npm run lint && npm test",
+    "release:validate": "npm run lock:check && npm run verify:script-policy && npm run check:hermes-version && npm run lint && npm test",
     "dev": "tsc -p tsconfig.json --watch",
     "viewer:dev": "vite --config vite.config.ts",
     "bridge": "tsx bridge.cts",
@@ -71,7 +74,11 @@
     "test:integration": "vitest run tests/integration",
     "test:e2e": "vitest run tests/e2e",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "postinstall": "node scripts/postinstall.cjs"
+    "postinstall": "node scripts/postinstall.cjs",
+    "lock:normalize": "node scripts/normalize-sqlite-lock.cjs",
+    "lock:check": "node scripts/normalize-sqlite-lock.cjs --check",
+    "verify:native": "node scripts/verify-native-runtime.cjs",
+    "verify:script-policy": "node scripts/verify-script-policy.cjs"
   },
   "keywords": [
     "memory",
@@ -86,13 +93,13 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@huggingface/transformers": "4.2.0",
     "@preact/signals": "^2.9.0",
     "@sinclair/typebox": "^0.34.48",
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "13.0.3",
     "preact": "^10.29.1",
     "tsx": "^4.21.0",
     "uuid": "^10.0.0",
@@ -135,13 +142,16 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-brand": "0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
     "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.0-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
     "@deepseek-ai/dsh-timeout": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-typert-protocol": "0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@preact/preset-vite": "^2.10.5",
     "@types/better-sqlite3": "^7.6.12",
@@ -150,5 +160,14 @@
     "typescript": "^5.7.0",
     "vite": "^5.4.10",
     "vitest": "^2.1.9"
+  },
+  "allowScripts": {
+    "better-sqlite3": false,
+    "esbuild@0.27.7": true,
+    "esbuild@0.21.5": true,
+    "sharp@0.34.5": true,
+    "onnxruntime-node": false,
+    "protobufjs": false,
+    "fsevents": false
   }
 }

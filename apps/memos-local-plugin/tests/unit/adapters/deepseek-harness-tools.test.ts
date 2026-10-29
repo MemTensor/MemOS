@@ -118,8 +118,8 @@ describe("DeepSeek Harness memory tools", () => {
         agent: "deepseek-harness",
         namespace: {
           agentKind: "deepseek-harness",
-          profileId: "standard",
-          profileLabel: "standard",
+          profileId: "web",
+          profileLabel: "web",
           workspacePath: "/workspace/project",
           sessionKey: "dsh-session-a",
         },
@@ -207,7 +207,7 @@ describe("DeepSeek Harness memory tools", () => {
       sessionId: "dsh-session-a",
       episodeId: "episode-1",
       toolCallId: "tool-call-1",
-      namespace: expect.objectContaining({ profileId: "standard" }),
+      namespace: expect.objectContaining({ profileId: "web" }),
     }));
     expect(result).toMatchObject({
       found: true,

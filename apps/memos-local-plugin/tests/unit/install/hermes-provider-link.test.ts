@@ -125,7 +125,7 @@ describe("Hermes provider install links", () => {
 
     expect(unixSource).toContain("npm install --omit=dev --legacy-peer-deps");
     expect(windowsSource).toMatch(
-      /"install", "--omit=dev", "--legacy-peer-deps", "--no-fund"/,
+      /"install", "--omit=dev", "--legacy-peer-deps", "--strict-allow-scripts", "--engine-strict", "--no-fund"/,
     );
   });
 
