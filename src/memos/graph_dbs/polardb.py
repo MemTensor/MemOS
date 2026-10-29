@@ -33,9 +33,30 @@ def _build_lightweight_return_columns(return_fields: list[str]) -> str:
     return "".join(f",\n                               {column}" for column in columns)
 
 
-def _decode_lightweight_return_value(value: Any) -> Any:
+def _decode_lightweight_return_value(value: Any, field: str | None = None) -> Any:
     if hasattr(value, "value"):
         value = value.value
+    # Drivers may return agtype identifiers as already-decoded scalar strings.
+    # Parsing a numeric ID again would change its type.
+    identifier_fields = {
+        "user_id",
+        "user_name",
+        "session_id",
+        "mem_cube_id",
+        "dialog_id",
+        "working_binding",
+        "project_id",
+        "manager_user_id",
+    }
+    if field in identifier_fields:
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return value
+            return decoded if decoded is None or isinstance(decoded, str) else value
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
     if isinstance(value, str):
         try:
             return json.loads(value)
@@ -1990,7 +2011,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     item = {"id": id_val, "score": score_val}
                     if light_weight_mode:
                         for offset, field in enumerate(validated_return_fields, start=5):
-                            item[field] = _decode_lightweight_return_value(row[offset])
+                            item[field] = _decode_lightweight_return_value(row[offset], field=field)
                     elif validated_return_fields:
                         properties = row[1]  # properties column
                         item.update(
