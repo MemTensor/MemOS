@@ -235,17 +235,27 @@ class PersistentUserManager(UserManager):
     def delete_user(self, user_id: str) -> bool:
         """Delete a user and their configuration.
 
+        The parent deletion runs first so that a refused deletion (e.g. a
+        protected ROOT user, or a nonexistent user) leaves the persisted
+        configuration untouched. Configuration is only cleaned up once the
+        user itself was successfully deleted.
+
         Args:
             user_id (str): The user ID.
 
         Returns:
-            bool: True if successful, False otherwise.
+            bool: True if the user was deleted, False otherwise.
         """
-        # Delete configuration first
+        # Delete user using parent method first; if it refuses (protected or
+        # missing user), keep the user and its configuration as-is.
+        if not super().delete_user(user_id):
+            return False
+
+        # The user is gone, so clean up its configuration. This is best-effort:
+        # a cleanup failure does not change the outcome of the deletion.
         self.delete_user_config(user_id)
 
-        # Delete user using parent method
-        return super().delete_user(user_id)
+        return True
 
     def get_user_cube_access(self, user_id: str) -> list[str]:
         """Get list of cube IDs that a user has access to.
