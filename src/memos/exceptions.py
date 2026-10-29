@@ -21,6 +21,10 @@ class MemCubeError(MemOSError): ...
 class VectorDBError(MemOSError): ...
 
 
+class GraphDBError(MemOSError):
+    """Graph storage, schema or connection lifecycle failure."""
+
+
 class LLMError(MemOSError): ...
 
 
