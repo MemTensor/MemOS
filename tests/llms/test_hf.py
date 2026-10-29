@@ -2,13 +2,46 @@ import unittest
 
 from unittest.mock import MagicMock, patch
 
-import torch
+import pytest
 
 from transformers import DynamicCache
 
 from memos.configs.llm import HFLLMConfig, LLMConfigFactory
 from memos.llms.factory import LLMFactory
 from memos.llms.hf import HFLLM
+from tests.utils import dynamic_cache_seq_len, make_dynamic_cache
+
+
+# The KV cache is a torch structure; skip the whole module where torch is
+# not installed instead of failing the collection of the test suite.
+torch = pytest.importorskip("torch")
+
+
+class CacheGrowingModel:
+    """A stand-in for a transformers model that grows the cache in place.
+
+    Real transformers models append the newly generated key/value tensors to
+    the ``past_key_values`` object they are given (``DynamicLayer.update``
+    rebinds ``keys``/``values`` on the very same layer object). Handing the
+    stored activation cache to the model therefore grows the stored cache with
+    every turn.
+    """
+
+    def __init__(self, device: str = "cpu") -> None:
+        self.device = device
+        self.received_caches = []
+
+    def __call__(
+        self, input_ids=None, use_cache=False, past_key_values=None, return_dict=True, **kwargs
+    ):
+        self.received_caches.append(past_key_values)
+        if past_key_values is not None:
+            past_key_values.update(torch.zeros(1, 2, 1, 4), torch.ones(1, 2, 1, 4), 0)
+        output = MagicMock()
+        output.logits = torch.full((1, 1, 100), -1e9)
+        output.logits[0, 0, 7] = 1.0
+        output.past_key_values = past_key_values
+        return output
 
 
 @patch("transformers.AutoModelForCausalLM", MagicMock())
@@ -182,3 +215,52 @@ class TestHFLLM(unittest.TestCase):
         kv_cache = DynamicCache()
         resp = llm.generate([{"role": "user", "content": "Sampling"}], past_key_values=kv_cache)
         self.assertEqual(resp, self.standard_response)
+
+    def test_generate_does_not_mutate_caller_cache(self):
+        # Regression for #2301: the cache stored in the activation memory must
+        # not grow with the tokens generated for the current turn.
+        config = HFLLMConfig(
+            model_name_or_path="qwen3:0.6b",
+            max_tokens=5,
+            do_sample=False,
+            add_generation_prompt=True,
+        )
+        llm = self._create_llm(config)
+        model = CacheGrowingModel()
+        llm.model = model
+
+        cache = make_dynamic_cache(seq_len=3)
+        resp = llm.generate([{"role": "user", "content": "Hello"}], past_key_values=cache)
+
+        self.assertEqual(resp, self.standard_response)
+        # The model received a copy, not the caller's cache.
+        self.assertIsNot(model.received_caches[0], cache)
+        # The copy did grow, i.e. the model really appends in place.
+        self.assertGreater(dynamic_cache_seq_len(model.received_caches[0]), 3)
+        # The caller's cache still holds only the original tokens.
+        self.assertEqual(dynamic_cache_seq_len(cache), 3)
+
+    def test_generate_stream_does_not_mutate_caller_cache(self):
+        # Same regression for the streaming path.
+        config = HFLLMConfig(
+            model_name_or_path="qwen3:0.6b",
+            max_tokens=5,
+            do_sample=False,
+            add_generation_prompt=True,
+        )
+        llm = self._create_llm(config)
+        model = CacheGrowingModel()
+        llm.model = model
+
+        cache = make_dynamic_cache(seq_len=3)
+        chunks = list(
+            llm.generate_stream([{"role": "user", "content": "Hello"}], past_key_values=cache)
+        )
+
+        self.assertTrue(chunks)
+        # The model received a copy, not the caller's cache.
+        self.assertIsNot(model.received_caches[0], cache)
+        # The copy did grow, i.e. the model really appends in place.
+        self.assertGreater(dynamic_cache_seq_len(model.received_caches[0]), 3)
+        # The caller's cache still holds only the original tokens.
+        self.assertEqual(dynamic_cache_seq_len(cache), 3)
