@@ -6,6 +6,7 @@ the graph, retrieval and maintenance contracts are implemented.
 
 import json
 import math
+import re
 
 from typing import Any
 
@@ -253,6 +254,185 @@ class OpenGaussNodeStore:
                 "properties = %s::ag_catalog.agtype WHERE scope = %s AND business_id = %s",
                 (memory, vector, payload, scope, id),
             )
+
+    @staticmethod
+    def _validate_edge_type(edge_type: str, allow_any: bool = True) -> None:
+        if (
+            not isinstance(edge_type, str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", edge_type)
+            or (edge_type == "ANY" and not allow_any)
+        ):
+            raise ValueError("Invalid relationship type")
+
+    @staticmethod
+    def _cypher(
+        cursor: Any, body: str, parameters: dict[str, Any], columns: str = "result agtype"
+    ) -> list[tuple]:
+        # AGE requires a literal query body and a prepared agtype parameter.
+        # This connection belongs exclusively to the pool borrower. Clearing
+        # first also bounds statements left behind by an aborted transaction.
+        cursor.execute("DEALLOCATE ALL")
+        cursor.execute(
+            "PREPARE memos_age (ag_catalog.agtype) AS SELECT * FROM "
+            f"ag_catalog.cypher('memos_graph', $memos${body}$memos$, $1) AS ({columns})"
+        )
+        cursor.execute(
+            "EXECUTE memos_age(%s::ag_catalog.agtype)",
+            (json.dumps(parameters, ensure_ascii=False),),
+        )
+        rows = cursor.fetchall()
+        cursor.execute("DEALLOCATE memos_age")
+        return rows
+
+    @staticmethod
+    def _lock_graph_nodes(cursor: Any, ids: list[str], scope: str) -> set[str]:
+        # Serialize graph mutations, including concurrent creation of AGE edge
+        # labels. Row locks coordinate deletion with existing node upserts.
+        cursor.execute("SELECT pg_advisory_xact_lock(621503, 2)")
+        cursor.execute(
+            f"SELECT business_id FROM ONLY {_TABLE} "
+            "WHERE scope = %s AND business_id = ANY(%s) ORDER BY business_id FOR UPDATE",
+            (scope, sorted(set(ids))),
+        )
+        return {row[0] for row in cursor.fetchall()}
+
+    def delete_node(self, id: str, user_name: str | None = None) -> None:
+        """Atomically hard-delete one scoped node and all its incident native edges."""
+        self._pool.ensure_open()
+        scope = self._scope(user_name)
+        self._validate_id(id)
+        with self._pool.transaction() as connection, connection.cursor() as cursor:
+            if not self._lock_graph_nodes(cursor, [id], scope):
+                return
+            self._cypher(
+                cursor,
+                "MATCH (a:Memory)-[r]->(b:Memory) WHERE "
+                "(a.id = $id AND a.user_name = $scope) OR "
+                "(b.id = $id AND b.user_name = $scope) DELETE r",
+                {"id": id, "scope": scope},
+            )
+            # Native AGE node deletion bypasses SQL row triggers and DELETE
+            # privileges in this build. Keep node mutations on the SQL label
+            # path so projection, constraints and failure handling stay aligned.
+            cursor.execute(
+                f"DELETE FROM ONLY {_TABLE} WHERE scope = %s AND business_id = %s",
+                (scope, id),
+            )
+
+    def _change_edge(
+        self, source: str, target: str, edge_type: str, user_name: str | None, create: bool
+    ) -> None:
+        self._pool.ensure_open()
+        scope = self._scope(user_name)
+        self._validate_id(source)
+        self._validate_id(target)
+        self._validate_edge_type(edge_type, allow_any=False)
+        endpoints = {source, target}
+        with self._pool.transaction() as connection, connection.cursor() as cursor:
+            if self._lock_graph_nodes(cursor, list(endpoints), scope) != endpoints:
+                return
+            conditions = (
+                "a.id = $source AND b.id = $target "
+                "AND a.user_name = $scope AND b.user_name = $scope "
+            )
+            body = (
+                f"MATCH (a:Memory), (b:Memory) WHERE {conditions}MERGE (a)-[:{edge_type}]->(b)"
+                if create
+                else f"MATCH (a:Memory)-[r]->(b:Memory) WHERE {conditions}"
+                "AND type(r) = $type DELETE r"
+            )
+            parameters = {"source": source, "target": target, "scope": scope}
+            if not create:
+                parameters["type"] = edge_type
+            self._cypher(cursor, body, parameters)
+
+    def add_edge(
+        self, source_id: str, target_id: str, type: str, user_name: str | None = None
+    ) -> None:
+        """Merge a directed typed edge; a missing scoped endpoint is a no-op."""
+        self._change_edge(source_id, target_id, type, user_name, create=True)
+
+    def delete_edge(
+        self, source_id: str, target_id: str, type: str, user_name: str | None = None
+    ) -> None:
+        """Remove only the given direction and type, retaining parallel edges."""
+        self._change_edge(source_id, target_id, type, user_name, create=False)
+
+    def get_edges(
+        self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str | None = None
+    ) -> list[dict[str, str]]:
+        """Return sorted, unique from/to/type records, with both endpoints scoped."""
+        self._pool.ensure_open()
+        scope = self._scope(user_name)
+        self._validate_id(id)
+        self._validate_edge_type(type)
+        if direction not in ("OUTGOING", "INCOMING", "ANY"):
+            raise ValueError("Invalid edge direction")
+        endpoint = {
+            "OUTGOING": "a.id = $id",
+            "INCOMING": "b.id = $id",
+            "ANY": "(a.id = $id OR b.id = $id)",
+        }[direction]
+        condition = "" if type == "ANY" else " AND type(r) = $type"
+        with self._pool.transaction() as connection, connection.cursor() as cursor:
+            return self._read_edges(
+                cursor,
+                endpoint + condition,
+                {"id": id, "scope": scope, "type": type},
+            )
+
+    def _read_edges(
+        self, cursor: Any, condition: str, parameters: dict[str, Any]
+    ) -> list[dict[str, str]]:
+        rows = self._cypher(
+            cursor,
+            "MATCH (a:Memory)-[r]->(b:Memory) WHERE "
+            f"{condition} AND a.user_name = $scope AND b.user_name = $scope "
+            "RETURN a.id, b.id, type(r)",
+            parameters,
+            "source agtype, target agtype, edge_type agtype",
+        )
+        edges = set()
+        try:
+            for row in rows:
+                edge = tuple(json.loads(value) for value in row)
+                if len(edge) != 3 or not all(isinstance(value, str) for value in edge):
+                    raise ValueError("Invalid edge fields")
+                edges.add(edge)
+        except (TypeError, ValueError) as exc:
+            raise GraphDBError("Invalid AGE edge projection") from exc
+        return [
+            {"from": source, "to": target, "type": edge_type}
+            for source, target, edge_type in sorted(edges)
+        ]
+
+    def edge_exists(
+        self,
+        source_id: str,
+        target_id: str,
+        type: str = "ANY",
+        direction: str = "OUTGOING",
+        user_name: str | None = None,
+    ) -> bool:
+        """Check adjacency in the requested direction without crossing scopes."""
+        self._pool.ensure_open()
+        self._validate_id(target_id)
+        return any(
+            (edge["to"] if edge["from"] == source_id else edge["from"]) == target_id
+            for edge in self.get_edges(source_id, type, direction, user_name)
+        )
+
+    def get_neighbors(
+        self, id: str, type: str, direction: str = "out", user_name: str | None = None
+    ) -> list[str]:
+        """Return unique sorted neighboring business IDs, including self-loops."""
+        self._pool.ensure_open()
+        if direction not in ("in", "out", "both"):
+            raise ValueError("Invalid neighbor direction")
+        edges = self.get_edges(
+            id, type, {"in": "INCOMING", "out": "OUTGOING", "both": "ANY"}[direction], user_name
+        )
+        return sorted({edge["to"] if edge["from"] == id else edge["from"] for edge in edges})
 
     def close(self) -> None:
         """Close owned connections; repeated successful close is harmless."""

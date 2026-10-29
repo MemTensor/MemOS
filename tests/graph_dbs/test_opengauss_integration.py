@@ -543,3 +543,275 @@ def test_preparation_failure_leaves_existing_data_untouched(stores, database, po
     assert _query(admin, 'SELECT scope,business_id,memory FROM memos_graph."Memory"') == [
         ("A", "keep", "existing")
     ]
+
+
+def _relation_fixture(db):
+    for scope in ("A", "B"):
+        db.add_nodes_batch(
+            [
+                {"id": "one", "memory": "source", "metadata": {"embedding": [1, 0, 0]}},
+                {"id": "two", "memory": "target"},
+                {"id": "three", "memory": "unconnected"},
+            ],
+            user_name=scope,
+        )
+        db.add_edge("one", "two", "RELATE_TO", user_name=scope)
+    db.add_edge("two", "one", "FOLLOWS")
+    db.add_edge("one", "one", "SELF")
+    db.add_edge("one", "two", "PARENT")
+
+
+@pytest.mark.parametrize(
+    "direction,expected",
+    [
+        (
+            "OUTGOING",
+            [
+                {"from": "one", "to": "one", "type": "SELF"},
+                {"from": "one", "to": "two", "type": "PARENT"},
+                {"from": "one", "to": "two", "type": "RELATE_TO"},
+            ],
+        ),
+        (
+            "INCOMING",
+            [
+                {"from": "one", "to": "one", "type": "SELF"},
+                {"from": "two", "to": "one", "type": "FOLLOWS"},
+            ],
+        ),
+        (
+            "ANY",
+            [
+                {"from": "one", "to": "one", "type": "SELF"},
+                {"from": "one", "to": "two", "type": "PARENT"},
+                {"from": "one", "to": "two", "type": "RELATE_TO"},
+                {"from": "two", "to": "one", "type": "FOLLOWS"},
+            ],
+        ),
+    ],
+)
+def test_age_edge_directions_return_true_endpoints(stores, direction, expected):
+    db = stores()
+    _relation_fixture(db)
+    assert db.get_edges("one", direction=direction) == expected
+    assert db.get_edges("one", user_name="B") == [{"from": "one", "to": "two", "type": "RELATE_TO"}]
+
+
+def test_age_edge_existence_neighbors_and_exact_deletion(stores):
+    db = stores()
+    _relation_fixture(db)
+    assert db.edge_exists("one", "two", "RELATE_TO")
+    assert not db.edge_exists("one", "two", "RELATE_TO", "INCOMING")
+    assert db.edge_exists("one", "two", "FOLLOWS", "INCOMING")
+    assert db.edge_exists("one", "two", direction="ANY")
+    assert db.edge_exists("one", "one", "SELF")
+    assert db.get_neighbors("one", "ANY", "out") == ["one", "two"]
+    assert db.get_neighbors("one", "FOLLOWS", "in") == ["two"]
+    assert db.get_neighbors("one", "ANY", "both") == ["one", "two"]
+    assert db.get_neighbors("three", "ANY") == []
+    assert db.get_edges("absent") == []
+    assert not db.edge_exists("one", "absent")
+    db.delete_edge("one", "two", "RELATE_TO")
+    db.delete_edge("one", "two", "RELATE_TO")
+    assert db.get_edges("one") == [
+        {"from": "one", "to": "one", "type": "SELF"},
+        {"from": "one", "to": "two", "type": "PARENT"},
+        {"from": "two", "to": "one", "type": "FOLLOWS"},
+    ]
+    assert db.edge_exists("one", "two", "RELATE_TO", user_name="B")
+    assert db.get_edges("one", "NOT_CREATED") == []
+
+
+@pytest.mark.parametrize(
+    "source,target", [("absent", "two"), ("one", "absent"), ("absent", "absent")]
+)
+def test_age_missing_endpoints_never_create_nodes_or_edges(stores, source, target):
+    db = stores()
+    db.add_node("one", "source", {})
+    db.add_node("two", "other scope", {}, user_name="B")
+    db.add_edge(source, target, "RELATE_TO")
+    db.delete_edge(source, target, "RELATE_TO")
+    assert db.get_edges("one") == []
+    assert db.get_node("absent") is None
+
+
+def test_age_cross_scope_write_and_external_cross_scope_read_are_blocked(stores, database):
+    db = stores()
+    admin, _ = database
+    db.add_node("one", "A source", {})
+    db.add_node("two", "B target", {}, user_name="B")
+    db.add_edge("one", "two", "RELATE_TO")
+    assert _query(admin, "SELECT count(*) FROM memos_graph._ag_label_edge") == [(0,)]
+    _query(
+        admin,
+        "SELECT * FROM ag_catalog.cypher('memos_graph',$$MATCH (a:Memory {id:'one',user_name:'A'}),(b:Memory {id:'two',user_name:'B'}) CREATE (a)-[:RELATE_TO]->(b)$$) AS (result agtype)",
+    )
+    assert db.get_edges("one") == []
+    assert db.get_edges("two", user_name="B") == []
+    assert not db.edge_exists("one", "two")
+
+
+def test_age_duplicate_parallel_self_edges_and_concurrency(stores, database):
+    db = stores()
+    admin, _ = database
+    db.add_nodes_batch([{"id": "one", "memory": "source"}, {"id": "two", "memory": "target"}])
+    barrier = threading.Barrier(2)
+
+    def write(_):
+        barrier.wait(timeout=5)
+        db.add_edge("one", "two", "RELATE_TO")
+
+    with ThreadPoolExecutor(2) as executor:
+        list(executor.map(write, range(2)))
+    db.add_edge("one", "two", "RELATE_TO")
+    db.add_edge("one", "two", "PARENT")
+    db.add_edge("one", "one", "SELF")
+    assert _query(admin, "SELECT count(*) FROM memos_graph._ag_label_edge") == [(3,)]
+    assert db.get_edges("one") == [
+        {"from": "one", "to": "one", "type": "SELF"},
+        {"from": "one", "to": "two", "type": "PARENT"},
+        {"from": "one", "to": "two", "type": "RELATE_TO"},
+    ]
+
+
+def test_age_hard_delete_detaches_all_edges_and_preserves_other_scope(stores, database):
+    db = stores()
+    admin, _ = database
+    _relation_fixture(db)
+    db.delete_node("one")
+    db.delete_node("one")
+    db.delete_node("absent")
+    assert db.get_nodes(["one", "two", "three"]) == [
+        {"id": "two", "memory": "target", "metadata": {}},
+        {"id": "three", "memory": "unconnected", "metadata": {}},
+    ]
+    assert db.get_node("one", include_embedding=True, user_name="B") == {
+        "id": "one",
+        "memory": "source",
+        "metadata": {"embedding": [1, 0, 0]},
+    }
+    assert db.get_edges("two") == []
+    assert db.get_edges("one", user_name="B") == [{"from": "one", "to": "two", "type": "RELATE_TO"}]
+    assert _query(admin, "SELECT count(*) FROM memos_graph._ag_label_edge") == [(1,)]
+    assert _query(
+        admin,
+        'SELECT count(*) FROM ONLY memos_graph."Memory" WHERE scope=%s AND business_id=%s',
+        ("A", "one"),
+    ) == [(0,)]
+
+
+@pytest.mark.parametrize("failure", ["trigger", "permission"])
+def test_age_detach_failure_rolls_back_edges_node_and_retrieval_columns(stores, database, failure):
+    db = stores()
+    admin, config = database
+    _relation_fixture(db)
+    if failure == "trigger":
+        _query(
+            admin,
+            "CREATE OR REPLACE FUNCTION public.memos_it_reject_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rejected delete'; END $$",
+        )
+        _query(
+            admin,
+            'CREATE TRIGGER memos_it_reject_delete BEFORE DELETE ON memos_graph."Memory" FOR EACH ROW EXECUTE PROCEDURE public.memos_it_reject_delete()',
+        )
+    else:
+        owner = _query(admin, "SELECT current_user")[0][0]
+        _query(
+            admin,
+            sql.SQL('ALTER TABLE memos_graph."Memory" OWNER TO {}').format(sql.Identifier(owner)),
+        )
+        _query(
+            admin,
+            sql.SQL('GRANT SELECT, UPDATE ON memos_graph."Memory" TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    with pytest.raises(GraphDBError) as error:
+        db.delete_node("one")
+    assert error.value.__cause__.pgcode == ("P0001" if failure == "trigger" else "42501")
+    assert db.get_node("one", include_embedding=True) == {
+        "id": "one",
+        "memory": "source",
+        "metadata": {"embedding": [1, 0, 0]},
+    }
+    assert db.get_edges("one") == [
+        {"from": "one", "to": "one", "type": "SELF"},
+        {"from": "one", "to": "two", "type": "PARENT"},
+        {"from": "one", "to": "two", "type": "RELATE_TO"},
+        {"from": "two", "to": "one", "type": "FOLLOWS"},
+    ]
+    assert db.edge_exists("one", "two", "RELATE_TO", user_name="B")
+    with db._pool.transaction() as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT count(*) FROM pg_prepared_statements")
+        assert cursor.fetchone() == (0,)
+    if failure == "trigger":
+        _query(admin, 'DROP TRIGGER memos_it_reject_delete ON memos_graph."Memory"')
+    else:
+        _query(
+            admin,
+            sql.SQL('ALTER TABLE memos_graph."Memory" OWNER TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    db.delete_node("one")
+    assert db.get_node("one") is None
+
+
+@pytest.mark.parametrize("physical", [False, True])
+def test_age_bound_special_ids_and_scopes_round_trip(stores, physical):
+    scope = None if physical else "中文 $$ ' ; --"
+    db = stores(use_multi_db=physical, user_name=scope)
+    source, target = "a\" $$ ' \\ ; --", "中文\n$target"
+    db.add_nodes_batch([{"id": source, "memory": "source"}, {"id": target, "memory": "target"}])
+    db.add_edge(source, target, "Mixed_case_1")
+    assert db.get_edges(source) == [{"from": source, "to": target, "type": "Mixed_case_1"}]
+    db.delete_edge(source, target, "Mixed_case_1")
+    assert not db.edge_exists(source, target)
+    db.add_edge(source, target, "Mixed_case_1")
+    db.delete_node(source)
+    assert db.get_node(source) is None
+    assert db.get_node(target)["memory"] == "target"
+
+
+@pytest.mark.parametrize("existing_edge", [False, True])
+def test_age_concurrent_delete_and_edge_creation_leave_no_dangling_edges(
+    stores, database, existing_edge
+):
+    db = stores()
+    admin, _ = database
+    db.add_nodes_batch([{"id": "one", "memory": "source"}, {"id": "two", "memory": "target"}])
+    if existing_edge:
+        db.add_edge("one", "two", "RELATE_TO")
+    barrier = threading.Barrier(2)
+
+    def change(delete):
+        barrier.wait(timeout=5)
+        if delete:
+            db.delete_node("one")
+        else:
+            db.add_edge("one", "two", "RELATE_TO")
+
+    with ThreadPoolExecutor(2) as executor:
+        list(executor.map(change, [True, False]))
+    assert db.get_node("one") is None
+    assert db.get_node("two") == {"id": "two", "memory": "target", "metadata": {}}
+    assert db.get_edges("two") == []
+    assert _query(admin, "SELECT count(*) FROM memos_graph._ag_label_edge") == [(0,)]
+
+
+def test_age_maximum_type_length_and_native_graph_after_sql_delete(stores, database):
+    db = stores()
+    admin, _ = database
+    db.add_nodes_batch([{"id": "one", "memory": "source"}, {"id": "two", "memory": "target"}])
+    edge_type = "R" * 63
+    db.add_edge("one", "two", edge_type)
+    assert db.get_edges("one", edge_type) == [{"from": "one", "to": "two", "type": edge_type}]
+    db.delete_node("one")
+    assert _query(
+        admin,
+        "SELECT * FROM ag_catalog.cypher('memos_graph',$$MATCH (n:Memory) RETURN n.id$$) AS (id agtype)",
+    ) == [('"two"',)]
+    db.add_node("one", "recreated", {})
+    assert db.get_edges("one") == []
+    db.add_edge("one", "two", edge_type)
+    assert db.edge_exists("one", "two", edge_type)
