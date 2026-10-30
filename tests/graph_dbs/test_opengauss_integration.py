@@ -18,7 +18,7 @@ import pytest
 
 from memos.configs.graph_db import OpenGaussGraphDBConfig
 from memos.exceptions import GraphDBError
-from memos.graph_dbs._opengauss_store import OpenGaussNodeStore
+from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
 
 
 psycopg2 = pytest.importorskip("psycopg2")
@@ -118,7 +118,7 @@ def stores(database):
         _query(admin, "SELECT ag_catalog.drop_graph('memos_graph',true)")
 
     def make(**overrides):
-        store = OpenGaussNodeStore(config.model_copy(update=overrides))
+        store = PartialOpenGaussGraphDB(config.model_copy(update=overrides))
         opened.append(store)
         return store
 
@@ -339,7 +339,7 @@ def test_partial_update_reads_after_row_lock_without_losing_fields(stores):
         db.update_node("one", {"tags": ["second"]})
 
     with ThreadPoolExecutor(1) as executor:
-        with db._pool.transaction() as connection, connection.cursor() as cursor:
+        with db._get_connection() as connection, connection.cursor() as cursor:
             cursor.execute(
                 'UPDATE memos_graph."Memory" SET properties=%s::agtype WHERE scope=%s AND business_id=%s',
                 (
@@ -365,14 +365,14 @@ def test_failed_transactions_dirty_sessions_and_replacement_connections(stores):
     db.add_node("one", "keep", {})
     with (
         pytest.raises(GraphDBError) as error,
-        db._pool.transaction() as connection,
+        db._get_connection() as connection,
         connection.cursor() as cursor,
     ):
         cursor.execute("SELECT 1/0")
     assert error.value.__cause__.pgcode == "22012"
-    with db._pool.transaction() as connection, connection.cursor() as cursor:
+    with db._get_connection() as connection, connection.cursor() as cursor:
         cursor.execute("SET search_path = pg_catalog")
-    with db._pool.transaction() as connection, connection.cursor() as cursor:
+    with db._get_connection() as connection, connection.cursor() as cursor:
         cursor.execute("SHOW search_path")
         assert cursor.fetchone()[0] == "ag_catalog, public"
         cursor.execute(
@@ -380,7 +380,7 @@ def test_failed_transactions_dirty_sessions_and_replacement_connections(stores):
         )
         assert json.loads(cursor.fetchone()[0]) == "one"
     connection.set_session(isolation_level="SERIALIZABLE", readonly=True, autocommit=True)
-    with db._pool.transaction() as connection, connection.cursor() as cursor:
+    with db._get_connection() as connection, connection.cursor() as cursor:
         assert connection.autocommit is False
         cursor.execute("SHOW transaction_isolation")
         assert cursor.fetchone()[0] == "read committed"
@@ -394,7 +394,7 @@ def test_failed_transactions_dirty_sessions_and_replacement_connections(stores):
 
 def test_bounded_wait_recovery_close_and_post_close_empty_calls(stores):
     db = stores(maxconn=1, connection_wait_timeout=1)
-    with db._pool.transaction(), pytest.raises(GraphDBError, match="wait timed out"):
+    with db._get_connection(), pytest.raises(GraphDBError, match="wait timed out"):
         db.get_node("missing")
     assert db.get_node("missing") is None
     db.close()
@@ -741,7 +741,7 @@ def test_age_detach_failure_rolls_back_edges_node_and_retrieval_columns(stores, 
         {"from": "two", "to": "one", "type": "FOLLOWS"},
     ]
     assert db.edge_exists("one", "two", "RELATE_TO", user_name="B")
-    with db._pool.transaction() as connection, connection.cursor() as cursor:
+    with db._get_connection() as connection, connection.cursor() as cursor:
         cursor.execute("SELECT count(*) FROM pg_prepared_statements")
         assert cursor.fetchone() == (0,)
     if failure == "trigger":
@@ -1038,3 +1038,381 @@ def test_age_bad_tag_data_fails_without_poisoning_the_connection(stores):
     assert db.get_neighbors_by_tag(["red"], []) == [
         {"id": "a", "memory": "invalid tags", "metadata": {"tags": ["red"]}}
     ]
+
+
+@pytest.fixture
+def filtered_store(stores):
+    db = stores()
+    for node_id, metadata in [
+        (
+            "a",
+            {
+                "status": "activated",
+                "tags": ["x", "y"],
+                "confidence": 0.8,
+                "created_at": "2026-01-01T00:00:00Z",
+                "info": {"project": "星港", "done": True},
+                "file_ids": ["f1", "f2"],
+            },
+        ),
+        (
+            "b",
+            {
+                "status": "archived",
+                "tags": ["y"],
+                "confidence": 0.2,
+                "created_at": "2026-01-01T08:00:00+08:00",
+                "file_ids": ["f2"],
+            },
+        ),
+        (
+            "c",
+            {
+                "status": "deleted",
+                "tags": [],
+                "confidence": 0.5,
+                "created_at": "2026-01-02T00:00:00",
+                "info": {"project": None},
+            },
+        ),
+        ("d", {}),
+    ]:
+        db.add_node(
+            node_id,
+            "memo " + node_id,
+            {"memory_type": "LongTermMemory", "embedding": [1, 0, 0], **metadata},
+        )
+    db.add_node("a", "B memo", {"memory_type": "LongTermMemory"}, user_name="B")
+    db.add_node("k", "K memo", {"memory_type": "LongTermMemory"}, user_name="K")
+    return db
+
+
+@pytest.mark.parametrize(
+    "condition, expected",
+    [
+        ({}, ["a", "b", "c", "d"]),
+        ({"status": "activated"}, ["a"]),
+        ({"confidence": {"gt": 0.5}}, ["a"]),
+        ({"confidence": {"gte": 0.5}}, ["a", "c"]),
+        ({"confidence": {"lt": 0.5}}, ["b"]),
+        ({"confidence": {"lte": 0.5}}, ["b", "c"]),
+        ({"status": {"in": ["archived", "deleted"]}}, ["b", "c"]),
+        ({"status": {"in": []}}, []),
+        ({"tags": "x"}, ["a"]),
+        ({"tags": ["x", "y"]}, ["a"]),
+        ({"tags": []}, ["a", "b", "c"]),
+        ({"tags": {"in": ["z", "y"]}}, ["a", "b"]),
+        ({"tags": {"contains": "x"}}, ["a"]),
+        ({"tags": {"contains": []}}, []),
+        ({"file_ids": {"contains": ["f1", "f2"]}}, ["a", "b"]),
+        ({"project": "星港"}, ["a"]),
+        ({"info.project": None}, ["c"]),
+        ({"info.done": True}, ["a"]),
+        ({"info.done": 1}, []),
+        ({"info": {"=": {"project": "星港", "done": True}}}, ["a"]),
+        ({"memory": {"like": "emo a"}}, ["a"]),
+        ({"memory": {"nolike": "a"}}, ["b", "c", "d"]),
+        ({"memory": {"starts_with": "memo"}}, ["a", "b", "c", "d"]),
+        ({"memory": {"ends_with": "b"}}, ["b"]),
+        ({"created_at": "2026-01-01T00:00:00Z"}, ["a", "b"]),
+        ({"created_at": {"gte": "2026-01-01", "lte": "2026-01-01T00:00:00Z"}}, ["a", "b"]),
+        ({"created_at": {"gt": "2026-01-01T08:00:00+08:00"}}, ["c"]),
+        ({"created_at": {"lt": "2026-01-02T00:00:00Z"}}, ["a", "b"]),
+        (
+            {"or": [{"status": "deleted"}, {"and": [{"tags": "x"}, {"confidence": {"gte": 0.8}}]}]},
+            ["a", "c"],
+        ),
+        ({"or": [{"id": "a"}, {"id": "b"}], "status": "archived"}, ["b"]),
+        ({"user_name": "B"}, []),
+    ],
+)
+def test_filter_business_results_real_sql(filtered_store, condition, expected):
+    assert filtered_store.get_by_metadata([], filter=condition) == expected
+
+
+@pytest.mark.parametrize(
+    "field, op, value, expected",
+    [
+        ("status", "=", "deleted", ["c"]),
+        ("status", "in", ["archived", "deleted"], ["b", "c"]),
+        ("tags", "contains", ["x", "z"], ["a"]),
+        ("confidence", ">", 0.5, ["a"]),
+        ("confidence", ">=", 0.5, ["a", "c"]),
+        ("confidence", "<", 0.5, ["b"]),
+        ("confidence", "<=", 0.5, ["b", "c"]),
+        ("memory", "like", "emo a", ["a"]),
+        ("memory", "starts_with", "memo", ["a", "b", "c", "d"]),
+        ("memory", "ends_with", "b", ["b"]),
+        ("created_at", "=", "2026-01-01T08:00:00+08:00", ["a", "b"]),
+    ],
+)
+def test_filter_metadata_results_real_sql(filtered_store, field, op, value, expected):
+    assert filtered_store.get_by_metadata([{"field": field, "op": op, "value": value}]) == expected
+
+
+def test_filter_scopes_status_projection_and_literal_strings(filtered_store):
+    db = filtered_store
+    assert db.get_by_metadata([], status="activated") == ["a", "d"]
+    assert db.get_by_metadata([], user_name="B") == ["a"]
+    assert db.get_by_metadata([], knowledgebase_ids=["B", "K", "K"]) == [
+        "a",
+        "b",
+        "c",
+        "d",
+        "a",
+        "k",
+    ]
+    assert db.get_by_metadata([], knowledgebase_ids=[]) == ["a", "b", "c", "d"]
+    assert db.get_by_metadata(
+        [{"field": "tags", "op": "contains", "value": "y"}], filter={"status": "archived"}
+    ) == ["b"]
+    rows = db.get_all_memory_items("LongTermMemory", status="activated", include_embedding=True)
+    assert [row["id"] for row in rows] == ["a", "d"]
+    assert all(row["metadata"]["embedding"] == [1, 0, 0] for row in rows)
+    rows = db.get_all_memory_items("LongTermMemory", knowledgebase_ids=["B"])
+    assert [(row["metadata"]["user_name"], row["id"]) for row in rows] == [
+        ("A", "a"),
+        ("A", "b"),
+        ("A", "c"),
+        ("A", "d"),
+        ("B", "a"),
+    ]
+    literal = "中文🚀 %_\\ ' $memos$ ; --\n"
+    db.add_node("special", literal, {"tags": '["x"]', "status": None})
+    assert db.get_by_metadata([], filter={"memory": {"like": literal}}) == ["special"]
+    assert db.get_by_metadata([], filter={"memory": {"like": "%"}}) == ["special"]
+    assert db.get_by_metadata([], filter={"tags": {"contains": "x"}}) == ["a"]
+    assert db.get_by_metadata([], status="activated") == ["a", "d"]
+
+
+def test_filter_all_types_and_no_hidden_limit(stores):
+    db = stores()
+    types = [
+        "WorkingMemory",
+        "LongTermMemory",
+        "UserMemory",
+        "OuterMemory",
+        "ToolSchemaMemory",
+        "ToolTrajectoryMemory",
+        "RawFileMemory",
+        "SkillMemory",
+        "PreferenceMemory",
+        "Context",
+        "InsightMemory",
+        "DreamDiary",
+        "ProfileMemory",
+    ]
+    for kind in types:
+        db.add_node(kind, kind, {"memory_type": kind})
+        assert db.get_all_memory_items(kind) == [
+            {"id": kind, "memory": kind, "metadata": {"memory_type": kind}}
+        ]
+    db.add_nodes_batch(
+        [
+            {"id": f"n{i:03}", "memory": "", "metadata": {"memory_type": "LongTermMemory"}}
+            for i in range(105)
+        ]
+    )
+    assert len(db.get_all_memory_items("LongTermMemory")) == 106
+
+
+def test_filter_soft_delete_and_restore_preserve_identity_graph_and_vector(
+    filtered_store, database
+):
+    db = filtered_store
+    db.add_edge("a", "d", "R")
+    admin, _ = database
+    before = _query(
+        admin, "SELECT id FROM memos_graph.\"Memory\" WHERE scope='A' AND business_id='a'"
+    )
+    db.update_node("a", {"status": "deleted", "evolve_to": ["d"]})
+    assert db.get_by_metadata([], status="activated") == ["d"]
+    assert db.get_by_metadata([], status="deleted") == ["a", "c"]
+    node = db.get_node("a", include_embedding=True)
+    assert node["memory"] == "memo a" and node["metadata"]["embedding"] == [1, 0, 0]
+    assert node["metadata"]["evolve_to"] == ["d"]
+    assert db.get_neighbors_by_tag(["x"], []) == []
+    assert db.edge_exists("a", "d", "R")
+    db.update_node("a", {"status": "activated"})
+    assert db.get_by_metadata([], status="activated") == ["a", "d"]
+    assert [node["id"] for node in db.get_neighbors_by_tag(["x"], [])] == ["a"]
+    assert (
+        _query(admin, "SELECT id FROM memos_graph.\"Memory\" WHERE scope='A' AND business_id='a'")
+        == before
+    )
+    assert db.get_node("a", user_name="B")["memory"] == "B memo"
+
+
+@pytest.mark.parametrize(
+    "selector, expected",
+    [
+        ({"memory_ids": ["a", "a", "missing"]}, ["b", "c", "d"]),
+        ({"file_ids": ["f2"]}, ["c", "d"]),
+        ({"filter": {"status": {"in": ["archived", "deleted"]}}}, ["a", "d"]),
+    ],
+)
+def test_filter_hard_delete_counts_edges_and_scope(filtered_store, database, selector, expected):
+    db = filtered_store
+    db.add_edge("a", "b", "R")
+    db.add_edge("b", "c", "R")
+    db.add_edge("a", "a", "SELF")
+    assert db.delete_node_by_prams(**selector) == 4 - len(expected)
+    assert db.get_by_metadata([]) == expected
+    assert db.get_node("a", user_name="B")["memory"] == "B memo"
+    assert all(
+        edge["from"] in expected and edge["to"] in expected
+        for node_id in "abcd"
+        for edge in db.get_edges(node_id)
+    )
+    admin, _ = database
+    expected_edges = 1 if expected == ["b", "c", "d"] else 0
+    assert _query(admin, 'SELECT count(*) FROM memos_graph."R"') == [(expected_edges,)]
+    assert _query(admin, 'SELECT count(*) FROM memos_graph."SELF"') == [(int("a" in expected),)]
+    assert db.delete_node_by_prams(**selector) == 0
+
+
+def test_filter_delete_explicit_scopes_and_empty_selection(filtered_store):
+    db = filtered_store
+    assert db.delete_node_by_prams(memory_ids=["a"], writable_cube_ids=[]) == 0
+    assert db.delete_node_by_prams(filter={}) == 0
+    assert db.delete_node_by_prams(memory_ids=["a"], writable_cube_ids=["B", "B", "K"]) == 1
+    assert db.get_node("a") is not None
+    assert db.get_node("k", user_name="K") is not None
+    assert (
+        db.delete_node_by_prams(
+            filter={"memory_type": "LongTermMemory"}, writable_cube_ids=["A", "K"]
+        )
+        == 5
+    )
+    assert db.get_by_metadata([], knowledgebase_ids=["B", "K"]) == []
+
+
+def test_filter_delete_batch_rollback_and_connection_recovery(filtered_store, database):
+    db = filtered_store
+    admin, _ = database
+    db.add_edge("a", "b", "R")
+    _query(
+        admin,
+        "CREATE FUNCTION public.memos_filter_reject() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.business_id='b' THEN RAISE EXCEPTION 'synthetic batch reject'; END IF; RETURN OLD; END $$",
+    )
+    _query(
+        admin,
+        'CREATE TRIGGER memos_filter_reject BEFORE DELETE ON memos_graph."Memory" FOR EACH ROW EXECUTE PROCEDURE public.memos_filter_reject()',
+    )
+    try:
+        with pytest.raises(GraphDBError) as error:
+            db.delete_node_by_prams(file_ids=["f2"])
+        assert error.value.__cause__.pgcode == "P0001"
+        assert db.get_by_metadata([]) == ["a", "b", "c", "d"]
+        assert db.edge_exists("a", "b", "R")
+    finally:
+        _query(admin, 'DROP TRIGGER memos_filter_reject ON memos_graph."Memory"')
+        _query(admin, "DROP FUNCTION public.memos_filter_reject()")
+    assert db.delete_node_by_prams(file_ids=["f2"]) == 2
+
+
+def test_filter_invalid_stored_time_is_not_empty_success(filtered_store):
+    db = filtered_store
+    db.add_node("bad", "", {"created_at": "broken"})
+    with pytest.raises(GraphDBError):
+        db.get_by_metadata([], filter={"created_at": {"gte": "2026-01-01"}})
+    assert db.get_by_metadata([], filter={"id": "bad"}) == ["bad"]
+
+
+def test_filter_age_fraction_round_trip_preserves_strings(stores):
+    db = stores()
+    metadata = {
+        "confidence": 0.8,
+        "negative": -0.2,
+        "info": {"nested": [0.125, -0.125]},
+        "background": 'literal .8, -.2 and "quoted: .8"; slash \\ .7',
+    }
+    db.add_node("fraction", "text: .8 and -.2", metadata)
+    assert db.get_node("fraction") == {
+        "id": "fraction",
+        "memory": "text: .8 and -.2",
+        "metadata": metadata,
+    }
+    db.update_node("fraction", {"status": "deleted"})
+    assert db.get_node("fraction")["metadata"] == {**metadata, "status": "deleted"}
+
+
+def test_filter_nonmatching_types_null_and_structured_values(stores):
+    db = stores()
+    db.add_node("a", "", {"info": {"value": None}, "confidence": "0.8", "tags": "x"})
+    db.add_node("b", "", {"info": "serialized or invalid", "confidence": True, "tags": {"x": 1}})
+    db.add_node("c", "", {"info": {"value": 1.0}, "confidence": -0.2, "tags": ["x"]})
+    db.add_node("d", "", {"info": {"value": "1"}, "confidence": None, "tags": None})
+    assert db.get_by_metadata([], filter={"value": {"in": [None, 1]}}) == ["a", "c"]
+    assert db.get_by_metadata([], filter={"value": {"in": []}}) == []
+    assert db.get_by_metadata([], filter={"confidence": {"lt": 0}}) == ["c"]
+    assert db.get_by_metadata([], filter={"tags": {"contains": "x"}}) == ["c"]
+    assert db.get_by_metadata([], filter={"confidence": {"like": "0.8"}}) == ["a"]
+    assert db.get_by_metadata([], filter={"confidence": {"nolike": "no"}}) == ["a"]
+    assert db.get_all_memory_items("missing", filter={"id": "a"}) == []
+
+
+def test_filter_physical_scope_and_quoted_explicit_scope(stores):
+    db = stores(use_multi_db=True, user_name=None)
+    db.add_node("id", "physical", {"memory_type": "Context"})
+    quoted = " scope ' $memos$ -- 中文 "
+    db.add_node("id", "quoted", {"memory_type": "Context"}, user_name=quoted)
+    assert db.get_by_metadata([]) == ["id"]
+    assert db.get_all_memory_items("Context") == [
+        {"id": "id", "memory": "physical", "metadata": {"memory_type": "Context"}}
+    ]
+    assert db.get_by_metadata([], user_name=quoted) == ["id"]
+    assert db.delete_node_by_prams(memory_ids=["id"]) == 1
+    assert db.get_by_metadata([]) == []
+    assert db.get_node("id", user_name=quoted)["memory"] == "quoted"
+    assert db.delete_node_by_prams(memory_ids=["id"], writable_cube_ids=[quoted]) == 1
+
+
+@pytest.mark.parametrize("operation", ["metadata", "list", "delete"])
+def test_filter_permission_failure_restores_connection(filtered_store, database, operation):
+    db = filtered_store
+    admin, config = database
+    _query(
+        admin,
+        sql.SQL('REVOKE SELECT ON memos_graph."Memory" FROM {}').format(
+            sql.Identifier(config.user)
+        ),
+    )
+    try:
+        with pytest.raises(GraphDBError) as error:
+            if operation == "metadata":
+                db.get_by_metadata([])
+            elif operation == "list":
+                db.get_all_memory_items("LongTermMemory")
+            else:
+                db.delete_node_by_prams(memory_ids=["a"])
+        assert error.value.__cause__.pgcode == "42501"
+    finally:
+        _query(
+            admin,
+            sql.SQL('GRANT SELECT ON memos_graph."Memory" TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    assert db.get_by_metadata([]) == ["a", "b", "c", "d"]
+
+
+def test_filter_delete_and_edge_creation_are_serialized(filtered_store, database):
+    db = filtered_store
+    db.add_edge("a", "b", "R")
+    barrier = threading.Barrier(2)
+
+    def remove():
+        barrier.wait(timeout=5)
+        return db.delete_node_by_prams(file_ids=["f1"])
+
+    def connect():
+        barrier.wait(timeout=5)
+        db.add_edge("a", "c", "R")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        removed, connected = executor.submit(remove), executor.submit(connect)
+        assert removed.result(timeout=10) == 1
+        connected.result(timeout=10)
+    assert db.get_by_metadata([]) == ["b", "c", "d"]
+    assert _query(database[0], 'SELECT count(*) FROM memos_graph."R"') == [(0,)]

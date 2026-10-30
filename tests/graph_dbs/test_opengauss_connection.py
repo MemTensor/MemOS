@@ -12,11 +12,12 @@ import pytest
 
 from memos.configs.graph_db import OpenGaussGraphDBConfig
 from memos.exceptions import ConfigurationError
+from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
 
 
 @pytest.fixture
 def pool_case(monkeypatch):
-    module = importlib.import_module("memos.graph_dbs._opengauss_connection")
+    module = importlib.import_module("memos.graph_dbs.opengauss")
     config = OpenGaussGraphDBConfig(
         host="db",
         user="memos",
@@ -31,7 +32,8 @@ def pool_case(monkeypatch):
     conn.closed = 0
     factory = MagicMock(return_value=raw)
     monkeypatch.setattr(module, "ThreadedConnectionPool", factory)
-    pool = module.OpenGaussConnectionPool(config)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_init_schema", lambda self: None)
+    pool = PartialOpenGaussGraphDB(config)
     return module, pool, raw, conn, factory
 
 
@@ -42,7 +44,7 @@ def test_pool_parameters_and_prepared_session(pool_case):
     assert kwargs["connect_timeout"] == 10
     assert kwargs["dbname"] == "test"
     assert kwargs["application_name"] == "memos-opengauss"
-    with pool.transaction() as borrowed:
+    with pool._get_connection() as borrowed:
         assert borrowed is conn
         cur = conn.cursor.return_value.__enter__.return_value
         cur.execute.assert_any_call("RESET ALL")
@@ -75,7 +77,7 @@ def test_failures_are_not_replayed_and_do_not_leak_slots(pool_case, stage):
         cursor.fetchone.side_effect = error
     elif stage == "commit":
         conn.commit.side_effect = error
-    with pytest.raises(module.GraphDBError) as caught, pool.transaction():
+    with pytest.raises(module.GraphDBError) as caught, pool._get_connection():
         if stage == "body":
             raise error
         if stage == "fetch":
@@ -91,7 +93,7 @@ def test_failures_are_not_replayed_and_do_not_leak_slots(pool_case, stage):
 @pytest.mark.parametrize("error", [ValueError("bad input"), KeyboardInterrupt(), SystemExit(3)])
 def test_non_driver_exceptions_and_cancellation_preserve_identity(pool_case, error):
     _, pool, raw, conn, _ = pool_case
-    with pytest.raises(type(error)) as caught, pool.transaction():
+    with pytest.raises(type(error)) as caught, pool._get_connection():
         raise error
     assert caught.value is error
     assert conn.rollback.call_count == 2
@@ -109,7 +111,7 @@ def test_cleanup_failures_keep_original_error(pool_case, put_fails, close_fails)
         raw.putconn.side_effect = module.psycopg2.pool.PoolError("return")
     if close_fails:
         conn.close.side_effect = module.psycopg2.Error("close")
-    with pytest.raises(ValueError) as caught, pool.transaction():
+    with pytest.raises(ValueError) as caught, pool._get_connection():
         raise original
     assert caught.value is original
     raw.putconn.assert_called_once_with(conn, close=True)
@@ -119,7 +121,7 @@ def test_cleanup_failures_keep_original_error(pool_case, put_fails, close_fails)
 def test_return_failure_after_commit_is_observable(pool_case):
     module, pool, raw, conn, _ = pool_case
     raw.putconn.side_effect = module.psycopg2.pool.PoolError("return")
-    with pytest.raises(module.GraphDBError, match="return"), pool.transaction():
+    with pytest.raises(module.GraphDBError, match="return"), pool._get_connection():
         pass
     conn.commit.assert_called_once()
     conn.close.assert_called_once()
@@ -132,11 +134,11 @@ def test_return_failure_stops_admission_and_drains_existing_owner(pool_case):
     other.closed = 0
     raw.getconn.side_effect = [conn, other]
     raw.putconn.side_effect = [module.psycopg2.pool.PoolError("return"), None]
-    with pool.transaction(), pytest.raises(module.GraphDBError, match="closed"):
-        with pytest.raises(module.GraphDBError, match="return"), pool.transaction():
+    with pool._get_connection(), pytest.raises(module.GraphDBError, match="closed"):
+        with pytest.raises(module.GraphDBError, match="return"), pool._get_connection():
             pass
         raw.closeall.assert_not_called()
-        pool.ensure_open()
+        pool._ensure_open()
     raw.closeall.assert_called_once()
     pool.close()
     raw.closeall.assert_called_once()
@@ -146,7 +148,7 @@ def test_shutdown_failure_during_return_cleanup_preserves_return_error(pool_case
     module, pool, raw, _, _ = pool_case
     raw.putconn.side_effect = module.psycopg2.pool.PoolError("return")
     raw.closeall.side_effect = module.psycopg2.Error("shutdown")
-    with pytest.raises(module.GraphDBError, match="return"), pool.transaction():
+    with pytest.raises(module.GraphDBError, match="return"), pool._get_connection():
         pass
     raw.closeall.assert_called_once()
     with pytest.raises(module.GraphDBError, match="close"):
@@ -156,7 +158,7 @@ def test_shutdown_failure_during_return_cleanup_preserves_return_error(pool_case
 def test_closed_connection_is_discarded(pool_case):
     module, pool, raw, conn, _ = pool_case
     conn.closed = 1
-    with pytest.raises(module.GraphDBError, match="closed connection"), pool.transaction():
+    with pytest.raises(module.GraphDBError, match="closed connection"), pool._get_connection():
         pytest.fail("must not yield a closed connection")
     raw.putconn.assert_called_once_with(conn, close=True)
 
@@ -165,7 +167,7 @@ def test_wait_timeout_does_not_borrow(pool_case):
     module, pool, raw, _, _ = pool_case
     pool._semaphore = MagicMock()
     pool._semaphore.acquire.return_value = False
-    with pytest.raises(module.GraphDBError, match="wait timed out"), pool.transaction():
+    with pytest.raises(module.GraphDBError, match="wait timed out"), pool._get_connection():
         pytest.fail("must not yield")
     raw.getconn.assert_not_called()
 
@@ -180,7 +182,7 @@ def test_close_during_admission_releases_slot(pool_case):
 
     gate.acquire.side_effect = close_before_admission
     pool._semaphore = gate
-    with pytest.raises(module.GraphDBError, match="closed"), pool.transaction():
+    with pytest.raises(module.GraphDBError, match="closed"), pool._get_connection():
         pytest.fail("must not yield")
     gate.release.assert_called_once()
     raw.getconn.assert_not_called()
@@ -191,7 +193,7 @@ def test_close_is_idempotent_and_blocks_new_borrows(pool_case):
     pool.close()
     pool.close()
     raw.closeall.assert_called_once()
-    with pytest.raises(module.GraphDBError, match="closed"), pool.transaction():
+    with pytest.raises(module.GraphDBError, match="closed"), pool._get_connection():
         pytest.fail("must not yield")
 
 
@@ -206,7 +208,7 @@ def test_close_waits_for_owned_transaction(pool_case, monkeypatch):
 
     monkeypatch.setattr(pool._condition, "wait", wait)
     with ThreadPoolExecutor(1) as executor:
-        with pool.transaction():
+        with pool._get_connection():
             closing = executor.submit(pool.close)
             assert waiting.wait(5)
             raw.closeall.assert_not_called()
@@ -228,7 +230,7 @@ def test_constructor_driver_failure_is_sanitized(pool_case, monkeypatch):
     error = module.psycopg2.OperationalError("synthetic-sensitive-detail")
     factory.side_effect = error
     with pytest.raises(module.GraphDBError) as caught:
-        module.OpenGaussConnectionPool(pool.config)
+        PartialOpenGaussGraphDB(pool.config)
     assert caught.value.__cause__ is error
     assert "synthetic-sensitive-detail" not in str(caught.value)
 
@@ -245,4 +247,4 @@ def test_optional_driver_import_has_install_guidance(pool_case, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", blocked)
     namespace = runpy.run_path(module.__file__)
     with pytest.raises(ConfigurationError, match=r"MemoryOS\[tree-mem\]"):
-        namespace["OpenGaussConnectionPool"](pool.config)
+        namespace["OpenGaussGraphDB"].__init__(object(), pool.config)

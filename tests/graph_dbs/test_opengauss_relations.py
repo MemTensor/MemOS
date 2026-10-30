@@ -8,15 +8,19 @@ import pytest
 
 from memos.configs.graph_db import OpenGaussGraphDBConfig
 from memos.exceptions import GraphDBError
-from memos.graph_dbs import _opengauss_store as module
+from memos.graph_dbs import opengauss as module
+from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
 
 
 @pytest.fixture
 def store(monkeypatch):
     pool = MagicMock()
     cursor = pool.transaction.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
-    monkeypatch.setattr(module, "OpenGaussConnectionPool", MagicMock(return_value=pool))
-    monkeypatch.setattr(module.OpenGaussNodeStore, "_initialize", lambda self: None)
+    monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", pool.transaction)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_ensure_open", pool.ensure_open)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "close", pool.close)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_init_schema", lambda self: None)
     config = OpenGaussGraphDBConfig(
         host="localhost",
         user="memos",
@@ -25,7 +29,7 @@ def store(monkeypatch):
         user_name="A",
         embedding_dimension=3,
     )
-    return module.OpenGaussNodeStore(config), pool, cursor
+    return PartialOpenGaussGraphDB(config), pool, cursor
 
 
 @pytest.mark.parametrize("method", ["add_edge", "delete_edge"])

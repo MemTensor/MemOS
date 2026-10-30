@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from memos.configs.graph_db import OpenGaussGraphDBConfig
+from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
 
 
 @pytest.fixture
@@ -26,13 +27,16 @@ def config():
 
 @pytest.fixture
 def store(config, monkeypatch):
-    module = importlib.import_module("memos.graph_dbs._opengauss_store")
+    module = importlib.import_module("memos.graph_dbs.opengauss")
     pool = MagicMock()
     connection = pool.transaction.return_value.__enter__.return_value
     cursor = connection.cursor.return_value.__enter__.return_value
-    monkeypatch.setattr(module, "OpenGaussConnectionPool", MagicMock(return_value=pool))
-    monkeypatch.setattr(module.OpenGaussNodeStore, "_initialize", lambda self: None)
-    return module.OpenGaussNodeStore(config), pool, cursor
+    monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", pool.transaction)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_ensure_open", pool.ensure_open)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "close", pool.close)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_init_schema", lambda self: None)
+    return PartialOpenGaussGraphDB(config), pool, cursor
 
 
 def test_upsert_preserves_input_and_binds_scope_and_payload(store):
@@ -336,12 +340,15 @@ def _columns():
 
 @pytest.fixture
 def schema_case(config, monkeypatch):
-    module = importlib.import_module("memos.graph_dbs._opengauss_store")
+    module = importlib.import_module("memos.graph_dbs.opengauss")
     pool = MagicMock()
     cursor = pool.transaction.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
     cursor.fetchone.side_effect = [(1,), ("v", "memos_graph", "Memory"), (1,)]
     cursor.fetchall.return_value = _columns()
-    monkeypatch.setattr(module, "OpenGaussConnectionPool", MagicMock(return_value=pool))
+    monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", pool.transaction)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_ensure_open", pool.ensure_open)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "close", pool.close)
     return module, config, pool, cursor
 
 
@@ -351,7 +358,7 @@ def test_initialization_creates_missing_graph_or_label_without_private_id_helper
 ):
     module, config, pool, cursor = schema_case
     cursor.fetchone.side_effect = [graph, None, (1,)]
-    db = module.OpenGaussNodeStore(config)
+    db = PartialOpenGaussGraphDB(config)
     assert db.config is not config
     queries = [call.args[0] for call in cursor.execute.call_args_list]
     assert any("pg_advisory_xact_lock" in query for query in queries)
@@ -363,7 +370,7 @@ def test_initialization_creates_missing_graph_or_label_without_private_id_helper
 
 def test_compatible_initialization_does_not_run_destructive_ddl(schema_case):
     module, config, _, cursor = schema_case
-    module.OpenGaussNodeStore(config)
+    PartialOpenGaussGraphDB(config)
     assert not any(
         "CREATE " in call.args[0] or "ALTER " in call.args[0] or "DROP " in call.args[0]
         for call in cursor.execute.call_args_list
@@ -384,7 +391,7 @@ def test_incompatible_schema_is_rejected_and_pool_closed(schema_case, failure):
     else:
         cursor.fetchone.side_effect = [(1,), ("v", "memos_graph", "Memory"), None]
     with pytest.raises(GraphDBError, match="incompatible"):
-        module.OpenGaussNodeStore(config)
+        PartialOpenGaussGraphDB(config)
     pool.close.assert_called_once()
 
 
@@ -397,8 +404,8 @@ def test_initialization_failure_preserves_original_even_if_close_fails(schema_ca
     def fail(self):
         raise error
 
-    monkeypatch.setattr(module.OpenGaussNodeStore, "_initialize", fail)
+    monkeypatch.setattr(PartialOpenGaussGraphDB, "_init_schema", fail)
     pool.close.side_effect = GraphDBError("cleanup")
     with pytest.raises(ValueError) as caught:
-        module.OpenGaussNodeStore(config)
+        PartialOpenGaussGraphDB(config)
     assert caught.value is error
