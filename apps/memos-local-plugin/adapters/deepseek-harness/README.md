@@ -8,10 +8,11 @@ modifying the DSH repository.
 
 > [!IMPORTANT]
 > DeepSeek Harness is currently a developer preview. The initial compatibility
-> target for this adapter is DSH `0.1.0-rc.5`; record the exact DSH version in
+> target for this adapter was DSH `0.1.0-rc.5`; record the exact DSH version in
 > every release's validation because later preview releases may require adapter
-> changes. Unit compilation and contract tests currently use the published DSH
-> `0.1.0-rc.6` packages; the end-to-end host below is the rc.5 source checkout.
+> changes. Unit compilation and contract tests currently run against the
+> published DSH `0.2.1-rc.2` packages and are re-checked against
+> `0.1.0-rc.6`; the end-to-end host below is the rc.5 source checkout.
 
 ## How it works
 
@@ -569,11 +570,11 @@ errors and are not fail-open.
 
 ## Known limitations
 
-1. **Developer-preview compatibility.** The initial compatibility target is
-   DSH `0.1.0-rc.5`; verify the packaged artifact against that exact host
-   before publishing results. Its optional DSH peer range is
-   `>=0.1.0-rc.5 <0.2.0`, but that range is not a guarantee across preview
-   breaking changes.
+1. **Developer-preview compatibility.** The initial compatibility target was
+   DSH `0.1.0-rc.5`; verify the packaged artifact against the exact host
+   before publishing results. Its optional DSH peer range now also admits the
+   V4 session-format preview lines (`0.1.7-rc.x`, `0.2.0-rc.x`, `0.2.1-rc.x`),
+   but that range is not a guarantee across preview breaking changes.
 2. **Eventual consistency and abrupt-crash replay gap.** Per-turn foreground
    recall never waits for prior capture, relation, or intent work. A completed
    background result is visible to later automatic recalls and explicit tool
@@ -609,7 +610,14 @@ errors and are not fail-open.
    is `user` triggers one automatic recall, including greetings. Re-entry in the
    same logical turn is de-duplicated; plugin and tool messages cannot trigger
    it.
-7. **Background recovery has no owning route.** In opt-in full-memory mode,
+7. **Producer-owned message sources.** Session format V4 rejects the retired V3
+   wrapper `source: { kind: "plugin", plugin: "<name>" }` and admits only a
+   producer-owned kind. Both runtime writers therefore emit
+   `source: { kind: "plugin:memos-local-memory" }`, which is the same value
+   DSH's V3→V4 migration derives for historical sessions. The recall message
+   additionally keeps `form: "recall"`; host-LLM messages omit `form` because
+   they are auxiliary MemOS calls, not DSH conversation context.
+8. **Background recovery has no owning route.** In opt-in full-memory mode,
    startup stale/dirty recovery and the 10-minute dirty-episode rescore run
    outside any DSH request scope. When the effective MemOS provider is `host`,
    the adapter disables those autonomous jobs instead of borrowing an

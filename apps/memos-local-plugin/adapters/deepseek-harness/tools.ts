@@ -1,7 +1,7 @@
 /** Read-oriented MemOS tools exposed through DeepSeek Harness. */
 
 import type { Context } from "@deepseek-ai/cordis";
-import { defineTool, type JsonValue } from "@deepseek-ai/dsh-tools";
+import { defineTool } from "@deepseek-ai/dsh-tools";
 
 import type {
   RetrievalQueryDTO,
@@ -24,6 +24,18 @@ import {
   isDeepSeekHarnessTimeout,
   waitForDeepSeekHarnessDeadline,
 } from "./deadline.js";
+
+/**
+ * Canonical lossless JSON value accepted by DSH tool output.
+ *
+ * DSH moved this type between packages across preview releases
+ * (`dsh-session` re-export through `dsh-tools` before 0.2, `dsh-util-values`
+ * after). Declaring the shape locally keeps the adapter compiling against
+ * both without pinning the plugin to one preview line.
+ */
+type JsonValue = null | boolean | number | string | JsonValue[] | {
+  [key: string]: JsonValue;
+};
 
 export interface DeepSeekHarnessToolsOptions {
   core: MemoryCore;

@@ -5,7 +5,15 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
-- `2.0.16` (unreleased) — Add the out-of-tree DeepSeek Harness Cordis
+- `2.0.16` (unreleased) — **Fix:** DSH session format V4 rejected every turn
+  with "format v4 message requires a producer-owned source kind" because the
+  adapter still wrote the retired V3 source wrapper `kind: "plugin"` on both
+  runtime message paths. Recall messages and host-LLM user messages now carry
+  the producer-owned `kind: "plugin:memos-local-memory"` (the same value DSH's
+  own V3→V4 migration derives) and the optional DSH peer range now admits the
+  V4 preview lines (`0.1.7-rc.x`, `0.2.0-rc.x`, `0.2.1-rc.x`), so `dsh plugin`
+  no longer needs `allow-version` on current hosts.
+  Add the out-of-tree DeepSeek Harness Cordis
   bundle with capture, six memory tools, DSH profile-aware storage, and one
   automatic recall for every accepted, non-empty direct-user turn. Same-turn
   re-entry is de-duplicated, while greetings and restored-session turns receive

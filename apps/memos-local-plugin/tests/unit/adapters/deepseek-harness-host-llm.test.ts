@@ -176,7 +176,7 @@ describe("DeepSeek Harness host LLM bridge", () => {
         {
           role: "user",
           content: [{ type: "text", text: "Question" }],
-          source: { kind: "plugin", plugin: "memos-local-memory" },
+          source: { kind: "plugin:memos-local-memory" },
         },
         {
           role: "assistant",
