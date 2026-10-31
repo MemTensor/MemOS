@@ -160,7 +160,7 @@ class MemosApiClient:
                     "messages": batch_messages,
                     "user_id": user_id,
                     "mem_cube_id": user_id,
-                    "conversation_id": conv_id,
+                    "session_id": conv_id,
                 }
             )
             response = requests.request("POST", url, data=payload, headers=self.headers)
