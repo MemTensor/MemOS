@@ -169,7 +169,7 @@ async function callLLMOnceAnthropic(
   const endpoint = normalizeAnthropicEndpoint(
     cfg.endpoint ?? "https://api.anthropic.com/v1/messages",
   );
-  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const model = cfg.model ?? "claude-haiku-4-5-20251001";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "x-api-key": cfg.apiKey ?? "",
