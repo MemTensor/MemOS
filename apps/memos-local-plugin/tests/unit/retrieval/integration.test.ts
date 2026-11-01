@@ -456,6 +456,108 @@ describe("retrieval/integration", () => {
     );
   });
 
+  it("caps the LLM filter budget at algorithm.retrieval.llmFilterTimeoutMs (#2499)", async () => {
+    const captured: Array<{ timeoutMs?: number }> = [];
+    const llm: any = {
+      completeJson: async (_messages: unknown, opts: { timeoutMs?: number }) => {
+        captured.push(opts);
+        return { value: { selected: [1], sufficient: true }, servedBy: "fake" };
+      },
+    };
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+          llmFilterTimeoutMs: 4_321,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s1" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+      { deadlineAt: Date.now() + 60_000 },
+    );
+
+    expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.timeoutMs).toBe(4_321);
+  });
+
+  it("keeps the legacy 2 s default filter budget when llmFilterTimeoutMs is unset (#2499)", async () => {
+    const captured: Array<{ timeoutMs?: number }> = [];
+    const llm: any = {
+      completeJson: async (_messages: unknown, opts: { timeoutMs?: number }) => {
+        captured.push(opts);
+        return { value: { selected: [1], sufficient: true }, servedBy: "fake" };
+      },
+    };
+    const res = await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s1" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+      { deadlineAt: Date.now() + 60_000 },
+    );
+
+    expect(res.stats.llmFilterOutcome).toBe("llm_filtered");
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.timeoutMs).toBe(2_000);
+  });
+
+  it("still clamps the filter budget to the remaining retrieval deadline (#2499)", async () => {
+    const captured: Array<{ timeoutMs?: number }> = [];
+    const llm: any = {
+      completeJson: async (_messages: unknown, opts: { timeoutMs?: number }) => {
+        captured.push(opts);
+        return { value: { selected: [1], sufficient: true }, servedBy: "fake" };
+      },
+    };
+    const deadlineAt = Date.now() + 250;
+    await turnStartRetrieve(
+      {
+        ...makeDeps(handle),
+        llm,
+        config: {
+          ...makeDeps(handle).config,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+          llmFilterTimeoutMs: 4_321,
+        },
+      },
+      {
+        reason: "turn_start",
+        agent: "openclaw",
+        sessionId: "s1" as SessionId,
+        userText: "run docker compose",
+        ts: NOW as never,
+      },
+      { deadlineAt },
+    );
+
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.timeoutMs!).toBeGreaterThan(0);
+    expect(captured[0]!.timeoutMs!).toBeLessThanOrEqual(250);
+  });
+
   it("can defer the local LLM pass for one final merged filter", async () => {
     let filterCalls = 0;
     const llm: any = {

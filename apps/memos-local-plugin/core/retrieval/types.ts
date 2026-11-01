@@ -320,6 +320,15 @@ export interface RetrievalConfig {
    * window pays for itself).
    */
   llmFilterCandidateBodyChars?: number;
+  /**
+   * Wall-clock budget (ms) for a single LLM filter call. Always clamped
+   * by the retrieval deadline when one is set. Default 2000 (2 s) fits
+   * hosted models; self-hosted OpenAI-compatible endpoints on consumer
+   * hardware regularly need more, and with the old hard-coded cap every
+   * turn_start aborted the local call and fell back to the host model
+   * (issue #2499).
+   */
+  llmFilterTimeoutMs?: number;
   /** Low-cost mode: retrieve raw trace memories only. */
   lightweightMemory?: boolean;
   /**

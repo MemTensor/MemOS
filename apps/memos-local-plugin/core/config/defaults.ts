@@ -319,6 +319,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       // hits before injection.
       llmFilterMinCandidates: 2,
       llmFilterCandidateBodyChars: 500,
+      llmFilterTimeoutMs: 2_000,
       // Default 0 — no time-window bound, keeping the legacy
       // brute-force scan behaviour for fresh installs that haven't
       // grown past the threshold where the bound starts paying off.

@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { MemosError } from "../../../agent-contract/errors.js";
+import { MemosError, ERROR_CODES } from "../../../agent-contract/errors.js";
 import { decodeSse, httpPostJson, httpPostStream } from "../../../core/llm/fetcher.js";
 import { initTestLogger } from "../../../core/logger/index.js";
 import type { LlmProviderLogger } from "../../../core/llm/types.js";
@@ -80,6 +80,61 @@ describe("llm/fetcher", () => {
     await expect(pending).rejects.toBeInstanceOf(MemosError);
     expect(f).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+
+  /** Fetch that hangs forever and rejects with the merged signal's
+   *  reason when it fires — mirrors undici's rejection semantics. */
+  function hangingFetch() {
+    const f = vi.fn((_url: unknown, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal?.reason),
+          { once: true },
+        );
+      }),
+    );
+    vi.stubGlobal("fetch", f);
+    return f;
+  }
+
+  it("classifies an internal per-attempt timeout as LLM_TIMEOUT, not LLM_UNAVAILABLE (#2499)", async () => {
+    hangingFetch();
+    // A caller signal must be present for `mergeSignals` to run — without
+    // one, the raw `AbortSignal.timeout()` reaches fetch and its
+    // `TimeoutError` reason survives. The retrieval filter always passes
+    // one, which is how the reason got flattened into a bare `AbortError`
+    // and surfaced as `llm_unavailable` (issue #2499).
+    const ctrl = new AbortController();
+
+    await expect(
+      httpPostJson({
+        url: "https://x",
+        body: {},
+        timeoutMs: 50,
+        maxRetries: 0,
+        signal: ctrl.signal,
+        provider: "openai_compatible",
+        log: nullLog(),
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.LLM_TIMEOUT });
+  });
+
+  it("still reports caller cancellation distinctly from a budget timeout (#2499)", async () => {
+    const ctrl = new AbortController();
+    hangingFetch();
+
+    const pending = httpPostJson({
+      url: "https://x",
+      body: {},
+      timeoutMs: 5_000,
+      maxRetries: 0,
+      signal: ctrl.signal,
+      provider: "openai_compatible",
+      log: nullLog(),
+    });
+    ctrl.abort();
+    await expect(pending).rejects.toMatchObject({ message: /was cancelled/ });
   });
 
   it("defers a long Retry-After from a 503 without retrying early", async () => {
