@@ -2609,6 +2609,305 @@ algorithm:
     }
   });
 
+  it("collects a closed episode dirtied above the stored scan cursor in a single pass (issue #2459 gap 1)", async () => {
+    // The persisted cursor only ever moves away from the newest rows, so
+    // an episode that becomes dirty after the cursor paged past its
+    // position used to wait until the walk reached the end of the closed
+    // set and reset (~70 min on the reporter's DB, hours on #1787's).
+    // One collect pass must pick it up via a bounded newest-first page.
+    const base = 1_000;
+    db!.repos.sessions.upsert({
+      id: "se_cursor_starve",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: base,
+      lastSeenAt: base,
+      meta: {},
+    });
+    for (let i = 0; i < 6; i++) {
+      const startedAt = base + i;
+      const dirty = i === 5;
+      db!.repos.episodes.insert({
+        id: `ep_cursor_${i}`,
+        sessionId: "se_cursor_starve",
+        ownerAgentKind: "openclaw",
+        ownerProfileId: "main",
+        ownerWorkspaceId: null,
+        startedAt,
+        endedAt: startedAt + 1,
+        traceIds: [`tr_cursor_${i}`] as never,
+        rTask: dirty ? null : 1,
+        status: "closed",
+        meta: {
+          closeReason: "finalized",
+          ...(dirty
+            ? { rewardDirty: { failedAttempts: 0, lastFailureAt: 0 } }
+            : {}),
+        },
+      });
+    }
+    db!.repos.traces.insert({
+      id: "tr_cursor_5",
+      episodeId: "ep_cursor_5",
+      sessionId: "se_cursor_starve",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: base + 6,
+      userText: "光标饥饿测试：新变脏的 episode 应当立刻被收集。",
+      agentText: "好的，新一轮扫描应包含它。",
+      summary: null,
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      share: null,
+      turnId: base + 6,
+      schemaVersion: 1,
+    });
+    // Park the cursor below the newest row: the downward walk can only
+    // ever see episodes older than `ep_cursor_2`, so `ep_cursor_5` sits
+    // "above" the cursor and is invisible to the historic walk.
+    db!.repos.kv.set("pipeline.dirty_closed_scan_cursor.v1", {
+      startedAt: base + 2,
+      id: "ep_cursor_2",
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "issue2459-cursor-starve",
+    );
+
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const episode = db!.repos.episodes.getById("ep_cursor_5" as never);
+    expect(episode).toBeDefined();
+    // Collected on this very pass: phase-1 stamps the row before its
+    // reward chain runs.
+    expect(episode?.meta?.recoveryReason).toBe(
+      RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+    );
+  });
+
+  it("still settles phase-2 per episode when shutdown cancels the drain mid-flush (issue #2459 gap 2)", async () => {
+    // `recoverDirtyClosedEpisodes` used to return right after
+    // `await handle.flush()` when `startupRecoveryCancelled` was set,
+    // skipping the accounting pass for the whole batch: successes kept
+    // `rewardDirty` (re-run later, duplicate LLM spend) and failures
+    // lost their backoff counters. Settlement must happen even when the
+    // drain was cancelled.
+    const base = Date.now() - 5_000;
+    db!.repos.sessions.upsert({
+      id: "se_cancel_drain",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: base,
+      lastSeenAt: base,
+      meta: {},
+    });
+    for (const suffix of ["a", "b"]) {
+      const id = `ep_cancel_${suffix}`;
+      const startedAt = base + (suffix === "a" ? 0 : 10);
+      db!.repos.episodes.insert({
+        id,
+        sessionId: "se_cancel_drain",
+        ownerAgentKind: "openclaw",
+        ownerProfileId: "main",
+        ownerWorkspaceId: null,
+        startedAt,
+        endedAt: startedAt + 1,
+        traceIds: [`tr_cancel_${suffix}`] as never,
+        rTask: null,
+        status: "closed",
+        meta: { closeReason: "finalized" },
+      });
+      db!.repos.traces.insert({
+        id: `tr_cancel_${suffix}`,
+        episodeId: id,
+        sessionId: "se_cancel_drain",
+        ownerAgentKind: "openclaw",
+        ownerProfileId: "main",
+        ownerWorkspaceId: null,
+        ts: startedAt + 1,
+        userText: "中断 drain 测试：取消后仍要逐条结算退避计数。",
+        agentText: "明白，结算不得整批跳过。",
+        summary: null,
+        toolCalls: [],
+        reflection: null,
+        agentThinking: null,
+        value: 0,
+        alpha: 0,
+        rHuman: null,
+        priority: 0.5,
+        tags: [],
+        errorSignatures: [],
+        vecSummary: null,
+        vecAction: null,
+        share: null,
+        turnId: startedAt + 1,
+        schemaVersion: 1,
+      });
+    }
+
+    pipeline = createPipeline(buildDeps(db!));
+    // Park the reward chain mid-drain so the recovery is provably inside
+    // `await handle.flush()` when shutdown's grace expires and flips
+    // `startupRecoveryCancelled`. The simulated LLM outage keeps both
+    // episodes dirty, so phase-2 must bump each one's backoff counters.
+    let releaseReward!: () => void;
+    const rewardGate = new Promise<void>((resolve) => {
+      releaseReward = resolve;
+    });
+    pipeline.rewardRunner.run = async () => {
+      await rewardGate;
+      throw new Error("simulated llm outage during drain");
+    };
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "issue2459-cancel-drain",
+      { startupRecoveryShutdownGraceMs: 100 },
+    );
+
+    await core.init();
+    const shutdownPromise = core.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    releaseReward();
+    await shutdownPromise;
+    await core.waitForStartupRecovery?.();
+
+    for (const suffix of ["a", "b"]) {
+      const episode = db!.repos.episodes.getById(
+        `ep_cancel_${suffix}` as never,
+      );
+      expect(episode).toBeDefined();
+      const meta = episode?.meta ?? {};
+      const rewardDirty = meta.rewardDirty as
+        | { failedAttempts?: number; lastFailureAt?: number }
+        | undefined;
+      // Settled per-episode: still dirty (LLM failed) → failedAttempts
+      // bumped 0 → 1 with a fresh lastFailureAt.
+      expect(rewardDirty?.failedAttempts).toBe(1);
+      expect(typeof rewardDirty?.lastFailureAt).toBe("number");
+    }
+  });
+
+  it("does not re-emit episodes that are still mid-drain when the periodic rescan hits (issue #2459 review)", async () => {
+    // The head-page pass re-reads the newest page every 10-minute tick.
+    // Episodes whose drain is still in flight keep their `rewardDirty`
+    // markers until phase-2 settles, so without an in-flight guard the
+    // periodic scan re-collects and re-emits the whole batch — the
+    // duplicate LLM spend gap 2 set out to eliminate. While the first
+    // drain is parked inside the reward chain, a periodic tick must not
+    // queue a second run for the same episodes.
+    const base = Date.now() - 5_000;
+    db!.repos.sessions.upsert({
+      id: "se_inflight",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: base,
+      lastSeenAt: base,
+      meta: {},
+    });
+    for (const suffix of ["a", "b"]) {
+      const id = `ep_inflight_${suffix}`;
+      const startedAt = base + (suffix === "a" ? 0 : 10);
+      db!.repos.episodes.insert({
+        id,
+        sessionId: "se_inflight",
+        ownerAgentKind: "openclaw",
+        ownerProfileId: "main",
+        ownerWorkspaceId: null,
+        startedAt,
+        endedAt: startedAt + 1,
+        traceIds: [`tr_inflight_${suffix}`] as never,
+        rTask: null,
+        status: "closed",
+        meta: { closeReason: "finalized" },
+      });
+      db!.repos.traces.insert({
+        id: `tr_inflight_${suffix}`,
+        episodeId: id,
+        sessionId: "se_inflight",
+        ownerAgentKind: "openclaw",
+        ownerProfileId: "main",
+        ownerWorkspaceId: null,
+        ts: startedAt + 1,
+        userText: "在途防重测试：drain 未结算时周期扫描不得重发。",
+        agentText: "明白，在途行跳过。",
+        summary: null,
+        toolCalls: [],
+        reflection: null,
+        agentThinking: null,
+        value: 0,
+        alpha: 0,
+        rHuman: null,
+        priority: 0.5,
+        tags: [],
+        errorSignatures: [],
+        vecSummary: null,
+        vecAction: null,
+        share: null,
+        turnId: startedAt + 1,
+        schemaVersion: 1,
+      });
+    }
+
+    pipeline = createPipeline(buildDeps(db!));
+    let rewardRuns = 0;
+    let releaseReward!: () => void;
+    const rewardGate = new Promise<void>((resolve) => {
+      releaseReward = resolve;
+    });
+    pipeline.rewardRunner.run = async () => {
+      rewardRuns++;
+      await rewardGate;
+      throw new Error("simulated llm outage during drain");
+    };
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "issue2459-inflight",
+    );
+
+    // Only hijack the 10-minute periodic interval; leave timers used by
+    // the flush chain (setImmediate / setTimeout) on the real clock.
+    vi.useFakeTimers({ toFake: ["setInterval"] });
+    try {
+      await core.init();
+      // First (startup) drain collects both episodes and parks inside
+      // the gated reward chain.
+      await vi.waitFor(() => expect(rewardRuns).toBe(2));
+
+      // One periodic tick while the drain is still in flight.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      // Give a (buggy) second collection time to run its phase-1 + flush
+      // up to the reward gate.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Still exactly one run per episode — no re-emission.
+      expect(rewardRuns).toBe(2);
+    } finally {
+      vi.useRealTimers();
+      releaseReward();
+    }
+  });
+
   it("shutdown() awaits background recovery before tearing down storage (issue #1808)", async () => {
     // If `shutdown()` did not await the background recovery promise we
     // would close SQLite while the reflect / reward listeners were
