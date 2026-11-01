@@ -815,21 +815,15 @@ export function registerIPCHandlers(): void {
     console.log('[API Key] Validation requested');
 
     try {
-      // Make a simple API call to validate the key
+      // List models instead of sending a message, so a model retirement can't fail the check
       const response = await fetchWithTimeout(
-        'https://api.anthropic.com/v1/messages',
+        'https://api.anthropic.com/v1/models',
         {
-          method: 'POST',
+          method: 'GET',
           headers: {
-            'Content-Type': 'application/json',
             'x-api-key': sanitizedKey,
             'anthropic-version': '2023-06-01',
           },
-          body: JSON.stringify({
-            model: 'claude-3-haiku-20240307',
-            max_tokens: 1,
-            messages: [{ role: 'user', content: 'test' }],
-          }),
         },
         API_KEY_VALIDATION_TIMEOUT_MS
       );
@@ -868,19 +862,13 @@ export function registerIPCHandlers(): void {
       switch (provider) {
         case 'anthropic':
           response = await fetchWithTimeout(
-            'https://api.anthropic.com/v1/messages',
+            'https://api.anthropic.com/v1/models',
             {
-              method: 'POST',
+              method: 'GET',
               headers: {
-                'Content-Type': 'application/json',
                 'x-api-key': sanitizedKey,
                 'anthropic-version': '2023-06-01',
               },
-              body: JSON.stringify({
-                model: 'claude-3-haiku-20240307',
-                max_tokens: 1,
-                messages: [{ role: 'user', content: 'test' }],
-              }),
             },
             API_KEY_VALIDATION_TIMEOUT_MS
           );
