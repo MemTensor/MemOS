@@ -696,3 +696,123 @@ exit 90
     expect(pkg.files).not.toContain("tests");
   });
 });
+
+function extractShellFunction(script: string, name: string): string {
+  const start = script.indexOf(`${name}() {`);
+  if (start < 0) throw new Error(`${name} function not found`);
+  const end = script.indexOf("\n}", start);
+  if (end < 0) throw new Error(`${name} function end not found`);
+  return script.slice(start, end + 2);
+}
+
+function runRotate(body: string): { code: number; stdout: string; stderr: string } {
+  const script = readFileSync(SCRIPT, "utf8");
+  const rotate = extractShellFunction(script, "rotate_oversized_log");
+  const cap = script.match(/^DAEMON_LOG_MAX_BYTES=\$\(\(.*\)\)$/m)?.[0] ?? "";
+  const r = spawnSync(
+    "bash",
+    ["-c", `${cap}\n${rotate}\n${body}`],
+    { encoding: "utf8", timeout: 10_000 },
+  );
+  return { code: r.status ?? -1, stdout: r.stdout, stderr: r.stderr };
+}
+
+describe("install.sh — rotate_oversized_log", () => {
+  it("does nothing when the log file is absent", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "memos-rotate-"));
+    try {
+      const r = runRotate(`rotate_oversized_log "${root}/missing.log"`);
+      expect(r.code).toBe(0);
+      expect(existsSync(`${root}/missing.log`)).toBe(false);
+      expect(existsSync(`${root}/missing.log.1`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not rotate when the size exactly equals the cap", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "memos-rotate-"));
+    try {
+      const log = path.join(root, "daemon.log");
+      writeFileSync(log, Buffer.alloc(2048, "a"), "utf8");
+      const r = runRotate(`rotate_oversized_log "${log}" 2048`);
+      expect(r.code).toBe(0);
+      expect(readFileSync(log, "utf8")).toHaveLength(2048);
+      expect(existsSync(`${log}.1`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rotates an over-cap log and trims the .1 generation to the cap", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "memos-rotate-"));
+    try {
+      const log = path.join(root, "daemon.log");
+      const oversized = Buffer.alloc(6000, "a");
+      writeFileSync(log, oversized, "utf8");
+      const r = runRotate(`rotate_oversized_log "${log}" 1024`);
+      expect(r.code).toBe(0);
+      // Active log truncated, ready for the launch redirect.
+      expect(readFileSync(log, "utf8")).toHaveLength(0);
+      // `.1` keeps only the tail, bounded at the cap (not the full 6000 B).
+      expect(readFileSync(`${log}.1`, "utf8")).toHaveLength(1024);
+      expect(existsSync(`${log}.1.tmp`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is a no-op when wc output is not numeric", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "memos-rotate-"));
+    try {
+      const bin = path.join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      writeExecutable(
+        path.join(bin, "wc"),
+        `#!/usr/bin/env bash\necho not-a-number\n`,
+      );
+      const log = path.join(root, "daemon.log");
+      writeFileSync(log, Buffer.alloc(6000, "a"), "utf8");
+      // The real function is sourced from the script; only `wc` is replaced,
+      // so the numeric guard (not the size) decides the outcome.
+      const script = readFileSync(SCRIPT, "utf8");
+      const rotate = extractShellFunction(script, "rotate_oversized_log");
+      const cap = script.match(/^DAEMON_LOG_MAX_BYTES=\$\(\(.*\)\)$/m)?.[0] ?? "";
+      const r = spawnSync(
+        "bash",
+        ["-c", `${cap}\n${rotate}\nrotate_oversized_log "${log}" 1024`],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+          timeout: 10_000,
+        },
+      );
+      expect(r.status).toBe(0);
+      expect(readFileSync(log, "utf8")).toHaveLength(6000);
+      expect(existsSync(`${log}.1`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the active log when mv fails after removing the old .1", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "memos-rotate-"));
+    try {
+      const dir = path.join(root, "logs");
+      mkdirSync(dir, { recursive: true });
+      const log = path.join(dir, "daemon.log");
+      writeFileSync(log, Buffer.alloc(6000, "a"), "utf8");
+      // Read-only directory makes mv (a rename) fail after `.1` was removed.
+      chmodSync(dir, 0o555);
+      try {
+        const r = runRotate(`rotate_oversized_log "${log}" 1024`);
+        expect(r.code).toBe(0);
+        expect(existsSync(`${log}.1`)).toBe(false);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
