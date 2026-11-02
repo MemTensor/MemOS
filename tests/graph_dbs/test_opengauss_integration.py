@@ -6,6 +6,7 @@ role; the application under test uses an ordinary role, without SYSADMIN.
 """
 
 import json
+import math
 import os
 import secrets
 import threading
@@ -115,7 +116,7 @@ def stores(database):
     admin, config = database
     opened = []
     if _query(admin, "SELECT 1 FROM ag_catalog.ag_graph WHERE name='memos_graph'"):
-        _query(admin, "SELECT ag_catalog.drop_graph('memos_graph',true)")
+        _drop_test_graph(admin)
 
     def make(**overrides):
         store = PartialOpenGaussGraphDB(config.model_copy(update=overrides))
@@ -138,6 +139,16 @@ def stores(database):
             break
         time.sleep(0.01)
     assert remaining == [(0,)]
+
+
+def _drop_test_graph(admin):
+    # The WLM space-accounting worker can race AGE's drop lock order. Only
+    # this owned test object is retried, once, after the autocommit rollback.
+    statement = "SELECT ag_catalog.drop_graph('memos_graph',true)"
+    try:
+        _query(admin, statement)
+    except psycopg2.errors.DeadlockDetected:
+        _query(admin, statement)
 
 
 def test_registered_age_label_and_ordinary_application_role(stores, database):
@@ -1416,3 +1427,736 @@ def test_filter_delete_and_edge_creation_are_serialized(filtered_store, database
         connected.result(timeout=10)
     assert db.get_by_metadata([]) == ["b", "c", "d"]
     assert _query(database[0], 'SELECT count(*) FROM memos_graph."R"') == [(0,)]
+
+
+def _vector_fixture(db):
+    """Independent vectors: cosine scores for e1 are 1, .9, .5 and 0."""
+    for node_id, vector in [
+        ("same", [1, 0, 0]),
+        ("near", [0.8, 0.6, 0]),
+        ("orthogonal", [0, 1, 0]),
+        ("opposite", [-1, 0, 0]),
+    ]:
+        db.add_node(
+            node_id,
+            node_id,
+            {
+                "memory_type": "LongTermMemory",
+                "status": "activated",
+                "embedding": vector,
+                "info": {"project": "星港"},
+                "session_id": "s1",
+            },
+        )
+    for node_id, status in [
+        ("archived", "archived"),
+        ("deleted", "deleted"),
+        ("null-status", None),
+    ]:
+        db.add_node(
+            node_id,
+            node_id,
+            {"memory_type": "LongTermMemory", "status": status, "embedding": [1, 0, 0]},
+        )
+    db.add_node("no-vector", "no-vector", {"memory_type": "LongTermMemory"})
+    db.add_node("zero", "zero", {"memory_type": "LongTermMemory", "embedding": [0, 0, 0]})
+    db.add_node(
+        "same", "scope B", {"memory_type": "LongTermMemory", "embedding": [1, 0, 0]}, user_name="B"
+    )
+
+
+def test_datavec_scores_scopes_thresholds_and_projection(stores):
+    db = stores()
+    _vector_fixture(db)
+    hits = db.search_by_embedding(
+        [1, 0, 0],
+        top_k=10,
+        scope="LongTermMemory",
+        return_fields=["memory", "user_name", "info"],
+        include_embedding=True,
+    )
+    assert [hit["id"] for hit in hits] == ["same", "near", "orthogonal", "opposite"]
+    assert [hit["score"] for hit in hits] == pytest.approx([1, 0.9, 0.5, 0], abs=1e-6)
+    assert all(hit["user_name"] == "A" and hit["info"] == {"project": "星港"} for hit in hits)
+    assert hits[0]["embedding"] == [1, 0, 0]
+    assert [hit["id"] for hit in db.search_by_embedding([1, 0, 0], threshold=0.5, top_k=10)] == [
+        "same",
+        "near",
+        "orthogonal",
+    ]
+    assert [
+        hit["id"] for hit in db.search_by_embedding([1, 0, 0], threshold=0.50001, top_k=10)
+    ] == ["same", "near"]
+    assert db.search_by_embedding([1, 0, 0], threshold=1, top_k=1) == [{"id": "same", "score": 1}]
+    assert [hit["id"] for hit in db.search_by_embedding([1, 0, 0], status="archived")] == [
+        "archived"
+    ]
+    assert db.search_by_embedding([1, 0, 0], scope="UserMemory") == []
+    assert db.search_by_embedding([1, 0, 0], top_k=0) == []
+
+
+def test_datavec_filters_and_same_id_multi_scope_projection(stores):
+    db = stores()
+    _vector_fixture(db)
+    assert db.search_by_embedding([1, 0, 0], filter={"project": "missing"}) == []
+    assert db.search_by_embedding([1, 0, 0], search_filter={"session_id": "s2"}) == []
+    assert [
+        hit["id"]
+        for hit in db.search_by_embedding(
+            [1, 0, 0], filter={"project": "星港"}, search_filter={"session_id": "s1"}, top_k=2
+        )
+    ] == ["same", "near"]
+    hits = db.search_by_embedding(
+        [1, 0, 0],
+        knowledgebase_ids=["B", "B"],
+        threshold=1,
+        top_k=10,
+        return_fields=["user_name", "memory", "unknown"],
+    )
+    assert hits == [
+        {"id": "same", "score": 1, "user_name": "A", "memory": "same", "unknown": None},
+        {"id": "same", "score": 1, "user_name": "B", "memory": "scope B", "unknown": None},
+    ]
+    assert db.search_by_embedding([1, 0, 0], user_name="A", cube_name="B", top_k=1) == [
+        {"id": "same", "score": 1}
+    ]
+    assert db.get_node("same", user_name="A", cube_name="B")["memory"] == "scope B"
+
+
+def test_datavec_updates_soft_delete_restore_and_completion_deletion(stores):
+    db = stores()
+    _vector_fixture(db)
+    db.update_node("same", {"status": "deleted"})
+    assert db.search_by_embedding([1, 0, 0], top_k=1)[0]["id"] == "near"
+    db.update_node("same", {"status": "activated", "embedding": [0, 1, 0]})
+    assert db.search_by_embedding([0, 1, 0], top_k=10)[0]["score"] == 1
+    db.update_node("same", {"embedding": None})
+    assert "same" not in [hit["id"] for hit in db.search_by_embedding([1, 0, 0], top_k=10)]
+    hits = db.search_by_embedding([1, 0, 0], top_k=1)
+    db.add_node("near", "other scope", {"embedding": [1, 0, 0]}, user_name="B")
+    db.delete_node("near")
+    assert db.get_nodes([hit["id"] for hit in hits], cube_name="A") == []
+    assert db.get_node("near", user_name="B")["memory"] == "other scope"
+
+
+@pytest.mark.parametrize("dimension", [1, 1024, 2000, 2001, 3072, 16000])
+def test_datavec_real_supported_dimensions_and_index_policy(stores, database, dimension):
+    db = stores(embedding_dimension=dimension)
+    vector = [1] + [0] * (dimension - 1)
+    db.add_node("one", "fixture", {"embedding": vector})
+    assert db.search_by_embedding(vector, top_k=1) == [{"id": "one", "score": 1}]
+    admin, _ = database
+    count = _query(
+        admin,
+        "SELECT count(*) FROM pg_indexes WHERE schemaname='memos_graph' AND indexname='memory_embedding_hnsw'",
+    )[0][0]
+    assert count == (1 if dimension <= 2000 else 0)
+
+
+def test_datavec_index_repair_preserves_nodes_and_rejects_incompatible_index(stores, database):
+    db = stores()
+    db.add_node("one", "fixture", {"embedding": [1, 0, 0]})
+    admin, _ = database
+    graphid = _query(admin, 'SELECT id::text FROM memos_graph."Memory"')[0][0]
+    _query(admin, "DROP INDEX memos_graph.memory_embedding_hnsw")
+    repaired = stores()
+    assert repaired.search_by_embedding([1, 0, 0], top_k=1) == [{"id": "one", "score": 1}]
+    assert _query(admin, 'SELECT id::text FROM memos_graph."Memory"') == [(graphid,)]
+    _query(admin, "DROP INDEX memos_graph.memory_embedding_hnsw")
+    _query(admin, 'CREATE INDEX memory_embedding_hnsw ON memos_graph."Memory" (memory)')
+    with pytest.raises(GraphDBError, match="index"):
+        stores()
+    assert db.get_node("one")["memory"] == "fixture"
+
+
+def test_datavec_hnsw_plan_and_strong_scope_filter(stores, database):
+    db = stores()
+    db.add_nodes_batch(
+        [
+            {"id": f"b{i}", "memory": "other", "metadata": {"embedding": [1, 0, 0]}}
+            for i in range(150)
+        ],
+        user_name="B",
+    )
+    db.add_nodes_batch(
+        [
+            {"id": f"a{i}", "memory": "ours", "metadata": {"embedding": [0.8, 0.6, 0]}}
+            for i in range(5)
+        ]
+    )
+    with db._get_connection() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            'EXPLAIN SELECT /*+ indexscan(m memory_embedding_hnsw) */ business_id FROM ONLY memos_graph."Memory" m WHERE scope=%s AND vector_norm(embedding)>0 ORDER BY embedding <=> %s::vector LIMIT 3',
+            ("A", "[1,0,0]"),
+        )
+        plan = "\n".join(row[0] for row in cursor.fetchall())
+        assert "Ann Index Scan" in plan and "memory_embedding_hnsw" in plan
+    hits = db.search_by_embedding([1, 0, 0], top_k=5, return_fields=["user_name"])
+    assert [hit["id"] for hit in hits] == ["a0", "a1", "a2", "a3", "a4"]
+    assert all(hit["user_name"] == "A" for hit in hits)
+
+
+def test_datavec_real_retriever_completion_respects_cube_alias(stores, monkeypatch):
+    from memos.memories.textual.tree_text_memory.retrieve.recall import GraphMemoryRetriever
+
+    monkeypatch.delenv("MEMOS_POLARDB_LIGHTWEIGHT_SEARCH_ENABLED", raising=False)
+    db = stores()
+    first = "00000000-0000-4000-8000-000000000001"
+    second = "00000000-0000-4000-8000-000000000002"
+    db.add_node(first, "same", {"memory_type": "LongTermMemory", "embedding": [1, 0, 0]})
+    db.add_node(second, "near", {"memory_type": "LongTermMemory", "embedding": [0.8, 0.6, 0]})
+    db.add_node(
+        first, "scope B", {"memory_type": "LongTermMemory", "embedding": [1, 0, 0]}, user_name="B"
+    )
+    retriever = GraphMemoryRetriever(db, None, include_embedding=True)
+    results = retriever._vector_recall([[1, 0, 0]], "LongTermMemory", top_k=2, user_name="A")
+    assert [item.id for item in results] == [first, second]
+    assert [item.metadata.relativity for item in results] == pytest.approx([1, 0.9], abs=1e-6)
+    assert results[0].metadata.embedding == [1, 0, 0]
+    external = retriever._vector_recall(
+        [[1, 0, 0]], "LongTermMemory", top_k=1, user_name="A", cube_name="B"
+    )
+    assert [item.memory for item in external] == ["scope B"]
+
+
+def test_datavec_query_permission_failure_and_pool_recovery(stores, database):
+    db = stores()
+    db.add_node("one", "fixture", {"embedding": [1, 0, 0]})
+    admin, config = database
+    _query(
+        admin,
+        sql.SQL('REVOKE SELECT ON memos_graph."Memory" FROM {}').format(
+            sql.Identifier(config.user)
+        ),
+    )
+    try:
+        with pytest.raises(GraphDBError) as caught:
+            db.search_by_embedding([1, 0, 0])
+        assert caught.value.__cause__.pgcode == "42501"
+    finally:
+        _query(
+            admin,
+            sql.SQL('GRANT SELECT ON memos_graph."Memory" TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    assert db.search_by_embedding([1, 0, 0], top_k=1) == [{"id": "one", "score": 1}]
+
+
+@pytest.mark.parametrize("failure", ["cancel", "timeout"])
+def test_datavec_cancel_timeout_and_subsequent_query_recovery(stores, database, failure):
+    admin, config = database
+    if failure == "timeout":
+        _query(
+            admin,
+            sql.SQL("ALTER ROLE {} SET statement_timeout='1s'").format(sql.Identifier(config.user)),
+        )
+    locker = None
+    try:
+        db = stores()
+        db.add_node("one", "fixture", {"embedding": [1, 0, 0]})
+        locker = _connect(config)
+        with locker.cursor() as cursor:
+            cursor.execute('LOCK TABLE memos_graph."Memory" IN ACCESS EXCLUSIVE MODE')
+        with ThreadPoolExecutor(1) as executor:
+            future = executor.submit(db.search_by_embedding, [1, 0, 0])
+            try:
+                if failure == "cancel":
+                    deadline = time.monotonic() + 5
+                    while True:
+                        active = _query(
+                            admin,
+                            "SELECT pid FROM pg_stat_activity WHERE datname=%s AND application_name='memos-opengauss' AND state='active' AND query LIKE 'SELECT business_id%%'",
+                            (config.db_name,),
+                        )
+                        if active or time.monotonic() >= deadline:
+                            break
+                        time.sleep(0.01)
+                    assert len(active) == 1
+                    assert _query(admin, "SELECT pg_cancel_backend(%s)", (active[0][0],)) == [
+                        (True,)
+                    ]
+                with pytest.raises(GraphDBError) as caught:
+                    future.result(timeout=5)
+                assert caught.value.__cause__.pgcode == "57014"
+            finally:
+                locker.rollback()
+        assert db.search_by_embedding([1, 0, 0], top_k=1) == [{"id": "one", "score": 1}]
+    finally:
+        if locker is not None:
+            locker.close()
+        if failure == "timeout":
+            _query(
+                admin,
+                sql.SQL("ALTER ROLE {} RESET statement_timeout").format(
+                    sql.Identifier(config.user)
+                ),
+            )
+
+
+def test_datavec_index_creation_permission_failure_preserves_data(stores, database):
+    db = stores()
+    db.add_node("one", "fixture", {"embedding": [1, 0, 0]})
+    admin, config = database
+    _query(admin, "DROP INDEX memos_graph.memory_embedding_hnsw")
+    owner = _query(admin, "SELECT current_user")[0][0]
+    _query(
+        admin, sql.SQL('ALTER TABLE memos_graph."Memory" OWNER TO {}').format(sql.Identifier(owner))
+    )
+    _query(
+        admin,
+        sql.SQL('GRANT SELECT ON memos_graph."Memory" TO {}').format(sql.Identifier(config.user)),
+    )
+    try:
+        with pytest.raises(GraphDBError) as caught:
+            stores()
+        assert caught.value.__cause__.pgcode == "42501"
+        assert db.get_node("one")["memory"] == "fixture"
+    finally:
+        _query(
+            admin,
+            sql.SQL('ALTER TABLE memos_graph."Memory" OWNER TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    repaired = stores()
+    assert repaired.search_by_embedding([1, 0, 0], top_k=1) == [{"id": "one", "score": 1}]
+
+
+def test_datavec_failed_write_keeps_index_results_and_extreme_queries(stores):
+    db = stores()
+    db.add_node("one", "fixture", {"embedding": [1, 0, 0]})
+    with (
+        pytest.raises(GraphDBError),
+        db._get_connection() as connection,
+        connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            "UPDATE memos_graph.\"Memory\" SET embedding='[0,1,0]'::vector WHERE scope=%s", ("A",)
+        )
+        cursor.execute("SELECT 1/0")
+    for scale in (1e-300, 1e300):
+        assert db.search_by_embedding([scale, 0, 0], top_k=1) == [{"id": "one", "score": 1}]
+
+
+def test_datavec_invalid_inputs_preserve_real_rows_and_physical_scope(stores, database):
+    db = stores(use_multi_db=True, user_name=None)
+    db.add_node("one", "fixture", {"embedding": [1, 0, 0]})
+    db.add_node("one", "other scope", {"embedding": [0, 1, 0]}, user_name="B")
+    admin, _ = database
+    statement = 'SELECT id::text, scope, business_id, properties, embedding::text FROM ONLY memos_graph."Memory" ORDER BY scope'
+    before = _query(admin, statement)
+    for vector in (
+        [1, 0],
+        [1, 0, 0, 0],
+        [0, 0, 0],
+        [True, 0, 0],
+        [float("nan"), 0, 0],
+        [float("inf"), 0, 0],
+        ["1", 0, 0],
+    ):
+        with pytest.raises(ValueError):
+            db.search_by_embedding(vector)
+    for kwargs in ({"top_k": -1}, {"top_k": True}, {"return_fields": ["id; DROP TABLE x"]}):
+        with pytest.raises(ValueError):
+            db.search_by_embedding([1, 0, 0], **kwargs)
+    assert _query(admin, statement) == before
+    assert db.search_by_embedding([1, 0, 0], top_k=10, return_fields=["user_name"]) == [
+        {"id": "one", "score": 1, "user_name": ""}
+    ]
+
+
+def _bm25_fixture(db):
+    for node_id, scope, memory in [
+        ("both", "A", "星港 回归"),
+        ("star", "A", "星港"),
+        ("regression", "A", "回归"),
+        ("none", "A", "月球"),
+        ("both", "B", "星港 星港 回归"),
+    ]:
+        db.add_node(
+            node_id,
+            memory,
+            {
+                "memory_type": "LongTermMemory",
+                "embedding": [1, 0, 0],
+                "info": {"project": "星港"},
+                "session_id": "s1",
+            },
+            user_name=scope,
+        )
+
+
+def test_bm25_real_scores_match_independent_formula_and_projection(stores, database):
+    db = stores()
+    _bm25_fixture(db)
+    idf = math.log(1 + (5 - 3 + 0.5) / (3 + 0.5))
+    one_term = idf * 2.2 / (1 + 1.2 * (0.25 + 0.75 / 1.6))
+    both_terms = 2 * idf * 2.2 / (1 + 1.2 * (0.25 + 0.75 * 2 / 1.6))
+    hits = db.search_by_fulltext(
+        ["星港", "回归"],
+        return_fields=["memory", "info", "unknown", "user_name"],
+        include_embedding=True,
+    )
+    assert [hit["id"] for hit in hits] == ["both", "regression", "star"]
+    assert [hit["score"] for hit in hits] == pytest.approx(
+        [both_terms, one_term, one_term], abs=1e-6
+    )
+    assert hits[0]["memory"] == "星港 回归" and hits[0]["info"] == {"project": "星港"}
+    assert all(
+        hit["embedding"] == [1, 0, 0] and hit["unknown"] is None and hit["user_name"] == "A"
+        for hit in hits
+    )
+    assert [h["id"] for h in db.search_by_fulltext(["星港", "回归"], threshold=0.8)] == ["both"]
+    rare = db.search_by_fulltext(["月球"], threshold=1)
+    assert len(rare) == 1 and rare[0]["score"] > 1
+    admin, _ = database
+    plan = _query(
+        admin,
+        'EXPLAIN SELECT business_id FROM ONLY memos_graph."Memory" WHERE scope=%s ORDER BY memory <&> %s DESC LIMIT 5',
+        ("A", "星港"),
+    )
+    assert "memory_fulltext_bm25" in "\n".join(row[0] for row in plan)
+
+
+@pytest.mark.parametrize(
+    "words,expected",
+    [
+        (["星港"], ["star", "both"]),
+        (["'星港'", '"回归"', "星港"], ["both", "regression", "star"]),
+        (["星港 & 回归"], ["both", "regression", "star"]),
+        (["星港 | 回归"], ["both", "regression", "star"]),
+        (["unmatch"], []),
+        (["!!!"], []),
+        ([], []),
+        (["  ", "''"], []),
+        (["星港'; DROP TABLE absent; --"], ["star", "both"]),
+    ],
+)
+def test_bm25_words_are_native_or_text_not_sql_or_tsquery(stores, words, expected):
+    db = stores()
+    _bm25_fixture(db)
+    assert [h["id"] for h in db.search_by_fulltext(words)] == expected
+    assert db.get_node("both")["memory"] == "星港 回归"
+
+
+@pytest.mark.parametrize("top_k", [1, 5, 200, 201, 210])
+def test_bm25_more_than_200_candidates_survive_scope_filter(stores, top_k):
+    db = stores()
+    db.add_nodes_batch(
+        [{"id": f"b{i}", "memory": "星港 星港 星港"} for i in range(220)], user_name="B"
+    )
+    db.add_nodes_batch(
+        [
+            {"id": f"a{i:03}", "memory": "星港", "metadata": {"info": {"project": "ours"}}}
+            for i in range(215)
+        ]
+    )
+    hits = db.search_by_fulltext(
+        ["星港"], top_k=top_k, filter={"project": "ours"}, return_fields=["user_name"]
+    )
+    assert len(hits) == top_k and len({h["id"] for h in hits}) == top_k
+    assert all(h["user_name"] == "A" and h["id"].startswith("a") for h in hits)
+    assert [h["id"] for h in hits] == sorted(h["id"] for h in hits)
+
+
+def test_bm25_filters_status_cube_alias_and_same_id_scopes(stores):
+    db = stores()
+    _bm25_fixture(db)
+    db.update_node("star", {"status": "archived"})
+    assert [h["id"] for h in db.search_by_fulltext(["星港"])] == ["both"]
+    assert [h["id"] for h in db.search_by_fulltext(["星港"], status="archived")] == ["star"]
+    assert db.search_by_fulltext(["星港"], scope="UserMemory") == []
+    assert db.search_by_fulltext(["星港"], filter={"project": "missing"}) == []
+    assert db.search_by_fulltext(["星港"], search_filter={"session_id": "missing"}) == []
+    hits = db.search_by_fulltext(
+        ["星港"],
+        scope="LongTermMemory",
+        filter={"project": "星港"},
+        search_filter={"session_id": "s1"},
+        knowledgebase_ids=["B", "B"],
+        return_fields=["user_name"],
+    )
+    assert {(h["id"], h["user_name"]) for h in hits} == {("both", "A"), ("both", "B")}
+    assert (
+        db.search_by_fulltext(["星港"], user_name="A", cube_name="B", return_fields=["user_name"])[
+            0
+        ]["user_name"]
+        == "B"
+    )
+    db.update_node("star", {"status": "activated"})
+    assert {h["id"] for h in db.search_by_fulltext(["星港"])} == {"star", "both"}
+
+
+def test_bm25_update_delete_and_rollback_recovery_preserve_graph(stores, database):
+    db = stores()
+    db.add_node("one", "星港", {"embedding": [1, 0, 0]})
+    db.add_node("two", "月球", {})
+    db.add_edge("one", "two", "RELATE_TO")
+    admin, _ = database
+    graphid = _query(
+        admin, 'SELECT id::text FROM memos_graph."Memory" WHERE business_id=%s', ("one",)
+    )
+    db.update_node("one", {"memory": "回归"})
+    assert db.search_by_fulltext(["星港"]) == []
+    assert [h["id"] for h in db.search_by_fulltext(["回归"])] == ["one"]
+    with pytest.raises(GraphDBError), db._get_connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            'UPDATE memos_graph."Memory" SET memory=%s WHERE business_id=%s',
+            ("rollbackmarker", "one"),
+        )
+        cursor.execute("SELECT 1/0")
+    assert [h["id"] for h in db.search_by_fulltext(["回归"])] == ["one"]
+    assert db.search_by_fulltext(["rollbackmarker"]) == []
+    assert db.edge_exists("one", "two", "RELATE_TO")
+    assert (
+        _query(admin, 'SELECT id::text FROM memos_graph."Memory" WHERE business_id=%s', ("one",))
+        == graphid
+    )
+    db.delete_node("one")
+    assert db.search_by_fulltext(["回归"]) == []
+
+
+def test_bm25_missing_index_reinitialization_and_incompatible_index(stores, database):
+    db = stores()
+    db.add_node("one", "星港", {})
+    admin, _ = database
+    _query(admin, "DROP INDEX memos_graph.memory_fulltext_bm25")
+    with pytest.raises(GraphDBError):
+        db.search_by_fulltext(["星港"])
+    repaired = stores()
+    assert [h["id"] for h in repaired.search_by_fulltext(["星港"])] == ["one"]
+    _query(admin, "DROP INDEX memos_graph.memory_fulltext_bm25")
+    _query(admin, 'CREATE INDEX memory_fulltext_bm25 ON memos_graph."Memory" (memory)')
+    with pytest.raises(GraphDBError):
+        stores()
+    assert db.get_node("one")["memory"] == "星港"
+
+
+def test_bm25_repair_permission_failure_is_explicit_and_recoverable(stores, database):
+    db = stores()
+    db.add_node("one", "星港", {})
+    with pytest.raises(GraphDBError), db._get_connection() as conn, conn.cursor() as cursor:
+        cursor.execute('UPDATE memos_graph."Memory" SET memory=%s', ("rollbackmarker",))
+        cursor.execute("SELECT 1/0")
+    admin, config = database
+    owner = _query(admin, "SELECT current_user")[0][0]
+    _query(
+        admin, sql.SQL('ALTER TABLE memos_graph."Memory" OWNER TO {}').format(sql.Identifier(owner))
+    )
+    _query(
+        admin,
+        sql.SQL('GRANT SELECT ON memos_graph."Memory" TO {}').format(sql.Identifier(config.user)),
+    )
+    try:
+        with pytest.raises(GraphDBError) as caught:
+            db.search_by_fulltext(["星港"])
+        assert caught.value.__cause__.pgcode == "42501"
+    finally:
+        _query(
+            admin,
+            sql.SQL('ALTER TABLE memos_graph."Memory" OWNER TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    assert [h["id"] for h in db.search_by_fulltext(["星港"])] == ["one"]
+
+
+def test_bm25_parallel_recovery_after_rolled_back_write(stores):
+    db = stores()
+    db.add_node("one", "星港", {})
+    with pytest.raises(GraphDBError), db._get_connection() as conn, conn.cursor() as cursor:
+        cursor.execute('UPDATE memos_graph."Memory" SET memory=%s', ("rollbackmarker",))
+        cursor.execute("SELECT 1/0")
+    with ThreadPoolExecutor(2) as executor:
+        futures = [executor.submit(db.search_by_fulltext, ["星港"]) for _ in range(2)]
+        assert [[h["id"] for h in future.result(timeout=10)] for future in futures] == [
+            ["one"],
+            ["one"],
+        ]
+    assert db.search_by_fulltext(["rollbackmarker"]) == []
+
+
+def test_bm25_retriever_fast_graph_switch_and_cube_completion(stores):
+    from memos.memories.textual.tree_text_memory.retrieve.recall import GraphMemoryRetriever
+    from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import (
+        ParsedTaskGoal,
+    )
+
+    db = stores()
+    node_id = "00000000-0000-4000-8000-000000000001"
+    db.add_node(node_id, "星港", {"memory_type": "LongTermMemory", "embedding": [1, 0, 0]})
+    db.add_node(node_id, "星港 回归", {"memory_type": "LongTermMemory"}, user_name="B")
+    retriever = GraphMemoryRetriever(db, None, include_embedding=True)
+    parsed = ParsedTaskGoal(keys=["星港"], tags=[])
+    assert (
+        retriever.retrieve(
+            query="星港",
+            top_k=5,
+            parsed_goal=parsed,
+            memory_scope="LongTermMemory",
+            query_embedding=[],
+            user_name="A",
+            use_fast_graph=False,
+        )
+        == []
+    )
+    results = retriever.retrieve(
+        query="星港",
+        top_k=5,
+        parsed_goal=parsed,
+        memory_scope="LongTermMemory",
+        query_embedding=[],
+        user_name="A",
+        use_fast_graph=True,
+    )
+    assert [r.id for r in results] == [node_id] and results[0].metadata.relativity > 0
+    assert results[0].metadata.embedding == [1, 0, 0]
+    other = retriever._fulltext_recall(["星港"], "LongTermMemory", user_name="A", cube_name="B")
+    assert [r.memory for r in other] == ["星港 回归"]
+
+
+@pytest.mark.parametrize("failure", ["cancel", "timeout"])
+def test_bm25_cancel_timeout_do_not_hide_failure_or_break_pool(stores, database, failure):
+    admin, config = database
+    if failure == "timeout":
+        _query(
+            admin,
+            sql.SQL("ALTER ROLE {} SET statement_timeout='1s'").format(sql.Identifier(config.user)),
+        )
+    locker = None
+    try:
+        db = stores()
+        db.add_node("one", "星港", {})
+        locker = _connect(config)
+        with locker.cursor() as cursor:
+            cursor.execute('LOCK TABLE memos_graph."Memory" IN ACCESS EXCLUSIVE MODE')
+        with ThreadPoolExecutor(1) as executor:
+            future = executor.submit(db.search_by_fulltext, ["星港"])
+            try:
+                if failure == "cancel":
+                    deadline = time.monotonic() + 5
+                    while True:
+                        active = _query(
+                            admin,
+                            "SELECT pid FROM pg_stat_activity WHERE datname=%s AND application_name='memos-opengauss' AND state='active' AND query LIKE 'SELECT business_id%%'",
+                            (config.db_name,),
+                        )
+                        if active or time.monotonic() >= deadline:
+                            break
+                        time.sleep(0.01)
+                    assert len(active) == 1
+                    assert _query(admin, "SELECT pg_cancel_backend(%s)", (active[0][0],)) == [
+                        (True,)
+                    ]
+                with pytest.raises(GraphDBError) as caught:
+                    future.result(timeout=5)
+                assert caught.value.__cause__.pgcode == "57014"
+            finally:
+                locker.rollback()
+        assert [h["id"] for h in db.search_by_fulltext(["星港"])] == ["one"]
+    finally:
+        if locker is not None:
+            locker.close()
+        if failure == "timeout":
+            _query(
+                admin,
+                sql.SQL("ALTER ROLE {} RESET statement_timeout").format(
+                    sql.Identifier(config.user)
+                ),
+            )
+
+
+def test_bm25_query_permission_failure_then_restore(stores, database):
+    db = stores()
+    db.add_node("one", "星港", {})
+    admin, config = database
+    _query(
+        admin,
+        sql.SQL('REVOKE SELECT ON memos_graph."Memory" FROM {}').format(
+            sql.Identifier(config.user)
+        ),
+    )
+    try:
+        with pytest.raises(GraphDBError) as caught:
+            db.search_by_fulltext(["星港"])
+        assert caught.value.__cause__.pgcode == "42501"
+    finally:
+        _query(
+            admin,
+            sql.SQL('GRANT SELECT ON memos_graph."Memory" TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    assert [h["id"] for h in db.search_by_fulltext(["星港"])] == ["one"]
+
+
+def test_bm25_index_creation_permission_failure_preserves_graph(stores, database):
+    db = stores()
+    db.add_node("one", "星港", {})
+    admin, config = database
+    owner = _query(admin, "SELECT current_user")[0][0]
+    _query(admin, "DROP INDEX memos_graph.memory_fulltext_bm25")
+    _query(
+        admin, sql.SQL('ALTER TABLE memos_graph."Memory" OWNER TO {}').format(sql.Identifier(owner))
+    )
+    _query(
+        admin,
+        sql.SQL('GRANT SELECT ON memos_graph."Memory" TO {}').format(sql.Identifier(config.user)),
+    )
+    try:
+        with pytest.raises(GraphDBError) as caught:
+            stores()
+        assert caught.value.__cause__.pgcode == "42501"
+        assert db.get_node("one")["memory"] == "星港"
+    finally:
+        _query(
+            admin,
+            sql.SQL('ALTER TABLE memos_graph."Memory" OWNER TO {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+    repaired = stores()
+    assert [h["id"] for h in repaired.search_by_fulltext(["星港"])] == ["one"]
+
+
+def test_bm25_failed_batch_rolls_back_all_nodes_and_search_recovers(stores):
+    db = stores()
+    db.add_node("one", "星港", {})
+    with pytest.raises(GraphDBError):
+        db.add_nodes_batch(
+            [
+                {"id": "transient", "memory": "rollbackmarker"},
+                {
+                    "id": "overflow",
+                    "memory": "rollbackmarker",
+                    "metadata": {"embedding": [1e100, 0, 0]},
+                },
+            ]
+        )
+    assert db.get_nodes(["transient", "overflow"]) == []
+    assert [h["id"] for h in db.search_by_fulltext(["星港"])] == ["one"]
+    assert db.search_by_fulltext(["rollbackmarker"]) == []
+
+
+def test_bm25_invalid_inputs_and_physical_scope_preserve_storage(stores, database):
+    db = stores(use_multi_db=True, user_name=None)
+    db.add_node("one", "星港", {})
+    db.add_node("one", "星港", {}, user_name="B")
+    admin, _ = database
+    statement = 'SELECT id::text,scope,business_id,memory,properties FROM ONLY memos_graph."Memory" ORDER BY scope'
+    before = _query(admin, statement)
+    for words in (None, "星港", [True], [None]):
+        with pytest.raises(ValueError):
+            db.search_by_fulltext(words)
+    for kwargs in (
+        {"top_k": -1},
+        {"threshold": float("nan")},
+        {"tsquery_config": "custom"},
+        {"return_fields": ["bad;"]},
+    ):
+        with pytest.raises(ValueError):
+            db.search_by_fulltext(["星港"], **kwargs)
+    assert _query(admin, statement) == before
+    hits = db.search_by_fulltext(["星港"], return_fields=["user_name"])
+    assert len(hits) == 1 and hits[0]["user_name"] == "" and hits[0]["id"] == "one"

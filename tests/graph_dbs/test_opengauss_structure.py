@@ -14,7 +14,6 @@ from memos.graph_dbs.base import BaseGraphDB
 
 PENDING = {
     "get_context_chain",
-    "search_by_embedding",
     "get_structure_optimization_candidates",
     "deduplicate_nodes",
     "detect_conflicts",
@@ -46,6 +45,8 @@ def test_one_backend_class_owns_pool_storage_and_filters():
         "get_by_metadata",
         "get_all_memory_items",
         "delete_node_by_prams",
+        "search_by_embedding",
+        "search_by_fulltext",
     ]:
         assert name in cls.__dict__
     assert "ThreadedConnectionPool" in inspect.getsource(cls.__init__)
