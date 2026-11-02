@@ -1,8 +1,8 @@
 """openGauss enterprise AGE backend, following the existing GraphDB provider layout.
 
 The provider owns its connection pool, graph operations and filter builders.
-Retrieval and maintenance methods are still abstract; factory registration waits
-until the full BaseGraphDB contract is implemented.
+Some graph and maintenance methods are still abstract; factory registration
+waits until the required consumer contracts are implemented.
 """
 
 import json
@@ -272,6 +272,87 @@ class OpenGaussGraphDB(BaseGraphDB):
             )
             if cursor.fetchone() is None:
                 raise GraphDBError("The openGauss Memory unique constraint is incompatible")
+            self._init_vector_index(cursor)
+            self._init_fulltext_index(cursor)
+
+    def _init_fulltext_index(self, cursor: Any, create: bool = True) -> None:
+        """Validate the owned native text index, creating it only during initialization."""
+        inspect_index = (
+            "SELECT tn.nspname, t.relname, am.amname, opc.opcname, i.indkey::text, "
+            "i.indisvalid, i.indisready, i.indpred, i.indexprs, idx.reloptions "
+            "FROM pg_catalog.pg_class idx "
+            "JOIN pg_catalog.pg_namespace n ON n.oid=idx.relnamespace "
+            "JOIN pg_catalog.pg_index i ON i.indexrelid=idx.oid "
+            "JOIN pg_catalog.pg_class t ON t.oid=i.indrelid "
+            "JOIN pg_catalog.pg_namespace tn ON tn.oid=t.relnamespace "
+            "JOIN pg_catalog.pg_am am ON am.oid=idx.relam "
+            "JOIN pg_catalog.pg_opclass opc ON opc.oid=i.indclass[0] "
+            "WHERE n.nspname='memos_graph' AND idx.relname='memory_fulltext_bm25'"
+        )
+        cursor.execute(inspect_index)
+        index = cursor.fetchone()
+        if index is None and create:
+            cursor.execute(f"CREATE INDEX memory_fulltext_bm25 ON {_TABLE} USING bm25 (memory)")
+            cursor.execute(inspect_index)
+            index = cursor.fetchone()
+        if index != (
+            "memos_graph",
+            "Memory",
+            "bm25",
+            "bm25_text_ops",
+            "5",
+            True,
+            True,
+            None,
+            None,
+            ["dict_path=DEFAULT"],
+        ):
+            raise GraphDBError("The openGauss fulltext index is missing or incompatible")
+
+    def _rebuild_fulltext_index(self) -> None:
+        """Repair the known failed-write index state without replaying any write."""
+        with self._get_connection() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_xact_lock(621503, 1)")
+            self._init_fulltext_index(cursor, create=False)
+            cursor.execute("REINDEX INDEX memos_graph.memory_fulltext_bm25")
+
+    def _init_vector_index(self, cursor: Any) -> None:
+        """Keep full precision above the HNSW dimension limit using exact retrieval."""
+        if self.config.embedding_dimension > 2000:
+            return
+        inspect_index = (
+            "SELECT tn.nspname, t.relname, am.amname, opc.opcname, i.indkey::text, "
+            "i.indisvalid, i.indisready, i.indpred, i.indexprs "
+            "FROM pg_catalog.pg_class idx "
+            "JOIN pg_catalog.pg_namespace n ON n.oid=idx.relnamespace "
+            "JOIN pg_catalog.pg_index i ON i.indexrelid=idx.oid "
+            "JOIN pg_catalog.pg_class t ON t.oid=i.indrelid "
+            "JOIN pg_catalog.pg_namespace tn ON tn.oid=t.relnamespace "
+            "JOIN pg_catalog.pg_am am ON am.oid=idx.relam "
+            "JOIN pg_catalog.pg_opclass opc ON opc.oid=i.indclass[0] "
+            "WHERE n.nspname='memos_graph' AND idx.relname='memory_embedding_hnsw'"
+        )
+        cursor.execute(inspect_index)
+        index = cursor.fetchone()
+        if index is None:
+            cursor.execute(
+                f"CREATE INDEX memory_embedding_hnsw ON {_TABLE} "
+                "USING hnsw (embedding pg_catalog.vector_cosine_ops)"
+            )
+            cursor.execute(inspect_index)
+            index = cursor.fetchone()
+        if index != (
+            "memos_graph",
+            "Memory",
+            "hnsw",
+            "vector_cosine_ops",
+            "6",
+            True,
+            True,
+            None,
+            None,
+        ):
+            raise GraphDBError("The openGauss vector index is incompatible")
 
     def _scope(self, user_name: str | None) -> str:
         scope = self.config.user_name if user_name is None else user_name
@@ -350,6 +431,22 @@ class OpenGaussGraphDB(BaseGraphDB):
                     cursor.execute(_UPSERT, row)
 
     @staticmethod
+    def _decode_embedding(value: Any) -> list[float] | None:
+        """Decode the driver's vector value without hiding damaged data."""
+        if value is None:
+            return None
+        try:
+            if isinstance(value, str):
+                value = json.loads(value)
+            if not isinstance(value, list | tuple) or any(
+                type(item) not in (int, float) or not math.isfinite(item) for item in value
+            ):
+                raise ValueError("Invalid vector values")
+            return list(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise GraphDBError("Invalid stored openGauss embedding") from exc
+
+    @staticmethod
     def _decode_node(row: tuple, scope: str, include_embedding: bool) -> dict[str, Any]:
         node_id, memory, payload, vector = row
         try:
@@ -369,15 +466,19 @@ class OpenGaussGraphDB(BaseGraphDB):
         for key in ("id", "memory", "user_name"):
             del properties[key]
         if include_embedding:
-            properties["embedding"] = json.loads(vector) if vector is not None else None
+            properties["embedding"] = OpenGaussGraphDB._decode_embedding(vector)
         return {"id": node_id, "memory": memory, "metadata": properties}
 
     def get_nodes(
-        self, ids: list[str], include_embedding: bool = False, user_name: str | None = None
+        self,
+        ids: list[str],
+        include_embedding: bool = False,
+        user_name: str | None = None,
+        cube_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return existing identities once, in first-requested order, within one scope."""
         self._ensure_open()
-        scope = self._scope(user_name)
+        scope = self._scope(cube_name if cube_name is not None else user_name)
         if not isinstance(ids, list):
             raise ValueError("ids must be a list")
         for node_id in ids:
@@ -405,11 +506,276 @@ class OpenGaussGraphDB(BaseGraphDB):
         }
 
     def get_node(
-        self, id: str, include_embedding: bool = False, user_name: str | None = None
+        self,
+        id: str,
+        include_embedding: bool = False,
+        user_name: str | None = None,
+        cube_name: str | None = None,
     ) -> dict[str, Any] | None:
         """Read an identity; a missing node is None."""
-        nodes = self.get_nodes([id], include_embedding, user_name)
+        nodes = self.get_nodes([id], include_embedding, user_name, cube_name)
         return nodes[0] if nodes else None
+
+    def search_by_embedding(
+        self,
+        vector: list[float],
+        top_k: int = 5,
+        return_fields: list[str] | None = None,
+        *,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        filter: dict | None = None,
+        user_name: str | None = None,
+        cube_name: str | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        include_embedding: bool = False,
+    ) -> list[dict]:
+        """Recall scoped DataVec candidates with normalized cosine scores.
+
+        HNSW supports at most 2000 dimensions. An underfilled candidate query is
+        replaced by one exact, identically filtered query. Higher dimensions use
+        exact search directly. Separate reads retain READ COMMITTED semantics.
+        """
+        self._ensure_open()
+        if not isinstance(vector, list) or len(vector) != self.config.embedding_dimension:
+            raise ValueError("vector must be a list matching embedding_dimension")
+        try:
+            if any(type(value) not in (int, float) or not math.isfinite(value) for value in vector):
+                raise ValueError("vector must contain finite numbers, excluding bool")
+            scale = max(abs(float(value)) for value in vector)
+            if not scale:
+                raise ValueError("Cosine query vector must be nonzero")
+            query_vector = json.dumps([value / scale for value in vector])
+        except OverflowError as exc:
+            raise ValueError("vector numbers must be representable as finite floats") from exc
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k must be a nonnegative integer")
+        if threshold is not None and (
+            type(threshold) not in (int, float) or not 0 <= threshold <= 1
+        ):
+            raise ValueError("threshold must be a finite number between zero and one")
+        if not isinstance(include_embedding, bool):
+            raise ValueError("include_embedding must be a bool")
+        if return_fields is not None and (
+            not isinstance(return_fields, list)
+            or any(
+                not isinstance(field, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field)
+                for field in return_fields
+            )
+        ):
+            raise ValueError("return_fields must contain valid field names")
+        fields = list(dict.fromkeys(return_fields or []))
+        if include_embedding and "embedding" not in fields:
+            fields.append("embedding")
+        with_embedding = "embedding" in fields
+        scopes = self._filter_scopes(
+            cube_name if cube_name is not None else user_name, knowledgebase_ids
+        )
+        if search_filter is not None and not isinstance(search_filter, dict):
+            raise ValueError("search_filter must be an object")
+        metadata = [{"field": key, "value": value} for key, value in (search_filter or {}).items()]
+        if scope is not None:
+            self._validate_id(scope)
+            metadata.append({"field": "memory_type", "value": scope})
+        params: list[Any] = []
+        metadata_sql = self._build_metadata_conditions(metadata, params)
+        filter_sql = self._build_filter_where_clause(filter, params)
+        status_sql = self._filter_status("activated" if status is None else status, params)
+        if top_k == 0:
+            return []
+        vector_column = "embedding::text" if with_embedding else "NULL"
+        query = (
+            f"SELECT business_id, memory, properties, {vector_column}, scope, "
+            f"embedding <=> %s::pg_catalog.vector FROM ONLY {_TABLE} "
+            "WHERE scope = ANY(%s) AND embedding IS NOT NULL AND vector_norm(embedding) > 0 "
+            f"AND ({metadata_sql}) AND ({filter_sql}) AND ({status_sql}) "
+            "ORDER BY (embedding <=> %s::pg_catalog.vector)"
+        )
+        query_params = [query_vector, scopes, *params, query_vector, top_k]
+        with self._get_connection() as connection, connection.cursor() as cursor:
+            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
+            if self.config.embedding_dimension <= 2000:
+                cursor.execute("SET LOCAL hnsw_ef_search = 100")
+                cursor.execute(query + " LIMIT %s", query_params)
+                rows = cursor.fetchall()
+            else:
+                rows = []
+            if self.config.embedding_dimension > 2000 or len(rows) < top_k:
+                cursor.execute(query + " + 0, scope, business_id LIMIT %s", query_params)
+                rows = cursor.fetchall()
+        ranked = []
+        for row in rows:
+            try:
+                distance = float(row[5])
+                if not 0 <= distance <= 2:
+                    raise ValueError("Distance outside cosine range")
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise GraphDBError("Invalid openGauss cosine distance") from exc
+            score = 1 - distance / 2
+            node = self._decode_node(row[:4], row[4], with_embedding)
+            item = {"id": node["id"], "score": score}
+            for field in fields:
+                if field in ("id", "score"):
+                    continue
+                if field == "user_name":
+                    item[field] = row[4]
+                elif field == "memory":
+                    item[field] = node["memory"]
+                else:
+                    item[field] = node["metadata"].get(field)
+            if threshold is None or score >= threshold:
+                ranked.append((score, row[4], node["id"], item))
+        ranked.sort(key=lambda hit: (-hit[0], hit[1], hit[2]))
+        return [hit[3] for hit in ranked[:top_k]]
+
+    def _query_fulltext(self, query: str, params: list[Any]) -> list[tuple]:
+        with self._get_connection() as connection, connection.cursor() as cursor:
+            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
+            # TAAT scores all term candidates; SQL LIMIT can exceed bm25_topk's
+            # separate 200 maximum. Pin scoring independently of role defaults.
+            cursor.execute("SET LOCAL enable_bm25_taat = on")
+            cursor.execute("SET LOCAL bm25_k1 = 1.2")
+            cursor.execute("SET LOCAL bm25_b = 0.75")
+            cursor.execute("SET LOCAL enable_bm25_global_idf = off")
+            cursor.execute(query, params)
+            return cursor.fetchall()
+
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsvector_field: str = "properties_tsvector_zh",
+        tsquery_config: str | None = "jiebacfg",
+        return_fields: list[str] | None = None,
+        *,
+        cube_name: str | None = None,
+        include_embedding: bool = False,
+    ) -> list[dict]:
+        """Return native BM25 OR matches and raw scores within the requested scopes.
+
+        The legacy tsquery aliases select the native default tokenizer. Terms
+        are natural text, not executable tsquery expressions. One recognized
+        failed-write index error permits REINDEX and a fresh read, at most once.
+        """
+        self._ensure_open()
+        if not isinstance(query_words, list) or any(
+            not isinstance(word, str) for word in query_words
+        ):
+            raise ValueError("query_words must be a list of strings")
+        terms = []
+        for word in query_words:
+            term = word.strip()
+            if len(term) >= 2 and term[0] == term[-1] and term[0] in ("'", '"'):
+                quote = term[0]
+                term = term[1:-1]
+                if quote == "'":
+                    term = term.replace("''", "'")
+                term = term.strip()
+            if term and term not in terms:
+                terms.append(term)
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k must be a nonnegative integer")
+        if threshold is not None:
+            try:
+                valid_threshold = (
+                    type(threshold) in (int, float) and math.isfinite(threshold) and threshold >= 0
+                )
+            except OverflowError:
+                valid_threshold = False
+            if not valid_threshold:
+                raise ValueError("threshold must be a finite nonnegative number")
+        if tsvector_field not in ("properties_tsvector_zh", "memory") or tsquery_config not in (
+            None,
+            "jiebacfg",
+            "jiebaqry",
+        ):
+            raise ValueError("Only native BM25 and the documented fulltext aliases are supported")
+        if not isinstance(include_embedding, bool):
+            raise ValueError("include_embedding must be a bool")
+        if return_fields is not None and (
+            not isinstance(return_fields, list)
+            or any(
+                not isinstance(field, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field)
+                for field in return_fields
+            )
+        ):
+            raise ValueError("return_fields must contain valid field names")
+        fields = list(dict.fromkeys(return_fields or []))
+        if include_embedding and "embedding" not in fields:
+            fields.append("embedding")
+        with_embedding = "embedding" in fields
+        scopes = self._filter_scopes(
+            cube_name if cube_name is not None else user_name, knowledgebase_ids
+        )
+        if search_filter is not None and not isinstance(search_filter, dict):
+            raise ValueError("search_filter must be an object")
+        metadata = [{"field": key, "value": value} for key, value in (search_filter or {}).items()]
+        if scope is not None:
+            self._validate_id(scope)
+            metadata.append({"field": "memory_type", "value": scope})
+        params: list[Any] = []
+        metadata_sql = self._build_metadata_conditions(metadata, params)
+        filter_sql = self._build_filter_where_clause(filter, params)
+        status_sql = self._filter_status("activated" if status is None else status, params)
+        if not terms or top_k == 0:
+            return []
+        query_text = " ".join(terms)
+        vector_column = "embedding::text" if with_embedding else "NULL"
+        query = (
+            f"SELECT business_id, memory, properties, {vector_column}, scope, memory <&> %s "
+            f"FROM ONLY {_TABLE} WHERE scope = ANY(%s) "
+            f"AND ({metadata_sql}) AND ({filter_sql}) AND ({status_sql}) "
+            "ORDER BY memory <&> %s DESC LIMIT %s"
+        )
+        query_params = [query_text, scopes, *params, query_text, top_k]
+        try:
+            rows = self._query_fulltext(query, query_params)
+        except GraphDBError as exc:
+            cause = exc.__cause__
+            if (
+                not isinstance(cause, psycopg2.Error)
+                or cause.pgcode != "42809"
+                or cause.diag.message_primary
+                != (
+                    "Last batch insert document failed, scanned score maybe affected, "
+                    "please reindex or recreate bm25 index [memory_fulltext_bm25]."
+                )
+            ):
+                raise
+            self._rebuild_fulltext_index()
+            rows = self._query_fulltext(query, query_params)
+        ranked = []
+        for row in rows:
+            try:
+                score = float(row[5])
+                if not math.isfinite(score) or score < 0:
+                    raise ValueError("Invalid BM25 score")
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise GraphDBError("Invalid openGauss BM25 score") from exc
+            node = self._decode_node(row[:4], row[4], with_embedding)
+            item = {"id": node["id"], "score": score}
+            for field in fields:
+                if field in ("id", "score"):
+                    continue
+                if field == "user_name":
+                    item[field] = row[4]
+                elif field == "memory":
+                    item[field] = node["memory"]
+                else:
+                    item[field] = node["metadata"].get(field)
+            if threshold is None or score >= threshold:
+                ranked.append((score, row[4], node["id"], item))
+        ranked.sort(key=lambda hit: (-hit[0], hit[1], hit[2]))
+        return [hit[3] for hit in ranked[:top_k]]
 
     def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
         """Merge fields under a row lock, retaining unspecified values and scope."""

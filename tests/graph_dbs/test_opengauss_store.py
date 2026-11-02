@@ -343,7 +343,24 @@ def schema_case(config, monkeypatch):
     module = importlib.import_module("memos.graph_dbs.opengauss")
     pool = MagicMock()
     cursor = pool.transaction.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
-    cursor.fetchone.side_effect = [(1,), ("v", "memos_graph", "Memory"), (1,)]
+    cursor.fetchone.side_effect = [
+        (1,),
+        ("v", "memos_graph", "Memory"),
+        (1,),
+        ("memos_graph", "Memory", "hnsw", "vector_cosine_ops", "6", True, True, None, None),
+        (
+            "memos_graph",
+            "Memory",
+            "bm25",
+            "bm25_text_ops",
+            "5",
+            True,
+            True,
+            None,
+            None,
+            ["dict_path=DEFAULT"],
+        ),
+    ]
     cursor.fetchall.return_value = _columns()
     monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", pool.transaction)
@@ -357,7 +374,25 @@ def test_initialization_creates_missing_graph_or_label_without_private_id_helper
     schema_case, graph
 ):
     module, config, pool, cursor = schema_case
-    cursor.fetchone.side_effect = [graph, None, (1,)]
+    cursor.fetchone.side_effect = [
+        graph,
+        None,
+        (1,),
+        None,
+        ("memos_graph", "Memory", "hnsw", "vector_cosine_ops", "6", True, True, None, None),
+        (
+            "memos_graph",
+            "Memory",
+            "bm25",
+            "bm25_text_ops",
+            "5",
+            True,
+            True,
+            None,
+            None,
+            ["dict_path=DEFAULT"],
+        ),
+    ]
     db = PartialOpenGaussGraphDB(config)
     assert db.config is not config
     queries = [call.args[0] for call in cursor.execute.call_args_list]

@@ -284,7 +284,9 @@ class OpenGaussGraphDBConfig(BaseConfig):
         default=False,
         description="Use physical database isolation instead of a required logical scope",
     )
-    embedding_dimension: int = Field(default=1024, ge=1, description="Embedding dimension")
+    embedding_dimension: int = Field(
+        default=1024, ge=1, le=16000, description="DataVec dimension; HNSW supports up to 2000"
+    )
     minconn: int = Field(default=1, ge=1, description="Minimum pooled connections")
     maxconn: int = Field(default=20, ge=1, description="Maximum pooled connections")
     connect_timeout: int = Field(
