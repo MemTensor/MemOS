@@ -121,15 +121,26 @@ class HFLLM(BaseLLM):
         which would mutate the stored cache during the generation and leave
         it grown whenever the generation is interrupted.
 
+        A cache that is already an owned copy -- one that was handed out by
+        the activation memory and therefore shares no tensor with the stored
+        cache -- is not copied again: the copy would be pure overhead and
+        would keep a second full set of K/V tensors alive during the
+        generation. The stored cache stays read-only either way, because an
+        owned copy never aliases it.
+
         Args:
             cache (DynamicCache): The cache provided by the caller.
 
         Returns:
-            DynamicCache: A copy that does not share any tensor with ``cache``.
+            DynamicCache: A cache that does not share any tensor with the
+            stored activation memory.
         """
         # Imported lazily: memos.llms.factory imports this module, so a
         # module-level import of memos.memories.activation.kv would be circular.
-        from memos.memories.activation.kv import clone_dynamic_cache
+        from memos.memories.activation.kv import clone_dynamic_cache, is_owned_cache
+
+        if is_owned_cache(cache):
+            return cache
 
         return clone_dynamic_cache(cache)
 

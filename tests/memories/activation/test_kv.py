@@ -6,7 +6,11 @@ from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
 from memos.memories.activation.item import KVCacheItem
-from memos.memories.activation.kv import KVCacheMemory, clone_dynamic_cache
+from memos.memories.activation.kv import (
+    KVCacheMemory,
+    clone_dynamic_cache,
+    is_owned_cache,
+)
 from tests.utils import (
     dynamic_cache_key_tensors,
     dynamic_cache_layer_count,
@@ -192,6 +196,9 @@ def test_clone_dynamic_cache_handles_legacy_layout():
     assert torch.equal(cloned.key_cache[0], cache.key_cache[0])
     assert cloned.value_cache[0].data_ptr() != cache.value_cache[0].data_ptr()
     assert torch.equal(cloned.value_cache[0], cache.value_cache[0])
+    # The copy of a legacy cache is an owned copy as well.
+    assert is_owned_cache(cloned)
+    assert not is_owned_cache(cache)
 
 
 def test_clone_dynamic_cache_prefers_the_layers_layout():
@@ -240,3 +247,54 @@ def test_clone_dynamic_cache_copies_layers_with_legacy_attribute_names():
     assert torch.equal(cloned.layers[0].key_cache, cache.layers[0].key_cache)
     assert cloned.layers[0].value_cache.data_ptr() != cache.layers[0].value_cache.data_ptr()
     assert torch.equal(cloned.layers[0].value_cache, cache.layers[0].value_cache)
+
+
+def test_clone_dynamic_cache_hands_out_an_owned_copy():
+    # A clone is an owned copy: it shares no tensor with the original, so the
+    # caller may hand it to a model that appends to it in place. The model
+    # boundary uses that ownership to avoid copying it a second time.
+    cache = make_filled_cache()
+    cloned = clone_dynamic_cache(cache)
+
+    assert is_owned_cache(cloned)
+    assert not is_owned_cache(cache)
+
+
+def test_get_cache_hands_out_an_owned_copy(kv_memory):
+    # The cache the memory hands out is an owned copy; the stored cache is not.
+    item = KVCacheItem(memory=make_filled_cache())
+    kv_memory.add([item])
+
+    cached = kv_memory.get_cache([item.id])
+
+    assert is_owned_cache(cached)
+    assert not is_owned_cache(item.memory)
+
+
+def test_get_cache_merge_hands_out_an_owned_copy(kv_memory):
+    # The merged cache is built from freshly concatenated tensors, so it is an
+    # owned copy as well.
+    item1 = KVCacheItem(memory=make_filled_cache())
+    item2 = KVCacheItem(memory=make_filled_cache())
+    kv_memory.add([item1, item2])
+
+    merged = kv_memory.get_cache([item1.id, item2.id])
+
+    assert is_owned_cache(merged)
+    assert not is_owned_cache(item1.memory)
+    assert not is_owned_cache(item2.memory)
+
+
+def test_stored_cache_is_never_an_owned_copy(kv_memory):
+    # A cache that is stored in the memory belongs to the memory: storing an
+    # already owned copy back must drop the ownership, otherwise the model
+    # would append to the stored cache in place.
+    item = KVCacheItem(memory=make_filled_cache())
+    kv_memory.add([item])
+
+    cached = kv_memory.get_cache([item.id])
+    assert is_owned_cache(cached)
+
+    kv_memory.add([KVCacheItem(memory=cached, metadata=item.metadata)])
+
+    assert not is_owned_cache(cached)

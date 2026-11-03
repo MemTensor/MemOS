@@ -15,6 +15,50 @@ from memos.memories.activation.item import KVCacheItem
 from memos.memories.textual.item import TextualMemoryItem
 
 
+#: Attribute that marks a cache as an *owned copy*.
+#:
+#: A cache that leaves the activation memory is an owned copy when it shares
+#: no tensor with the stored cache: the caller may hand it to a model that
+#: appends to it in place without corrupting the stored cache. The marker
+#: records that ownership, so the model boundary can tell an already owned
+#: cache from a borrowed one and does not copy it a second time.
+_OWNED_CACHE_MARKER = "_memos_owned_cache_copy"
+
+
+def is_owned_cache(cache: Any) -> bool:
+    """
+    Whether ``cache`` is an owned copy that the caller may mutate in place.
+
+    A cache is owned when it was produced by :func:`clone_dynamic_cache` or by
+    the merge path of ``_concat_caches``: it shares no tensor with the
+    activation memory, so handing it to a model that appends to it in place
+    cannot corrupt the stored cache. Any other cache is *borrowed* and has to
+    be copied before it is given to the model.
+
+    Args:
+        cache: The cache to inspect.
+
+    Returns:
+        bool: True when the cache is an owned copy.
+    """
+    return bool(getattr(cache, _OWNED_CACHE_MARKER, False))
+
+
+def _mark_cache_as_stored(cache: Any) -> None:
+    """
+    Drop the ownership marker of a cache that is stored in the memory.
+
+    A stored cache belongs to the activation memory, not to the caller: it
+    must never be treated as an owned copy, otherwise the model would append
+    to it in place and grow the stored memory again.
+
+    Args:
+        cache: The cache that is about to be stored.
+    """
+    if getattr(cache, _OWNED_CACHE_MARKER, False):
+        setattr(cache, _OWNED_CACHE_MARKER, False)
+
+
 class KVCacheMemory(BaseActMemory):
     """
     Key-Value Cache Memory for activation memories.
@@ -60,6 +104,9 @@ class KVCacheMemory(BaseActMemory):
             memories: List of KVCacheItem to add
         """
         for memory in memories:
+            # A stored cache belongs to the memory: it must not be treated as
+            # an owned copy, otherwise the model would append to it in place.
+            _mark_cache_as_stored(memory.memory)
             self.kv_cache_memories[memory.id] = memory
 
     def get_cache(self, cache_ids: list[str]) -> DynamicCache | None:
@@ -256,6 +303,10 @@ class KVCacheMemory(BaseActMemory):
                 "DynamicCache object has neither 'layers' nor 'key_cache' attributes"
             )
 
+        # The merged cache is built from freshly concatenated tensors, so it
+        # shares nothing with the stored caches: it is an owned copy as well.
+        setattr(merged, _OWNED_CACHE_MARKER, True)
+
         return merged
 
 
@@ -301,6 +352,10 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
     * ``transformers >= 4.55``: a ``layers`` list whose layers carry either
       ``keys`` / ``values`` or ``key_cache`` / ``value_cache``.
 
+    The copy is marked as an owned copy (see :func:`is_owned_cache`), so the
+    model boundary does not copy it a second time when it is handed to a
+    model that appends to it in place.
+
     Args:
         cache: The cache to copy.
 
@@ -315,6 +370,7 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
         # cache it receives.
         cloned = copy.copy(cache)
         cloned.layers = [_clone_cache_layer(layer) for layer in layers]
+        setattr(cloned, _OWNED_CACHE_MARKER, True)
         return cloned
 
     key_cache = getattr(cache, "key_cache", None)
@@ -326,6 +382,7 @@ def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
             cloned.key_cache = [_clone_tensor(tensor) for tensor in key_cache]
         if value_cache is not None:
             cloned.value_cache = [_clone_tensor(tensor) for tensor in value_cache]
+        setattr(cloned, _OWNED_CACHE_MARKER, True)
         return cloned
 
     raise AttributeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
