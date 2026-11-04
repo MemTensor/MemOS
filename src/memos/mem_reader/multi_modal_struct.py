@@ -159,14 +159,23 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     "chunk_index": chunk_idx,
                     "chunk_total": chunk_total,
                 }
-                # Create a new memory item for each chunk, preserving original metadata
+                # Create a new memory item for each chunk, preserving original
+                # metadata. We pass an empty ``sources`` list deliberately: the
+                # parent already carries those source messages, and chunks
+                # are *derived* fragments — not original messages — so they
+                # should not multiply the full source list (issue #2453, which
+                # produced N byte-identical ``SourceMessage`` copies per chunk
+                # when the parent had N sources and the item was split into N
+                # chunks). Provenance of each chunk is preserved through
+                # ``internal_info.chunk_index / chunk_total / ingest_batch_id``
+                # below.
                 split_item = self._make_memory_item(
                     value=chunk_text,
                     info=chunk_info,
                     memory_type=item.metadata.memory_type,
                     tags=item.metadata.tags or [],
                     key=item.metadata.key,
-                    sources=item.metadata.sources or [],
+                    sources=[],
                     background=item.metadata.background or "",
                     need_embed=False,
                 )
