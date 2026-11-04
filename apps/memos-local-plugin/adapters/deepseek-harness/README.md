@@ -7,11 +7,11 @@ background capture, and on-demand memory tools to a DSH profile without
 modifying the DSH repository.
 
 > [!IMPORTANT]
-> DeepSeek Harness is currently a developer preview. The initial compatibility
-> target for this adapter is DSH `0.1.0-rc.5`; record the exact DSH version in
-> every release's validation because later preview releases may require adapter
-> changes. Unit compilation and contract tests currently use the published DSH
-> `0.1.0-rc.6` packages; the end-to-end host below is the rc.5 source checkout.
+> DeepSeek Harness is currently a developer preview. The development API stack
+> is pinned to `0.2.1-rc.3`. The compatibility matrix compiles, builds, and tests
+> this adapter against the published `0.1.0-rc.6`, `0.1.7-rc.2`, `0.2.0-rc.2`,
+> `0.2.1-rc.2`, and `0.2.1-rc.3` packages. These are API/contract checks, not a
+> substitute for validating each packaged Desktop/Web/CLI release.
 
 ## How it works
 
@@ -115,9 +115,8 @@ the MemOS JSON-RPC bridge or a sidecar daemon.
 
 Prerequisites:
 
-- A Node.js version accepted by the DSH release. DSH `0.1.0-rc.5` requires
-  Node.js `^22.19.0 || >=24.0.0`; this stricter host requirement takes
-  precedence over the MemOS package's standalone `>=22` engine.
+- Node.js `>=22` in the actual host runtime, also satisfying the selected DSH
+  release's engine constraint. Desktop uses its bundled Node/Electron runtime.
 - A working DSH installation. The recommended one-command installer prepares
   an isolated `pnpm@11.7.0` for the install when pnpm is absent. Lower-level
   direct `dsh plugin` commands still require pnpm on `PATH`.
@@ -610,22 +609,66 @@ npx vitest run tests/unit/adapters/deepseek-harness-{bridge,host-llm,runtime}.te
 ```
 
 These tests use the published `@deepseek-ai/dsh-session-format-v3-to-v4`
-`0.2.0-rc.2` codec, without a DSH desktop installation, account, or network
+`0.2.1-rc.3` codec, without a DSH desktop installation, account, or network
 calls during testing. They check real recall and host-LLM messages through
 both `assertV4RowAdmission` and `encodeEvent`, including a pre-step inbox
 batch and rejection of retired `kind: "plugin"` sources. The codec is a dev
-dependency only. Its Cordis peer is satisfied by the development range;
-existing DSH brand/protocol peers remain pinned to the older adapter test
-stack. This validates V4 attribution, not general compatibility with every
-DSH API in the codec's release line.
+dependency only. All DSH development packages, including brand/protocol peers,
+use the same `0.2.1-rc.3` stack and Cordis `~4.0.5`.
+
+For the compatibility matrix, run:
+
+```sh
+npm run test:dsh-compat
+# Or select a specific published API stack:
+npm run test:dsh-compat -- 0.2.1-rc.3
+```
+
+The script needs npm registry access. It installs each real host peer graph in
+its own temporary directory, then type-checks and builds the plugin and runs
+the adapter tests. Non-host test/build dependencies reuse the checkout's
+installation. It retains fixtures for inspection and does not touch DSH
+profiles, credentials, sessions, or the checkout's dependency installation.
+The native session boundary tests also check that the producer-owned source
+survives the old host's admission and snapshot paths.
+
+## Version compatibility and upgrades
+
+The six optional DSH service peers intentionally declare separate prerelease
+lines:
+
+```text
+>=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2
+```
+
+npm semver only admits a prerelease when a comparator explicitly names its
+`major.minor.patch` tuple. Simply changing `<0.2.0` to `<0.3.0` would still
+exclude `0.2.1-rc.3`. Unvalidated `0.2.2` and `0.3.x` remain excluded.
+The former `0.1.0-rc.5` API baseline is no longer advertised: its core packages
+are unavailable from npm, so it cannot be revalidated by this matrix.
+
+There are two independent checks to distinguish:
+
+- **Startup: bundle skipped as incompatible.** Plugin `2.0.20` and `2.0.21`
+  declare peers below `0.2.0`; neither version's manifest admits DSH 0.2.x.
+  This change updates that declaration together with the adapter's moved JSON
+  type and synchronized npm/pnpm locks. It does not change the Cloud plugin.
+- **Runtime: V4 rejects `source.kind: "plugin"`.** Fixed in `2.0.21`; this
+  adapter retains that producer-owned source implementation and codec tests.
+
+After a release containing these compatibility changes is published, update
+the plugin in each DSH profile that uses it and fully restart that host. If
+you patched `dist/` by hand, reinstall the released package: a profile install
+can overwrite those patches. A successful `allow-version` exemption alone
+does not verify runtime compatibility. Until this change is released,
+installing npm `2.0.21` still leaves the startup version restriction in place.
 
 ## Known limitations
 
-1. **Developer-preview compatibility.** The initial compatibility target is
-   DSH `0.1.0-rc.5`; verify the packaged artifact against that exact host
-   before publishing results. Its optional DSH peer range is
-   `>=0.1.0-rc.5 <0.2.0`, but that range is not a guarantee across preview
-   breaking changes.
+1. **Developer-preview compatibility.** The supported prerelease lines and
+   repeatable API matrix are listed above. New DSH lines need explicit
+   validation before the peer range is expanded. Automated adapter tests do
+   not validate every platform's native dependencies or Desktop packaging.
 2. **Eventual consistency and abrupt-crash replay gap.** Per-turn foreground
    recall never waits for prior capture, relation, or intent work. A completed
    background result is visible to later automatic recalls and explicit tool

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { assertV4RowAdmission, releasedV4SessionFormatCodec } from "@deepseek-ai/dsh-session-format-v3-to-v4";
+import { adoptSessionEvent, snapshotSessionEvent } from "@deepseek-ai/dsh-session";
 
 import type { Context } from "@deepseek-ai/cordis";
 import { describe, expect, it, vi } from "vitest";
@@ -20,6 +21,16 @@ import { dshV4Event } from "../../helpers/deepseek-harness-v4.js";
 import { DEFAULT_CONFIG } from "../../../core/config/index.js";
 
 describe("DeepSeek Harness adapter runtime defaults", () => {
+  it("preserves recall attribution across the installed host's session boundary", () => {
+    const message = createDeepSeekHarnessRecallMessage("synthetic recall");
+    const event = { ...dshV4Event("user/message", message), surfaceOp: "append" };
+    expect(adoptSessionEvent(event as never)).toEqual(event);
+    expect(snapshotSessionEvent(event as never)).toEqual(event);
+    expect(event.data).toMatchObject({ source: {
+      kind: "plugin:memos-local-memory", plugin: "memos-local-memory", form: "recall",
+    } });
+  });
+
   it("creates producer-owned recall messages admitted by DSH V4", () => {
     const message = createDeepSeekHarnessRecallMessage("synthetic recall");
     const event = dshV4Event("user/message", message);
