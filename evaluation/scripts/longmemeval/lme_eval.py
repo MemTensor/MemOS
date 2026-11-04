@@ -24,6 +24,7 @@ from tqdm import tqdm
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.judge import parse_judge_label
 from utils.prompts import LME_JUDGE_MODEL_TEMPLATE
 
 
@@ -174,7 +175,15 @@ def lme_grader(llm_client, question, golden_answer, response):
     )
 
     message_content = response.choices[0].message.content
-    label = json.loads(message_content)["label"]
+    try:
+        label = parse_judge_label(message_content)
+    except ValueError as exc:
+        # The judge occasionally returns an empty body or prose without the
+        # ``{"label": ...}`` snippet. Downgrade that to a WRONG verdict and keep
+        # the sample in the batch instead of letting ``asyncio.gather`` abort
+        # the whole user's processing (see issue #2525's log-collapse symptom).
+        print(f"[WARN] lme_grader failed to parse judge reply: {exc}")
+        return False
     parsed = LLMGrade(llm_judgment=label, llm_reasoning="")
 
     return parsed.llm_judgment.strip().lower() == "correct"
