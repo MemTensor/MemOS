@@ -1,5 +1,6 @@
 import math
 import random
+import re
 
 from typing import Any
 
@@ -8,6 +9,19 @@ from memos.memories.activation.item import KVCacheItem
 
 
 logger = get_logger(__name__)
+
+
+# Strip the outer markdown fences from an LLM JSON response. The opening
+# fence may include a short info string (``json`` or otherwise) optionally
+# surrounded by blanks; the closing fence is bare. Both patterns are
+# anchored so interior triple-backtick sequences inside a JSON string value
+# are preserved verbatim (issue #2420 — suggestions/responses that
+# contained code snippets were being silently corrupted before
+# ``json.loads``). The info string is restricted to a real identifier so a
+# single-line fenced payload (````` ```{"a": 1}``` `````, no newline after
+# the fence) is not swallowed by a greedy character class.
+_JSON_FENCE_OPEN_RE = re.compile(r"^```[ \t]*[A-Za-z0-9_+-]*[ \t]*\n?")
+_JSON_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
 
 
 def extract_node_name(memory: str) -> str:
@@ -533,7 +547,7 @@ def convert_graph_to_tree_forworkmem(
         node_name = extract_node_name(memory)
         memory_key = node.get("metadata", {}).get("key", node_name)
         usage = node.get("metadata", {}).get("usage", [])
-        frequency = len(usage) if len(usage) < 100 else 100
+        frequency = min(100, len(usage))
         node_map[node["id"]] = {
             "id": node["id"],
             "value": memory,
@@ -1394,11 +1408,16 @@ def clean_json_response(response: str) -> str:
     """
     Remove markdown JSON code block formatting from LLM response.
 
+    Only an opening fence (with its optional ``json`` info string) at the
+    very start and a closing fence at the very end are markup; interior
+    triple-backtick sequences are part of the JSON payload (issue #2420)
+    and must be preserved verbatim.
+
     Args:
         response: Raw response string that may contain ```json and ```
 
     Returns:
-        str: Clean JSON string without markdown formatting
+        str: Clean JSON string without the outer markdown fences.
 
     Raises:
         ValueError: If ``response`` is None. This is almost always an upstream
@@ -1413,4 +1432,11 @@ def clean_json_response(response: str) -> str:
             "failed silently (check timed_with_status / generate() error "
             "handling)."
         )
-    return response.replace("```json", "").replace("```", "").strip()
+    s = response.strip()
+    # Anchor at the start so interior ```json / ``` markers inside JSON
+    # string values are left alone. The opening-fence info string ("json" or
+    # any other word) and the trailing newline are stripped.
+    s = _JSON_FENCE_OPEN_RE.sub("", s, count=1)
+    # Anchor at the end so a stray closing fence inside a value is kept.
+    s = _JSON_FENCE_CLOSE_RE.sub("", s, count=1)
+    return s.strip()
