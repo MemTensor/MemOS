@@ -17,7 +17,7 @@ class MOSConfig(BaseConfig):
         description="User ID for the MOS. This is used to distinguish between different users' memories.",
     )
     session_id: str = Field(
-        default=str(uuid.uuid4()),
+        default_factory=lambda: str(uuid.uuid4()),
         description="Session ID for the MOS. This is used to distinguish between different dialogue",
     )
     chat_model: LLMConfigFactory = Field(
