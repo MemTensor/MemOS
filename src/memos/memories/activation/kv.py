@@ -1,7 +1,9 @@
+import copy
 import os
 import pickle
 
 from datetime import datetime
+from typing import Any
 
 from transformers import DynamicCache
 
@@ -11,6 +13,50 @@ from memos.llms.factory import LLMFactory
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import KVCacheItem
 from memos.memories.textual.item import TextualMemoryItem
+
+
+#: Attribute that marks a cache as an *owned copy*.
+#:
+#: A cache that leaves the activation memory is an owned copy when it shares
+#: no tensor with the stored cache: the caller may hand it to a model that
+#: appends to it in place without corrupting the stored cache. The marker
+#: records that ownership, so the model boundary can tell an already owned
+#: cache from a borrowed one and does not copy it a second time.
+_OWNED_CACHE_MARKER = "_memos_owned_cache_copy"
+
+
+def is_owned_cache(cache: Any) -> bool:
+    """
+    Whether ``cache`` is an owned copy that the caller may mutate in place.
+
+    A cache is owned when it was produced by :func:`clone_dynamic_cache` or by
+    the merge path of ``_concat_caches``: it shares no tensor with the
+    activation memory, so handing it to a model that appends to it in place
+    cannot corrupt the stored cache. Any other cache is *borrowed* and has to
+    be copied before it is given to the model.
+
+    Args:
+        cache: The cache to inspect.
+
+    Returns:
+        bool: True when the cache is an owned copy.
+    """
+    return bool(getattr(cache, _OWNED_CACHE_MARKER, False))
+
+
+def _mark_cache_as_stored(cache: Any) -> None:
+    """
+    Drop the ownership marker of a cache that is stored in the memory.
+
+    A stored cache belongs to the activation memory, not to the caller: it
+    must never be treated as an owned copy, otherwise the model would append
+    to it in place and grow the stored memory again.
+
+    Args:
+        cache: The cache that is about to be stored.
+    """
+    if getattr(cache, _OWNED_CACHE_MARKER, False):
+        setattr(cache, _OWNED_CACHE_MARKER, False)
 
 
 class KVCacheMemory(BaseActMemory):
@@ -58,6 +104,9 @@ class KVCacheMemory(BaseActMemory):
             memories: List of KVCacheItem to add
         """
         for memory in memories:
+            # A stored cache belongs to the memory: it must not be treated as
+            # an owned copy, otherwise the model would append to it in place.
+            _mark_cache_as_stored(memory.memory)
             self.kv_cache_memories[memory.id] = memory
 
     def get_cache(self, cache_ids: list[str]) -> DynamicCache | None:
@@ -206,7 +255,9 @@ class KVCacheMemory(BaseActMemory):
 
         assert caches, "Need at least one cache"
         if len(caches) == 1:
-            return caches[0]
+            # Hand out an independent copy: the stored cache must stay read-only,
+            # otherwise the model appends the generated tokens to it in place.
+            return clone_dynamic_cache(caches[0])
 
         merged = DynamicCache()
 
@@ -252,7 +303,89 @@ class KVCacheMemory(BaseActMemory):
                 "DynamicCache object has neither 'layers' nor 'key_cache' attributes"
             )
 
+        # The merged cache is built from freshly concatenated tensors, so it
+        # shares nothing with the stored caches: it is an owned copy as well.
+        setattr(merged, _OWNED_CACHE_MARKER, True)
+
         return merged
+
+
+def _clone_tensor(tensor: Any) -> Any:
+    """Clone a cache tensor, keeping ``None`` as ``None``."""
+    if tensor is None:
+        return None
+    return tensor.clone()
+
+
+def _clone_cache_layer(layer: Any) -> Any:
+    """
+    Copy a single cache layer without sharing any tensor with the original.
+
+    The layer object itself is shallow-copied so that all non-tensor state
+    (e.g. the cumulative sequence length tracked by newer ``transformers``
+    versions) is preserved, while every key/value tensor is replaced by an
+    independent clone.
+    """
+    cloned = copy.copy(layer)
+    for attribute in ("keys", "key_cache", "values", "value_cache"):
+        tensor = getattr(layer, attribute, None)
+        if tensor is not None:
+            setattr(cloned, attribute, _clone_tensor(tensor))
+    return cloned
+
+
+def clone_dynamic_cache(cache: DynamicCache) -> DynamicCache:
+    """
+    Return an independent copy of a ``DynamicCache``.
+
+    ``transformers`` appends the newly generated key/value tensors **in place**
+    to the cache object it is given (``DynamicLayer.update`` rebinds
+    ``keys``/``values`` on the very same layer object). When the cache handed
+    to the model is the object stored in the activation memory, every chat turn
+    permanently grows the stored activation memory, and the growth is written
+    back to disk on the next dump.
+
+    The returned cache shares no tensor with the original, so it can safely be
+    passed to the model. Both cache layouts are supported:
+
+    * ``transformers < 4.55``: ``key_cache`` / ``value_cache`` lists;
+    * ``transformers >= 4.55``: a ``layers`` list whose layers carry either
+      ``keys`` / ``values`` or ``key_cache`` / ``value_cache``.
+
+    The copy is marked as an owned copy (see :func:`is_owned_cache`), so the
+    model boundary does not copy it a second time when it is handed to a
+    model that appends to it in place.
+
+    Args:
+        cache: The cache to copy.
+
+    Returns:
+        DynamicCache: A copy that does not share any tensor with ``cache``.
+    """
+    layers = getattr(cache, "layers", None)
+    if layers is not None:
+        # The modern layout. The check is on the attribute itself and not on
+        # its content: an empty cache still has to be copied into an
+        # independent one, because the model appends its first layer to the
+        # cache it receives.
+        cloned = copy.copy(cache)
+        cloned.layers = [_clone_cache_layer(layer) for layer in layers]
+        setattr(cloned, _OWNED_CACHE_MARKER, True)
+        return cloned
+
+    key_cache = getattr(cache, "key_cache", None)
+    value_cache = getattr(cache, "value_cache", None)
+    if key_cache is not None or value_cache is not None:
+        # The legacy layout, where the tensors live in two flat lists.
+        cloned = copy.copy(cache)
+        if key_cache is not None:
+            cloned.key_cache = [_clone_tensor(tensor) for tensor in key_cache]
+        if value_cache is not None:
+            cloned.value_cache = [_clone_tensor(tensor) for tensor in value_cache]
+        setattr(cloned, _OWNED_CACHE_MARKER, True)
+        return cloned
+
+    raise AttributeError("DynamicCache object has neither 'layers' nor 'key_cache' attributes")
 
 
 def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> DynamicCache:
