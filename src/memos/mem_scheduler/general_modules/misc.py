@@ -4,10 +4,11 @@ import os
 from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Full, Queue
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, get_args, get_origin
 
 from dotenv import load_dotenv
 from pydantic import field_serializer
+from typing_extensions import Self
 
 
 if TYPE_CHECKING:
@@ -16,6 +17,15 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 BaseModelType = TypeVar("T", bound="BaseModel")
+
+
+def _is_optional(annotation: Any) -> bool:
+    """True if ``annotation`` is ``Optional[X]`` / ``X | None``."""
+    origin = get_origin(annotation)
+    if origin is None:
+        return False
+    args = get_args(annotation)
+    return type(None) in args
 
 
 class EnvConfigMixin(Generic[T]):
@@ -37,14 +47,13 @@ class EnvConfigMixin(Generic[T]):
         """
         class_name = cls.__name__
         # Remove 'Config' suffix if present
-        if class_name.endswith("Config"):
-            class_name = class_name[:-6]
+        class_name = class_name.removesuffix("Config")
         # Convert to uppercase and add trailing underscore
 
         return f"{cls.ENV_PREFIX}{class_name.upper()}_"
 
     @classmethod
-    def from_env(cls: type[T]) -> T:
+    def from_env(cls) -> Self:
         """Creates a config instance from environment variables.
 
         Reads all environment variables with the class-specific prefix and maps them
@@ -54,7 +63,8 @@ class EnvConfigMixin(Generic[T]):
             An instance of the config class populated from environment variables.
 
         Raises:
-            ValueError: If required environment variables are missing.
+            ValueError: If a required field (no default and no ``Optional``) has
+                no matching environment variable.
         """
         load_dotenv()
 
@@ -65,21 +75,36 @@ class EnvConfigMixin(Generic[T]):
             env_var = f"{prefix}{field_name.upper()}"
             field_type = field_info.annotation
 
-            if field_info.is_required() and env_var not in os.environ:
-                raise ValueError(f"Required environment variable {env_var} is missing")
-
             if env_var in os.environ:
                 raw_value = os.environ[env_var]
                 field_values[field_name] = cls._parse_env_value(raw_value, field_type)
-            elif field_info.default is not None:
-                field_values[field_name] = field_info.default
-            else:
-                raise ValueError()
+                continue
+
+            # Absent env var: only fail if the field is genuinely required
+            # (no default *and* not Optional). Pydantic will apply the
+            # field's default (or ``None`` for ``Optional[...]``) on its
+            # own when we don't pass a value at all. Previously this code
+            # raised a bare ``ValueError()`` for any absent optional field
+            # (issue #2424).
+            if field_info.is_required() and not _is_optional(field_type):
+                raise ValueError(f"Required environment variable {env_var} is missing")
+
         return cls(**field_values)
 
     @classmethod
     def _parse_env_value(cls, value: str, target_type: type) -> Any:
-        """Converts environment variable string to appropriate type."""
+        """Converts environment variable string to appropriate type.
+
+        Unwraps ``Optional[X]`` / ``X | None`` so an optional ``int``/``float``
+        env var parses as its inner type instead of staying a raw string
+        (issue #2424 secondary symptom).
+        """
+        # ``Optional[X]`` and ``X | None`` both come back from get_origin as
+        # ``types.UnionType`` (PEP 604) or ``typing.Union``.
+        if _is_optional(target_type):
+            args = [a for a in get_args(target_type) if a is not type(None)]
+            if args:
+                target_type = args[0]
         if target_type is bool:
             return value.lower() in ("true", "1", "t", "y", "yes")
         if target_type is int:
@@ -155,7 +180,7 @@ class DictConversionMixin:
         return json.dumps(self.to_dict(), ensure_ascii=False, default=lambda o: str(o), **kwargs)
 
     @classmethod
-    def from_json(cls: type[BaseModelType], json_str: str) -> BaseModelType:
+    def from_json(cls, json_str: str) -> Self:
         """
         Create model instance from a JSON string.
         - Parses JSON into a dictionary and delegates to from_dict
@@ -167,7 +192,7 @@ class DictConversionMixin:
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls: type[BaseModelType], data: dict) -> BaseModelType:
+    def from_dict(cls, data: dict) -> Self:
         """
         Create model instance from dictionary.
         - Automatically converts timestamp strings to datetime objects
@@ -200,8 +225,7 @@ class AutoDroppingQueue(Queue[T]):
 
     def __init__(self, maxsize: int = 0):
         # If maxsize <= 0, set to 0 (unlimited queue size)
-        if maxsize <= 0:
-            maxsize = 0
+        maxsize = max(0, maxsize)
         super().__init__(maxsize=maxsize)
 
     def put(self, item: T, block: bool = False, timeout: float | None = None) -> None:
