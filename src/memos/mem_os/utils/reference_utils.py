@@ -152,11 +152,16 @@ def prepare_reference_data(memories_list: list[TextualMemoryItem]) -> list[dict]
             reference.append({"metadata": memories_json["metadata"]})
         else:
             memories_json = memories
-            memories_json["metadata"]["ref_id"] = f"{memories_json['id'].split('-')[0]}"
+            # already-serialized entries may lack keys or carry a non-string
+            # id (e.g. an int from a JSON payload); derive the ref_id from
+            # the string form when an id exists at all
+            memory_id = memories_json.get("id")
+            if memory_id is not None:
+                memories_json["metadata"]["ref_id"] = f"{str(memory_id).split('-')[0]}"
+                memories_json["metadata"]["id"] = memory_id
             memories_json["metadata"]["embedding"] = []
             memories_json["metadata"]["sources"] = []
             memories_json["metadata"]["memory"] = memories_json["memory"]
-            memories_json["metadata"]["id"] = memories_json["id"]
             reference.append({"metadata": memories_json["metadata"]})
 
     return reference
