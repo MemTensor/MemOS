@@ -1228,6 +1228,36 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         return parsed_nodes
 
+    def get_nodes(self, ids: list[str], **kwargs) -> list[dict[str, Any]]:
+        """Batched override of the inherited ``Neo4jGraphDB.get_nodes``.
+
+        The parent implementation loops over ``self._parse_node``, which this
+        subclass overrides to fetch the embedding from the vector DB per node
+        (one ``get_by_id`` round-trip each). For a batch of N ids that means N
+        serial vector-DB calls. This override runs the exact same Cypher query
+        but parses all nodes via ``_parse_nodes``, fetching all embeddings in a
+        single batched ``get_by_ids`` call.
+        """
+        if not ids:
+            return []
+        user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+        where_user = ""
+        params = {"ids": ids}
+
+        if not self.config.use_multi_db and (self.config.user_name or user_name):
+            where_user = " AND n.user_name = $user_name"
+            if kwargs.get("cube_name"):
+                params["user_name"] = kwargs["cube_name"]
+            else:
+                params["user_name"] = user_name
+
+        query = f"MATCH (n:Memory) WHERE n.id IN $ids{where_user} RETURN n"
+
+        with self.driver.session(database=self.db_name) as session:
+            results = session.run(query, params)
+            nodes_data = [dict(record["n"]) for record in results]
+            return self._parse_nodes(nodes_data)
+
     def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, str | None]:
         """Get user names by memory ids.
 
