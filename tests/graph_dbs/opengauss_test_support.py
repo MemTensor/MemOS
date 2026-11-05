@@ -12,7 +12,6 @@ class PartialOpenGaussGraphDB(OpenGaussGraphDB):
         raise NotImplementedError("This openGauss capability is not implemented yet")
 
     get_context_chain = _unimplemented
-    get_structure_optimization_candidates = _unimplemented
     deduplicate_nodes = _unimplemented
     detect_conflicts = _unimplemented
     merge_nodes = _unimplemented

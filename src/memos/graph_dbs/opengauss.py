@@ -1487,6 +1487,42 @@ class OpenGaussGraphDB(BaseGraphDB):
         """Return integer one only when this Cube has no rows of the given type."""
         return int(self.get_memory_count(scope, user_name) == 0)
 
+    def get_structure_optimization_candidates(
+        self,
+        scope: str,
+        include_embedding: bool = False,
+        user_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read activated nodes without same-Cube PARENT adjacency in one snapshot."""
+        owner = self._capacity_scope(scope, user_name)
+        if not isinstance(include_embedding, bool):
+            raise ValueError("include_embedding must be a bool")
+        condition, params = self._join_fragments(
+            [
+                self._build_equal_condition(["memory_type"], scope, prefix="memos_type"),
+                self._build_equal_condition(["status"], "activated", prefix="memos_status"),
+            ],
+            " AND ",
+        )
+        vector = "m.embedding::text" if include_embedding else "NULL"
+        # The inherited edge table also works before a PARENT label exists.
+        # Its tableoid identifies the AGE label; native graphids join endpoints
+        # without conflating equal business IDs in different Cubes.
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT m.business_id, m.memory, m.properties, {vector} FROM ONLY {_TABLE} m "
+                f"WHERE m.scope = %(scope)s AND {condition} AND NOT EXISTS ("
+                "SELECT 1 FROM memos_graph._ag_label_edge e "
+                "JOIN ag_catalog.ag_label l ON l.relation = e.tableoid "
+                "AND l.name = 'PARENT' AND l.kind = 'e' "
+                f"JOIN ONLY {_TABLE} n ON n.scope = m.scope AND "
+                "((e.start_id = m.id AND e.end_id = n.id) OR "
+                "(e.end_id = m.id AND e.start_id = n.id))) "
+                'ORDER BY m.business_id COLLATE "C"',
+                self._merge_bindings(params, {"scope": owner}),
+            )
+            return [self._decode_node(row, owner, include_embedding) for row in cursor.fetchall()]
+
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int | str, user_name: str | None = None
     ) -> None:
