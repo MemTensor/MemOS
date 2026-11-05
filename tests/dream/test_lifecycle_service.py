@@ -193,6 +193,10 @@ def test_opted_in_persistence_initializes_service_state_without_confidence_rewri
     created = [row for row in records if row["metadata"].get("confidence") == 0.7]
     assert len(created) == 1
     assert created[0]["metadata"][LIFECYCLE_METADATA_KEY]["base_strength"] == 1
+    from memos.memories.textual.item import TextualMemoryItem
+
+    native_item = TextualMemoryItem(**graph.get_node(created[0]["id"], user_name="cube-a"))
+    assert native_item.metadata.source == "dream"
 
 
 def test_inspection_explains_quarantine_and_retention_without_initializing_or_writing(graph):

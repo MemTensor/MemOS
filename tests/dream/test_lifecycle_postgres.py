@@ -200,7 +200,18 @@ def test_legacy_write_semantics_and_embedding_survive_managed_updates(graph):
 
 
 @pytest.mark.parametrize(
-    "envelope", [None, [], {"version": 99}, {"protect_archived_status": "false"}]
+    "envelope",
+    [
+        None,
+        [],
+        {"version": 99},
+        {"protect_archived_status": "false"},
+        {"version": 99, "protect_archived_status": False},
+        {"version": True, "protect_archived_status": False},
+        {"protect_archived_status": False},
+        {"version": "1", "protect_archived_status": False},
+        {"version": 1.0, "protect_archived_status": False},
+    ],
 )
 def test_malformed_envelope_remains_quarantined_across_ordinary_writers(graph, envelope):
     memory_id = "quarantine-" + uuid4().hex

@@ -193,3 +193,132 @@ def test_delayed_notification_checks_receipts_against_delivery_clock(graph):
             at=old,
         )
     assert LIFECYCLE_METADATA_KEY not in graph.get_node(item, user_name="cube-a")["metadata"]
+
+
+def test_real_feedback_replacement_gets_independent_lifecycle_through_manager(graph):
+    from memos.dream.lifecycle import EventKind, LifecycleEvent
+    from memos.dream.lifecycle.runner import DreamMaintenanceRunner
+    from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+
+    now = datetime.now(timezone.utc)
+    service = DreamLifecycleService(graph, LifecycleConfig())
+    bridge = DreamLifecycleObserver(service)
+    hooks.register_hook(H.MEMORY_FEEDBACK_COMMITTED, bridge.on_feedback_committed)
+    item = str(uuid4())
+    metadata = service.metadata_for_new(
+        item,
+        "cube-a",
+        {
+            "source": "system",
+            "status": "activated",
+            "memory_type": "LongTermMemory",
+            "confidence": 0.7,
+        },
+        now=now,
+    )
+    graph.add_node(item, "Before", metadata, user_name="cube-a")
+    service.observe(
+        [
+            LifecycleEvent(
+                memory_id=item,
+                cube_id="cube-a",
+                event_id="old-hit",
+                kind=EventKind.RETRIEVED,
+                at=now,
+            )
+        ],
+        now=now,
+    )
+    old = TextualMemoryItem(**graph.get_node(item, user_name="cube-a"))
+    new = TextualMemoryItem(memory="Corrected", metadata={"memory_type": "LongTermMemory"})
+    manager = MemoryManager.__new__(MemoryManager)
+    manager.graph_store = graph
+    manager.reorganizer = SimpleNamespace(
+        add_message=lambda _message: None,
+        wait_until_current_task_done=lambda: None,
+        stop=lambda: None,
+    )
+    manager._cleanup_working_memory = lambda _scope: None
+    feedback = MemFeedback.__new__(MemFeedback)
+    feedback.graph_store = graph
+    feedback.mem_reader = SimpleNamespace(memory_version_switch="off")
+    feedback.memory_manager = manager
+    feedback._retry_db_operation = lambda callback: callback()
+    result = feedback._single_update_operation(old, new, "user-a", "cube-a")
+    replacement = graph.get_node(result["id"], user_name="cube-a")["metadata"]
+    assert result["id"] != item
+    assert LIFECYCLE_METADATA_KEY not in replacement
+    assert replacement["confidence"] == 0.7 and replacement["source"] == "system"
+    inspection = service.inspect([result["id"]], cube_id="cube-a", now=datetime.now(timezone.utc))[
+        0
+    ]
+    assert inspection.eligible and not inspection.quarantined and inspection.hit_count == 0
+    service.observe(
+        [
+            LifecycleEvent(
+                memory_id=result["id"],
+                cube_id="cube-a",
+                event_id="new-hit",
+                kind=EventKind.RETRIEVED,
+                at=datetime.now(timezone.utc),
+            )
+        ],
+        now=datetime.now(timezone.utc),
+    )
+    replacement = graph.get_node(result["id"], user_name="cube-a")["metadata"]
+    assert replacement[LIFECYCLE_METADATA_KEY]["memory_id"] == result["id"]
+    assert replacement[LIFECYCLE_METADATA_KEY]["hit_count"] == 1
+    assert len(replacement[LIFECYCLE_METADATA_KEY]["receipts"]) == 1
+    assert graph.get_node(item, user_name="cube-a")["metadata"][LIFECYCLE_METADATA_KEY][
+        "invalidated_by_feedback"
+    ]
+    assert (
+        DreamMaintenanceRunner(service)
+        .run(cube_id="cube-a", now=datetime.now(timezone.utc))
+        .complete
+    )
+
+
+def test_native_version_archive_copy_does_not_inherit_current_identity(graph):
+    now = datetime.now(timezone.utc)
+    service = DreamLifecycleService(graph, LifecycleConfig())
+    item = str(uuid4())
+    metadata = service.metadata_for_new(
+        item,
+        "cube-a",
+        {"source": "dream", "status": "activated", "memory_type": "LongTermMemory"},
+        now=now,
+    )
+    graph.add_node(item, "Original", metadata, user_name="cube-a")
+    old = TextualMemoryItem(id=item, memory="Original", metadata=metadata)
+    archive = old.model_copy(deep=True)
+    archive.id = str(uuid4())
+    archive.metadata.status = "archived"
+
+    def version_provider(**kwargs):
+        return old, archive, archive.metadata.model_dump(), {"memory": "Corrected"}
+
+    hooks.register_hook(H.MEMORY_VERSION_APPLY_FEEDBACK_UPDATE, version_provider)
+    feedback = MemFeedback.__new__(MemFeedback)
+    feedback.graph_store = graph
+    feedback._retry_db_operation = lambda callback: callback()
+    feedback._single_update_operation_with_versions(
+        old, TextualMemoryItem(memory="Corrected"), "cube-a"
+    )
+    archived = graph.get_node(archive.id, user_name="cube-a")["metadata"]
+    assert LIFECYCLE_METADATA_KEY not in archived
+    report = service.inspect([archive.id], cube_id="cube-a", now=datetime.now(timezone.utc))[0]
+    assert not report.quarantined and report.next_action == "skip"
+
+
+@pytest.mark.parametrize("prefix", ["dream_mem_", "dream_merged_", "dream_diary_", "ctx_"])
+def test_native_dream_identifiers_remain_uuid_validated(prefix):
+    identifier = prefix + uuid4().hex
+    assert (
+        TextualMemoryItem(id=identifier, memory="Native", metadata={"source": "dream"}).id
+        == identifier
+    )
+    with pytest.raises(ValueError):
+        TextualMemoryItem(id=prefix + "not-a-uuid", memory="Invalid")
+    with pytest.raises(ValueError):
+        TextualMemoryItem(id="unknown_" + uuid4().hex, memory="Unknown prefix")

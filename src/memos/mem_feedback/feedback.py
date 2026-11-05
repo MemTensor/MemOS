@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 from memos.configs.memory import MemFeedbackConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
+from memos.dream.lifecycle.contracts import detach_lifecycle_identity
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
@@ -240,6 +241,11 @@ class MemFeedback(BaseMemFeedback):
             to_add_memory = new_memory_item.model_copy(deep=True)
 
         to_add_memory.id = str(uuid.uuid4())
+        fresh_metadata = detach_lifecycle_identity(
+            to_add_memory.metadata.model_dump(),
+            source_memory_id=(old_memory_item or new_memory_item).id,
+        )
+        to_add_memory.metadata = type(to_add_memory.metadata).model_validate(fresh_metadata)
         if to_add_memory.metadata.memory_type == "PreferenceMemory":
             to_add_memory.metadata.preference = new_memory_item.memory
 
@@ -394,6 +400,10 @@ class MemFeedback(BaseMemFeedback):
 
         if archived_item and archived_metadata:
             try:
+                if archived_item.id != old_memory_item.id:
+                    archived_metadata = detach_lifecycle_identity(
+                        archived_metadata, source_memory_id=old_memory_item.id
+                    )
                 self.graph_store.add_node(
                     id=archived_item.id,
                     memory=archived_item.memory,

@@ -24,6 +24,7 @@ from memos.dependency import require_python_package
 from memos.exceptions import MemoryError as MemOSMemoryError
 from memos.graph_dbs.base import (
     MANAGED_LIFECYCLE_KEY,
+    MANAGED_LIFECYCLE_VERSION,
     BaseGraphDB,
     NodeMetadataResult,
     NodeMetadataUpdate,
@@ -274,7 +275,9 @@ class PostgresGraphDB(BaseGraphDB):
         # Missing/invalid archive guards conservatively preserve current status.
         protected = sql.SQL("""
             CASE WHEN existing.properties ? {key} THEN
-                (CASE WHEN existing.properties->{key}->'protect_archived_status' = 'false'::jsonb
+                (CASE WHEN jsonb_typeof(existing.properties->{key}->'version') = 'number'
+                    AND existing.properties->{key}->>'version' = {version}
+                    AND existing.properties->{key}->'protect_archived_status' = 'false'::jsonb
                     THEN EXCLUDED.properties
                     ELSE (EXCLUDED.properties - 'status') ||
                         CASE WHEN existing.properties ? 'status'
@@ -282,7 +285,7 @@ class PostgresGraphDB(BaseGraphDB):
                             ELSE '{{}}'::jsonb END END)
                 || jsonb_build_object({key}, existing.properties->{key})
             ELSE EXCLUDED.properties END
-        """).format(key=key)
+        """).format(key=key, version=sql.Literal(str(MANAGED_LIFECYCLE_VERSION)))
         embedding_update = sql.SQL("embedding = EXCLUDED.embedding," if embedding else "")
         query = sql.SQL("""
             INSERT INTO {table} AS existing

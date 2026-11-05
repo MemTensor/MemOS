@@ -136,7 +136,7 @@ class TextualMemoryMetadata(BaseModel):
         default=None,
         description="A numeric score (float between 0 and 100) indicating how certain you are about the accuracy or reliability of the memory.",
     )
-    source: Literal["conversation", "retrieved", "web", "file", "system"] | None = Field(
+    source: Literal["conversation", "retrieved", "web", "file", "system", "dream"] | None = Field(
         default=None, description="The origin of the memory"
     )
     tags: list[str] | None = Field(
@@ -317,6 +317,13 @@ class TextualMemoryItem(BaseModel):
     @field_validator("id")
     @classmethod
     def _validate_id(cls, v: str) -> str:
+        # Native Dream writers namespace UUIDs to distinguish actions, diaries
+        # and Context nodes. Keep validating their UUID payload, rather than
+        # admitting arbitrary graph identifiers into the textual memory API.
+        for prefix in ("dream_mem_", "dream_merged_", "dream_diary_", "ctx_"):
+            if v.startswith(prefix):
+                uuid.UUID(v[len(prefix) :])
+                return v
         uuid.UUID(v)
         return v
 

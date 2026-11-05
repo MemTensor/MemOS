@@ -10,6 +10,7 @@ from memos.exceptions import MemoryError as MemOSMemoryError
 
 
 MANAGED_LIFECYCLE_KEY = "_memos_dream_lifecycle_v1"
+MANAGED_LIFECYCLE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,13 @@ def preserve_managed_metadata(current: dict[str, Any], incoming: dict[str, Any])
     if MANAGED_LIFECYCLE_KEY in current:
         state = current[MANAGED_LIFECYCLE_KEY]
         merged[MANAGED_LIFECYCLE_KEY] = deepcopy(state)
-        if not isinstance(state, dict) or state.get("protect_archived_status") is not False:
+        recognized_unprotected = (
+            isinstance(state, dict)
+            and type(state.get("version")) is int
+            and state["version"] == MANAGED_LIFECYCLE_VERSION
+            and state.get("protect_archived_status") is False
+        )
+        if not recognized_unprotected:
             if "status" in current:
                 merged["status"] = current["status"]
             else:

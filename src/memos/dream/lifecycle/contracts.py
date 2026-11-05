@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from memos.exceptions import MemoryError as MemOSMemoryError
-from memos.graph_dbs.base import MANAGED_LIFECYCLE_KEY
+from memos.graph_dbs.base import MANAGED_LIFECYCLE_KEY, MANAGED_LIFECYCLE_VERSION
 
 
 LIFECYCLE_METADATA_KEY = MANAGED_LIFECYCLE_KEY
@@ -28,6 +29,31 @@ class LifecycleMetadataError(LifecycleError):
 
 class LifecycleCapacityError(LifecycleError):
     """Live deduplication receipts cannot be evicted to admit another event."""
+
+
+def detach_lifecycle_identity(metadata: dict[str, Any], *, source_memory_id: str) -> dict[str, Any]:
+    """Prepare an explicit new identity without inheriting observations or receipts.
+
+    Source/provenance fields remain intact. The small Dream-origin marker allows
+    the lifecycle service to initialize fresh evidence even for a system-sourced
+    diary that was originally recognized only by its reserved envelope. This
+    function changes a new copy, never the source node's managed state.
+    """
+    fresh = deepcopy(metadata)
+    if LIFECYCLE_METADATA_KEY not in fresh:
+        return fresh
+    fresh.pop(LIFECYCLE_METADATA_KEY)
+    internal = fresh.get("internal_info") or {}
+    if not isinstance(internal, dict):
+        raise LifecycleError("Cannot preserve malformed derived-memory provenance")
+    dream = internal.get("dream") or {}
+    if not isinstance(dream, dict):
+        raise LifecycleError("Cannot preserve malformed Dream-origin provenance")
+    dream.setdefault("kind", "derived_memory")
+    dream["lifecycle_origin_memory_id"] = source_memory_id
+    internal["dream"] = dream
+    fresh["internal_info"] = internal
+    return fresh
 
 
 def utc_time(value: datetime | str, *, legacy: bool = False) -> datetime:
@@ -117,7 +143,12 @@ class LifecycleState(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    version: int = Field(default=1, ge=1, le=1, strict=True)
+    version: int = Field(
+        default=MANAGED_LIFECYCLE_VERSION,
+        ge=MANAGED_LIFECYCLE_VERSION,
+        le=MANAGED_LIFECYCLE_VERSION,
+        strict=True,
+    )
     memory_id: str = Field(min_length=1, strict=True)
     cube_id: str = Field(min_length=1, strict=True)
     policy_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
