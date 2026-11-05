@@ -1658,6 +1658,108 @@ class OpenGaussGraphDB(BaseGraphDB):
             for owner, source, target, kind in sorted(edges)
         ]
 
+    @staticmethod
+    def _reject_nul(value: Any) -> None:
+        if isinstance(value, str):
+            if "\0" in value:
+                raise ValueError("Import strings cannot contain NUL")
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                OpenGaussGraphDB._reject_nul(key)
+                OpenGaussGraphDB._reject_nul(item)
+        elif isinstance(value, list):
+            for item in value:
+                OpenGaussGraphDB._reject_nul(item)
+
+    def import_graph(self, data: dict[str, Any], user_name: str | None = None) -> None:
+        """Atomically upsert one Cube's nodes and merge edges with existing endpoints."""
+        scope = self._maintenance_scope(user_name)
+        if (
+            not isinstance(data, dict)
+            or not isinstance(data.get("nodes", []), list)
+            or not isinstance(data.get("edges", []), list)
+        ):
+            raise ValueError("Graph data must contain nodes and edges lists")
+        self._reject_nul(data)
+        nodes = {}
+        for node in data.get("nodes", []):
+            if not isinstance(node, dict) or "id" not in node or "memory" not in node:
+                raise ValueError("Each import node needs id and memory")
+            encoded = self._encode_node(node["id"], node["memory"], node.get("metadata", {}), scope)
+            if node["id"] in nodes:
+                raise ValueError("Duplicate import node ID")
+            nodes[node["id"]] = encoded
+        edges = set()
+        endpoints = set()
+        for edge in data.get("edges", []):
+            if not isinstance(edge, dict) or not {"source", "target", "type"} <= edge.keys():
+                raise ValueError("Each import edge needs source, target and type")
+            self._validate_id(edge["source"])
+            self._validate_id(edge["target"])
+            self._validate_edge_type(edge["type"], allow_any=False)
+            if edge.get("user_name", scope) != scope:
+                raise ValueError("Import edge user_name must match the target Cube")
+            edges.add((edge["source"], edge["target"], edge["type"]))
+            endpoints.update((edge["source"], edge["target"]))
+        if not nodes and not edges:
+            return
+        with self._cursor(lock=2) as cursor:
+            existing = self._lock_graph_nodes(cursor, sorted(set(nodes) | endpoints), scope)
+            if endpoints - existing - nodes.keys():
+                raise GraphDBError("An import edge endpoint does not exist in the target Cube")
+            for key in sorted(nodes):
+                owner, node_id, memory, embedding, properties = nodes[key]
+                cursor.execute(
+                    _UPSERT,
+                    {
+                        "scope": owner,
+                        "id": node_id,
+                        "memory": memory,
+                        "embedding": embedding,
+                        "properties": properties,
+                    },
+                )
+            for source, target, kind in sorted(edges):
+                self._cypher(
+                    cursor,
+                    "MATCH (a:Memory), (b:Memory) WHERE a.id=$source AND b.id=$target "
+                    "AND a.user_name=$scope AND b.user_name=$scope "
+                    f"MERGE (a)-[:{kind}]->(b)",
+                    {"source": source, "target": target, "scope": scope},
+                )
+
+    def _delete_locked_nodes(self, cursor: Any, scope: str, ids: list[str]) -> int:
+        deleted = 0
+        for offset in range(0, len(ids), 500):
+            batch = ids[offset : offset + 500]
+            self._cypher(
+                cursor,
+                "MATCH (a:Memory)-[r]->(b:Memory) WHERE "
+                "(a.user_name = $scope AND a.id IN $ids) OR "
+                "(b.user_name = $scope AND b.id IN $ids) DELETE r",
+                {"scope": scope, "ids": batch},
+            )
+            cursor.execute(
+                f"DELETE FROM ONLY {_TABLE} WHERE scope = %(scope)s AND business_id = ANY(%(ids)s)",
+                {"scope": scope, "ids": batch},
+            )
+            deleted += cursor.rowcount
+        return deleted
+
+    def clear(self, user_name: str | None = None) -> None:
+        """Clear a fixed locked set in one Cube, retaining graph schema and other Cubes."""
+        scope = self._maintenance_scope(user_name)
+        with self._cursor(lock=2) as cursor:
+            cursor.execute(
+                f"SELECT business_id FROM ONLY {_TABLE} WHERE scope = %(scope)s ORDER BY business_id FOR UPDATE",
+                {"scope": scope},
+            )
+            self._delete_locked_nodes(cursor, scope, [row[0] for row in cursor.fetchall()])
+
+    def drop_database(self) -> None:
+        """Compatibility operation: clear the configured Cube, never drop the database."""
+        self.clear()
+
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int | str, user_name: str | None = None
     ) -> None:

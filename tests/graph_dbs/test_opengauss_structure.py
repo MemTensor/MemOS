@@ -17,8 +17,6 @@ PENDING = {
     "deduplicate_nodes",
     "detect_conflicts",
     "merge_nodes",
-    "clear",
-    "import_graph",
 }
 
 
@@ -51,6 +49,9 @@ def test_one_backend_class_owns_pool_storage_and_filters():
         "remove_oldest_memory",
         "get_structure_optimization_candidates",
         "export_graph",
+        "import_graph",
+        "clear",
+        "drop_database",
     ]:
         assert name in cls.__dict__
     assert "ThreadedConnectionPool" in inspect.getsource(cls.__init__)

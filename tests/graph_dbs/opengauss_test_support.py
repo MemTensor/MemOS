@@ -15,5 +15,3 @@ class PartialOpenGaussGraphDB(OpenGaussGraphDB):
     deduplicate_nodes = _unimplemented
     detect_conflicts = _unimplemented
     merge_nodes = _unimplemented
-    clear = _unimplemented
-    import_graph = _unimplemented
