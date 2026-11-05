@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from memos.dream.hook_defs import DreamH
@@ -172,6 +172,15 @@ class DreamPersistence:
                 dream_metadata=dream_metadata,
             )
 
+    def _lifecycle_metadata(self, memory_id: str, cube_id: str, metadata: dict) -> dict:
+        """Initialize opted-in evidence as part of the native node write."""
+        service = self.context.get("shared", {}).get("dream_lifecycle")
+        if service is None:
+            return metadata
+        return service.metadata_for_new(
+            memory_id, cube_id, metadata, now=datetime.now(timezone.utc)
+        )
+
     def _write_memory_create(self, *, action, text_mem, cube_id, dream_metadata) -> None:
         """Create a new memory node from Dream reasoning output."""
         graph_db = self.context.get("shared", {}).get("graph_db")
@@ -191,6 +200,7 @@ class DreamPersistence:
             **dream_metadata,
             **action.metadata,
         }
+        metadata = self._lifecycle_metadata(node_id, cube_id, metadata)
         graph_db.add_node(node_id, action.new_content, metadata, user_name=cube_id)
         logger.info(
             "[Dream] created memory node: id=%s, type=%s",
@@ -213,8 +223,7 @@ class DreamPersistence:
         try:
             graph_db.update_node(
                 action.target_memory_id,
-                action.new_content,
-                metadata,
+                {**metadata, "memory": action.new_content},
                 user_name=cube_id,
             )
             logger.info("[Dream] updated memory: id=%s", action.target_memory_id)
@@ -240,13 +249,13 @@ class DreamPersistence:
             **dream_metadata,
             **action.metadata,
         }
+        metadata = self._lifecycle_metadata(merged_id, cube_id, metadata)
         graph_db.add_node(merged_id, action.new_content, metadata, user_name=cube_id)
 
         for src_id in action.source_memory_ids:
             try:
                 graph_db.update_node(
                     src_id,
-                    None,
                     {"status": "merged", "merged_into": merged_id},
                     user_name=cube_id,
                 )
@@ -262,9 +271,18 @@ class DreamPersistence:
             return
 
         try:
+            lifecycle = self.context.get("shared", {}).get("dream_lifecycle")
+            if lifecycle is not None:
+                outcome = lifecycle.archive(
+                    action.target_memory_id,
+                    cube_id=cube_id,
+                    reason=action.rationale,
+                    now=datetime.now(timezone.utc),
+                )
+                if outcome.action != "skip":
+                    return
             graph_db.update_node(
                 action.target_memory_id,
-                None,
                 {
                     "status": "archived",
                     "archived_at": datetime.utcnow().isoformat(),
@@ -303,6 +321,7 @@ class DreamPersistence:
             mem_cube_id=mem_cube_id,
             signal_snapshot=signal_snapshot,
         )
+        metadata = self._lifecycle_metadata(entry.diary_id, cube_id, metadata)
         try:
             graph_db.add_node(
                 entry.diary_id,
