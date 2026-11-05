@@ -13,13 +13,23 @@ import json
 import re
 import time
 
-from contextlib import suppress
+from collections.abc import Callable
+from contextlib import contextmanager, suppress
+from copy import deepcopy
 from datetime import datetime
 from typing import Any, Literal
 
 from memos.configs.graph_db import PostgresGraphDBConfig
 from memos.dependency import require_python_package
-from memos.graph_dbs.base import BaseGraphDB
+from memos.exceptions import MemoryError as MemOSMemoryError
+from memos.graph_dbs.base import (
+    MANAGED_LIFECYCLE_KEY,
+    MANAGED_LIFECYCLE_VERSION,
+    BaseGraphDB,
+    NodeMetadataResult,
+    NodeMetadataUpdate,
+    preserve_managed_metadata,
+)
 from memos.log import get_logger
 
 
@@ -42,6 +52,8 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 class PostgresGraphDB(BaseGraphDB):
     """PostgreSQL + pgvector implementation of a graph memory store."""
+
+    supports_atomic_lifecycle = True
 
     @require_python_package(
         import_name="psycopg2",
@@ -245,61 +257,66 @@ class PostgresGraphDB(BaseGraphDB):
     def add_node(
         self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
     ) -> None:
-        """Add a memory node."""
+        """Upsert content while preserving committed server-owned lifecycle state."""
+        from psycopg2 import sql
+
         user_name = user_name or self.user_name
-        metadata = _prepare_node_metadata(metadata.copy())
-
-        # Extract embedding
+        metadata = _prepare_node_metadata(deepcopy(metadata))
         embedding = metadata.pop("embedding", None)
-        created_at = metadata.pop("created_at", datetime.utcnow().isoformat())
-        updated_at = metadata.pop("updated_at", datetime.utcnow().isoformat())
-
-        # Serialize sources if present
+        created_at = metadata.pop("created_at")
+        updated_at = metadata.pop("updated_at")
         if metadata.get("sources"):
             metadata["sources"] = [
-                json.dumps(s) if not isinstance(s, str) else s for s in metadata["sources"]
+                json.dumps(item) if not isinstance(item, str) else item
+                for item in metadata["sources"]
             ]
-
-        conn = self._get_conn()
-        try:
-            with conn.cursor() as cur:
-                if embedding:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {self.schema}.memories
-                        (id, memory, properties, embedding, user_name, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s::vector, %s, %s, %s)
-                        ON CONFLICT (id) DO UPDATE SET
-                            memory = EXCLUDED.memory,
-                            properties = EXCLUDED.properties,
-                            embedding = EXCLUDED.embedding,
-                            updated_at = EXCLUDED.updated_at
-                    """,
-                        (
-                            id,
-                            memory,
-                            json.dumps(metadata),
-                            embedding,
-                            user_name,
-                            created_at,
-                            updated_at,
-                        ),
-                    )
-                else:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {self.schema}.memories
-                        (id, memory, properties, user_name, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (id) DO UPDATE SET
-                            memory = EXCLUDED.memory,
-                            properties = EXCLUDED.properties,
-                            updated_at = EXCLUDED.updated_at
-                    """,
-                        (id, memory, json.dumps(metadata), user_name, created_at, updated_at),
-                    )
-        finally:
-            self._put_conn(conn)
+        key = sql.Literal(MANAGED_LIFECYCLE_KEY)
+        # ON CONFLICT holds the row lock while reading the *current* envelope.
+        # Missing/invalid archive guards conservatively preserve current status.
+        protected = sql.SQL("""
+            CASE WHEN existing.properties ? {key} THEN
+                (CASE WHEN jsonb_typeof(existing.properties->{key}->'version') = 'number'
+                    AND existing.properties->{key}->>'version' = {version}
+                    AND existing.properties->{key}->'protect_archived_status' = 'false'::jsonb
+                    THEN EXCLUDED.properties
+                    ELSE (EXCLUDED.properties - 'status') ||
+                        CASE WHEN existing.properties ? 'status'
+                            THEN jsonb_build_object('status', existing.properties->'status')
+                            ELSE '{{}}'::jsonb END END)
+                || jsonb_build_object({key}, existing.properties->{key})
+            ELSE EXCLUDED.properties END
+        """).format(key=key, version=sql.Literal(str(MANAGED_LIFECYCLE_VERSION)))
+        embedding_update = sql.SQL("embedding = EXCLUDED.embedding," if embedding else "")
+        query = sql.SQL("""
+            INSERT INTO {table} AS existing
+                (id, memory, properties, embedding, user_name, created_at, updated_at)
+            VALUES (%s, %s, %s::jsonb, %s::vector, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                memory = EXCLUDED.memory, properties = {protected},
+                {embedding_update} updated_at = EXCLUDED.updated_at
+            WHERE NOT (existing.properties ? {key})
+                OR existing.user_name IS NOT DISTINCT FROM EXCLUDED.user_name
+        """).format(
+            table=sql.Identifier(self.schema, "memories"),
+            protected=protected,
+            embedding_update=embedding_update,
+            key=key,
+        )
+        with self._metadata_transaction() as conn, conn.cursor() as cur:
+            cur.execute(
+                query,
+                (
+                    id,
+                    memory,
+                    json.dumps(metadata, allow_nan=False),
+                    embedding,
+                    user_name,
+                    created_at,
+                    updated_at,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise MemOSMemoryError("Cannot replace a lifecycle memory from another scope")
 
     def add_nodes_batch(self, nodes: list[dict[str, Any]], user_name: str | None = None) -> None:
         """Batch add memory nodes."""
@@ -312,44 +329,167 @@ class PostgresGraphDB(BaseGraphDB):
             )
 
     def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
-        """Update node fields."""
-        user_name = user_name or self.user_name
+        """Merge current properties under a row lock without erasing lifecycle evidence."""
+        from psycopg2 import sql
+
         if not fields:
             return
-
-        # Get current node
-        current = self.get_node(id, user_name=user_name)
-        if not current:
-            return
-
-        # Merge properties
-        props = current.get("metadata", {}).copy()
+        user_name = user_name or self.user_name
+        fields = deepcopy(fields)
         embedding = fields.pop("embedding", None)
-        memory = fields.pop("memory", current.get("memory", ""))
-        props.update(fields)
-        props["updated_at"] = datetime.utcnow().isoformat()
+        with self._metadata_transaction() as conn, conn.cursor() as cur:
+            table = sql.Identifier(self.schema, "memories")
+            cur.execute(
+                sql.SQL(
+                    "SELECT memory, properties FROM {} WHERE id = %s AND user_name = %s FOR UPDATE"
+                ).format(table),
+                (id, user_name),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return
+            memory = fields.pop("memory", row[0])
+            properties = preserve_managed_metadata(row[1], {**row[1], **fields})
+            properties["updated_at"] = datetime.utcnow().isoformat()
+            parameters = [memory, json.dumps(properties, allow_nan=False)]
+            embedding_clause = sql.SQL("")
+            if embedding:
+                embedding_clause = sql.SQL(", embedding = %s::vector")
+                parameters.append(embedding)
+            parameters.extend([id, user_name])
+            cur.execute(
+                sql.SQL(
+                    "UPDATE {} SET memory = %s, properties = %s::jsonb{}"
+                    ", updated_at = NOW() WHERE id = %s AND user_name = %s"
+                ).format(table, embedding_clause),
+                parameters,
+            )
 
+    @contextmanager
+    def _metadata_transaction(self):
+        """Borrow one connection, roll back failures, and restore pool state."""
+        conn = self._get_conn()
+        reusable = True
+        try:
+            conn.autocommit = False
+            yield conn
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                reusable = False
+            raise
+        finally:
+            if reusable:
+                try:
+                    conn.autocommit = True
+                except Exception:
+                    reusable = False
+            if reusable:
+                self._put_conn(conn)
+            else:
+                with suppress(Exception):
+                    self.pool.putconn(conn, close=True)
+                with suppress(Exception):
+                    conn.close()
+
+    @staticmethod
+    def _lifecycle_scope(user_name: str) -> None:
+        if not isinstance(user_name, str) or not user_name.strip():
+            raise MemOSMemoryError("Lifecycle operations require an explicit scope")
+
+    def mutate_nodes_metadata(
+        self,
+        ids: list[str],
+        reducer: Callable[[str, dict[str, Any]], NodeMetadataUpdate],
+        *,
+        user_name: str,
+    ) -> list[NodeMetadataResult]:
+        """Atomically reduce a bounded scoped batch using stable row-lock ordering.
+
+        Missing nodes return found=False. Every callback sees a detached current
+        snapshot. None/empty patches do not update timestamps; callback or SQL
+        failure rolls back all prior updates in this batch.
+        """
+        from psycopg2 import sql
+
+        self._lifecycle_scope(user_name)
+        if len(ids) > 1000 or any(not isinstance(item, str) or not item for item in ids):
+            raise MemOSMemoryError("Lifecycle batches require at most 1000 nonempty IDs")
+        ordered = list(dict.fromkeys(ids))
+        if not ordered:
+            return []
+        results = {}
+        table = sql.Identifier(self.schema, "memories")
+        with self._metadata_transaction() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "SELECT id, properties, created_at, updated_at FROM {} "
+                    'WHERE user_name = %s AND id = ANY(%s) ORDER BY id COLLATE "C" '
+                    "FOR UPDATE"
+                ).format(table),
+                (user_name, ordered),
+            )
+            rows = cur.fetchall()
+            for memory_id, properties, created_at, updated_at in rows:
+                snapshot = deepcopy(properties)
+                snapshot.setdefault("created_at", created_at.isoformat())
+                snapshot.setdefault("updated_at", updated_at.isoformat())
+                patch = reducer(memory_id, snapshot)
+                if not isinstance(patch, NodeMetadataUpdate):
+                    raise MemOSMemoryError("Metadata reducer must return NodeMetadataUpdate")
+                if patch.fields is not None and not isinstance(patch.fields, dict):
+                    raise MemOSMemoryError("Metadata patch must be a dictionary or None")
+                changed = bool(patch.fields) and any(
+                    key not in properties or properties[key] != value
+                    for key, value in patch.fields.items()
+                )
+                if changed:
+                    merged = {**properties, **patch.fields}
+                    cur.execute(
+                        sql.SQL(
+                            "UPDATE {} SET properties = %s::jsonb, "
+                            "updated_at = NOW() WHERE id = %s AND user_name = %s"
+                        ).format(table),
+                        (json.dumps(merged, allow_nan=False), memory_id, user_name),
+                    )
+                results[memory_id] = NodeMetadataResult(
+                    memory_id, True, bool(changed), patch.result
+                )
+        return [results.get(item, NodeMetadataResult(item, False)) for item in ordered]
+
+    def list_lifecycle_nodes(
+        self, *, user_name: str, after: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Fetch metadata-only Dream candidates in a stable scoped keyset page."""
+        from psycopg2 import sql
+
+        self._lifecycle_scope(user_name)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise MemOSMemoryError("Lifecycle page limit must be between 1 and 1000")
+        if after is not None and (not isinstance(after, str) or not after):
+            raise MemOSMemoryError("Lifecycle cursor must be a nonempty ID")
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                if embedding:
-                    cur.execute(
-                        f"""
-                        UPDATE {self.schema}.memories
-                        SET memory = %s, properties = %s, embedding = %s::vector, updated_at = NOW()
-                        WHERE id = %s AND user_name = %s
-                    """,
-                        (memory, json.dumps(props), embedding, id, user_name),
-                    )
-                else:
-                    cur.execute(
-                        f"""
-                        UPDATE {self.schema}.memories
-                        SET memory = %s, properties = %s, updated_at = NOW()
-                        WHERE id = %s AND user_name = %s
-                    """,
-                        (memory, json.dumps(props), id, user_name),
-                    )
+                cur.execute(
+                    sql.SQL("""
+                    SELECT id, properties, created_at, updated_at FROM {table}
+                    WHERE user_name = %s AND (%s IS NULL OR id COLLATE "C" > %s)
+                        AND (properties ? %s OR properties->>'source' = 'dream'
+                            OR properties->'internal_info' ? 'dream')
+                    ORDER BY id COLLATE "C" LIMIT %s
+                """).format(table=sql.Identifier(self.schema, "memories")),
+                    (user_name, after, after, MANAGED_LIFECYCLE_KEY, limit),
+                )
+                result = []
+                for memory_id, properties, created_at, updated_at in cur.fetchall():
+                    metadata = dict(properties)
+                    metadata.setdefault("created_at", created_at.isoformat())
+                    metadata.setdefault("updated_at", updated_at.isoformat())
+                    result.append({"id": memory_id, "metadata": metadata})
+                return result
         finally:
             self._put_conn(conn)
 

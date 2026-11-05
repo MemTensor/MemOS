@@ -1,7 +1,59 @@
 import re
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any, Literal
+
+from memos.exceptions import MemoryError as MemOSMemoryError
+
+
+MANAGED_LIFECYCLE_KEY = "_memos_dream_lifecycle_v1"
+MANAGED_LIFECYCLE_VERSION = 1
+
+
+@dataclass(frozen=True)
+class NodeMetadataUpdate:
+    """Pure metadata patch and caller result; None requests a read-only operation."""
+
+    fields: dict[str, Any] | None
+    result: Any = None
+
+
+@dataclass(frozen=True)
+class NodeMetadataResult:
+    """Outcome of one scoped, transactionally committed metadata reduction."""
+
+    memory_id: str
+    found: bool
+    changed: bool = False
+    result: Any = None
+
+
+def preserve_managed_metadata(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Keep server-owned lifecycle evidence across ordinary graph writes.
+
+    The storage layer deliberately knows only the reserved envelope and its
+    archive guard, avoiding a dependency on Dream policy. Unknown/malformed
+    envelopes retain their current status until an explicit lifecycle repair.
+    """
+    merged = deepcopy(incoming)
+    if MANAGED_LIFECYCLE_KEY in current:
+        state = current[MANAGED_LIFECYCLE_KEY]
+        merged[MANAGED_LIFECYCLE_KEY] = deepcopy(state)
+        recognized_unprotected = (
+            isinstance(state, dict)
+            and type(state.get("version")) is int
+            and state["version"] == MANAGED_LIFECYCLE_VERSION
+            and state.get("protect_archived_status") is False
+        )
+        if not recognized_unprotected:
+            if "status" in current:
+                merged["status"] = current["status"]
+            else:
+                merged.pop("status", None)
+    return merged
 
 
 # Pattern for valid field names: alphanumeric and underscores, must start with letter or underscore
@@ -9,9 +61,29 @@ _VALID_FIELD_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class BaseGraphDB(ABC):
-    """
-    Abstract base class for a graph database interface used in a memory-augmented RAG system.
-    """
+    """Graph storage interface for memory-augmented retrieval."""
+
+    supports_atomic_lifecycle = False
+
+    def mutate_nodes_metadata(
+        self,
+        ids: list[str],
+        reducer: Callable[[str, dict[str, Any]], NodeMetadataUpdate],
+        *,
+        user_name: str,
+    ) -> list[NodeMetadataResult]:
+        """Reduce current scoped metadata under locks, or reject unsupported backends.
+
+        Reducers must be pure and bounded: no network calls, recursive database
+        access or external side effects. A reducer failure rolls back the batch.
+        """
+        raise MemOSMemoryError("This graph backend lacks atomic lifecycle metadata mutation")
+
+    def list_lifecycle_nodes(
+        self, *, user_name: str, after: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Read one scoped, bounded keyset page without memory content/embeddings."""
+        raise MemOSMemoryError("This graph backend lacks lifecycle keyset pagination")
 
     @staticmethod
     def _validate_return_fields(return_fields: list[str] | None) -> list[str]:

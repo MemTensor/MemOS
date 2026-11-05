@@ -4,7 +4,7 @@ import json
 import re
 import uuid
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 from tenacity import retry, stop_after_attempt, wait_random_exponential
@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 from memos.configs.memory import MemFeedbackConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
+from memos.dream.lifecycle.contracts import detach_lifecycle_identity
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
@@ -34,7 +35,7 @@ from memos.memories.textual.tree_text_memory.organize.manager import (
 )
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 from memos.plugins.hook_defs import H
-from memos.plugins.hooks import trigger_single_hook
+from memos.plugins.hooks import notify_hook, trigger_single_hook
 
 
 if TYPE_CHECKING:
@@ -240,6 +241,11 @@ class MemFeedback(BaseMemFeedback):
             to_add_memory = new_memory_item.model_copy(deep=True)
 
         to_add_memory.id = str(uuid.uuid4())
+        fresh_metadata = detach_lifecycle_identity(
+            to_add_memory.metadata.model_dump(),
+            source_memory_id=(old_memory_item or new_memory_item).id,
+        )
+        to_add_memory.metadata = type(to_add_memory.metadata).model_validate(fresh_metadata)
         if to_add_memory.metadata.memory_type == "PreferenceMemory":
             to_add_memory.metadata.preference = new_memory_item.memory
 
@@ -328,6 +334,14 @@ class MemFeedback(BaseMemFeedback):
                 f"[Memory Feedback UPDATE] Updated:{item_id} | history appended | memory_type: {old_memory_item.metadata.memory_type}"
             )
 
+        notify_hook(
+            H.MEMORY_FEEDBACK_COMMITTED,
+            cube_id=user_name,
+            memory_ids=[old_memory_item.id],
+            action="superseded" if item_id != old_memory_item.id else "corrected",
+            event_id="feedback:" + uuid.uuid4().hex,
+            at=datetime.now(timezone.utc),
+        )
         return {
             "id": item_id,
             "text": new_memory_item.memory,
@@ -386,6 +400,10 @@ class MemFeedback(BaseMemFeedback):
 
         if archived_item and archived_metadata:
             try:
+                if archived_item.id != old_memory_item.id:
+                    archived_metadata = detach_lifecycle_identity(
+                        archived_metadata, source_memory_id=old_memory_item.id
+                    )
                 self.graph_store.add_node(
                     id=archived_item.id,
                     memory=archived_item.memory,
