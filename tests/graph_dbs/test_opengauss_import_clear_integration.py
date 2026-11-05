@@ -303,10 +303,15 @@ def test_commit_uncertainty_is_observable_without_replay(
         assert support.ids(check) == (["a", "b", "c", "z"] if operation == "import" else [])
 
 
-def test_clear_actual_cancel_restores_nodes_edges_and_replaces_connection(stores, database):
+@pytest.mark.parametrize("operation", ["clear", "hard_delete"])
+def test_scoped_delete_actual_cancel_restores_data_and_replaces_connection(
+    stores, database, operation
+):
     db = stores(maxconn=1)
     admin, _ = database
     db.import_graph(fixture())
+    if operation == "hard_delete":
+        db.delete_node_by_mem_cube_id("A", "R")
     before = support.snapshot(admin)
     raw = db.connection_pool.getconn()
     pid = _query(raw, "SELECT pg_backend_pid()")[0][0]
@@ -320,7 +325,11 @@ def test_clear_actual_cancel_restores_nodes_edges_and_replaces_connection(stores
             ),
             ThreadPoolExecutor(max_workers=1) as executor,
         ):
-            future = executor.submit(db.clear)
+            future = (
+                executor.submit(db.clear)
+                if operation == "clear"
+                else executor.submit(db.delete_node_by_mem_cube_id, "A", "R", True)
+            )
             try:
                 support.wait_until(
                     lambda: _query(
@@ -338,6 +347,14 @@ def test_clear_actual_cancel_restores_nodes_edges_and_replaces_connection(stores
     finally:
         _query(admin, "SELECT pg_advisory_unlock_all()")
     assert raw.closed and support.snapshot(admin) == before
+    if operation == "hard_delete":
+        assert db.search_by_embedding([1, 0, 0]) == []
+        assert db.search_by_fulltext(["星港"]) == []
+        db.recover_memory_by_mem_cube_id("A", "R")
+        assert db.get_node("a")["metadata"]["status"] == "activated"
+        assert db.search_by_embedding([1, 0, 0])
+        assert db.search_by_fulltext(["星港"])
+        return
     support.visible(db, ["a"])
 
 

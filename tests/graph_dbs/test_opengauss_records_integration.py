@@ -158,20 +158,63 @@ def test_late_property_update_failure_rolls_back_entire_record(stores, database,
     assert support.snapshot(admin) == before
 
 
-@pytest.mark.parametrize("failure", [None, "x0500", "x1000"])
-def test_hard_delete_record_three_blocks_is_atomic(stores, database, failure):
-    db = stores()
-    admin, _ = database
+@pytest.mark.parametrize("failure", [None, "x0500", "x1000", "permission", "timeout"])
+def test_hard_delete_record_three_blocks_is_atomic(stores, database, monkeypatch, failure):
+    from psycopg2 import sql
+
+    db = stores(maxconn=1)
+    admin, config = database
     support.seed_large(db, admin)
     assert db.delete_node_by_mem_cube_id("A", "R") == 1200
     before = support.snapshot(admin)
     if failure is None:
         assert db.delete_node_by_mem_cube_id("A", "R", True) == 1200
         assert support.snapshot(admin) == {"nodes": [], "edges": []}
+        return
+    if failure == "permission":
+        _query(
+            admin,
+            sql.SQL('REVOKE DELETE ON memos_graph."Memory" FROM {}').format(
+                sql.Identifier(config.user)
+            ),
+        )
+        try:
+            with pytest.raises(GraphDBError) as caught:
+                db.delete_node_by_mem_cube_id("A", "R", True)
+            assert caught.value.__cause__.pgcode == "42501"
+        finally:
+            _query(
+                admin,
+                sql.SQL('GRANT DELETE ON memos_graph."Memory" TO {}').format(
+                    sql.Identifier(config.user)
+                ),
+            )
     else:
-        with support.failing_delete(admin, node_id=failure), pytest.raises(GraphDBError):
+
+        def hook(stage, cursor, rows):
+            if stage == "execute" and "pg_advisory_xact_lock" in cursor.statement:
+                cursor.cursor.execute("SET LOCAL statement_timeout='500ms'")
+
+        if failure == "timeout":
+            support.observe(db, monkeypatch, hook)
+        with (
+            support.failing_delete(
+                admin,
+                node_id="x1000" if failure == "timeout" else failure,
+                action="PERFORM pg_sleep(2)"
+                if failure == "timeout"
+                else "RAISE EXCEPTION 'hard delete failure'",
+            ),
+            pytest.raises(GraphDBError) as caught,
+        ):
             db.delete_node_by_mem_cube_id("A", "R", True)
-        assert support.snapshot(admin) == before
+        assert caught.value.__cause__.pgcode == ("57014" if failure == "timeout" else "P0001")
+    assert support.snapshot(admin) == before
+    assert db.search_by_embedding([1, 0, 0], top_k=1300) == []
+    assert db.search_by_fulltext(["批量"], top_k=1300) == []
+    assert db.recover_memory_by_mem_cube_id("A", "R") == 1200
+    assert len(db.search_by_embedding([1, 0, 0], top_k=1300)) == 1200
+    assert len(db.search_by_fulltext(["批量"], top_k=1300)) == 1200
 
 
 def test_soft_delete_fixed_set_leaves_concurrent_insert_for_next_call(stores, monkeypatch):
