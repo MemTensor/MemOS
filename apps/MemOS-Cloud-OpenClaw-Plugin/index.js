@@ -195,11 +195,15 @@ export function buildAddMessagePayload(cfg, messages, ctx) {
   if (cfg.appId) payload.app_id = cfg.appId;
   if (cfg.tags?.length) payload.tags = cfg.tags;
 
+  const reservedInfoKeys = new Set(["local_state", "state", "localStats"]);
+  const customInfo = Object.fromEntries(
+    Object.entries(cfg.info || {}).filter(([key]) => !reservedInfoKeys.has(key)),
+  );
   const info = {
     source: MEMOS_SOURCE,
     sessionKey: ctx?.sessionKey,
     agentId: ctx?.agentId,
-    ...(cfg.info || {}),
+    ...customInfo,
   };
   if (Object.keys(info).length > 0) payload.info = info;
 
