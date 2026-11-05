@@ -668,6 +668,25 @@ describe("HTTP server — REST routes", () => {
     expect(body.imported).toBe(0);
   });
 
+  it("forwards preview and explicit import ownership choices", async () => {
+    const r = await fetch(`${handle.url}/api/v1/import?dryRun=true&ownership=target&targetProfileId=work`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, traces: [] }),
+    });
+    expect(r.status).toBe(200);
+    expect(core.importBundle).toHaveBeenCalledWith({ version: 1, traces: [] }, {
+      dryRun: true, ownership: "target", targetProfileId: "work",
+    });
+  });
+
+  it("rejects invalid import options before calling the core", async () => {
+    const r = await fetch(`${handle.url}/api/v1/import?ownership=public`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    });
+    expect(r.status).toBe(400);
+    expect(core.importBundle).not.toHaveBeenCalled();
+  });
+
   it("GET /api/v1/embeddings/maintenance returns vector health", async () => {
     const r = await fetch(`${handle.url}/api/v1/embeddings/maintenance`);
     expect(r.status).toBe(200);

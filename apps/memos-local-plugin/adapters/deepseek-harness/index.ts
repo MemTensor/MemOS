@@ -39,9 +39,17 @@ import {
   type DeepSeekHarnessHostLlmBridge,
 } from "./host-llm.js";
 import { registerDeepSeekHarnessTools } from "./tools.js";
+import { memosMessageSource } from "./message-source.js";
 
 export const name = DEEPSEEK_HARNESS_PLUGIN;
 export const inject = ["systemPrompt", "tools", "llm"];
+
+export function createDeepSeekHarnessRecallMessage(text: string): ReturnType<typeof createUserMessage> {
+  return createUserMessage({
+    content: [{ type: "text", text }],
+    source: memosMessageSource("recall"),
+  });
+}
 export const DEEPSEEK_HARNESS_VIEWER_PORT = 18_801;
 export const DEEPSEEK_HARNESS_VIEWER_RETRY_DELAYS_MS = [
   250,
@@ -384,14 +392,7 @@ export async function apply(
       recallTimeoutMs: foregroundSearchTimeoutMs,
       contextMaxChars: config.contextMaxChars,
       runWithLlmRoute: (route, operation) => routes.run(route, operation),
-      createRecallMessage: (text) => createUserMessage({
-        content: [{ type: "text", text }],
-        source: {
-          kind: "plugin",
-          plugin: DEEPSEEK_HARNESS_PLUGIN,
-          form: "recall",
-        },
-      }) as unknown as DshUserMessageLike,
+      createRecallMessage: (text) => createDeepSeekHarnessRecallMessage(text) as unknown as DshUserMessageLike,
       onWarn: (message, error) => {
         ctx.logger.warn(`memos-local-memory: ${message}`);
         if (error instanceof Error && error.stack) ctx.logger.warn(error.stack);

@@ -39,6 +39,13 @@ interface ProviderBlock {
   temperature?: number;
   maxInputTokens?: number;
   batchSize?: number;
+  local?: {
+    remoteHost?: string;
+    modelPath?: string;
+    cacheDir?: string;
+    offline?: boolean;
+    loadTimeoutMs?: number;
+  };
 }
 
 interface AlgorithmBlock {
@@ -408,6 +415,7 @@ function ModelCard({
         provider: block.provider,
         endpoint: block.endpoint,
         model: block.model,
+        local: block.local,
         apiKey: sanitizeApiKey(block.apiKey),
       });
       setResult(r);
@@ -472,6 +480,7 @@ function ModelCard({
           {localHint}
         </div>
       )}
+      {isLocal && testing && <div role="status" class="muted">{t("settings.embedding.loading")}</div>}
 
       <div
         style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--sp-4)"
@@ -500,7 +509,7 @@ function ModelCard({
             onInput={(e) => onPatch({ model: (e.target as HTMLInputElement).value })}
           />
         </Field>
-        <Field label={t("settings.endpoint")}>
+        {!isLocal && <Field label={t("settings.endpoint")}>
           <input
             class="input"
             type="url"
@@ -508,8 +517,8 @@ function ModelCard({
             placeholder="https://api.openai.com/v1"
             onInput={(e) => onPatch({ endpoint: (e.target as HTMLInputElement).value })}
           />
-        </Field>
-        <Field label={t("settings.apiKey")}>
+        </Field>}
+        {!isLocal && <Field label={t("settings.apiKey")}>
           <input
             class="input"
             type="password"
@@ -525,7 +534,23 @@ function ModelCard({
             }
             onInput={(e) => onPatch({ apiKey: (e.target as HTMLInputElement).value })}
           />
-        </Field>
+        </Field>}
+        {isLocal && ([
+          ["remoteHost", "settings.embedding.remoteHost"],
+          ["modelPath", "settings.embedding.modelPath"],
+          ["cacheDir", "settings.embedding.cacheDir"],
+        ] as const).map(([key, label]) => <Field key={key} label={t(label)}>
+          <input class="input" type="text" value={block.local?.[key] ?? ""}
+            onInput={(event) => onPatch({ local: { ...block.local, [key]: (event.target as HTMLInputElement).value } })} />
+        </Field>)}
+        {isLocal && <Field label={t("settings.embedding.offline")}>
+          <input type="checkbox" checked={block.local?.offline ?? false}
+            onChange={(event) => onPatch({ local: { ...block.local, offline: (event.target as HTMLInputElement).checked } })} />
+        </Field>}
+        {isLocal && <Field label={t("settings.embedding.loadTimeout")}>
+          <input class="input" type="number" min={1} max={3600} step={1} value={(block.local?.loadTimeoutMs ?? 120_000) / 1000}
+            onInput={(event) => onPatch({ local: { ...block.local, loadTimeoutMs: Math.min(3600, Math.max(1, Number((event.target as HTMLInputElement).value) || 120)) * 1000 } })} />
+        </Field>}
         {type === "embedding" && (
           <Field label={t("settings.embedding.maxInputTokens.label")}>
             <input

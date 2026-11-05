@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { probeLocalEmbedding } from "../../../server/routes/models.js";
 
 describe("local embedding model probe", () => {
+  it("tests unsaved local model source and offline settings", async () => {
+    const create = vi.fn(() => ({ embedOne: vi.fn(async () => Float32Array.from([1, 0])) }));
+    const local = { remoteHost: "https://mirror.example/", modelPath: "/models", offline: true };
+    await expect(probeLocalEmbedding("test/model", create, local)).resolves.toBe(2);
+    expect(create).toHaveBeenCalledWith("test/model", local);
+  });
   it("loads the default MiniLM model and verifies a real vector", async () => {
     const embedOne = vi.fn(async () => Float32Array.from([0.1, 0.2, 0.3]));
     const create = vi.fn(() => ({ embedOne }));

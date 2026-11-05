@@ -175,6 +175,9 @@ Write-Host ""
 try {
     $NodeVersionStr = (node -v 2>$null)
     if (-not $NodeVersionStr) { Stop-Die "Node.js is not installed or not in PATH." }
+    if ([int]($NodeVersionStr.TrimStart('v').Split('.')[0]) -lt 22) {
+        Stop-Die "Node.js >=22 is required. Upgrade the actual host runtime before replacing the existing plugin."
+    }
     Write-Success "Node.js $NodeVersionStr"
 } catch {
     Stop-Die "Node.js is not installed or not in PATH."
@@ -341,6 +344,9 @@ function Prepare-StagedPackage {
         Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
         throw "Node.js executable not found for staged install"
     }
+    & $NodeForBridge -e 'if (Number(process.versions.node.split(".")[0]) < 22) { console.error("MemOS requires Node.js >=22 in the bridge runtime"); process.exit(1); }'
+    if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $StagedPrefix; throw "Bridge Node.js runtime is unsupported; existing installation is unchanged." }
+
     $NpmCommand = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
     if (-not $NpmCommand) { $NpmCommand = (Get-Command "npm" -ErrorAction SilentlyContinue).Source }
     if (-not $NpmCommand) {
@@ -364,7 +370,7 @@ function Prepare-StagedPackage {
             # npm 11 still resolves omitted DSH development peer trees unless
             # legacy peer resolution is requested for the packed runtime.
             Invoke-NativeChecked -Command $NpmCommand -Arguments @(
-                "install", "--omit=dev", "--legacy-peer-deps", "--no-fund", "--no-audit", "--loglevel=error"
+                "install", "--omit=dev", "--legacy-peer-deps", "--strict-allow-scripts", "--engine-strict", "--no-fund", "--no-audit", "--loglevel=error"
             ) -FailureMessage "npm install failed"
         } finally {
             if ($null -eq $PreviousSkipSetup) {
@@ -376,18 +382,7 @@ function Prepare-StagedPackage {
         }
 
         if (-not (Test-BetterSqlite3 -NodeBin $NodeForBridge -Prefix $StagedPrefix)) {
-            Write-Info "Rebuilding better-sqlite3 in staging..."
-            Push-Location $StagedPrefix
-            try {
-                Invoke-NativeChecked -Command $NpmCommand -Arguments @(
-                    "rebuild", "better-sqlite3", "--loglevel=error"
-                ) -FailureMessage "better-sqlite3 rebuild failed"
-            } finally {
-                Pop-Location
-            }
-            if (-not (Test-BetterSqlite3 -NodeBin $NodeForBridge -Prefix $StagedPrefix)) {
-                throw "better-sqlite3 is not loadable after rebuild"
-            }
+            throw "better-sqlite3 is not loadable: SQLite prebuilt failed its staging smoke test. No source rebuild was attempted; existing installation is unchanged."
         }
 
         Set-Content -Path (Join-Path $StagedPrefix ".memos-node-bin") -Value $NodeForBridge -Encoding UTF8
