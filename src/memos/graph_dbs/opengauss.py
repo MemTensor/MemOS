@@ -1034,6 +1034,27 @@ class OpenGaussGraphDB(BaseGraphDB):
         )
         return sorted({edge["to"] if edge["from"] == id else edge["from"] for edge in edges})
 
+    def get_context_chain(
+        self, id: str, type: str = "FOLLOWS", user_name: str | None = None
+    ) -> list[str]:
+        """Return one-hop outgoing neighbors, matching the existing context contract."""
+        return self.get_neighbors(id, type=type, direction="out", user_name=user_name)
+
+    def deduplicate_nodes(self) -> None:
+        """Persistent semantic deduplication is outside this backend's capabilities."""
+        self._ensure_open()
+        raise NotImplementedError("openGauss does not support deduplicate_nodes")
+
+    def detect_conflicts(self) -> list[tuple[str, str]]:
+        """Semantic conflict detection is outside this backend's capabilities."""
+        self._ensure_open()
+        raise NotImplementedError("openGauss does not support detect_conflicts")
+
+    def merge_nodes(self, id1: str, id2: str) -> str:
+        """Semantic node merging is outside this backend's capabilities."""
+        self._ensure_open()
+        raise NotImplementedError("openGauss does not support merge_nodes")
+
     @staticmethod
     def _validate_depth(depth: int) -> None:
         if type(depth) is not int or not 1 <= depth <= 5:
