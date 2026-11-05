@@ -17,6 +17,7 @@ import {
   type RetryPlan,
   waitForRetry,
 } from "../util/retry-after.js";
+import { isTransientNetworkError } from "../util/network-error.js";
 import type { EmbeddingProviderName, ProviderLogger } from "./types.js";
 
 export interface HttpPostOpts<TBody> {
@@ -150,7 +151,7 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
     } catch (err) {
       lastErr = err;
       if (err instanceof MemosError) throw err;
-      const transient = isTransientError(err);
+      const transient = isTransientNetworkError(err);
       opts.log.warn("http.exception", {
         url: opts.url,
         attempt,
@@ -205,15 +206,9 @@ async function safeText(resp: Response): Promise<string | undefined> {
   }
 }
 
-function isTransientError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  // Node fetch maps network errors to specific causes; abort with timeout is
-  // also retriable once. We're conservative here.
-  const msg = err.message ?? "";
-  if (/timeout|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up/i.test(msg)) return true;
-  if ((err as { code?: string }).code === "ABORT_ERR") return true;
-  return false;
-}
+// isTransientError moved to `core/util/network-error.ts` (isTransientNetworkError)
+// so the embedding and LLM fetchers share one classification; it walks the
+// undici `cause` chain instead of only the top-level message (issue #2379).
 
 function retryPlanDetails(
   plan: RetryPlan,
