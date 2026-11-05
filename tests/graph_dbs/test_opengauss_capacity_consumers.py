@@ -164,9 +164,7 @@ def test_string_capacity_still_fails_in_consumers_list_slice(manager):
 
 
 @pytest.mark.parametrize("has_node", [False, True])
-def test_reorganizer_stops_at_the_actual_unimplemented_candidate_boundary(
-    manager, monkeypatch, has_node
-):
+def test_reorganizer_skips_missing_or_archived_only_candidates(manager, monkeypatch, has_node):
     instance, db = manager
     if has_node:
         db.add_node(M1, "archived node", {"memory_type": "LongTermMemory", "status": "archived"})
@@ -179,9 +177,8 @@ def test_reorganizer_stops_at_the_actual_unimplemented_candidate_boundary(
     monkeypatch.setattr(db, "get_memory_count", count)
     monkeypatch.setattr(db, "get_structure_optimization_candidates", candidates)
     if has_node:
-        with pytest.raises(NotImplementedError):
-            reorganizer.optimize_structure(scope="LongTermMemory", user_name="A")
-        candidates.assert_called_once_with("LongTermMemory", user_name="A")
+        assert reorganizer.optimize_structure(scope="LongTermMemory", user_name="A") is None
+        candidates.assert_called_once_with("LongTermMemory", include_embedding=True, user_name="A")
         # node_not_exist also delegates to the real count method.
         assert count.call_count == 2
     else:
