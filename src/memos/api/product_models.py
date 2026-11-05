@@ -965,6 +965,17 @@ class GetMemoryDashboardRequest(GetMemoryRequest):
     """Request model for getting memories for dashboard."""
 
     mem_cube_id: str | None = Field(None, description="Cube ID")
+    all_cubes: bool | None = Field(
+        None,
+        strict=True,
+        description="Optional range: omitted/null preserves legacy selection; true selects all Cubes; false selects one Cube (configured default when omitted). Supported by openGauss.",
+    )
+    exclude_cube_id: str | None = Field(
+        None,
+        min_length=1,
+        pattern=r"\S",
+        description="Optionally exclude this exact Cube from the final all-Cube range. Supported by openGauss.",
+    )
 
 
 class DeleteMemoryRequest(BaseRequest):
