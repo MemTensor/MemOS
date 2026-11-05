@@ -231,6 +231,11 @@ def get_default_cube_config(
             },
         }
 
+    else:
+        raise ValueError(
+            f"text_mem_type must be 'tree_text' or 'general_text', got {text_mem_type!r}"
+        )
+
     # Configure activation memory if enabled.
     # KV cache activation memory requires a local HuggingFace/vLLM model (it
     # extracts internal attention KV tensors via build_kv_cache), so it cannot
