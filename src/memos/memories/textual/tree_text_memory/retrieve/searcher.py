@@ -1165,7 +1165,14 @@ class Searcher:
         include_preference_memory=False,
         pref_mem_top_k=6,
     ):
-        """Sort results by score and trim to top_k"""
+        """Sort results by score and trim to top_k.
+
+        Note:
+            Never mutates the input items: selected textual items are returned
+            as shallow copies (``model_copy``, no revalidation) carrying the
+            final ``relativity``; other metadata types are rebuilt into
+            ``SearchedTreeNodeTextualMemoryMetadata`` as before.
+        """
         final_items = []
         if search_tool_memory:
             tool_schema_results = [
@@ -1266,15 +1273,25 @@ class Searcher:
         for item, score in sorted_results:
             if plugin and round(score, 2) == 0.00:
                 continue
-            meta_data = item.metadata.model_dump()
-            meta_data["relativity"] = score
-            final_items.append(
-                TextualMemoryItem(
-                    id=item.id,
-                    memory=item.memory,
-                    metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+            metadata = item.metadata
+            if isinstance(metadata, SearchedTreeNodeTextualMemoryMetadata):
+                # Decouple from caller-owned items: shallow-copy without
+                # revalidation (cheap), writing the final score on the copy
+                # with the same float() coercion the rebuild path applies.
+                metadata = metadata.model_copy(update={"relativity": float(score)})
+                final_items.append(item.model_copy(update={"metadata": metadata}))
+            else:
+                # Type upgrade (e.g. graph/bm25 results without relativity):
+                # rebuild into the searched metadata type as before.
+                meta_data = metadata.model_dump()
+                meta_data["relativity"] = score
+                final_items.append(
+                    TextualMemoryItem(
+                        id=item.id,
+                        memory=item.memory,
+                        metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+                    )
                 )
-            )
         return final_items
 
     @timed
