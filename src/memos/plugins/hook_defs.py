@@ -71,6 +71,8 @@ class H:
     # @hookable("search") — SearchHandler.handle_search_memories
     SEARCH_BEFORE = "search.before"
     SEARCH_AFTER = "search.after"
+    SEARCH_COMPLETED = "search.completed"
+    MEMORY_FEEDBACK_COMMITTED = "memory.feedback.committed"
 
     # Search extension point before core threshold/dedup/rerank processing.
     SEARCH_MEMORY_RESULTS = "search.memory_results"
@@ -182,4 +184,11 @@ define_hook(
         "text_mem",
         "scheduler_context",
     ],
+)
+
+
+define_hook(
+    H.MEMORY_FEEDBACK_COMMITTED,
+    description="Observe explicitly affected IDs after a successful feedback update",
+    params=["cube_id", "memory_ids", "action", "event_id", "at"],
 )

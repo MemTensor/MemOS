@@ -4,7 +4,7 @@ import json
 import re
 import uuid
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 from tenacity import retry, stop_after_attempt, wait_random_exponential
@@ -34,7 +34,7 @@ from memos.memories.textual.tree_text_memory.organize.manager import (
 )
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 from memos.plugins.hook_defs import H
-from memos.plugins.hooks import trigger_single_hook
+from memos.plugins.hooks import notify_hook, trigger_single_hook
 
 
 if TYPE_CHECKING:
@@ -328,6 +328,14 @@ class MemFeedback(BaseMemFeedback):
                 f"[Memory Feedback UPDATE] Updated:{item_id} | history appended | memory_type: {old_memory_item.metadata.memory_type}"
             )
 
+        notify_hook(
+            H.MEMORY_FEEDBACK_COMMITTED,
+            cube_id=user_name,
+            memory_ids=[old_memory_item.id],
+            action="superseded" if item_id != old_memory_item.id else "corrected",
+            event_id="feedback:" + uuid.uuid4().hex,
+            at=datetime.now(timezone.utc),
+        )
         return {
             "id": item_id,
             "text": new_memory_item.memory,
