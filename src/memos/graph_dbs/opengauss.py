@@ -76,6 +76,7 @@ _ROOT_FIELDS = {
     "project_id",
     "manager_user_id",
     "delete_time",
+    "delete_record_id",
     "related_id",
     "message_ids",
 }
@@ -1759,6 +1760,93 @@ class OpenGaussGraphDB(BaseGraphDB):
     def drop_database(self) -> None:
         """Compatibility operation: clear the configured Cube, never drop the database."""
         self.clear()
+
+    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, str | None]:
+        """Resolve unique stored ownership; never arbitrarily choose among multiple Cubes."""
+        self._ensure_open()
+        self._maintenance_strings(memory_ids, "memory_ids")
+        result = dict.fromkeys(memory_ids)
+        if not result:
+            return result
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT business_id, scope FROM ONLY {_TABLE} WHERE business_id = ANY(%(ids)s)",
+                {"ids": list(result)},
+            )
+            for node_id, owner in cursor.fetchall():
+                if result[node_id] is not None and result[node_id] != owner:
+                    raise GraphDBError("A memory ID belongs to multiple Cubes")
+                result[node_id] = owner
+            return result
+
+    def exist_user_name(self, user_name: str) -> dict[str, bool]:
+        """Report stored data presence, including archived and deleted memories."""
+        self._ensure_open()
+        self._maintenance_strings([user_name], "user_name")
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT EXISTS (SELECT 1 FROM ONLY {_TABLE} WHERE scope = %(scope)s)",
+                {"scope": user_name},
+            )
+            return {user_name: bool(cursor.fetchone()[0])}
+
+    def delete_node_by_mem_cube_id(
+        self, mem_cube_id: str, delete_record_id: str, hard_delete: bool = False
+    ) -> int:
+        """Mark currently nondeleted rows, or hard-delete one already-deleted batch."""
+        self._ensure_open()
+        if not isinstance(hard_delete, bool):
+            raise ValueError("hard_delete must be a bool")
+        return self._change_deletion_record(
+            mem_cube_id, delete_record_id, "hard" if hard_delete else "delete"
+        )
+
+    def recover_memory_by_mem_cube_id(self, mem_cube_id: str, delete_record_id: str) -> int:
+        """Reactivate only deleted rows carrying this Cube's deletion batch."""
+        return self._change_deletion_record(mem_cube_id, delete_record_id, "recover")
+
+    def _change_deletion_record(self, scope: str, record_id: str, action: str) -> int:
+        self._ensure_open()
+        self._maintenance_strings([scope, record_id], "Cube and deletion record")
+        deleted, params = self._build_equal_condition(["status"], "deleted", prefix="memos_deleted")
+        if action == "delete":
+            predicate = f"({deleted}) IS NOT TRUE"
+        else:
+            batch, bound = self._build_equal_condition(
+                ["delete_record_id"], record_id, prefix="memos_batch"
+            )
+            predicate = f"{deleted} AND {batch}"
+            params = self._merge_bindings(params, bound)
+        with self._cursor(lock=2) as cursor:
+            cursor.execute(
+                f"SELECT business_id, memory, properties, NULL FROM ONLY {_TABLE} "
+                f"WHERE scope = %(scope)s AND ({predicate}) ORDER BY business_id FOR UPDATE",
+                self._merge_bindings(params, {"scope": scope}),
+            )
+            rows = cursor.fetchall()
+            if action == "hard":
+                return self._delete_locked_nodes(cursor, scope, [row[0] for row in rows])
+            changes = (
+                {
+                    "status": "deleted",
+                    "delete_record_id": record_id,
+                    "delete_time": datetime.now(timezone.utc).isoformat(),
+                }
+                if action == "delete"
+                else {"status": "activated", "delete_record_id": "", "delete_time": ""}
+            )
+            affected = 0
+            for row in rows:
+                node = self._decode_node(row, scope, False)
+                metadata = {**node["metadata"], **changes}
+                payload = self._encode_node(node["id"], node["memory"], metadata, scope)[4]
+                cursor.execute(
+                    f"UPDATE ONLY {_TABLE} SET properties = %(properties)s::ag_catalog.agtype "
+                    "WHERE scope = %(scope)s AND business_id = %(id)s",
+                    {"scope": scope, "id": node["id"], "properties": payload},
+                )
+                affected += cursor.rowcount
+            return affected
 
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int | str, user_name: str | None = None
