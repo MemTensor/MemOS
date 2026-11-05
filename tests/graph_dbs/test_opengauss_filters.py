@@ -175,8 +175,8 @@ def test_bound_values_scopes_and_no_input_mutation(store):
         [], user_name="B", knowledgebase_ids=["K", "K"], filter=condition
     ) == ["a", "a", "k"]
     statement, params = cursor.execute.call_args.args
-    assert "scope = ANY(%s)" in statement and "ORDER BY scope, business_id" in statement
-    assert params[0] == ["B", "K"]
+    assert "scope = ANY(%(scopes)s)" in statement and "ORDER BY scope, business_id" in statement
+    assert params["scopes"] == ["B", "K"]
     assert value not in statement and "project" not in statement
     assert condition == original
 
@@ -212,7 +212,7 @@ def test_multi_scope_projection_and_physical_empty_scope(store):
     db.config.use_multi_db = True
     cursor.fetchall.return_value = []
     assert db.get_by_metadata([]) == []
-    assert cursor.execute.call_args.args[1][0] == [""]
+    assert cursor.execute.call_args.args[1]["scopes"] == [""]
 
 
 @pytest.mark.parametrize(

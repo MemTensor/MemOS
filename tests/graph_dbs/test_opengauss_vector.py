@@ -89,7 +89,7 @@ def test_underfilled_ann_is_replaced_by_one_same_scope_exact_query(vector_store)
     assert " + 0" not in queries[0].args[0]
     assert " + 0" in queries[1].args[0]
     assert queries[0].args[1] == queries[1].args[1]
-    assert ["B"] in queries[0].args[1]
+    assert ["B"] in queries[0].args[1].values()
     transaction.assert_called_once()
 
 
@@ -120,12 +120,15 @@ def test_scopes_filters_and_values_are_bound_without_mutating_inputs(vector_stor
     before = deepcopy(arguments)
     db.search_by_embedding([1, 0, 0], **arguments)
     statement, params = cursor.execute.call_args.args
-    assert "scope = ANY(%s)" in statement
+    assert "scope = ANY(%(scopes)s)" in statement
     assert "vector_norm(embedding) > 0" in statement
-    assert ["A'中文", "K"] in params
+    assert ["A'中文", "K"] in params.values()
     for literal in ("LongTermMemory", "archived", "bound-session'", "中文'; DROP TABLE Memory; --"):
         assert literal not in statement
-        assert json.dumps(literal, ensure_ascii=False) in params or json.dumps(literal) in params
+        assert (
+            json.dumps(literal, ensure_ascii=False) in params.values()
+            or json.dumps(literal) in params.values()
+        )
     assert arguments == before
 
 
@@ -235,7 +238,7 @@ def test_finite_extreme_query_is_scaled_without_mutation(vector_store, scale):
     vector = [scale, 0, 0]
     assert db.search_by_embedding(vector, top_k=1) == [{"id": "one", "score": 1}]
     assert vector == [scale, 0, 0]
-    assert json.loads(cursor.execute.call_args.args[1][0]) == [1, 0, 0]
+    assert json.loads(cursor.execute.call_args.args[1]["vector"]) == [1, 0, 0]
 
 
 def test_zero_limit_and_closed_store(vector_store):
@@ -292,7 +295,7 @@ def test_node_completion_uses_the_same_cube_alias(vector_store, cube, expected):
     db, _, cursor = vector_store
     cursor.fetchall.return_value = [_hit(scope=expected)[:4]]
     assert db.get_node("one", user_name="B", cube_name=cube)["id"] == "one"
-    assert cursor.execute.call_args.args[1][0] == expected
+    assert cursor.execute.call_args.args[1]["scope"] == expected
 
 
 INDEX_ROW = ("memos_graph", "Memory", "hnsw", "vector_cosine_ops", "6", True, True, None, None)

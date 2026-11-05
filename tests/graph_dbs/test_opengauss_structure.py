@@ -47,6 +47,10 @@ def test_one_backend_class_owns_pool_storage_and_filters():
         "delete_node_by_prams",
         "search_by_embedding",
         "search_by_fulltext",
+        "get_grouped_counts",
+        "get_memory_count",
+        "node_not_exist",
+        "remove_oldest_memory",
     ]:
         assert name in cls.__dict__
     assert "ThreadedConnectionPool" in inspect.getsource(cls.__init__)

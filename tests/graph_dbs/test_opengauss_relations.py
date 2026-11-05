@@ -41,7 +41,7 @@ def test_mutations_bind_scoped_endpoints_and_serialize(store, method):
     calls = cursor.execute.call_args_list
     assert "pg_advisory_xact_lock" in calls[0].args[0]
     assert "ORDER BY business_id FOR UPDATE" in calls[1].args[0]
-    assert calls[1].args[1] == (scope, sorted([source, target]))
+    assert calls[1].args[1] == {"scope": scope, "ids": sorted([source, target])}
     prepare = next(call.args[0] for call in calls if call.args[0].startswith("PREPARE"))
     assert ("MERGE" if method == "add_edge" else "DELETE r") in prepare
     assert "a.user_name = $scope" in prepare and "b.user_name = $scope" in prepare
@@ -49,7 +49,7 @@ def test_mutations_bind_scoped_endpoints_and_serialize(store, method):
     expected = {"scope": scope, "source": source, "target": target}
     if method == "delete_edge":
         expected["type"] = "RELATE_TO"
-    assert json.loads(execute.args[1][0]) == expected
+    assert json.loads(execute.args[1]["parameters"]) == expected
     assert source not in prepare and scope not in prepare
     assert calls[-1].args[0] == "DEALLOCATE memos_age"
     pool.transaction.assert_called_once()
@@ -70,11 +70,11 @@ def test_hard_delete_removes_native_edges_then_sql_label_row(store):
     db.delete_node("one", user_name="B")
     calls = cursor.execute.call_args_list
     assert "DELETE r" in next(call.args[0] for call in calls if call.args[0].startswith("PREPARE"))
-    bound = next(call.args[1][0] for call in calls if call.args[0].startswith("EXECUTE"))
+    bound = next(call.args[1]["parameters"] for call in calls if call.args[0].startswith("EXECUTE"))
     assert json.loads(bound) == {"id": "one", "scope": "B"}
     assert calls[-1].args == (
-        'DELETE FROM ONLY "memos_graph"."Memory" WHERE scope = %s AND business_id = %s',
-        ("B", "one"),
+        'DELETE FROM ONLY "memos_graph"."Memory" WHERE scope = %(scope)s AND business_id = %(id)s',
+        {"scope": "B", "id": "one"},
     )
 
 
@@ -154,7 +154,7 @@ def test_projection_is_sorted_unique_and_scoped(store, direction, edge_type):
     prepare = next(call.args[0] for call in calls if call.args[0].startswith("PREPARE"))
     assert "a.user_name = $scope" in prepare and "b.user_name = $scope" in prepare
     assert ("type(r) = $type" in prepare) == (edge_type != "ANY")
-    bound = next(call.args[1][0] for call in calls if call.args[0].startswith("EXECUTE"))
+    bound = next(call.args[1]["parameters"] for call in calls if call.args[0].startswith("EXECUTE"))
     assert json.loads(bound)["scope"] == "B"
 
 
