@@ -36,6 +36,11 @@ capacity, pool_case = _capacity, _pool_case
         {"status": [""]},
         {"status": ["x\0"]},
         {"status": 1},
+        {"exclude_user_name": "P"},
+        {"all_cubes": True, "exclude_user_name": ""},
+        {"all_cubes": True, "exclude_user_name": " "},
+        {"all_cubes": True, "exclude_user_name": 1},
+        {"all_cubes": True, "exclude_user_name": "P\0"},
     ],
 )
 def test_invalid_export_never_borrows(capacity, kwargs):
@@ -51,6 +56,24 @@ def test_closed_export_precedes_validation(capacity):
     with pytest.raises(GraphDBError, match="closed"):
         db.export_graph(page=-1)
     pool.getconn.assert_not_called()
+
+
+def test_excluded_cube_is_bound_in_count_and_page_predicates(capacity):
+    db, _, _, cursor = capacity
+    cursor.fetchone.return_value = (0,)
+    cursor.fetchall.return_value = []
+    excluded = "P' OR true --"
+    assert db.export_graph(all_cubes=True, exclude_user_name=excluded)["nodes"] == []
+    queries = [
+        call
+        for call in cursor.execute.call_args_list
+        if call.args[0].startswith(("SELECT COUNT(*)", "SELECT business_id,"))
+    ]
+    assert len(queries) == 2
+    for query in queries:
+        assert excluded not in query.args[0]
+        assert "scope <> %(memos_excluded_owner)s" in query.args[0]
+        assert query.args[1]["memos_excluded_owner"] == excluded
 
 
 @pytest.mark.parametrize("embedding,all_cubes", [(False, False), (True, True)])

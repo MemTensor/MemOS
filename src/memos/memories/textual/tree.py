@@ -15,6 +15,7 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
+from memos.graph_dbs.opengauss import OpenGaussGraphDB
 from memos.lifecycle import CloseGuard
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
@@ -404,11 +405,22 @@ class TreeTextMemory(BaseTextMemory):
         page_size: int | None = None,
         filter: dict | None = None,
         memory_type: list[str] | None = None,
+        *,
+        all_cubes: bool | None = None,
+        exclude_user_name: str | None = None,
     ) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
+        scope = {}
+        if all_cubes is not None or exclude_user_name is not None:
+            if not isinstance(self.graph_store, OpenGaussGraphDB):
+                raise ValueError("This graph backend does not support explicit Cube ranges")
+            if all_cubes is not None:
+                scope["all_cubes"] = all_cubes
+            if exclude_user_name is not None:
+                scope["exclude_user_name"] = exclude_user_name
         graph_output = self.graph_store.export_graph(
             user_name=user_name,
             user_id=user_id,
@@ -416,6 +428,7 @@ class TreeTextMemory(BaseTextMemory):
             page_size=page_size,
             filter=filter,
             memory_type=memory_type,
+            **scope,
         )
         return graph_output
 

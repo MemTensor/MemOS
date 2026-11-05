@@ -1,8 +1,7 @@
 """openGauss enterprise AGE backend, following the existing GraphDB provider layout.
 
 The provider owns its connection pool, graph operations and filter builders.
-Some graph and maintenance methods are still abstract; factory registration
-waits until the required consumer contracts are implemented.
+Consumer capabilities are validated separately from factory registration.
 """
 
 import json
@@ -1574,6 +1573,7 @@ class OpenGaussGraphDB(BaseGraphDB):
         status: list[str] | None = None,
         *,
         all_cubes: bool = False,
+        exclude_user_name: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Export a consistent filtered page; cross-Cube reads require explicit opt-in."""
@@ -1589,6 +1589,13 @@ class OpenGaussGraphDB(BaseGraphDB):
         ):
             raise ValueError("page and page_size must both be positive integers or omitted")
         parts = [self._build_filter_where_clause(filter)]
+        if exclude_user_name is not None:
+            if not all_cubes:
+                raise ValueError("exclude_user_name requires all_cubes=True")
+            self._maintenance_scope(exclude_user_name)
+            parts.append(
+                ("scope <> %(memos_excluded_owner)s", {"memos_excluded_owner": exclude_user_name})
+            )
         if not all_cubes:
             parts.append(
                 ("scope = %(memos_owner)s", {"memos_owner": self._maintenance_scope(user_name)})
