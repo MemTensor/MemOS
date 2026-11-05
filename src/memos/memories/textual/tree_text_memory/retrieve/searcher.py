@@ -1165,7 +1165,14 @@ class Searcher:
         include_preference_memory=False,
         pref_mem_top_k=6,
     ):
-        """Sort results by score and trim to top_k"""
+        """Sort results by score and trim to top_k.
+
+        Note:
+            Takes ownership of ``results``: selected textual items have their
+            ``metadata.relativity`` overwritten in place when the metadata type
+            already declares the field; other metadata types are rebuilt into
+            ``SearchedTreeNodeTextualMemoryMetadata`` as before.
+        """
         final_items = []
         if search_tool_memory:
             tool_schema_results = [
@@ -1266,15 +1273,25 @@ class Searcher:
         for item, score in sorted_results:
             if plugin and round(score, 2) == 0.00:
                 continue
-            meta_data = item.metadata.model_dump()
-            meta_data["relativity"] = score
-            final_items.append(
-                TextualMemoryItem(
-                    id=item.id,
-                    memory=item.memory,
-                    metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+            metadata = item.metadata
+            if isinstance(metadata, SearchedTreeNodeTextualMemoryMetadata):
+                # The field already exists on this metadata type: write the
+                # score in place, applying the same float() coercion the
+                # rebuild path below would apply through pydantic validation.
+                metadata.relativity = float(score)
+                final_items.append(item)
+            else:
+                # Type upgrade (e.g. graph/bm25 results without relativity):
+                # rebuild into the searched metadata type as before.
+                meta_data = metadata.model_dump()
+                meta_data["relativity"] = score
+                final_items.append(
+                    TextualMemoryItem(
+                        id=item.id,
+                        memory=item.memory,
+                        metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+                    )
                 )
-            )
         return final_items
 
     @timed
