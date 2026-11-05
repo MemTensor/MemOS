@@ -340,9 +340,11 @@ explicit row because its ordering and lifecycle differ:
 | SubAgent starts (`onSubAgentStart`)          | `subAgentRetrieve` (Tier-2 + optional Tier-3; no Tier-1)                  | Prepended to the sub-agent's first turn   |
 | Decision-repair signal fires (see §4.3)      | `repairRetrieve` (targeted Tier-1+2 lookup; no Tier-3)                    | Prepended to the **next** LLM step        |
 
-`lightweightMemory` narrows automatic, tool-driven, and sub-agent retrieval
-to trace-only Tier-2. Turn-start scheduling can also gate tiers for the
-classified scenario, so the table describes the normal full-memory plan.
+`lightweightMemory` keeps turn-start ("automatic") retrieval on Tier-1
+skills + Tier-2 traces, and narrows tool-driven and sub-agent retrieval to
+trace-only Tier-2; world models (Tier-3) and episodes are never injected in
+this mode. Turn-start scheduling can still gate tiers for the classified
+scenario, so the table describes the normal full-memory plan.
 
 We do **not** silently inject context on every `onToolCall` / `onToolResult`.
 Those hooks are for observation only (failure counters, latency, event
