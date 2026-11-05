@@ -46,16 +46,34 @@ export function nullable<T>(v: T | undefined): T | null {
   return v === undefined ? null : v;
 }
 
+/**
+ * Hard upper bound for explicitly requested page sizes. Callers that need
+ * bulk windows (e.g. `metrics()` loads 10_000 traces for the viewer's
+ * "memory writes per day" chart, world-model maintenance scans 100_000
+ * rows) must actually receive what they ask for. The previous
+ * `Math.min(n, 500)` silently rewrote every explicit request to the
+ * default page size, which truncated the viewer's analytics to the newest
+ * 500 traces and undercounted `sessions` / `embeddings` (#2401).
+ *
+ * This ceiling is for trusted in-process bulk reads. Untrusted input
+ * (HTTP query params, agent tool args) must be bounded at the API
+ * boundary — see `MAX_HTTP_PAGE_LIMIT` in `server/routes/params.ts`.
+ */
+export const MAX_QUERY_LIMIT = 100_000;
+
+/** Default page size when a caller omits `limit`. */
+export const DEFAULT_PAGE_SIZE = 500;
+
 export function buildPageClauses(opts: PageOptions | undefined, tsColumn: string): string {
   const newestFirst = opts?.newestFirst !== false;
-  const limit = clampLimit(opts?.limit ?? 500);
+  const limit = clampLimit(opts?.limit ?? DEFAULT_PAGE_SIZE);
   const offset = Math.max(opts?.offset ?? 0, 0);
   return `ORDER BY ${tsColumn} ${newestFirst ? "DESC" : "ASC"} LIMIT ${limit} OFFSET ${offset}`;
 }
 
 export function clampLimit(n: number): number {
-  if (!Number.isFinite(n) || n <= 0) return 500;
-  return Math.min(Math.trunc(n), 500);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_PAGE_SIZE;
+  return Math.min(Math.trunc(n), MAX_QUERY_LIMIT);
 }
 
 export function timeRangeWhere(

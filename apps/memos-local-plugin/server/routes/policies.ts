@@ -21,6 +21,7 @@
  */
 import type { PolicyDTO } from "../../agent-contract/dto.js";
 import type { ServerDeps } from "../types.js";
+import { parseLimitParam } from "./params.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
 export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
@@ -28,10 +29,8 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
 
   routes.set("GET /api/v1/policies", async (ctx) => {
     const params = ctx.url.searchParams;
-    const parsedLimit = Number(params.get("limit"));
+    const limit = parseLimitParam(params.get("limit"));
     const parsedOffset = Number(params.get("offset"));
-    const limit =
-      Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
     const offset =
       Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const statusRaw = params.get("status");
@@ -267,10 +266,8 @@ export function registerPoliciesRoutes(routes: Routes, deps: ServerDeps): void {
 
   routes.set("GET /api/v1/world-models", async (ctx) => {
     const params = ctx.url.searchParams;
-    const parsedLimit = Number(params.get("limit"));
+    const limit = parseLimitParam(params.get("limit"));
     const parsedOffset = Number(params.get("offset"));
-    const limit =
-      Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
     const offset =
       Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const q = params.get("q") || undefined;

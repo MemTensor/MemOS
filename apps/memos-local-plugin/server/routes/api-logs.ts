@@ -14,15 +14,14 @@
  *   { logs: ApiLogDTO[], total: number, limit, offset, nextOffset? }
  */
 import type { ServerDeps } from "../types.js";
+import { parseLimitParam } from "./params.js";
 import type { Routes } from "./registry.js";
 
 export function registerApiLogsRoutes(routes: Routes, deps: ServerDeps): void {
   routes.set("GET /api/v1/api-logs", async (ctx) => {
     const params = ctx.url.searchParams;
-    const parsedLimit = Number(params.get("limit"));
+    const limit = parseLimitParam(params.get("limit"));
     const parsedOffset = Number(params.get("offset"));
-    const limit =
-      Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
     const offset =
       Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const tool = params.get("tool") || undefined;
