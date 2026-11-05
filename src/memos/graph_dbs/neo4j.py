@@ -1893,6 +1893,24 @@ class Neo4jGraphDB(BaseGraphDB):
                 node["sources"][idx] = json.loads(node["sources"][idx])
         return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
 
+    def _delete_vectors_for_deleted_nodes(self, node_ids: list[str]) -> None:
+        """Purge the embeddings of just-deleted graph nodes from the vector store.
+
+        Deleting a graph node alone leaves its vector behind, and vector search is
+        what retrieval reads first, so the deleted memory stays retrievable. The
+        vector store is an external dependency, so a failure here is logged rather
+        than raised: the graph deletion is already committed and must not be
+        reported as failed.
+        """
+        vec_db = getattr(self, "vec_db", None)
+        if not node_ids or vec_db is None:
+            return
+        try:
+            vec_db.delete(node_ids)
+            logger.info("[delete_node_by_prams] Deleted %d vectors from VecDB", len(node_ids))
+        except Exception as e:
+            logger.warning("[delete_node_by_prams] Failed to delete vectors from VecDB: %s", e)
+
     def delete_node_by_prams(
         self,
         writable_cube_ids: list[str] | None = None,
@@ -1994,15 +2012,24 @@ class Neo4jGraphDB(BaseGraphDB):
         else:
             final_where = data_conditions
 
-        # Delete directly without pre-counting
-        delete_query = f"MATCH (n:Memory) WHERE {final_where} DETACH DELETE n"
+        # Collect the matching node IDs and delete the nodes in ONE statement, so
+        # the IDs that are purged from the vector store are exactly the nodes this
+        # call removed: two separate auto-commit statements would let a concurrent
+        # writer slip nodes in between them, and those nodes' vectors would be
+        # left behind. RETURN rides along with DETACH DELETE, and the deleted
+        # count comes from the same summary the deletion produced.
+        delete_query = (
+            f"MATCH (n:Memory) WHERE {final_where} WITH n DETACH DELETE n RETURN n.id AS id"
+        )
         logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
 
         deleted_count = 0
+        deleted_ids: list[str] = []
         try:
             with self.driver.session(database=self.db_name) as session:
-                # Execute delete query
+                # Execute the collect-and-delete query
                 result = session.run(delete_query, **params)
+                deleted_ids = [record["id"] for record in result]
                 # Consume the result to ensure deletion completes and get the summary
                 summary = result.consume()
                 # Get the count from the result summary
@@ -2016,6 +2043,7 @@ class Neo4jGraphDB(BaseGraphDB):
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
             raise
 
+        self._delete_vectors_for_deleted_nodes(deleted_ids)
         logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
         return deleted_count
 
