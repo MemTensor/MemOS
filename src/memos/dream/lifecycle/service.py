@@ -11,6 +11,7 @@ from memos.dream.lifecycle.contracts import (
     LifecycleConfig,
     LifecycleError,
     LifecycleEvent,
+    LifecycleMetadataError,
     LifecycleState,
     checked_state,
     utc_time,
@@ -49,6 +50,35 @@ class MemoryLifecycleOutcome:
     changed: bool = False
     strength: float | None = None
     usefulness: float | None = None
+    eligible: bool = False
+    evidence_revision: int | None = None
+
+
+@dataclass(frozen=True)
+class MemoryLifecycleInspection:
+    """Read-only retention explanation; excludes content and deduplication hashes."""
+
+    memory_id: str
+    cube_id: str
+    found: bool = True
+    eligible: bool = False
+    managed: bool = False
+    quarantined: bool = False
+    graph_status: str | None = None
+    next_action: str = "skip"
+    reason: str = "not_dream"
+    policy_fingerprint: str | None = None
+    revision: int | None = None
+    created_at: datetime | None = None
+    last_hit_at: datetime | None = None
+    hit_count: int | None = None
+    outcome_count: int | None = None
+    pinned: bool | None = None
+    invalidated_by_feedback: bool | None = None
+    strength: float | None = None
+    usefulness: float | None = None
+    receipt_count: int | None = None
+    receipt_capacity: int | None = None
 
 
 class DreamLifecycleService:
@@ -121,11 +151,26 @@ class DreamLifecycleService:
                 raise LifecycleError("Stored lifecycle scope mismatch")
             if (state.created_at - now).total_seconds() > self.config.future_tolerance_seconds:
                 raise LifecycleError("Stored creation timestamp is in the future")
+            for timestamp in (
+                state.last_hit_at,
+                state.mass_anchor_at,
+                state.archived_at,
+                state.restored_at,
+            ):
+                if timestamp is not None:
+                    if (timestamp - now).total_seconds() > self.config.future_tolerance_seconds:
+                        raise LifecycleError("Stored lifecycle evidence is in the future")
+                    if (
+                        state.created_at - timestamp
+                    ).total_seconds() > self.config.future_tolerance_seconds:
+                        raise LifecycleError("Stored lifecycle evidence predates creation")
             if state.protect_archived_status and metadata.get("status") != "archived":
                 raise LifecycleError("Protected lifecycle and graph status disagree")
             return state
-        except (ValueError, TypeError, AttributeError) as exc:
-            raise LifecycleError("Malformed Dream lifecycle metadata; no mutation applied") from exc
+        except (LifecycleError, ValueError, TypeError, AttributeError) as exc:
+            raise LifecycleMetadataError(
+                "Malformed Dream lifecycle metadata; no mutation applied"
+            ) from exc
 
     @staticmethod
     def _fields(state: LifecycleState) -> dict[str, Any]:
@@ -187,6 +232,69 @@ class DreamLifecycleService:
                 skipped += ignored
         return ObservationReport(accepted, duplicates, skipped, missing)
 
+    def inspect(
+        self, ids: list[str], *, cube_id: str, now: datetime
+    ) -> list[MemoryLifecycleInspection]:
+        """Explain retention/quarantine without initializing metadata or pruning receipts.
+
+        Each snapshot uses the same scoped current-read capability as a transition.
+        Malformed stored state becomes a quarantine explanation, allowing operators
+        to locate affected identifiers without treating corruption as low usefulness.
+        Inspection does not authorize a recovery or silently reinterpret a policy.
+        """
+        now = utc_time(now)
+
+        def reduce(memory_id, metadata):
+            common = {
+                "memory_id": memory_id,
+                "cube_id": cube_id,
+                "eligible": self.is_dream(metadata),
+                "managed": LIFECYCLE_METADATA_KEY in metadata,
+                "graph_status": metadata.get("status"),
+            }
+            try:
+                state = self._state(memory_id, cube_id, metadata, now)
+                if state is None:
+                    return NodeMetadataUpdate(None, MemoryLifecycleInspection(**common))
+                decision = decide_maintenance(
+                    state, self.config, now=now, graph_status=metadata.get("status", "")
+                )
+            except LifecycleError:
+                return NodeMetadataUpdate(
+                    None,
+                    MemoryLifecycleInspection(
+                        **common, quarantined=True, reason="invalid_lifecycle"
+                    ),
+                )
+            report = MemoryLifecycleInspection(
+                **common,
+                next_action=decision.action,
+                reason=decision.reason,
+                policy_fingerprint=state.policy_fingerprint,
+                revision=state.revision,
+                created_at=state.created_at,
+                last_hit_at=state.last_hit_at,
+                hit_count=state.hit_count,
+                outcome_count=state.outcome_count,
+                pinned=state.pinned,
+                invalidated_by_feedback=state.invalidated_by_feedback,
+                strength=decision.strength,
+                usefulness=decision.usefulness,
+                receipt_count=len(state.receipts),
+                receipt_capacity=self.config.receipt_capacity,
+            )
+            return NodeMetadataUpdate(None, report)
+
+        rows = self.graph.mutate_nodes_metadata(ids, reduce, user_name=cube_id)
+        return [
+            row.result
+            if row.found
+            else MemoryLifecycleInspection(
+                memory_id=row.memory_id, cube_id=cube_id, found=False, reason="not_found"
+            )
+            for row in rows
+        ]
+
     def maintain(
         self, ids: list[str], *, cube_id: str, now: datetime, dry_run: bool = False
     ) -> list[MemoryLifecycleOutcome]:
@@ -226,6 +334,8 @@ class DreamLifecycleService:
                 bool(fields) and not dry_run,
                 decision.strength,
                 decision.usefulness,
+                eligible=True,
+                evidence_revision=state.revision,
             )
             return NodeMetadataUpdate(None if dry_run else fields, outcome)
 

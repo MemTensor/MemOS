@@ -121,3 +121,33 @@ def test_checkpoint_failure_replays_committed_page_without_duplicate_transitions
     monkeypatch.setattr(runner, "_save_cursor", original)
     replay = runner.run(cube_id="runner-cube", now=NOW)
     assert replay.complete and replay.archived == 0
+
+
+def test_reports_bound_decisions_and_checkpoint_exact_evidence_revisions(graph, tmp_path):
+    records(graph, 5)
+    path = tmp_path / "cursor.json"
+    runner = DreamMaintenanceRunner(service(graph), checkpoint=path)
+    report = runner.run(
+        cube_id="runner-cube",
+        now=NOW,
+        limits=MaintenanceLimits(page_size=2, max_report_decisions=2),
+    )
+    assert report.eligible == 5 and report.archived == 5
+    assert len(report.decisions) == 2 and report.omitted_decisions == 3
+    assert report.reason_counts == {"stale": 5}
+    assert report.backend_capability == "atomic_lifecycle_metadata"
+    assert all(item.evidence_revision == 0 for item in report.decisions)
+    cursor = json.loads(path.read_text())
+    assert cursor["last_page"][0]["reason"] == "stale"
+    assert cursor["last_page"][0]["evidence_revision"] == 0
+    assert "memory" not in cursor["last_page"][0]
+
+
+def test_failed_page_reports_every_retry_id_without_advancing_cursor(graph, tmp_path):
+    ids = sorted(records(graph, 2))
+    graph.update_node(ids[-1], {LIFECYCLE_METADATA_KEY: {"version": 99}}, user_name="runner-cube")
+    runner = DreamMaintenanceRunner(service(graph), checkpoint=tmp_path / "cursor.json")
+    report = runner.run(cube_id="runner-cube", now=NOW)
+    assert report.retry_ids == tuple(ids)
+    assert report.invalid == 1 and report.failed == 1
+    assert report.next_after is None

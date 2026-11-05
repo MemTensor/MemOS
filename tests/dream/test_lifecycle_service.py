@@ -193,3 +193,47 @@ def test_opted_in_persistence_initializes_service_state_without_confidence_rewri
     created = [row for row in records if row["metadata"].get("confidence") == 0.7]
     assert len(created) == 1
     assert created[0]["metadata"][LIFECYCLE_METADATA_KEY]["base_strength"] == 1
+
+
+def test_inspection_explains_quarantine_and_retention_without_initializing_or_writing(graph):
+    good = node(graph)
+    corrupt = node(graph, **{LIFECYCLE_METADATA_KEY: {"version": 99}})
+    unrelated = node(graph, source="user")
+    service = DreamLifecycleService(
+        graph, LifecycleConfig(half_life_seconds=86400, never_hit_grace_seconds=0)
+    )
+    before = graph.get_node(good, user_name="cube-a")["metadata"]
+    reports = service.inspect([good, corrupt, unrelated, "missing"], cube_id="cube-a", now=NOW)
+    assert reports[0].next_action == "archive" and reports[0].reason == "stale"
+    assert reports[0].managed is False and reports[0].receipt_count == 0
+    assert reports[1].quarantined and reports[1].next_action == "skip"
+    assert reports[2].eligible is False and reports[3].found is False
+    assert graph.get_node(good, user_name="cube-a")["metadata"] == before
+
+
+def test_malformed_temporal_and_ownership_invariants_are_quarantined(graph):
+    from memos.dream.lifecycle import initialize_state
+
+    service = DreamLifecycleService(graph, LifecycleConfig())
+    for patch in [
+        {"last_hit_at": NOW + timedelta(days=1), "hit_count": 1},
+        {"status": "archived", "protect_archived_status": False},
+        {"invalidated_by_feedback": True},
+        {"hit_count": 1, "last_hit_at": None},
+    ]:
+        item = node(graph)
+        state = initialize_state(
+            memory_id=item,
+            cube_id="cube-a",
+            config=service.config,
+            created_at=NOW - timedelta(days=1),
+        )
+        graph.update_node(
+            item,
+            {LIFECYCLE_METADATA_KEY: state.model_copy(update=patch).model_dump(mode="json")},
+            user_name="cube-a",
+        )
+        before = graph.get_node(item, user_name="cube-a")["metadata"]
+        with pytest.raises(LifecycleError):
+            service.maintain([item], cube_id="cube-a", now=NOW)
+        assert graph.get_node(item, user_name="cube-a")["metadata"] == before

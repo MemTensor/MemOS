@@ -143,7 +143,9 @@ def test_failed_native_feedback_emits_no_success_notification(graph, monkeypatch
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("Synthetic failed write")),
     )
     old = TextualMemoryItem(id=item, memory="Before", metadata={"memory_type": "WorkingMemory"})
-    new = TextualMemoryItem(memory="Corrected", metadata={"memory_type": "WorkingMemory", "embedding": [0, 0, 1]})
+    new = TextualMemoryItem(
+        memory="Corrected", metadata={"memory_type": "WorkingMemory", "embedding": [0, 0, 1]}
+    )
     with pytest.raises(OSError):
         feedback._single_update_operation(old, new, "user-a", "cube-a")
     assert calls == []
@@ -169,3 +171,25 @@ def test_delivery_failure_is_reported_without_mutating_response(graph):
     )
     assert delivery.failed == 1 and bridge.delivery_snapshot().failed == 1
     assert response.data["text_mem"][0]["memories"] == [{"id": item}]
+
+
+def test_delayed_notification_checks_receipts_against_delivery_clock(graph):
+    from datetime import timedelta
+
+    from memos.dream.lifecycle import LifecycleError
+
+    item = new_node(graph)
+    bridge = observer(graph)
+    request = APISearchRequest(user_id="user-a", readable_cube_ids=["cube-a"], query="Fixture")
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    graph.update_node(
+        item, {"created_at": (old - timedelta(days=1)).isoformat()}, user_name="cube-a"
+    )
+    with pytest.raises(LifecycleError, match="too old"):
+        bridge.observe_returned(
+            request=request,
+            results={"text_mem": [{"cube_id": "cube-a", "memories": [{"id": item}]}]},
+            event_id="expired-response",
+            at=old,
+        )
+    assert LIFECYCLE_METADATA_KEY not in graph.get_node(item, user_name="cube-a")["metadata"]

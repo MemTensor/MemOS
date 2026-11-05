@@ -17,7 +17,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from memos.dream.lifecycle.contracts import LifecycleError, utc_time
+from memos.dream.lifecycle.contracts import (
+    LifecycleCapacityError,
+    LifecycleError,
+    LifecycleMetadataError,
+    utc_time,
+)
 
 
 if TYPE_CHECKING:
@@ -32,8 +37,22 @@ class MaintenanceLimits(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     page_size: int = Field(default=100, ge=1, le=1000, strict=True)
+    max_report_decisions: int = Field(default=1000, ge=0, le=1000, strict=True)
     max_nodes: int = Field(default=10000, ge=1, le=10000000, strict=True)
     max_seconds: float = Field(default=60, gt=0, strict=True)
+
+
+class MaintenanceRecord(BaseModel):
+    """One retention decision tied to the evidence revision actually read under lock."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    memory_id: str
+    action: str
+    reason: str
+    changed: bool
+    eligible: bool
+    evidence_revision: int | None
 
 
 class MaintenanceCursor(BaseModel):
@@ -48,6 +67,7 @@ class MaintenanceCursor(BaseModel):
     sweep_id: str = Field(min_length=1, strict=True)
     after: str | None = Field(default=None, min_length=1, strict=True)
     complete: bool = Field(default=False, strict=True)
+    last_page: tuple[MaintenanceRecord, ...] = Field(default=(), max_length=1000)
 
 
 class MaintenanceReport(BaseModel):
@@ -60,6 +80,17 @@ class MaintenanceReport(BaseModel):
     sweep_id: str
     at: datetime
     dry_run: bool
+    policy_fingerprint: str
+    backend: str
+    backend_capability: Literal["atomic_lifecycle_metadata"] = "atomic_lifecycle_metadata"
+    eligible: int = 0
+    invalid: int = 0
+    capacity_exceeded: int = 0
+    restored: int = 0
+    decisions: tuple[MaintenanceRecord, ...] = Field(default=(), max_length=1000)
+    omitted_decisions: int = 0
+    reason_counts: dict[str, int] = Field(default_factory=dict)
+    retry_ids: tuple[str, ...] = Field(default=(), max_length=1000)
     scanned: int = 0
     archived: int = 0
     would_archive: int = 0
@@ -131,8 +162,8 @@ class DreamMaintenanceRunner:
         if self.checkpoint is not None and self.checkpoint.exists():
             try:
                 with self.checkpoint.open("rb") as stream:
-                    raw = stream.read(65537)
-                if len(raw) > 65536:
+                    raw = stream.read(2097153)
+                if len(raw) > 2097152:
                     raise LifecycleError("Maintenance checkpoint exceeds size limit")
                 data = json.loads(
                     raw,
@@ -255,7 +286,16 @@ class DreamMaintenanceRunner:
                 "missing": 0,
                 "failed": 0,
                 "next_after": cursor.after,
+                "policy_fingerprint": self.service.config.fingerprint(),
+                "backend": type(self.service.graph).__name__,
+                "eligible": 0,
+                "invalid": 0,
+                "capacity_exceeded": 0,
+                "omitted_decisions": 0,
+                "reason_counts": {},
+                "retry_ids": (),
             }
+            decisions = []
             stop_reason = "complete"
             complete = False
             error_type = None
@@ -290,11 +330,31 @@ class DreamMaintenanceRunner:
                         )
                     except Exception as exc:
                         values["failed"] += 1
+                        values["retry_ids"] = tuple(ids)
+                        values["invalid"] += int(isinstance(exc, LifecycleMetadataError))
+                        values["capacity_exceeded"] += int(isinstance(exc, LifecycleCapacityError))
                         error_type = type(exc).__name__
                         stop_reason = "page_failed"
                         break
                     values["scanned"] += len(ids)
+                    page_records = []
                     for outcome in outcomes:
+                        record = MaintenanceRecord(
+                            memory_id=outcome.memory_id,
+                            action=outcome.action,
+                            reason=outcome.reason,
+                            changed=outcome.changed,
+                            eligible=outcome.eligible,
+                            evidence_revision=outcome.evidence_revision,
+                        )
+                        page_records.append(record)
+                        if len(decisions) < limits.max_report_decisions:
+                            decisions.append(record)
+                        else:
+                            values["omitted_decisions"] += 1
+                        values["eligible"] += int(outcome.eligible)
+                        reasons = values["reason_counts"]
+                        reasons[outcome.reason] = reasons.get(outcome.reason, 0) + 1
                         if outcome.action == "archive":
                             if dry_run:
                                 values["would_archive"] += 1
@@ -308,13 +368,16 @@ class DreamMaintenanceRunner:
                             values["missing"] += 1
                         else:
                             values["skipped"] += 1
-                    proposed = cursor.model_copy(update={"after": ids[-1]})
+                    proposed = cursor.model_copy(
+                        update={"after": ids[-1], "last_page": tuple(page_records)}
+                    )
                 if not dry_run:
                     try:
                         self._save_cursor(proposed)
                     except OSError as exc:
                         complete = False
                         stop_reason = "checkpoint_failed"
+                        values["retry_ids"] = tuple(row["id"] for row in page)
                         error_type = type(exc).__name__
                         break
                 cursor = proposed
@@ -328,4 +391,5 @@ class DreamMaintenanceRunner:
                 stop_reason=stop_reason,
                 error_type=error_type,
                 elapsed_seconds=elapsed,
+                decisions=tuple(decisions),
             )

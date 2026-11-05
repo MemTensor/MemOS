@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from memos.dream.lifecycle.contracts import (
     EventKind,
     EventReceipt,
+    LifecycleCapacityError,
     LifecycleConfig,
     LifecycleError,
     LifecycleEvent,
@@ -92,7 +93,7 @@ def apply_event(
                 raise LifecycleError("Lifecycle event identity conflict")
             return state
     if len(live) >= config.receipt_capacity:
-        raise LifecycleError("Lifecycle event receipt capacity exhausted")
+        raise LifecycleCapacityError("Lifecycle event receipt capacity exhausted")
     receipt = EventReceipt(
         identity=identity,
         payload=digest,

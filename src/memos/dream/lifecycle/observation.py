@@ -6,14 +6,13 @@ import threading
 
 from collections import defaultdict
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from memos.dream.lifecycle.contracts import EventKind, LifecycleError, LifecycleEvent
 
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from memos.dream.lifecycle.service import DreamLifecycleService, ObservationReport
 
 
@@ -64,7 +63,7 @@ class DreamLifecycleObserver:
 
     def _commit(self, events: list[LifecycleEvent], *, event_id: str, at: datetime) -> None:
         try:
-            report = self.service.observe(events, now=at)
+            report = self.service.observe(events, now=datetime.now(timezone.utc))
         except Exception as exc:
             with self._lock:
                 self._delivery = replace(

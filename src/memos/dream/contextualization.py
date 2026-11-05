@@ -417,6 +417,11 @@ class DreamContextualizer:
                 summary_strategy=summary_strategy,
             )
 
+        lifecycle = self.context.get("shared", {}).get("dream_lifecycle")
+        if lifecycle is not None:
+            metadata = lifecycle.metadata_for_new(
+                context_id, cube_id, metadata, now=datetime.now(timezone.utc)
+            )
         graph_db.add_node(context_id, summary, metadata, user_name=cube_id)
         return _build_context_event(
             context_id=context_id,

@@ -7,6 +7,7 @@ import json
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -19,6 +20,14 @@ LIFECYCLE_METADATA_KEY = MANAGED_LIFECYCLE_KEY
 
 class LifecycleError(MemOSMemoryError):
     """An observation or transition cannot safely change lifecycle evidence."""
+
+
+class LifecycleMetadataError(LifecycleError):
+    """Stored evidence is invalid or incompatible and must remain quarantined."""
+
+
+class LifecycleCapacityError(LifecycleError):
+    """Live deduplication receipts cannot be evicted to admit another event."""
 
 
 def utc_time(value: datetime | str, *, legacy: bool = False) -> datetime:
@@ -79,7 +88,7 @@ class LifecycleEvent(BaseModel):
 
     @field_validator("at", mode="before")
     @classmethod
-    def aware_event_time(cls, value):
+    def aware_event_time(cls, value: datetime | str) -> datetime:
         try:
             return utc_time(value)
         except LifecycleError as exc:
@@ -99,7 +108,7 @@ class EventReceipt(BaseModel):
 
     @field_validator("expires_at", mode="before")
     @classmethod
-    def aware_expiry(cls, value):
+    def aware_expiry(cls, value: datetime | str) -> datetime:
         return utc_time(value)
 
 
@@ -136,7 +145,7 @@ class LifecycleState(BaseModel):
         "created_at", "last_hit_at", "mass_anchor_at", "archived_at", "restored_at", mode="before"
     )
     @classmethod
-    def stored_time(cls, value):
+    def stored_time(cls, value: Any) -> datetime | None:
         return None if value is None else utc_time(value, legacy=True)
 
 
@@ -155,6 +164,18 @@ def checked_state(state: LifecycleState, config: LifecycleConfig) -> LifecycleSt
         state = LifecycleState.model_validate(state.model_dump(mode="python"))
     except ValueError as exc:
         raise LifecycleError("Invalid stored lifecycle envelope") from exc
+    if state.protect_archived_status != (state.status == "archived"):
+        raise LifecycleError("Lifecycle archive ownership/status mismatch")
+    if state.status == "archived" and (
+        state.archived_at is None or not state.archive_reason.strip()
+    ):
+        raise LifecycleError("Lifecycle archive lacks transition provenance")
+    if state.invalidated_by_feedback and not state.protect_archived_status:
+        raise LifecycleError("Invalidated lifecycle evidence must remain archived")
+    if (state.hit_count == 0) != (state.last_hit_at is None):
+        raise LifecycleError("Lifecycle retrieval count/time mismatch")
+    if state.outcome_count == 0 and (state.positive_mass != 0 or state.negative_mass != 0):
+        raise LifecycleError("Lifecycle outcome mass lacks observed outcomes")
     if state.policy_fingerprint != config.fingerprint():
         raise LifecycleError("Lifecycle policy mismatch; explicit migration is required")
     if len(state.receipts) > config.receipt_capacity:
