@@ -139,7 +139,7 @@ class OpenGaussGraphDB(BaseGraphDB):
                 raise GraphDBError("The openGauss connection pool is closed")
 
     @contextmanager
-    def _get_connection(self) -> Iterator[Any]:
+    def _get_connection(self, *, snapshot: bool = False) -> Iterator[Any]:
         """Prepare one owned session, commit once, and always release admission."""
         self._ensure_open()
         if not self._semaphore.acquire(timeout=self.config.connection_wait_timeout):
@@ -157,7 +157,9 @@ class OpenGaussGraphDB(BaseGraphDB):
                 raise GraphDBError("The openGauss pool returned a closed connection")
             connection.rollback()
             connection.set_session(
-                isolation_level="READ COMMITTED", readonly=False, autocommit=False
+                isolation_level="REPEATABLE READ" if snapshot else "READ COMMITTED",
+                readonly=snapshot,
+                autocommit=False,
             )
             with connection.cursor() as cursor:
                 cursor.execute("RESET ALL")
@@ -198,9 +200,12 @@ class OpenGaussGraphDB(BaseGraphDB):
                 self._semaphore.release()
 
     @contextmanager
-    def _cursor(self, *, utc: bool = False, lock: int | None = None) -> Iterator[Any]:
+    def _cursor(
+        self, *, utc: bool = False, lock: int | None = None, snapshot: bool = False
+    ) -> Iterator[Any]:
         """Borrow one transactional cursor, optionally preparing UTC and a graph lock."""
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        transaction = self._get_connection(snapshot=True) if snapshot else self._get_connection()
+        with transaction as connection, connection.cursor() as cursor:
             if utc:
                 cursor.execute("SET LOCAL TIME ZONE 'UTC'")
             if lock is not None:
@@ -1522,6 +1527,136 @@ class OpenGaussGraphDB(BaseGraphDB):
                 self._merge_bindings(params, {"scope": owner}),
             )
             return [self._decode_node(row, owner, include_embedding) for row in cursor.fetchall()]
+
+    def _maintenance_scope(self, user_name: str | None) -> str:
+        self._ensure_open()
+        scope = self._scope(user_name)
+        if "\0" in scope:
+            raise ValueError("user_name cannot contain NUL")
+        return scope
+
+    def _maintenance_strings(self, values: list[str], name: str) -> None:
+        self._validate_string_list(values, name)
+        if any("\0" in value for value in values):
+            raise ValueError(f"{name} cannot contain NUL")
+
+    def export_graph(
+        self,
+        include_embedding: bool = False,
+        user_name: str | None = None,
+        user_id: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+        filter: dict | None = None,
+        memory_type: list[str] | None = None,
+        status: list[str] | None = None,
+        *,
+        all_cubes: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Export a consistent filtered page; cross-Cube reads require explicit opt-in."""
+        self._ensure_open()
+        if kwargs:
+            raise ValueError("Unknown export_graph arguments")
+        if not isinstance(include_embedding, bool) or not isinstance(all_cubes, bool):
+            raise ValueError("include_embedding and all_cubes must be bool")
+        if all_cubes and user_name is not None:
+            raise ValueError("all_cubes and user_name are mutually exclusive")
+        if (page is None) != (page_size is None) or any(
+            type(value) is not int or value <= 0 for value in (page, page_size) if value is not None
+        ):
+            raise ValueError("page and page_size must both be positive integers or omitted")
+        parts = [self._build_filter_where_clause(filter)]
+        if not all_cubes:
+            parts.append(
+                ("scope = %(memos_owner)s", {"memos_owner": self._maintenance_scope(user_name)})
+            )
+        if user_id is not None:
+            self._maintenance_strings([user_id], "user_id")
+            parts.append(self._build_equal_condition(["user_id"], user_id, prefix="memos_user"))
+        if memory_type is not None:
+            self._maintenance_strings(memory_type, "memory_type")
+            if memory_type:
+                parts.append(
+                    self._build_filter_condition(
+                        "memory_type", "in", memory_type, prefix="memos_types"
+                    )
+                )
+        if status is None:
+            deleted, bound = self._build_equal_condition(
+                ["status"], "deleted", prefix="memos_deleted"
+            )
+            parts.append((f"({deleted}) IS NOT TRUE", bound))
+        else:
+            self._maintenance_strings(status, "status")
+            if status:
+                statuses = []
+                for index, value in enumerate(status):
+                    expression, bound = self._filter_status(value)
+                    key = f"memos_status_{index}"
+                    statuses.append(
+                        (
+                            expression.replace("%(memos_status)s", f"%({key})s"),
+                            {key: bound["memos_status"]},
+                        )
+                    )
+                expression, bound = self._join_fragments(statuses, " OR ")
+                parts.append((f"({expression})", bound))
+        predicate, params = self._join_fragments(parts, " AND ")
+        instant, time_params = self._text_field_expr(["created_at"], prefix="memos_created")
+        vector = "embedding::text" if include_embedding else "NULL"
+        pagination = ""
+        page_params = {}
+        if page is not None:
+            pagination = " LIMIT %(memos_limit)s OFFSET %(memos_offset)s"
+            page_params = {"memos_limit": page_size, "memos_offset": (page - 1) * page_size}
+        with self._cursor(utc=True, snapshot=True) as cursor:
+            cursor.execute(f"SELECT COUNT(*) FROM ONLY {_TABLE} WHERE {predicate}", params)
+            total = cursor.fetchone()[0]
+            cursor.execute(
+                f"SELECT business_id, memory, properties, {vector}, scope, id::text "
+                f"FROM ONLY {_TABLE} WHERE {predicate} "
+                f"ORDER BY {instant}::timestamptz DESC NULLS LAST, "
+                'business_id COLLATE "C" DESC, scope COLLATE "C"' + pagination,
+                self._merge_bindings(params, time_params, page_params),
+            )
+            rows = cursor.fetchall()
+            nodes = []
+            for row in rows:
+                node = self._decode_node(row[:4], row[4], include_embedding)
+                node["metadata"]["user_name"] = row[4]
+                nodes.append(node)
+            edges = self._export_edges(cursor, [row[5] for row in rows], all_cubes)
+            return {"nodes": nodes, "edges": edges, "total_nodes": total, "total_edges": len(edges)}
+
+    def _export_edges(
+        self, cursor: Any, graphids: list[str], all_cubes: bool
+    ) -> list[dict[str, str]]:
+        if not graphids:
+            return []
+        cursor.execute(
+            "SELECT a.business_id, b.business_id, l.name, a.scope "
+            "FROM memos_graph._ag_label_edge e "
+            "JOIN ag_catalog.ag_label l ON l.relation = e.tableoid AND l.kind = 'e' "
+            f"JOIN ONLY {_TABLE} a ON a.id = e.start_id "
+            f"JOIN ONLY {_TABLE} b ON b.id = e.end_id AND b.scope = a.scope "
+            "WHERE a.id::text = ANY(%(graphids)s) AND b.id::text = ANY(%(graphids)s)",
+            {"graphids": graphids},
+        )
+        edges = set()
+        for source, target, kind, owner in cursor.fetchall():
+            if not all(isinstance(value, str) for value in (source, target, kind, owner)):
+                raise GraphDBError("Invalid stored openGauss edge")
+            edges.add((owner, source, target, kind))
+        return [
+            {
+                "source": source,
+                "target": target,
+                "type": kind,
+                **({"user_name": owner} if all_cubes else {}),
+            }
+            for owner, source, target, kind in sorted(edges)
+        ]
 
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int | str, user_name: str | None = None
