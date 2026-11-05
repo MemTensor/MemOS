@@ -16,5 +16,4 @@ class PartialOpenGaussGraphDB(OpenGaussGraphDB):
     detect_conflicts = _unimplemented
     merge_nodes = _unimplemented
     clear = _unimplemented
-    export_graph = _unimplemented
     import_graph = _unimplemented
