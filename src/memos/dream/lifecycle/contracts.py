@@ -11,9 +11,10 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from memos.exceptions import MemoryError as MemOSMemoryError
+from memos.graph_dbs.base import MANAGED_LIFECYCLE_KEY
 
 
-LIFECYCLE_METADATA_KEY = "_memos_dream_lifecycle_v1"
+LIFECYCLE_METADATA_KEY = MANAGED_LIFECYCLE_KEY
 
 
 class LifecycleError(MemOSMemoryError):
