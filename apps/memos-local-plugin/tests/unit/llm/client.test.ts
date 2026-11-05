@@ -631,4 +631,75 @@ describe("llm/client", () => {
       expect(provider.calls).toBe(2);
     });
   });
+
+  describe("signal sanitization (issue #2412)", () => {
+    it("should replace aborted signal with fresh one in background calls", async () => {
+      // Mock provider that captures the signal passed to it
+      let capturedSignal: AbortSignal | undefined;
+      const provider = new FakeProvider("openai_compatible", () => ({
+        text: "ok",
+        durationMs: 1,
+      }));
+      // Patch to capture signal
+      const originalComplete = provider.complete.bind(provider);
+      provider.complete = async (messages, opts, ctx) => {
+        capturedSignal = ctx.signal;
+        return originalComplete(messages, opts, ctx);
+      };
+
+      const client = createLlmClientWithProvider(cfg(), provider);
+
+      // Simulate background call with already-aborted signal (issue #2412)
+      const abortedController = new AbortController();
+      abortedController.abort();
+
+      await client.complete("test prompt", { signal: abortedController.signal });
+
+      // The provider should receive a fresh, non-aborted signal
+      expect(capturedSignal).toBeDefined();
+      expect(capturedSignal?.aborted).toBe(false);
+    });
+
+    it("should preserve non-aborted signal in foreground calls", async () => {
+      let capturedSignal: AbortSignal | undefined;
+      const provider = new FakeProvider("openai_compatible", () => ({
+        text: "ok",
+        durationMs: 1,
+      }));
+      const originalComplete = provider.complete.bind(provider);
+      provider.complete = async (messages, opts, ctx) => {
+        capturedSignal = ctx.signal;
+        return originalComplete(messages, opts, ctx);
+      };
+
+      const client = createLlmClientWithProvider(cfg(), provider);
+
+      const controller = new AbortController();
+      await client.complete("test prompt", { signal: controller.signal });
+
+      // The provider should receive the original signal
+      expect(capturedSignal).toBe(controller.signal);
+      expect(capturedSignal?.aborted).toBe(false);
+    });
+
+    it("should handle undefined signal gracefully", async () => {
+      let capturedSignal: AbortSignal | undefined;
+      const provider = new FakeProvider("openai_compatible", () => ({
+        text: "ok",
+        durationMs: 1,
+      }));
+      const originalComplete = provider.complete.bind(provider);
+      provider.complete = async (messages, opts, ctx) => {
+        capturedSignal = ctx.signal;
+        return originalComplete(messages, opts, ctx);
+      };
+
+      const client = createLlmClientWithProvider(cfg(), provider);
+
+      await client.complete("test prompt");
+
+      // No signal provided, so ctx.signal should be undefined
+      expect(capturedSignal).toBeUndefined();
+    });
+  });
 });
