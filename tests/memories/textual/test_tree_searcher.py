@@ -72,10 +72,18 @@ def test_searcher_fast_path(mock_searcher):
     ]
 
     result = mock_searcher.search(
-        query=query, top_k=2, info={"test": True}, mode="fast", memory_type="All"
+        query=query,
+        top_k=2,
+        info={"test": True, "reference_time": "2023-04-01T00:00:00Z"},
+        mode="fast",
+        memory_type="All",
     )
 
     assert mock_searcher.task_goal_parser.parse.called
+    assert (
+        mock_searcher.task_goal_parser.parse.call_args.kwargs["reference_time"]
+        == "2023-04-01T00:00:00Z"
+    )
     mock_searcher.embedder.embed.assert_called_once()
 
     assert len(result) <= 2

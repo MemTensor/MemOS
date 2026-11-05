@@ -335,13 +335,15 @@ class Searcher:
             """
 
         # parse goal using LLM
+        parser_kwargs = dict(kwargs)
+        parser_kwargs.setdefault("reference_time", info.get("reference_time"))
         parsed_goal = self.task_goal_parser.parse(
             task_description=query,
             context="\n".join(context),
             conversation=info.get("chat_history", []),
             mode=mode,
             use_fast_graph=self.use_fast_graph,
-            **kwargs,
+            **parser_kwargs,
         )
 
         query = parsed_goal.rephrased_query or query
