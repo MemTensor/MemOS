@@ -13,6 +13,8 @@ from memos.context.context import (
     generate_trace_id,
     set_request_context,
 )
+from memos.exceptions import MemOSError
+from memos.lifecycle import CloseGuard
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.task_threads import ThreadManager
@@ -61,6 +63,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
     ):
         super().__init__()
         self.config = config
+        self._close_guard = CloseGuard()
+        self._retired_executors = []
+        self._closed_executors = set()
 
         # Main dispatcher thread pool
         self.max_workers = max_workers
@@ -771,6 +776,25 @@ class SchedulerDispatcher(BaseSchedulerModule):
         except Exception as e:
             logger.error(f"Multiple tasks execution failed: {e}", exc_info=True)
             raise
+
+    def close(self) -> None:
+        """Drain all current and retired executors after recovery is disabled."""
+        self._close_guard.close(self._close_executors)
+
+    def _close_executors(self) -> None:
+        self._running = False
+        errors = []
+        for executor in [self.dispatcher_executor, *self._retired_executors]:
+            if executor is None or executor in self._closed_executors:
+                continue
+            try:
+                executor.shutdown(wait=True, cancel_futures=True)
+                self._closed_executors.add(executor)
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise MemOSError("Dispatcher executors have not all exited") from errors[0]
+        self._futures.clear()
 
     def shutdown(self) -> None:
         """Gracefully shutdown the dispatcher."""

@@ -323,6 +323,7 @@ class GraphDBConfigFactory(BaseModel):
         "neo4j-community": Neo4jCommunityGraphDBConfig,
         "polardb": PolarDBGraphDBConfig,
         "postgres": PostgresGraphDBConfig,
+        "opengauss": OpenGaussGraphDBConfig,
     }
 
     @field_validator("backend")

@@ -1,10 +1,9 @@
 import threading
-import time
-
-from time import perf_counter
 
 from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.context.context import ContextThread, ContextThreadPoolExecutor
+from memos.exceptions import MemOSError
+from memos.lifecycle import CloseGuard
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -25,6 +24,9 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
 
     def __init__(self, config: BaseSchedulerConfig):
         super().__init__()
+        self._close_guard = CloseGuard()
+        self._stop_event = threading.Event()
+        self._recovery_paused = False
         self.config: BaseSchedulerConfig = config
 
         self.check_interval = self.config.get(
@@ -119,8 +121,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         """Main monitoring loop that periodically checks all registered pools."""
         logger.info(f"Starting monitor loop with {self.check_interval} second interval")
 
-        while self._running:
-            time.sleep(self.check_interval)
+        while not self._stop_event.wait(self.check_interval):
             try:
                 self._check_pools_health()
             except Exception as e:
@@ -247,53 +248,62 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
             name: Name of the pool to restart
             pool_info: Dictionary containing pool configuration
         """
-        if self._restart_in_progress:
-            return
-
-        self._restart_in_progress = True
-        logger.info(f"Attempting to restart thread pool '{name}'")
-
+        with self._close_guard.condition:
+            if self._close_guard.started or self._recovery_paused or self._restart_in_progress:
+                return
+            self._restart_in_progress = True
+            operation = self._close_guard.operation()
+            operation.__enter__()
         try:
             old_executor = pool_info["executor"]
-            self.dispatcher.shutdown()
-
-            # Create new executor with same parameters
+            if old_executor not in self.dispatcher._retired_executors:
+                self.dispatcher._retired_executors.append(old_executor)
+            old_executor.shutdown(wait=False, cancel_futures=True)
             new_executor = ContextThreadPoolExecutor(
                 max_workers=pool_info["max_workers"],
-                thread_name_prefix=self.dispatcher.thread_name_prefix,  # pylint: disable=protected-access
+                thread_name_prefix=self.dispatcher.thread_name_prefix,
             )
-            self.unregister_pool(name=self.dispatcher_pool_name)
-            self.dispatcher.dispatcher_executor = new_executor
-            self.register_pool(
-                name=self.dispatcher_pool_name,
-                executor=self.dispatcher.dispatcher_executor,
-                max_workers=self.dispatcher.max_workers,
-                restart_on_failure=True,
-            )
-
-            # Replace in registry
-            start_time = perf_counter()
-            with self._pool_lock:
-                pool_info["executor"] = new_executor
-                pool_info["failure_count"] = 0
-                pool_info["healthy"] = True
-                pool_info["last_active"] = get_utc_now()
-
-                elapsed_time = perf_counter() - start_time
-                if elapsed_time > 1:
-                    logger.warning(f"Long lock wait: {elapsed_time:.3f}s")
-
-            # Shutdown old executor
-            try:
-                old_executor.shutdown(wait=False)
-            except Exception as e:
-                logger.error(f"Error shutting down old executor: {e!s}", exc_info=True)
-
-            logger.info(f"Successfully restarted thread pool '{name}'")
-        except Exception as e:
-            logger.error(f"Failed to restart pool '{name}': {e!s}", exc_info=True)
+            with self._close_guard.condition:
+                if self._close_guard.started or self._recovery_paused:
+                    self.dispatcher._retired_executors.append(new_executor)
+                    return
+                self.dispatcher.dispatcher_executor = new_executor
+                self.dispatcher.thread_manager.thread_pool_executor = new_executor
+                with self._pool_lock:
+                    pool_info.update(
+                        executor=new_executor,
+                        failure_count=0,
+                        healthy=True,
+                        last_active=get_utc_now(),
+                    )
+            logger.info("Successfully restarted thread pool %s", name)
+        except Exception:
+            logger.exception("Failed to restart pool %s", name)
         finally:
-            self._restart_in_progress = False
+            with self._close_guard.condition:
+                self._restart_in_progress = False
+                operation.__exit__(None, None, None)
+
+    def begin_close(self) -> None:
+        """Block recovery publication before waiting for any in-flight work."""
+        with self._close_guard.condition:
+            self._close_guard.started = True
+            self._recovery_paused = True
+            self._running = False
+            self._stop_event.set()
+            self._close_guard.condition.notify_all()
+
+    def close(self) -> None:
+        """End monitoring and recovery; executor ownership stays with dispatcher."""
+        self._close_guard.close(self._quiesce)
+
+    def _quiesce(self) -> None:
+        self.begin_close()
+        self._close_guard.wait_for_operations()
+        if self._monitor_thread is not None:
+            if self._monitor_thread is threading.current_thread():
+                raise MemOSError("Monitor cannot close from its own thread")
+            self._monitor_thread.join()
 
     def get_status(self, name: str | None = None) -> dict:
         """
@@ -326,17 +336,21 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         Returns:
             bool: True if monitor started successfully, False if already running
         """
-        if self._running:
-            logger.warning("Dispatcher Monitor is already running")
-            return False
+        with self._close_guard.condition:
+            self._close_guard.ensure_open()
+            self._recovery_paused = False
+            self._stop_event.clear()
+            if self._running:
+                logger.warning("Dispatcher Monitor is already running")
+                return False
 
-        self._running = True
-        self._monitor_thread = ContextThread(
-            target=self._monitor_loop, name="threadpool_monitor", daemon=True
-        )
-        self._monitor_thread.start()
-        logger.info("Dispatcher Monitor  monitor started")
-        return True
+            self._running = True
+            self._monitor_thread = ContextThread(
+                target=self._monitor_loop, name="threadpool_monitor", daemon=True
+            )
+            self._monitor_thread.start()
+            logger.info("Dispatcher Monitor  monitor started")
+            return True
 
     def stop(self) -> None:
         """
@@ -348,6 +362,9 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
 
         # Stop the monitoring loop
         self._running = False
+        self._recovery_paused = True
+        self._stop_event.set()
+        self._close_guard.wait_for_operations()
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=5)
 

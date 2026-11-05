@@ -15,6 +15,7 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
+from memos.lifecycle import CloseGuard
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.mem_reader.read_multi_modal.utils import detect_lang
@@ -55,50 +56,69 @@ class TreeTextMemory(BaseTextMemory):
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
 
-        self.search_strategy = config.search_strategy
-        self.bm25_retriever = (
-            EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
-        )
+        self._close_guard = CloseGuard()
+        self._owns_graph_store = True
+        try:
+            self.search_strategy = config.search_strategy
+            self.bm25_retriever = (
+                EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
+            )
 
-        if config.reranker is None:
-            default_cfg = RerankerConfigFactory.model_validate(
-                {
-                    "backend": "cosine_local",
-                    "config": {
-                        "level_weights": {"topic": 1.0, "concept": 1.0, "fact": 1.0},
-                        "level_field": "background",
-                    },
-                }
+            if config.reranker is None:
+                default_cfg = RerankerConfigFactory.model_validate(
+                    {
+                        "backend": "cosine_local",
+                        "config": {
+                            "level_weights": {"topic": 1.0, "concept": 1.0, "fact": 1.0},
+                            "level_field": "background",
+                        },
+                    }
+                )
+                self.reranker = RerankerFactory.from_config(default_cfg)
+            else:
+                self.reranker = RerankerFactory.from_config(config.reranker)
+            self.is_reorganize = config.reorganize
+            self.memory_manager: MemoryManager = MemoryManager(
+                self.graph_store,
+                self.embedder,
+                self.extractor_llm,
+                memory_size=config.memory_size
+                or {
+                    "WorkingMemory": 20,
+                    "LongTermMemory": 1500,
+                    "UserMemory": 480,
+                },
+                is_reorganize=self.is_reorganize,
             )
-            self.reranker = RerankerFactory.from_config(default_cfg)
-        else:
-            self.reranker = RerankerFactory.from_config(config.reranker)
-        self.is_reorganize = config.reorganize
-        self.memory_manager: MemoryManager = MemoryManager(
-            self.graph_store,
-            self.embedder,
-            self.extractor_llm,
-            memory_size=config.memory_size
-            or {
-                "WorkingMemory": 20,
-                "LongTermMemory": 1500,
-                "UserMemory": 480,
-            },
-            is_reorganize=self.is_reorganize,
-        )
-        # Create internet retriever if configured
-        self.internet_retriever = None
-        if config.internet_retriever is not None:
-            self.internet_retriever = InternetRetrieverFactory.from_config(
-                config.internet_retriever, self.embedder
-            )
-            logger.info(
-                f"Internet retriever initialized with backend: {config.internet_retriever.backend}"
-            )
-        else:
-            logger.info("No internet retriever configured")
-        self.tokenizer = None
-        self.include_embedding = config.include_embedding or False
+            # Create internet retriever if configured
+            self.internet_retriever = None
+            if config.internet_retriever is not None:
+                self.internet_retriever = InternetRetrieverFactory.from_config(
+                    config.internet_retriever, self.embedder
+                )
+                logger.info(
+                    f"Internet retriever initialized with backend: {config.internet_retriever.backend}"
+                )
+            else:
+                logger.info("No internet retriever configured")
+            self.tokenizer = None
+            self.include_embedding = config.include_embedding or False
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                logger.exception("Failed to close graph after text memory initialization failure")
+            raise
+
+    def close(self) -> None:
+        """Release the graph created by this memory; injected graphs are borrowed."""
+
+        def release() -> None:
+            close = getattr(self.graph_store, "close", None)
+            if self._owns_graph_store and callable(close):
+                close()
+
+        self._close_guard.close(release)
 
     def add(
         self,

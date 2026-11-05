@@ -315,9 +315,12 @@ def test_existing_backend_configs_are_still_selected(backend, values, class_name
     assert type(config.config).__name__ == class_name
 
 
-def test_factories_do_not_expose_an_unimplemented_store():
+def test_factories_expose_the_concrete_opengauss_store():
     from memos.graph_dbs.factory import GraphStoreFactory
+    from memos.graph_dbs.opengauss import OpenGaussGraphDB
 
-    expected = {"neo4j", "neo4j-community", "polardb", "postgres"}
+    expected = {"neo4j", "neo4j-community", "polardb", "postgres", "opengauss"}
     assert set(graph_db.GraphDBConfigFactory.backend_to_class) == expected
     assert set(GraphStoreFactory.backend_to_class) == expected
+    assert GraphStoreFactory.backend_to_class["opengauss"] is OpenGaussGraphDB
+    assert not OpenGaussGraphDB.__abstractmethods__

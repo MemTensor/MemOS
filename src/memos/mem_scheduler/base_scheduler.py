@@ -6,7 +6,10 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from memos.api.lifecycle import shutdown_components
 from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
+from memos.exceptions import MemOSError
+from memos.lifecycle import CloseGuard
 from memos.log import get_logger
 from memos.mem_scheduler.base_mixins import (
     BaseSchedulerMemoryMixin,
@@ -55,7 +58,10 @@ if TYPE_CHECKING:
     from memos.llms.base import BaseLLM
     from memos.mem_cube.base import BaseMemCube
     from memos.mem_feedback.simple_feedback import SimpleMemFeedback
-    from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
+    from memos.mem_scheduler.schemas.message_schemas import (
+        ScheduleLogForWebItem,
+        ScheduleMessageItem,
+    )
     from memos.memories.textual.item import TextualMemoryItem
     from memos.memories.textual.tree import TreeTextMemory
     from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
@@ -79,6 +85,12 @@ class BaseScheduler(
     def __init__(self, config: BaseSchedulerConfig):
         """Initialize the scheduler with the given configuration."""
         super().__init__()
+        self._close_guard = CloseGuard()
+        self._initialization_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._closed_parts = set()
+        self.components = None
+        self._borrowed_components = False
         self.config = config
 
         # hyper-parameters
@@ -207,6 +219,18 @@ class BaseScheduler(
         mem_reader=None,
         redis_client: redis.Redis | None = None,
     ):
+        with self._close_guard.operation():
+            self._initialize_modules(chat_llm, process_llm, db_engine, mem_reader, redis_client)
+            self._close_guard.ensure_open()
+
+    def _initialize_modules(
+        self,
+        chat_llm: BaseLLM,
+        process_llm: BaseLLM | None,
+        db_engine: Engine | None,
+        mem_reader,
+        redis_client: redis.Redis | None,
+    ) -> None:
         if process_llm is None:
             process_llm = chat_llm
 
@@ -281,19 +305,96 @@ class BaseScheduler(
         except Exception as e:
             logger.warning(f"Error during cleanup: {e}")
 
+    def close(self) -> None:
+        """End this scheduler's lifecycle, draining users before its owned graph."""
+        self._close_guard.close(self._close_resources)
+
+    def _close_resources(self) -> None:
+        errors = []
+
+        def release(name, callback):
+            if name in self._closed_parts:
+                return True
+            try:
+                callback()
+                self._closed_parts.add(name)
+                return True
+            except Exception as error:
+                errors.append(error)
+                logger.exception("Failed to close scheduler resource %s", name)
+                return False
+
+        self._running = False
+        self._stop_event.set()
+        if self.dispatcher_monitor is not None:
+            self.dispatcher_monitor.begin_close()
+        self._close_guard.wait_for_operations()
+        self._running = False
+        self._stop_event.set()
+        # An in-flight initialize_modules may have just created the monitor.
+        if self.dispatcher_monitor is not None:
+            self.dispatcher_monitor.begin_close()
+        # RabbitMQ is independent; failure must not prevent draining DB users.
+        release("rabbitmq", self.rabbitmq_close)
+        monitor_stopped = self.dispatcher_monitor is None or release(
+            "monitor", self.dispatcher_monitor.close
+        )
+        consumers_stopped = release("consumers", self._join_consumers)
+        tasks_stopped = False
+        if monitor_stopped and consumers_stopped:
+            tasks_stopped = release("dispatcher", self.dispatcher.close)
+        if tasks_stopped and self.components is not None:
+            release("components", lambda: shutdown_components(self.components))
+        if errors:
+            raise MemOSError(
+                "Scheduler shutdown failed; unreleased resources retained"
+            ) from errors[0]
+
+    def _join_consumers(self) -> None:
+        for thread in (self._consumer_thread, self._monitor_thread):
+            if thread is not None:
+                if thread is threading.current_thread():
+                    raise MemOSError("Scheduler cannot close from its consumer thread")
+                thread.join()
+        if self._consumer_process is not None:
+            self._consumer_process.join(timeout=5)
+            if self._consumer_process.is_alive():
+                raise MemOSError("Scheduler consumer process has not exited")
+
+    def _ensure_components(self) -> None:
+        with self._initialization_lock:
+            self._close_guard.ensure_open()
+            if self.components is None:
+                self.components = init_components()
+            # Retain ownership even when close won the race; never publish late.
+            self._close_guard.ensure_open()
+            self.current_mem_cube = self.components["naive_mem_cube"]
+            self._feedback_server = self.components["feedback_server"]
+
+    def start(self) -> None:
+        with self._close_guard.operation():
+            super().start()
+
+    def start_consumer(self) -> None:
+        with self._close_guard.operation():
+            self._stop_event.clear()
+            super().start_consumer()
+
+    def start_background_monitor(self) -> None:
+        with self._close_guard.operation():
+            super().start_background_monitor()
+
+    def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]) -> None:
+        with self._close_guard.operation():
+            super().submit_messages(messages)
+
     @property
     def mem_cube(self) -> BaseMemCube:
         """The memory cube associated with this MemChat."""
-        if self.current_mem_cube is None:
-            logger.error("mem_cube is None when accessed", stack_info=True)
-            try:
-                self.components = init_components()
-                self.current_mem_cube: BaseMemCube = self.components["naive_mem_cube"]
-            except Exception:
-                logger.info(
-                    "No environment available to initialize mem cube. Using fallback naive_mem_cube."
-                )
-        return self.current_mem_cube
+        with self._close_guard.operation():
+            if self.current_mem_cube is None and not self._borrowed_components:
+                self._ensure_components()
+            return self.current_mem_cube
 
     @property
     def status_tracker(self) -> TaskStatusTracker | None:
@@ -331,16 +432,10 @@ class BaseScheduler(
     @property
     def feedback_server(self) -> SimpleMemFeedback:
         """The memory cube associated with this MemChat."""
-        if self._feedback_server is None:
-            logger.error("feedback_server is None when accessed", stack_info=True)
-            try:
-                self.components = init_components()
-                self._feedback_server: SimpleMemFeedback = self.components["feedback_server"]
-            except Exception:
-                logger.info(
-                    "No environment available to initialize feedback_server. Using fallback feedback_server."
-                )
-        return self._feedback_server
+        with self._close_guard.operation():
+            if self._feedback_server is None and not self._borrowed_components:
+                self._ensure_components()
+            return self._feedback_server
 
     @feedback_server.setter
     def feedback_server(self, value: SimpleMemFeedback) -> None:
@@ -349,8 +444,12 @@ class BaseScheduler(
     @mem_cube.setter
     def mem_cube(self, value: BaseMemCube) -> None:
         """The memory cube associated with this MemChat."""
-        self.current_mem_cube = value
-        self.retriever.mem_cube = value
+        with self._close_guard.condition:
+            self._close_guard.ensure_open()
+            self._borrowed_components = True
+            self.current_mem_cube = value
+            if self.retriever is not None:
+                self.retriever.mem_cube = value
 
     @property
     def mem_cubes(self) -> dict[str, BaseMemCube]:
