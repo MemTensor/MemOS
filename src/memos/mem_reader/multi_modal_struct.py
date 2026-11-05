@@ -1224,6 +1224,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 elif part_type in ("file", "image", "image_url"):
                     # Extract as a standalone message for its specialised parser
                     expanded.append(part)
+                elif part_type == "video_url":
+                    # Keep the chat envelope so the user parser retains video provenance.
+                    expanded.append({**msg, "content": [part]})
                 else:
                     text_parts.append(f"[{part_type}]")
 

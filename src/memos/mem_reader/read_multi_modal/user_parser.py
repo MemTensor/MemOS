@@ -118,6 +118,18 @@ class UserParser(BaseMessageParser):
                         )
                         source.lang = overall_lang
                         sources.append(source)
+                    elif part_type == "video_url":
+                        video_info = part.get("video_url", {})
+                        source = SourceMessage(
+                            type="video",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=video_info.get("url"),
+                            video_info=video_info,
+                        )
+                        source.lang = overall_lang
+                        sources.append(source)
                     else:
                         # input_audio, etc.
                         source = SourceMessage(
