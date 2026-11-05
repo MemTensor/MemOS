@@ -6,26 +6,18 @@ import inspect
 
 from pathlib import Path
 
-import pytest
-
 from memos.configs.graph_db import GraphDBConfigFactory
 from memos.graph_dbs.base import BaseGraphDB
-
-
-PENDING = {
-    "get_context_chain",
-    "deduplicate_nodes",
-    "detect_conflicts",
-    "merge_nodes",
-}
 
 
 def test_one_backend_class_owns_pool_storage_and_filters():
     module = importlib.import_module("memos.graph_dbs.opengauss")
     cls = module.OpenGaussGraphDB
     assert issubclass(cls, BaseGraphDB)
-    assert cls.__abstractmethods__ == PENDING
-    assert inspect.isabstract(cls)
+    assert cls.__abstractmethods__ == frozenset()
+    assert not inspect.isabstract(cls)
+    support = importlib.import_module("tests.graph_dbs.opengauss_test_support")
+    assert support.PartialOpenGaussGraphDB is cls
     assert "opengauss" not in GraphDBConfigFactory.backend_to_class
     tree = ast.parse(Path(module.__file__).read_text())
     assert [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)] == [
@@ -52,6 +44,14 @@ def test_one_backend_class_owns_pool_storage_and_filters():
         "import_graph",
         "clear",
         "drop_database",
+        "get_user_names_by_memory_ids",
+        "exist_user_name",
+        "delete_node_by_mem_cube_id",
+        "recover_memory_by_mem_cube_id",
+        "get_context_chain",
+        "deduplicate_nodes",
+        "detect_conflicts",
+        "merge_nodes",
     ]:
         assert name in cls.__dict__
     assert "ThreadedConnectionPool" in inspect.getsource(cls.__init__)
@@ -73,10 +73,3 @@ def test_parse_filter_preserves_input_and_routes_business_fields():
     assert condition == before
     assert module.OpenGaussGraphDB.parse_filter(None) is None
     assert module.OpenGaussGraphDB.parse_filter({}) == {}
-
-
-@pytest.mark.parametrize("method", sorted(PENDING))
-def test_unimplemented_methods_in_test_harness_fail_explicitly(method):
-    support = importlib.import_module("tests.graph_dbs.opengauss_test_support")
-    with pytest.raises(NotImplementedError):
-        getattr(support.PartialOpenGaussGraphDB, method)(None)
