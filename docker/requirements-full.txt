@@ -169,7 +169,6 @@ zstandard==0.23.0
 prometheus_client==0.23.1
 beartype==0.22.5
 diskcache==5.6.3
-iniconfig==2.3.0
 jaraco.classes==3.4.0
 jaraco.context==6.0.1
 jaraco.functools==4.3.0
@@ -178,11 +177,9 @@ more-itertools==10.8.0
 pathable==0.4.4
 pathvalidate==3.3.1
 platformdirs==4.5.0
-pluggy==1.6.0
 psycopg2-binary==2.9.11
 py-key-value-aio==0.2.8
 py-key-value-shared==0.2.8
 PyJWT==2.10.1
-pytest==9.0.2
 alibabacloud-oss-v2==1.2.2
 tavily-python==0.5.0

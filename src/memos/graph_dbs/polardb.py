@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import re
 import textwrap
 import threading
 import time
@@ -19,6 +20,53 @@ from memos.utils import timed
 
 
 logger = get_logger(__name__)
+
+
+# Relationship types used across the codebase (see tree_text_memory/organize/*,
+# mem_scheduler handlers). Hardcoded allowlist so dynamic `type` values can never
+# be interpolated into Cypher patterns.
+ALLOWED_EDGE_TYPES = (
+    "FOLLOWS",
+    "PARENT",
+    "MERGED_TO",
+    "RELATE",
+    "RELATED",
+    "RELATE_TO",
+    "INFERS",
+    "AGGREGATE_TO",
+    "CAUSE",
+    "CONDITION",
+    "CONFLICT",
+)
+
+
+def _validate_edge_type(type: str) -> str:
+    """Validate a relationship type against the allowlist; return it."""
+    if type != "ANY" and type not in ALLOWED_EDGE_TYPES:
+        raise ValueError(
+            f"Invalid relationship type: {type!r}. "
+            f"Must be one of {ALLOWED_EDGE_TYPES} or 'ANY'."
+        )
+    return type
+
+
+def _cypher_safe_id(value: Any) -> str:
+    """Coerce a node id / user_name to a safe Cypher literal.
+
+    Only allow characters that can appear in real ids / user names
+    (UUID hex, letters, digits, '-', '_', '.'). Anything else — quotes,
+    `$`, backslashes, spaces, `;`, etc. — is rejected outright, so a value
+    can never break out of the dollar-quoted Cypher body or its string
+    literal. Empty values are allowed (they simply never match any node).
+
+    Apache AGE does not treat SQL double-quote-escaping (`''`) as a valid
+    escape inside a Cypher single-quoted string, so we defend by strict
+    character allowlisting instead of escaping.
+    """
+    text = str(value or "")
+    if not re.fullmatch(r"[0-9A-Za-z_.\-]*", text):
+        raise ValueError(f"Invalid identifier for Cypher embedding: {value!r}")
+    return text
 
 
 def _build_lightweight_return_columns(return_fields: list[str]) -> str:
@@ -744,63 +792,6 @@ class PolarDBGraphDB(BaseGraphDB):
             cursor.execute(query, (source_id, target_id, type))
             logger.info(f"Edge deleted: {source_id} -[{type}]-> {target_id}")
 
-    @timed
-    def edge_exists_old(
-        self, source_id: str, target_id: str, type: str = "ANY", direction: str = "OUTGOING"
-    ) -> bool:
-        """
-        Check if an edge exists between two nodes.
-        Args:
-            source_id: ID of the source node.
-            target_id: ID of the target node.
-            type: Relationship type. Use "ANY" to match any relationship type.
-            direction: Direction of the edge.
-                       Use "OUTGOING" (default), "INCOMING", or "ANY".
-        Returns:
-            True if the edge exists, otherwise False.
-        """
-        where_clauses = []
-        params = []
-        # SELECT * FROM
-        # cypher('memtensor_memos_graph', $$
-        # MATCH(a: Memory
-        # {id: "13bb9df6-0609-4442-8bed-bba77dadac92"})-[r] - (b:Memory {id: "2dd03a5b-5d5f-49c9-9e0a-9a2a2899b98d"})
-        # RETURN
-        # r
-        # $$) AS(r
-        # agtype);
-
-        if direction == "OUTGOING":
-            where_clauses.append("source_id = %s AND target_id = %s")
-            params.extend([source_id, target_id])
-        elif direction == "INCOMING":
-            where_clauses.append("source_id = %s AND target_id = %s")
-            params.extend([target_id, source_id])
-        elif direction == "ANY":
-            where_clauses.append(
-                "((source_id = %s AND target_id = %s) OR (source_id = %s AND target_id = %s))"
-            )
-            params.extend([source_id, target_id, target_id, source_id])
-        else:
-            raise ValueError(
-                f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
-            )
-
-        if type != "ANY":
-            where_clauses.append("edge_type = %s")
-            params.append(type)
-
-        where_clause = " AND ".join(where_clauses)
-
-        query = f"""
-            SELECT 1 FROM "{self.db_name}_graph"."Edges"
-            WHERE {where_clause}
-            LIMIT 1
-        """
-        with self._get_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(query, params)
-            result = cursor.fetchone()
-            return result is not None
 
     @timed
     def edge_exists(
@@ -999,199 +990,67 @@ class PolarDBGraphDB(BaseGraphDB):
                 nodes.append(self._parse_node(properties))
             return nodes
 
-    @timed
-    def get_edges_old(
-        self, id: str, type: str = "ANY", direction: str = "ANY"
-    ) -> list[dict[str, str]]:
-        """
-        Get edges connected to a node, with optional type and direction filter.
-
-        Args:
-            id: Node ID to retrieve edges for.
-            type: Relationship type to match, or 'ANY' to match all.
-            direction: 'OUTGOING', 'INCOMING', or 'ANY'.
-
-        Returns:
-            List of edges:
-            [
-              {"from": "source_id", "to": "target_id", "type": "RELATE"},
-              ...
-            ]
-        """
-
-        # Create a simple edge table to store relationships (if not exists)
-        try:
-            with self.connection.cursor() as cursor:
-                # Create edge table
-                cursor.execute(f"""
-                    CREATE TABLE IF NOT EXISTS "{self.db_name}_graph"."Edges" (
-                        id SERIAL PRIMARY KEY,
-                        source_id TEXT NOT NULL,
-                        target_id TEXT NOT NULL,
-                        edge_type TEXT NOT NULL,
-                        properties JSONB,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (source_id) REFERENCES "{self.db_name}_graph"."Memory"(id),
-                        FOREIGN KEY (target_id) REFERENCES "{self.db_name}_graph"."Memory"(id)
-                    );
-                """)
-
-                # Create indexes
-                cursor.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_edges_source
-                    ON "{self.db_name}_graph"."Edges" (source_id);
-                """)
-                cursor.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_edges_target
-                    ON "{self.db_name}_graph"."Edges" (target_id);
-                """)
-                cursor.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_edges_type
-                    ON "{self.db_name}_graph"."Edges" (edge_type);
-                """)
-        except Exception as e:
-            logger.warning(f"Failed to create edges table: {e}")
-
-        # Query edges
-        where_clauses = []
-        params = [id]
-
-        if type != "ANY":
-            where_clauses.append("edge_type = %s")
-            params.append(type)
-
-        if direction == "OUTGOING":
-            where_clauses.append("source_id = %s")
-        elif direction == "INCOMING":
-            where_clauses.append("target_id = %s")
-        else:  # ANY
-            where_clauses.append("(source_id = %s OR target_id = %s)")
-            params.append(id)  # Add second parameter for ANY direction
-
-        where_clause = " AND ".join(where_clauses)
-
-        query = f"""
-            SELECT source_id, target_id, edge_type
-            FROM "{self.db_name}_graph"."Edges"
-            WHERE {where_clause}
-        """
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(query, params)
-            results = cursor.fetchall()
-
-            edges = []
-            for row in results:
-                source_id, target_id, edge_type = row
-                edges.append({"from": source_id, "to": target_id, "type": edge_type})
-            return edges
 
     def get_neighbors(
         self, id: str, type: str, direction: Literal["in", "out", "both"] = "out"
     ) -> list[str]:
         """Get connected node IDs in a specific direction and relationship type."""
-        raise NotImplementedError
+        if direction not in ("in", "out", "both"):
+            raise ValueError("Invalid direction. Must be 'in', 'out', or 'both'.")
+        _validate_edge_type(type)
 
-    @timed
-    def get_neighbors_by_tag_old(
-        self,
-        tags: list[str],
-        exclude_ids: list[str],
-        top_k: int = 5,
-        min_overlap: int = 1,
-    ) -> list[dict[str, Any]]:
-        """
-        Find top-K neighbor nodes with maximum tag overlap.
+        # In multi-db mode user_name may be None (single-tenant databases), so
+        # only apply the tenant filter when one is configured.
+        user_name = self._get_config_value("user_name")
+        id_safe = _cypher_safe_id(id)
+        user_clause = ""
+        if user_name:
+            user_safe = _cypher_safe_id(user_name)
+            user_clause = f" AND a.user_name = '{user_safe}'"
+        type_filter = f":{type}" if type != "ANY" else ""
 
-        Args:
-            tags: The list of tags to match.
-            exclude_ids: Node IDs to exclude (e.g., local cluster).
-            top_k: Max number of neighbors to return.
-            min_overlap: Minimum number of overlapping tags required.
-
-        Returns:
-            List of dicts with node details and overlap count.
-        """
-        # Build query conditions
-        where_clauses = []
-        params = []
-
-        # Exclude specified IDs
-        if exclude_ids:
-            placeholders = ",".join(["%s"] * len(exclude_ids))
-            where_clauses.append(f"id NOT IN ({placeholders})")
-            params.extend(exclude_ids)
-
-        # Status filter
-        where_clauses.append("properties->>'status' = %s")
-        params.append("activated")
-
-        # Type filter
-        where_clauses.append("properties->>'type' != %s")
-        params.append("reasoning")
-
-        where_clauses.append("properties->>'memory_type' != %s")
-        params.append("WorkingMemory")
-
-        # User filter
-        if not self._get_config_value("use_multi_db", True) and self._get_config_value("user_name"):
-            where_clauses.append("properties->>'user_name' = %s")
-            params.append(self._get_config_value("user_name"))
-
-        where_clause = " AND ".join(where_clauses)
-
-        # Get all candidate nodes
+        if direction == "out":
+            cypher_body = f"""
+            MATCH (a:Memory)-[r{type_filter}]->(b:Memory)
+            WHERE a.id = '{id_safe}'{user_clause}
+            RETURN DISTINCT b.id AS neighbor_id
+            """
+        elif direction == "in":
+            cypher_body = f"""
+            MATCH (b:Memory)-[r{type_filter}]->(a:Memory)
+            WHERE a.id = '{id_safe}'{user_clause}
+            RETURN DISTINCT b.id AS neighbor_id
+            """
+        else:  # both
+            cypher_body = f"""
+            MATCH (a:Memory)-[r{type_filter}]-(b:Memory)
+            WHERE a.id = '{id_safe}'{user_clause}
+            RETURN DISTINCT b.id AS neighbor_id
+            """
         query = f"""
-            SELECT id, properties, embedding
-            FROM "{self.db_name}_graph"."Memory"
-            WHERE {where_clause}
+            SELECT * FROM cypher('{self.db_name}_graph', $$
+            {cypher_body.strip()}
+            $$) AS (neighbor_id agtype)
         """
+        try:
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(query, params)
-            results = cursor.fetchall()
+                neighbors = []
+                for row in results:
+                    # Guard against NULL results (e.g. optional match / graph inconsistency)
+                    if row[0] is None:
+                        continue
+                    raw = row[0].value if hasattr(row[0], "value") else row[0]
+                    if isinstance(raw, str) and raw.startswith('"') and raw.endswith('"'):
+                        raw = raw[1:-1]
+                    neighbors.append(str(raw))
+                return neighbors
+        except Exception as e:
+            logger.error(f"Failed to get neighbors: {e}", exc_info=True)
+            raise
 
-            nodes_with_overlap = []
-            for row in results:
-                node_id, properties_json, embedding_json = row
-                properties = properties_json if properties_json else {}
-
-                # Parse embedding
-                if embedding_json is not None:
-                    try:
-                        embedding = (
-                            json.loads(embedding_json)
-                            if isinstance(embedding_json, str)
-                            else embedding_json
-                        )
-                        properties["embedding"] = embedding
-                    except (json.JSONDecodeError, TypeError):
-                        logger.warning(f"Failed to parse embedding for node {node_id}")
-
-                # Compute tag overlap
-                node_tags = properties.get("tags", [])
-                if isinstance(node_tags, str):
-                    try:
-                        node_tags = json.loads(node_tags)
-                    except (json.JSONDecodeError, TypeError):
-                        node_tags = []
-
-                overlap_tags = [tag for tag in tags if tag in node_tags]
-                overlap_count = len(overlap_tags)
-
-                if overlap_count >= min_overlap:
-                    node_data = self._parse_node(
-                        {
-                            "id": properties.get("id", node_id),
-                            "memory": properties.get("memory", ""),
-                            "metadata": properties,
-                        }
-                    )
-                    nodes_with_overlap.append((node_data, overlap_count))
-
-            # Sort by overlap count and return top_k
-            nodes_with_overlap.sort(key=lambda x: x[1], reverse=True)
-            return [node for node, _ in nodes_with_overlap[:top_k]]
 
     @timed
     def get_children_with_embeddings(
@@ -1274,7 +1133,56 @@ class PolarDBGraphDB(BaseGraphDB):
 
     def get_path(self, source_id: str, target_id: str, max_depth: int = 3) -> list[str]:
         """Get the path of nodes from source to target within a limited depth."""
-        raise NotImplementedError
+        if not isinstance(max_depth, int) or isinstance(max_depth, bool):
+            raise TypeError(f"max_depth must be an int, got {type(max_depth).__name__!r}")
+
+        user_name = self._get_config_value("user_name")
+        source_safe = _cypher_safe_id(source_id)
+        target_safe = _cypher_safe_id(target_id)
+        # Filter both endpoints *and* every intermediate node on the path so a
+        # variable-length match in a shared graph cannot cross tenants. In
+        # multi-db mode each database is a single tenant, so no filter applies.
+        user_clause = ""
+        if user_name:
+            user_safe = _cypher_safe_id(user_name)
+            user_clause = (
+                f"WHERE n.user_name = '{user_safe}' AND m.user_name = '{user_safe}' "
+                f"AND all(x IN nodes(p) WHERE x.user_name = '{user_safe}')"
+            )
+
+        # Variable-length path [*1..N] counts edges; cap at a sane upper bound
+        # to avoid unbounded traversal in AGE.
+        hops = max(1, min(max_depth, 6))
+        query = f"""
+            SELECT * FROM cypher('{self.db_name}_graph', $cypher$
+                MATCH p = (n:Memory {{id: '{source_safe}'}})-[*1..{hops}]-(m:Memory {{id: '{target_safe}'}})
+                {user_clause}
+                RETURN [x IN nodes(p) | x.id] AS path_ids
+                ORDER BY length(p) ASC
+                LIMIT 1
+            $cypher$) AS (path_ids agtype)
+        """
+        try:
+            with self._get_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(query)
+                row = cursor.fetchone()
+                if row is None:
+                    return []
+                raw = row[0].value if hasattr(row[0], "value") else row[0]
+                if isinstance(raw, list):
+                    result = []
+                    for x in raw:
+                        if x is None:
+                            continue
+                        val = x.value if hasattr(x, "value") else x
+                        if isinstance(val, str) and val.startswith('"') and val.endswith('"'):
+                            val = val[1:-1]
+                        result.append(str(val))
+                    return result
+                return []
+        except Exception as e:
+            logger.error(f"Failed to get path: {e}", exc_info=True)
+            raise
 
     @timed
     def get_subgraph(
@@ -1482,7 +1390,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
     def get_context_chain(self, id: str, type: str = "FOLLOWS") -> list[str]:
         """Get the ordered context chain starting from a node."""
-        raise NotImplementedError
+        return self.get_neighbors(id, type, "out")
 
     def _extract_fields_from_properties(
         self, properties: Any, return_fields: list[str]
@@ -2109,81 +2017,6 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info("get_by_metadata internal took %.1f ms", elapsed)
         return ids
 
-    @timed
-    def get_grouped_counts1(
-        self,
-        group_fields: list[str],
-        where_clause: str = "",
-        params: dict[str, Any] | None = None,
-        user_name: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Count nodes grouped by any fields.
-
-        Args:
-            group_fields (list[str]): Fields to group by, e.g., ["memory_type", "status"]
-            where_clause (str, optional): Extra WHERE condition. E.g.,
-            "WHERE n.status = 'activated'"
-            params (dict, optional): Parameters for WHERE clause.
-
-        Returns:
-            list[dict]: e.g., [{ 'memory_type': 'WorkingMemory', 'status': 'active', 'count': 10 }, ...]
-        """
-        user_name = user_name if user_name else self.config.user_name
-        if not group_fields:
-            raise ValueError("group_fields cannot be empty")
-
-        final_params = params.copy() if params else {}
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
-            user_clause = "n.user_name = $user_name"
-            final_params["user_name"] = user_name
-            if where_clause:
-                where_clause = where_clause.strip()
-                if where_clause.upper().startswith("WHERE"):
-                    where_clause += f" AND {user_clause}"
-                else:
-                    where_clause = f"WHERE {where_clause} AND {user_clause}"
-            else:
-                where_clause = f"WHERE {user_clause}"
-        # Force RETURN field AS field to guarantee key match
-        group_fields_cypher = ", ".join([f"n.{field} AS {field}" for field in group_fields])
-        """
-        # group_fields_cypher_polardb = "agtype, ".join([f"{field}" for field in group_fields])
-        """
-        group_fields_cypher_polardb = ", ".join([f"{field} agtype" for field in group_fields])
-        query = f"""
-               SELECT * FROM cypher('{self.db_name}_graph', $$
-                   MATCH (n:Memory)
-                   {where_clause}
-                   RETURN {group_fields_cypher}, COUNT(n) AS count1
-               $$ ) as ({group_fields_cypher_polardb}, count1 agtype);
-               """
-        try:
-            with self.connection.cursor() as cursor:
-                # Handle parameterized query
-                if params and isinstance(params, list):
-                    cursor.execute(query, final_params)
-                else:
-                    cursor.execute(query)
-                results = cursor.fetchall()
-
-                output = []
-                for row in results:
-                    group_values = {}
-                    for i, field in enumerate(group_fields):
-                        value = row[i]
-                        if hasattr(value, "value"):
-                            group_values[field] = value.value
-                        else:
-                            group_values[field] = str(value)
-                    count_value = row[-1]  # Last column is count
-                    output.append({**group_values, "count": count_value})
-
-                return output
-
-        except Exception as e:
-            logger.error(f"Failed to get grouped counts: {e}", exc_info=True)
-            return []
 
     @timed
     def get_grouped_counts(
@@ -2704,111 +2537,6 @@ class PolarDBGraphDB(BaseGraphDB):
 
             return nodes
 
-    def get_all_memory_items_old(
-        self, scope: str, include_embedding: bool = False, user_name: str | None = None
-    ) -> list[dict]:
-        """
-        Retrieve all memory items of a specific memory_type.
-
-        Args:
-            scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
-            include_embedding: with/without embedding
-            user_name (str, optional): User name for filtering in non-multi-db mode
-
-        Returns:
-            list[dict]: Full list of memory items under this scope.
-        """
-        user_name = user_name if user_name else self._get_config_value("user_name")
-        if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"}:
-            raise ValueError(f"Unsupported memory type scope: {scope}")
-
-        # Use cypher query to retrieve memory items
-        if include_embedding:
-            cypher_query = f"""
-                WITH t as (
-                    SELECT * FROM cypher('{self.db_name}_graph', $$
-                    MATCH (n:Memory)
-                    WHERE n.memory_type = '{scope}' AND n.user_name = '{user_name}'
-                    RETURN id(n) as id1,n
-                    LIMIT 100
-                    $$) AS (id1 agtype,n agtype)
-                )
-                SELECT
-                    m.embedding,
-                    t.n
-                FROM t,
-                     {self.db_name}_graph."Memory" m
-                WHERE t.id1 = m.id;
-                """
-        else:
-            cypher_query = f"""
-                SELECT * FROM cypher('{self.db_name}_graph', $$
-                MATCH (n:Memory)
-                WHERE n.memory_type = '{scope}' AND n.user_name = '{user_name}'
-                RETURN properties(n) as props
-                LIMIT 100
-                $$) AS (nprops agtype)
-            """
-
-            nodes = []
-            try:
-                with self.connection.cursor() as cursor:
-                    cursor.execute(cypher_query)
-                    results = cursor.fetchall()
-
-                    for row in results:
-                        node_agtype = row[0]
-
-                        # Handle string-formatted data
-                        if isinstance(node_agtype, str):
-                            try:
-                                # Remove ::vertex suffix
-                                json_str = node_agtype.replace("::vertex", "")
-                                node_data = json.loads(json_str)
-
-                                if isinstance(node_data, dict) and "properties" in node_data:
-                                    properties = node_data["properties"]
-                                    # Build node data
-                                    parsed_node_data = {
-                                        "id": properties.get("id", ""),
-                                        "memory": properties.get("memory", ""),
-                                        "metadata": properties,
-                                    }
-
-                                    if include_embedding and "embedding" in properties:
-                                        parsed_node_data["embedding"] = properties["embedding"]
-
-                                    nodes.append(self._parse_node(parsed_node_data))
-                                    logger.debug(
-                                        f"[get_all_memory_items] Parsed node successfully: {properties.get('id', '')}"
-                                    )
-                                else:
-                                    logger.warning(f"Invalid node data format: {node_data}")
-
-                            except (json.JSONDecodeError, TypeError) as e:
-                                logger.error(f"JSON parsing failed: {e}")
-                        elif node_agtype and hasattr(node_agtype, "value"):
-                            # Handle agtype object
-                            node_props = node_agtype.value
-                            if isinstance(node_props, dict):
-                                # Parse node properties
-                                node_data = {
-                                    "id": node_props.get("id", ""),
-                                    "memory": node_props.get("memory", ""),
-                                    "metadata": node_props,
-                                }
-
-                                if include_embedding and "embedding" in node_props:
-                                    node_data["embedding"] = node_props["embedding"]
-
-                                nodes.append(self._parse_node(node_data))
-                        else:
-                            logger.warning(f"Unknown data format: {type(node_agtype)}")
-
-            except Exception as e:
-                logger.error(f"Failed to get memories: {e}", exc_info=True)
-
-            return nodes
 
     @timed
     def get_structure_optimization_candidates(
@@ -2985,17 +2713,14 @@ class PolarDBGraphDB(BaseGraphDB):
         return candidates
 
     def drop_database(self) -> None:
-        """Permanently delete the entire graph this instance is using."""
-        return
-        if self._get_config_value("use_multi_db", True):
-            with self.connection.cursor() as cursor:
-                cursor.execute(f"SELECT drop_graph('{self.db_name}_graph', true)")
-                logger.info(f"Graph '{self.db_name}_graph' has been dropped.")
-        else:
-            raise ValueError(
-                f"Refusing to drop graph '{self.db_name}_graph' in "
-                f"Shared Database Multi-Tenant mode"
-            )
+        """
+        Permanently delete the entire graph this instance is using.
+
+        Intentionally a no-op: dropping a PolarDB graph is handled by the
+        operator (e.g. dropping the whole database/schema), not by this
+        process, to avoid accidental destructive actions on shared deployment.
+        """
+        pass
 
     def _parse_node(self, node_data: dict[str, Any]) -> dict[str, Any]:
         """Parse node data from database format to standard format."""
@@ -3088,8 +2813,11 @@ class PolarDBGraphDB(BaseGraphDB):
 
     def __del__(self):
         """Close database connection when object is destroyed."""
-        if hasattr(self, "connection") and self.connection:
-            self.connection.close()
+        if hasattr(self, "connection_pool"):
+            try:
+                self.connection_pool.closeall()
+            except Exception as e:
+                logger.warning(f"Failed to close connection pool in __del__: {e}")
 
     @timed
     def add_node(
@@ -3551,164 +3279,6 @@ class PolarDBGraphDB(BaseGraphDB):
             logger.error(f"Failed to get neighbors by tag: {e}", exc_info=True)
             return []
 
-    def get_neighbors_by_tag_ccl(
-        self,
-        tags: list[str],
-        exclude_ids: list[str],
-        top_k: int = 5,
-        min_overlap: int = 1,
-        include_embedding: bool = False,
-        user_name: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Find top-K neighbor nodes with maximum tag overlap.
-
-        Args:
-            tags: The list of tags to match.
-            exclude_ids: Node IDs to exclude (e.g., local cluster).
-            top_k: Max number of neighbors to return.
-            min_overlap: Minimum number of overlapping tags required.
-            include_embedding: with/without embedding
-            user_name (str, optional): User name for filtering in non-multi-db mode
-
-        Returns:
-            List of dicts with node details and overlap count.
-        """
-        if not tags:
-            return []
-
-        user_name = user_name if user_name else self._get_config_value("user_name")
-
-        # Build query conditions shared with other graph backends
-        where_clauses = [
-            'n.status = "activated"',
-            'NOT (n.node_type = "reasoning")',
-            'NOT (n.memory_type = "WorkingMemory")',
-        ]
-        where_clauses = [
-            'n.status = "activated"',
-            'NOT (n.memory_type = "WorkingMemory")',
-        ]
-
-        if exclude_ids:
-            exclude_ids_str = "[" + ", ".join(f'"{id}"' for id in exclude_ids) + "]"
-            where_clauses.append(f"NOT (n.id IN {exclude_ids_str})")
-
-        where_clauses.append(f'n.user_name = "{user_name}"')
-
-        where_clause = " AND ".join(where_clauses)
-        tag_list_literal = "[" + ", ".join(f'"{t}"' for t in tags) + "]"
-
-        return_fields = [
-            "n.id AS id",
-            "n.memory AS memory",
-            "n.user_name AS user_name",
-            "n.user_id AS user_id",
-            "n.session_id AS session_id",
-            "n.status AS status",
-            "n.key AS key",
-            "n.confidence AS confidence",
-            "n.tags AS tags",
-            "n.created_at AS created_at",
-            "n.updated_at AS updated_at",
-            "n.memory_type AS memory_type",
-            "n.sources AS sources",
-            "n.source AS source",
-            "n.node_type AS node_type",
-            "n.visibility AS visibility",
-            "n.background AS background",
-        ]
-
-        if include_embedding:
-            return_fields.append("n.embedding AS embedding")
-
-        return_fields_str = ", ".join(return_fields)
-        result_fields = []
-        for field in return_fields:
-            # Extract field name 'id' from 'n.id AS id'
-            field_name = field.split(" AS ")[-1]
-            result_fields.append(f"{field_name} agtype")
-
-        # Add overlap_count
-        result_fields.append("overlap_count agtype")
-        result_fields_str = ", ".join(result_fields)
-        # Use Cypher query to keep the graph query path aligned
-        query = f"""
-            SELECT * FROM (
-                SELECT * FROM cypher('{self.db_name}_graph', $$
-                WITH {tag_list_literal} AS tag_list
-                MATCH (n:Memory)
-                WHERE {where_clause}
-                RETURN {return_fields_str},
-                       size([tag IN n.tags WHERE tag IN tag_list]) AS overlap_count
-                $$) AS ({result_fields_str})
-            ) AS subquery
-            ORDER BY (overlap_count::integer) DESC
-            LIMIT {top_k}
-        """
-        logger.debug(f"get_neighbors_by_tag: {query}")
-        try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(query)
-                results = cursor.fetchall()
-
-                neighbors = []
-                for row in results:
-                    # Parse results
-                    props = {}
-                    overlap_count = None
-
-                    # Manually parse each field
-                    field_names = [
-                        "id",
-                        "memory",
-                        "user_name",
-                        "user_id",
-                        "session_id",
-                        "status",
-                        "key",
-                        "confidence",
-                        "tags",
-                        "created_at",
-                        "updated_at",
-                        "memory_type",
-                        "sources",
-                        "source",
-                        "node_type",
-                        "visibility",
-                        "background",
-                    ]
-
-                    if include_embedding:
-                        field_names.append("embedding")
-                    field_names.append("overlap_count")
-
-                    for i, field in enumerate(field_names):
-                        if field == "overlap_count":
-                            overlap_count = row[i].value if hasattr(row[i], "value") else row[i]
-                        else:
-                            props[field] = row[i].value if hasattr(row[i], "value") else row[i]
-                    overlap_int = int(overlap_count)
-                    if overlap_count is not None and overlap_int >= min_overlap:
-                        parsed = self._parse_node(props)
-                        parsed["overlap_count"] = overlap_int
-                        neighbors.append(parsed)
-
-                # Sort by overlap count
-                neighbors.sort(key=lambda x: x["overlap_count"], reverse=True)
-                neighbors = neighbors[:top_k]
-
-                # Remove overlap_count field
-                result = []
-                for neighbor in neighbors:
-                    neighbor.pop("overlap_count", None)
-                    result.append(neighbor)
-
-                return result
-
-        except Exception as e:
-            logger.error(f"Failed to get neighbors by tag: {e}", exc_info=True)
-            return []
 
     @timed
     def import_graph(self, data: dict[str, Any], user_name: str | None = None) -> None:
