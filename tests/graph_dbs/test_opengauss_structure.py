@@ -18,7 +18,7 @@ def test_one_backend_class_owns_pool_storage_and_filters():
     assert not inspect.isabstract(cls)
     support = importlib.import_module("tests.graph_dbs.opengauss_test_support")
     assert support.PartialOpenGaussGraphDB is cls
-    assert "opengauss" not in GraphDBConfigFactory.backend_to_class
+    assert "opengauss" in GraphDBConfigFactory.backend_to_class
     tree = ast.parse(Path(module.__file__).read_text())
     assert [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)] == [
         "OpenGaussGraphDB"

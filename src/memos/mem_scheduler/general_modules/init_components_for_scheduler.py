@@ -4,6 +4,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from memos.api.config import APIConfig
+from memos.api.lifecycle import shutdown_components
 from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.graph_db import GraphDBConfigFactory
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
@@ -36,7 +37,7 @@ from memos.reranker.factory import RerankerFactory
 logger = get_logger(__name__)
 
 
-def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
+def build_graph_db_config(user_id: str | None = "default") -> GraphDBConfigFactory:
     """
     Build graph database configuration.
 
@@ -46,23 +47,7 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
     Returns:
         Validated graph database configuration dictionary
     """
-    graph_db_backend_map = {
-        "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
-        "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
-        "polardb": APIConfig.get_polardb_config(user_id=user_id),
-        "postgres": APIConfig.get_postgres_config(user_id=user_id),
-    }
-
-    # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
-    graph_db_backend = os.getenv(
-        "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
-    ).lower()
-    return GraphDBConfigFactory.model_validate(
-        {
-            "backend": graph_db_backend,
-            "config": graph_db_backend_map[graph_db_backend],
-        }
-    )
+    return GraphDBConfigFactory.model_validate(APIConfig.get_graph_db_config(user_id))
 
 
 def build_vec_db_config() -> dict[str, Any]:
@@ -274,84 +259,93 @@ def init_components() -> dict[str, Any]:
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
-    llm = LLMFactory.from_config(llm_config)
-    feedback_llm = LLMFactory.from_config(feedback_llm_config)
-    embedder = EmbedderFactory.from_config(embedder_config)
+    components = {"graph_db": graph_db}
+    try:
+        llm = LLMFactory.from_config(llm_config)
+        feedback_llm = LLMFactory.from_config(feedback_llm_config)
+        embedder = EmbedderFactory.from_config(embedder_config)
 
-    plugin_manager.discover()
-    plugin_context = build_plugin_context(
-        graph_db=graph_db,
-        embedder=embedder,
-        default_cube_config=default_cube_config,
-        nli_client_config=nli_client_config,
-        mem_reader_config=mem_reader_config,
-        reranker_config=reranker_config,
-        feedback_reranker_config=feedback_reranker_config,
-        internet_retriever_config=internet_retriever_config,
-    )
-    plugin_manager.init_components(plugin_context)
+        plugin_manager.discover()
+        plugin_context = build_plugin_context(
+            graph_db=graph_db,
+            embedder=embedder,
+            default_cube_config=default_cube_config,
+            nli_client_config=nli_client_config,
+            mem_reader_config=mem_reader_config,
+            reranker_config=reranker_config,
+            feedback_reranker_config=feedback_reranker_config,
+            internet_retriever_config=internet_retriever_config,
+        )
+        plugin_manager.init_components(plugin_context)
 
-    # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
-    mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
-    reranker = RerankerFactory.from_config(reranker_config)
-    feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
-    internet_retriever = InternetRetrieverFactory.from_config(
-        internet_retriever_config, embedder=embedder
-    )
+        # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
+        mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
+        reranker = RerankerFactory.from_config(reranker_config)
+        feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
+        internet_retriever = InternetRetrieverFactory.from_config(
+            internet_retriever_config, embedder=embedder
+        )
 
-    # Initialize chat llms
-    logger.debug("Core components instantiated")
+        # Initialize chat llms
+        logger.debug("Core components instantiated")
 
-    # Initialize memory manager
-    memory_manager = MemoryManager(
-        graph_db,
-        embedder,
-        llm,
-        memory_size=_get_default_memory_size(default_cube_config),
-        is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
-    )
+        # Initialize memory manager
+        memory_manager = MemoryManager(
+            graph_db,
+            embedder,
+            llm,
+            memory_size=_get_default_memory_size(default_cube_config),
+            is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
+        )
 
-    logger.debug("Memory manager initialized")
+        logger.debug("Memory manager initialized")
 
-    tokenizer = FastTokenizer()
-    # Initialize text memory
-    text_mem = SimpleTreeTextMemory(
-        llm=llm,
-        embedder=embedder,
-        mem_reader=mem_reader,
-        graph_db=graph_db,
-        reranker=reranker,
-        memory_manager=memory_manager,
-        config=default_cube_config.text_mem.config,
-        internet_retriever=internet_retriever,
-        tokenizer=tokenizer,
-    )
+        tokenizer = FastTokenizer()
+        # Initialize text memory
+        text_mem = SimpleTreeTextMemory(
+            llm=llm,
+            embedder=embedder,
+            mem_reader=mem_reader,
+            graph_db=graph_db,
+            reranker=reranker,
+            memory_manager=memory_manager,
+            config=default_cube_config.text_mem.config,
+            internet_retriever=internet_retriever,
+            tokenizer=tokenizer,
+        )
 
-    logger.debug("Text memory initialized")
+        logger.debug("Text memory initialized")
 
-    # Create MemCube with pre-initialized memory instances
-    naive_mem_cube = NaiveMemCube(
-        text_mem=text_mem,
-        act_mem=None,
-        para_mem=None,
-    )
+        # Create MemCube with pre-initialized memory instances
+        naive_mem_cube = NaiveMemCube(
+            text_mem=text_mem,
+            act_mem=None,
+            para_mem=None,
+        )
 
-    tree_mem: SimpleTreeTextMemory = naive_mem_cube.text_mem
-    searcher: Searcher = tree_mem.get_searcher(
-        manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
-        moscube=False,
-        process_llm=mem_reader.general_llm,
-    )
-    # Initialize feedback server
-    feedback_server = SimpleMemFeedback(
-        llm=feedback_llm,
-        embedder=embedder,
-        graph_store=graph_db,
-        memory_manager=memory_manager,
-        mem_reader=mem_reader,
-        searcher=searcher,
-        reranker=feedback_reranker,
-        pref_feedback=True,
-    )
-    # Return all components as a dictionary for easy access and extension
-    return {"naive_mem_cube": naive_mem_cube, "feedback_server": feedback_server}
+        tree_mem: SimpleTreeTextMemory = naive_mem_cube.text_mem
+        searcher: Searcher = tree_mem.get_searcher(
+            manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+            moscube=False,
+            process_llm=mem_reader.general_llm,
+        )
+        # Initialize feedback server
+        feedback_server = SimpleMemFeedback(
+            llm=feedback_llm,
+            embedder=embedder,
+            graph_store=graph_db,
+            memory_manager=memory_manager,
+            mem_reader=mem_reader,
+            searcher=searcher,
+            reranker=feedback_reranker,
+            pref_feedback=True,
+        )
+        # Return all components as a dictionary for easy access and extension
+        components.update(naive_mem_cube=naive_mem_cube, feedback_server=feedback_server)
+        return components
+    except BaseException:
+        try:
+            shutdown_components(components)
+        except Exception:
+            logger.exception("Failed to release components after initialization failure")
+        raise

@@ -1,11 +1,11 @@
 import os
-import time
 
 from typing import Literal
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.utils import get_json_file_model_schema
 from memos.exceptions import ConfigurationError, MemCubeError
+from memos.lifecycle import CloseGuard
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.utils import download_repo, merge_config_with_default
@@ -24,28 +24,42 @@ class GeneralMemCube(BaseMemCube):
     def __init__(self, config: GeneralMemCubeConfig):
         """Initialize the MemCube with a configuration."""
         self.config = config
-        time_start = time.time()
-        self._text_mem: BaseTextMemory | None = (
-            MemoryFactory.from_config(config.text_mem)
-            if config.text_mem.backend != "uninitialized"
-            else None
-        )
-        logger.info(f"init_text_mem in {time.time() - time_start} seconds")
-        self._act_mem: BaseActMemory | None = (
-            MemoryFactory.from_config(config.act_mem)
-            if config.act_mem.backend != "uninitialized"
-            else None
-        )
-        self._para_mem: BaseParaMemory | None = (
-            MemoryFactory.from_config(config.para_mem)
-            if config.para_mem.backend != "uninitialized"
-            else None
-        )
-        self._pref_mem: BaseTextMemory | None = (
-            MemoryFactory.from_config(config.pref_mem)
-            if config.pref_mem.backend != "uninitialized"
-            else None
-        )
+        self._close_guard = CloseGuard()
+        self._owned_memories = []
+        try:
+            for name in ("text_mem", "act_mem", "para_mem", "pref_mem"):
+                memory_config = getattr(config, name)
+                memory = None
+                if memory_config.backend != "uninitialized":
+                    memory = MemoryFactory.from_config(memory_config)
+                    if all(memory is not owned for owned in self._owned_memories):
+                        self._owned_memories.append(memory)
+                setattr(self, "_" + name, memory)
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                logger.exception("Failed to close memories after Cube initialization failure")
+            raise
+
+    def close(self) -> None:
+        """Close memories created by this Cube, including subsequently replaced ones."""
+        self._close_guard.close(self._close_owned_memories)
+
+    def _close_owned_memories(self) -> None:
+        errors = []
+        for memory in self._owned_memories[:]:
+            try:
+                close = getattr(memory, "close", None)
+                if callable(close):
+                    close()
+                self._owned_memories = [
+                    owned for owned in self._owned_memories if owned is not memory
+                ]
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]
 
     def load(
         self,
@@ -158,7 +172,14 @@ class GeneralMemCube(BaseMemCube):
             config = merge_config_with_default(config, default_config)
             logger.info(f"Applied default config to cube {config.cube_id}")
         mem_cube = GeneralMemCube(config)
-        mem_cube.load(dir, memory_types)
+        try:
+            mem_cube.load(dir, memory_types)
+        except BaseException:
+            try:
+                mem_cube.close()
+            except Exception:
+                logger.exception("Failed to close Cube after load failure")
+            raise
         return mem_cube
 
     @staticmethod
