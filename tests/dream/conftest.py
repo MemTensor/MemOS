@@ -10,7 +10,7 @@ from memos.configs.graph_db import PostgresGraphDBConfig
 from memos.graph_dbs.postgres import PostgresGraphDB
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def graph():
     dsn = os.environ.get("MEMOS_TEST_PG_DSN")
     if not dsn:
