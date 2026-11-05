@@ -56,7 +56,7 @@ def graph(store, monkeypatch):
     ]
 
     def execute(statement, parameters):
-        scope, ids = parameters
+        scope, ids = parameters["scope"], parameters["ids"]
         selected = [
             (name, metadata)
             for (owner, name), metadata in nodes.items()
@@ -258,7 +258,7 @@ def test_frontier_values_are_bound_and_both_endpoints_scoped(store):
     prepare = next(call.args[0] for call in calls if call.args[0].startswith("PREPARE"))
     assert "a.user_name = $scope" in prepare and "b.user_name = $scope" in prepare
     assert node_id not in prepare and scope not in prepare
-    bound = next(call.args[1][0] for call in calls if call.args[0].startswith("EXECUTE"))
+    bound = next(call.args[1]["parameters"] for call in calls if call.args[0].startswith("EXECUTE"))
     assert json.loads(bound) == {"scope": scope, "ids": [node_id]}
 
 
@@ -340,7 +340,7 @@ def test_tag_sql_binds_special_scope_and_excluded_ids(store):
     scope, excluded = " 范围 ' $$ ", "节点 $memos$ ' ; --\n"
     assert db.get_neighbors_by_tag(["标签 ' $$"], [excluded], user_name=scope) == []
     statement, parameters = cursor.execute.call_args.args
-    assert parameters == (scope, [excluded])
+    assert parameters == {"scope": scope, "ids": [excluded]}
     assert scope not in statement and excluded not in statement
 
 

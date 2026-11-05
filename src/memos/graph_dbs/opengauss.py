@@ -36,9 +36,17 @@ _TABLE = '"memos_graph"."Memory"'
 _AGE_JSON_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|(?<![\w.])(-?)\.(\d+)')
 _UPSERT = (
     f"INSERT INTO {_TABLE} (scope, business_id, memory, embedding, properties) "
-    "VALUES (%s, %s, %s, %s::pg_catalog.vector, %s::ag_catalog.agtype) "
+    "VALUES (%(scope)s, %(id)s, %(memory)s, %(embedding)s::pg_catalog.vector, %(properties)s::ag_catalog.agtype) "
     "ON CONFLICT (scope, business_id) DO UPDATE SET memory = EXCLUDED.memory, "
     "embedding = EXCLUDED.embedding, properties = EXCLUDED.properties"
+)
+
+
+_DELETE_NODE = f"DELETE FROM ONLY {_TABLE} WHERE scope = %(scope)s AND business_id = %(id)s"
+_DELETE_INCIDENT_EDGES = (
+    "MATCH (a:Memory)-[r]->(b:Memory) WHERE "
+    "(a.id = $id AND a.user_name = $scope) OR "
+    "(b.id = $id AND b.user_name = $scope) DELETE r"
 )
 
 
@@ -189,6 +197,16 @@ class OpenGaussGraphDB(BaseGraphDB):
                     self._condition.notify_all()
                 self._semaphore.release()
 
+    @contextmanager
+    def _cursor(self, *, utc: bool = False, lock: int | None = None) -> Iterator[Any]:
+        """Borrow one transactional cursor, optionally preparing UTC and a graph lock."""
+        with self._get_connection() as connection, connection.cursor() as cursor:
+            if utc:
+                cursor.execute("SET LOCAL TIME ZONE 'UTC'")
+            if lock is not None:
+                cursor.execute("SELECT pg_advisory_xact_lock(621503, %(lock)s)", {"lock": lock})
+            yield cursor
+
     def _return_connection(self, connection: Any, discard: bool, failed: bool) -> None:
         try:
             self.connection_pool.putconn(connection, close=discard or bool(connection.closed))
@@ -224,22 +242,29 @@ class OpenGaussGraphDB(BaseGraphDB):
             self._pool_closed = True
 
     def _init_schema(self) -> None:
-        with self._get_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT pg_advisory_xact_lock(621503, 1)")
-            cursor.execute("SELECT oid FROM ag_catalog.ag_graph WHERE name = %s", ("memos_graph",))
+        with self._cursor(lock=1) as cursor:
+            cursor.execute(
+                "SELECT oid FROM ag_catalog.ag_graph WHERE name = %(graph)s",
+                {"graph": "memos_graph"},
+            )
             if cursor.fetchone() is None:
-                cursor.execute("SELECT ag_catalog.create_graph(%s)", ("memos_graph",))
+                cursor.execute(
+                    "SELECT ag_catalog.create_graph(%(graph)s)", {"graph": "memos_graph"}
+                )
             cursor.execute(
                 "SELECT l.kind, n.nspname, c.relname FROM ag_catalog.ag_label l "
                 "JOIN ag_catalog.ag_graph g ON g.oid = l.graph "
                 "JOIN pg_catalog.pg_class c ON c.oid = l.relation "
                 "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
-                "WHERE g.name = %s AND l.name = %s",
-                ("memos_graph", "Memory"),
+                "WHERE g.name = %(graph)s AND l.name = %(label)s",
+                {"graph": "memos_graph", "label": "Memory"},
             )
             label = cursor.fetchone()
             if label is None:
-                cursor.execute("SELECT ag_catalog.create_vlabel(%s, %s)", ("memos_graph", "Memory"))
+                cursor.execute(
+                    "SELECT ag_catalog.create_vlabel(%(graph)s, %(label)s)",
+                    {"graph": "memos_graph", "label": "Memory"},
+                )
                 cursor.execute(
                     f"ALTER TABLE {_TABLE} ADD COLUMN scope text NOT NULL, "
                     "ADD COLUMN business_id text NOT NULL, ADD COLUMN memory text NOT NULL, "
@@ -251,8 +276,8 @@ class OpenGaussGraphDB(BaseGraphDB):
             cursor.execute(
                 "SELECT attname, pg_catalog.format_type(atttypid, atttypmod), attnotnull, "
                 "atthasdef, attnum FROM pg_catalog.pg_attribute "
-                "WHERE attrelid = %s::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum",
-                (_TABLE,),
+                "WHERE attrelid = %(table)s::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum",
+                {"table": _TABLE},
             )
             expected = [
                 ("id", "graphid", True, True, 1),
@@ -265,10 +290,10 @@ class OpenGaussGraphDB(BaseGraphDB):
             if cursor.fetchall() != expected:
                 raise GraphDBError("The openGauss Memory columns are incompatible")
             cursor.execute(
-                "SELECT 1 FROM pg_catalog.pg_index WHERE indrelid = %s::regclass "
+                "SELECT 1 FROM pg_catalog.pg_index WHERE indrelid = %(table)s::regclass "
                 "AND indisunique AND indisvalid AND indimmediate AND indpred IS NULL "
                 "AND indexprs IS NULL AND indkey::text = '3 4'",
-                (_TABLE,),
+                {"table": _TABLE},
             )
             if cursor.fetchone() is None:
                 raise GraphDBError("The openGauss Memory unique constraint is incompatible")
@@ -311,8 +336,7 @@ class OpenGaussGraphDB(BaseGraphDB):
 
     def _rebuild_fulltext_index(self) -> None:
         """Repair the known failed-write index state without replaying any write."""
-        with self._get_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT pg_advisory_xact_lock(621503, 1)")
+        with self._cursor(lock=1) as cursor:
             self._init_fulltext_index(cursor, create=False)
             cursor.execute("REINDEX INDEX memos_graph.memory_fulltext_bm25")
 
@@ -426,9 +450,18 @@ class OpenGaussGraphDB(BaseGraphDB):
                 self._encode_node(node["id"], node["memory"], node.get("metadata", {}), scope)
             )
         if rows:
-            with self._get_connection() as connection, connection.cursor() as cursor:
-                for row in rows:
-                    cursor.execute(_UPSERT, row)
+            with self._cursor() as cursor:
+                for owner, node_id, memory, embedding, properties in rows:
+                    cursor.execute(
+                        _UPSERT,
+                        {
+                            "scope": owner,
+                            "id": node_id,
+                            "memory": memory,
+                            "embedding": embedding,
+                            "properties": properties,
+                        },
+                    )
 
     @staticmethod
     def _decode_embedding(value: Any) -> list[float] | None:
@@ -488,7 +521,7 @@ class OpenGaussGraphDB(BaseGraphDB):
         ids = list(dict.fromkeys(ids))
         if not ids:
             return []
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        with self._cursor() as cursor:
             found = self._read_nodes(cursor, ids, scope, include_embedding)
         return [found[node_id] for node_id in ids if node_id in found]
 
@@ -498,8 +531,8 @@ class OpenGaussGraphDB(BaseGraphDB):
         vector_column = "embedding::text" if include_embedding else "NULL"
         cursor.execute(
             f"SELECT business_id, memory, properties, {vector_column} FROM ONLY {_TABLE} "
-            "WHERE scope = %s AND business_id = ANY(%s)",
-            (scope, ids),
+            "WHERE scope = %(scope)s AND business_id = ANY(%(ids)s)",
+            {"scope": scope, "ids": ids},
         )
         return {
             row[0]: self._decode_node(row, scope, include_embedding) for row in cursor.fetchall()
@@ -579,31 +612,34 @@ class OpenGaussGraphDB(BaseGraphDB):
         if scope is not None:
             self._validate_id(scope)
             metadata.append({"field": "memory_type", "value": scope})
-        params: list[Any] = []
-        metadata_sql = self._build_metadata_conditions(metadata, params)
-        filter_sql = self._build_filter_where_clause(filter, params)
-        status_sql = self._filter_status("activated" if status is None else status, params)
+        metadata_sql, metadata_params = self._build_metadata_conditions(metadata)
+        filter_sql, filter_params = self._build_filter_where_clause(filter)
+        status_sql, status_params = self._filter_status("activated" if status is None else status)
         if top_k == 0:
             return []
         vector_column = "embedding::text" if with_embedding else "NULL"
         query = (
             f"SELECT business_id, memory, properties, {vector_column}, scope, "
-            f"embedding <=> %s::pg_catalog.vector FROM ONLY {_TABLE} "
-            "WHERE scope = ANY(%s) AND embedding IS NOT NULL AND vector_norm(embedding) > 0 "
+            f"embedding <=> %(vector)s::pg_catalog.vector FROM ONLY {_TABLE} "
+            "WHERE scope = ANY(%(scopes)s) AND embedding IS NOT NULL AND vector_norm(embedding) > 0 "
             f"AND ({metadata_sql}) AND ({filter_sql}) AND ({status_sql}) "
-            "ORDER BY (embedding <=> %s::pg_catalog.vector)"
+            "ORDER BY (embedding <=> %(vector)s::pg_catalog.vector)"
         )
-        query_params = [query_vector, scopes, *params, query_vector, top_k]
-        with self._get_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
+        query_params = self._merge_bindings(
+            metadata_params,
+            filter_params,
+            status_params,
+            {"vector": query_vector, "scopes": scopes, "top_k": top_k},
+        )
+        with self._cursor(utc=True) as cursor:
             if self.config.embedding_dimension <= 2000:
                 cursor.execute("SET LOCAL hnsw_ef_search = 100")
-                cursor.execute(query + " LIMIT %s", query_params)
+                cursor.execute(query + " LIMIT %(top_k)s", query_params)
                 rows = cursor.fetchall()
             else:
                 rows = []
             if self.config.embedding_dimension > 2000 or len(rows) < top_k:
-                cursor.execute(query + " + 0, scope, business_id LIMIT %s", query_params)
+                cursor.execute(query + " + 0, scope, business_id LIMIT %(top_k)s", query_params)
                 rows = cursor.fetchall()
         ranked = []
         for row in rows:
@@ -630,9 +666,8 @@ class OpenGaussGraphDB(BaseGraphDB):
         ranked.sort(key=lambda hit: (-hit[0], hit[1], hit[2]))
         return [hit[3] for hit in ranked[:top_k]]
 
-    def _query_fulltext(self, query: str, params: list[Any]) -> list[tuple]:
-        with self._get_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
+    def _query_fulltext(self, query: str, params: dict[str, Any]) -> list[tuple]:
+        with self._cursor(utc=True) as cursor:
             # TAAT scores all term candidates; SQL LIMIT can exceed bm25_topk's
             # separate 200 maximum. Pin scoring independently of role defaults.
             cursor.execute("SET LOCAL enable_bm25_taat = on")
@@ -722,21 +757,25 @@ class OpenGaussGraphDB(BaseGraphDB):
         if scope is not None:
             self._validate_id(scope)
             metadata.append({"field": "memory_type", "value": scope})
-        params: list[Any] = []
-        metadata_sql = self._build_metadata_conditions(metadata, params)
-        filter_sql = self._build_filter_where_clause(filter, params)
-        status_sql = self._filter_status("activated" if status is None else status, params)
+        metadata_sql, metadata_params = self._build_metadata_conditions(metadata)
+        filter_sql, filter_params = self._build_filter_where_clause(filter)
+        status_sql, status_params = self._filter_status("activated" if status is None else status)
         if not terms or top_k == 0:
             return []
         query_text = " ".join(terms)
         vector_column = "embedding::text" if with_embedding else "NULL"
         query = (
-            f"SELECT business_id, memory, properties, {vector_column}, scope, memory <&> %s "
-            f"FROM ONLY {_TABLE} WHERE scope = ANY(%s) "
+            f"SELECT business_id, memory, properties, {vector_column}, scope, memory <&> %(query)s "
+            f"FROM ONLY {_TABLE} WHERE scope = ANY(%(scopes)s) "
             f"AND ({metadata_sql}) AND ({filter_sql}) AND ({status_sql}) "
-            "ORDER BY memory <&> %s DESC LIMIT %s"
+            "ORDER BY memory <&> %(query)s DESC LIMIT %(top_k)s"
         )
-        query_params = [query_text, scopes, *params, query_text, top_k]
+        query_params = self._merge_bindings(
+            metadata_params,
+            filter_params,
+            status_params,
+            {"query": query_text, "scopes": scopes, "top_k": top_k},
+        )
         try:
             rows = self._query_fulltext(query, query_params)
         except GraphDBError as exc:
@@ -787,11 +826,11 @@ class OpenGaussGraphDB(BaseGraphDB):
         self._encode_node(id, fields.get("memory", ""), supplied, scope)
         if not fields:
             return
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        with self._cursor() as cursor:
             cursor.execute(
                 f"SELECT business_id, memory, properties, embedding::text FROM ONLY {_TABLE} "
-                "WHERE scope = %s AND business_id = %s FOR UPDATE",
-                (scope, id),
+                "WHERE scope = %(scope)s AND business_id = %(id)s FOR UPDATE",
+                {"scope": scope, "id": id},
             )
             row = cursor.fetchone()
             if row is None:
@@ -802,9 +841,15 @@ class OpenGaussGraphDB(BaseGraphDB):
                 id, fields.get("memory", node["memory"]), metadata, scope
             )
             cursor.execute(
-                f"UPDATE {_TABLE} SET memory = %s, embedding = %s::pg_catalog.vector, "
-                "properties = %s::ag_catalog.agtype WHERE scope = %s AND business_id = %s",
-                (memory, vector, payload, scope, id),
+                f"UPDATE {_TABLE} SET memory = %(memory)s, embedding = %(embedding)s::pg_catalog.vector, "
+                "properties = %(properties)s::ag_catalog.agtype WHERE scope = %(scope)s AND business_id = %(id)s",
+                {
+                    "memory": memory,
+                    "embedding": vector,
+                    "properties": payload,
+                    "scope": scope,
+                    "id": id,
+                },
             )
 
     @staticmethod
@@ -829,8 +874,8 @@ class OpenGaussGraphDB(BaseGraphDB):
             f"ag_catalog.cypher('memos_graph', $memos${body}$memos$, $1) AS ({columns})"
         )
         cursor.execute(
-            "EXECUTE memos_age(%s::ag_catalog.agtype)",
-            (json.dumps(parameters, ensure_ascii=False),),
+            "EXECUTE memos_age(%(parameters)s::ag_catalog.agtype)",
+            {"parameters": json.dumps(parameters, ensure_ascii=False)},
         )
         rows = cursor.fetchall()
         cursor.execute("DEALLOCATE memos_age")
@@ -838,13 +883,12 @@ class OpenGaussGraphDB(BaseGraphDB):
 
     @staticmethod
     def _lock_graph_nodes(cursor: Any, ids: list[str], scope: str) -> set[str]:
-        # Serialize graph mutations, including concurrent creation of AGE edge
-        # labels. Row locks coordinate deletion with existing node upserts.
-        cursor.execute("SELECT pg_advisory_xact_lock(621503, 2)")
+        # The caller holds the graph advisory lock before taking these row
+        # locks, which coordinate deletion with existing node upserts.
         cursor.execute(
             f"SELECT business_id FROM ONLY {_TABLE} "
-            "WHERE scope = %s AND business_id = ANY(%s) ORDER BY business_id FOR UPDATE",
-            (scope, sorted(set(ids))),
+            "WHERE scope = %(scope)s AND business_id = ANY(%(ids)s) ORDER BY business_id FOR UPDATE",
+            {"scope": scope, "ids": sorted(set(ids))},
         )
         return {row[0] for row in cursor.fetchall()}
 
@@ -853,22 +897,20 @@ class OpenGaussGraphDB(BaseGraphDB):
         self._ensure_open()
         scope = self._scope(user_name)
         self._validate_id(id)
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        with self._cursor(lock=2) as cursor:
             if not self._lock_graph_nodes(cursor, [id], scope):
                 return
             self._cypher(
                 cursor,
-                "MATCH (a:Memory)-[r]->(b:Memory) WHERE "
-                "(a.id = $id AND a.user_name = $scope) OR "
-                "(b.id = $id AND b.user_name = $scope) DELETE r",
+                _DELETE_INCIDENT_EDGES,
                 {"id": id, "scope": scope},
             )
             # Native AGE node deletion bypasses SQL row triggers and DELETE
             # privileges in this build. Keep node mutations on the SQL label
             # path so projection, constraints and failure handling stay aligned.
             cursor.execute(
-                f"DELETE FROM ONLY {_TABLE} WHERE scope = %s AND business_id = %s",
-                (scope, id),
+                _DELETE_NODE,
+                {"scope": scope, "id": id},
             )
 
     def _change_edge(
@@ -880,7 +922,7 @@ class OpenGaussGraphDB(BaseGraphDB):
         self._validate_id(target)
         self._validate_edge_type(edge_type, allow_any=False)
         endpoints = {source, target}
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        with self._cursor(lock=2) as cursor:
             if self._lock_graph_nodes(cursor, list(endpoints), scope) != endpoints:
                 return
             conditions = (
@@ -926,7 +968,7 @@ class OpenGaussGraphDB(BaseGraphDB):
             "ANY": "(a.id = $id OR b.id = $id)",
         }[direction]
         condition = "" if type == "ANY" else " AND type(r) = $type"
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        with self._cursor() as cursor:
             return self._read_edges(
                 cursor,
                 endpoint + condition,
@@ -1000,11 +1042,11 @@ class OpenGaussGraphDB(BaseGraphDB):
         self._validate_id(source_id)
         self._validate_id(target_id)
         self._validate_depth(max_depth)
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        with self._cursor() as cursor:
             endpoints = {source_id, target_id}
             cursor.execute(
-                f"SELECT business_id FROM ONLY {_TABLE} WHERE scope = %s AND business_id = ANY(%s)",
-                (scope, sorted(endpoints)),
+                f"SELECT business_id FROM ONLY {_TABLE} WHERE scope = %(scope)s AND business_id = ANY(%(ids)s)",
+                {"scope": scope, "ids": sorted(endpoints)},
             )
             if {row[0] for row in cursor.fetchall()} != endpoints:
                 return []
@@ -1047,7 +1089,7 @@ class OpenGaussGraphDB(BaseGraphDB):
         if center_status is not None and not isinstance(center_status, str):
             raise ValueError("center_status must be a string or None")
         empty = {"core_node": None, "neighbors": [], "edges": []}
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        with self._cursor() as cursor:
             core = self._read_nodes(cursor, [center_id], scope).get(center_id)
             if core is None or (
                 center_status and core["metadata"].get("status", "activated") != center_status
@@ -1125,11 +1167,11 @@ class OpenGaussGraphDB(BaseGraphDB):
             return []
         requested = set(tags)
         vector_column = "embedding::text" if include_embedding else "NULL"
-        with self._get_connection() as connection, connection.cursor() as cursor:
+        with self._cursor() as cursor:
             cursor.execute(
                 f"SELECT business_id, memory, properties, {vector_column} FROM ONLY {_TABLE} "
-                "WHERE scope = %s AND NOT (business_id = ANY(%s))",
-                (scope, exclude_ids),
+                "WHERE scope = %(scope)s AND NOT (business_id = ANY(%(ids)s))",
+                {"scope": scope, "ids": exclude_ids},
             )
             ranked = []
             for row in cursor.fetchall():
@@ -1158,16 +1200,16 @@ class OpenGaussGraphDB(BaseGraphDB):
         return sorted(set(scopes))
 
     @staticmethod
-    def _filter_status(status: str | None, params: list[Any]) -> str:
+    def _filter_status(status: str | None) -> tuple[str, dict[str, Any]]:
         if status is None:
-            return "TRUE"
+            return "TRUE", {}
         if not isinstance(status, str) or not status.strip():
             raise ValueError("status must be a nonblank string or None")
-        params.append(json.dumps(status))
         return (
             "(CASE WHEN properties ? 'status'::text THEN "
             "ag_catalog.agtype_access_operator(properties, '\"status\"'::ag_catalog.agtype) "
-            "ELSE '\"activated\"'::ag_catalog.agtype END) = %s::ag_catalog.agtype"
+            "ELSE '\"activated\"'::ag_catalog.agtype END) = %(memos_status)s::ag_catalog.agtype",
+            {"memos_status": json.dumps(status)},
         )
 
     def get_by_metadata(
@@ -1184,17 +1226,18 @@ class OpenGaussGraphDB(BaseGraphDB):
         scopes = self._filter_scopes(user_name, knowledgebase_ids)
         if user_name_flag is not True:
             raise ValueError("Disabling scope isolation is unsupported")
-        params: list[Any] = []
-        metadata_sql = self._build_metadata_conditions(filters, params)
-        filter_sql = self._build_filter_where_clause(filter, params)
-        status_sql = self._filter_status(status, params)
-        with self._get_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
+        metadata_sql, metadata_params = self._build_metadata_conditions(filters)
+        filter_sql, filter_params = self._build_filter_where_clause(filter)
+        status_sql, status_params = self._filter_status(status)
+        params = self._merge_bindings(
+            metadata_params, filter_params, status_params, {"scopes": scopes}
+        )
+        with self._cursor(utc=True) as cursor:
             cursor.execute(
-                f"SELECT business_id FROM ONLY {_TABLE} WHERE scope = ANY(%s) "
+                f"SELECT business_id FROM ONLY {_TABLE} WHERE scope = ANY(%(scopes)s) "
                 f"AND ({metadata_sql}) AND ({filter_sql}) AND ({status_sql}) "
                 "ORDER BY scope, business_id",
-                [scopes, *params],
+                params,
             )
             return [row[0] for row in cursor.fetchall()]
 
@@ -1213,20 +1256,19 @@ class OpenGaussGraphDB(BaseGraphDB):
         self._validate_id(scope)
         if not isinstance(include_embedding, bool):
             raise ValueError("include_embedding must be a bool")
-        params: list[Any] = []
-        type_sql = self._build_metadata_conditions(
-            [{"field": "memory_type", "value": scope}], params
+        type_sql, type_params = self._build_metadata_conditions(
+            [{"field": "memory_type", "value": scope}]
         )
-        filter_sql = self._build_filter_where_clause(filter, params)
-        status_sql = self._filter_status(status, params)
+        filter_sql, filter_params = self._build_filter_where_clause(filter)
+        status_sql, status_params = self._filter_status(status)
+        params = self._merge_bindings(type_params, filter_params, status_params, {"scopes": scopes})
         vector_column = "embedding::text" if include_embedding else "NULL"
-        with self._get_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
+        with self._cursor(utc=True) as cursor:
             cursor.execute(
                 f"SELECT business_id, memory, properties, {vector_column}, scope FROM ONLY {_TABLE} "
-                f"WHERE scope = ANY(%s) AND ({type_sql}) AND ({filter_sql}) AND ({status_sql}) "
+                f"WHERE scope = ANY(%(scopes)s) AND ({type_sql}) AND ({filter_sql}) AND ({status_sql}) "
                 "ORDER BY scope, business_id",
-                [scopes, *params],
+                params,
             )
             nodes = []
             for row in cursor.fetchall():
@@ -1253,80 +1295,308 @@ class OpenGaussGraphDB(BaseGraphDB):
         for name, values in (("memory_ids", memory_ids), ("file_ids", file_ids)):
             if values is not None:
                 self._validate_string_list(values, name)
-        params: list[Any] = []
-        predicate = self._build_filter_where_clause(filter, params)
+        predicate, params = self._build_filter_where_clause(filter)
         modes = sum(bool(value) for value in (memory_ids, file_ids, filter))
         if modes > 1:
             raise ValueError("Select only one of memory_ids, file_ids or filter")
         if memory_ids:
-            predicate = self._build_metadata_conditions(
-                [{"field": "id", "op": "in", "value": memory_ids}], params
+            predicate, params = self._build_metadata_conditions(
+                [{"field": "id", "op": "in", "value": memory_ids}]
             )
         elif file_ids:
-            predicate = self._build_metadata_conditions(
-                [{"field": "file_ids", "op": "contains", "value": file_ids}], params
+            predicate, params = self._build_metadata_conditions(
+                [{"field": "file_ids", "op": "contains", "value": file_ids}]
             )
         if not modes or not scopes:
             return 0
-        with self._get_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
-            cursor.execute("SELECT pg_advisory_xact_lock(621503, 2)")
+        params = self._merge_bindings(params, {"scopes": scopes})
+        with self._cursor(utc=True, lock=2) as cursor:
             cursor.execute(
-                f"SELECT scope, business_id FROM ONLY {_TABLE} WHERE scope = ANY(%s) "
+                f"SELECT scope, business_id FROM ONLY {_TABLE} WHERE scope = ANY(%(scopes)s) "
                 f"AND ({predicate}) ORDER BY scope, business_id FOR UPDATE",
-                [scopes, *params],
+                params,
             )
             selected = cursor.fetchall()
             deleted = 0
             for owner, node_id in selected:
                 self._cypher(
                     cursor,
-                    "MATCH (a:Memory)-[r]->(b:Memory) WHERE "
-                    "(a.id = $id AND a.user_name = $scope) OR "
-                    "(b.id = $id AND b.user_name = $scope) DELETE r",
+                    _DELETE_INCIDENT_EDGES,
                     {"id": node_id, "scope": owner},
                 )
                 cursor.execute(
-                    f"DELETE FROM ONLY {_TABLE} WHERE scope = %s AND business_id = %s",
-                    (owner, node_id),
+                    _DELETE_NODE,
+                    {"scope": owner, "id": node_id},
                 )
                 deleted += cursor.rowcount
             return deleted
 
-    def _field_expr(self, path: list[str], params: list[Any]) -> str:
-        params.append(_encode_filter_value(path[0]))
-        root = "ag_catalog.agtype_access_operator(properties, %s::ag_catalog.agtype)"
+    def get_grouped_counts(
+        self,
+        group_fields: list[str],
+        where_clause: str | None = "",
+        params: dict[str, Any] | None = None,
+        user_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Group all scoped rows by AGE values, with an optional trusted SQL predicate.
+
+        Callers must supply constant SQL and bind dynamic values through params.
+        This interface is not a sandbox for SQL supplied by end users.
+        """
+        self._ensure_open()
+        scope = self._scope(user_name)
+        if "\0" in scope:
+            raise ValueError("user_name must not contain NUL")
+        predicate, params = self._validate_grouping(group_fields, where_clause, params)
+        query, bindings = self._build_grouping_query(group_fields, predicate, params, scope)
+        with self._cursor() as cursor:
+            # AGE's numeric equality merges 1 and 1.0, but this build's hash
+            # aggregation does not. Keep the workaround local to this read.
+            cursor.execute("SET LOCAL enable_hashagg = off")
+            cursor.execute(query, bindings)
+            return self._decode_grouped_rows(group_fields, cursor.fetchall())
+
+    @staticmethod
+    def _validate_grouping(
+        group_fields: list[str], where_clause: str | None, params: dict[str, Any] | None
+    ) -> tuple[str, dict[str, Any]]:
+        """Validate trusted predicates and scalar user bindings before borrowing."""
+        if not isinstance(group_fields, list) or not group_fields:
+            raise ValueError("group_fields must be a nonempty list")
+        for field in group_fields:
+            if (
+                not isinstance(field, str)
+                or not re.fullmatch(r"(?:info\.)?[A-Za-z_][A-Za-z0-9_]*", field)
+                or field == "count"
+            ):
+                raise ValueError("Invalid grouping field")
+        if len(set(group_fields)) != len(group_fields):
+            raise ValueError("Grouping fields must be unique")
+        if where_clause is not None and not isinstance(where_clause, str):
+            raise ValueError("where_clause must be a string or None")
+        predicate = re.sub(r"(?i)^WHERE\b", "", (where_clause or "").strip(), count=1).strip()
+        if any(token in predicate for token in ("\0", ";", "--", "/*")):
+            raise ValueError("Invalid SQL predicate")
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            raise ValueError("params must be a dict or None")
+        for key, value in params.items():
+            if (
+                not isinstance(key, str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
+                or key.startswith("memos_")
+            ):
+                raise ValueError("Invalid or reserved SQL parameter name")
+            if (
+                type(value) not in (type(None), bool, int, float, str)
+                or (type(value) is float and not math.isfinite(value))
+                or (type(value) is str and "\0" in value)
+            ):
+                raise ValueError("SQL parameters must be finite scalar values without NUL")
+        placeholder = re.compile(r"%%|%\(([A-Za-z_][A-Za-z0-9_]*)\)s")
+        keys = {match[1] for match in placeholder.finditer(predicate) if match[1] is not None}
+        if "%" in placeholder.sub("", predicate) or keys != set(params):
+            raise ValueError("SQL placeholders must exactly match named parameters")
+        return predicate, dict(params)
+
+    def _build_grouping_query(
+        self, group_fields: list[str], predicate: str, params: dict[str, Any], scope: str
+    ) -> tuple[str, dict[str, Any]]:
+        """Build deterministic AGE value grouping with a separate outer scope."""
+        bindings = self._merge_bindings(params, {"memos_scope": scope})
+        expressions = []
+        for index, field in enumerate(group_fields):
+            expression, field_params = self._field_expr(
+                field.split("."), prefix=f"memos_group_{index}"
+            )
+            bindings = self._merge_bindings(bindings, field_params)
+            expressions.append(f"{expression} AS g{index}")
+        groups = ", ".join(f"g{i}" for i in range(len(group_fields)))
+        representatives = ", ".join(
+            f'MIN(ag_catalog.agtype_out(g{i})::text COLLATE "C") AS r{i}'
+            for i in range(len(group_fields))
+        )
+        order = ", ".join(f'r{i} COLLATE "C" ASC NULLS LAST' for i in range(len(group_fields)))
+        query = (
+            f"SELECT {representatives}, COUNT(*) FROM "
+            f"(SELECT {', '.join(expressions)} FROM ONLY {_TABLE} "
+            "WHERE scope = %(memos_scope)s"
+            + (f" AND ({predicate})" if predicate else "")
+            + f") AS grouped GROUP BY {groups} ORDER BY {order}"
+        )
+        return query, bindings
+
+    @staticmethod
+    def _decode_grouped_rows(group_fields: list[str], rows: list[tuple]) -> list[dict[str, Any]]:
+        """Decode scalar/structured AGE representatives before the transaction commits."""
+        result = []
+        for row in rows:
+            record = {}
+            for field, payload in zip(group_fields, row[:-1], strict=True):
+                try:
+                    record[field] = (
+                        None
+                        if payload is None
+                        else json.loads(
+                            _AGE_JSON_TOKEN.sub(
+                                lambda token: token[0]
+                                if token[0].startswith('"')
+                                else f"{token[1]}0.{token[2]}",
+                                payload,
+                            )
+                        )
+                    )
+                    # Python's JSON parser accepts NaN/Infinity extensions;
+                    # AGE results must still be finite JSON, including nested values.
+                    json.dumps(record[field], allow_nan=False)
+                except (TypeError, ValueError) as exc:
+                    raise GraphDBError("Invalid AGE grouped value") from exc
+            record["count"] = row[-1]
+            result.append(record)
+        return result
+
+    def _capacity_scope(self, memory_type: str, user_name: str | None) -> str:
+        """Validate the type and Cube before borrowing a connection."""
+        self._ensure_open()
+        scope = self._scope(user_name)
+        if (
+            not isinstance(memory_type, str)
+            or not memory_type.strip()
+            or "\0" in memory_type
+            or "\0" in scope
+        ):
+            raise ValueError("memory_type and user_name must be nonblank strings without NUL")
+        return scope
+
+    def get_memory_count(self, memory_type: str, user_name: str | None = None) -> int:
+        """Count occupied rows of one type, including archived and deleted rows."""
+        scope = self._capacity_scope(memory_type, user_name)
+        kind, params = self._build_equal_condition(
+            ["memory_type"], memory_type, prefix="memos_type"
+        )
+        params = self._merge_bindings(params, {"scope": scope})
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM ONLY {_TABLE} WHERE scope = %(scope)s AND {kind}",
+                params,
+            )
+            return cursor.fetchone()[0]
+
+    def node_not_exist(self, scope: str, user_name: str | None = None) -> int:
+        """Return integer one only when this Cube has no rows of the given type."""
+        return int(self.get_memory_count(scope, user_name) == 0)
+
+    def remove_oldest_memory(
+        self, memory_type: str, keep_latest: int | str, user_name: str | None = None
+    ) -> None:
+        """Trim a fixed locked set atomically; concurrent inserts await a later trim."""
+        scope = self._capacity_scope(memory_type, user_name)
+        if isinstance(keep_latest, str) and re.fullmatch(r"[0-9]+", keep_latest):
+            keep_latest = int(keep_latest)
+        if type(keep_latest) is not int or keep_latest < 0:
+            raise ValueError("keep_latest must be a nonnegative integer or ASCII digit string")
+        kind, params = self._build_equal_condition(
+            ["memory_type"], memory_type, prefix="memos_type"
+        )
+        params = self._merge_bindings(params, {"scope": scope})
+        with self._cursor(lock=2) as cursor:
+            cursor.execute(
+                f"SELECT business_id FROM ONLY {_TABLE} WHERE scope = %(scope)s "
+                f"AND {kind} ORDER BY business_id FOR UPDATE",
+                params,
+            )
+            locked = [row[0] for row in cursor.fetchall()]
+            if not locked:
+                return
+            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
+            instant, time_params = self._text_field_expr(["updated_at"], prefix="memos_time")
+            cursor.execute(
+                f"SELECT business_id FROM ONLY {_TABLE} "
+                "WHERE scope = %(scope)s AND business_id = ANY(%(ids)s) "
+                f"ORDER BY {instant}::timestamptz DESC NULLS LAST, "
+                'business_id COLLATE "C" DESC',
+                self._merge_bindings(time_params, {"scope": scope, "ids": locked}),
+            )
+            # Fetch the full ranking even when keep=0 or keep>=len(S): every
+            # locked timestamp must be parsed before any deletion can occur.
+            ranked = [row[0] for row in cursor.fetchall()]
+            deleted = sorted(ranked[min(keep_latest, len(ranked)) :])
+            for offset in range(0, len(deleted), 500):
+                batch = deleted[offset : offset + 500]
+                self._cypher(
+                    cursor,
+                    "MATCH (a:Memory)-[r]->(b:Memory) WHERE "
+                    "(a.user_name = $scope AND a.id IN $ids) OR "
+                    "(b.user_name = $scope AND b.id IN $ids) DELETE r",
+                    {"scope": scope, "ids": batch},
+                )
+                cursor.execute(
+                    f"DELETE FROM ONLY {_TABLE} WHERE scope = %(scope)s AND business_id = ANY(%(ids)s)",
+                    {"scope": scope, "ids": batch},
+                )
+
+    @staticmethod
+    def _merge_bindings(*parts: dict[str, Any]) -> dict[str, Any]:
+        """Compose independent fragments without silently replacing a parameter."""
+        result = {}
+        for part in parts:
+            if result.keys() & part.keys():
+                raise ValueError("Duplicate SQL parameter names")
+            result.update(part)
+        return result
+
+    def _join_fragments(
+        self, parts: list[tuple[str, dict[str, Any]]], separator: str
+    ) -> tuple[str, dict[str, Any]]:
+        return separator.join(sql for sql, _ in parts), self._merge_bindings(
+            *(params for _, params in parts)
+        )
+
+    def _field_expr(self, path: list[str], *, prefix: str) -> tuple[str, dict[str, Any]]:
+        """Bind field paths; prefixes are internal names supplied by the query builder."""
+        params = {f"{prefix}_root": _encode_filter_value(path[0])}
+        root = (
+            f"ag_catalog.agtype_access_operator(properties, %({prefix}_root)s::ag_catalog.agtype)"
+        )
         if len(path) == 1:
-            return root
+            return root, params
+        params[f"{prefix}_child"] = _encode_filter_value(path[1])
         # Serialized info strings are preserved by storage, but are not maps.
-        params.extend([_encode_filter_value(path[0]), _encode_filter_value(path[1])])
         return (
             f"(CASE WHEN left(ag_catalog.agtype_out({root})::text, 1) = '{{' "
-            f"THEN ag_catalog.agtype_access_operator({root}, %s::ag_catalog.agtype) END)"
+            f"THEN ag_catalog.agtype_access_operator({root}, %({prefix}_child)s::ag_catalog.agtype) END)",
+            params,
         )
 
-    def _text_field_expr(self, path: list[str], params: list[Any]) -> str:
-        kind = self._field_expr(path, params)
-        value = self._field_expr(path, params)
+    def _text_field_expr(self, path: list[str], *, prefix: str) -> tuple[str, dict[str, Any]]:
+        value, params = self._field_expr(path, prefix=prefix)
         return (
-            f"(CASE WHEN left(ag_catalog.agtype_out({kind})::text, 1) = '\"' "
-            f"THEN {value}::text END)"
+            f"(CASE WHEN left(ag_catalog.agtype_out({value})::text, 1) = '\"' "
+            f"THEN {value}::text END)",
+            params,
         )
 
-    def _build_equal_condition(self, path: list[str], value: Any, params: list[Any]) -> str:
+    def _build_equal_condition(
+        self, path: list[str], value: Any, *, prefix: str
+    ) -> tuple[str, dict[str, Any]]:
         # AGE access returns SQL NULL for both missing fields and JSON null.
         # Containment distinguishes them without converting AGE maps to JSON.
         if value is None:
             nested = value
             for key in reversed(path):
                 nested = {key: nested}
-            params.append(_encode_filter_value(nested))
-            return "(properties @> %s::ag_catalog.agtype)"
-        expr = self._field_expr(path, params)
-        params.append(_encode_filter_value(value))
-        return f"({expr} = %s::ag_catalog.agtype)"
+            return f"(properties @> %({prefix}_value)s::ag_catalog.agtype)", {
+                f"{prefix}_value": _encode_filter_value(nested)
+            }
+        expr, params = self._field_expr(path, prefix=prefix)
+        return f"({expr} = %({prefix}_value)s::ag_catalog.agtype)", self._merge_bindings(
+            params, {f"{prefix}_value": _encode_filter_value(value)}
+        )
 
-    def _build_filter_condition(self, field: str, op: str, value: Any, params: list[Any]) -> str:
+    def _build_filter_condition(
+        self, field: str, op: str, value: Any, *, prefix: str
+    ) -> tuple[str, dict[str, Any]]:
         if not isinstance(field, str) or not re.fullmatch(
             r"(?:info\.)?[A-Za-z_][A-Za-z0-9_]*", field
         ):
@@ -1337,6 +1607,7 @@ class OpenGaussGraphDB(BaseGraphDB):
         _encode_filter_value(value)
         operator = _OPERATORS.get(op, op)
         temporal = path[-1].endswith("_at") or path[-1] == "delete_time"
+        bound = f"%({prefix}_value)s"
         if operator in {">", ">=", "<", "<="} or (operator == "=" and temporal):
             if temporal:
                 try:
@@ -1347,61 +1618,74 @@ class OpenGaussGraphDB(BaseGraphDB):
                         instant = instant.replace(tzinfo=timezone.utc)
                 except ValueError as exc:
                     raise ValueError("Invalid ISO date/time filter") from exc
-                expr = f"{self._text_field_expr(path, params)}::timestamptz"
-                params.append(instant.isoformat())
-                return f"({expr} {operator} %s::timestamptz)"
+                expr, params = self._text_field_expr(path, prefix=prefix)
+                return (
+                    f"({expr}::timestamptz {operator} {bound}::timestamptz)",
+                    self._merge_bindings(params, {f"{prefix}_value": instant.isoformat()}),
+                )
             try:
                 if type(value) not in (int, float) or not math.isfinite(value):
                     raise ValueError("Numeric filter requires a finite number")
             except OverflowError as exc:
                 raise ValueError("Numeric filter is too large") from exc
-            kind = self._field_expr(path, params)
-            numeric = self._field_expr(path, params)
-            params.append(value)
+            expr, params = self._field_expr(path, prefix=prefix)
             return (
-                f"((CASE WHEN ag_catalog.agtype_out({kind})::text ~ '^[-.0-9]' "
-                f"THEN ag_catalog.agtype_out({numeric})::text::numeric END) {operator} %s)"
+                f"((CASE WHEN ag_catalog.agtype_out({expr})::text ~ '^[-.0-9]' "
+                f"THEN ag_catalog.agtype_out({expr})::text::numeric END) {operator} {bound})",
+                self._merge_bindings(params, {f"{prefix}_value": value}),
             )
         if operator == "=":
-            return self._build_equal_condition(path, value, params)
+            return self._build_equal_condition(path, value, prefix=prefix)
         if operator in {"in", "contains", "all"}:
             if operator == "in" and not isinstance(value, list):
                 raise ValueError("in requires a list")
             values = value if isinstance(value, list) else [value]
             if operator == "all":
-                expr = self._field_expr(path, params)
-                params.append(_encode_filter_value(values))
-                return f"({expr} @> %s::ag_catalog.agtype)"
+                expr, params = self._field_expr(path, prefix=prefix)
+                return f"({expr} @> {bound}::ag_catalog.agtype)", self._merge_bindings(
+                    params, {f"{prefix}_value": _encode_filter_value(values)}
+                )
             if not values:
-                return "FALSE"
+                return "FALSE", {}
             array = operator == "contains" or path[-1] in _ARRAY_FIELDS
             parts = []
-            for item in values:
+            for index, item in enumerate(values):
+                child = f"{prefix}_item_{index}"
                 if array:
-                    expr = self._field_expr(path, params)
-                    params.append(_encode_filter_value([item]))
-                    parts.append(f"{expr} @> %s::ag_catalog.agtype")
+                    expr, params = self._field_expr(path, prefix=child)
+                    parts.append(
+                        (
+                            f"{expr} @> %({child}_value)s::ag_catalog.agtype",
+                            self._merge_bindings(
+                                params, {f"{child}_value": _encode_filter_value([item])}
+                            ),
+                        )
+                    )
                 else:
-                    parts.append(self._build_equal_condition(path, item, params))
-            return "(" + " OR ".join(parts) + ")"
+                    parts.append(self._build_equal_condition(path, item, prefix=child))
+            sql, params = self._join_fragments(parts, " OR ")
+            return f"({sql})", params
         if operator in {"like", "nolike", "starts_with", "ends_with"}:
             if not isinstance(value, str):
                 raise ValueError("String filter requires a string")
             escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             pattern = ("" if operator == "starts_with" else "%") + escaped
             pattern += "" if operator == "ends_with" else "%"
-            expr = self._text_field_expr(path, params)
-            params.append(pattern)
+            expr, params = self._text_field_expr(path, prefix=prefix)
             comparison = "NOT LIKE" if operator == "nolike" else "LIKE"
-            return f"({expr} {comparison} %s)"
+            return f"({expr} {comparison} {bound})", self._merge_bindings(
+                params, {f"{prefix}_value": pattern}
+            )
         raise ValueError(f"Unsupported filter operator: {op}")
 
-    def _build_metadata_conditions(self, filters: list[dict[str, Any]], params: list[Any]) -> str:
-        """Compile the existing field/op/value list as an AND expression."""
+    def _build_metadata_conditions(
+        self, filters: list[dict[str, Any]], *, prefix: str = "memos_metadata"
+    ) -> tuple[str, dict[str, Any]]:
+        """Compile the existing field/op/value list as independent AND fragments."""
         if not isinstance(filters, list):
             raise ValueError("filters must be a list")
         parts = []
-        for item in filters:
+        for index, item in enumerate(filters):
             if (
                 not isinstance(item, dict)
                 or not {"field", "value"} <= item.keys()
@@ -1410,10 +1694,11 @@ class OpenGaussGraphDB(BaseGraphDB):
                 raise ValueError("Invalid metadata filter")
             parts.append(
                 self._build_filter_condition(
-                    item["field"], item.get("op", "="), item["value"], params
+                    item["field"], item.get("op", "="), item["value"], prefix=f"{prefix}_{index}"
                 )
             )
-        return " AND ".join(parts) or "TRUE"
+        sql, params = self._join_fragments(parts, " AND ")
+        return sql or "TRUE", params
 
     @staticmethod
     def parse_filter(filter_dict: dict | None = None) -> dict | None:
@@ -1436,39 +1721,48 @@ class OpenGaussGraphDB(BaseGraphDB):
         return normalized
 
     def _build_single_filter_condition(
-        self, condition_dict: dict[str, Any], params: list[Any]
-    ) -> str:
-        """Build parameter-bound predicates for one business condition object."""
+        self, condition_dict: dict[str, Any], *, prefix: str
+    ) -> tuple[str, dict[str, Any]]:
+        """Assign each field/operator occurrence its own binding namespace."""
         parts = []
-        for field, value in condition_dict.items():
+        for index, (field, value) in enumerate(condition_dict.items()):
+            child = f"{prefix}_{index}"
             if isinstance(value, dict):
                 if not value:
                     raise ValueError("Filter operators cannot be empty")
                 parts.extend(
-                    self._build_filter_condition(field, op, val, params)
-                    for op, val in value.items()
+                    self._build_filter_condition(field, op, val, prefix=f"{child}_{op_index}")
+                    for op_index, (op, val) in enumerate(value.items())
                 )
             else:
                 op = "all" if field in _ARRAY_FIELDS else "="
-                parts.append(self._build_filter_condition(field, op, value, params))
-        return " AND ".join(parts)
+                parts.append(self._build_filter_condition(field, op, value, prefix=child))
+        return self._join_fragments(parts, " AND ")
 
     def _build_filter_where_clause(
-        self, filter_dict: dict | None, params: list[Any], nested: bool = False
-    ) -> str:
-        """Build a scoped query's business predicate without ignoring invalid children."""
+        self, filter_dict: dict | None, *, prefix: str = "memos_filter", nested: bool = False
+    ) -> tuple[str, dict[str, Any]]:
+        """Build named predicates without sharing a mutable parameter accumulator."""
         condition = self.parse_filter(filter_dict)
         if nested and not condition:
             raise ValueError("Nested filter conditions cannot be empty")
         if condition is None:
-            return "TRUE"
+            return "TRUE", {}
         parts = []
-        for field, value in condition.items():
+        for index, (field, value) in enumerate(condition.items()):
+            child_prefix = f"{prefix}_{index}"
             if field in ("and", "or"):
                 children = [
-                    self._build_filter_where_clause(child, params, nested=True) for child in value
+                    self._build_filter_where_clause(
+                        child, prefix=f"{child_prefix}_{child_index}", nested=True
+                    )
+                    for child_index, child in enumerate(value)
                 ]
-                parts.append("(" + f" {field.upper()} ".join(children) + ")")
+                sql, params = self._join_fragments(children, f" {field.upper()} ")
+                parts.append((f"({sql})", params))
             else:
-                parts.append(self._build_single_filter_condition({field: value}, params))
-        return "(" + " AND ".join(parts) + ")" if parts else "TRUE"
+                parts.append(
+                    self._build_single_filter_condition({field: value}, prefix=child_prefix)
+                )
+        sql, params = self._join_fragments(parts, " AND ")
+        return f"({sql})" if parts else "TRUE", params

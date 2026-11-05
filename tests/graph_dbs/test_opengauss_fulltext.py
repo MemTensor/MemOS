@@ -86,9 +86,12 @@ def test_fulltext_terms_filters_and_scope_are_bound_and_input_is_unchanged(fullt
     before = deepcopy(kwargs)
     db.search_by_fulltext(**kwargs)
     statement, params = cursor.execute.call_args.args
-    assert params[0] == "星港 回归 it's x'; DROP TABLE y; --"
-    assert ["A'", "K"] in params
-    assert "scope = ANY(%s)" in statement and "ORDER BY memory <&> %s DESC LIMIT %s" in statement
+    assert params["query"] == "星港 回归 it's x'; DROP TABLE y; --"
+    assert ["A'", "K"] in params.values()
+    assert (
+        "scope = ANY(%(scopes)s)" in statement
+        and "ORDER BY memory <&> %(query)s DESC LIMIT %(top_k)s" in statement
+    )
     for value in ("星港", "bound-session'", "DROP TABLE", "LongTermMemory", "archived"):
         assert value not in statement
     assert kwargs == before
@@ -100,7 +103,7 @@ def test_fulltext_uses_taat_without_clamping_sql_limit(fulltext_store, top_k):
     cursor.fetchall.return_value = [_hit()]
     assert db.search_by_fulltext(["星港"], top_k=top_k) == [{"id": "one", "score": 2.5}]
     cursor.execute.assert_any_call("SET LOCAL enable_bm25_taat = on")
-    assert cursor.execute.call_args.args[1][-1] == top_k
+    assert cursor.execute.call_args.args[1]["top_k"] == top_k
 
 
 @pytest.mark.parametrize("words", [[], ["", "  ", "''", '""']])
@@ -316,7 +319,7 @@ def test_fulltext_rebuild_locks_and_only_repairs_the_owned_index(fulltext_store,
         with pytest.raises(GraphDBError):
             db._rebuild_fulltext_index()
         assert not any("REINDEX" in call.args[0] for call in cursor.execute.call_args_list)
-    cursor.execute.assert_any_call("SELECT pg_advisory_xact_lock(621503, 1)")
+    cursor.execute.assert_any_call("SELECT pg_advisory_xact_lock(621503, %(lock)s)", {"lock": 1})
 
 
 @pytest.mark.parametrize("failure", ["none", "one_deadlock", "two_deadlocks", "permission"])

@@ -54,9 +54,9 @@ def test_upsert_preserves_input_and_binds_scope_and_payload(store):
     query, params = cursor.execute.call_args.args
     assert "ON CONFLICT (scope, business_id)" in query
     assert "id =" not in query.split("DO UPDATE", 1)[1]
-    assert params[:3] == ("A", "same", "fixture memory")
-    assert json.loads(params[3]) == [1, 0, 0]
-    properties = json.loads(params[4])
+    assert (params["scope"], params["id"], params["memory"]) == ("A", "same", "fixture memory")
+    assert json.loads(params["embedding"]) == [1, 0, 0]
+    properties = json.loads(params["properties"])
     assert properties == {
         **{k: v for k, v in metadata.items() if k != "embedding"},
         "id": "same",
@@ -86,7 +86,7 @@ def test_reads_reorder_and_deduplicate_without_leaking_scope(store):
         {"id": "one", "memory": "first", "metadata": {"tags": ["x"], "embedding": [1, 0, 0]}},
         {"id": "two", "memory": "second", "metadata": {"status": "archived", "embedding": None}},
     ]
-    assert cursor.execute.call_args.args[1] == ("A", ["one", "missing", "two"])
+    assert cursor.execute.call_args.args[1] == {"scope": "A", "ids": ["one", "missing", "two"]}
 
 
 @pytest.mark.parametrize("position", [0, 1, 2])
@@ -103,7 +103,7 @@ def test_bad_batch_is_rejected_before_acquiring_a_connection(store, position):
 def test_explicit_scope_is_preserved_and_overrides_config(store, scope):
     db, _, cursor = store
     db.add_node("id", "", {"user_name": scope}, user_name=scope)
-    assert cursor.execute.call_args.args[1][0] == scope
+    assert cursor.execute.call_args.args[1]["scope"] == scope
 
 
 @pytest.mark.parametrize("scope", ["", " \t", False, 12, [], {}])
@@ -119,7 +119,7 @@ def test_physical_database_scope_is_explicitly_bounded(store):
     db.config.use_multi_db = True
     db.config.user_name = None
     db.add_node("id", "physical", {})
-    assert cursor.execute.call_args.args[1][0] == ""
+    assert cursor.execute.call_args.args[1]["scope"] == ""
     db.config.use_multi_db = False
     with pytest.raises(ValueError, match="user_name"):
         db.get_node("id")
@@ -163,7 +163,7 @@ def test_vectorless_nodes_are_allowed_without_random_embeddings(store, embedding
     db.add_node(
         "dream", "", {"embedding": embedding, "memory_type": "CustomMemory", "status": "pending"}
     )
-    assert cursor.execute.call_args.args[1][3] is None
+    assert cursor.execute.call_args.args[1]["embedding"] is None
 
 
 @pytest.mark.parametrize(
@@ -274,15 +274,15 @@ def test_partial_update_keeps_fields_and_does_not_mutate_input(store):
     db.update_node("one", fields)
     query, params = cursor.execute.call_args.args
     assert query.startswith("UPDATE")
-    assert params[:2] == ("after", "[1, 0, 0]")
-    assert json.loads(params[2]) == {
+    assert (params["memory"], params["embedding"]) == ("after", "[1, 0, 0]")
+    assert json.loads(params["properties"]) == {
         "id": "one",
         "memory": "after",
         "user_name": "A",
         "tags": ["keep"],
         "info": {"new": 2},
     }
-    assert params[3:] == ("A", "one")
+    assert (params["scope"], params["id"]) == ("A", "one")
     assert fields == original
     assert any("FOR UPDATE" in call.args[0] for call in cursor.execute.call_args_list)
 
@@ -300,9 +300,11 @@ def test_partial_update_embedding_presence_controls_preservation(store, fields):
     )
     db.update_node("one", fields)
     params = cursor.execute.call_args.args[1]
-    assert params[0] == "before"
+    assert params["memory"] == "before"
     expected = fields.get("embedding", [1, 0, 0])
-    assert (None if params[1] is None else json.loads(params[1])) == (expected or None)
+    assert (None if params["embedding"] is None else json.loads(params["embedding"])) == (
+        expected or None
+    )
 
 
 def test_missing_update_is_noop_and_empty_update_does_not_borrow(store):
