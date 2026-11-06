@@ -67,3 +67,25 @@ An explicit load fails on missing, unreadable, or invalid JSON files with
 `memos.exceptions.MemoryError`. Database errors retain their cause. Restoration
 is an atomic merge into the same Cube: it preserves nodes and edges absent from
 the file. Importing a node without an embedding clears its existing embedding.
+
+Search results retain their original Cube identity, including equal memory IDs
+in different Cubes. Parallel Cube searches merge in request order. The existing
+no/sim/MMR selection and scoring rules remain in use. Required storage and input
+errors propagate through keyword search, API handlers and scheduled Feedback;
+these errors are distinct from a successful query with no matches.
+
+Default Feedback (`DB_IDX_READY=False`) supports SQL LIKE keyword replacement.
+`search_by_keywords_like` accepts the caller's exact pattern: `%` matches any
+sequence, `_` matches one character, and backslash escapes those characters.
+It binds the pattern, defaults to activated memories, applies the usual Cube/KB
+scope and filters, and returns all matches in Cube/ID order. Empty patterns only
+match empty text; invalid types, NUL and an unpaired trailing escape are rejected.
+The default projection contains `id`; multi-Cube projections also contain
+`user_name`. Explicit fields can include memory, embedding and metadata fields.
+
+Feedback preserves the existing version behavior: with versioning off, working
+memory updates in place and long-term memory creates a new node then archives
+the old one. These multiple writes are not one transaction. Storage errors are
+reported and are not retried by the Feedback wrapper, since a failed connection
+can leave a write's commit outcome unknown. Successful earlier updates may remain.
+The TFIDF branch (`DB_IDX_READY=True`) remains unsupported.

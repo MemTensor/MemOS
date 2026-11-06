@@ -206,7 +206,9 @@ def test_consumer_cleanup_failure_preserves_separately_committed_writes(
                 )
             assert caught.value.__cause__.pgcode == "P0001"
         elif operation == "add":
-            assert instance.add([item()], user_name="A", mode="sync", use_batch=False) == []
+            with pytest.raises(GraphDBError) as caught:
+                instance.add([item()], user_name="A", mode="sync", use_batch=False)
+            assert caught.value.__cause__.pgcode == "P0001"
         else:
             assert instance.remove_and_refresh_memory(user_name="A") is None
     end = datetime.now()
@@ -221,7 +223,7 @@ def test_consumer_cleanup_failure_preserves_separately_committed_writes(
     )
     assert len(after) == (4 if operation == "replace" else 3)
     assert instance.current_memory_size == {"WorkingMemory": 3 if operation == "refresh" else 2}
-    if operation != "replace":
+    if operation == "refresh":
         assert "Remove WorkingMemory error" in caplog.text
 
 

@@ -7,6 +7,7 @@ from datetime import datetime
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
+from memos.exceptions import GraphDBError
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
@@ -130,6 +131,8 @@ class MemoryManager:
                 try:
                     ids = future.result()
                     added_ids.extend(ids)
+                except (GraphDBError, ValueError):
+                    raise
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
         logger.info(f"[MemoryManager: _add_memories_parallel] Added {len(added_ids)} memories")
@@ -257,6 +260,8 @@ class MemoryManager:
                 keep_latest=self.memory_size["WorkingMemory"],
                 user_name=user_name,
             )
+        except (GraphDBError, ValueError):
+            raise
         except Exception:
             logger.warning(f"Remove WorkingMemory error: {traceback.format_exc()}")
 
@@ -336,7 +341,14 @@ class MemoryManager:
                 f_working = ex.submit(
                     self._add_memory_to_db, memory, "WorkingMemory", user_name, working_id
                 )
-                futures.append(("working", f_working))
+                # Both writes use working_id. Finish this write before publishing
+                # the final memory type, so it cannot overwrite the graph memory.
+                try:
+                    f_working.result()
+                except (GraphDBError, ValueError):
+                    raise
+                except Exception:
+                    logger.warning("Working memory processing failed:\n%s", traceback.format_exc())
 
             if memory.metadata.memory_type in (
                 "LongTermMemory",
@@ -354,13 +366,15 @@ class MemoryManager:
                     user_name=user_name,
                     working_binding=working_id,
                 )
-                futures.append(("long", f_graph))
+                futures.append(f_graph)
 
-            for kind, fut in futures:
+            for fut in futures:
                 try:
                     res = fut.result()
-                    if kind != "working" and isinstance(res, str) and res:
+                    if isinstance(res, str) and res:
                         ids.append(res)
+                except (GraphDBError, ValueError):
+                    raise
                 except Exception:
                     logger.warning("Parallel memory processing failed:\n%s", traceback.format_exc())
 
