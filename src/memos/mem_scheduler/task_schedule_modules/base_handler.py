@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING
 
+from memos.exceptions import GraphDBError
 from memos.log import get_logger
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 
@@ -46,6 +47,8 @@ class BaseSchedulerHandler:
                     continue
                 try:
                     message_handler(user_id, mem_cube_id, batch)
+                except (GraphDBError, ValueError):
+                    raise
                 except Exception as e:
                     self.handle_exception(
                         e, f"Error processing batch for user {user_id}, mem_cube {mem_cube_id}"

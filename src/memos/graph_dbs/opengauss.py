@@ -821,6 +821,77 @@ class OpenGaussGraphDB(BaseGraphDB):
         ranked.sort(key=lambda hit: (-hit[0], hit[1], hit[2]))
         return [hit[3] for hit in ranked[:top_k]]
 
+    def search_by_keywords_like(
+        self,
+        query_word: str,
+        scope: str | None = None,
+        status: str | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        return_fields: list[str] | None = None,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        """Return every literal SQL LIKE match, ordered by Cube and business ID."""
+        self._ensure_open()
+        if kwargs:
+            raise ValueError("Unknown search_by_keywords_like arguments")
+        if not isinstance(query_word, str) or "\0" in query_word:
+            raise ValueError("query_word must be a string without NUL")
+        if (len(query_word) - len(query_word.rstrip("\\"))) % 2:
+            raise ValueError("query_word cannot end with an unpaired LIKE escape")
+        if return_fields is not None and (
+            not isinstance(return_fields, list)
+            or any(
+                not isinstance(field, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field)
+                for field in return_fields
+            )
+        ):
+            raise ValueError("return_fields must contain valid field names")
+        fields = list(dict.fromkeys(return_fields or []))
+        scopes = self._filter_scopes(user_name, knowledgebase_ids)
+        if len(scopes) > 1 and "user_name" not in fields:
+            fields.append("user_name")
+        if search_filter is not None and not isinstance(search_filter, dict):
+            raise ValueError("search_filter must be an object")
+        metadata = [{"field": key, "value": value} for key, value in (search_filter or {}).items()]
+        if scope is not None:
+            self._validate_id(scope)
+            metadata.append({"field": "memory_type", "value": scope})
+        predicate, params = self._join_fragments(
+            [
+                self._build_metadata_conditions(metadata),
+                self._build_filter_where_clause(filter),
+                self._filter_status("activated" if status is None else status),
+            ],
+            " AND ",
+        )
+        with_embedding = "embedding" in fields
+        vector_column = "embedding::text" if with_embedding else "NULL"
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT business_id, memory, properties, {vector_column}, scope FROM ONLY {_TABLE} "
+                "WHERE scope = ANY(%(scopes)s) AND memory LIKE %(memos_like)s "
+                f'AND {predicate} ORDER BY scope COLLATE "C", business_id COLLATE "C"',
+                self._merge_bindings(params, {"scopes": scopes, "memos_like": query_word}),
+            )
+            results = []
+            for row in cursor.fetchall():
+                node = self._decode_node(row[:4], row[4], with_embedding)
+                item = {"id": node["id"]}
+                for field in fields:
+                    if field == "id":
+                        continue
+                    if field == "user_name":
+                        item[field] = row[4]
+                    elif field == "memory":
+                        item[field] = node["memory"]
+                    else:
+                        item[field] = node["metadata"].get(field)
+                results.append(item)
+            return results
+
     def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
         """Merge fields under a row lock, retaining unspecified values and scope."""
         self._ensure_open()
