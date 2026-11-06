@@ -89,11 +89,14 @@ def test_nonbatch_add_really_trims_new_working_memory(manager):
     assert instance.get_current_memory_size(user_name="A") == {"WorkingMemory": 2}
 
 
-def test_default_batch_does_not_write_working_nodes(manager):
+def test_default_batch_writes_and_trims_working_nodes(manager):
     instance, db = manager
+    start = datetime.now()
     assert instance.add([item(key) for key in [M1, M2, M3]], user_name="A", use_batch=True) == []
-    assert stored(db) == []
-    assert instance.get_current_memory_size(user_name="A") == {}
+    end = datetime.now()
+    assert support.ids(db) == [M2, M3]
+    assert_generated(stored(db), ["新增工作记忆", "新增工作记忆"], start, end)
+    assert instance.get_current_memory_size(user_name="A") == {"WorkingMemory": 2}
 
 
 def test_replace_preslices_two_inputs_then_trims_old_nodes(manager):

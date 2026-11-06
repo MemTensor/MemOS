@@ -25,6 +25,7 @@ from memos.mem_os.utils.format_utils import (
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
+from memos.memories.textual.tree_text_memory.organize.manager import extract_working_binding_ids
 
 
 logger = get_logger(__name__)
@@ -426,17 +427,7 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
                 memories = []
 
             if memories:
-                import re
-
-                pattern = re.compile(r"\[working_binding:([0-9a-fA-F-]{36})\]")
-                for mem in memories:
-                    metadata = mem.get("metadata") or {}
-                    bg = metadata.get("background") or ""
-                    if not isinstance(bg, str):
-                        continue
-                    match = pattern.search(bg)
-                    if match:
-                        working_ids_to_delete.add(match.group(1))
+                working_ids_to_delete = extract_working_binding_ids(memories)
 
         if delete_mem_req.memory_ids is not None:
             # Unified deletion from text_mem (includes preferences)
@@ -445,7 +436,7 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
             naive_mem_cube.text_mem.delete_by_filter(
                 writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
             )
-        elif has_filter_mode:
+        else:  # The validation above leaves only filter mode.
             merged_filter = _merge_delete_filter(delete_mem_req.filter, quick_constraints)
             naive_mem_cube.text_mem.delete_by_filter(
                 writable_cube_ids=delete_mem_req.writable_cube_ids,

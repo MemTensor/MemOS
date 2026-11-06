@@ -45,8 +45,8 @@ def test_manager_required_failure_reaches_feedback(method, failure):
     manager.reorganizer = Mock()
     manager.memory_size = {"WorkingMemory": 20}
     manager.graph_store = Mock(remove_oldest_memory=Mock(side_effect=failure))
-    manager._add_memory_to_db = Mock(side_effect=failure)
-    manager._add_to_graph_memory = Mock(return_value="done")
+    manager.graph_store.add_nodes_batch.side_effect = failure
+    manager.is_reorganize = False
     memory = TextualMemoryItem(memory="old", metadata={"memory_type": "LongTermMemory"})
     if method == "_add_memories_parallel":
         manager._process_memory = Mock(side_effect=failure)
@@ -60,44 +60,15 @@ def test_manager_required_failure_reaches_feedback(method, failure):
     assert caught.value is failure
 
 
-def test_same_identity_working_write_finishes_before_graph_submission(monkeypatch):
-    manager = MemoryManager.__new__(MemoryManager)
-    manager.reorganizer = Mock()
-    manager._add_memory_to_db = Mock(return_value="working")
-    manager._add_to_graph_memory = Mock(return_value="long")
-    events = []
-
-    class Future:
-        def __init__(self, fn, args, kwargs):
-            self.fn, self.args, self.kwargs = fn, args, kwargs
-
-        def result(self):
-            result = self.fn(*self.args, **self.kwargs)
-            events.append("working_done" if self.fn is manager._add_memory_to_db else "graph_done")
-            return result
-
-    class Executor:
-        def __init__(self, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def submit(self, fn, *args, **kwargs):
-            if fn is manager._add_to_graph_memory:
-                assert "working_done" in events
-            return Future(fn, args, kwargs)
-
-    monkeypatch.setattr(
-        "memos.memories.textual.tree_text_memory.organize.manager.ContextThreadPoolExecutor",
-        Executor,
-    )
-    assert manager._process_memory(
-        TextualMemoryItem(memory="one", metadata={"memory_type": "LongTermMemory"}), "A"
-    ) == ["long"]
+def test_working_and_graph_are_submitted_in_one_write():
+    manager = MemoryManager(Mock(), Mock(), Mock())
+    memory = TextualMemoryItem(memory="one", metadata={"memory_type": "LongTermMemory"})
+    assert manager._process_memory(memory, "A") == [memory.id]
+    manager.graph_store.add_node.assert_not_called()
+    manager.graph_store.add_nodes_batch.assert_called_once()
+    working, graph = manager.graph_store.add_nodes_batch.call_args.args[0]
+    assert working["id"] != graph["id"] == memory.id
+    assert graph["metadata"]["working_binding"] == working["id"]
 
 
 @pytest.mark.parametrize("error", [GraphDBError("uncertain write"), ValueError("invalid")])

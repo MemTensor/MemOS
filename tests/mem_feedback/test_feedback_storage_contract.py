@@ -1,6 +1,5 @@
 """Regression branches around the Feedback boundaries changed for storage errors."""
 
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -159,61 +158,41 @@ def manager():
     m.reorganizer = Mock()
     m.memory_size = {"WorkingMemory": 20}
     m.graph_store = Mock()
-    m._add_memory_to_db = Mock(return_value="working")
-    m._add_to_graph_memory = Mock(return_value="graph")
+    m.is_reorganize = False
     return m
 
 
 @pytest.mark.parametrize(
-    "kind,result",
-    [
-        ("WorkingMemory", []),
-        ("Context", []),
-        ("RawFileMemory", ["graph"]),
-        ("LongTermMemory", ["graph"]),
-    ],
+    "kind", ["WorkingMemory", "OuterMemory", "Context", "RawFileMemory", "LongTermMemory"]
 )
-def test_manager_selected_kinds(manager, kind, result):
-    assert (
-        manager._process_memory(
-            SimpleNamespace(id="id", metadata=SimpleNamespace(memory_type=kind)), "A"
-        )
-        == result
-    )
-
-
-@pytest.mark.parametrize("stage", ["working", "graph"])
-@pytest.mark.parametrize(
-    "failure", [GraphDBError("storage"), ValueError("input"), RuntimeError("optional")]
-)
-def test_manager_update_failure_kind(manager, stage, failure):
-    target = manager._add_memory_to_db if stage == "working" else manager._add_to_graph_memory
-    target.side_effect = failure
-    memory = TextualMemoryItem(memory="one", metadata={"memory_type": "LongTermMemory"})
-    if isinstance(failure, GraphDBError | ValueError):
-        with pytest.raises(type(failure)):
-            manager._process_memory(memory, "A")
+def test_manager_selected_kinds(manager, kind):
+    memory = TextualMemoryItem(memory="one", metadata={"memory_type": kind})
+    expected = [memory.id] if kind in {"RawFileMemory", "LongTermMemory"} else []
+    assert manager._process_memory(memory, "A") == expected
+    if kind == "Context":
+        manager.graph_store.add_nodes_batch.assert_not_called()
     else:
-        assert manager._process_memory(memory, "A") == (["graph"] if stage == "working" else [])
+        assert manager.graph_store.add_nodes_batch.call_args.kwargs == {"user_name": "A"}
 
 
-@pytest.mark.parametrize("result", [None, ""])
-def test_manager_non_id_result(manager, result):
-    manager._add_to_graph_memory.return_value = result
-    assert (
-        manager._process_memory(
-            TextualMemoryItem(memory="one", metadata={"memory_type": "RawFileMemory"}), "A"
-        )
-        == []
-    )
+@pytest.mark.parametrize(
+    "failure", [GraphDBError("storage"), ValueError("input"), RuntimeError("driver")]
+)
+def test_manager_update_failure_kind(manager, failure):
+    manager.graph_store.add_nodes_batch.side_effect = failure
+    memory = TextualMemoryItem(memory="one", metadata={"memory_type": "LongTermMemory"})
+    with pytest.raises(type(failure)) as caught:
+        manager._process_memory(memory, "A")
+    assert caught.value is failure
 
 
-def test_manager_parallel_optional_failure_and_empty(manager):
+def test_manager_parallel_failure_and_empty(manager):
     manager._process_memory = Mock(return_value=["id"])
     assert manager._add_memories_parallel([Mock()], "A") == ["id"]
     assert manager._add_memories_parallel([], "A") == []
-    manager._process_memory.side_effect = RuntimeError("optional")
-    assert manager._add_memories_parallel([Mock()], "A") == []
+    manager._process_memory.side_effect = RuntimeError("write")
+    with pytest.raises(RuntimeError):
+        manager._add_memories_parallel([Mock()], "A")
     manager._cleanup_working_memory("A")
     manager.graph_store.remove_oldest_memory.side_effect = RuntimeError("optional")
     manager._cleanup_working_memory("A")
