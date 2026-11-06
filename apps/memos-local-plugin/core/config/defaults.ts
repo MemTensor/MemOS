@@ -282,6 +282,10 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
       bgLlmConcurrency: 2,
     },
     retrieval: {
+      // Confine turn-start recall to the calling Session by default. A trace
+      // is a transcript, and injecting another Session's transcript makes the
+      // agent adopt that conversation as its own history (MemOS#1532).
+      recallScope: "session",
       tier1TopK: 3,
       tier2TopK: 5,
       tier3TopK: 2,

@@ -463,6 +463,21 @@ const AlgorithmSchema = Type.Object({
     bgLlmConcurrency: NumberInRange(2, 1, 8),
   }, { default: {} }),
   retrieval: Type.Object({
+    /**
+     * Whether automatic (turn-start) recall may read traces written by other
+     * Sessions. A trace is a transcript (`[user] … / [assistant] …`), so
+     * injecting another Session's transcript makes the agent adopt that
+     * conversation as its own history (MemOS#1532).
+     *
+     * Only the turn-start injection path is confined. Explicit searches
+     * (`memos_search`), decision-repair and sub-agent retrieval stay
+     * profile-wide, because those paths deliberately look across history.
+     * L2/L3 artifacts are never confined by this switch either.
+     */
+    recallScope: Type.Union([
+      Type.Literal("session"),
+      Type.Literal("profile"),
+    ], { default: "session" }),
     /** How many Skill snippets to inject at turn start. */
     tier1TopK: NumberInRange(3, 0, 100),
     /** How many trace/episode snippets to inject. */

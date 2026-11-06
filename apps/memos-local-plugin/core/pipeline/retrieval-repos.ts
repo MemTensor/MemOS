@@ -12,7 +12,34 @@ import type { Repos } from "../storage/repos/index.js";
 import type { RuntimeNamespace, TraceId } from "../../agent-contract/dto.js";
 import { isVisibleTo, visibilityWhere } from "../runtime/namespace.js";
 
-export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): RetrievalRepos {
+export interface RetrievalRepoOptions {
+  /**
+   * `session` confines L1 trace reads to `namespace.sessionKey`; anything else
+   * (the default) leaves recall profile-wide.
+   *
+   * A trace is a verbatim transcript (`[user] … / [assistant] …`). Injecting
+   * another Session's transcript makes the agent adopt that conversation as
+   * its own history, which is MemOS#1532. Only the turn-start injection path
+   * sets this; explicit searches, decision-repair and sub-agent retrieval
+   * deliberately keep looking across history.
+   */
+  recallScope?: "session" | "profile";
+}
+
+export function wrapRetrievalRepos(
+  repos: Repos,
+  namespace: RuntimeNamespace,
+  options: RetrievalRepoOptions = {},
+): RetrievalRepos {
+  // Absent or non-string `sessionKey` fails open to profile-wide recall: a
+  // missing Session id must never silently confine recall to a Session that
+  // has no rows.
+  const sessionKey
+    = options.recallScope === "session"
+    && typeof namespace.sessionKey === "string"
+    && namespace.sessionKey.length > 0
+      ? namespace.sessionKey
+      : undefined;
   return {
     skills: {
       searchByVector(query, k, opts) {
@@ -47,21 +74,21 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
         return repos.traces.searchByVector(
           query,
           k,
-          mergeVisibility(opts, namespace),
+          mergeVisibility(opts, namespace, "", sessionKey),
         );
       },
       searchByText(ftsMatch, k, opts) {
         return repos.traces.searchByText(
           ftsMatch,
           k,
-          mergeVisibility(opts, namespace, "t"),
+          mergeVisibility(opts, namespace, "t", sessionKey),
         );
       },
       searchByPattern(terms, k, opts) {
         return repos.traces.searchByPattern(
           terms,
           k,
-          mergeVisibility(opts, namespace),
+          mergeVisibility(opts, namespace, "", sessionKey),
         );
       },
       getManyByIds(ids) {
@@ -85,7 +112,7 @@ export function wrapRetrievalRepos(repos: Repos, namespace: RuntimeNamespace): R
         const rows = repos.traces.searchByErrorSignature(
           fragments,
           limit,
-          mergeVisibility(opts, namespace),
+          mergeVisibility(opts, namespace, "", sessionKey),
         );
         return rows.filter((r) => isVisibleTo(r, namespace)).map((r) => ({
           id: r.id,
@@ -197,16 +224,29 @@ function mergeVisibility<T extends {
   opts: T | undefined,
   namespace: RuntimeNamespace,
   alias = "",
+  sessionKey?: string,
 ): T {
   const visible = visibilityWhere(namespace, alias);
+  // The pin goes into SQL rather than a post-filter so a foreign Session's
+  // rows cannot consume the LIMIT budget (`k=1` would otherwise come back
+  // empty). The parameter name is deliberately distinct from the tier-2
+  // `visible_context_*` / `exclude_session_id` params it is merged after.
+  const pin = sessionKey === undefined
+    ? null
+    : {
+        sql: `${alias ? `${alias}.` : ""}session_id = @vis_recall_session_key`,
+        params: { vis_recall_session_key: sessionKey },
+      };
+  const scopeSql = pin ? `(${visible.sql}) AND (${pin.sql})` : visible.sql;
   return {
     ...(opts ?? {}),
     where: opts?.where
-      ? `(${opts.where}) AND (${visible.sql})`
-      : visible.sql,
+      ? `(${opts.where}) AND (${scopeSql})`
+      : scopeSql,
     params: {
       ...(opts?.params ?? {}),
       ...visible.params,
+      ...(pin?.params ?? {}),
     },
   } as T;
 }
@@ -235,3 +275,4 @@ function normaliseSkillDecisionGuidance(
         : [],
   };
 }
+

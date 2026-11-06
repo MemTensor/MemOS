@@ -222,6 +222,14 @@ export interface RankedSnippet {
  * build minimal configs without standing up the TypeBox defaults.
  */
 export interface RetrievalConfig {
+  /**
+   * Runtime marker: whether this particular retrieval is pinned to its
+   * Session. `buildRetrievalDeps` seeds it from the on-disk preference;
+   * `orchestrator.retrievalDepsFor` then narrows it to `"profile"` for every
+   * path except turn-start automatic injection. Optional so hand-written
+   * configs in tests and embedders stay valid; absent means no pin.
+   */
+  recallScope?: "session" | "profile";
   tier1TopK: number;
   tier2TopK: number;
   tier3TopK: number;
