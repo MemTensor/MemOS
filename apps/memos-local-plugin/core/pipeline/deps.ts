@@ -141,6 +141,7 @@ export function extractAlgorithmConfig(
     skill: alg.skill,
     feedback: alg.feedback,
     retrieval: {
+      recallScope: alg.retrieval.recallScope,
       tier1TopK: alg.retrieval.tier1TopK,
       tier2TopK: alg.retrieval.tier2TopK,
       tier3TopK: alg.retrieval.tier3TopK,

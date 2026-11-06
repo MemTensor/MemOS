@@ -52,6 +52,13 @@ interface AlgorithmBlock {
   lightweightMemory?: {
     enabled?: boolean;
   };
+  retrieval?: {
+    /**
+     * `session` (default) confines turn-start automatic recall to the calling
+     * Session; `profile` restores cross-session recall. See MemOS#1532.
+     */
+    recallScope?: "session" | "profile";
+  };
 }
 
 interface ResolvedConfig {
@@ -1002,6 +1009,19 @@ function GeneralTab({
           <ToggleSwitch
             checked={algorithm.lightweightMemory?.enabled === false}
             onChange={(v) => onPatchAlgorithm({ lightweightMemory: { enabled: !v } })}
+          />
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="hstack" style="justify-content:space-between;margin-bottom:var(--sp-2)">
+          <div>
+            <h3 class="card__title">{t("settings.general.crossSessionRecall")}</h3>
+            <p class="card__subtitle">{t("settings.general.crossSessionRecall.desc")}</p>
+          </div>
+          <ToggleSwitch
+            checked={(algorithm.retrieval?.recallScope ?? "session") === "profile"}
+            onChange={(v) => onPatchAlgorithm({ retrieval: { recallScope: v ? "profile" : "session" } })}
           />
         </div>
       </section>

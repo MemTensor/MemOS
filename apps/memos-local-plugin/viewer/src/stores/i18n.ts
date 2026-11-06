@@ -959,6 +959,9 @@ const en = {
   "settings.general.lightweightMemory": "Enable memory self-evolution",
   "settings.general.lightweightMemory.desc":
     "Automatically distill tasks, experiences, environment knowledge and skills beyond basic summary memory. Uses more model calls and is best for heavy memory workflows. Save and restart to apply.",
+  "settings.general.crossSessionRecall": "Allow cross-session recall",
+  "settings.general.crossSessionRecall.desc":
+    "Off (default): turn-start automatic recall only injects traces written by the calling session. On: sessions sharing this home and profileId can recall each other's conversations — convenient, but the agent may mistake another session's words for its own history. Explicit searches and decision repair always stay cross-session. Save and restart to apply.",
   "settings.general.detailedLogs": "Show detailed debug logs",
   "settings.general.detailedLogs.desc":
     "Enable chain view, failure-only filtering, and task, experience, skill, environment and system log categories.",
@@ -1835,6 +1838,9 @@ const zh: Record<TranslationKey, string> = {
   "settings.general.lightweightMemory": "启用记忆自进化",
   "settings.general.lightweightMemory.desc":
     "在基础摘要记忆之外，自动沉淀任务、经验、环境认知和技能。会调用更多模型能力，适合重度记忆使用场景。保存并重启后生效。",
+  "settings.general.crossSessionRecall": "允许跨会话召回",
+  "settings.general.crossSessionRecall.desc":
+    "关闭（默认）：回合开始时的自动召回只注入本会话写入的对话记录。开启：共用同一目录且 profileId 相同的会话可以互相召回对方的对话——方便，但 AI 可能把别的会话里的话当成自己的历史。主动搜索和历史修复始终跨会话。保存并重启后生效。",
   "settings.general.detailedLogs": "显示详细调试日志",
   "settings.general.detailedLogs.desc":
     "开启后显示链路视图、仅看失败筛选，以及任务、经验、技能、环境认知和系统日志分类。",
