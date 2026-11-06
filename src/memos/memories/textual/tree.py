@@ -14,6 +14,7 @@ from memos.configs.reranker import RerankerConfigFactory
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
+from memos.exceptions import MemoryError
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
 from memos.graph_dbs.opengauss import OpenGaussGraphDB
 from memos.lifecycle import CloseGuard
@@ -535,43 +536,47 @@ class TreeTextMemory(BaseTextMemory):
             self.graph_store.update_node(related_id, updates, user_name=user_name)
 
     def load(self, dir: str, user_name: str | None = None) -> None:
+        """Read a graph file and merge it atomically into the selected Cube."""
+        memory_file = os.path.join(dir, self.config.memory_filename)
         try:
-            memory_file = os.path.join(dir, self.config.memory_filename)
-
-            if not os.path.exists(memory_file):
-                logger.warning(f"Memory file not found: {memory_file}")
-                return
-
             with open(memory_file, encoding="utf-8") as f:
                 memories = json.load(f)
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise MemoryError(f"Unable to read memory file: {memory_file}") from error
 
-            self.graph_store.import_graph(memories, user_name=user_name)
-            logger.info(f"Loaded {len(memories)} memories from {memory_file}")
-
-        except FileNotFoundError:
-            logger.error(f"Memory file not found in directory: {dir}")
-        except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON from memory file: {e}")
-        except Exception as e:
-            logger.error(f"An error occurred while loading memories: {e}")
+        self.graph_store.import_graph(memories, user_name=user_name)
+        logger.info("Loaded memories from %s", memory_file)
 
     def dump(self, dir: str, include_embedding: bool = False, user_name: str | None = None) -> None:
-        """Dump memories to os.path.join(dir, self.config.memory_filename)"""
+        """Publish a single-Cube graph file after it has been fully written."""
+        options = {"status": []} if isinstance(self.graph_store, OpenGaussGraphDB) else {}
+        json_memories = self.graph_store.export_graph(
+            include_embedding=include_embedding, user_name=user_name, **options
+        )
+        memory_file = os.path.join(dir, self.config.memory_filename)
+        temporary_path = None
         try:
-            json_memories = self.graph_store.export_graph(
-                include_embedding=include_embedding, user_name=user_name
-            )
-
             os.makedirs(dir, exist_ok=True)
-            memory_file = os.path.join(dir, self.config.memory_filename)
-            with open(memory_file, "w", encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=dir, prefix=".memos-", suffix=".json", delete=False
+            ) as f:
+                temporary_path = f.name
                 json.dump(json_memories, f, indent=4, ensure_ascii=False)
-
-            logger.info(f"Dumped {len(json_memories.get('nodes'))} memories to {memory_file}")
-
-        except Exception as e:
-            logger.error(f"An error occurred while dumping memories: {e}")
-            raise
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, memory_file)
+            temporary_path = None
+        except (OSError, TypeError, ValueError) as error:
+            raise MemoryError(f"Unable to write memory file: {memory_file}") from error
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.exception("Unable to remove unpublished memory file %s", temporary_path)
+        logger.info("Dumped memories to %s", memory_file)
 
     def drop(self, keep_last_n: int = 30) -> None:
         """

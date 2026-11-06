@@ -55,3 +55,15 @@ Expect HTTP 422 for request-model type/shape errors, 400 for invalid range/filte
 Direct `TreeTextMemory` and `GeneralMemCube` instances close their own resources through `close()`. Injected graphs and memories remain borrowed. The API closes its shared graph after its Scheduler has finished using it; independently initialized Schedulers close their own graph. `Scheduler.stop()` stops work, while `close()` ends the lifecycle. Final close rejects new work and lazy initialization, waits for running tasks and recovery, reports cleanup failures, and can retry incomplete cleanup. Successful repeated close is a no-op.
 
 Graph adapters without an explicit `close` are skipped for compatibility; that does not establish that their resources were released. This change does not add complete Scheduler restart support. The combined Tree `drop` workflow, non-default Feedback TFIDF, actual Java integration, full service HTTP E2E, and production-scale performance require separate validation.
+
+TreeTextMemory.dump exports every state from one Cube. Its default omits vectors;
+pass `include_embedding=True` for a full logical backup. GeneralMemCube.dump
+requests vectors for openGauss Tree memory automatically. Files are published
+with a same-directory atomic replacement only after writing, flushing, syncing,
+and closing succeeds. A failed export or write preserves the previous file.
+This guarantee covers one memory file, not the Cube's entire directory.
+
+An explicit load fails on missing, unreadable, or invalid JSON files with
+`memos.exceptions.MemoryError`. Database errors retain their cause. Restoration
+is an atomic merge into the same Cube: it preserves nodes and edges absent from
+the file. Importing a node without an embedding clears its existing embedding.
