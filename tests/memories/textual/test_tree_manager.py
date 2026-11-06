@@ -72,8 +72,9 @@ def test_process_memory_adds_nodes(memory_manager):
             confidence=80.0,
         ),
     )
-    memory_manager._process_memory(memory)  # Only pass the single memory item
-    assert memory_manager.graph_store.add_node.called
+    memory_manager._process_memory(memory)
+    nodes = memory_manager.graph_store.add_nodes_batch.call_args.args[0]
+    assert len(nodes) == 2 and nodes[0]["id"] != nodes[1]["id"]
 
 
 def test_add_to_graph_memory_merges(memory_manager, mock_graph_store):

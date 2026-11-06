@@ -175,7 +175,15 @@ def test_default_feedback_keyword_replacement_real_mutation(feedback, kind):
     assert db.get_node(ids["other"])["memory"] == "旧词 内容"
     assert db.get_node(ids["deleted"])["metadata"]["status"] == "deleted"
     assert db.export_graph(user_name="B", status=[], include_embedding=True) == before_b
-    assert db.search_by_keywords_like("%新词%") == [{"id": new_id}]
+    expected_ids = {new_id}
+    if kind == "LongTermMemory":
+        working_id = node["metadata"]["working_binding"]
+        assert working_id != new_id
+        working = db.get_node(working_id, include_embedding=True)
+        assert working["metadata"]["memory_type"] == "WorkingMemory"
+        assert working["memory"] == "新词 内容" and working["metadata"]["embedding"] == [0, 1, 0]
+        expected_ids.add(working_id)
+    assert db.search_by_keywords_like("%新词%") == [{"id": value} for value in sorted(expected_ids)]
     assert new_id in [n["id"] for n in db.search_by_embedding([0, 1, 0], scope=kind)]
     assert new_id in [n["id"] for n in db.search_by_fulltext(["新词"], scope=kind)]
 
