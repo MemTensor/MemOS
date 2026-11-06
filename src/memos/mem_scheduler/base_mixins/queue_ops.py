@@ -348,13 +348,13 @@ class BaseSchedulerQueueMixin:
         if self._monitor_thread:
             self._monitor_thread.join(timeout=2.0)
 
-        if self.dispatcher:
-            logger.info("Shutting down dispatcher...")
-            self.dispatcher.shutdown()
-
         if self.dispatcher_monitor:
             logger.info("Shutting down monitor...")
             self.dispatcher_monitor.stop()
+
+        if self.dispatcher:
+            logger.info("Shutting down dispatcher...")
+            self.dispatcher.shutdown()
 
     @property
     def handlers(self) -> dict[str, Callable]:

@@ -1,4 +1,5 @@
 import os
+import time
 
 from typing import Literal
 
@@ -6,7 +7,7 @@ from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.utils import get_json_file_model_schema
 from memos.exceptions import ConfigurationError, MemCubeError
 from memos.graph_dbs.opengauss import OpenGaussGraphDB
-from memos.lifecycle import CloseGuard
+from memos.lifecycle import CloseState
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.utils import download_repo, merge_config_with_default
@@ -26,17 +27,27 @@ class GeneralMemCube(BaseMemCube):
     def __init__(self, config: GeneralMemCubeConfig):
         """Initialize the MemCube with a configuration."""
         self.config = config
-        self._close_guard = CloseGuard()
+        self._close_state = CloseState()
         self._owned_memories = []
+        self._text_mem: BaseTextMemory | None = None
+        self._act_mem: BaseActMemory | None = None
+        self._para_mem: BaseParaMemory | None = None
+        self._pref_mem: BaseTextMemory | None = None
         try:
-            for name in ("text_mem", "act_mem", "para_mem", "pref_mem"):
-                memory_config = getattr(config, name)
-                memory = None
-                if memory_config.backend != "uninitialized":
-                    memory = MemoryFactory.from_config(memory_config)
-                    if all(memory is not owned for owned in self._owned_memories):
-                        self._owned_memories.append(memory)
-                setattr(self, "_" + name, memory)
+            time_start = time.time()
+            if config.text_mem.backend != "uninitialized":
+                self._text_mem = MemoryFactory.from_config(config.text_mem)
+                self._owned_memories.append(self._text_mem)
+            logger.info("init_text_mem in %s seconds", time.time() - time_start)
+            if config.act_mem.backend != "uninitialized":
+                self._act_mem = MemoryFactory.from_config(config.act_mem)
+                self._owned_memories.append(self._act_mem)
+            if config.para_mem.backend != "uninitialized":
+                self._para_mem = MemoryFactory.from_config(config.para_mem)
+                self._owned_memories.append(self._para_mem)
+            if config.pref_mem.backend != "uninitialized":
+                self._pref_mem = MemoryFactory.from_config(config.pref_mem)
+                self._owned_memories.append(self._pref_mem)
         except BaseException:
             try:
                 self.close()
@@ -46,11 +57,15 @@ class GeneralMemCube(BaseMemCube):
 
     def close(self) -> None:
         """Close memories created by this Cube, including subsequently replaced ones."""
-        self._close_guard.close(self._close_owned_memories)
+        self._close_state.close(self._close_owned_memories)
 
     def _close_owned_memories(self) -> None:
         errors = []
+        seen = set()
         for memory in self._owned_memories[:]:
+            if id(memory) in seen:
+                continue
+            seen.add(id(memory))
             try:
                 close = getattr(memory, "close", None)
                 if callable(close):

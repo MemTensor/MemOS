@@ -1,7 +1,7 @@
 """R09-04/05: event barriers make close/initialization/recovery races deterministic."""
 
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from threading import Event, Thread
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -26,8 +26,7 @@ def owned_components():
 
 
 def wait_for_close(component):
-    with component._close_guard.condition:
-        assert component._close_guard.condition.wait_for(lambda: component._close_guard.started, 3)
+    assert component._close_state.closing.wait(3)
 
 
 def test_lazy_properties_share_one_creation(monkeypatch, scheduler):
@@ -43,6 +42,16 @@ def test_lazy_properties_share_one_creation(monkeypatch, scheduler):
     scheduler.close()
     scheduler.close()
     components["graph_db"].close.assert_called_once_with()
+
+
+def test_nonfinal_stop_quiesces_monitor_before_dispatcher(scheduler):
+    order = []
+    scheduler._running = True
+    scheduler.stop_consumer = Mock(side_effect=lambda: order.append("consumer"))
+    scheduler.dispatcher_monitor = Mock(stop=Mock(side_effect=lambda: order.append("monitor")))
+    scheduler.dispatcher.shutdown = Mock(side_effect=lambda: order.append("dispatcher"))
+    scheduler.stop()
+    assert order == ["consumer", "monitor", "dispatcher"]
 
 
 @pytest.mark.parametrize("property_name", ["mem_cube", "feedback_server"])
@@ -201,14 +210,19 @@ def test_recovery_cannot_publish_new_executor_after_close(monkeypatch, scheduler
         "memos.mem_scheduler.monitors.dispatcher_monitor.ContextThreadPoolExecutor", new_executor
     )
     scheduler.rabbitmq_close = Mock(side_effect=closing.set)
-    with ThreadPoolExecutor(2) as pool:
-        recovery = pool.submit(monitor._restart_pool, "dispatcher", monitor._pools["dispatcher"])
+    # Recovery belongs to the monitor thread; shutdown joins that actual owner.
+    monitor._monitor_thread = Thread(
+        target=monitor._restart_pool, args=("dispatcher", monitor._pools["dispatcher"])
+    )
+    with ThreadPoolExecutor(1) as pool:
+        monitor._monitor_thread.start()
         assert entered.wait(3)
         close = pool.submit(scheduler.close)
         wait_for_close(monitor)
         assert not close.done()
         release.set()
-        recovery.result(3)
+        monitor._monitor_thread.join(3)
+        assert not monitor._monitor_thread.is_alive()
         close.result(3)
     assert scheduler.dispatcher.dispatcher_executor is old
     assert candidate._shutdown
@@ -451,9 +465,71 @@ def test_monitor_start_duplicate_stop_and_self_join():
     assert not monitor._monitor_thread.is_alive()
     monitor._monitor_thread = threading.current_thread()
     with pytest.raises(MemOSError):
+        monitor.stop()
+    with pytest.raises(MemOSError):
         monitor.close()
     monitor._monitor_thread = None
     monitor.close()
+
+
+def test_retired_worker_cannot_close_owner_and_recovery_keeps_wait_log(
+    scheduler, monkeypatch, caplog
+):
+    import memos.mem_scheduler.monitors.dispatcher_monitor as module
+
+    monitor = SchedulerDispatcherMonitor({})
+    monitor.initialize(scheduler.dispatcher)
+    scheduler.dispatcher_monitor = monitor
+    entered, released = Event(), Event()
+
+    def work():
+        entered.set()
+        assert released.wait(3)
+        with pytest.raises(MemOSError):
+            scheduler.close()
+        with pytest.raises(MemOSError):
+            scheduler.dispatcher.close()
+
+    task = scheduler.dispatcher.dispatcher_executor.submit(work)
+    assert entered.wait(3)
+    monkeypatch.setattr(module, "perf_counter", Mock(side_effect=[0, 2]))
+    try:
+        monitor._restart_pool("dispatcher", monitor._pools["dispatcher"])
+    finally:
+        released.set()
+    task.result(3)
+    assert "Long lock wait: 2.000s" in caplog.text
+    assert not scheduler._close_state.closing.is_set()
+    scheduler.close()
+
+
+def test_nonfinal_stop_without_optional_dispatcher_or_monitor(scheduler):
+    dispatcher = scheduler.dispatcher
+    scheduler._running = True
+    scheduler.stop_consumer = Mock()
+    scheduler._monitor_thread = Mock()
+    scheduler.dispatcher = None
+    try:
+        scheduler.stop()
+        scheduler._monitor_thread.join.assert_called_once_with(timeout=2.0)
+    finally:
+        scheduler.dispatcher = dispatcher
+        scheduler._monitor_thread = None
+    scheduler.close()
+
+
+def test_resource_close_callback_cannot_recursively_close_owner():
+    from memos.lifecycle import CloseState
+
+    state = CloseState()
+    with pytest.raises(MemOSError, match="callback"):
+        state.close(lambda: state.close(lambda: None))
+    with pytest.raises(MemOSError, match="clos"):
+        state.ensure_open()
+    cleanup = Mock()
+    state.close(cleanup)
+    state.close(cleanup)
+    cleanup.assert_called_once()
 
 
 def test_rabbitmq_closed_connection_and_exited_thread(scheduler):
