@@ -50,10 +50,12 @@ const DEFAULT_MAX_TOKENS = 1024;
  * same `maxTokens` truncates at the same point. Thinking models share one
  * budget between hidden reasoning and the answer, so a small budget can come
  * back as an empty 200 OK. The retry therefore grows the budget (never shrinks
- * it) up to this ceiling.
+ * it) up to this ceiling. The ceiling sits above the 4096 default that
+ * dedicated clients such as `l3Llm` / `skillEvolver` use, so their retries can
+ * still grow.
  */
 const LENGTH_RETRY_MIN_TOKENS = 1024;
-const LENGTH_RETRY_MAX_TOKENS = 4096;
+const LENGTH_RETRY_MAX_TOKENS = 8192;
 const LENGTH_RETRY_GROWTH = 4;
 
 export function nextLengthRetryMaxTokens(current: number | undefined): number {
@@ -563,7 +565,16 @@ export function createLlmClientWithProvider(
           // A truncated reply is truncated again at the same limit, so give
           // the retry more room (see LENGTH_RETRY_* above).
           if (completion.finishReason === "length") {
-            call.maxTokens = nextLengthRetryMaxTokens(call.maxTokens);
+            const fromMaxTokens = call.maxTokens;
+            call.maxTokens = nextLengthRetryMaxTokens(fromMaxTokens);
+            // Make the escalation (or a retry that cannot grow) visible in logs.
+            jsonLog.warn("length_retry_budget", {
+              op,
+              attempt,
+              fromMaxTokens,
+              toMaxTokens: call.maxTokens,
+              grew: call.maxTokens > (fromMaxTokens ?? 0),
+            });
           }
           continue;
         }

@@ -209,8 +209,10 @@ describe("llm/client", () => {
     expect(nextLengthRetryMaxTokens(160)).toBe(1024);
     expect(nextLengthRetryMaxTokens(512)).toBe(2048);
     expect(nextLengthRetryMaxTokens(1024)).toBe(4096);
-    expect(nextLengthRetryMaxTokens(2048)).toBe(4096);
+    // 4096 is the l3Llm / skillEvolver default; its retry must still grow.
+    expect(nextLengthRetryMaxTokens(4096)).toBe(8192);
     expect(nextLengthRetryMaxTokens(8192)).toBe(8192);
+    expect(nextLengthRetryMaxTokens(16384)).toBe(16384);
     expect(nextLengthRetryMaxTokens(undefined)).toBe(4096);
   });
 
