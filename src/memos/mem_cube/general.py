@@ -5,6 +5,7 @@ from typing import Literal
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.utils import get_json_file_model_schema
 from memos.exceptions import ConfigurationError, MemCubeError
+from memos.graph_dbs.opengauss import OpenGaussGraphDB
 from memos.lifecycle import CloseGuard
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
@@ -13,6 +14,7 @@ from memos.memories.activation.base import BaseActMemory
 from memos.memories.factory import MemoryFactory
 from memos.memories.parametric.base import BaseParaMemory
 from memos.memories.textual.base import BaseTextMemory
+from memos.memories.textual.tree import TreeTextMemory
 
 
 logger = get_logger(__name__)
@@ -129,7 +131,12 @@ class GeneralMemCube(BaseMemCube):
 
         # Dump specified memory types
         if "text_mem" in memory_types and self.text_mem:
-            self.text_mem.dump(dir)
+            if isinstance(self.text_mem, TreeTextMemory) and isinstance(
+                self.text_mem.graph_store, OpenGaussGraphDB
+            ):
+                self.text_mem.dump(dir, include_embedding=True)
+            else:
+                self.text_mem.dump(dir)
             logger.info(f"Dumped text_mem to {dir}")
 
         if "act_mem" in memory_types and self.act_mem:
