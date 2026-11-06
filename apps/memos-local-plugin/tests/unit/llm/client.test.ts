@@ -7,6 +7,7 @@ import {
   createLlmClientWithProvider,
   registerHostLlmBridge,
 } from "../../../core/llm/index.js";
+import { nextLengthRetryMaxTokens } from "../../../core/llm/client.js";
 import { initTestLogger } from "../../../core/logger/index.js";
 import type {
   LlmConfig,
@@ -169,6 +170,48 @@ describe("llm/client", () => {
       expect((err as MemosError).code).toBe(ERROR_CODES.LLM_OUTPUT_MALFORMED);
     }
     expect(fake.invocations).toBe(2);
+  });
+
+  it("completeJson gives a length-truncated retry a larger maxTokens", async () => {
+    const seen: Array<number | undefined> = [];
+    const provider: LlmProvider = {
+      name: "openai_compatible",
+      async complete(_m, opts) {
+        seen.push(opts.maxTokens);
+        return seen.length === 1
+          ? { text: "", finishReason: "length", durationMs: 1 }
+          : { text: '{"x":1}', finishReason: "stop", durationMs: 1 };
+      },
+    };
+    const client = createLlmClientWithProvider(cfg(), provider);
+    const r = await client.completeJson<{ x: number }>("ask", { maxTokens: 160 });
+    expect(r.value.x).toBe(1);
+    expect(seen).toEqual([160, 1024]);
+  });
+
+  it("completeJson keeps maxTokens on a retry that was not truncated", async () => {
+    const seen: Array<number | undefined> = [];
+    const provider: LlmProvider = {
+      name: "openai_compatible",
+      async complete(_m, opts) {
+        seen.push(opts.maxTokens);
+        return seen.length === 1
+          ? { text: "not json", finishReason: "stop", durationMs: 1 }
+          : { text: '{"x":1}', finishReason: "stop", durationMs: 1 };
+      },
+    };
+    const client = createLlmClientWithProvider(cfg(), provider);
+    await client.completeJson<{ x: number }>("ask", { maxTokens: 160 });
+    expect(seen).toEqual([160, 160]);
+  });
+
+  it("nextLengthRetryMaxTokens grows, caps, and never shrinks", () => {
+    expect(nextLengthRetryMaxTokens(160)).toBe(1024);
+    expect(nextLengthRetryMaxTokens(512)).toBe(2048);
+    expect(nextLengthRetryMaxTokens(1024)).toBe(4096);
+    expect(nextLengthRetryMaxTokens(2048)).toBe(4096);
+    expect(nextLengthRetryMaxTokens(8192)).toBe(8192);
+    expect(nextLengthRetryMaxTokens(undefined)).toBe(4096);
   });
 
   it("stream passes provider-native chunks through", async () => {

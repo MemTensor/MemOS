@@ -387,4 +387,18 @@ describe("retrieval/llm-filter", () => {
     );
     expect(llm.completeJson.mock.calls[0][1].maxTokens).toBeGreaterThan(512);
   });
+
+  it("LLM output budget leaves room for thinking models on short lists", async () => {
+    const llm: any = {
+      completeJson: vi.fn().mockResolvedValue({
+        value: { ranked: [1], sufficient: false },
+        servedBy: "fake",
+      }),
+    };
+    await llmFilterCandidates(
+      { query: "q", ranked: [trace("a", 0.9), trace("b", 0.8)] },
+      { llm, log, config: cfg },
+    );
+    expect(llm.completeJson.mock.calls[0][1].maxTokens).toBeGreaterThanOrEqual(1024);
+  });
 });

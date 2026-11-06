@@ -30,7 +30,9 @@ import type {
 } from "./types.js";
 
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
-const MIN_FILTER_OUTPUT_TOKENS = 160;
+// Thinking models spend part of max_tokens on hidden reasoning; at 160 they
+// routinely returned an empty answer with finishReason "length".
+const MIN_FILTER_OUTPUT_TOKENS = 1024;
 const MAX_FILTER_OUTPUT_TOKENS = 2048;
 
 export interface FilterInput {
