@@ -1,71 +1,57 @@
-"""Synchronization for terminal, retryable component cleanup."""
+"""Share the result of a terminal close attempt; resource owners handle draining."""
 
-from collections.abc import Callable, Iterator
-from concurrent.futures import Future
-from contextlib import contextmanager
-from threading import Condition, RLock
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from threading import Event, Lock, get_ident
 
 from memos.exceptions import MemOSError
 
 
-class CloseGuard:
-    """Share a close attempt without hiding failures or reopening the owner.
+@dataclass
+class _CloseAttempt:
+    owner: int
+    done: Event = field(default_factory=Event)
+    error: BaseException | None = None
 
-    Resource ownership and cleanup order remain with the component. The guard
-    only coordinates entry, in-flight operations and concurrent close callers.
-    """
+
+class CloseState:
+    """Keep concurrent close callers on one attempt without tracking operations."""
 
     def __init__(self) -> None:
-        self.condition = Condition(RLock())
-        self.started = False
+        self._lock = Lock()
+        self.closing = Event()
         self._closed = False
-        self._attempt: Future | None = None
-        self._active = 0
+        self._attempt: _CloseAttempt | None = None
 
     def ensure_open(self) -> None:
         """Reject new work once final close has started, including after failure."""
-        with self.condition:
-            if self.started:
-                raise MemOSError("Component is closing or closed")
-
-    @contextmanager
-    def operation(self) -> Iterator[None]:
-        """Register work which must finish before owned resources are released."""
-        with self.condition:
-            self.ensure_open()
-            self._active += 1
-        try:
-            yield
-        finally:
-            with self.condition:
-                self._active -= 1
-                self.condition.notify_all()
-
-    def wait_for_operations(self) -> None:
-        """Wait without holding a lock needed to publish or finish an operation."""
-        with self.condition:
-            self.condition.wait_for(lambda: self._active == 0)
+        if self.closing.is_set():
+            raise MemOSError("Component is closing or closed")
 
     def close(self, cleanup: Callable[[], None]) -> None:
         """Run cleanup once per attempt; retry only after a completed failure."""
-        with self.condition:
+        with self._lock:
             if self._closed:
                 return
             attempt = self._attempt
-            execute = attempt is None or attempt.done()
+            execute = attempt is None or attempt.done.is_set()
             if execute:
-                self.started = True
-                attempt = self._attempt = Future()
-                self.condition.notify_all()
+                self.closing.set()
+                attempt = self._attempt = _CloseAttempt(get_ident())
+            elif attempt.owner == get_ident():
+                raise MemOSError("A close callback cannot close its own owner")
         if not execute:
-            attempt.result()
+            attempt.done.wait()
+            if attempt.error is not None:
+                raise attempt.error
             return
         try:
             cleanup()
         except BaseException as error:
-            attempt.set_exception(error)
+            attempt.error = error
             raise
         else:
-            with self.condition:
+            with self._lock:
                 self._closed = True
-                attempt.set_result(None)
+        finally:
+            attempt.done.set()

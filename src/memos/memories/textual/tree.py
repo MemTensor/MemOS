@@ -17,7 +17,7 @@ from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.exceptions import MemoryError
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
 from memos.graph_dbs.opengauss import OpenGaussGraphDB
-from memos.lifecycle import CloseGuard
+from memos.lifecycle import CloseState
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.mem_reader.read_multi_modal.utils import detect_lang
@@ -58,7 +58,7 @@ class TreeTextMemory(BaseTextMemory):
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
 
-        self._close_guard = CloseGuard()
+        self._close_state = CloseState()
         self._owns_graph_store = True
         try:
             self.search_strategy = config.search_strategy
@@ -120,7 +120,7 @@ class TreeTextMemory(BaseTextMemory):
             if self._owns_graph_store and callable(close):
                 close()
 
-        self._close_guard.close(release)
+        self._close_state.close(release)
 
     def add(
         self,

@@ -3,13 +3,14 @@ from __future__ import annotations
 import os
 import threading
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from memos.api.lifecycle import shutdown_components
 from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
 from memos.exceptions import MemOSError
-from memos.lifecycle import CloseGuard
+from memos.lifecycle import CloseState
 from memos.log import get_logger
 from memos.mem_scheduler.base_mixins import (
     BaseSchedulerMemoryMixin,
@@ -51,6 +52,8 @@ from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerM
 
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     import redis
 
     from sqlalchemy.engine import Engine
@@ -85,8 +88,9 @@ class BaseScheduler(
     def __init__(self, config: BaseSchedulerConfig):
         """Initialize the scheduler with the given configuration."""
         super().__init__()
-        self._close_guard = CloseGuard()
-        self._initialization_lock = threading.Lock()
+        self._close_state = CloseState()
+        self._initialization_lock = threading.RLock()
+        self._entry_local = threading.local()
         self._stop_event = threading.Event()
         self._closed_parts = set()
         self.components = None
@@ -219,9 +223,9 @@ class BaseScheduler(
         mem_reader=None,
         redis_client: redis.Redis | None = None,
     ):
-        with self._close_guard.operation():
+        with self._lifecycle_entry():
             self._initialize_modules(chat_llm, process_llm, db_engine, mem_reader, redis_client)
-            self._close_guard.ensure_open()
+            self._close_state.ensure_open()
 
     def _initialize_modules(
         self,
@@ -307,7 +311,29 @@ class BaseScheduler(
 
     def close(self) -> None:
         """End this scheduler's lifecycle, draining users before its owned graph."""
-        self._close_guard.close(self._close_resources)
+        current = threading.current_thread()
+        owned_threads = [self._consumer_thread, self._monitor_thread, self._io_loop_thread]
+        if self.dispatcher_monitor is not None:
+            owned_threads.append(self.dispatcher_monitor._monitor_thread)
+        if (
+            getattr(self._entry_local, "active", False)
+            or self.dispatcher.is_worker_thread()
+            or any(current is thread for thread in owned_threads)
+        ):
+            raise MemOSError("Scheduler close must run outside its workers and initialization")
+        self._close_state.close(self._close_resources)
+
+    @contextmanager
+    def _lifecycle_entry(self) -> Iterator[None]:
+        """Serialize component creation/start with the owner's shutdown barrier."""
+        with self._initialization_lock:
+            self._close_state.ensure_open()
+            nested = getattr(self._entry_local, "active", False)
+            self._entry_local.active = True
+            try:
+                yield
+            finally:
+                self._entry_local.active = nested
 
     def _close_resources(self) -> None:
         errors = []
@@ -328,7 +354,10 @@ class BaseScheduler(
         self._stop_event.set()
         if self.dispatcher_monitor is not None:
             self.dispatcher_monitor.begin_close()
-        self._close_guard.wait_for_operations()
+        # Only initialization/start owns this lock. Release it before joining
+        # workers, which may need the same lock to observe the closing state.
+        with self._initialization_lock:
+            pass
         self._running = False
         self._stop_event.set()
         # An in-flight initialize_modules may have just created the monitor.
@@ -363,35 +392,35 @@ class BaseScheduler(
 
     def _ensure_components(self) -> None:
         with self._initialization_lock:
-            self._close_guard.ensure_open()
+            self._close_state.ensure_open()
             if self.components is None:
                 self.components = init_components()
             # Retain ownership even when close won the race; never publish late.
-            self._close_guard.ensure_open()
+            self._close_state.ensure_open()
             self.current_mem_cube = self.components["naive_mem_cube"]
             self._feedback_server = self.components["feedback_server"]
 
     def start(self) -> None:
-        with self._close_guard.operation():
+        with self._lifecycle_entry():
             super().start()
 
     def start_consumer(self) -> None:
-        with self._close_guard.operation():
+        with self._lifecycle_entry():
             self._stop_event.clear()
             super().start_consumer()
 
     def start_background_monitor(self) -> None:
-        with self._close_guard.operation():
+        with self._lifecycle_entry():
             super().start_background_monitor()
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]) -> None:
-        with self._close_guard.operation():
+        with self._lifecycle_entry():
             super().submit_messages(messages)
 
     @property
     def mem_cube(self) -> BaseMemCube:
         """The memory cube associated with this MemChat."""
-        with self._close_guard.operation():
+        with self._lifecycle_entry():
             if self.current_mem_cube is None and not self._borrowed_components:
                 self._ensure_components()
             return self.current_mem_cube
@@ -432,7 +461,7 @@ class BaseScheduler(
     @property
     def feedback_server(self) -> SimpleMemFeedback:
         """The memory cube associated with this MemChat."""
-        with self._close_guard.operation():
+        with self._lifecycle_entry():
             if self._feedback_server is None and not self._borrowed_components:
                 self._ensure_components()
             return self._feedback_server
@@ -444,8 +473,7 @@ class BaseScheduler(
     @mem_cube.setter
     def mem_cube(self, value: BaseMemCube) -> None:
         """The memory cube associated with this MemChat."""
-        with self._close_guard.condition:
-            self._close_guard.ensure_open()
+        with self._lifecycle_entry():
             self._borrowed_components = True
             self.current_mem_cube = value
             if self.retriever is not None:

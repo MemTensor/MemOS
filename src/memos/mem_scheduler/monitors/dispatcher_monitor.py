@@ -1,9 +1,11 @@
 import threading
 
+from time import perf_counter
+
 from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.context.context import ContextThread, ContextThreadPoolExecutor
 from memos.exceptions import MemOSError
-from memos.lifecycle import CloseGuard
+from memos.lifecycle import CloseState
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -24,7 +26,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
 
     def __init__(self, config: BaseSchedulerConfig):
         super().__init__()
-        self._close_guard = CloseGuard()
+        self._close_state = CloseState()
         self._stop_event = threading.Event()
         self._recovery_paused = False
         self.config: BaseSchedulerConfig = config
@@ -248,12 +250,15 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
             name: Name of the pool to restart
             pool_info: Dictionary containing pool configuration
         """
-        with self._close_guard.condition:
-            if self._close_guard.started or self._recovery_paused or self._restart_in_progress:
+        with self._pool_lock:
+            if (
+                self._close_state.closing.is_set()
+                or self._recovery_paused
+                or self._restart_in_progress
+            ):
                 return
             self._restart_in_progress = True
-            operation = self._close_guard.operation()
-            operation.__enter__()
+        logger.info("Attempting to restart thread pool %s", name)
         try:
             old_executor = pool_info["executor"]
             if old_executor not in self.dispatcher._retired_executors:
@@ -262,47 +267,48 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
             new_executor = ContextThreadPoolExecutor(
                 max_workers=pool_info["max_workers"],
                 thread_name_prefix=self.dispatcher.thread_name_prefix,
+                initializer=self.dispatcher._mark_worker,
             )
-            with self._close_guard.condition:
-                if self._close_guard.started or self._recovery_paused:
+            lock_started = perf_counter()
+            with self._pool_lock:
+                lock_wait = perf_counter() - lock_started
+                if lock_wait > 1:
+                    logger.warning("Long lock wait: %.3fs", lock_wait)
+                if self._close_state.closing.is_set() or self._recovery_paused:
                     self.dispatcher._retired_executors.append(new_executor)
                     return
                 self.dispatcher.dispatcher_executor = new_executor
                 self.dispatcher.thread_manager.thread_pool_executor = new_executor
-                with self._pool_lock:
-                    pool_info.update(
-                        executor=new_executor,
-                        failure_count=0,
-                        healthy=True,
-                        last_active=get_utc_now(),
-                    )
+                pool_info.update(
+                    executor=new_executor,
+                    failure_count=0,
+                    healthy=True,
+                    last_active=get_utc_now(),
+                )
             logger.info("Successfully restarted thread pool %s", name)
         except Exception:
             logger.exception("Failed to restart pool %s", name)
         finally:
-            with self._close_guard.condition:
+            with self._pool_lock:
                 self._restart_in_progress = False
-                operation.__exit__(None, None, None)
 
     def begin_close(self) -> None:
         """Block recovery publication before waiting for any in-flight work."""
-        with self._close_guard.condition:
-            self._close_guard.started = True
+        with self._pool_lock:
+            self._close_state.closing.set()
             self._recovery_paused = True
             self._running = False
             self._stop_event.set()
-            self._close_guard.condition.notify_all()
 
     def close(self) -> None:
         """End monitoring and recovery; executor ownership stays with dispatcher."""
-        self._close_guard.close(self._quiesce)
+        if self._monitor_thread is threading.current_thread():
+            raise MemOSError("Monitor cannot close from its own thread")
+        self._close_state.close(self._quiesce)
 
     def _quiesce(self) -> None:
         self.begin_close()
-        self._close_guard.wait_for_operations()
         if self._monitor_thread is not None:
-            if self._monitor_thread is threading.current_thread():
-                raise MemOSError("Monitor cannot close from its own thread")
             self._monitor_thread.join()
 
     def get_status(self, name: str | None = None) -> dict:
@@ -336,8 +342,8 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         Returns:
             bool: True if monitor started successfully, False if already running
         """
-        with self._close_guard.condition:
-            self._close_guard.ensure_open()
+        with self._pool_lock:
+            self._close_state.ensure_open()
             self._recovery_paused = False
             self._stop_event.clear()
             if self._running:
@@ -357,16 +363,18 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         Stop the monitoring thread and clean up all managed thread pools.
         Ensures proper shutdown of all monitored executors.
         """
+        if self._monitor_thread is threading.current_thread():
+            raise MemOSError("Monitor cannot stop from its own thread")
         if not self._running:
             return
 
         # Stop the monitoring loop
-        self._running = False
-        self._recovery_paused = True
-        self._stop_event.set()
-        self._close_guard.wait_for_operations()
+        with self._pool_lock:
+            self._running = False
+            self._recovery_paused = True
+            self._stop_event.set()
         if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=5)
+            self._monitor_thread.join()
 
         # Shutdown all registered pools
         with self._pool_lock:

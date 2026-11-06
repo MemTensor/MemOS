@@ -181,10 +181,7 @@ def test_scheduler_finishes_inflight_database_task_before_closing_pool(environme
         assert entered.wait(5)
         with ThreadPoolExecutor(1) as pool:
             closing = pool.submit(scheduler.close)
-            with scheduler._close_guard.condition:
-                assert scheduler._close_guard.condition.wait_for(
-                    lambda: scheduler._close_guard.started, 5
-                )
+            assert scheduler._close_state.closing.wait(5)
             assert not closing.done()
             release.set()
             running.result(5)

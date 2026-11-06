@@ -107,6 +107,19 @@ def test_cube_partial_construction_closes_created_memory(monkeypatch):
     first.close.assert_called_once_with()
 
 
+def test_cube_preserves_text_initialization_timing_log(monkeypatch, caplog):
+    memory = Mock()
+    monkeypatch.setattr(
+        "memos.mem_cube.general.MemoryFactory.from_config", Mock(return_value=memory)
+    )
+    with caplog.at_level("INFO"):
+        cube = GeneralMemCube(
+            cube_config("tree_text", "uninitialized", "uninitialized", "uninitialized")
+        )
+    assert "init_text_mem in " in caplog.text
+    cube.close()
+
+
 def test_cube_load_failure_closes_new_cube(monkeypatch):
     config = cube_config("tree_text", "uninitialized", "uninitialized", "uninitialized")
     monkeypatch.setattr(

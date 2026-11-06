@@ -10,6 +10,7 @@ import pytest
 from memos.api.handlers import component_init
 from memos.api.lifecycle import shutdown_components
 from memos.exceptions import GraphDBError, MemOSError
+from memos.lifecycle import CloseState
 from memos.mem_scheduler.general_modules import init_components_for_scheduler as standalone
 
 
@@ -19,7 +20,7 @@ def test_api_closes_graph_without_active_scheduler(scheduler):
     components = {"graph_db": graph, "mem_scheduler": scheduler}
     shutdown_components(components)
     shutdown_components(components)
-    graph.close.assert_called_once_with()
+    assert graph.close.call_count == 2
 
 
 def test_api_waits_for_scheduler_and_retries_failed_cleanup():
@@ -36,20 +37,21 @@ def test_api_waits_for_scheduler_and_retries_failed_cleanup():
     assert scheduler.close.call_count == 2
 
 
-def test_api_retries_only_graph_after_scheduler_succeeded():
+def test_api_retry_delegates_idempotence_after_scheduler_succeeded():
     graph = Mock(close=Mock(side_effect=[GraphDBError("pool"), None]))
     scheduler = Mock()
     components = {"graph_db": graph, "mem_scheduler": scheduler}
     with pytest.raises(MemOSError):
         shutdown_components(components)
     shutdown_components(components)
-    scheduler.close.assert_called_once_with()
+    assert scheduler.close.call_count == 2
     assert graph.close.call_count == 2
 
 
 @pytest.mark.parametrize("failure", [None, GraphDBError("close failed")])
-def test_concurrent_api_close_waits_for_same_result(failure):
+def test_concurrent_api_close_delegates_same_result_to_resource(failure, monkeypatch):
     entered, release, joined = Event(), Event(), Event()
+    state = CloseState()
 
     def close():
         entered.set()
@@ -57,16 +59,23 @@ def test_concurrent_api_close_waits_for_same_result(failure):
         if failure:
             raise failure
 
-    graph = Mock(close=Mock(side_effect=close))
+    cleanup = Mock(side_effect=close)
+    graph = Mock(close=Mock(side_effect=lambda: state.close(cleanup)))
     components = {"graph_db": graph}
 
     def concurrent():
-        joined.set()
         shutdown_components(components)
 
     with ThreadPoolExecutor(2) as pool:
         first = pool.submit(shutdown_components, components)
         assert entered.wait(3)
+        original_wait = state._attempt.done.wait
+
+        def observed_wait(*args, **kwargs):
+            joined.set()
+            return original_wait(*args, **kwargs)
+
+        monkeypatch.setattr(state._attempt.done, "wait", observed_wait)
         second = pool.submit(concurrent)
         assert joined.wait(3)
         assert not second.done()
@@ -77,7 +86,8 @@ def test_concurrent_api_close_waits_for_same_result(failure):
                     future.result(3)
             else:
                 future.result(3)
-    graph.close.assert_called_once_with()
+    assert graph.close.call_count == 2
+    cleanup.assert_called_once_with()
 
 
 def prepare_components(monkeypatch, module):
