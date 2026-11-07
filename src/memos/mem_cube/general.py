@@ -75,6 +75,7 @@ class GeneralMemCube(BaseMemCube):
                 ]
             except Exception as error:
                 errors.append(error)
+                logger.exception("Failed to close owned memory %s", type(memory).__name__)
         if errors:
             raise errors[0]
 

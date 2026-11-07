@@ -968,7 +968,7 @@ class GetMemoryDashboardRequest(GetMemoryRequest):
     all_cubes: bool | None = Field(
         None,
         strict=True,
-        description="Optional range: omitted/null preserves legacy selection; true selects all Cubes; false selects one Cube (configured default when omitted). Supported by openGauss.",
+        description="Optional range: omitted/null or false selects one Cube (configured default when mem_cube_id is omitted); true selects all Cubes. Legacy user scope filters explicitly select all Cubes except their specified Cube. Supported by openGauss.",
     )
     exclude_cube_id: str | None = Field(
         None,
