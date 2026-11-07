@@ -480,7 +480,7 @@ def _dashboard_scope(request: GetMemoryDashboardRequest) -> dict[str, Any]:
         if not isinstance(value, str) or not value.strip() or "\0" in value:
             raise ValueError(f"{name} must be a nonblank Cube selection string")
 
-    def prune(condition, root=False):
+    def prune(condition, root=False, inside_or=False):
         if root and (condition is None or condition == {}):
             return None
         if not isinstance(condition, dict) or not condition:
@@ -490,11 +490,13 @@ def _dashboard_scope(request: GetMemoryDashboardRequest) -> dict[str, Any]:
             if key in ("and", "or"):
                 if not isinstance(value, list) or not value:
                     raise ValueError("Dashboard and/or filters require nonempty lists")
-                children = [prune(child) for child in value]
+                children = [prune(child, inside_or=inside_or or key == "or") for child in value]
                 children = [child for child in children if child is not None]
                 if children:
                     remaining[key] = children
             elif key in ("object_type", "mem_cube_id"):
+                if inside_or:
+                    raise ValueError("Dashboard scope controls are not allowed inside OR")
                 nonblank(value, key)
                 if key in controls and controls[key] != value:
                     raise ValueError("Conflicting Dashboard scope controls")
@@ -514,10 +516,13 @@ def _dashboard_scope(request: GetMemoryDashboardRequest) -> dict[str, Any]:
         nonblank(owner, "mem_cube_id")
     excluded = controls.get("mem_cube_id") if kind == "user" else None
     if kind == "public":
+        if owner is not None and owner != controls["mem_cube_id"]:
+            raise ValueError("Conflicting Dashboard Cube selections")
         owner = controls["mem_cube_id"]
     elif kind == "user":
-        owner = None
-    all_cubes = owner is None
+        if owner is not None:
+            raise ValueError("User range conflicts with a single Cube selection")
+    all_cubes = kind == "user"
     if request.all_cubes is True:
         if request.mem_cube_id is not None or kind == "public":
             raise ValueError("all_cubes=True conflicts with a single Cube selection")

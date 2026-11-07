@@ -22,7 +22,10 @@ def consumer(messages):
         memos_message_queue=Mock(get_messages=Mock(return_value=messages)),
     )
     owner.dispatcher.get_running_task_count.return_value = 0
-    owner._stop_event = Mock(wait=Mock(side_effect=lambda _: setattr(owner, "_running", False)))
+    owner._stop_event = Mock(
+        is_set=Mock(return_value=False),
+        wait=Mock(side_effect=lambda _: setattr(owner, "_running", False)),
+    )
     return owner
 
 

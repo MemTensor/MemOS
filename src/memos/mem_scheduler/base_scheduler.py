@@ -388,7 +388,11 @@ class BaseScheduler(
         if self._consumer_process is not None:
             self._consumer_process.join(timeout=5)
             if self._consumer_process.is_alive():
-                raise MemOSError("Scheduler consumer process has not exited")
+                logger.warning("Consumer process did not stop gracefully, terminating")
+                self._consumer_process.terminate()
+                self._consumer_process.join(timeout=2)
+                if self._consumer_process.is_alive():
+                    raise MemOSError("Scheduler consumer process has not exited")
 
     def _ensure_components(self) -> None:
         with self._initialization_lock:

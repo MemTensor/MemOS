@@ -160,7 +160,7 @@ class BaseSchedulerQueueMixin:
             self.memos_message_queue.submit_messages(messages=queued_msgs)
 
     def _message_consumer(self) -> None:
-        while self._running:
+        while self._running and not self._stop_event.is_set():
             try:
                 if self.enable_parallel_dispatch and self.dispatcher:
                     running_tasks = self.dispatcher.get_running_task_count()
@@ -289,8 +289,9 @@ class BaseSchedulerQueueMixin:
         self._running = True
 
         if self.scheduler_startup_mode == STARTUP_BY_PROCESS:
+            self._stop_event = multiprocessing.Event()
             self._consumer_process = multiprocessing.Process(
-                target=self._message_consumer,
+                target=self._process_consumer,
                 daemon=True,
                 name="MessageConsumerProcess",
             )
@@ -304,6 +305,13 @@ class BaseSchedulerQueueMixin:
             )
             self._consumer_thread.start()
             logger.info("Message consumer thread started")
+
+    def _process_consumer(self) -> None:
+        """Drain the child's accepted tasks before a graceful process exit."""
+        try:
+            self._message_consumer()
+        finally:
+            self.dispatcher.close()
 
     def stop_consumer(self) -> None:
         if not self._running:

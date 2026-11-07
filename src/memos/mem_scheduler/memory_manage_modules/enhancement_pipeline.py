@@ -4,6 +4,7 @@ import time
 
 from typing import TYPE_CHECKING
 
+from memos.exceptions import GraphDBError
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
@@ -194,27 +195,35 @@ class EnhancementPipeline:
         return batches
 
     def recall_for_missing_memories(self, query: str, memories: list[str]) -> tuple[str, bool]:
-        text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(memories)])
-
-        prompt = self.build_prompt(
-            template_name="enlarge_recall",
-            query=query,
-            memories_inline=text_memories,
-        )
-        llm_response = self.process_llm.generate([{"role": "user", "content": prompt}])
-
-        json_result: dict = extract_json_obj(llm_response)
-
-        logger.info(
-            "[recall_for_missing_memories] done | prompt=%s | llm_response=%s",
-            prompt,
-            llm_response,
-        )
-
-        hint = json_result.get("hint", "")
-        if len(hint) == 0:
-            return hint, False
-        return hint, json_result.get("trigger_recall", False)
+        # This optional model-only step may fail without invalidating retrieved data.
+        try:
+            text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(memories)])
+            prompt = self.build_prompt(
+                template_name="enlarge_recall",
+                query=query,
+                memories_inline=text_memories,
+            )
+            llm_response = self.process_llm.generate([{"role": "user", "content": prompt}])
+            json_result: dict = extract_json_obj(llm_response)
+            logger.info(
+                "[recall_for_missing_memories] done | prompt=%s | llm_response=%s",
+                prompt,
+                llm_response,
+            )
+            hint = json_result.get("hint", "")
+            trigger = json_result.get("trigger_recall", False)
+            if not isinstance(hint, str) or not isinstance(trigger, bool):
+                raise ValueError("Invalid optional recall hint or trigger")
+            if len(hint) == 0:
+                return hint, False
+            return hint, trigger
+        except GraphDBError:
+            raise
+        except Exception:
+            logger.warning(
+                "Optional recall enhancement failed; keeping retrieved memories", exc_info=True
+            )
+            return "", False
 
     def enhance_memories_with_query(
         self,

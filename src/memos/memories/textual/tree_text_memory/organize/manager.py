@@ -48,7 +48,11 @@ def extract_working_binding_ids(mem_items: list[TextualMemoryItem | dict]) -> se
             parsed = uuid.UUID(binding) if isinstance(binding, str) else None
         except ValueError:
             continue
-        if parsed is not None and binding != primary_id and str(parsed) != str(primary_id).lower():
+        try:
+            primary = uuid.UUID(primary_id) if isinstance(primary_id, str) else None
+        except ValueError:
+            primary = None
+        if parsed is not None and parsed != primary:
             bindings.add(binding)
     return bindings
 
@@ -298,45 +302,6 @@ class MemoryManager:
         working_memory = TextualMemoryItem(id=node_id, memory=memory.memory, metadata=metadata)
         # Insert node into graph
         self.graph_store.add_node(working_memory.id, working_memory.memory, metadata, user_name)
-        return node_id
-
-    def _add_to_graph_memory(
-        self,
-        memory: TextualMemoryItem,
-        memory_type: str,
-        user_name: str | None = None,
-        working_binding: str | None = None,
-    ):
-        """
-        Generalized method to add memory to a graph-based memory type (e.g., LongTermMemory, UserMemory).
-        """
-        node_id = memory.id if hasattr(memory, "id") else str(uuid.uuid4())
-        # Step 2: Add new node to graph
-        metadata_dict = memory.metadata.model_dump(exclude_none=True)
-        if working_binding:
-            metadata_dict["working_binding"] = working_binding
-        tags = metadata_dict.get("tags") or []
-        if working_binding and ("mode:fast" in tags):
-            metadata_dict["is_fast"] = True  # Temporal fix
-            prev_bg = metadata_dict.get("background", "") or ""
-            binding_line = f"[working_binding:{working_binding}] direct built from raw inputs"
-            if prev_bg:
-                metadata_dict["background"] = prev_bg + " || " + binding_line
-            else:
-                metadata_dict["background"] = binding_line
-        self.graph_store.add_node(
-            node_id,
-            memory.memory,
-            metadata_dict,
-            user_name=user_name,
-        )
-        self.reorganizer.add_message(
-            QueueMessage(
-                op="add",
-                after_node=[node_id],
-                user_name=user_name,
-            )
-        )
         return node_id
 
     def _inherit_edges(self, from_id: str, to_id: str, user_name: str | None = None) -> None:

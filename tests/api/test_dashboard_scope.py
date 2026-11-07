@@ -30,26 +30,18 @@ def cube(open_gauss=True, nodes=None, total=0):
 @pytest.mark.parametrize(
     "fields,owner,all_cubes,excluded,business",
     [
-        ({}, None, True, None, None),
-        ({"all_cubes": None, "exclude_cube_id": None}, None, True, None, None),
+        ({}, None, False, None, None),
+        ({"all_cubes": None, "exclude_cube_id": None}, None, False, None, None),
         ({"mem_cube_id": "A"}, "A", False, None, None),
         ({"all_cubes": False}, None, False, None, None),
         ({"all_cubes": False, "mem_cube_id": "A"}, "A", False, None, None),
         ({"all_cubes": True}, None, True, None, None),
-        ({"exclude_cube_id": "P"}, None, True, "P", None),
         ({"all_cubes": True, "exclude_cube_id": "P"}, None, True, "P", None),
-        ({"filter": PUBLIC, "mem_cube_id": "A"}, "P", False, None, None),
+        ({"filter": PUBLIC, "mem_cube_id": "P"}, "P", False, None, None),
         ({"filter": PUBLIC, "all_cubes": False}, "P", False, None, None),
-        ({"filter": USER, "mem_cube_id": "A"}, None, True, "P", None),
+        ({"filter": USER}, None, True, "P", None),
         ({"filter": USER, "all_cubes": True}, None, True, "P", None),
         ({"filter": USER, "exclude_cube_id": "P"}, None, True, "P", None),
-        (
-            {"filter": {"or": [{"object_type": "public", "mem_cube_id": "P"}, {"tag": "x"}]}},
-            "P",
-            False,
-            None,
-            {"or": [{"tag": "x"}]},
-        ),
         (
             {"filter": {"and": [PUBLIC, PUBLIC, {"or": [{"tag": "x"}, {"tag": "y"}]}]}},
             "P",
@@ -57,8 +49,8 @@ def cube(open_gauss=True, nodes=None, total=0):
             None,
             {"and": [{"or": [{"tag": "x"}, {"tag": "y"}]}]},
         ),
-        ({"filter": {}}, None, True, None, None),
-        ({"filter": {"tag": {"in": ["x", "y"]}}}, None, True, None, {"tag": {"in": ["x", "y"]}}),
+        ({"filter": {}}, None, False, None, None),
+        ({"filter": {"tag": {"in": ["x", "y"]}}}, None, False, None, {"tag": {"in": ["x", "y"]}}),
     ],
 )
 def test_dashboard_resolves_once_and_preserves_request(
@@ -84,6 +76,11 @@ def test_dashboard_resolves_once_and_preserves_request(
 @pytest.mark.parametrize(
     "fields",
     [
+        {"exclude_cube_id": "P"},
+        {"mem_cube_id": "A", "filter": PUBLIC},
+        {"mem_cube_id": "A", "filter": USER},
+        {"filter": {"or": [PUBLIC, {"tag": "x"}]}},
+        {"filter": {"or": [{"and": [USER, {"tag": "x"}]}, {"tag": "y"}]}},
         {"all_cubes": True, "mem_cube_id": "A"},
         {"all_cubes": True, "filter": PUBLIC},
         {"all_cubes": False, "filter": USER},

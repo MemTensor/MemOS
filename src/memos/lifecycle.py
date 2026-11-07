@@ -43,7 +43,7 @@ class CloseState:
         if not execute:
             attempt.done.wait()
             if attempt.error is not None:
-                raise attempt.error
+                raise MemOSError("Concurrent component close failed") from attempt.error
             return
         try:
             cleanup()

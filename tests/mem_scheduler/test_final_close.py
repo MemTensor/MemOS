@@ -375,12 +375,13 @@ def test_join_self_and_live_process_are_visible_errors(scheduler):
     with pytest.raises(MemOSError):
         scheduler._join_consumers()
     scheduler._consumer_thread = None
-    process = Mock(is_alive=Mock(side_effect=[True, False]))
+    process = Mock(is_alive=Mock(side_effect=[True, True, False]))
     scheduler._consumer_process = process
     with pytest.raises(MemOSError):
         scheduler._join_consumers()
     scheduler._join_consumers()
-    assert process.join.call_count == 2
+    assert process.join.call_count == 3
+    process.terminate.assert_called_once()
 
 
 def test_existing_components_are_reused_when_feedback_reference_is_reset(monkeypatch, scheduler):
