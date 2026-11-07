@@ -10,10 +10,10 @@ Optional settings are `OPENGAUSS_PORT` (5432), `OPENGAUSS_MIN_CONN` (1), `OPENGA
 
 | Field | Meaning |
 | --- | --- |
-| `all_cubes: null` or omitted | Preserve existing selection rules: a supplied `mem_cube_id` selects that Cube; otherwise openGauss selects all Cubes. |
+| `all_cubes: null` or omitted | Select the supplied `mem_cube_id`, or the configured default Cube if omitted. Legacy filter controls below can explicitly select a different range. |
 | `all_cubes: true` | Select all Cubes. Cannot be combined with an outer `mem_cube_id` or a `public` single-Cube selection. |
 | `all_cubes: false` | Select the supplied Cube, or the configured default if none is supplied. |
-| `exclude_cube_id` | Exclude exactly one Cube from an all-Cube selection. Must be a nonblank string; an absent Cube excludes nothing. |
+| `exclude_cube_id` | Exclude exactly one Cube from an explicitly selected all-Cube range. This field alone does not enable all-Cube selection. Must be a nonblank string; an absent Cube excludes nothing. |
 
 For example, list all scopes except `public`, with pagination:
 
@@ -26,7 +26,7 @@ For example, list all scopes except `public`, with pagination:
 }
 ```
 
-The existing filter controls `{"object_type":"public","mem_cube_id":"P"}` select P, while `{"object_type":"user","mem_cube_id":"P"}` select all other Cubes. Controls are extracted from nested `and`/`or` trees and applied globally; remaining business predicates retain their Boolean structure. Repeated identical controls are accepted. Incomplete or conflicting controls, unknown object types, empty Boolean nodes, single-Cube exclusion, and conflicting exclusion IDs return parameter errors. Explicit `all_cubes=false` conflicts with a `user` selection.
+The existing filter controls `{"object_type":"public","mem_cube_id":"P"}` select P, while `{"object_type":"user","mem_cube_id":"P"}` explicitly select all other Cubes. Controls can appear at the root or under `and` and apply globally. Scope controls anywhere beneath `or` are rejected because extracting them would change the Boolean meaning; ordinary business `or` filters are preserved. Repeated identical controls are accepted. An outer `mem_cube_id` must agree with a `public` selection and cannot accompany a `user` selection. Incomplete or conflicting controls, unknown object types, empty Boolean nodes, single-Cube exclusion, and conflicting exclusion IDs return parameter errors. Explicit `all_cubes=false` conflicts with a `user` selection.
 
 `user_id`, memory type, status and business filters still constrain the selected range. Supply both positive `page` and `page_size`, or omit both to return all matching records. Pagination and totals apply independently to each of the four memory categories. A bucket's `total_nodes` counts its records on the current page; `statistics` counts all matching records before pagination.
 
