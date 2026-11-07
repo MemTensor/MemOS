@@ -66,6 +66,82 @@ def client(mock_init_server):
     return TestClient(mock_init_server)
 
 
+@pytest.mark.parametrize(
+    "path,method",
+    [
+        ("/scheduler/wait/stream", "get"),
+        ("/chat/stream", "post"),
+        ("/chat/stream/playground", "post"),
+        ("/chat/stream/business_user", "post"),
+    ],
+)
+def test_sse_openapi_declares_actual_response_media_type(mock_init_server, path, method):
+    paths = mock_init_server.openapi()["paths"]
+    key = next(key for key in paths if key.endswith(path))
+    content = paths[key][method]["responses"]["200"]["content"]
+    assert set(content) == {"text/event-stream"}
+
+
+@pytest.mark.parametrize(
+    "path,handler_name",
+    [
+        ("/chat/stream", "handle_chat_stream"),
+        ("/chat/stream/playground", "handle_chat_stream_playground"),
+        ("/chat/stream/business_user", "handle_chat_stream_for_business_user"),
+    ],
+)
+@pytest.mark.parametrize("available", [False, True])
+def test_chat_stream_keeps_event_bytes_and_unavailable_error(
+    client, monkeypatch, path, handler_name, available
+):
+    from fastapi.responses import StreamingResponse
+
+    from memos.api.routers import server_router
+
+    handler = Mock()
+    getattr(handler, handler_name).return_value = StreamingResponse(
+        iter(["data: fixture\n\n"]), media_type="text/event-stream"
+    )
+    monkeypatch.setattr(server_router, "chat_handler", handler if available else None)
+    payload = {"user_id": "u", "query": "q"}
+    if path.endswith("business_user"):
+        payload["business_key"] = "fixture-business"
+    response = client.post("/product" + path, json=payload)
+    assert response.status_code == (200 if available else 503), response.text
+    if available:
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.text == "data: fixture\n\n"
+        getattr(handler, handler_name).assert_called_once()
+    else:
+        assert "not available" in response.json()["message"]
+
+
+def test_scheduler_stream_keeps_event_bytes_and_parameters(client, monkeypatch):
+    from fastapi.responses import StreamingResponse
+
+    from memos.api.routers import server_router
+
+    handler = Mock(
+        return_value=StreamingResponse(iter(["data: done\n\n"]), media_type="text/event-stream")
+    )
+    monkeypatch.setattr(
+        server_router.handlers.scheduler_handler, "handle_scheduler_wait_stream", handler
+    )
+    response = client.get(
+        "/product/scheduler/wait/stream",
+        params={"user_name": "A", "timeout_seconds": 2, "poll_interval": 0.1},
+    )
+    assert response.status_code == 200 and response.text == "data: done\n\n"
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert handler.call_args.kwargs == {
+        "user_name": "A",
+        "timeout_seconds": 2,
+        "poll_interval": 0.1,
+        "status_tracker": server_router.status_tracker,
+        "instance_id": server_router.INSTANCE_ID,
+    }
+
+
 @pytest.fixture
 def mock_handlers():
     """Mock all handlers used by server_router."""
