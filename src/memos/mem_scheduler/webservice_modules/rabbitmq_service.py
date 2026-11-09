@@ -61,7 +61,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         self.rabbitmq_conn_sleep_seconds = 1
 
         # Thread management
-        self._rabbitmq_io_loop_thread = None  # For IOLoop execution
+        self._io_loop_thread = None  # For IOLoop execution
         self._rabbitmq_stop_flag = False  # Graceful shutdown flag
         # Use RLock because publishing may trigger initialization, which also grabs the lock.
         self._rabbitmq_lock = threading.RLock()

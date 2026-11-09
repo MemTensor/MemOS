@@ -50,7 +50,7 @@ class OpenAIResponsesLLM(BaseLLM):
         output_reasoning = [
             item for item in response.output if isinstance(item, ResponseReasoningItem)
         ]
-        summary = output_reasoning[0].summary
+        summary = output_reasoning[0].summary if output_reasoning else None
 
         if self.config.remove_think_prefix:
             return remove_thinking_tags(output_text)
@@ -138,7 +138,7 @@ class AzureResponsesLLM(BaseLLM):
         output_reasoning = [
             item for item in response.output if isinstance(item, ResponseReasoningItem)
         ]
-        summary = output_reasoning[0].summary
+        summary = output_reasoning[0].summary if output_reasoning else None
 
         if self.config.remove_think_prefix:
             return remove_thinking_tags(output_text)
