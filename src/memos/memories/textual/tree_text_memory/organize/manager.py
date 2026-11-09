@@ -417,13 +417,14 @@ class MemoryManager:
             metadata_dict,
             user_name=user_name,
         )
-        self.reorganizer.add_message(
-            QueueMessage(
-                op="add",
-                after_node=[node_id],
-                user_name=user_name,
+        if self.is_reorganize:
+            self.reorganizer.add_message(
+                QueueMessage(
+                    op="add",
+                    after_node=[node_id],
+                    user_name=user_name,
+                )
             )
-        )
         return node_id
 
     def _inherit_edges(self, from_id: str, to_id: str, user_name: str | None = None) -> None:
