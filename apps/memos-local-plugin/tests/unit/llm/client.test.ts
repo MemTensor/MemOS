@@ -244,6 +244,86 @@ describe("llm/client", () => {
     expect(client.stats().hostFallbacks).toBe(1);
   });
 
+  it("does NOT fall back after the caller aborts the primary request", async () => {
+    const controller = new AbortController();
+    const primaryError = new MemosError(
+      ERROR_CODES.LLM_TIMEOUT,
+      "openai_compatible request was cancelled",
+      { cancelled: true },
+    );
+    const provider: LlmProvider = {
+      name: "openai_compatible",
+      async complete(_messages, _input, ctx) {
+        expect(ctx.signal?.aborted).toBe(false);
+        controller.abort(new Error("caller cancelled"));
+        throw primaryError;
+      },
+    };
+    let hostCalls = 0;
+    registerHostLlmBridge({
+      id: "test.host.v1",
+      async complete() {
+        hostCalls++;
+        return { text: "too late", model: "host-m", durationMs: 1 };
+      },
+    });
+    const client = createLlmClientWithProvider(cfg({ fallbackToHost: true }), provider);
+
+    await expect(client.complete("ping", { signal: controller.signal })).rejects.toBe(
+      primaryError,
+    );
+    expect(hostCalls).toBe(0);
+    expect(client.stats().hostFallbacks).toBe(0);
+  });
+
+  it("does NOT fall back after the caller deadline has passed", async () => {
+    const primaryError = new MemosError(
+      ERROR_CODES.LLM_TIMEOUT,
+      "openai_compatible request timed out",
+    );
+    const thrower = new ThrowingProvider(primaryError);
+    let hostCalls = 0;
+    registerHostLlmBridge({
+      id: "test.host.v1",
+      async complete() {
+        hostCalls++;
+        return { text: "too late", model: "host-m", durationMs: 1 };
+      },
+    });
+    const client = createLlmClientWithProvider(cfg({ fallbackToHost: true }), thrower);
+
+    await expect(client.complete("ping", { deadlineAt: Date.now() - 1 })).rejects.toBe(
+      primaryError,
+    );
+    expect(hostCalls).toBe(0);
+    expect(client.stats().hostFallbacks).toBe(0);
+  });
+
+  it("still falls back on a provider timeout while the caller budget remains", async () => {
+    const thrower = new ThrowingProvider(
+      new MemosError(ERROR_CODES.LLM_TIMEOUT, "provider timed out"),
+    );
+    const controller = new AbortController();
+    const deadlineAt = Date.now() + 10_000;
+    let seen: { signal?: AbortSignal; deadlineAt?: number } | undefined;
+    registerHostLlmBridge({
+      id: "test.host.v1",
+      async complete(input) {
+        seen = input;
+        return { text: "host response", model: "host-m", durationMs: 1 };
+      },
+    });
+    const client = createLlmClientWithProvider(cfg({ fallbackToHost: true }), thrower);
+
+    const result = await client.complete("ping", {
+      signal: controller.signal,
+      deadlineAt,
+    });
+
+    expect(result.servedBy).toBe("host_fallback");
+    expect(seen).toMatchObject({ signal: controller.signal, deadlineAt });
+  });
+
   it("does NOT fall back when primary throws a non-transient error", async () => {
     const thrower = new ThrowingProvider(
       new MemosError(ERROR_CODES.INVALID_ARGUMENT, "bad payload"),
