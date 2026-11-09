@@ -77,4 +77,26 @@ describe("llm/json-mode", () => {
     expect(h).toMatch(/Expected shape/);
     expect(h).toMatch(/"a"/);
   });
+
+  it("extractFirstJsonBlock stops at the first opener and returns null for truncated root objects", () => {
+    const raw = '{"title":"Alpine dependency resolution","domain_tags":["network","http"],"environment":[{"label":"Foo","description":"Bar truncated here';
+    try {
+      parseLlmJson(raw);
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MemosError);
+      expect((err as MemosError).code).toBe("llm_output_malformed");
+    }
+  });
+
+  it("does not silently return a nested balanced block when outer object is truncated", () => {
+    const raw = '{"title":"x","items":[1,2,3],"extra":"trunc';
+    try {
+      parseLlmJson(raw);
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MemosError);
+      expect((err as MemosError).code).toBe("llm_output_malformed");
+    }
+  });
 });

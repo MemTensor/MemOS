@@ -77,14 +77,20 @@ function stripFences(s: string): string {
  * Find the first balanced `{…}` or `[…]` block. Returns null when nothing
  * obvious is found. Naive — but good enough for LLMs that say "Here you go:
  * {…}" or "I'll return [ …, … ] now."
+ *
+ * Stops at the first opener and returns whatever `walkToClose` finds —
+ * including null when that block is unbalanced (truncated). We deliberately
+ * do NOT continue scanning for a nested balanced sub-block: silently returning
+ * a nested value (e.g. a `domain_tags` array from inside a truncated root
+ * object) would cause the caller's schema validator to report a misleading
+ * field-level error instead of the real cause (output truncated at maxTokens).
  */
 function extractFirstJsonBlock(s: string): string | null {
   const openers = ["{", "["];
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
     if (!openers.includes(ch!)) continue;
-    const match = walkToClose(s, i);
-    if (match) return match;
+    return walkToClose(s, i);
   }
   return null;
 }
