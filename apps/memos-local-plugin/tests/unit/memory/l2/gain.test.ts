@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { applyGain, computeGain, nextStatus, smoothGain } from "../../../../core/memory/l2/gain.js";
+import { adaptiveBaseline, applyGain, computeGain, MIN_ADAPTIVE_BASELINE, nextStatus, smoothGain } from "../../../../core/memory/l2/gain.js";
 import type { PolicyId, TraceRow } from "../../../../core/types.js";
 
 function mkTrace(value: number): TraceRow {
@@ -58,6 +58,47 @@ describe("memory/l2/gain", () => {
     );
     expect(g.poolMean).toBeGreaterThan(0.5);
     expect(g.baseline).toBeCloseTo(0.5, 5);
+  });
+
+  it("adaptiveBaseline tracks poolMean across the v2.0.7 backprop V distribution (regression for #2364)", () => {
+    // v2.0.7 backprop V values cluster in the 0.02–0.5 band (see
+    // core/config/defaults.ts "V values for typical multi-step turns are
+    // clustered around 0.02–0.5"). At these poolMeans the baseline must
+    // *actually* adapt instead of clamping to a fixed floor.
+    expect(adaptiveBaseline(0.02)).toBeCloseTo(0.02, 6);
+    expect(adaptiveBaseline(0.05)).toBeCloseTo(0.05, 6);
+    expect(adaptiveBaseline(0.15)).toBeCloseTo(0.15, 6);
+    // Bounds still hold at both ends.
+    expect(adaptiveBaseline(0.6)).toBeCloseTo(0.5, 6);
+    expect(adaptiveBaseline(0)).toBeCloseTo(MIN_ADAPTIVE_BASELINE, 6);
+    expect(adaptiveBaseline(Number.NaN)).toBeCloseTo(0.5, 6);
+    // The floor must be low enough that the entire v2.0.7 V band
+    // (documented as 0.02–0.5) is inside the adaptive branch, not below
+    // it — otherwise adaptiveBaseline collapses to a constant floor and
+    // policy/skill promotion stalls fleet-wide.
+    expect(MIN_ADAPTIVE_BASELINE).toBeLessThanOrEqual(0.02);
+  });
+
+  it("computeGain follows poolMean when the pool sits in the v2.0.7 backprop V band (regression for #2364)", () => {
+    // Typical v2.0.7 pool: with-set ~0.05–0.08, without-set ~0.02–0.05.
+    // Before the fix, baseline clamped to 0.2 and gain went strongly
+    // negative for these pools even though the with-set outperforms the
+    // without-set by the reward distribution's own scale.
+    const g = computeGain(
+      {
+        policyId: "po_v207" as PolicyId,
+        withTraces: [mkTrace(0.06), mkTrace(0.05)],
+        withoutTraces: [mkTrace(0.03), mkTrace(0.04)],
+      },
+      { tauSoftmax: 0.5 },
+    );
+    expect(g.poolMean).toBeCloseTo(0.045, 5);
+    expect(g.baseline).toBeCloseTo(0.045, 5);
+    // With baseline = 0.045 the blended without-mean sits close to the
+    // empirical mean instead of being dragged up to 0.2, so the sign of
+    // the gain reflects the with vs. without contrast rather than the
+    // stale floor.
+    expect(g.gain).toBeGreaterThan(0);
   });
 
   it("uses value-weighted mean for the with-set when count ≥ 3", () => {

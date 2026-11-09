@@ -122,10 +122,16 @@ and reward backprop spreads similar V values across all step traces, so
 `mean(V_without)` collapses onto `mean(V_with)` and the V7 contrast
 formula evaluates to ≈ 0 for every policy regardless of its actual
 utility. Anchoring the without-set against a neutral 0.5 baseline
-guarantees that genuinely-useful policies (V_with ≈ 0.7-0.85) score
-positive and net-neutral or harmful ones don't. As real comparable
-without-evidence accumulates, the prior gracefully dilutes and we
-recover the original V7 §0.6 contrast formulation.
+guarantees that genuinely-useful policies score positive and
+net-neutral or harmful ones don't. Post-v2.0.7 the normalized
+credit-assignment backprop (see `core/reward/backprop.ts`) leaves
+per-trace V values in a ~0.02–0.5 band (matching the
+`minTraceValue: 0.005` docstring in `core/config/defaults.ts`), so the
+`adaptiveBaseline` floor (`gain.ts::MIN_ADAPTIVE_BASELINE = 0.005`)
+lets `poolMean` flow through as the actual anchor across that band
+rather than being pinned at a stale pre-v2.0.7 constant. As real
+comparable without-evidence accumulates, the prior gracefully dilutes
+and we recover the original V7 §0.6 contrast formulation.
 
 Use cases:
 
