@@ -6,7 +6,9 @@ from typing import Any
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
 from memos.graph_dbs.neo4j import (
+    _DICT_METADATA_FIELDS,
     Neo4jGraphDB,
+    _deserialize_dict_field,
     _flatten_info_fields,
     _prepare_node_metadata,
     _sanitize_neo4j_metadata,
@@ -1171,6 +1173,13 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
+
+        # Reverse the write-side ``dict → json.dumps`` transform for the
+        # known dict-typed metadata fields. See issue #2288.
+        for _field in _DICT_METADATA_FIELDS:
+            if _field in node:
+                node[_field] = _deserialize_dict_field(node[_field])
+
         new_node = {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
         try:
             vec_item = self.vec_db.get_by_id(new_node["id"])
@@ -1207,6 +1216,12 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                     ):
                         break
                     node["sources"][idx] = json.loads(node["sources"][idx])
+
+            # Reverse the write-side ``dict → json.dumps`` transform for
+            # the known dict-typed metadata fields. See issue #2288.
+            for _field in _DICT_METADATA_FIELDS:
+                if _field in node:
+                    node[_field] = _deserialize_dict_field(node[_field])
 
             node_id = node.pop("id")
             node_ids.append(node_id)
