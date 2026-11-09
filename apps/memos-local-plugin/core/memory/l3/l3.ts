@@ -79,6 +79,15 @@ interface L3RetryState {
   reason?: string;
 }
 
+/**
+ * Catch-all cluster key emitted by `cluster.ts::domainKeyOf` when a
+ * policy matches none of the TAG / TOOL regexes. Clusters with this key
+ * have no shared organising principle; L3 pre-filters them before
+ * calling the abstractor to avoid the reliably-empty-title failure mode
+ * documented in issue #2374.
+ */
+const UNTAGGED_CLUSTER_KEY = "_|_";
+
 // ─── Public entry ──────────────────────────────────────────────────────────
 
 export async function runL3(
@@ -162,6 +171,25 @@ export async function runL3(
         reason: "no_centroid",
         policyIds: cluster.policies.map((p) => p.id),
       });
+      continue;
+    }
+
+    // Untagged clusters — no TAG_REGEX or TOOL_REGEX matched any member,
+    // so `domainKeyOf` returned the catch-all `"_|_"` bucket. These have
+    // no shared organising principle; the abstractor's `DOMAIN_TAGS: -`
+    // prompt reliably yields empty titles and 100% `llm_failed` in the
+    // field (issue #2374). Pre-filter before we consult cooldown or spend
+    // an LLM round-trip.
+    if (cluster.key === UNTAGGED_CLUSTER_KEY) {
+      abstractLog.info("untagged.skipped", {
+        clusterKey: cluster.key,
+        clusterPolicyCount: cluster.policies.length,
+      });
+      abstractions.push(
+        skipped(cluster, "untagged_cluster", {
+          policyIds: cluster.policies.map((p) => p.id),
+        }),
+      );
       continue;
     }
 

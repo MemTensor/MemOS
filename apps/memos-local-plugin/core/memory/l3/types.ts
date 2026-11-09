@@ -164,6 +164,7 @@ export interface AbstractionResult {
     | "cooldown"
     | "retry_cooldown"
     | "no_centroid"
+    | "untagged_cluster"
     | "duplicate_of";
   /** When `skippedReason === "duplicate_of"`, the existing WM id. */
   duplicateOfWorldId?: WorldModelId | null;
