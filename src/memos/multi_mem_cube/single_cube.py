@@ -12,6 +12,7 @@ from memos.api.handlers.formatters_handler import (
     format_memory_item,
     post_process_textual_mem,
 )
+from memos.exceptions import GraphDBError
 from memos.log import get_logger, summarize_search_request, summarize_search_results
 from memos.mem_reader.utils import parse_keep_filter_response
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
@@ -216,6 +217,8 @@ class SingleCubeView(MemCubeView):
                 return []
             return text_memories
 
+        except (GraphDBError, ValueError):
+            raise
         except Exception as e:
             self.logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())
             return []

@@ -24,6 +24,7 @@ from memos.api.handlers.config_builders import (
     build_scheduler_llm_config,
     build_suggestion_llm_config,
 )
+from memos.api.lifecycle import shutdown_components
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.embedders.factory import EmbedderFactory
 from memos.graph_dbs.factory import GraphStoreFactory
@@ -175,178 +176,191 @@ def init_server() -> dict[str, Any]:
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
-    llm = LLMFactory.from_config(llm_config)
-    feedback_llm = LLMFactory.from_config(feedback_llm_config)
-    suggestion_llm = LLMFactory.from_config(suggestion_llm_config)
-    scheduler_llm = LLMFactory.from_config(scheduler_llm_config)
-    chat_llms = (
-        _init_chat_llms(chat_llm_config)
-        if os.getenv("ENABLE_CHAT_API", "false") == "true"
-        else None
-    )
-    playground_chat_llms = (
-        _init_chat_llms(playground_chat_llm_config)
-        if os.getenv("ENABLE_CHAT_API", "false") == "true" and playground_chat_llm_config
-        else chat_llms
-    )
-    embedder = EmbedderFactory.from_config(embedder_config)
+    components = {"graph_db": graph_db}
+    try:
+        llm = LLMFactory.from_config(llm_config)
+        feedback_llm = LLMFactory.from_config(feedback_llm_config)
+        suggestion_llm = LLMFactory.from_config(suggestion_llm_config)
+        scheduler_llm = LLMFactory.from_config(scheduler_llm_config)
+        chat_llms = (
+            _init_chat_llms(chat_llm_config)
+            if os.getenv("ENABLE_CHAT_API", "false") == "true"
+            else None
+        )
+        playground_chat_llms = (
+            _init_chat_llms(playground_chat_llm_config)
+            if os.getenv("ENABLE_CHAT_API", "false") == "true" and playground_chat_llm_config
+            else chat_llms
+        )
+        embedder = EmbedderFactory.from_config(embedder_config)
 
-    plugin_context = build_plugin_context(
-        graph_db=graph_db,
-        embedder=embedder,
-        llm=llm,
-        default_cube_config=default_cube_config,
-        nli_client_config=nli_client_config,
-        mem_reader_config=mem_reader_config,
-        reranker_config=reranker_config,
-        feedback_reranker_config=feedback_reranker_config,
-        internet_retriever_config=internet_retriever_config,
-    )
-    plugin_manager.discover()
-    plugin_manager.init_components(plugin_context)
+        plugin_context = build_plugin_context(
+            graph_db=graph_db,
+            embedder=embedder,
+            llm=llm,
+            default_cube_config=default_cube_config,
+            nli_client_config=nli_client_config,
+            mem_reader_config=mem_reader_config,
+            reranker_config=reranker_config,
+            feedback_reranker_config=feedback_reranker_config,
+            internet_retriever_config=internet_retriever_config,
+        )
+        plugin_manager.discover()
+        plugin_manager.init_components(plugin_context)
 
-    # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
-    mem_reader = MemReaderFactory.from_config(
-        mem_reader_config,
-        graph_db=graph_db,
-    )
-    reranker = RerankerFactory.from_config(reranker_config)
-    feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
-    internet_retriever = InternetRetrieverFactory.from_config(
-        internet_retriever_config, embedder=embedder
-    )
+        # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
+        mem_reader = MemReaderFactory.from_config(
+            mem_reader_config,
+            graph_db=graph_db,
+        )
+        reranker = RerankerFactory.from_config(reranker_config)
+        feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
+        internet_retriever = InternetRetrieverFactory.from_config(
+            internet_retriever_config, embedder=embedder
+        )
 
-    # Initialize chat llms
+        # Initialize chat llms
 
-    logger.debug("Core components instantiated")
+        logger.debug("Core components instantiated")
 
-    # Initialize memory manager
-    memory_manager = MemoryManager(
-        graph_db,
-        embedder,
-        llm,
-        memory_size=_get_default_memory_size(default_cube_config),
-        is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
-    )
+        # Initialize memory manager
+        memory_manager = MemoryManager(
+            graph_db,
+            embedder,
+            llm,
+            memory_size=_get_default_memory_size(default_cube_config),
+            is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
+        )
 
-    logger.debug("Memory manager initialized")
-    tokenizer = FastTokenizer()
-    # Initialize text memory
-    text_mem = SimpleTreeTextMemory(
-        llm=llm,
-        embedder=embedder,
-        mem_reader=mem_reader,
-        graph_db=graph_db,
-        reranker=reranker,
-        memory_manager=memory_manager,
-        config=default_cube_config.text_mem.config,
-        internet_retriever=internet_retriever,
-        tokenizer=tokenizer,
-        include_embedding=bool(os.getenv("INCLUDE_EMBEDDING", "false") == "true"),
-    )
+        logger.debug("Memory manager initialized")
+        tokenizer = FastTokenizer()
+        # Initialize text memory
+        text_mem = SimpleTreeTextMemory(
+            llm=llm,
+            embedder=embedder,
+            mem_reader=mem_reader,
+            graph_db=graph_db,
+            reranker=reranker,
+            memory_manager=memory_manager,
+            config=default_cube_config.text_mem.config,
+            internet_retriever=internet_retriever,
+            tokenizer=tokenizer,
+            include_embedding=bool(os.getenv("INCLUDE_EMBEDDING", "false") == "true"),
+        )
 
-    logger.debug("Text memory initialized")
+        logger.debug("Text memory initialized")
 
-    # Create MemCube with pre-initialized memory instances
-    naive_mem_cube = NaiveMemCube(
-        text_mem=text_mem,
-        act_mem=None,
-        para_mem=None,
-    )
+        # Create MemCube with pre-initialized memory instances
+        naive_mem_cube = NaiveMemCube(
+            text_mem=text_mem,
+            act_mem=None,
+            para_mem=None,
+        )
 
-    logger.debug("MemCube created")
+        logger.debug("MemCube created")
 
-    tree_mem: TreeTextMemory = naive_mem_cube.text_mem
-    searcher: Searcher = tree_mem.get_searcher(
-        manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
-        moscube=False,
-        process_llm=mem_reader.general_llm,
-    )
-    logger.debug("Searcher created")
+        tree_mem: TreeTextMemory = naive_mem_cube.text_mem
+        searcher: Searcher = tree_mem.get_searcher(
+            manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+            moscube=False,
+            process_llm=mem_reader.general_llm,
+        )
+        logger.debug("Searcher created")
 
-    # Set searcher to mem_reader
-    mem_reader.set_searcher(searcher)
+        # Set searcher to mem_reader
+        mem_reader.set_searcher(searcher)
 
-    # Initialize feedback server
-    feedback_server = SimpleMemFeedback(
-        llm=feedback_llm,
-        embedder=embedder,
-        graph_store=graph_db,
-        memory_manager=memory_manager,
-        mem_reader=mem_reader,
-        searcher=searcher,
-        reranker=feedback_reranker,
-        pref_feedback=True,
-    )
+        # Initialize feedback server
+        feedback_server = SimpleMemFeedback(
+            llm=feedback_llm,
+            embedder=embedder,
+            graph_store=graph_db,
+            memory_manager=memory_manager,
+            mem_reader=mem_reader,
+            searcher=searcher,
+            reranker=feedback_reranker,
+            pref_feedback=True,
+        )
 
-    # Initialize Scheduler
-    scheduler_config_dict = APIConfig.get_scheduler_config()
-    scheduler_config = SchedulerConfigFactory(
-        backend=scheduler_config_dict["backend"],
-        config=scheduler_config_dict["config"],
-    )
-    mem_scheduler: OptimizedScheduler = SchedulerFactory.from_config(scheduler_config)
-    mem_scheduler.initialize_modules(
-        chat_llm=scheduler_llm,
-        process_llm=mem_reader.general_llm,
-        db_engine=BaseDBManager.create_default_sqlite_engine(),
-        mem_reader=mem_reader,
-        redis_client=redis_client,
-    )
-    mem_scheduler.init_mem_cube(
-        mem_cube=naive_mem_cube, searcher=searcher, feedback_server=feedback_server
-    )
-    logger.debug("Scheduler initialized")
+        # Initialize Scheduler
+        scheduler_config_dict = APIConfig.get_scheduler_config()
+        scheduler_config = SchedulerConfigFactory(
+            backend=scheduler_config_dict["backend"],
+            config=scheduler_config_dict["config"],
+        )
+        mem_scheduler: OptimizedScheduler = SchedulerFactory.from_config(scheduler_config)
+        components["mem_scheduler"] = mem_scheduler
+        mem_scheduler.initialize_modules(
+            chat_llm=scheduler_llm,
+            process_llm=mem_reader.general_llm,
+            db_engine=BaseDBManager.create_default_sqlite_engine(),
+            mem_reader=mem_reader,
+            redis_client=redis_client,
+        )
+        mem_scheduler.init_mem_cube(
+            mem_cube=naive_mem_cube, searcher=searcher, feedback_server=feedback_server
+        )
+        logger.debug("Scheduler initialized")
 
-    # Initialize SchedulerAPIModule
-    api_module = mem_scheduler.api_module
+        # Initialize SchedulerAPIModule
+        api_module = mem_scheduler.api_module
 
-    # Plugins keep a reference to the original context dict, so updating the shared
-    # section here makes the runtime handles visible without adding a second init step.
-    plugin_context["shared"]["mem_scheduler"] = mem_scheduler
-    plugin_context["shared"]["submit_scheduler_messages"] = mem_scheduler.submit_messages
-    plugin_context["shared"]["api_module"] = api_module
+        # Plugins keep a reference to the original context dict, so updating the shared
+        # section here makes the runtime handles visible without adding a second init step.
+        plugin_context["shared"]["mem_scheduler"] = mem_scheduler
+        plugin_context["shared"]["submit_scheduler_messages"] = mem_scheduler.submit_messages
+        plugin_context["shared"]["api_module"] = api_module
 
-    # Start scheduler if enabled
-    if os.getenv("API_SCHEDULER_ON", "true").lower() == "true":
-        mem_scheduler.start()
-        logger.info("Scheduler started")
+        # Start scheduler if enabled
+        if os.getenv("API_SCHEDULER_ON", "true").lower() == "true":
+            mem_scheduler.start()
+            logger.info("Scheduler started")
 
-    logger.info("MemOS server components initialized successfully")
+        logger.info("MemOS server components initialized successfully")
 
-    # Initialize online bot if enabled
-    online_bot = None
-    if dingding_enabled:
-        from memos.memos_tools.notification_service import get_online_bot_function
+        # Initialize online bot if enabled
+        online_bot = None
+        if dingding_enabled:
+            from memos.memos_tools.notification_service import get_online_bot_function
 
-        online_bot = get_online_bot_function() if dingding_enabled else None
-        logger.info("DingDing bot is enabled")
+            online_bot = get_online_bot_function() if dingding_enabled else None
+            logger.info("DingDing bot is enabled")
 
-    deepsearch_agent = DeepSearchMemAgent(
-        llm=llm,
-        memory_retriever=tree_mem,
-    )
-    # Return all components as a dictionary for easy access and extension
-    return {
-        "graph_db": graph_db,
-        "mem_reader": mem_reader,
-        "llm": llm,
-        "suggestion_llm": suggestion_llm,
-        "scheduler_llm": scheduler_llm,
-        "chat_llms": chat_llms,
-        "playground_chat_llms": playground_chat_llms,
-        "embedder": embedder,
-        "reranker": reranker,
-        "internet_retriever": internet_retriever,
-        "memory_manager": memory_manager,
-        "default_cube_config": default_cube_config,
-        "mem_scheduler": mem_scheduler,
-        "naive_mem_cube": naive_mem_cube,
-        "searcher": searcher,
-        "api_module": api_module,
-        "text_mem": text_mem,
-        "online_bot": online_bot,
-        "feedback_server": feedback_server,
-        "redis_client": redis_client,
-        "deepsearch_agent": deepsearch_agent,
-    }
+        deepsearch_agent = DeepSearchMemAgent(
+            llm=llm,
+            memory_retriever=tree_mem,
+        )
+        # Return all components as a dictionary for easy access and extension
+        components.update(
+            {
+                "graph_db": graph_db,
+                "mem_reader": mem_reader,
+                "llm": llm,
+                "suggestion_llm": suggestion_llm,
+                "scheduler_llm": scheduler_llm,
+                "chat_llms": chat_llms,
+                "playground_chat_llms": playground_chat_llms,
+                "embedder": embedder,
+                "reranker": reranker,
+                "internet_retriever": internet_retriever,
+                "memory_manager": memory_manager,
+                "default_cube_config": default_cube_config,
+                "mem_scheduler": mem_scheduler,
+                "naive_mem_cube": naive_mem_cube,
+                "searcher": searcher,
+                "api_module": api_module,
+                "text_mem": text_mem,
+                "online_bot": online_bot,
+                "feedback_server": feedback_server,
+                "redis_client": redis_client,
+                "deepsearch_agent": deepsearch_agent,
+            }
+        )
+        return components
+
+    except BaseException:
+        try:
+            shutdown_components(components)
+        except Exception:
+            logger.exception("Failed to release components after initialization failure")
+        raise

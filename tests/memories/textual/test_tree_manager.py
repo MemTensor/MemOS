@@ -72,22 +72,23 @@ def test_process_memory_adds_nodes(memory_manager):
             confidence=80.0,
         ),
     )
-    memory_manager._process_memory(memory)  # Only pass the single memory item
-    assert memory_manager.graph_store.add_node.called
+    memory_manager._process_memory(memory)
+    nodes = memory_manager.graph_store.add_nodes_batch.call_args.args[0]
+    assert len(nodes) == 2 and nodes[0]["id"] != nodes[1]["id"]
 
 
-def test_add_to_graph_memory_merges(memory_manager, mock_graph_store):
+def test_process_user_memory_writes_bound_pair(memory_manager, mock_graph_store):
     memory = TextualMemoryItem(
         memory="to merge",
         metadata=TreeNodeTextualMemoryMetadata(
             embedding=[0.1] * 5, memory_type="UserMemory", confidence=80.0
         ),
     )
-    memory_manager._add_to_graph_memory(memory, "UserMemory")
-    assert mock_graph_store.add_node.called
+    memory_manager._process_memory(memory)
+    assert mock_graph_store.add_nodes_batch.called
 
 
-def test_add_to_graph_memory_creates_new_node(memory_manager, mock_graph_store):
+def test_process_long_term_memory_writes_bound_pair(memory_manager, mock_graph_store):
     mock_graph_store.search_by_embedding.return_value = [{"id": "id1", "score": 0.5}]
     memory = TextualMemoryItem(
         memory="new memory",
@@ -98,8 +99,8 @@ def test_add_to_graph_memory_creates_new_node(memory_manager, mock_graph_store):
             key="topic",
         ),
     )
-    memory_manager._add_to_graph_memory(memory, "LongTermMemory")
-    assert mock_graph_store.add_node.called
+    memory_manager._process_memory(memory)
+    assert mock_graph_store.add_nodes_batch.called
 
 
 def test_inherit_edges(memory_manager, mock_graph_store):

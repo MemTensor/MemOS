@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from memos.configs.memory import TreeTextMemoryConfig
 from memos.embedders.base import BaseEmbedder
 from memos.graph_dbs.base import BaseGraphDB
+from memos.lifecycle import CloseState
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
@@ -40,6 +41,8 @@ class SimpleTreeTextMemory(TreeTextMemory):
         include_embedding: bool = False,
     ):
         """Initialize memory with the given configuration."""
+        self._close_state = CloseState()
+        self._owns_graph_store = False
         self.config: TreeTextMemoryConfig = config
         self.mode = self.config.mode
         logger.info(f"Tree mode is {self.mode}")
