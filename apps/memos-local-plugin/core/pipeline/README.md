@@ -165,7 +165,7 @@ Implements the adapter contract 1:1. A few translation details:
 | `init()`               | No-op flag flip. Stays idempotent for adapters that re-arm the core.   |
 | `shutdown()`           | Drains the pipeline, closes the DB (if `onShutdown` provided).         |
 | `openSession`          | Delegates to `sessionManager.openSession`.                             |
-| `closeSession`         | Throws `session_not_found` when missing.                               |
+| `closeSession`         | Idempotent; unknown session ids are a no-op (mirrors closeEpisode).    |
 | `openEpisode`          | Calls `startEpisode(sessionId, userMessage="")`.                       |
 | `closeEpisode`         | Idempotent; returns silently if already closed.                        |
 | `onTurnStart`          | Wraps the orchestrator's `InjectionPacket` into a `RetrievalResultDTO`.|
