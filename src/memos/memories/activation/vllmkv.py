@@ -2,13 +2,22 @@ import os
 import pickle
 
 from datetime import datetime
+from typing import Any
 
 from memos.configs.memory import KVCacheMemoryConfig
 from memos.dependency import require_python_package
 from memos.llms.factory import LLMFactory
+from memos.log import get_logger
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import VLLMKVCacheItem
+from memos.memories.activation.kv import (
+    _compute_producer_fingerprint,
+    _fingerprint_mismatch_reasons,
+)
 from memos.memories.textual.item import TextualMemoryItem
+
+
+logger = get_logger(__name__)
 
 
 class VLLMKVCacheMemory(BaseActMemory):
@@ -27,6 +36,10 @@ class VLLMKVCacheMemory(BaseActMemory):
         self.config = config
         self.llm = LLMFactory.from_config(config.extractor_llm)
         self.kv_cache_memories: dict[str, VLLMKVCacheItem] = {}
+
+    def _producer_fingerprint(self) -> dict[str, Any]:
+        """Fingerprint of the LLM currently wired into this memory."""
+        return _compute_producer_fingerprint(self.llm)
 
     def extract(self, text: str) -> VLLMKVCacheItem:
         """Extract memory based on the text.
@@ -47,7 +60,11 @@ class VLLMKVCacheMemory(BaseActMemory):
         # Create a VLLMKVCacheItem with the extracted prompt
         cache_item = VLLMKVCacheItem(
             memory=prompt,
-            metadata={"source_text": text, "extracted_at": datetime.now().isoformat()},
+            metadata={
+                "source_text": text,
+                "extracted_at": datetime.now().isoformat(),
+                "producer": self._producer_fingerprint(),
+            },
         )
 
         return cache_item
@@ -140,7 +157,51 @@ class VLLMKVCacheMemory(BaseActMemory):
         """
         # Build vLLM KV cache from the textual memory content
         prompt = self.llm.build_vllm_kv_cache(mem.memory)
-        return VLLMKVCacheItem(memory=prompt, metadata=mem.metadata.model_dump())
+        metadata = mem.metadata.model_dump()
+        metadata["producer"] = self._producer_fingerprint()
+        return VLLMKVCacheItem(memory=prompt, metadata=metadata)
+
+    def _verify_and_filter(
+        self, memories: dict[str, VLLMKVCacheItem]
+    ) -> dict[str, VLLMKVCacheItem]:
+        """Compare each item's saved producer fingerprint against the live LLM.
+
+        Drops items with an incompatible fingerprint. Items without a
+        fingerprint are kept with a warning (backward compatibility with
+        pre-2.0.30 caches).
+        """
+        if not memories:
+            return {}
+        try:
+            live_fp = self._producer_fingerprint()
+        except Exception:
+            logger.warning(
+                "Failed to compute live producer fingerprint; loading vLLM KV cache without verification",
+                exc_info=True,
+            )
+            return memories
+
+        verified: dict[str, VLLMKVCacheItem] = {}
+        for item_id, item in memories.items():
+            item_metadata = getattr(item, "metadata", None) or {}
+            saved_fp = item_metadata.get("producer") if isinstance(item_metadata, dict) else None
+            if saved_fp is None:
+                logger.warning(
+                    "vLLM KV cache item %s has no producer fingerprint (pre-2.0.30 cache); loading unchecked",
+                    item_id,
+                )
+                verified[item_id] = item
+                continue
+            reasons = _fingerprint_mismatch_reasons(saved_fp, live_fp)
+            if reasons:
+                logger.warning(
+                    "vLLM KV cache item %s dropped: producer fingerprint mismatch (%s)",
+                    item_id,
+                    "; ".join(reasons),
+                )
+                continue
+            verified[item_id] = item
+        return verified
 
     def load(self, dir: str) -> None:
         """Load memories from os.path.join(dir, self.config.memory_filename)
@@ -169,21 +230,30 @@ class VLLMKVCacheMemory(BaseActMemory):
                     memories = data["kv_cache_memories"]
                     if isinstance(memories, list):
                         # Convert list to dict format
-                        self.kv_cache_memories = {item.id: item for item in memories}
+                        candidate = {item.id: item for item in memories}
                     else:
-                        self.kv_cache_memories = memories
+                        candidate = memories
+                    self.kv_cache_memories = self._verify_and_filter(candidate)
                 else:
                     # Reset to empty if no memories in data
                     self.kv_cache_memories = {}
             elif isinstance(data, list):
                 # Backward compatibility: convert list to dict
-                self.kv_cache_memories = {item.id: item for item in data}
+                candidate = {item.id: item for item in data}
+                self.kv_cache_memories = self._verify_and_filter(candidate)
             else:
                 # Reset to empty if data format is unexpected
                 self.kv_cache_memories = {}
 
-        except (EOFError, pickle.UnpicklingError, Exception):
-            # If loading fails, start with empty memories
+        except Exception:
+            # Corrupt or incompatible cache — log the failure so it is
+            # distinguishable from an empty file in production. Loader
+            # stays resilient by resetting to an empty dict.
+            logger.warning(
+                "Failed to load vLLM KV cache from %s; resetting to empty",
+                file_path,
+                exc_info=True,
+            )
             self.kv_cache_memories = {}
 
     def dump(self, dir: str) -> None:
