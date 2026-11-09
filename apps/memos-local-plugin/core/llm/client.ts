@@ -45,6 +45,27 @@ import type {
 } from "./types.js";
 
 const DEFAULT_MAX_TOKENS = 1024;
+/**
+ * When a JSON completion stops with `finishReason: "length"`, retrying at the
+ * same `maxTokens` truncates at the same point. Thinking models share one
+ * budget between hidden reasoning and the answer, so a small budget can come
+ * back as an empty 200 OK. The retry therefore grows the budget (never shrinks
+ * it) up to this ceiling. The ceiling sits above the 4096 default that
+ * dedicated clients such as `l3Llm` / `skillEvolver` use, so their retries can
+ * still grow.
+ */
+const LENGTH_RETRY_MIN_TOKENS = 1024;
+const LENGTH_RETRY_MAX_TOKENS = 8192;
+const LENGTH_RETRY_GROWTH = 4;
+
+export function nextLengthRetryMaxTokens(current: number | undefined): number {
+  const base = current ?? DEFAULT_MAX_TOKENS;
+  const grown = Math.min(
+    Math.max(base * LENGTH_RETRY_GROWTH, LENGTH_RETRY_MIN_TOKENS),
+    LENGTH_RETRY_MAX_TOKENS,
+  );
+  return Math.max(base, grown);
+}
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
@@ -534,10 +555,27 @@ export function createLlmClientWithProvider(
         jsonLog.warn("malformed", {
           op,
           attempt,
+          finishReason: completion.finishReason,
+          usage: completion.usage,
+          maxTokens: call.maxTokens,
           err: summarizeErr(err),
         });
         if (attempt <= maxMalformedRetries) {
           retries++;
+          // A truncated reply is truncated again at the same limit, so give
+          // the retry more room (see LENGTH_RETRY_* above).
+          if (completion.finishReason === "length") {
+            const fromMaxTokens = call.maxTokens;
+            call.maxTokens = nextLengthRetryMaxTokens(fromMaxTokens);
+            // Make the escalation (or a retry that cannot grow) visible in logs.
+            jsonLog.warn("length_retry_budget", {
+              op,
+              attempt,
+              fromMaxTokens,
+              toMaxTokens: call.maxTokens,
+              grew: call.maxTokens > (fromMaxTokens ?? 0),
+            });
+          }
           continue;
         }
       }
