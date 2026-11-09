@@ -287,6 +287,34 @@ describe("skill/runSkill (integration)", () => {
     expect(after.trialsPassed).toBe(2);
   });
 
+  it("does not resurrect a skill deleted while a rebuild awaits the LLM", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    await runSkill({ trigger: "manual", policyId }, makeDeps(h).deps);
+    const before = h.repos.skills.list()[0]!;
+
+    const current = h.repos.policies.getById(policyId)!;
+    h.repos.policies.upsert({
+      ...current,
+      procedure: `${current.procedure}\n4. verify service restart`,
+      updatedAt: (before.updatedAt + 1000) as typeof current.updatedAt,
+    });
+
+    const run2 = makeDeps(h, {
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": () => {
+            h.repos.skills.deleteById(before.id);
+            return makeDraft();
+          },
+        },
+      }),
+    });
+    const r = await runSkill({ trigger: "manual", policyId }, run2.deps);
+    expect(r.rebuilt).toBe(0);
+    expect(h.repos.skills.getById(before.id)).toBeNull();
+  });
+
   it("skips when LLM is disabled", async () => {
     const h = open();
     const { policyId } = seedFullCandidate(h);

@@ -212,9 +212,17 @@ export async function runSkill(
     // counters), so re-read the live row and carry its counters instead of
     // writing the stale snapshot values back over them.
     if (decision.action === "rebuild" && decision.existingSkill) {
-      const live =
-        repos.skills.getById(decision.existingSkill.id) ??
-        decision.existingSkill;
+      const live = repos.skills.getById(decision.existingSkill.id);
+      if (!live) {
+        // Deleted while we were awaiting: do not resurrect it from the
+        // stale snapshot.
+        rejected += 1;
+        warnings.push({
+          policyId: decision.policy.id,
+          reason: "skill-deleted-during-rebuild",
+        });
+        continue;
+      }
       row.trialsAttempted = live.trialsAttempted;
       row.trialsPassed = live.trialsPassed;
       row.eta = recomputeEta(live, decision.policy, config);
