@@ -75,12 +75,41 @@ class MarkdownChunker(BaseChunker):
         logger.debug(f"Generated {len(chunks)} chunks from input text")
         return chunks
 
+    _FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+
+    @classmethod
+    def _code_block_mask(cls, lines: list[str]) -> list[bool]:
+        """Mark which lines sit inside a fenced code block.
+
+        Fenced code (``` or ~~~, CommonMark-style) is tracked so that ``#``
+        comments inside embedded code are never mistaken for markdown
+        headers. The fence lines themselves are masked as well.
+        """
+        mask = []
+        fence_char = None
+        for line in lines:
+            fence_match = cls._FENCE_RE.match(line)
+            if fence_match:
+                char = fence_match.group(1)[0]
+                if fence_char is None:
+                    fence_char = char
+                elif char == fence_char:
+                    fence_char = None
+                mask.append(True)
+            else:
+                mask.append(fence_char is not None)
+        return mask
+
     def _detect_malformed_headers(self, text: str) -> bool:
         """Detect if markdown has improper header hierarchy usage."""
         # Extract all valid markdown header lines
         header_levels = []
         pattern = re.compile(r"^#{1,6}\s+.+")
-        for line in text.split("\n"):
+        lines = text.split("\n")
+        code_mask = self._code_block_mask(lines)
+        for line, in_code in zip(lines, code_mask, strict=True):
+            if in_code:
+                continue
             stripped_line = line.strip()
             if pattern.match(stripped_line):
                 hash_match = re.match(r"^(#+)", stripped_line)
@@ -123,10 +152,16 @@ class MarkdownChunker(BaseChunker):
         """
         header_pattern = re.compile(r"^(#{1,6})\s+(.+)$")
         lines = text.split("\n")
+        code_mask = self._code_block_mask(lines)
         fixed_lines = []
         first_valid_header = False
 
-        for line in lines:
+        for line, in_code in zip(lines, code_mask, strict=True):
+            if in_code:
+                # Fenced code must pass through untouched: `#` comments in
+                # embedded code are not headers.
+                fixed_lines.append(line)
+                continue
             stripped_line = line.strip()
             # Match valid header lines (invalid # lines kept as-is)
             header_match = header_pattern.match(stripped_line)
