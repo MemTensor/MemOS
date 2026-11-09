@@ -249,6 +249,44 @@ describe("skill/runSkill (integration)", () => {
     expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
   });
 
+  it("keeps trial counters recorded while a rebuild awaits the LLM", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    const first = makeDeps(h);
+    await runSkill({ trigger: "manual", policyId }, first.deps);
+    const before = h.repos.skills.list()[0]!;
+    expect(before.trialsAttempted).toBe(0);
+
+    // Drift the policy so the next run rebuilds the existing skill.
+    const current = h.repos.policies.getById(policyId)!;
+    h.repos.policies.upsert({
+      ...current,
+      procedure: `${current.procedure}\n4. verify service restart`,
+      gain: current.gain + 0.1,
+      updatedAt: (before.updatedAt + 1000) as typeof current.updatedAt,
+    });
+
+    // While the rebuild is suspended inside the crystallize call, a reward
+    // resolves two pending trials (what `resolveTrialsForReward` does).
+    const run2 = makeDeps(h, {
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": () => {
+            h.repos.skills.bumpTrial(before.id, true, Date.now());
+            h.repos.skills.bumpTrial(before.id, true, Date.now());
+            return makeDraft();
+          },
+        },
+      }),
+    });
+    const r = await runSkill({ trigger: "manual", policyId }, run2.deps);
+    expect(r.rebuilt).toBe(1);
+
+    const after = h.repos.skills.getById(before.id)!;
+    expect(after.trialsAttempted).toBe(2);
+    expect(after.trialsPassed).toBe(2);
+  });
+
   it("skips when LLM is disabled", async () => {
     const h = open();
     const { policyId } = seedFullCandidate(h);

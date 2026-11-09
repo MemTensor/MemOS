@@ -205,8 +205,19 @@ export async function runSkill(
     // If rebuilding, start from the existing skill's trial counters but
     // reset η toward the recomputed value — existing practitioner skills
     // lose credibility when the underlying policy shifts materially.
+    //
+    // The `existingSkill` snapshot was taken before the crystallize + embed
+    // awaits above. A `reward.updated` event may have resolved pending
+    // trials while we were suspended (`applySkillFeedback` upserts new
+    // counters), so re-read the live row and carry its counters instead of
+    // writing the stale snapshot values back over them.
     if (decision.action === "rebuild" && decision.existingSkill) {
-      row.eta = recomputeEta(decision.existingSkill, decision.policy, config);
+      const live =
+        repos.skills.getById(decision.existingSkill.id) ??
+        decision.existingSkill;
+      row.trialsAttempted = live.trialsAttempted;
+      row.trialsPassed = live.trialsPassed;
+      row.eta = recomputeEta(live, decision.policy, config);
     }
 
     repos.skills.upsert(row);
