@@ -225,6 +225,28 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             logger.error(f"[add_nodes_batch] Failed to add nodes: {e}", exc_info=True)
             raise
 
+    def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
+        """
+        Update node in Neo4j and sync key fields to Qdrant payload.
+
+        The parent implementation only updates Neo4j. For the community edition, which
+        relies on an external vector DB (Qdrant), key status/metadata fields must also
+        be propagated to the Qdrant payload so that vector searches reflect the latest
+        node state (e.g. archived memories are excluded correctly).
+        """
+        super().update_node(id, fields, user_name)
+
+        sync_fields = {"status", "tags", "memory_type", "content", "sources"}
+        payload_updates = {k: v for k, v in fields.items() if k in sync_fields}
+        if payload_updates and self.vec_db:
+            try:
+                self.vec_db.update(id, VecDBItem(id=id, vector=None, payload=payload_updates))
+            except Exception as e:
+                logger.warning(
+                    f"[update_node] Failed to sync fields {list(payload_updates)} "
+                    f"to Qdrant for node {id}: {e}"
+                )
+
     def get_children_with_embeddings(
         self, id: str, user_name: str | None = None
     ) -> list[dict[str, Any]]:
