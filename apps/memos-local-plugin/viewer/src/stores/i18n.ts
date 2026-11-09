@@ -7,6 +7,8 @@
  *     interpolation trivial.
  *   - Language preference persists in localStorage; default language
  *     is inferred from `navigator.language` (zh-* → zh, else en).
+ *     `detectDefault` is exported and accepts an options bag so tests
+ *     and SSR hosts can drive both branches without stubbing globals.
  *   - Uses @preact/signals so components re-render automatically on
  *     language switch without subscription plumbing.
  *
@@ -1809,14 +1811,93 @@ export type Locale = "en" | "zh";
 
 const STORAGE_KEY = "memos.lang";
 
-function detectDefault(): Locale {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === "en" || saved === "zh") return saved;
-  } catch {
-    // ignore
+/**
+ * Options for {@link detectDefault}. Every field is optional — omitted
+ * fields fall back to the ambient browser globals (`navigator.language`,
+ * `globalThis.localStorage`), matching the historical behaviour of this
+ * module exactly. Callers under Node (Vitest / SSR) can inject a stub
+ * storage or an explicit `navLanguage` to exercise both branches without
+ * touching global state.
+ *
+ * See issue #2346 — before injection was available, the `zh-*` branch
+ * was unreachable from unit tests because Node has no `navigator` and
+ * `localStorage` throws.
+ */
+export interface DetectDefaultOptions {
+  /**
+   * BCP-47 language tag (e.g. `"zh-CN"`, `"en-US"`). When omitted the
+   * detector reads `navigator.language`, or falls back to `"en"` if
+   * `navigator` is undefined (as it is under Node).
+   */
+  navLanguage?: string;
+  /**
+   * Storage object to consult for a previously saved locale. Semantics
+   * are asymmetric on purpose:
+   *
+   *   - **omitted** (`undefined`): read ambient `globalThis.localStorage`
+   *     (and silently fall back to `navLanguage` if that access throws –
+   *     private mode, SSR, …). Pass a `Map`-backed stub in tests to
+   *     simulate an empty or pre-populated store.
+   *   - **`null`**: explicit "disable storage" sentinel. The detector
+   *     skips storage lookup entirely and jumps straight to
+   *     `navLanguage`. Use this in tests that want to exercise the
+   *     navigator-only branch without providing a stub.
+   *
+   * If you want a no-op stub instead of disabling the lookup, pass an
+   * object whose `getItem` always returns `null` (e.g. `{ getItem: () => null }`)
+   * rather than `null`.
+   */
+  storage?: Pick<Storage, "getItem"> | null;
+  /** Key used to read the saved locale from `storage`. */
+  storageKey?: string;
+}
+
+/**
+ * Compute the default UI locale.
+ *
+ * Priority: injected/ambient `storage[storageKey]` (if it's `"en"` or
+ * `"zh"`) → `navLanguage` (zh-* → `"zh"`, else `"en"`) → `"en"`.
+ *
+ * The function is deliberately pure w.r.t. its arguments so tests can
+ * assert on both branches without mutating global state. When called
+ * with no arguments (as the module does at import time) it behaves
+ * exactly as it always has in the browser.
+ *
+ * @internal Exported for unit tests only. Not a stable public API —
+ * consumers outside this module should not depend on the signature.
+ *
+ * NOTE: `setLocale` writes back to the ambient `localStorage`, not to
+ * an injected storage stub. The `opts.storage` seam only covers the
+ * read path during initial detection; a test that exercises
+ * `detectDefault` with a `Map`-backed stub will not observe writes
+ * made by `setLocale`.
+ */
+export function detectDefault(opts: DetectDefaultOptions = {}): Locale {
+  const storageKey = opts.storageKey ?? STORAGE_KEY;
+  let storage: Pick<Storage, "getItem"> | null;
+  if (opts.storage !== undefined) {
+    storage = opts.storage;
+  } else if (
+    typeof globalThis !== "undefined" &&
+    (globalThis as { localStorage?: Storage }).localStorage
+  ) {
+    storage = (globalThis as { localStorage: Storage }).localStorage;
+  } else {
+    storage = null;
   }
-  const nav = (typeof navigator !== "undefined" && navigator.language) || "en";
+  if (storage) {
+    try {
+      const saved = storage.getItem(storageKey);
+      if (saved === "en" || saved === "zh") return saved;
+    } catch {
+      // Access to storage can throw (private mode, SSR). Fall through
+      // to navLanguage-based detection.
+    }
+  }
+  const nav =
+    opts.navLanguage !== undefined
+      ? opts.navLanguage
+      : (typeof navigator !== "undefined" && navigator.language) || "en";
   return nav.toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
