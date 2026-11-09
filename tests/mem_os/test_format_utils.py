@@ -35,6 +35,17 @@ class TestCleanJsonResponse:
         expected = '{"key": "value"}'
         assert clean_json_response(input_str) == expected
 
+    def test_clean_json_response_removes_single_line_fence(self):
+        """A single-line fenced payload (no newline after the opening fence)
+        must keep its JSON intact. A greedy info-string class swallowed the
+        whole payload here before the pattern was tightened."""
+        assert clean_json_response('```{"a": 1}```') == '{"a": 1}'
+
+    def test_clean_json_response_removes_single_line_fence_with_info_string(self):
+        """Same regression with an info string followed by a space instead
+        of a newline."""
+        assert clean_json_response('```json {"key": "value"}```') == '{"key": "value"}'
+
     def test_clean_json_response_strips_whitespace(self):
         """Test that leading/trailing whitespace is stripped."""
         input_str = '  \n  {"key": "value"}  \n  '
@@ -73,3 +84,37 @@ class TestCleanJsonResponse:
         result = clean_json_response(input_str)
         assert "`example`" in result
         assert result.count("`") == 2  # Only internal backticks remain
+
+    def test_clean_json_response_preserves_internal_fenced_code(self):
+        """Issue #2420 reproducer: a JSON string value that itself contains a
+        fenced code block must not have its fences stripped.
+
+        Before the fix the global ``response.replace("```", "")`` call
+        removed *every* triple-backtick sequence, including the one inside
+        the JSON value, silently corrupting suggestions and chat metadata
+        that contained code snippets.
+        """
+        input_str = '```json\n{"text": "```py\\ncode```"}\n```'
+        result = clean_json_response(input_str)
+        assert result == '{"text": "```py\\ncode```"}'
+
+    def test_clean_json_response_preserves_unclosed_fence_in_value(self):
+        """A JSON value containing a single unclosed fence (e.g. a partial
+        snippet the LLM didn't close) must also pass through unchanged.
+        """
+        input_str = '```json\n{"text": "here is some ```partial"}\n```'
+        result = clean_json_response(input_str)
+        assert result == '{"text": "here is some ```partial"}'
+
+    def test_clean_json_response_handles_only_opening_fence(self):
+        """An opening fence with no matching closing fence should still be
+        removed (best effort; it can never make the JSON valid)."""
+        input_str = '```json\n{"key": "value"}'
+        result = clean_json_response(input_str)
+        assert result == '{"key": "value"}'
+
+    def test_clean_json_response_handles_only_closing_fence(self):
+        """A closing fence with no opening fence should still be removed."""
+        input_str = '{"key": "value"}\n```'
+        result = clean_json_response(input_str)
+        assert result == '{"key": "value"}'
