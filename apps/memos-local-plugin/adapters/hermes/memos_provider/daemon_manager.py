@@ -56,6 +56,17 @@ HERMES_VIEWER_PORT = 18800
 VIEWER_PROBE_TTL_SEC = 30.0
 VIEWER_START_LOCK_TIMEOUT_SEC = 20.0
 VIEWER_START_LOCK_STALE_SEC = 60.0
+# Issue #2467: during a systemd restart window the managed bridge daemon is
+# mid-start while :18800 still probes "free" (nothing is bound yet). A session
+# host that rescue-spawns its own `--daemon` then wins first bind, the unit
+# crash-loops forever on "port busy", and the rogue answers
+# `/api/v1/health` — monitoring stays green while the supervised process is
+# gone. When a supervisor-managed bridge unit is active or activating, wait
+# for it instead of racing it.
+MANAGED_BRIDGE_UNIT_ENV = "MEMOS_BRIDGE_SYSTEMD_UNIT"
+DEFAULT_MANAGED_BRIDGE_UNIT = "memos-bridge.service"
+MANAGED_UNIT_GRACE_SEC = 20.0
+MANAGED_UNIT_POLL_SEC = 1.0
 # Bound how long a cached `_bridge_ok` answer is trusted. Without this, a
 # single transient `_node_available()` failure during gateway startup
 # (subprocess race, `.env` loaded after the first probe) would pin the
@@ -356,6 +367,98 @@ def _probe_json_url(url: str) -> LoopbackProbeResult:
         return "occupied"
 
 
+def _managed_bridge_unit() -> str | None:
+    """Return the supervisor-managed bridge unit to defer to, if any.
+
+    ``MEMOS_BRIDGE_SYSTEMD_UNIT`` renames the unit for deployments that
+    don't use the default name; setting it empty disables the check.
+    """
+    raw = os.environ.get(MANAGED_BRIDGE_UNIT_ENV, DEFAULT_MANAGED_BRIDGE_UNIT)
+    return raw.strip() or None
+
+
+def _systemd_unit_state(unit: str) -> str | None:
+    """Return ``systemctl is-active <unit>``, or None when undetectable.
+
+    Any failure — no systemctl binary, no systemd bus, timeout — degrades to
+    None so hosts without systemd keep the unconditional rescue-spawn
+    behavior. The state is printed on stdout even for non-zero exit codes
+    ("inactive"/"failed" exit 3), so only the output matters.
+    """
+    systemctl = shutil.which("systemctl")
+    if not systemctl:
+        return None
+    try:
+        completed = subprocess.run(
+            [systemctl, "is-active", unit],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except Exception:
+        return None
+    return (completed.stdout or "").strip().lower() or None
+
+
+def _managed_daemon_gate() -> Literal["spawn", "running", "refuse"]:
+    """Decide whether the rescue-spawn path may start a ``--daemon``.
+
+    ``spawn``: no managed-unit signal (systemd absent, unit inactive or
+    failed), or the unit just left active/activating — rescue exactly as
+    before.
+    ``running``: the managed daemon took :18800 while we waited — the
+    caller must report the viewer as up instead of spawning.
+    ``refuse``: the unit is still active/activating after the grace window
+    — spawning a competing daemon would start the #2467 port war, so fail
+    closed like the occupied/unknown paths.
+    """
+    unit = _managed_bridge_unit()
+    if not unit:
+        return "spawn"
+    state = _systemd_unit_state(unit)
+    if state not in ("active", "activating"):
+        return "spawn"
+    logger.info(
+        "MemOS: managed bridge unit %s is %s while port %d probes free — "
+        "waiting for the managed daemon instead of rescue-spawning",
+        unit,
+        state,
+        HERMES_VIEWER_PORT,
+    )
+    deadline = time.time() + MANAGED_UNIT_GRACE_SEC
+    while True:
+        status = _probe_viewer()
+        if status == "running_memos":
+            return "running"
+        if status == "occupied":
+            logger.warning(
+                "MemOS: port %d was claimed by a non-MemOS service while "
+                "waiting for managed unit %s",
+                HERMES_VIEWER_PORT,
+                unit,
+            )
+            return "refuse"
+        state = _systemd_unit_state(unit)
+        if state not in ("active", "activating"):
+            logger.info(
+                "MemOS: managed bridge unit %s is no longer %s — proceeding with rescue-spawn",
+                unit,
+                state or "active/activating",
+            )
+            return "spawn"
+        if time.time() >= deadline:
+            logger.warning(
+                "MemOS: managed bridge unit %s still %s after %.0fs and port "
+                "%d still free; refusing to spawn a competing daemon",
+                unit,
+                state or "unknown",
+                MANAGED_UNIT_GRACE_SEC,
+                HERMES_VIEWER_PORT,
+            )
+            return "refuse"
+        time.sleep(MANAGED_UNIT_POLL_SEC)
+
+
 def ensure_viewer_daemon(
     *,
     probe_only: bool = False,
@@ -428,6 +531,17 @@ def ensure_viewer_daemon(
                     "MemOS: timed out waiting for viewer daemon startup lock; "
                     "memory capture will continue without the web panel",
                 )
+                return False
+            # #2467: a "free" probe cannot distinguish "no daemon" from "the
+            # supervisor-managed daemon is mid-restart". Defer to the managed
+            # unit before spawning a competing --daemon.
+            gate = _managed_daemon_gate()
+            if gate == "running":
+                _viewer_status = "running_memos"
+                _viewer_last_probe_at = time.time()
+                logger.info("MemOS: managed bridge daemon is serving port %d", HERMES_VIEWER_PORT)
+                return True
+            if gate == "refuse":
                 return False
             if not ensure_bridge_running():
                 return False
