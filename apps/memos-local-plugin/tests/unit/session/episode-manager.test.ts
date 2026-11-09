@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
+import type { EpisodeId } from "../../../agent-contract/dto.js";
 import {
   createEpisodeManager,
   createSessionEventBus,
@@ -52,6 +53,18 @@ describe("session/episode-manager", () => {
       bus,
     });
     return { epm, bus };
+  }
+
+  /**
+   * What actually lands in `meta_json` in production: the repo persists via
+   * `toJsonText` → `JSON.stringify`, which omits undefined-valued keys, and
+   * the row is read back through `JSON.parse`. The fake keeps the raw
+   * (unserialised) object, so round-trip it here to assert on the shape a
+   * consistency check such as `json_type(meta_json,'$.rewardDirty')` sees.
+   */
+  function persistedMeta(id: EpisodeId): Record<string, unknown> {
+    const raw = episodesFake.rows.get(id)!.meta;
+    return JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
   }
 
   it("start inserts row and emits episode.started", () => {
@@ -199,5 +212,116 @@ describe("session/episode-manager", () => {
     expect(open.map((e) => e.id)).toEqual([s1.id]);
     const all = epm.listForSession("se_a");
     expect(all.map((e) => e.id).sort()).toEqual([s1.id, s2.id].sort());
+  });
+
+  // Regression test for #2370: reopen() must clear reward.skipped when setting
+  // rewardDirty so that episodeRewardIsDirty() is not short-circuited by
+  // rewardWasSkipped() and the marker is actually cleared by the rescore path.
+  it("reopen clears reward.skipped when setting rewardDirty (#2370)", () => {
+    const { epm } = makeEpm();
+    const snap = epm.start(
+      { sessionId: "se_a", initialTurn: { role: "user", content: "x" } },
+      intent("task"),
+    );
+    nowTick = 2_000;
+    // Simulate terminal-skip scoring: close the episode and stamp reward.skipped=true.
+    epm.finalize(snap.id);
+    epm.patchMeta(snap.id, {
+      reward: {
+        source: "heuristic",
+        reason: "too_short",
+        scoredAt: 2_000,
+        skipped: true,
+      },
+      closeReason: "abandoned",
+    });
+
+    // Verify the skip is present before reopen.
+    const beforeReopen = episodesFake.rows.get(snap.id)!;
+    expect((beforeReopen.meta.reward as Record<string, unknown>).skipped).toBe(true);
+
+    nowTick = 91_000;
+    // Reopen the episode (e.g. follow_up path).
+    const reopened = epm.reopen(snap.id, "follow_up");
+
+    // rewardDirty must be set so rescore scans pick this episode up.
+    expect(reopened.meta.rewardDirty).toBeTruthy();
+    expect((reopened.meta.rewardDirty as Record<string, unknown>).reason).toBe(
+      "episode_reopened",
+    );
+
+    // reward.skipped must be cleared (undefined) so rewardWasSkipped() returns
+    // false and episodeRewardIsDirty() reaches the hasRewardDirtyMarker check.
+    const reward = reopened.meta.reward as Record<string, unknown> | undefined;
+    expect(reward?.skipped).toBeUndefined();
+
+    // The DB row must also reflect the cleared flag.
+    const dbRow = episodesFake.rows.get(snap.id)!;
+    expect((dbRow.meta.reward as Record<string, unknown> | undefined)?.skipped).toBeUndefined();
+    expect(dbRow.meta.rewardDirty).toBeTruthy();
+  });
+
+  it("reopen does not set rewardDirty when episode was never scored", () => {
+    const { epm } = makeEpm();
+    const snap = epm.start(
+      { sessionId: "se_a", initialTurn: { role: "user", content: "x" } },
+      intent(),
+    );
+    epm.finalize(snap.id);
+    // No reward meta at all — rTask is null, no meta.reward set.
+    const reopened = epm.reopen(snap.id, "follow_up");
+    expect(reopened.meta.rewardDirty).toBeUndefined();
+  });
+
+  // Regression test for #2370: reopen() re-sets meta.rewardDirty, so a later
+  // terminal transition must drop it again. Before this, an episode that
+  // reached a terminal state through a path that did not happen to write a
+  // reward (e.g. it resumed with rTask != null, so the reward fallback was
+  // skipped) kept the marker forever and was reported dirty on every
+  // consistency run while being fully resolved.
+  it("reaching a terminal state clears the rewardDirty marker set by reopen (#2370)", () => {
+    const { epm } = makeEpm();
+    const snap = epm.start(
+      { sessionId: "se_a", initialTurn: { role: "user", content: "x" } },
+      intent(),
+    );
+    nowTick = 2_000;
+    epm.finalize(snap.id, { rTask: 0.0 });
+
+    nowTick = 3_000;
+    const reopened = epm.reopen(snap.id, "follow_up");
+    expect(reopened.status).toBe("open");
+    expect(reopened.rTask).toBe(0.0);
+    expect(persistedMeta(snap.id).rewardDirty).toBeDefined();
+
+    nowTick = 4_000;
+    const closed = epm.finalize(snap.id, { rTask: 0.0 });
+    expect(closed.status).toBe("closed");
+    const db = episodesFake.rows.get(snap.id)!;
+    expect(db.status).toBe("closed");
+    expect(db.meta.rewardDirty).toBeUndefined();
+    // Key *absence*, not just falsiness: a check written as
+    // `json_type(meta_json,'$.rewardDirty') IS NOT NULL` — which is how the
+    // reporter's watchdog is built — must not match either.
+    expect("rewardDirty" in persistedMeta(snap.id)).toBe(false);
+  });
+
+  it("abandon is terminal too and clears the rewardDirty marker (#2370)", () => {
+    const { epm } = makeEpm();
+    const snap = epm.start(
+      { sessionId: "se_a", initialTurn: { role: "user", content: "x" } },
+      intent(),
+    );
+    nowTick = 2_000;
+    epm.finalize(snap.id, { rTask: 0.5 });
+    nowTick = 3_000;
+    epm.reopen(snap.id, "follow_up");
+    expect(persistedMeta(snap.id).rewardDirty).toBeDefined();
+
+    nowTick = 4_000;
+    epm.abandon(snap.id, "host_crashed");
+    const db = episodesFake.rows.get(snap.id)!;
+    expect(db.status).toBe("closed");
+    expect("rewardDirty" in persistedMeta(snap.id)).toBe(false);
   });
 });
