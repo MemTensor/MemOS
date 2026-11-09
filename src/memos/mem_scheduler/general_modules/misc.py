@@ -1,10 +1,11 @@
 import json
 import os
+import types
 
 from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Full, Queue
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, Union, get_args, get_origin
 
 from dotenv import load_dotenv
 from pydantic import field_serializer
@@ -65,21 +66,31 @@ class EnvConfigMixin(Generic[T]):
             env_var = f"{prefix}{field_name.upper()}"
             field_type = field_info.annotation
 
-            if field_info.is_required() and env_var not in os.environ:
-                raise ValueError(f"Required environment variable {env_var} is missing")
-
             if env_var in os.environ:
                 raw_value = os.environ[env_var]
                 field_values[field_name] = cls._parse_env_value(raw_value, field_type)
-            elif field_info.default is not None:
-                field_values[field_name] = field_info.default
-            else:
-                raise ValueError()
+            elif field_info.is_required():
+                raise ValueError(f"Required environment variable {env_var} is missing")
+            # Non-required fields with no env var set: fall through and let
+            # pydantic apply the declared default (or default_factory) at
+            # construction time. Explicitly passing field_info.default here
+            # would leak PydanticUndefined for default_factory fields.
         return cls(**field_values)
 
     @classmethod
     def _parse_env_value(cls, value: str, target_type: type) -> Any:
-        """Converts environment variable string to appropriate type."""
+        """Converts environment variable string to appropriate type.
+
+        Unwraps ``Optional[T]`` / ``Union[T, None]`` / ``T | None`` to the
+        underlying ``T`` before dispatching, so optional numeric/bool fields
+        parse correctly instead of remaining as raw strings.
+        """
+        origin = get_origin(target_type)
+        if origin is Union or origin is types.UnionType:
+            non_none_args = [arg for arg in get_args(target_type) if arg is not type(None)]
+            if len(non_none_args) == 1:
+                target_type = non_none_args[0]
+
         if target_type is bool:
             return value.lower() in ("true", "1", "t", "y", "yes")
         if target_type is int:
