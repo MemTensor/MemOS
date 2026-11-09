@@ -44,7 +44,7 @@ describe("memory/l2/induce", () => {
   it("returns {ok:true, draft} and fills support_trace_ids when the LLM omits them", async () => {
     const llm = fakeLlm({
       completeJson: {
-        "l2.l2.induction.v2": {
+        "l2.l2.induction.v3": {
           title: "install system libs first",
           trigger: "pip install fails in container with missing system library",
           procedure: "1. detect missing lib 2. apk/apt-get install 3. retry pip",
@@ -75,7 +75,7 @@ describe("memory/l2/induce", () => {
   it("cleans unsafe markup from LLM-derived policy fields", async () => {
     const llm = fakeLlm({
       completeJson: {
-        "l2.l2.induction.v2": {
+        "l2.l2.induction.v3": {
           title: "<img src=x onerror=alert(1)> install system libs",
           trigger: "<script>alert(1)</script>pip fails [bad](javascript:alert(1))",
           procedure: "Use [safe](https://example.com), ignore [bad](javascript:alert(1))",
@@ -149,7 +149,7 @@ describe("memory/l2/induce", () => {
   it("reason=llm_failed when the LLM draft is malformed (missing title)", async () => {
     const llm = fakeLlm({
       completeJson: {
-        "l2.l2.induction.v2": { trigger: "no title", procedure: "..." },
+        "l2.l2.induction.v3": { trigger: "no title", procedure: "..." },
       },
     });
     const res = await induceDraft(

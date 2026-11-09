@@ -14,10 +14,14 @@ import type { PromptDef } from "./index.js";
  * belongs to the L3 world model, not here. The system prompt explicitly
  * rejects environment-fact drift to keep the two layers semantically
  * orthogonal. Bumping the version to v2 captures that change.
+ * v3 history: adds a negative list for conversational acts (clarify /
+ * confirm-with-user / notify / reporting status). 2026-08-28 audit: those
+ * crystallized into dead skills nobody can invoke.
+ * Bumping the version to v3 captures that change.
  */
 export const L2_INDUCTION_PROMPT: PromptDef = {
   id: "l2.induction",
-  version: 2,
+  version: 3,
   description:
     "Distill an L2 policy (procedural sub-task strategy) from a cluster of similar L1 traces, with explicit boundaries against L3 world-model drift.",
   system: `You induce reusable **procedural policies** from agent experience.
@@ -69,6 +73,22 @@ check, not as a standalone description. Example:
                '<lib> not found' or 'header not found'"
     caveats:  ["if first apk add still fails, also check musl-vs-glibc
                wheel compatibility before retrying"]
+
+──────────────────── Conversational acts are not policies ────────────────────
+
+Do NOT write a policy whose core ACTION is talking to the user: asking
+a clarifying question, requesting confirmation, notifying, or reporting
+status. Those are one-off dialogue behaviours, not reusable procedures —
+they later crystallize into dead "skills" no agent can invoke.
+
+If the underlying trace really contains a reusable check, express the
+CHECK itself as the action:
+
+  Wrong (conversational act):
+    action: "ask the user to confirm the skill name before viewing it"
+  Right (reusable check):
+    action: "resolve the skill id via skill list search before invoking
+    it; on miss, fall back to keyword search instead of prompting"
 
 ──────────────────── Same fact, two framings ─────────────────────
 
