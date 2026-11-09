@@ -5750,42 +5750,34 @@ function findLatestPersistedModelStatus(
   message?: string;
 } | null {
   try {
-    const rows = repos.apiLogs.list({
-      toolName: "system_model_status",
-      limit: 500,
-      offset: 0,
-    });
-    for (const row of rows) {
-      try {
-        const out = JSON.parse(row.outputJson) as {
-          role?: unknown;
-          status?: unknown;
-          provider?: unknown;
-          model?: unknown;
-          message?: unknown;
-        };
-        if (out.role !== role) continue;
-        // Only apply status rows for the currently configured model.
-        // This prevents an old 404 for a typo'd model from keeping the
-        // card red after the operator fixes Settings and restarts.
-        if (String(out.provider ?? "") !== provider) continue;
-        if (String(out.model ?? "") !== model) continue;
-        if (out.status !== "ok" && out.status !== "fallback" && out.status !== "error") {
-          continue;
-        }
-        return {
-          status: out.status,
-          at: row.calledAt,
-          message: typeof out.message === "string" ? out.message : undefined,
-        };
-      } catch {
-        // Malformed row — skip and keep walking.
+    // Use a targeted SQL query that filters role/provider/model via
+    // json_extract() so the result is never bounded by a top-N window.
+    // The previous approach (list 500 rows, post-filter) silently returned
+    // null whenever the target slot's row had been pushed >500 positions
+    // below the head by higher-frequency llm/embedding writes (#2380).
+    const row = repos.apiLogs.findLatestModelStatus({ role, provider, model });
+    if (!row) return null;
+    try {
+      const out = JSON.parse(row.outputJson) as {
+        status?: unknown;
+        message?: unknown;
+      };
+      if (out.status !== "ok" && out.status !== "fallback" && out.status !== "error") {
+        return null;
       }
+      return {
+        status: out.status,
+        at: row.calledAt,
+        message: typeof out.message === "string" ? out.message : undefined,
+      };
+    } catch {
+      // Malformed row — treat as missing.
+      return null;
     }
   } catch {
     // Repo failure is non-fatal for health; leave in-memory stats.
+    return null;
   }
-  return null;
 }
 
 type RetrievalStatsLogPayload = {

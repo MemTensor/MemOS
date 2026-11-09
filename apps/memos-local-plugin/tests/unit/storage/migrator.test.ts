@@ -205,4 +205,44 @@ describe("storage/migrator", () => {
       db.close();
     }
   });
+
+  it("keeps the model-status lookup index-driven so /health polls stay O(log n) (#2381)", () => {
+    // Regression test for the partial functional index added to keep
+    // `findLatestModelStatus()` from doing a full table scan on every
+    // /health poll. `api_logs` grows to ~10k rows on busy installs.
+    const { dbPath, cleanup } = tmpDb();
+    cleanups.push(cleanup);
+    const db = openDb({ filepath: dbPath, agent: "openclaw" });
+    try {
+      runMigrations(db);
+
+      const indexRow = db
+        .prepare<unknown, { name: string }>(
+          `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_api_logs_model_status'`,
+        )
+        .get({});
+      expect(indexRow?.name).toBe("idx_api_logs_model_status");
+
+      const plan = db
+        .prepare<{ role: string; provider: string; model: string }, { detail: string }>(
+          `EXPLAIN QUERY PLAN
+             SELECT id, tool_name, input_json, output_json, duration_ms, success, called_at
+               FROM api_logs
+              WHERE tool_name = 'system_model_status'
+                AND json_extract(output_json, '$.role')     = @role
+                AND json_extract(output_json, '$.provider') = @provider
+                AND json_extract(output_json, '$.model')    = @model
+              ORDER BY called_at DESC, id DESC
+              LIMIT 1`,
+        )
+        .all({ role: "skillEvolver", provider: "anthropic", model: "claude-x" });
+
+      const usesIndex = plan.some((row) =>
+        row.detail.includes("idx_api_logs_model_status"),
+      );
+      expect(usesIndex).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
 });
