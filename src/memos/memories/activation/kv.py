@@ -8,9 +8,53 @@ from transformers import DynamicCache
 from memos.configs.memory import KVCacheMemoryConfig
 from memos.dependency import require_python_package
 from memos.llms.factory import LLMFactory
+from memos.log import get_logger
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import KVCacheItem
+from memos.memories.activation.safe_unpickler import (
+    _BASE_ALLOWED_CLASSES,
+    _BaseSafeUnpickler,
+)
 from memos.memories.textual.item import TextualMemoryItem
+
+
+logger = get_logger(__name__)
+
+
+# Extra classes KVCacheMemory.dump() produces on top of the shared base
+# allowlist:
+#   * KVCacheItem instances
+#   * DynamicCache (transformers) with tensor state (torch rebuild helpers)
+#
+# ``torch.storage._load_from_bytes`` is *deliberately* NOT in this list —
+# it is a known pickle-allowlist bypass vector: it internally calls
+# ``pickle.loads`` on its bytes argument with the standard (unrestricted)
+# unpickler, which would defeat the ``find_class`` guard for any nested
+# payload. See the discussion on PR #2204.
+_KV_ALLOWED_CLASSES: frozenset[tuple[str, str]] = _BASE_ALLOWED_CLASSES | frozenset(
+    {
+        ("transformers.cache_utils", "DynamicCache"),
+        ("transformers.cache_utils", "DynamicLayer"),
+        ("memos.memories.activation.item", "KVCacheItem"),
+        ("memos.memories.activation.item", "KVCacheRecords"),
+        # torch tensor rebuilders — required to re-materialize DynamicCache
+        ("torch._utils", "_rebuild_tensor_v2"),
+        ("torch._utils", "_rebuild_tensor"),
+        ("torch._utils", "_rebuild_parameter"),
+        ("torch._utils", "_rebuild_qtensor"),
+        ("torch._utils", "_rebuild_meta_tensor_no_storage"),
+        ("torch", "Tensor"),
+        ("torch", "device"),
+        ("torch", "dtype"),
+        ("torch", "Size"),
+    }
+)
+
+
+class _SafeUnpickler(_BaseSafeUnpickler):
+    """Restricted pickle.Unpickler for the KV activation cache."""
+
+    _allowed_classes = _KV_ALLOWED_CLASSES
 
 
 class KVCacheMemory(BaseActMemory):
@@ -155,7 +199,10 @@ class KVCacheMemory(BaseActMemory):
             torch.serialization.add_safe_globals([DynamicCache, KVCacheItem])
 
             with open(file_path, "rb") as f:
-                data = pickle.load(f)
+                # Restricted unpickler — rejects any class outside the
+                # KVCache allowlist before invoking any reduce callable.
+                # See _KV_ALLOWED_CLASSES / _SafeUnpickler above.
+                data = _SafeUnpickler(f).load()
 
             if isinstance(data, dict):
                 # Load memories, handle both old and new formats
@@ -176,8 +223,24 @@ class KVCacheMemory(BaseActMemory):
                 # Reset to empty if data format is unexpected
                 self.kv_cache_memories = {}
 
-        except (EOFError, pickle.UnpicklingError, Exception):
-            # If loading fails, start with empty memories
+        except pickle.UnpicklingError as e:
+            # The safe unpickler refused a class — likely a hostile cache
+            # file. Log at WARN level so operators see it, then reset.
+            logger.warning(
+                "[KVCacheMemory] Refused to load activation cache (%s); resetting.",
+                e,
+            )
+            self.kv_cache_memories = {}
+        except (EOFError, OSError, ValueError) as e:
+            # Truncated file, I/O failure, or malformed pickle stream —
+            # log so operators can investigate silent data-loss cases,
+            # then reset. Do NOT catch bare Exception here: unexpected
+            # errors (MemoryError, AttributeError, etc.) should surface.
+            logger.warning(
+                "[KVCacheMemory] Failed to load activation cache (%s: %s); resetting.",
+                type(e).__name__,
+                e,
+            )
             self.kv_cache_memories = {}
 
     def dump(self, dir: str) -> None:

@@ -1,9 +1,10 @@
+import os
 import re
 import shutil
 import tempfile
 import zipfile
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -91,6 +92,63 @@ def _download_zip(url: str, tmp_dir: Path) -> Path:
     return zip_path
 
 
+# Unix mode bits for a symlink (S_IFLNK).
+_SYMLINK_MODE = 0o120000
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, extract_dir: Path) -> None:
+    """Extract ``zf`` into ``extract_dir`` after validating every entry.
+
+    Defense against zip-slip / path-traversal (CWE-22) and symlink escape.
+    Any hostile entry causes the entire extraction to be rejected with a
+    ``ValueError`` — we do not silently skip, because the caller path is
+    reachable from the unauthenticated ``/product`` surface and a partial
+    extraction produces a subtly-wrong SkillMemory that hides the attack.
+
+    Rules per entry:
+      * name must not be an absolute path (POSIX or NT style)
+      * name must not resolve outside ``extract_dir`` after normalization
+        (catches ``..`` traversal and Windows drive prefixes)
+      * external_attr must not encode a symlink (S_IFLNK)
+
+    Called by :func:`_extract_and_parse_skill_zip` in place of
+    ``zf.extractall(extract_dir)``.
+    """
+    base = extract_dir.resolve()
+    base.mkdir(parents=True, exist_ok=True)
+
+    for info in zf.infolist():
+        name = info.filename
+
+        # Symlink entry — reject before any I/O.
+        unix_mode = (info.external_attr >> 16) & 0o170000
+        if unix_mode == _SYMLINK_MODE:
+            raise ValueError(f"Refusing to extract symlink entry from skill zip: {name!r}")
+
+        # Absolute-path entry — reject. os.path.isabs on POSIX only
+        # recognises leading "/", so we also cross-check with pure-path
+        # variants for both POSIX ("/foo") and NT ("C:\\foo", "\\\\srv\\s")
+        # styles regardless of the host OS. The downstream ``base not in
+        # candidate.parents`` guard would catch drive-relative paths, but
+        # a fully platform-independent pre-filter here means the guard
+        # cannot be silently defeated if future code paths relax it.
+        if (
+            not name
+            or os.path.isabs(name)
+            or PurePosixPath(name).is_absolute()
+            or PureWindowsPath(name).is_absolute()
+        ):
+            raise ValueError(f"Refusing to extract absolute-path entry from skill zip: {name!r}")
+
+        # Compute the would-be destination and check containment.
+        candidate = (base / name).resolve()
+        if candidate != base and base not in candidate.parents:
+            raise ValueError(f"Refusing to extract entry outside extract_dir: {name!r}")
+
+    # All entries validated — extract.
+    zf.extractall(base)
+
+
 def _extract_and_parse_skill_zip(zip_path: Path) -> dict[str, Any]:
     """
     Extract a skill zip and parse SKILL.md + directory contents into a skill_memory dict.
@@ -102,7 +160,7 @@ def _extract_and_parse_skill_zip(zip_path: Path) -> dict[str, Any]:
     # Step 1: extract & locate SKILL.md
     extract_dir = zip_path.parent / zip_path.stem
     with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(extract_dir)
+        _safe_extract_zip(zf, extract_dir)
 
     skill_md_path = None
     for candidate in extract_dir.rglob("SKILL.md"):
