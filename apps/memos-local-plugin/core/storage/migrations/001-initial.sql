@@ -445,7 +445,7 @@ CREATE TRIGGER IF NOT EXISTS skills_fts_ad AFTER DELETE ON skills BEGIN
   DELETE FROM skills_fts WHERE skill_id = old.id;
 END;
 
-CREATE TRIGGER IF NOT EXISTS skills_fts_au AFTER UPDATE ON skills BEGIN
+CREATE TRIGGER IF NOT EXISTS skills_fts_au AFTER UPDATE OF name, invocation_guide ON skills BEGIN
   DELETE FROM skills_fts WHERE skill_id = old.id;
   INSERT INTO skills_fts(skill_id, name, invocation_guide)
   VALUES (new.id, new.name, new.invocation_guide);
