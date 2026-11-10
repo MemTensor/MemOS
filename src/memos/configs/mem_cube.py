@@ -36,7 +36,7 @@ class GeneralMemCubeConfig(BaseMemCubeConfig):
         description="User ID for the MemCube. This is used to distinguish between different users' memories.",
     )
     cube_id: str = Field(
-        str(uuid.uuid4()),
+        default_factory=lambda: str(uuid.uuid4()),
         description="Cube ID for the MemCube. This is used to distinguish between different MemCubes.",
     )
     text_mem: MemoryConfigFactory = Field(
