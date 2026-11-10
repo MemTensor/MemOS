@@ -5,6 +5,12 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
+- Local DSH compatibility branch: admit exactly `0.2.2-rc.1` after the
+  published host API matrix compiles, builds, and passes adapter tests.
+  Use the new host's Cordis peer and matching session codec for `0.2.2-rc.1`.
+  Earlier compatibility fixtures retain their pinned Cordis version. This
+  branch has not been published to npm.
+
 - Unreleased — Admit DSH `0.1.7-rc.2`, `0.2.0-rc.2`, and `0.2.1-rc.2/rc.3`
   through explicit, bounded optional peer ranges; retain the `2.0.21` V4
   producer-owned message sources. Stop importing the moved `JsonValue` type

@@ -12,7 +12,7 @@ const { satisfies } = createRequire(import.meta.url)("semver") as {
 const hostServices = ["agent", "llm", "session", "system-prompt", "timeout", "tools"];
 
 describe("DeepSeek Harness bundle package", () => {
-  it.each(["0.1.0-rc.6", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-rc.2", "0.2.1-rc.3"])(
+  it.each(["0.1.0-rc.6", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-rc.2", "0.2.1-rc.3", "0.2.2-rc.1"])(
     "admits the supported host %s without a version exemption",
     async (version) => {
       const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
@@ -24,7 +24,7 @@ describe("DeepSeek Harness bundle package", () => {
     },
   );
 
-  it.each(["0.1.0-rc.5", "0.2.2-rc.1", "0.2.2", "0.3.0-rc.1", "0.3.0"])(
+  it.each(["0.1.0-rc.5", "0.2.2", "0.3.0-rc.1", "0.3.0"])(
     "does not admit the unvalidated host %s",
     async (version) => {
       const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
