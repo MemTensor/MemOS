@@ -169,6 +169,24 @@ algorithm:
     traceCharCap: 500              # chars per evidence trace in the decision-repair prompt
     evidenceLimit: 4               # max high-value / low-value traces per synthesis call
   retrieval:
+    recallScope: session   # session (default) | profile — see note below
+    # `session` confines turn-start automatic recall to the calling Session: a
+    # trace is a transcript (`[user] … / [assistant] …`), and injecting another
+    # Session's transcript makes the agent adopt that conversation as its own
+    # history (MemOS#1532). `profile` restores the old behaviour, where every
+    # Session sharing this home AND `profileId` can recall the others'
+    # transcripts.
+    #
+    # Only the turn-start injection path is affected. Explicit `memos_search`
+    # calls, decision repair and sub-agent retrieval stay profile-wide: they
+    # deliberately look across history, and pinning them returns nothing.
+    #
+    # UPGRADE NOTE: existing installs have no `recallScope` on disk and
+    # therefore inherit `session`, losing cross-session transcript recall from
+    # automatic injection. Set `recallScope: profile` to opt back in.
+    #
+    # L2/L3 artifacts (`policies`, `world_model`) and skills are
+    # statement-shaped rather than transcript-shaped and are never confined.
     tier1TopK: 3            # skills injected at turn start
     tier2TopK: 5            # trace/episode snippets
     tier3TopK: 2            # world-model snippets

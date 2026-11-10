@@ -346,16 +346,23 @@ function buildTraceSearchFilters(
   const params: Record<string, unknown> = {};
   const includeLow = input.includeLowValue ?? deps.config.includeLowValue;
   if (!includeLow) parts.push("priority > 0");
+  // When the caller pinned recall to one Session, the trace SQL already has
+  // `session_id = <pin>`. The `session_id != X` half of the predicates below
+  // would then AND into an always-empty result (`session_id = X AND
+  // session_id != X`), silently zeroing trace recall. Keep the other half of
+  // each OR — the time bound and the exact-text exclusion — so already-visible
+  // context is still filtered out.
+  const scoped = deps.config.recallScope === "session";
   const visible = input.visibleContext;
   if (
     visible &&
     typeof visible.startTs === "number" &&
     Number.isFinite(visible.startTs)
   ) {
-    parts.push(
-      "(session_id != @visible_context_session_id OR ts < @visible_context_start_ts)",
-    );
-    params.visible_context_session_id = visible.sessionId;
+    parts.push(scoped
+      ? "ts < @visible_context_start_ts"
+      : "(session_id != @visible_context_session_id OR ts < @visible_context_start_ts)");
+    if (!scoped) params.visible_context_session_id = visible.sessionId;
     params.visible_context_start_ts = visible.startTs;
   } else if (visible) {
     const texts = Array.from(
@@ -370,12 +377,13 @@ function buildTraceSearchFilters(
       texts.forEach((text, index) => {
         params[`visible_user_text_${index}`] = text;
       });
-      parts.push(
-        `(session_id != @visible_context_session_id OR user_text NOT IN (${placeholders.join(", ")}))`,
-      );
-      params.visible_context_session_id = visible.sessionId;
+      const exclusion = `user_text NOT IN (${placeholders.join(", ")})`;
+      parts.push(scoped
+        ? exclusion
+        : `(session_id != @visible_context_session_id OR ${exclusion})`);
+      if (!scoped) params.visible_context_session_id = visible.sessionId;
     }
-  } else if (input.excludeSessionId) {
+  } else if (!scoped && input.excludeSessionId) {
     parts.push("session_id != @exclude_session_id");
     params.exclude_session_id = input.excludeSessionId;
   }

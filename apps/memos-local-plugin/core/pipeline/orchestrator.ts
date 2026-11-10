@@ -1093,11 +1093,30 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
   const retrievalDeps = buildRetrievalDeps(deps, algorithm, foregroundResources);
   const turnStartRetrievalStats = new Map<string, RetrievalResult["stats"]>();
 
-  function retrievalDepsFor(namespace = deps.namespace): typeof retrievalDeps {
+  /**
+   * Build the retrieval surface for one call.
+   *
+   * `recallScope` is only passed by the turn-start path. Every other entry
+   * point (tool-driven, skill-invoke, sub-agent, decision-repair) keeps
+   * profile-wide recall on purpose: decision-repair exists to find historical
+   * anti-patterns across Sessions, and `memos_search` is an explicit user
+   * request. Pinning them would turn a privacy fix into a functional
+   * regression.
+   *
+   * `config.recallScope` is narrowed in lockstep so tier-2 filter builders can
+   * suppress the same-session exclusions that would otherwise AND against the
+   * pin into an always-empty predicate.
+   */
+  function retrievalDepsFor(
+    namespace = deps.namespace,
+    recallScope?: "session" | "profile",
+  ): typeof retrievalDeps {
+    const scope = recallScope ?? "profile";
     return {
       ...retrievalDeps,
+      config: { ...retrievalDeps.config, recallScope: scope },
       namespace,
-      repos: wrapRetrievalRepos(deps.repos, namespace),
+      repos: wrapRetrievalRepos(deps.repos, namespace, { recallScope: scope }),
     };
   }
 
@@ -1116,7 +1135,7 @@ export function createPipeline(deps: PipelineDeps): PipelineHandle {
       ts: input.ts,
     };
     const result: RetrievalResult = await turnStartRetrieve(
-      retrievalDepsFor(input.namespace),
+      retrievalDepsFor(input.namespace, algorithm.retrieval.recallScope),
       ctx,
       {
         events: buses.retrieval,
