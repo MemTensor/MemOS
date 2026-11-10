@@ -313,6 +313,49 @@ describe("skill/runSkill (integration)", () => {
     const r = await runSkill({ trigger: "manual", policyId }, run2.deps);
     expect(r.rebuilt).toBe(0);
     expect(h.repos.skills.getById(before.id)).toBeNull();
+    // Downstream consumers (audit log, started-at map cleanup) key off
+    // `skill.failed`, so the persist-stage rejection must emit it too.
+    expect(
+      run2.events.some(
+        (e) =>
+          e.kind === "skill.failed" &&
+          e.stage === "persist" &&
+          e.reason === "skill-deleted-during-rebuild",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps usage stats recorded while a rebuild awaits the LLM", async () => {
+    const h = open();
+    const { policyId } = seedFullCandidate(h);
+    await runSkill({ trigger: "manual", policyId }, makeDeps(h).deps);
+    const before = h.repos.skills.list()[0]!;
+
+    const current = h.repos.policies.getById(policyId)!;
+    h.repos.policies.upsert({
+      ...current,
+      procedure: `${current.procedure}\n4. verify service restart`,
+      updatedAt: (before.updatedAt + 1000) as typeof current.updatedAt,
+    });
+
+    // A `memos_skill_get` loads the skill while the rebuild is suspended.
+    const usedAt = Date.now() + 5000;
+    const run2 = makeDeps(h, {
+      llm: fakeLlm({
+        completeJson: {
+          "skill.crystallize": () => {
+            h.repos.skills.recordUse(before.id, usedAt);
+            return makeDraft();
+          },
+        },
+      }),
+    });
+    const r = await runSkill({ trigger: "manual", policyId }, run2.deps);
+    expect(r.rebuilt).toBe(1);
+
+    const after = h.repos.skills.getById(before.id)!;
+    expect(after.usageCount).toBe(1);
+    expect(after.lastUsedAt).toBe(usedAt);
   });
 
   it("skips when LLM is disabled", async () => {

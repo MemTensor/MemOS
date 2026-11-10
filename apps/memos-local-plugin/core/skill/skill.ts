@@ -221,10 +221,20 @@ export async function runSkill(
           policyId: decision.policy.id,
           reason: "skill-deleted-during-rebuild",
         });
+        bus.emit({
+          kind: "skill.failed",
+          at: nowMs(),
+          policyId: decision.policy.id,
+          stage: "persist",
+          reason: "skill-deleted-during-rebuild",
+        });
+        timings.persist += nowMs() - tPersist;
         continue;
       }
       row.trialsAttempted = live.trialsAttempted;
       row.trialsPassed = live.trialsPassed;
+      row.usageCount = live.usageCount;
+      row.lastUsedAt = live.lastUsedAt;
       row.eta = recomputeEta(live, decision.policy, config);
     }
 
