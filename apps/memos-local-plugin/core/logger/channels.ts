@@ -93,6 +93,7 @@ export const CHANNELS = [
   "llm.bedrock",
   "llm.local_only",
   "llm.host",
+  "llm.chatgpt",
   "llm.json",
   "llm.prompts",
 

@@ -25,8 +25,10 @@ export { GeminiLlmProvider } from "./providers/gemini.js";
 export { BedrockLlmProvider } from "./providers/bedrock.js";
 export { HostLlmProvider } from "./providers/host.js";
 export { LocalOnlyLlmProvider } from "./providers/local-only.js";
+export { ChatGptLlmProvider } from "./providers/chatgpt.js";
 export * from "./prompts/index.js";
 export type {
+  ChatGptProviderConfig,
   LlmCallOptions,
   LlmCircuitBreakerConfig,
   LlmCompleteJsonOptions,

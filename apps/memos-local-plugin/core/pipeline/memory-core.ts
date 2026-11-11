@@ -98,7 +98,7 @@ import {
   registerHostLlmBridge,
   type HostLlmBridge,
 } from "../llm/host-bridge.js";
-import type { ReasoningConfig } from "../llm/types.js";
+import type { ChatGptProviderConfig, ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";
@@ -147,7 +147,33 @@ type DedicatedLlmConfig = {
   maxTokens?: number;
   /** Extra HTTP headers for the provider request. */
   headers?: Record<string, string>;
+  /** Only read when provider = "chatgpt". */
+  chatgpt?: ChatGptProviderConfig;
 };
+
+/**
+ * Endpoint / apiKey for a dedicated LLM slot (skillEvolver, l3Llm). A
+ * `chatgpt` slot with BOTH endpoint and apiKey blank reuses the main `llm`
+ * block's pair for its OpenAI-compatible fallback, and only when the main
+ * block is itself OpenAI-compatible (`openai_compatible` or `chatgpt`).
+ * The pair is inherited together or not at all, so a key is never sent to
+ * an endpoint it was not configured for.
+ */
+function dedicatedFallbackTarget(
+  slot: DedicatedLlmConfig | undefined,
+  provider: string,
+  mainLlm: ResolvedConfig["llm"],
+): { endpoint: string; apiKey: string } {
+  const endpoint = slot?.endpoint ?? "";
+  const apiKey = slot?.apiKey ?? "";
+  const inherit =
+    provider === "chatgpt" &&
+    !endpoint &&
+    !apiKey &&
+    (mainLlm.provider === "openai_compatible" || mainLlm.provider === "chatgpt");
+  if (inherit) return { endpoint: mainLlm.endpoint, apiKey: mainLlm.apiKey };
+  return { endpoint, apiKey };
+}
 
 export interface BootstrapOptions {
   agent: AgentKind;
@@ -440,11 +466,12 @@ export async function bootstrapMemoryCoreFull(
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
+      const evolverTarget = dedicatedFallbackTarget(evolver, evolverProvider, config.llm);
       reflectLlm = createLlmClient({
         provider: evolverProvider,
         model: evolverModel,
-        endpoint: evolver?.endpoint ?? "",
-        apiKey: evolver?.apiKey ?? "",
+        endpoint: evolverTarget.endpoint,
+        apiKey: evolverTarget.apiKey,
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
         providerIgnore: evolver?.providerIgnore,
@@ -453,6 +480,7 @@ export async function bootstrapMemoryCoreFull(
         reasoning: evolver?.reasoning,
         maxTokens: evolver?.maxTokens,
         headers: evolver?.headers,
+        chatgpt: evolver?.chatgpt,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -504,11 +532,12 @@ export async function bootstrapMemoryCoreFull(
     const l3Model = (l3c?.model ?? "").trim();
     const l3Provider = (l3c?.provider ?? "").trim();
     if (l3Model && l3Provider) {
+      const l3Target = dedicatedFallbackTarget(l3c, l3Provider, config.llm);
       l3Llm = createLlmClient({
         provider: l3Provider,
         model: l3Model,
-        endpoint: l3c?.endpoint ?? "",
-        apiKey: l3c?.apiKey ?? "",
+        endpoint: l3Target.endpoint,
+        apiKey: l3Target.apiKey,
         temperature: l3c?.temperature ?? 0,
         timeoutMs: l3c?.timeoutMs ?? 60_000,
         providerIgnore: l3c?.providerIgnore,
@@ -517,6 +546,7 @@ export async function bootstrapMemoryCoreFull(
         reasoning: l3c?.reasoning,
         maxTokens: l3c?.maxTokens,
         headers: l3c?.headers,
+        chatgpt: l3c?.chatgpt,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>

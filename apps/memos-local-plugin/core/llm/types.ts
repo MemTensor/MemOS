@@ -5,7 +5,10 @@
  * Providers stay internal to `core/llm/`.
  */
 
-import type { ReasoningConfig as ConfigReasoningConfig } from "../config/schema.js";
+import type {
+  ChatGptConfig as ConfigChatGptConfig,
+  ReasoningConfig as ConfigReasoningConfig,
+} from "../config/schema.js";
 import type { RetryDiagnosticDetails } from "../util/retry-after.js";
 
 // ─── Providers & config ──────────────────────────────────────────────────────
@@ -16,9 +19,18 @@ export type LlmProviderName =
   | "anthropic"
   | "gemini"
   | "bedrock"
-  | "host";
+  | "host"
+  | "chatgpt";
 
 export type ReasoningConfig = ConfigReasoningConfig;
+
+/**
+ * Settings for the `chatgpt` provider (`llm.chatgpt`, `skillEvolver.chatgpt`,
+ * `l3Llm.chatgpt`). The provider runs calls on the user's ChatGPT plan via
+ * "Sign in with ChatGPT"; `endpoint` / `apiKey` / `model` in the same block
+ * stay the openai_compatible fallback. Derived from `ChatGptSchema`.
+ */
+export type ChatGptProviderConfig = ConfigChatGptConfig;
 
 /**
  * Resolved LLM config, post-defaults. Subset of `ResolvedConfig.llm` so
@@ -70,6 +82,8 @@ export interface LlmConfig {
    * (issue #1897) for the full state machine.
    */
   circuitBreaker?: LlmCircuitBreakerConfig;
+  /** Only read by the `chatgpt` provider. */
+  chatgpt?: ChatGptProviderConfig;
 }
 
 export interface LlmCircuitBreakerConfig {

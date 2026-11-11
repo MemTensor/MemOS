@@ -174,4 +174,157 @@ l3Llm:
     expect(capturedLlmConfigs.find((cfg) => cfg.model === "skill-model")?.openRouter).toBe(false);
     expect(capturedLlmConfigs.find((cfg) => cfg.model === "l3-model")?.openRouter).toBe(false);
   });
+
+  it("passes skillEvolver.chatgpt through and inherits the main llm endpoint/key for its fallback", async () => {
+    const { bootstrapMemoryCore } = await import("../../../core/pipeline/memory-core.js");
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: `
+llm:
+  provider: openai_compatible
+  endpoint: https://openrouter.ai/api/v1
+  apiKey: sk-main
+  model: main
+skillEvolver:
+  provider: chatgpt
+  model: skill-fallback-model
+  chatgpt:
+    model: chatgpt-model
+    fallback: true
+`,
+    });
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "bootstrap-test",
+    });
+
+    expect(capturedLlmConfigs.find((cfg) => cfg.model === "skill-fallback-model")).toMatchObject({
+      provider: "chatgpt",
+      endpoint: "https://openrouter.ai/api/v1",
+      apiKey: "sk-main",
+      chatgpt: { model: "chatgpt-model", fallback: true },
+    });
+  });
+
+  it("does not inherit the main llm endpoint/key for non-chatgpt skill evolvers", async () => {
+    const { bootstrapMemoryCore } = await import("../../../core/pipeline/memory-core.js");
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: `
+llm:
+  provider: openai_compatible
+  endpoint: https://openrouter.ai/api/v1
+  apiKey: sk-main
+  model: main
+skillEvolver:
+  provider: openai_compatible
+  model: skill-model
+`,
+    });
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "bootstrap-test",
+    });
+
+    const evolver = capturedLlmConfigs.find((cfg) => cfg.model === "skill-model");
+    expect(evolver?.endpoint).toBe("");
+    expect(evolver?.apiKey).toBe("");
+  });
+
+  it("never copies a non-OpenAI-compatible main llm key into a chatgpt slot", async () => {
+    const { bootstrapMemoryCore } = await import("../../../core/pipeline/memory-core.js");
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: `
+llm:
+  provider: anthropic
+  endpoint: https://api.anthropic.com
+  apiKey: sk-ant-main
+  model: main
+skillEvolver:
+  provider: chatgpt
+  model: skill-fallback-model
+`,
+    });
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "bootstrap-test",
+    });
+
+    const evolver = capturedLlmConfigs.find((cfg) => cfg.model === "skill-fallback-model");
+    expect(evolver?.provider).toBe("chatgpt");
+    expect(evolver?.endpoint).toBe("");
+    expect(evolver?.apiKey).toBe("");
+  });
+
+  it("inherits the main endpoint/key only as a pair (a slot endpoint alone gets no main key)", async () => {
+    const { bootstrapMemoryCore } = await import("../../../core/pipeline/memory-core.js");
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: `
+llm:
+  provider: openai_compatible
+  endpoint: https://openrouter.ai/api/v1
+  apiKey: sk-main
+  model: main
+skillEvolver:
+  provider: chatgpt
+  model: skill-fallback-model
+  endpoint: http://127.0.0.1:8080/v1
+`,
+    });
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "bootstrap-test",
+    });
+
+    const evolver = capturedLlmConfigs.find((cfg) => cfg.model === "skill-fallback-model");
+    expect(evolver?.endpoint).toBe("http://127.0.0.1:8080/v1");
+    expect(evolver?.apiKey).toBe("");
+  });
+
+  it("wires l3Llm.chatgpt and inherits the main llm endpoint/key like skillEvolver", async () => {
+    const { bootstrapMemoryCore } = await import("../../../core/pipeline/memory-core.js");
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: `
+llm:
+  provider: openai_compatible
+  endpoint: https://openrouter.ai/api/v1
+  apiKey: sk-main
+  model: main
+l3Llm:
+  provider: chatgpt
+  model: l3-fallback-model
+  chatgpt:
+    model: chatgpt-l3-model
+`,
+    });
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "bootstrap-test",
+    });
+
+    expect(capturedLlmConfigs.find((cfg) => cfg.model === "l3-fallback-model")).toMatchObject({
+      provider: "chatgpt",
+      endpoint: "https://openrouter.ai/api/v1",
+      apiKey: "sk-main",
+      chatgpt: { model: "chatgpt-l3-model" },
+    });
+  });
 });

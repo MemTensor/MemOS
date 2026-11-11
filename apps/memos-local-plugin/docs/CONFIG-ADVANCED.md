@@ -47,6 +47,53 @@ llm:
   maxRetries: 3
 ```
 
+#### Sign in with ChatGPT (`provider: chatgpt`)
+
+Runs MemOS LLM calls on the user's own ChatGPT plan through OpenAI's
+[Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+(OAuth with PKCE, no API key). Calls go to the Responses API with
+`store: false` and `stream: true`. On failure (usage limit, not eligible,
+signed out, network) the call falls back to the OpenAI-compatible settings in
+the same block, so `endpoint` / `apiKey` / `model` there stay useful.
+
+Sign in once from the plugin folder (opens a browser; tokens are saved
+owner-only and refresh automatically):
+
+```bash
+node scripts/chatgpt-login.mjs            # sign in
+node scripts/chatgpt-login.mjs --status   # show sign-in state (never prints tokens)
+node scripts/chatgpt-login.mjs --models   # list models your plan can use
+```
+
+```yaml
+llm:
+  provider: chatgpt
+  endpoint: https://openrouter.ai/api/v1   # fallback
+  model: google/gemini-2.5-flash-lite      # fallback model
+  apiKey: sk-or-v1-...                     # fallback key
+  chatgpt:
+    model: ""              # slug from --models; blank = provider default
+    fallback: true         # false = fail instead of using the fallback
+    tokenFile: ""          # default ~/.config/memos-local/chatgpt-oauth.json
+    # reasoningEffort: low
+```
+
+`skillEvolver` and `l3Llm` accept the same `provider: chatgpt` and
+`chatgpt:` block (their `model` must be non-empty, as for any provider). A
+chatgpt `skillEvolver` / `l3Llm` with both `endpoint` and `apiKey` blank
+reuses the main `llm` block's pair for its fallback, but only when the main
+block is `openai_compatible` or `chatgpt`. The pair is inherited together or
+not at all, so a key is never sent to an endpoint it was not set up for. With no fallback target at all (no `apiKey`
+and no `endpoint`), ChatGPT errors are reported as they are instead of
+falling back.
+
+The Responses route ignores `temperature` and `maxTokens`. After a
+usage-limit error ChatGPT is skipped for 30 minutes, after "not eligible"
+for 6 hours, and after the server rejects the sign-in for 10 minutes; those
+calls go straight to the fallback. "Not signed in" is not paused, so signing
+in takes effect on the next call. The Settings **Test** button checks the
+sign-in (and refreshes the token if needed) without spending plan usage.
+
 ### `storage`
 ```yaml
 storage:

@@ -21,6 +21,7 @@
  */
 import { createEmbedder, type Embedder } from "../../core/embedding/index.js";
 import type { EmbeddingConfig } from "../../core/embedding/types.js";
+import { getAccessToken } from "../../core/llm/chatgpt-auth.js";
 import type { ServerDeps } from "../types.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
@@ -31,6 +32,8 @@ interface TestRequest {
   model?: string;
   apiKey?: string;
   local?: EmbeddingConfig["local"];
+  /** provider = "chatgpt" only: which credential file to check. */
+  chatgpt?: { tokenFile?: string };
 }
 
 export function registerModelsRoutes(routes: Routes, deps: ServerDeps): void {
@@ -362,6 +365,15 @@ async function probeChat(req: TestRequest): Promise<number> {
         .map((p) => p.text ?? "")
         .join("");
       return text.length;
+    }
+    case "chatgpt": {
+      // Checks the Sign in with ChatGPT credentials (file present, plan
+      // scope granted, access token usable; refreshes when near expiry)
+      // without spending plan usage on a completion. Fails with the
+      // "not signed in … run scripts/chatgpt-login.mjs" message otherwise.
+      const tokenFile = req.chatgpt?.tokenFile?.trim();
+      await getAccessToken({ file: tokenFile ? tokenFile : undefined });
+      return 0;
     }
     case "bedrock":
     case "host":

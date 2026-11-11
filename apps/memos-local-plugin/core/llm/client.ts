@@ -23,6 +23,7 @@ import { getHostLlmBridge } from "./host-bridge.js";
 import { buildJsonSystemHint, parseLlmJson } from "./json-mode.js";
 import { AnthropicLlmProvider } from "./providers/anthropic.js";
 import { BedrockLlmProvider } from "./providers/bedrock.js";
+import { ChatGptLlmProvider } from "./providers/chatgpt.js";
 import { GeminiLlmProvider } from "./providers/gemini.js";
 import { HostLlmProvider } from "./providers/host.js";
 import { LocalOnlyLlmProvider } from "./providers/local-only.js";
@@ -761,6 +762,8 @@ export function makeProviderFor(name: LlmProviderName): LlmProvider {
       return new HostLlmProvider();
     case "local_only":
       return new LocalOnlyLlmProvider();
+    case "chatgpt":
+      return new ChatGptLlmProvider();
     default:
       throw new MemosError(ERROR_CODES.UNSUPPORTED, `Unknown llm provider: ${String(name)}`, {
         provider: name,

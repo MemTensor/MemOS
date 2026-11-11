@@ -75,6 +75,17 @@ const EmbeddingSchema = Type.Object({
   }, { default: {} }),
 }, { default: {} });
 
+/** Reasoning effort levels accepted by `reasoning.effort` and `chatgpt.reasoningEffort`. */
+const ReasoningEffortSchema = Type.Union([
+  Type.Literal("minimal"),
+  Type.Literal("none"),
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+  Type.Literal("xhigh"),
+  Type.Literal("max"),
+]);
+
 const ReasoningSchema = Type.Object({
   /**
    * OpenRouter-compatible reasoning toggle. Omit the whole block to keep
@@ -82,18 +93,27 @@ const ReasoningSchema = Type.Object({
    */
   enabled: Type.Optional(Type.Boolean()),
   /** Optional provider effort hint for reasoning-capable models. */
-  effort: Type.Optional(Type.Union([
-    Type.Literal("minimal"),
-    Type.Literal("none"),
-    Type.Literal("low"),
-    Type.Literal("medium"),
-    Type.Literal("high"),
-    Type.Literal("xhigh"),
-    Type.Literal("max"),
-  ])),
+  effort: Type.Optional(ReasoningEffortSchema),
   /** Optional token budget for reasoning-capable providers. */
   maxTokens: Type.Optional(Type.Number({ minimum: 1 })),
 }, { default: {} });
+
+/**
+ * Settings for `provider: chatgpt` (Sign in with ChatGPT, see
+ * `core/llm/providers/chatgpt.ts`). Only read when the provider is
+ * "chatgpt"; `endpoint` / `apiKey` / `model` in the same block stay the
+ * openai_compatible fallback.
+ */
+const ChatGptSchema = Type.Object({
+  /** Model slug from GET /v1/models. Blank = provider default. */
+  model: Type.Optional(Type.String()),
+  /** Fall back to the openai_compatible settings on failure. Default true. */
+  fallback: Type.Optional(Type.Boolean()),
+  /** Credential file. Default ~/.config/memos-local/chatgpt-oauth.json. */
+  tokenFile: Type.Optional(Type.String()),
+  /** Optional Responses API reasoning effort (e.g. "low"). Omitted when unset. */
+  reasoningEffort: Type.Optional(ReasoningEffortSchema),
+});
 
 const LlmSchema = Type.Object({
   provider: Type.Union([
@@ -104,6 +124,7 @@ const LlmSchema = Type.Object({
     Type.Literal("anthropic"),
     Type.Literal("bedrock"),
     Type.Literal("host"),
+    Type.Literal("chatgpt"),
   ], { default: "" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault(""),
@@ -127,6 +148,8 @@ const LlmSchema = Type.Object({
   maxTokens: NumberInRange(1024, 100, 131072),
   /** Extra HTTP headers for the provider request. */
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
+  /** Only read when provider = "chatgpt" (see ChatGptSchema). */
+  chatgpt: Type.Optional(ChatGptSchema),
 }, { default: {} });
 
 /**
@@ -145,6 +168,7 @@ const SkillEvolverSchema = Type.Object({
     Type.Literal("openai_compatible"),
     Type.Literal("gemini"),
     Type.Literal("anthropic"),
+    Type.Literal("chatgpt"),
   ], { default: "" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault(""),
@@ -163,6 +187,13 @@ const SkillEvolverSchema = Type.Object({
   maxTokens: NumberInRange(1024, 100, 131072),
   /** Extra HTTP headers for the provider request. */
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
+  /**
+   * Only read when provider = "chatgpt". When this block's endpoint and
+   * apiKey are both blank, the openai_compatible fallback uses the main
+   * `llm` block's endpoint and apiKey, provided the main provider is
+   * openai_compatible or chatgpt.
+   */
+  chatgpt: Type.Optional(ChatGptSchema),
 }, { default: {} });
 
 const StorageSchema = Type.Object({
@@ -709,4 +740,5 @@ export const ConfigSchema = Type.Object({
 }, { default: {} });
 
 export type ReasoningConfig = Static<typeof ReasoningSchema>;
+export type ChatGptConfig = Static<typeof ChatGptSchema>;
 export type ResolvedConfig = Static<typeof ConfigSchema>;

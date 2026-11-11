@@ -10,7 +10,7 @@ facade — providers are not exported outside this directory.
 
 ## 1. Introduction
 
-Five real providers + two sentinels, all behind one interface:
+Six real providers + two sentinels, all behind one interface:
 
 | provider            | native JSON mode | native stream | notes                         |
 | ------------------- | ---------------- | ------------- | ----------------------------- |
@@ -18,6 +18,7 @@ Five real providers + two sentinels, all behind one interface:
 | `anthropic`         | ❌ (hint-based)   | ✅ (SSE)      | Messages API.                 |
 | `gemini`            | ✅ (`responseMimeType`) | ✅ (SSE) | Google generateContent.        |
 | `bedrock`           | ❌ (hint-based)   | ❌            | Converse API. SigV4 is the caller's problem. |
+| `chatgpt`           | ✅ (`json_object`, hint fallback) | ✅ (SSE) | User's ChatGPT plan via Sign in with ChatGPT (Responses API, `store:false`). Falls back to the block's openai_compatible settings. See `docs/CONFIG-ADVANCED.md`. |
 | `host`              | ❌ (hint-based)   | ❌ (faked)    | Delegates to the host agent (OpenClaw) via `HostLlmBridge`. |
 | `local_only`        | ─                | ─             | Always throws `LLM_UNAVAILABLE`. Use to explicitly disable LLM. |
 
@@ -161,7 +162,7 @@ Current prompts:
 - `llm.json`                  — malformed-JSON retry warnings
 - `llm.prompts`               — prompt registry lookups (Phase 12 onward)
 - `llm.openai_compatible`, `llm.anthropic`, `llm.gemini`, `llm.bedrock`,
-  `llm.host`, `llm.local_only` — per-provider HTTP attempts + duration
+  `llm.host`, `llm.local_only`, `llm.chatgpt` — per-provider HTTP attempts + duration
   + status
 
 Every successful call also produces an `llm(...)` payload:
