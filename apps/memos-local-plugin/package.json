@@ -39,6 +39,7 @@
     "templates/README.user.md",
     "viewer/dist",
     "scripts/postinstall.cjs",
+    "scripts/chatgpt-login.mjs",
     "scripts/migrate-dsh-preset-profile.mjs",
     "scripts/sync-hermes-version.cjs",
     "install.sh",

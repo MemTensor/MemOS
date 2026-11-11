@@ -110,6 +110,7 @@ const LLM_PROVIDERS = [
   "openai_compatible",
   "gemini",
   "anthropic",
+  "chatgpt",
 ];
 
 const SKILL_PROVIDERS = [
@@ -117,6 +118,7 @@ const SKILL_PROVIDERS = [
   "openai_compatible",
   "gemini",
   "anthropic",
+  "chatgpt",
 ];
 
 export function SettingsView({ initialTab }: { initialTab?: Tab } = {}) {
@@ -471,6 +473,13 @@ function ModelCard({
           style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
         >
           {inheritsLabel}
+        </div>
+      )}
+      {block.provider === "chatgpt" && (
+        <div
+          style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
+        >
+          {t("settings.chatgpt.hint")}
         </div>
       )}
       {isLocal && localHint && (

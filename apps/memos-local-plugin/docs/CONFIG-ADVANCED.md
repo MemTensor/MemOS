@@ -47,6 +47,44 @@ llm:
   maxRetries: 3
 ```
 
+#### Sign in with ChatGPT (`provider: chatgpt`)
+
+Runs MemOS LLM calls on the user's own ChatGPT plan through OpenAI's
+[Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+(OAuth with PKCE, no API key). Calls go to the Responses API with
+`store: false` and `stream: true`. On failure (usage limit, not eligible,
+signed out, network) the call falls back to the OpenAI-compatible settings in
+the same block, so `endpoint` / `apiKey` / `model` there stay useful.
+
+Sign in once from the plugin folder (opens a browser; tokens are saved
+owner-only and refresh automatically):
+
+```bash
+node scripts/chatgpt-login.mjs            # sign in
+node scripts/chatgpt-login.mjs --status   # show sign-in state (never prints tokens)
+node scripts/chatgpt-login.mjs --models   # list models your plan can use
+```
+
+```yaml
+llm:
+  provider: chatgpt
+  endpoint: https://openrouter.ai/api/v1   # fallback
+  model: google/gemini-2.5-flash-lite      # fallback model
+  apiKey: sk-or-v1-...                     # fallback key
+  chatgpt:
+    model: ""              # slug from --models; blank = provider default
+    fallback: true         # false = fail instead of using the fallback
+    tokenFile: ""          # default ~/.config/memos-local/chatgpt-oauth.json
+    # reasoningEffort: low
+```
+
+`skillEvolver` accepts the same `provider: chatgpt` and `chatgpt:` block. A
+chatgpt skill evolver with a blank `endpoint` / `apiKey` reuses the main
+`llm` block's for its fallback. The Responses route ignores `temperature`
+and `maxTokens`. After a usage-limit error ChatGPT is skipped for 30 minutes,
+after "not eligible" for 6 hours, and after an auth failure for 10 minutes;
+those calls go straight to the fallback.
+
 ### `storage`
 ```yaml
 storage:

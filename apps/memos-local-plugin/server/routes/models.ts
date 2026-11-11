@@ -366,6 +366,9 @@ async function probeChat(req: TestRequest): Promise<number> {
     case "bedrock":
     case "host":
     case "local_only":
+    // chatgpt authenticates with the Sign in with ChatGPT token file, not an
+    // API key, so there is nothing to probe from the settings form.
+    case "chatgpt":
       return 0;
     default:
       throw new Error(`unsupported chat provider: ${provider}`);

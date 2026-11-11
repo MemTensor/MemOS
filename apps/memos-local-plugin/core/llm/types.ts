@@ -16,9 +16,27 @@ export type LlmProviderName =
   | "anthropic"
   | "gemini"
   | "bedrock"
-  | "host";
+  | "host"
+  | "chatgpt";
 
 export type ReasoningConfig = ConfigReasoningConfig;
+
+/**
+ * Settings for the `chatgpt` provider (`llm.chatgpt`, `skillEvolver.chatgpt`).
+ * The provider runs calls on the user's ChatGPT plan via "Sign in with
+ * ChatGPT"; `endpoint` / `apiKey` / `model` in the same block stay the
+ * openai_compatible fallback.
+ */
+export interface ChatGptProviderConfig {
+  /** Model slug from GET /v1/models (visibility "list"). */
+  model?: string;
+  /** Fall back to the openai_compatible settings in the same block. Default true. */
+  fallback?: boolean;
+  /** Credential file. Default ~/.config/memos-local/chatgpt-oauth.json. */
+  tokenFile?: string;
+  /** Optional Responses API reasoning effort. Omitted when unset. */
+  reasoningEffort?: string;
+}
 
 /**
  * Resolved LLM config, post-defaults. Subset of `ResolvedConfig.llm` so
@@ -70,6 +88,8 @@ export interface LlmConfig {
    * (issue #1897) for the full state machine.
    */
   circuitBreaker?: LlmCircuitBreakerConfig;
+  /** Only read by the `chatgpt` provider. */
+  chatgpt?: ChatGptProviderConfig;
 }
 
 export interface LlmCircuitBreakerConfig {

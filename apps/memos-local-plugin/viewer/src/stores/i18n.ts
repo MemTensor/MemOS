@@ -920,6 +920,8 @@ const en = {
     "Model that turns your conversations into short task summaries and the takeaways the agent keeps.",
   "settings.summarizer.inherit":
     "Currently using the agent's model. Select a provider to override.",
+  "settings.chatgpt.hint":
+    "Runs on your ChatGPT plan. Sign in once with `node scripts/chatgpt-login.mjs`. The model, endpoint and API key below are the OpenAI-compatible fallback; set the ChatGPT model under `chatgpt.model` in config.yaml.",
   "settings.model.tip.title": "Model selection tips",
   "settings.model.tip.embedding":
     "Embedding — the built-in model is small. For better recall, configure a dedicated model such as bge-m3 or text-embedding-3-large.",
@@ -1797,6 +1799,8 @@ const zh: Record<TranslationKey, string> = {
   "settings.summarizer.desc": "把原始对话压缩成任务摘要和要点的模型。",
   "settings.summarizer.inherit":
     "当前使用 agent 的模型。选择 Provider 即可覆盖。",
+  "settings.chatgpt.hint":
+    "使用你的 ChatGPT 套餐运行。先运行一次 `node scripts/chatgpt-login.mjs` 登录。下方的模型、Endpoint 和 API Key 是 OpenAI 兼容的回退设置；ChatGPT 模型请在 config.yaml 的 `chatgpt.model` 中设置。",
   "settings.model.tip.title": "模型选择提示",
   "settings.model.tip.embedding":
     "嵌入模型：插件内置模型较小。为获得更精准的记忆检索，建议配置 bge-m3、text-embedding-3-large 等专业嵌入模型。",

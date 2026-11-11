@@ -95,6 +95,23 @@ const ReasoningSchema = Type.Object({
   maxTokens: Type.Optional(Type.Number({ minimum: 1 })),
 }, { default: {} });
 
+/**
+ * Settings for `provider: chatgpt` (Sign in with ChatGPT, see
+ * `core/llm/providers/chatgpt.ts`). Only read when the provider is
+ * "chatgpt"; `endpoint` / `apiKey` / `model` in the same block stay the
+ * openai_compatible fallback.
+ */
+const ChatGptSchema = Type.Object({
+  /** Model slug from GET /v1/models. Blank = provider default. */
+  model: Type.Optional(Type.String()),
+  /** Fall back to the openai_compatible settings on failure. Default true. */
+  fallback: Type.Optional(Type.Boolean()),
+  /** Credential file. Default ~/.config/memos-local/chatgpt-oauth.json. */
+  tokenFile: Type.Optional(Type.String()),
+  /** Optional Responses API reasoning effort (e.g. "low"). */
+  reasoningEffort: Type.Optional(Type.String()),
+});
+
 const LlmSchema = Type.Object({
   provider: Type.Union([
     Type.Literal(""),
@@ -104,6 +121,7 @@ const LlmSchema = Type.Object({
     Type.Literal("anthropic"),
     Type.Literal("bedrock"),
     Type.Literal("host"),
+    Type.Literal("chatgpt"),
   ], { default: "" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault(""),
@@ -127,6 +145,8 @@ const LlmSchema = Type.Object({
   maxTokens: NumberInRange(1024, 100, 131072),
   /** Extra HTTP headers for the provider request. */
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
+  /** Only read when provider = "chatgpt" (see ChatGptSchema). */
+  chatgpt: Type.Optional(ChatGptSchema),
 }, { default: {} });
 
 /**
@@ -145,6 +165,7 @@ const SkillEvolverSchema = Type.Object({
     Type.Literal("openai_compatible"),
     Type.Literal("gemini"),
     Type.Literal("anthropic"),
+    Type.Literal("chatgpt"),
   ], { default: "" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault(""),
@@ -163,6 +184,11 @@ const SkillEvolverSchema = Type.Object({
   maxTokens: NumberInRange(1024, 100, 131072),
   /** Extra HTTP headers for the provider request. */
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
+  /**
+   * Only read when provider = "chatgpt". A blank endpoint / apiKey here
+   * inherits the main `llm` block's for the openai_compatible fallback.
+   */
+  chatgpt: Type.Optional(ChatGptSchema),
 }, { default: {} });
 
 const StorageSchema = Type.Object({

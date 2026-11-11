@@ -98,7 +98,7 @@ import {
   registerHostLlmBridge,
   type HostLlmBridge,
 } from "../llm/host-bridge.js";
-import type { ReasoningConfig } from "../llm/types.js";
+import type { ChatGptProviderConfig, ReasoningConfig } from "../llm/types.js";
 
 import { createPipeline } from "./orchestrator.js";
 import { RECOVERY_REASONS } from "./recovery-constants.js";
@@ -147,6 +147,8 @@ type DedicatedLlmConfig = {
   maxTokens?: number;
   /** Extra HTTP headers for the provider request. */
   headers?: Record<string, string>;
+  /** Only read when provider = "chatgpt". */
+  chatgpt?: ChatGptProviderConfig;
 };
 
 export interface BootstrapOptions {
@@ -440,11 +442,15 @@ export async function bootstrapMemoryCoreFull(
     const evolverModel = (evolver?.model ?? "").trim();
     const evolverProvider = (evolver?.provider ?? "").trim();
     if (evolverModel && evolverProvider) {
+      // A chatgpt skill evolver with no endpoint/apiKey of its own uses the
+      // main llm block's for its openai_compatible fallback.
+      const mainLlm = (config as { llm?: { endpoint?: string; apiKey?: string } }).llm;
+      const inheritMain = evolverProvider === "chatgpt";
       reflectLlm = createLlmClient({
         provider: evolverProvider,
         model: evolverModel,
-        endpoint: evolver?.endpoint ?? "",
-        apiKey: evolver?.apiKey ?? "",
+        endpoint: evolver?.endpoint || (inheritMain ? mainLlm?.endpoint ?? "" : ""),
+        apiKey: evolver?.apiKey || (inheritMain ? mainLlm?.apiKey ?? "" : ""),
         temperature: evolver?.temperature ?? 0,
         timeoutMs: evolver?.timeoutMs ?? 60_000,
         providerIgnore: evolver?.providerIgnore,
@@ -453,6 +459,7 @@ export async function bootstrapMemoryCoreFull(
         reasoning: evolver?.reasoning,
         maxTokens: evolver?.maxTokens,
         headers: evolver?.headers,
+        chatgpt: evolver?.chatgpt,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
