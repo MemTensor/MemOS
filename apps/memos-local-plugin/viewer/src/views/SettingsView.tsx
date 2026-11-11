@@ -46,6 +46,8 @@ interface ProviderBlock {
     offline?: boolean;
     loadTimeoutMs?: number;
   };
+  /** provider = "chatgpt" only (edited in config.yaml). */
+  chatgpt?: { model?: string; tokenFile?: string };
 }
 
 interface AlgorithmBlock {
@@ -104,6 +106,10 @@ const EMBEDDING_PROVIDERS = [
   "openai_compatible",
   "gemini",
 ];
+
+/** Dashed note shown above a model card's fields. */
+const HINT_STYLE =
+  "font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)";
 
 const LLM_PROVIDERS = [
   "", // inherit from agent
@@ -419,6 +425,7 @@ function ModelCard({
         model: block.model,
         local: block.local,
         apiKey: sanitizeApiKey(block.apiKey),
+        chatgpt: block.provider === "chatgpt" ? { tokenFile: block.chatgpt?.tokenFile } : undefined,
       });
       setResult(r);
     } catch (err) {
@@ -469,23 +476,19 @@ function ModelCard({
       </div>
 
       {inherits && inheritsLabel && (
-        <div
-          style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
-        >
+        <div style={HINT_STYLE}>
           {inheritsLabel}
         </div>
       )}
       {block.provider === "chatgpt" && (
-        <div
-          style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
-        >
-          {t("settings.chatgpt.hint")}
+        <div style={HINT_STYLE}>
+          {t("settings.chatgpt.hint", {
+            path: type === "skillEvolver" ? "skillEvolver.chatgpt.model" : "llm.chatgpt.model",
+          })}
         </div>
       )}
       {isLocal && localHint && (
-        <div
-          style="font-size:var(--fs-xs);color:var(--fg-muted);margin-bottom:var(--sp-3);padding:var(--sp-2) var(--sp-3);background:var(--bg-canvas);border-radius:var(--radius-sm);border:1px dashed var(--border)"
-        >
+        <div style={HINT_STYLE}>
           {localHint}
         </div>
       )}

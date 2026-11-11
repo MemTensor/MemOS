@@ -13,14 +13,24 @@ import {
   describeCredentials,
   getAccessToken,
   listChatGptModels,
+  REQUIRED_PLAN_SCOPE,
   runLogin,
 } from "../dist/core/llm/chatgpt-auth.js";
 
 const args = process.argv.slice(2);
+const KNOWN_FLAGS = new Set(["--status", "--models"]);
+// Reject typos up front: an unknown flag must not fall through to an
+// interactive sign-in that writes the default token file.
+const unknown = args.filter((a) => !KNOWN_FLAGS.has(a) && !a.startsWith("--file="));
 const fileArg = args.find((a) => a.startsWith("--file="));
-const file = fileArg ? fileArg.slice("--file=".length) : undefined;
+const file = fileArg ? fileArg.slice("--file=".length).trim() || undefined : undefined;
 
 async function main() {
+  if (unknown.length > 0) {
+    throw new Error(
+      `unknown argument(s): ${unknown.join(" ")} (use --status, --models or --file=<path>)`,
+    );
+  }
   if (args.includes("--status")) {
     console.log(JSON.stringify(await describeCredentials(file), null, 2));
     return;
@@ -36,10 +46,17 @@ async function main() {
   console.log("");
   console.log("Signed in to ChatGPT for MemOS.");
   console.log(`  account:        ${res.email ?? "(no email claim)"}`);
-  console.log(`  plan scope:     ${res.scopes.includes("chatgpt.tokens.use.direct") ? "granted" : "MISSING"}`);
+  const planScope = res.scopes.includes(REQUIRED_PLAN_SCOPE);
+  console.log(`  plan scope:     ${planScope ? "granted" : "MISSING"}`);
   console.log(`  token file:     ${res.file}`);
   console.log(`  access expires: ${new Date(res.expiresAt).toISOString()} (refreshes automatically)`);
   console.log(`  registration:   ${res.newRegistration ? "new" : "reused"}`);
+  if (!planScope) {
+    console.error(
+      "chatgpt-login: the grant lacks the ChatGPT plan scope, so MemOS cannot use it. Sign in again and approve access to your plan.",
+    );
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {

@@ -75,6 +75,17 @@ const EmbeddingSchema = Type.Object({
   }, { default: {} }),
 }, { default: {} });
 
+/** Reasoning effort levels accepted by `reasoning.effort` and `chatgpt.reasoningEffort`. */
+const ReasoningEffortSchema = Type.Union([
+  Type.Literal("minimal"),
+  Type.Literal("none"),
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+  Type.Literal("xhigh"),
+  Type.Literal("max"),
+]);
+
 const ReasoningSchema = Type.Object({
   /**
    * OpenRouter-compatible reasoning toggle. Omit the whole block to keep
@@ -82,15 +93,7 @@ const ReasoningSchema = Type.Object({
    */
   enabled: Type.Optional(Type.Boolean()),
   /** Optional provider effort hint for reasoning-capable models. */
-  effort: Type.Optional(Type.Union([
-    Type.Literal("minimal"),
-    Type.Literal("none"),
-    Type.Literal("low"),
-    Type.Literal("medium"),
-    Type.Literal("high"),
-    Type.Literal("xhigh"),
-    Type.Literal("max"),
-  ])),
+  effort: Type.Optional(ReasoningEffortSchema),
   /** Optional token budget for reasoning-capable providers. */
   maxTokens: Type.Optional(Type.Number({ minimum: 1 })),
 }, { default: {} });
@@ -108,8 +111,8 @@ const ChatGptSchema = Type.Object({
   fallback: Type.Optional(Type.Boolean()),
   /** Credential file. Default ~/.config/memos-local/chatgpt-oauth.json. */
   tokenFile: Type.Optional(Type.String()),
-  /** Optional Responses API reasoning effort (e.g. "low"). */
-  reasoningEffort: Type.Optional(Type.String()),
+  /** Optional Responses API reasoning effort (e.g. "low"). Omitted when unset. */
+  reasoningEffort: Type.Optional(ReasoningEffortSchema),
 });
 
 const LlmSchema = Type.Object({
@@ -186,7 +189,8 @@ const SkillEvolverSchema = Type.Object({
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
   /**
    * Only read when provider = "chatgpt". A blank endpoint / apiKey here
-   * inherits the main `llm` block's for the openai_compatible fallback.
+   * inherits the main `llm` block's for the openai_compatible fallback
+   * when the main provider is openai_compatible or chatgpt.
    */
   chatgpt: Type.Optional(ChatGptSchema),
 }, { default: {} });
@@ -735,4 +739,5 @@ export const ConfigSchema = Type.Object({
 }, { default: {} });
 
 export type ReasoningConfig = Static<typeof ReasoningSchema>;
+export type ChatGptConfig = Static<typeof ChatGptSchema>;
 export type ResolvedConfig = Static<typeof ConfigSchema>;

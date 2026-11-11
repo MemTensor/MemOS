@@ -3,7 +3,7 @@
  * recovery and host ID. Synthetic token files in a temp folder only.
  */
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,10 @@ import {
   getOrCreateHostId,
   hostIdFile,
   isValidHostId,
+  listChatGptModels,
+  restrictToOwner,
+  runLogin,
+  verifyIdToken,
 } from "../../../core/llm/chatgpt-auth.js";
 
 function jsonResponse(obj: unknown, status: number): Response {
@@ -122,6 +126,36 @@ describe("chatgpt-auth getAccessToken", () => {
     ).rejects.toSatisfy((e: unknown) => e instanceof ChatGptAuthError && e.kind === "not_signed_in");
   });
 
+  it("treats a corrupt or incomplete token file as not signed in", async () => {
+    const { file } = await tokenFixture();
+    await writeFile(file, "{ not json");
+    await expect(getAccessToken({ file, now: () => NOW })).rejects.toSatisfy(
+      (e: unknown) => e instanceof ChatGptAuthError && e.kind === "not_signed_in",
+    );
+    await writeFile(file, JSON.stringify({ client_id: "oaiapp_test", expires_at: NOW }));
+    await expect(getAccessToken({ file, now: () => NOW })).rejects.toSatisfy(
+      (e: unknown) => e instanceof ChatGptAuthError && e.kind === "not_signed_in",
+    );
+  });
+
+  it("releases its own lock, but never a lock a peer re-created meanwhile", async () => {
+    const { file } = await tokenFixture();
+    const ok = (async () =>
+      jsonResponse({ access_token: "synthetic-access-2", refresh_token: "synthetic-refresh-2", expires_in: 3600 }, 200)
+    ) as unknown as typeof fetch;
+    await getAccessToken({ file, fetchImpl: ok, now: () => NOW });
+    await expect(stat(`${file}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const second = await tokenFixture();
+    const peer = (async () => {
+      // A peer treated our lock as stale and took it over.
+      await writeFile(`${second.file}.lock`, "peer-owner");
+      return jsonResponse({ access_token: "a", refresh_token: "r", expires_in: 3600 }, 200);
+    }) as unknown as typeof fetch;
+    await getAccessToken({ file: second.file, fetchImpl: peer, now: () => NOW });
+    expect(await readFile(`${second.file}.lock`, "utf8")).toBe("peer-owner");
+  });
+
   it("rejects a grant without the plan scope", async () => {
     const { file } = await tokenFixture({ scopes: ["openid", "offline_access"], expires_at: NOW + 3_000_000 });
     await expect(getAccessToken({ file, now: () => NOW })).rejects.toSatisfy(
@@ -149,5 +183,79 @@ describe("chatgpt-auth host ID", () => {
     expect(isValidHostId("urn:ietf:params:oauth:jwk-thumbprint:sha-256:abc")).toBe(true);
     expect(isValidHostId("someone@example.com")).toBe(false);
     expect(isValidHostId(undefined)).toBe(false);
+  });
+});
+
+describe("chatgpt-auth permissions", () => {
+  it("restrictToOwner keeps a folder usable by its owner (directories stay traversable)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "memos-chatgpt-perm-"));
+    dirs.push(dir);
+    expect(typeof (await restrictToOwner(dir))).toBe("boolean");
+    await writeFile(join(dir, "inside.txt"), "ok");
+    expect(await readFile(join(dir, "inside.txt"), "utf8")).toBe("ok");
+  });
+});
+
+describe("chatgpt-auth model list", () => {
+  it("keeps rows without a visibility field and drops hidden ones", async () => {
+    const fetchImpl = (async () =>
+      jsonResponse(
+        {
+          data: [
+            { id: "plain-model" },
+            { slug: "listed", visibility: "list", display_name: "Listed" },
+            { slug: "hidden", visibility: "hide" },
+          ],
+        },
+        200,
+      )) as unknown as typeof fetch;
+    const models = await listChatGptModels("synthetic-access", fetchImpl);
+    expect(models.map((m) => m.slug)).toEqual(["plain-model", "listed"]);
+  });
+});
+
+describe("chatgpt-auth id_token verification", () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const token = (kid?: string) => `${b64({ alg: "RS256", ...(kid ? { kid } : {}) })}.${b64({ sub: "s" })}.c2ln`;
+
+  it("fails clearly when the JWKS endpoint errors", async () => {
+    const fetchImpl = (async () => new Response("oops", { status: 500 })) as unknown as typeof fetch;
+    await expect(verifyIdToken(token("k1"), "client", "nonce", fetchImpl)).rejects.toThrow(
+      "id_token JWKS fetch failed: HTTP 500",
+    );
+  });
+
+  it("does not fall back to a lone key whose kid differs from the token's", async () => {
+    const fetchImpl = (async () =>
+      jsonResponse({ keys: [{ kty: "RSA", kid: "other", n: "AQAB", e: "AQAB" }] }, 200)) as unknown as typeof fetch;
+    await expect(verifyIdToken(token("k1"), "client", "nonce", fetchImpl)).rejects.toThrow(
+      "id_token signing key not found in JWKS",
+    );
+  });
+});
+
+describe("chatgpt-auth runLogin", () => {
+  it("never prints the ID token: id_token_hint goes only to the browser URL", async () => {
+    const { file } = await tokenFixture({ id_token: "synthetic.id.token" });
+    const printed: string[] = [];
+    let browserUrl = "";
+    const login = runLogin({
+      file,
+      port: 0,
+      print: (l) => printed.push(l),
+      openBrowser: (url) => {
+        browserUrl = url;
+        const u = new URL(url);
+        const redirect = new URL(u.searchParams.get("redirect_uri")!);
+        redirect.searchParams.set("state", u.searchParams.get("state")!);
+        redirect.searchParams.set("error", "access_denied");
+        void fetch(redirect).catch(() => undefined);
+      },
+      timeoutMs: 10_000,
+    });
+    await expect(login).rejects.toThrow("sign-in failed: access_denied");
+    expect(new URL(browserUrl).searchParams.get("id_token_hint")).toBe("synthetic.id.token");
+    expect(printed.join("\n")).not.toContain("synthetic.id.token");
+    expect(printed.join("\n")).not.toContain("id_token_hint");
   });
 });

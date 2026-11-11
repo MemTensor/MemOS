@@ -17,7 +17,7 @@ import {
   PAUSE_MS,
   resetChatGptPauseState,
 } from "../../../core/llm/providers/chatgpt.js";
-import type { AccessToken, TokenOptions } from "../../../core/llm/chatgpt-auth.js";
+import { ChatGptAuthError, type AccessToken, type TokenOptions } from "../../../core/llm/chatgpt-auth.js";
 import type {
   ChatGptProviderConfig,
   LlmConfig,
@@ -85,6 +85,8 @@ function baseConfig(chatgpt: ChatGptProviderConfig): LlmConfig {
     timeoutMs: 5_000,
     maxRetries: 0,
     openRouter: true,
+    endpoint: "https://openrouter.ai/api/v1",
+    apiKey: "sk-fallback-test",
     chatgpt,
   };
 }
@@ -286,6 +288,56 @@ describe("ChatGptLlmProvider", () => {
     expect((await p.complete(msgs, call, ctx)).text).toBe("from-fallback");
     expect(fb.calls.complete).toBe(1);
   });
+
+  it("does not pause after not_signed_in, so a sign-in takes effect on the next call", async () => {
+    const fb = makeFallback();
+    let signedIn = false;
+    const requests: string[] = [];
+    const p = new ChatGptLlmProvider({
+      fallback: fb.provider,
+      getToken: async () => {
+        if (!signedIn) throw new ChatGptAuthError("not_signed_in", "not signed in");
+        return { accessToken: "tok-A", expiresAt: Date.now() + 3_600_000 };
+      },
+      fetchImpl: (async (url: string) => {
+        requests.push(url);
+        return streamResponse(sse(okEvents(["ok"])));
+      }) as unknown as typeof fetch,
+      sleep: async () => {},
+    });
+    const ctx = { config: baseConfig({}), log: noopLog } as LlmProviderCtx;
+    expect((await p.complete(msgs, call, ctx)).text).toBe("from-fallback");
+    signedIn = true;
+    expect((await p.complete(msgs, call, ctx)).text).toBe("ok");
+    expect(requests).toHaveLength(1);
+  });
+
+  it("reports the ChatGPT error instead of falling back when the block has no fallback target", async () => {
+    const fb = makeFallback();
+    const p = new ChatGptLlmProvider({
+      fallback: fb.provider,
+      getToken: async () => {
+        throw new ChatGptAuthError("not_signed_in", "not signed in");
+      },
+    });
+    const ctx = {
+      config: { ...baseConfig({}), endpoint: "", apiKey: "" },
+      log: noopLog,
+    } as LlmProviderCtx;
+    await expect(p.complete(msgs, call, ctx)).rejects.toMatchObject({
+      code: "llm_unavailable",
+      message: expect.stringMatching(/auth:not_signed_in/),
+    });
+    await expect(collect(p.stream(msgs, call, ctx))).rejects.toMatchObject({ code: "llm_unavailable" });
+    expect(fb.calls).toEqual({ complete: 0, stream: 0 });
+  });
+
+  it("still pauses after the server rejects the sign-in (HTTP 403)", async () => {
+    const s = setup({ responses: [jsonResponse({ error: { code: "forbidden" } }, 403)] });
+    expect((await s.provider.complete(msgs, call, s.ctx)).text).toBe("from-fallback");
+    expect((await s.provider.complete(msgs, call, s.ctx)).text).toBe("from-fallback");
+    expect(s.requests).toHaveLength(1);
+  });
 });
 
 describe("chatgpt provider registration", () => {
@@ -313,5 +365,12 @@ describe("chatgpt provider registration", () => {
     expect([...Value.Errors(ConfigSchema, ok)].map((e) => `${e.path}: ${e.message}`)).toEqual([]);
     const bad = Value.Default(ConfigSchema, { skillEvolver: { provider: "not_a_provider", model: "x" } });
     expect([...Value.Errors(ConfigSchema, bad)].some((e) => e.path.startsWith("/skillEvolver/provider"))).toBe(true);
+  });
+
+  it("config schema rejects an unknown chatgpt.reasoningEffort", () => {
+    const ok = Value.Default(ConfigSchema, { llm: { provider: "chatgpt", chatgpt: { reasoningEffort: "low" } } });
+    expect([...Value.Errors(ConfigSchema, ok)]).toEqual([]);
+    const bad = Value.Default(ConfigSchema, { llm: { provider: "chatgpt", chatgpt: { reasoningEffort: "loww" } } });
+    expect([...Value.Errors(ConfigSchema, bad)].some((e) => e.path.startsWith("/llm/chatgpt/reasoningEffort"))).toBe(true);
   });
 });

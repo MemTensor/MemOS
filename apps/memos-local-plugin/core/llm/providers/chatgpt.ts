@@ -23,7 +23,7 @@
  *       reasoningEffort: low      # omitted unless set
  */
 
-import { ERROR_CODES, MemosError } from "../../../agent-contract/errors.js";
+import { ERROR_CODES, MemosError, type ErrorCode } from "../../../agent-contract/errors.js";
 import { ChatGptAuthError, CHATGPT_API_BASE, getAccessToken, type TokenOptions, type AccessToken } from "../chatgpt-auth.js";
 import { decodeSse } from "../fetcher.js";
 import { OpenAiLlmProvider } from "./openai.js";
@@ -268,6 +268,33 @@ export class ChatGptLlmProvider implements LlmProvider {
     if (ms > 0) pauseState.set(pauseKey(cg), { until: this.now() + ms, reason: failureCode(err) });
   }
 
+  /**
+   * Shared gate for both fallback paths: records a pause for the failure,
+   * then throws the ChatGPT error when fallback is off, the call was
+   * cancelled, or the block has no fallback target (no apiKey and no
+   * endpoint), so the caller sees the actionable ChatGPT reason instead of
+   * the fallback provider's configuration error.
+   */
+  private beginFallback(
+    ctx: LlmProviderCtx,
+    cg: ChatGptProviderConfig,
+    pausedReason: string | null,
+    err: unknown,
+    stream: boolean,
+  ): void {
+    if (err) this.notePause(err, cg);
+    const hasTarget = Boolean(ctx.config.apiKey) || Boolean(ctx.config.endpoint);
+    if (cg.fallback === false || ctx.signal?.aborted || !hasTarget) {
+      throw this.toMemosError(err ?? pausedErr(pausedReason), cg, ctx);
+    }
+    ctx.log.warn("chatgpt.fallback", {
+      to: "openai_compatible",
+      reason: pausedReason ? `paused:${pausedReason}` : failureCode(err),
+      status: err instanceof ChatGptFailure ? err.status : undefined,
+      stream,
+    });
+  }
+
   private async fallbackComplete(
     messages: LlmMessage[],
     opts: ProviderCallInput,
@@ -276,15 +303,7 @@ export class ChatGptLlmProvider implements LlmProvider {
     pausedReason: string | null,
     err: unknown,
   ): Promise<ProviderCompletion> {
-    if (err) this.notePause(err, cg);
-    if (cg.fallback === false || ctx.signal?.aborted) {
-      throw this.toMemosError(err ?? pausedErr(pausedReason), cg, ctx);
-    }
-    ctx.log.warn("chatgpt.fallback", {
-      to: "openai_compatible",
-      reason: pausedReason ? `paused:${pausedReason}` : failureCode(err),
-      status: err instanceof ChatGptFailure ? err.status : undefined,
-    });
+    this.beginFallback(ctx, cg, pausedReason, err, false);
     return this.fallbackProvider.complete(messages, opts, ctx);
   }
 
@@ -296,15 +315,7 @@ export class ChatGptLlmProvider implements LlmProvider {
     pausedReason: string | null,
     err: unknown,
   ): AsyncGenerator<LlmStreamChunk> {
-    if (err) this.notePause(err, cg);
-    if (cg.fallback === false || ctx.signal?.aborted) {
-      throw this.toMemosError(err ?? pausedErr(pausedReason), cg, ctx);
-    }
-    ctx.log.warn("chatgpt.fallback", {
-      to: "openai_compatible",
-      reason: pausedReason ? `paused:${pausedReason}` : failureCode(err),
-      stream: true,
-    });
+    this.beginFallback(ctx, cg, pausedReason, err, true);
     if (typeof this.fallbackProvider.stream === "function") {
       yield* this.fallbackProvider.stream(messages, opts, ctx);
       return;
@@ -318,12 +329,7 @@ export class ChatGptLlmProvider implements LlmProvider {
     if (err instanceof MemosError) return err;
     const code = failureCode(err);
     const status = err instanceof ChatGptFailure ? err.status : null;
-    const memosCode =
-      code === "subscription_sharing_usage_limit_exceeded" || status === 429
-        ? ERROR_CODES.LLM_RATE_LIMITED
-        : code === "timeout" || code === "cancelled"
-          ? ERROR_CODES.LLM_TIMEOUT
-          : ERROR_CODES.LLM_UNAVAILABLE;
+    const memosCode = memosCodeFor(code, status);
     ctx.log.warn("chatgpt.failed", { code, status });
     return new MemosError(memosCode, `chatgpt: ${code}${status ? ` (HTTP ${status})` : ""}`, {
       provider: "chatgpt",
@@ -436,9 +442,28 @@ function failureCode(err: unknown): string {
   return (err as Error)?.name ?? "unknown_error";
 }
 
+/** Maps a ChatGPT failure code / HTTP status to the facade's error code. */
+function memosCodeFor(code: string, status: number | null): ErrorCode {
+  if (code === "subscription_sharing_usage_limit_exceeded" || status === 429) {
+    return ERROR_CODES.LLM_RATE_LIMITED;
+  }
+  if (code === "timeout" || code === "cancelled") return ERROR_CODES.LLM_TIMEOUT;
+  return ERROR_CODES.LLM_UNAVAILABLE;
+}
+
+/**
+ * Auth problems found by reading the local token file (not signed in, plan
+ * scope missing, sign-in expired) are not paused: the check is cheap and
+ * the user fixes them by signing in, which should take effect at once.
+ * Transient refresh failures and lock timeouts are retryable, so they are
+ * not paused either. Only an auth rejection from the server
+ * (invalid_client, HTTP 401/403) pauses ChatGPT.
+ */
+const UNPAUSED_AUTH_KINDS = new Set(["not_signed_in", "missing_scope", "reauth_required", "transient", "lock_timeout"]);
+
 function pauseFor(err: unknown): number {
   if (err instanceof ChatGptAuthError) {
-    return err.kind === "transient" || err.kind === "lock_timeout" ? 0 : PAUSE_MS.auth;
+    return UNPAUSED_AUTH_KINDS.has(err.kind) ? 0 : PAUSE_MS.auth;
   }
   if (err instanceof ChatGptFailure) {
     if (err.code === "subscription_sharing_usage_limit_exceeded") return PAUSE_MS.usageLimit;

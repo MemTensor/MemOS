@@ -16,7 +16,14 @@
  * messages carry OAuth error codes only.
  */
 
-import { createHash, createPublicKey, randomBytes, randomUUID, verify as cryptoVerify } from "node:crypto";
+import {
+  createHash,
+  createPublicKey,
+  randomBytes,
+  randomUUID,
+  verify as cryptoVerify,
+  type JsonWebKey,
+} from "node:crypto";
 import { execFile } from "node:child_process";
 import { promises as fsp } from "node:fs";
 import * as http from "node:http";
@@ -110,15 +117,29 @@ export async function readCredentials(file: string): Promise<ChatGptCredentials 
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
   }
-  const parsed = JSON.parse(raw) as ChatGptCredentials;
-  if (!parsed || typeof parsed !== "object" || typeof parsed.client_id !== "string") {
+  let parsed: ChatGptCredentials;
+  try {
+    parsed = JSON.parse(raw) as ChatGptCredentials;
+  } catch {
+    throw new ChatGptAuthError("not_signed_in", "ChatGPT credential file is malformed");
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    typeof parsed.client_id !== "string" ||
+    !Array.isArray(parsed.scopes) ||
+    typeof parsed.expires_at !== "number"
+  ) {
     throw new ChatGptAuthError("not_signed_in", "ChatGPT credential file is malformed");
   }
   return parsed;
 }
 
-/** Atomic owner-only write: temp file in the same folder, then rename. */
-export async function writeCredentials(file: string, creds: ChatGptCredentials): Promise<void> {
+/**
+ * Atomic owner-only write: temp file in the same folder, then rename.
+ * Resolves false when owner-only permissions could not be applied.
+ */
+export async function writeCredentials(file: string, creds: ChatGptCredentials): Promise<boolean> {
   const dir = path.dirname(file);
   await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
@@ -135,43 +156,54 @@ export async function writeCredentials(file: string, creds: ChatGptCredentials):
     await fsp.rm(tmp, { force: true });
     throw err;
   }
-  await restrictToOwner(file);
+  return restrictToOwner(file);
 }
 
 /**
- * Owner-only permissions. POSIX: chmod 600. Windows: drop inherited ACEs and
- * grant only the current user full control (icacls).
+ * Owner-only permissions. POSIX: chmod 700 for folders, 600 for files.
+ * Windows: drop inherited ACEs and grant only the current user full
+ * control (icacls). Best effort: never throws, returns false when the
+ * permissions could not be applied so callers can warn.
  */
-export async function restrictToOwner(target: string): Promise<void> {
+export async function restrictToOwner(target: string): Promise<boolean> {
+  const isDir = (await fsp.stat(target).catch(() => null))?.isDirectory() === true;
   if (process.platform !== "win32") {
-    await fsp.chmod(target, 0o600).catch(() => undefined);
-    return;
+    return fsp.chmod(target, isDir ? 0o700 : 0o600).then(
+      () => true,
+      () => false,
+    );
   }
   const user = os.userInfo().username;
   const domain = process.env.USERDOMAIN;
   const principal = domain ? `${domain}\\${user}` : user;
-  const isDir = (await fsp.stat(target).catch(() => null))?.isDirectory() === true;
   const icacls = (args: string[]) =>
-    new Promise<void>((resolve) => {
-      // best effort; never fail a token write on ACL tooling
-      execFile("icacls", [target, ...args], { windowsHide: true }, () => resolve());
+    new Promise<boolean>((resolve) => {
+      execFile("icacls", [target, ...args], { windowsHide: true }, (err) => resolve(!err));
     });
   // /reset drops explicit ACEs a new file gets from the process token
   // (SYSTEM, logon session); then keep only the owner. Folders grant the
   // owner with (OI)(CI) so files created inside inherit owner-only access.
-  await icacls(["/reset"]);
-  await icacls(["/inheritance:r", "/grant:r", isDir ? `${principal}:(OI)(CI)F` : `${principal}:F`]);
+  const reset = await icacls(["/reset"]);
+  const granted = await icacls([
+    "/inheritance:r",
+    "/grant:r",
+    isDir ? `${principal}:(OI)(CI)F` : `${principal}:F`,
+  ]);
+  return reset && granted;
 }
 
 // ─── Lock (serialise refreshes across MemOS processes) ───────────────────────
 
 async function withFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
   const lock = `${file}.lock`;
+  // Unique per acquisition, so a holder never removes a lock that a peer
+  // re-created after treating this one as stale.
+  const owner = `${process.pid}.${randomBytes(8).toString("hex")}`;
   const started = Date.now();
   for (;;) {
     try {
       const h = await fsp.open(lock, "wx", 0o600);
-      await h.writeFile(String(process.pid));
+      await h.writeFile(owner);
       await h.close();
       break;
     } catch (err) {
@@ -194,7 +226,8 @@ async function withFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } finally {
-    await fsp.rm(lock, { force: true }).catch(() => undefined);
+    const current = await fsp.readFile(lock, "utf8").catch(() => null);
+    if (current === owner) await fsp.rm(lock, { force: true }).catch(() => undefined);
   }
 }
 
@@ -347,7 +380,9 @@ export async function listChatGptModels(accessToken: string, fetchImpl: typeof f
   }
   const rows = body.models ?? body.data ?? [];
   return rows
-    .filter((m) => m.visibility === "list")
+    // ChatGPT-plan listings mark usable models "list"; a plain OpenAI-style
+    // listing has no visibility field, so keep those rows too.
+    .filter((m) => m.visibility === undefined || m.visibility === "list")
     .map((m) => ({ slug: m.slug ?? m.id ?? "", displayName: m.display_name }))
     .filter((m) => m.slug.length > 0);
 }
@@ -401,12 +436,15 @@ export async function runLogin(opts: LoginOptions = {}): Promise<LoginResult> {
     ext_agent_host_id: extAgentHostId,
   });
   if (!savedClientId) params.set("agent_name_hint", AGENT_NAME_HINT);
+  // The printed address never carries the ID token: `id_token_hint` is an
+  // optional hint, so it only goes into the URL handed to the browser.
+  const printableUrl = `${CHATGPT_AUTHORIZE_URL}?${params.toString()}`;
   if (savedClientId && existing?.id_token) params.set("id_token_hint", existing.id_token);
   const authorizeUrl = `${CHATGPT_AUTHORIZE_URL}?${params.toString()}`;
 
   print("Opening your browser to sign in with ChatGPT.");
   print("If it does not open, paste this address into your browser:");
-  print(authorizeUrl);
+  print(printableUrl);
   (opts.openBrowser ?? openInBrowser)(authorizeUrl);
 
   let callback: URLSearchParams;
@@ -482,8 +520,11 @@ export async function runLogin(opts: LoginOptions = {}): Promise<LoginResult> {
     saved_at: new Date().toISOString(),
   };
   await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await restrictToOwner(path.dirname(file));
-  await writeCredentials(file, creds);
+  const dirRestricted = await restrictToOwner(path.dirname(file));
+  const fileRestricted = await writeCredentials(file, creds);
+  if (!dirRestricted || !fileRestricted) {
+    print(`Warning: could not restrict ${file} to your user account; check its permissions.`);
+  }
   return { email, subject, scopes, expiresAt: creds.expires_at, file, newRegistration: !savedClientId };
 }
 
@@ -543,7 +584,12 @@ export async function getOrCreateHostId(tokenFile: string, fromCredentials?: str
   await restrictToOwner(dir);
   const tmp = path.join(dir, `.host-id.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
   await fsp.writeFile(tmp, id, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  await fsp.rename(tmp, f);
+  try {
+    await fsp.rename(tmp, f);
+  } catch (err) {
+    await fsp.rm(tmp, { force: true });
+    throw err;
+  }
   await restrictToOwner(f);
   return id;
 }
@@ -620,11 +666,18 @@ export async function verifyIdToken(
   const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as IdTokenClaims;
   if (header.alg !== "RS256") throw new Error(`id_token alg ${header.alg} not accepted`);
   const jwksResp = await fetchImpl(CHATGPT_JWKS_URL, { signal: AbortSignal.timeout(30_000) });
-  const jwks = (await jwksResp.json()) as { keys?: Array<Record<string, unknown>> };
-  const keys = jwks.keys ?? [];
-  const jwk = keys.find((k) => k.kid === header.kid) ?? (keys.length === 1 ? keys[0] : undefined);
+  if (!jwksResp.ok) throw new Error(`id_token JWKS fetch failed: HTTP ${jwksResp.status}`);
+  const jwks = (await jwksResp.json().catch(() => ({}))) as { keys?: JsonWebKey[] };
+  const keys = Array.isArray(jwks.keys) ? jwks.keys : [];
+  let jwk: JsonWebKey | undefined;
+  if (header.kid) {
+    jwk = keys.find((k) => k.kid === header.kid);
+  } else if (keys.length === 1) {
+    // A single key is only accepted when the token names no key.
+    jwk = keys[0];
+  }
   if (!jwk) throw new Error("id_token signing key not found in JWKS");
-  const key = createPublicKey({ key: jwk as never, format: "jwk" });
+  const key = createPublicKey({ key: jwk, format: "jwk" });
   const ok = cryptoVerify(
     "RSA-SHA256",
     Buffer.from(`${parts[0]}.${parts[1]}`),

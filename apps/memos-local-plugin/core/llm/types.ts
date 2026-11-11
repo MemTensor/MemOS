@@ -5,7 +5,10 @@
  * Providers stay internal to `core/llm/`.
  */
 
-import type { ReasoningConfig as ConfigReasoningConfig } from "../config/schema.js";
+import type {
+  ChatGptConfig as ConfigChatGptConfig,
+  ReasoningConfig as ConfigReasoningConfig,
+} from "../config/schema.js";
 import type { RetryDiagnosticDetails } from "../util/retry-after.js";
 
 // ─── Providers & config ──────────────────────────────────────────────────────
@@ -22,21 +25,12 @@ export type LlmProviderName =
 export type ReasoningConfig = ConfigReasoningConfig;
 
 /**
- * Settings for the `chatgpt` provider (`llm.chatgpt`, `skillEvolver.chatgpt`).
- * The provider runs calls on the user's ChatGPT plan via "Sign in with
- * ChatGPT"; `endpoint` / `apiKey` / `model` in the same block stay the
- * openai_compatible fallback.
+ * Settings for the `chatgpt` provider (`llm.chatgpt`, `skillEvolver.chatgpt`,
+ * `l3Llm.chatgpt`). The provider runs calls on the user's ChatGPT plan via
+ * "Sign in with ChatGPT"; `endpoint` / `apiKey` / `model` in the same block
+ * stay the openai_compatible fallback. Derived from `ChatGptSchema`.
  */
-export interface ChatGptProviderConfig {
-  /** Model slug from GET /v1/models (visibility "list"). */
-  model?: string;
-  /** Fall back to the openai_compatible settings in the same block. Default true. */
-  fallback?: boolean;
-  /** Credential file. Default ~/.config/memos-local/chatgpt-oauth.json. */
-  tokenFile?: string;
-  /** Optional Responses API reasoning effort. Omitted when unset. */
-  reasoningEffort?: string;
-}
+export type ChatGptProviderConfig = ConfigChatGptConfig;
 
 /**
  * Resolved LLM config, post-defaults. Subset of `ResolvedConfig.llm` so

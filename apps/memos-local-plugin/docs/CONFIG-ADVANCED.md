@@ -78,12 +78,21 @@ llm:
     # reasoningEffort: low
 ```
 
-`skillEvolver` accepts the same `provider: chatgpt` and `chatgpt:` block. A
-chatgpt skill evolver with a blank `endpoint` / `apiKey` reuses the main
-`llm` block's for its fallback. The Responses route ignores `temperature`
-and `maxTokens`. After a usage-limit error ChatGPT is skipped for 30 minutes,
-after "not eligible" for 6 hours, and after an auth failure for 10 minutes;
-those calls go straight to the fallback.
+`skillEvolver` and `l3Llm` accept the same `provider: chatgpt` and
+`chatgpt:` block (their `model` must be non-empty, as for any provider). A
+chatgpt `skillEvolver` / `l3Llm` with a blank `endpoint` / `apiKey` reuses
+the main `llm` block's for its fallback, but only when the main block is
+`openai_compatible` or `chatgpt`, so another provider's key is never sent to
+an OpenAI-compatible endpoint. With no fallback target at all (no `apiKey`
+and no `endpoint`), ChatGPT errors are reported as they are instead of
+falling back.
+
+The Responses route ignores `temperature` and `maxTokens`. After a
+usage-limit error ChatGPT is skipped for 30 minutes, after "not eligible"
+for 6 hours, and after the server rejects the sign-in for 10 minutes; those
+calls go straight to the fallback. "Not signed in" is not paused, so signing
+in takes effect on the next call. The Settings **Test** button checks the
+sign-in (and refreshes the token if needed) without spending plan usage.
 
 ### `storage`
 ```yaml
