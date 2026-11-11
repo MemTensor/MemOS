@@ -1,6 +1,14 @@
 # openGauss graph storage
 
-Select `GRAPH_DB_BACKEND=opengauss` and set `OPENGAUSS_HOST`, `OPENGAUSS_USER`, `OPENGAUSS_PASSWORD`, and `OPENGAUSS_DB`. Install the `tree-mem` extra. The target database must already have the required AGE and DataVec/BM25 capabilities; the adapter does not create a physical database.
+Select `GRAPH_DB_BACKEND=opengauss` and set `OPENGAUSS_HOST`, `OPENGAUSS_USER`, `OPENGAUSS_PASSWORD`, and `OPENGAUSS_DB`. Install the `tree-mem` extra for tree memory. The target database must already have the required AGE and DataVec/BM25 capabilities; the adapter does not create a physical database.
+
+As with the PostgreSQL and PolarDB backends, install the database driver separately in the Python environment running MemOS. Neither `tree-mem` nor `all` installs this driver. The verified driver version is `psycopg2-binary==2.9.13`:
+
+```bash
+python -m pip install "psycopg2-binary==2.9.13"
+```
+
+For a Poetry checkout, run `poetry run python -m pip install "psycopg2-binary==2.9.13"` after `make install`. Without the driver, importing MemOS remains supported; initializing the openGauss backend raises an installation error before opening a connection.
 
 Optional settings are `OPENGAUSS_PORT` (5432), `OPENGAUSS_MIN_CONN` (1), `OPENGAUSS_MAX_CONN` (20), `OPENGAUSS_CONNECT_TIMEOUT` (10 seconds), `OPENGAUSS_CONNECTION_WAIT_TIMEOUT` (30 seconds), and `EMBEDDING_DIMENSION` (1024). Explicit request Cube IDs take precedence over the configured default scope. A scope selection is a query filter, not an authorization grant.
 

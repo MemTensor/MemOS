@@ -3,7 +3,15 @@ title: "openGauss 图存储"
 desc: "介绍 MemOS 的 openGauss 图存储后端配置、Dashboard 查询范围、资源所有权、备份恢复及 Feedback 支持范围。"
 ---
 
-设置 `GRAPH_DB_BACKEND=opengauss`，并配置 `OPENGAUSS_HOST`、`OPENGAUSS_USER`、`OPENGAUSS_PASSWORD` 和 `OPENGAUSS_DB`。安装时需启用 `tree-mem` 可选依赖组。目标数据库必须预先具备所需的 AGE 和 DataVec/BM25 能力；适配器不会创建物理数据库。
+设置 `GRAPH_DB_BACKEND=opengauss`，并配置 `OPENGAUSS_HOST`、`OPENGAUSS_USER`、`OPENGAUSS_PASSWORD` 和 `OPENGAUSS_DB`。树状记忆需启用 `tree-mem` 可选依赖组。目标数据库必须预先具备所需的 AGE 和 DataVec/BM25 能力；适配器不会创建物理数据库。
+
+与 PostgreSQL、PolarDB 后端一样，需要在运行 MemOS 的 Python 环境中单独安装数据库驱动。`tree-mem` 和 `all` 均不会安装此驱动。已验证的驱动版本为 `psycopg2-binary==2.9.13`：
+
+```bash
+python -m pip install "psycopg2-binary==2.9.13"
+```
+
+使用 Poetry 源码环境时，在 `make install` 后执行 `poetry run python -m pip install "psycopg2-binary==2.9.13"`。未安装驱动时仍可导入 MemOS；初始化 openGauss 后端会在打开连接前明确提示安装驱动。
 
 可选配置包括：`OPENGAUSS_PORT`（默认 5432）、`OPENGAUSS_MIN_CONN`（默认 1）、`OPENGAUSS_MAX_CONN`（默认 20）、`OPENGAUSS_CONNECT_TIMEOUT`（默认 10 秒）、`OPENGAUSS_CONNECTION_WAIT_TIMEOUT`（默认 30 秒）和 `EMBEDDING_DIMENSION`（默认 1024）。请求中显式指定的 Cube ID 优先于配置中的默认范围。范围选择只用于查询过滤，不代表授予访问权限。
 

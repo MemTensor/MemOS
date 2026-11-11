@@ -98,7 +98,7 @@ class OpenGaussGraphDB(BaseGraphDB):
     def __init__(self, config: OpenGaussGraphDBConfig) -> None:
         if ThreadedConnectionPool is None:
             raise ConfigurationError(
-                "Install openGauss support with pip install 'MemoryOS[tree-mem]'"
+                "Install the openGauss driver with python -m pip install 'psycopg2-binary==2.9.13'"
             )
         self.config = config.model_copy(deep=True)
         self.db_name = config.db_name

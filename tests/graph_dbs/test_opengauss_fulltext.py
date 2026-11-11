@@ -196,7 +196,7 @@ REBUILD_MESSAGE = "Last batch insert document failed, scanned score maybe affect
 
 
 def _failure(code, message):
-    import psycopg2
+    psycopg2 = pytest.importorskip("psycopg2")
 
     class DriverFailure(psycopg2.Error):
         @property
@@ -223,14 +223,16 @@ def test_fulltext_known_rollback_error_repairs_once_then_retries_read(fulltext_s
 
 
 @pytest.mark.parametrize(
-    "failure",
+    "code,message",
     [
-        GraphDBError("no cause"),
-        _failure("42501", REBUILD_MESSAGE),
-        _failure("42809", "No BM25 index is used to the scan, please check the plan."),
+        (None, None),
+        ("42501", REBUILD_MESSAGE),
+        ("42809", "No BM25 index is used to the scan, please check the plan."),
     ],
 )
-def test_fulltext_unrelated_errors_do_not_rebuild(fulltext_store, monkeypatch, failure):
+def test_fulltext_unrelated_errors_do_not_rebuild(fulltext_store, monkeypatch, code, message):
+    pytest.importorskip("psycopg2")
+    failure = GraphDBError("no cause") if code is None else _failure(code, message)
     db, transaction, cursor = fulltext_store
     repair = MagicMock()
     monkeypatch.setattr(db, "_rebuild_fulltext_index", repair)
@@ -324,7 +326,7 @@ def test_fulltext_rebuild_locks_and_only_repairs_the_owned_index(fulltext_store,
 
 @pytest.mark.parametrize("failure", ["none", "one_deadlock", "two_deadlocks", "permission"])
 def test_owned_test_graph_cleanup_only_retries_one_deadlock(monkeypatch, failure):
-    import psycopg2
+    psycopg2 = pytest.importorskip("psycopg2")
 
     from tests.graph_dbs import test_opengauss_integration as integration
 

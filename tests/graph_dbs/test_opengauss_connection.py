@@ -17,6 +17,9 @@ from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
 
 @pytest.fixture
 def pool_case(monkeypatch):
+    pytest.importorskip(
+        "psycopg2", reason="Connection tests require the optional PostgreSQL driver"
+    )
     module = importlib.import_module("memos.graph_dbs.opengauss")
     config = OpenGaussGraphDBConfig(
         host="db",
@@ -235,8 +238,8 @@ def test_constructor_driver_failure_is_sanitized(pool_case, monkeypatch):
     assert "synthetic-sensitive-detail" not in str(caught.value)
 
 
-def test_optional_driver_import_has_install_guidance(pool_case, monkeypatch):
-    module, pool, _, _, _ = pool_case
+def test_optional_driver_import_has_install_guidance(monkeypatch):
+    module = importlib.import_module("memos.graph_dbs.opengauss")
     original = builtins.__import__
 
     def blocked(name, *args, **kwargs):
@@ -246,5 +249,16 @@ def test_optional_driver_import_has_install_guidance(pool_case, monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", blocked)
     namespace = runpy.run_path(module.__file__)
-    with pytest.raises(ConfigurationError, match=r"MemoryOS\[tree-mem\]"):
-        namespace["OpenGaussGraphDB"].__init__(object(), pool.config)
+    assert namespace["psycopg2"] is None
+    assert namespace["ThreadedConnectionPool"] is None
+    config = OpenGaussGraphDBConfig(
+        host="db",
+        user="memos",
+        password="synthetic-password",
+        db_name="test",
+        user_name="A",
+    )
+    with pytest.raises(
+        ConfigurationError, match=r"python -m pip install 'psycopg2-binary==2\.9\.13'"
+    ):
+        namespace["OpenGaussGraphDB"](config)
