@@ -11,10 +11,7 @@ import pytest
 from memos.exceptions import GraphDBError
 from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
-from tests.graph_dbs.test_opengauss_integration import (
-    _query,
-    sql,
-)
+from tests.graph_dbs.test_opengauss_integration import _query
 from tests.graph_dbs.test_opengauss_integration import (
     database as _database,
 )
@@ -195,6 +192,8 @@ def test_default_feedback_keyword_replacement_real_mutation(feedback, kind):
     [("SELECT", "WorkingMemory"), ("UPDATE", "WorkingMemory"), ("CONSTRAINT", "LongTermMemory")],
 )
 def test_default_feedback_sql_error_visible_and_recovers(feedback, database, permission, kind):
+    from psycopg2 import sql
+
     db, fb = feedback
     key = str(uuid.uuid4())
     db.add_node(key, "旧词 内容", {"memory_type": kind, "status": "activated", "tags": []})
@@ -249,6 +248,7 @@ def test_feedback_http_and_actual_scheduler_handler_fail_on_storage(
     from contextlib import contextmanager
 
     from fastapi.testclient import TestClient
+    from psycopg2 import sql
 
     from memos.api.handlers.base_handler import HandlerDependencies
     from memos.api.handlers.feedback_handler import FeedbackHandler

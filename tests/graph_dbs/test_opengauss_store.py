@@ -26,12 +26,11 @@ def config():
 
 
 @pytest.fixture
-def store(config, monkeypatch):
-    module = importlib.import_module("memos.graph_dbs.opengauss")
+def store(config, monkeypatch, psycopg2_stub):
     pool = MagicMock()
     connection = pool.transaction.return_value.__enter__.return_value
     cursor = connection.cursor.return_value.__enter__.return_value
-    monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
+    monkeypatch.setattr(psycopg2_stub.pool, "ThreadedConnectionPool", MagicMock())
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", pool.transaction)
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_ensure_open", pool.ensure_open)
     monkeypatch.setattr(PartialOpenGaussGraphDB, "close", pool.close)
@@ -341,7 +340,7 @@ def _columns():
 
 
 @pytest.fixture
-def schema_case(config, monkeypatch):
+def schema_case(config, monkeypatch, psycopg2_stub):
     module = importlib.import_module("memos.graph_dbs.opengauss")
     pool = MagicMock()
     cursor = pool.transaction.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
@@ -364,7 +363,7 @@ def schema_case(config, monkeypatch):
         ),
     ]
     cursor.fetchall.return_value = _columns()
-    monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
+    monkeypatch.setattr(psycopg2_stub.pool, "ThreadedConnectionPool", MagicMock())
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", pool.transaction)
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_ensure_open", pool.ensure_open)
     monkeypatch.setattr(PartialOpenGaussGraphDB, "close", pool.close)

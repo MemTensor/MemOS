@@ -18,12 +18,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from memos.configs.graph_db import OpenGaussGraphDBConfig
+from memos.dependency import require_python_package
 from memos.exceptions import GraphDBError
 from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
-
-
-psycopg2 = pytest.importorskip("psycopg2")
-sql = pytest.importorskip("psycopg2.sql")
 
 
 pytestmark = pytest.mark.skipif(
@@ -31,7 +28,14 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@require_python_package(
+    import_name="psycopg2",
+    install_command="pip install psycopg2-binary",
+    install_link="https://pypi.org/project/psycopg2-binary/",
+)
 def _connect(config):
+    import psycopg2.sql
+
     return psycopg2.connect(
         host=config.host,
         port=config.port,
@@ -53,8 +57,12 @@ def _query(admin, statement, params=()):
 
 @pytest.fixture(scope="module")
 def database():
+    if not os.getenv("MEMOS_OPENGAUSS_TEST_CONFIG"):
+        pytest.skip("openGauss integration tests not enabled")
     config = OpenGaussGraphDBConfig.model_validate_json(os.environ["MEMOS_OPENGAUSS_TEST_CONFIG"])
     manager = _connect(config)
+    from psycopg2 import sql
+
     manager.autocommit = True
     suffix = uuid.uuid4().hex[:12]
     name, role = "memos_it_" + suffix, "memos_it_app_" + suffix
@@ -144,6 +152,8 @@ def stores(database):
 def _drop_test_graph(admin):
     # The WLM space-accounting worker can race AGE's drop lock order. Only
     # this owned test object is retried, once, after the autocommit rollback.
+    import psycopg2
+
     statement = "SELECT ag_catalog.drop_graph('memos_graph',true)"
     try:
         _query(admin, statement)
@@ -428,6 +438,8 @@ def test_incompatible_dimensions_do_not_change_existing_data(stores):
 
 
 def test_wrong_credentials_fail_without_password_in_public_error(stores):
+    import psycopg2
+
     with pytest.raises(GraphDBError) as error:
         stores(password="Synthetic_Wrong_Password_A7")
     assert isinstance(error.value.__cause__, psycopg2.OperationalError)
@@ -445,6 +457,8 @@ def test_unregistered_schema_is_not_adopted_or_destroyed(stores, database):
 
 
 def test_incomplete_registered_label_is_rejected_with_data_preserved(stores, database):
+    from psycopg2 import sql
+
     admin, config = database
     _query(admin, "SELECT ag_catalog.create_graph('memos_graph')")
     _query(
@@ -461,6 +475,8 @@ def test_incomplete_registered_label_is_rejected_with_data_preserved(stores, dat
 
 
 def test_missing_extension_fails_and_closes_its_connections(stores, database):
+    from psycopg2 import sql
+
     admin, _ = database
     name = "memos_it_no_age_" + uuid.uuid4().hex[:12]
     _query(admin, sql.SQL("CREATE DATABASE {} DBCOMPATIBILITY 'PG'").format(sql.Identifier(name)))
@@ -477,6 +493,8 @@ def test_missing_extension_fails_and_closes_its_connections(stores, database):
 
 
 def test_missing_create_privilege_fails_without_partial_graph(stores, database):
+    from psycopg2 import sql
+
     admin, config = database
     _query(
         admin,
@@ -501,6 +519,8 @@ def test_missing_create_privilege_fails_without_partial_graph(stores, database):
 
 
 def test_missing_unique_constraint_is_not_silently_repaired(stores, database):
+    from psycopg2 import sql
+
     db = stores()
     admin, _ = database
     db.add_node("one", "keep", {})
@@ -713,6 +733,8 @@ def test_age_hard_delete_detaches_all_edges_and_preserves_other_scope(stores, da
 
 @pytest.mark.parametrize("failure", ["trigger", "permission"])
 def test_age_detach_failure_rolls_back_edges_node_and_retrieval_columns(stores, database, failure):
+    from psycopg2 import sql
+
     db = stores()
     admin, config = database
     _relation_fixture(db)
@@ -1011,6 +1033,8 @@ def test_age_tag_neighbors_rank_visibility_and_optional_embeddings(stores):
     ],
 )
 def test_age_traversal_select_failure_rolls_back_and_recovers(stores, database, method, args):
+    from psycopg2 import sql
+
     db = stores(maxconn=1)
     db.add_node("a", "center", {"tags": ["red"]})
     db.add_node("b", "neighbor", {})
@@ -1381,6 +1405,8 @@ def test_filter_physical_scope_and_quoted_explicit_scope(stores):
 
 @pytest.mark.parametrize("operation", ["metadata", "list", "delete"])
 def test_filter_permission_failure_restores_connection(filtered_store, database, operation):
+    from psycopg2 import sql
+
     db = filtered_store
     admin, config = database
     _query(
@@ -1620,6 +1646,8 @@ def test_datavec_real_retriever_completion_respects_cube_alias(stores, monkeypat
 
 
 def test_datavec_query_permission_failure_and_pool_recovery(stores, database):
+    from psycopg2 import sql
+
     db = stores()
     db.add_node("one", "fixture", {"embedding": [1, 0, 0]})
     admin, config = database
@@ -1645,6 +1673,8 @@ def test_datavec_query_permission_failure_and_pool_recovery(stores, database):
 
 @pytest.mark.parametrize("failure", ["cancel", "timeout"])
 def test_datavec_cancel_timeout_and_subsequent_query_recovery(stores, database, failure):
+    from psycopg2 import sql
+
     admin, config = database
     if failure == "timeout":
         _query(
@@ -1695,6 +1725,8 @@ def test_datavec_cancel_timeout_and_subsequent_query_recovery(stores, database, 
 
 
 def test_datavec_index_creation_permission_failure_preserves_data(stores, database):
+    from psycopg2 import sql
+
     db = stores()
     db.add_node("one", "fixture", {"embedding": [1, 0, 0]})
     admin, config = database
@@ -1934,6 +1966,8 @@ def test_bm25_missing_index_reinitialization_and_incompatible_index(stores, data
 
 
 def test_bm25_repair_permission_failure_is_explicit_and_recoverable(stores, database):
+    from psycopg2 import sql
+
     db = stores()
     db.add_node("one", "星港", {})
     with pytest.raises(GraphDBError), db._get_connection() as conn, conn.cursor() as cursor:
@@ -2018,6 +2052,8 @@ def test_bm25_retriever_fast_graph_switch_and_cube_completion(stores):
 
 @pytest.mark.parametrize("failure", ["cancel", "timeout"])
 def test_bm25_cancel_timeout_do_not_hide_failure_or_break_pool(stores, database, failure):
+    from psycopg2 import sql
+
     admin, config = database
     if failure == "timeout":
         _query(
@@ -2068,6 +2104,8 @@ def test_bm25_cancel_timeout_do_not_hide_failure_or_break_pool(stores, database,
 
 
 def test_bm25_query_permission_failure_then_restore(stores, database):
+    from psycopg2 import sql
+
     db = stores()
     db.add_node("one", "星港", {})
     admin, config = database
@@ -2092,6 +2130,8 @@ def test_bm25_query_permission_failure_then_restore(stores, database):
 
 
 def test_bm25_index_creation_permission_failure_preserves_graph(stores, database):
+    from psycopg2 import sql
+
     db = stores()
     db.add_node("one", "星港", {})
     admin, config = database

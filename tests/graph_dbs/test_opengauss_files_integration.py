@@ -18,7 +18,7 @@ from memos.memories.textual.tree import TreeTextMemory
 from tests.api.test_server_router import mock_init_server
 from tests.graph_dbs.test_opengauss_consumers_integration import environment as _environment
 from tests.graph_dbs.test_opengauss_consumers_integration import model_factories
-from tests.graph_dbs.test_opengauss_integration import _query, sql
+from tests.graph_dbs.test_opengauss_integration import _query
 from tests.graph_dbs.test_opengauss_integration import database as _database
 from tests.graph_dbs.test_opengauss_integration import stores as _stores
 
@@ -123,6 +123,8 @@ def test_cube_dump_explicit_full_backup(environment, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("failure", ["cross_cube", "dangling", "sql"])
 def test_invalid_restore_and_database_fault_are_atomic(stores, database, tmp_path, failure):
+    from psycopg2 import sql
+
     db = stores()
     seed(db)
     before = db.export_graph(all_cubes=True, status=[], include_embedding=True)
@@ -208,6 +210,8 @@ def test_internal_ownership_and_record_side_effects(internal):
     ],
 )
 def test_internal_storage_failure_is_not_success(internal, database, route, payload):
+    from psycopg2 import sql
+
     client, db = internal
     admin, config = database
     before = db.export_graph(all_cubes=True, status=[], include_embedding=True)

@@ -1,6 +1,5 @@
 """DataVec score, scope, projection and bounded candidate recovery contracts."""
 
-import importlib
 import json
 
 from copy import deepcopy
@@ -14,13 +13,12 @@ from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
 
 
 @pytest.fixture
-def vector_store(monkeypatch):
-    module = importlib.import_module("memos.graph_dbs.opengauss")
+def vector_store(monkeypatch, psycopg2_stub):
     transaction = MagicMock()
     cursor = (
         transaction.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
     )
-    monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
+    monkeypatch.setattr(psycopg2_stub.pool, "ThreadedConnectionPool", MagicMock())
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_init_schema", lambda self: None)
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", transaction)
     config = OpenGaussGraphDBConfig(

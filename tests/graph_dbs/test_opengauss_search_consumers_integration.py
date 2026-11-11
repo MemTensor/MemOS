@@ -24,10 +24,7 @@ from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispat
 from memos.memories.textual.tree_text_memory.retrieve.recall import GraphMemoryRetriever
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from tests.api.test_server_router import mock_init_server
-from tests.graph_dbs.test_opengauss_integration import (
-    _query,
-    sql,
-)
+from tests.graph_dbs.test_opengauss_integration import _query
 from tests.graph_dbs.test_opengauss_integration import (
     database as _database,
 )
@@ -217,6 +214,8 @@ def client(pipeline, monkeypatch, tmp_path):
 @pytest.mark.parametrize("mode", ["fast", "fine", "mixture"])
 @pytest.mark.parametrize("fault", ["sql", "filter"])
 def test_required_reads_fail_through_actual_modes_and_http(pipeline, database, client, mode, fault):
+    from psycopg2 import sql
+
     db, handler, _ = pipeline
     admin, config = database
     payload = {
@@ -253,6 +252,8 @@ def test_required_reads_fail_through_actual_modes_and_http(pipeline, database, c
 
 
 def test_scheduler_marks_required_storage_failure_failed(pipeline, database):
+    from psycopg2 import sql
+
     db, handler, _ = pipeline
     admin, config = database
     tracker = Mock()

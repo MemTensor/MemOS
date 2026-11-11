@@ -1,6 +1,5 @@
 """Native BM25 contracts, including bounded recovery of a failed write index."""
 
-import importlib
 import json
 
 from copy import deepcopy
@@ -15,13 +14,12 @@ from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
 
 
 @pytest.fixture
-def fulltext_store(monkeypatch):
-    module = importlib.import_module("memos.graph_dbs.opengauss")
+def fulltext_store(monkeypatch, psycopg2_stub):
     transaction = MagicMock()
     cursor = (
         transaction.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
     )
-    monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
+    monkeypatch.setattr(psycopg2_stub.pool, "ThreadedConnectionPool", MagicMock())
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_init_schema", lambda self: None)
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", transaction)
     config = OpenGaussGraphDBConfig(
@@ -196,7 +194,7 @@ REBUILD_MESSAGE = "Last batch insert document failed, scanned score maybe affect
 
 
 def _failure(code, message):
-    psycopg2 = pytest.importorskip("psycopg2")
+    import psycopg2
 
     class DriverFailure(psycopg2.Error):
         @property
@@ -231,7 +229,6 @@ def test_fulltext_known_rollback_error_repairs_once_then_retries_read(fulltext_s
     ],
 )
 def test_fulltext_unrelated_errors_do_not_rebuild(fulltext_store, monkeypatch, code, message):
-    pytest.importorskip("psycopg2")
     failure = GraphDBError("no cause") if code is None else _failure(code, message)
     db, transaction, cursor = fulltext_store
     repair = MagicMock()
@@ -325,8 +322,8 @@ def test_fulltext_rebuild_locks_and_only_repairs_the_owned_index(fulltext_store,
 
 
 @pytest.mark.parametrize("failure", ["none", "one_deadlock", "two_deadlocks", "permission"])
-def test_owned_test_graph_cleanup_only_retries_one_deadlock(monkeypatch, failure):
-    psycopg2 = pytest.importorskip("psycopg2")
+def test_owned_test_graph_cleanup_only_retries_one_deadlock(monkeypatch, psycopg2_stub, failure):
+    import psycopg2
 
     from tests.graph_dbs import test_opengauss_integration as integration
 

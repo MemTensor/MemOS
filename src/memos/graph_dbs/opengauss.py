@@ -15,18 +15,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from memos.configs.graph_db import OpenGaussGraphDBConfig
-from memos.exceptions import ConfigurationError, GraphDBError
+from memos.dependency import require_python_package
+from memos.exceptions import GraphDBError
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
 
-
-try:
-    import psycopg2
-
-    from psycopg2.pool import ThreadedConnectionPool
-except ImportError:
-    psycopg2 = None
-    ThreadedConnectionPool = None
 
 logger = get_logger(__name__)
 _TABLE = '"memos_graph"."Memory"'
@@ -95,11 +88,14 @@ def _encode_filter_value(value: Any) -> str:
 class OpenGaussGraphDB(BaseGraphDB):
     """Scoped AGE graph backend with an owned pool and parameter-bound filters."""
 
+    @require_python_package(
+        import_name="psycopg2",
+        install_command="pip install psycopg2-binary",
+        install_link="https://pypi.org/project/psycopg2-binary/",
+    )
     def __init__(self, config: OpenGaussGraphDBConfig) -> None:
-        if ThreadedConnectionPool is None:
-            raise ConfigurationError(
-                "Install the openGauss driver with python -m pip install 'psycopg2-binary==2.9.13'"
-            )
+        import psycopg2.pool
+
         self.config = config.model_copy(deep=True)
         self.db_name = config.db_name
         self.user_name = config.user_name
@@ -109,7 +105,7 @@ class OpenGaussGraphDB(BaseGraphDB):
         self._closed = False
         self._pool_closed = False
         try:
-            self.connection_pool = ThreadedConnectionPool(
+            self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
                 config.minconn,
                 config.maxconn,
                 host=config.host,
@@ -141,6 +137,8 @@ class OpenGaussGraphDB(BaseGraphDB):
     @contextmanager
     def _get_connection(self, *, snapshot: bool = False) -> Iterator[Any]:
         """Prepare one owned session, commit once, and always release admission."""
+        import psycopg2
+
         self._ensure_open()
         if not self._semaphore.acquire(timeout=self.config.connection_wait_timeout):
             raise GraphDBError("openGauss connection wait timed out")
@@ -213,6 +211,8 @@ class OpenGaussGraphDB(BaseGraphDB):
             yield cursor
 
     def _return_connection(self, connection: Any, discard: bool, failed: bool) -> None:
+        import psycopg2
+
         try:
             self.connection_pool.putconn(connection, close=discard or bool(connection.closed))
         except psycopg2.Error as exc:
@@ -239,6 +239,8 @@ class OpenGaussGraphDB(BaseGraphDB):
             self._close_pool()
 
     def _close_pool(self) -> None:
+        import psycopg2
+
         if not self._pool_closed:
             try:
                 self.connection_pool.closeall()
@@ -784,6 +786,8 @@ class OpenGaussGraphDB(BaseGraphDB):
         try:
             rows = self._query_fulltext(query, query_params)
         except GraphDBError as exc:
+            import psycopg2
+
             cause = exc.__cause__
             if (
                 not isinstance(cause, psycopg2.Error)

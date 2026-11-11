@@ -17,7 +17,7 @@ from memos.graph_dbs.factory import GraphStoreFactory
 from memos.memories.textual.tree import TreeTextMemory
 from tests.api.test_server_router import mock_init_server
 from tests.graph_dbs.test_opengauss_consumers_integration import environment as _environment
-from tests.graph_dbs.test_opengauss_integration import _drop_test_graph, _query, sql
+from tests.graph_dbs.test_opengauss_integration import _drop_test_graph, _query
 from tests.graph_dbs.test_opengauss_integration import database as _database
 
 
@@ -170,6 +170,8 @@ def test_http_optional_contract_errors_and_no_virtual_buckets(client, payload, s
 
 
 def test_real_storage_failure_is_http_500_and_connection_recovers(client, dashboard, database):
+    from psycopg2 import sql
+
     admin, config = database
     _query(
         admin,

@@ -38,10 +38,10 @@ def test_cursor_owns_one_transaction_and_orders_optional_setup(pool_case, utc, l
 
 @pytest.mark.parametrize("stage", ["cursor", "utc", "lock", "body", "close"])
 def test_cursor_setup_body_and_close_errors_use_existing_rollback(pool_case, stage):
-    module, db, pool, connection, _ = pool_case
+    driver, db, pool, connection, _ = pool_case
     manager = MagicMock()
     cursor = manager.__enter__.return_value
-    error = module.psycopg2.ProgrammingError("shared cursor failure")
+    error = driver.ProgrammingError("shared cursor failure")
     connection.cursor.side_effect = [
         connection.cursor.return_value,
         error if stage == "cursor" else manager,

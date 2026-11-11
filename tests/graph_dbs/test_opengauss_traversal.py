@@ -8,15 +8,14 @@ import pytest
 
 from memos.configs.graph_db import OpenGaussGraphDBConfig
 from memos.exceptions import GraphDBError
-from memos.graph_dbs import opengauss as module
 from tests.graph_dbs.opengauss_test_support import PartialOpenGaussGraphDB
 
 
 @pytest.fixture
-def store(monkeypatch):
+def store(monkeypatch, psycopg2_stub):
     pool = MagicMock()
     cursor = pool.transaction.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
-    monkeypatch.setattr(module, "ThreadedConnectionPool", MagicMock())
+    monkeypatch.setattr(psycopg2_stub.pool, "ThreadedConnectionPool", MagicMock())
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_get_connection", pool.transaction)
     monkeypatch.setattr(PartialOpenGaussGraphDB, "_ensure_open", pool.ensure_open)
     monkeypatch.setattr(PartialOpenGaussGraphDB, "close", pool.close)
