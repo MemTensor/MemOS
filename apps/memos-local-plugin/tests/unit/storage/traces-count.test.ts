@@ -71,13 +71,16 @@ describe("traces count with > 500 items", () => {
     const count = repo.count();
     expect(count).toBe(600);
 
-    // Verify list with no limit still caps at 500
+    // An unpaginated list reads every row — no LIMIT is appended (#2401).
     const listed = repo.list({});
-    expect(listed.length).toBe(500);
+    expect(listed.length).toBe(600);
 
-    // Verify list with explicit high limit also caps at 500
+    // An explicit limit is honored instead of being clamped to 500 (#2401).
     const listedWithLimit = repo.list({ limit: 10000 });
-    expect(listedWithLimit.length).toBe(500);
+    expect(listedWithLimit.length).toBe(600);
+
+    // Small explicit limits still page as requested.
+    expect(repo.list({ limit: 25 })).toHaveLength(25);
   });
 
   it("countTurns() should return accurate count > 500", () => {
