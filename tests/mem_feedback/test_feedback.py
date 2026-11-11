@@ -33,6 +33,7 @@ def test_process_feedback_runs_answer_and_core_workflows():
 
     assert result == {
         "answer": "corrected answer",
+        "answer_status": "generated",
         "record": {"add": [{"id": "memory-1"}], "update": []},
     }
     feedback._generate_answer.assert_called_once_with(

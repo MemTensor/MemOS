@@ -6,6 +6,7 @@ integration fixtures. Expected business results are fixed independently of SQL.
 
 import math
 import os
+import sys
 import threading
 import time
 
@@ -321,6 +322,30 @@ def test_bad_time_is_checked_even_without_deletions(stores, database, keep):
     assert caught.value.__cause__.pgcode == "22007"
     assert snapshot(admin) == before
     visible(db, [*WORKING, "w6"])
+
+
+def test_oversized_zero_string_cannot_delete_real_memories(stores, database):
+    db = stores()
+    admin, _ = database
+    seed(db)
+    seed(db, "B")
+    before_a, before_b = snapshot(admin), snapshot(admin, "B")
+    previous = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(0)
+        for keep in ("0" * 65, "0" * 5000):
+            with pytest.raises(ValueError, match="64"):
+                db.remove_oldest_memory("WorkingMemory", keep, user_name="A")
+    finally:
+        sys.set_int_max_str_digits(previous)
+    assert snapshot(admin) == before_a
+    assert snapshot(admin, "B") == before_b
+    db.remove_oldest_memory("WorkingMemory", "9" * 64, user_name="A")
+    assert snapshot(admin) == before_a
+    db.remove_oldest_memory("WorkingMemory", "0" * 64, user_name="A")
+    assert db.get_memory_count("WorkingMemory", "A") == 0
+    assert db.get_memory_count("LongTermMemory", "A") == 3
+    assert db.get_memory_count("WorkingMemory", "B") == 5
 
 
 def test_all_statuses_occupy_capacity_and_equal_time_uses_id(stores):

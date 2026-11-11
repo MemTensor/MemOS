@@ -80,7 +80,17 @@ def test_storage_write_is_not_retried_or_wrapped(feedback, error):
     operation.assert_called_once()
 
 
-@pytest.mark.parametrize("error", [GraphDBError("storage"), ValueError("input")])
+def test_keyword_update_unexpected_failure_cannot_become_empty_success(feedback):
+    memory = TextualMemoryItem(memory="old word", metadata={"tags": ["old"]})
+    feedback.graph_store.search_by_keywords_like.return_value = [{"id": memory.id}]
+    feedback.graph_store.get_node.return_value = memory.model_dump()
+    feedback._batch_embed = Mock(return_value=[[1, 0, 0]])
+    feedback._single_update_operation = Mock(side_effect=OSError("failed update"))
+    with pytest.raises(OSError):
+        feedback.process_keyword_replace("u", "A", {"original": "old", "target": "new"})
+
+
+@pytest.mark.parametrize("error", [GraphDBError("storage"), ValueError("input"), OSError("core")])
 def test_scheduler_feedback_batch_does_not_report_storage_success(error):
     from memos.mem_scheduler.task_schedule_modules.handlers.feedback_handler import (
         FeedbackMessageHandler,
@@ -93,7 +103,7 @@ def test_scheduler_feedback_batch_does_not_report_storage_success(error):
     assert caught.value is error
 
 
-@pytest.mark.parametrize("error", [GraphDBError("storage"), ValueError("input")])
+@pytest.mark.parametrize("error", [GraphDBError("storage"), ValueError("input"), OSError("core")])
 def test_scheduler_group_boundary_does_not_swallow_required_error(error):
     from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
     from memos.mem_scheduler.task_schedule_modules.handlers.feedback_handler import (
@@ -106,3 +116,38 @@ def test_scheduler_group_boundary_does_not_swallow_required_error(error):
     with pytest.raises(type(error)) as caught:
         handler([msg])
     assert caught.value is error
+
+
+@pytest.mark.parametrize("content", ["{", "[]", '{"feedback_content": "change"}'])
+def test_feedback_failure_marks_dispatcher_task_failed(content):
+    from memos.mem_scheduler.base_scheduler import BaseScheduler
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+    from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
+    from memos.mem_scheduler.task_schedule_modules.handlers.feedback_handler import (
+        FeedbackMessageHandler,
+    )
+
+    scheduler = BaseScheduler({"use_redis_queue": False})
+    tracker = Mock()
+    scheduler.status_tracker = tracker
+    scheduler.dispatcher._maybe_emit_task_completion = Mock()
+    context = Mock()
+    context.get_feedback_server.return_value.process_feedback.side_effect = GraphDBError(
+        "write failed"
+    )
+    handler = FeedbackMessageHandler(context)
+    message = ScheduleMessageItem(
+        user_id="u", mem_cube_id="A", label="mem_feedback", content=content
+    )
+    task = RunningTaskItem(
+        user_id="u", mem_cube_id="A", task_info="feedback", task_name="feedback", messages=[message]
+    )
+    scheduler.dispatcher._running_tasks[task.item_id] = task
+    try:
+        with pytest.raises((GraphDBError, ValueError)):
+            scheduler.dispatcher._create_task_wrapper(handler, task)([message])
+        assert task.status == "failed"
+        tracker.task_failed.assert_called_once()
+        tracker.task_completed.assert_not_called()
+    finally:
+        scheduler.close()

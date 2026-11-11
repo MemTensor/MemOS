@@ -134,7 +134,7 @@ class SingleCubeView(MemCubeView):
         return memories_result
 
     @timed
-    def feedback_memories(self, feedback_req: APIFeedbackRequest) -> dict[str, Any]:
+    def feedback_memories(self, feedback_req: APIFeedbackRequest) -> dict[str, Any] | list:
         target_session_id = feedback_req.session_id or "default_session"
         if feedback_req.async_mode == "async":
             try:
@@ -157,6 +157,7 @@ class SingleCubeView(MemCubeView):
                     f"[SingleCubeView] cube={self.cube_id} Failed to submit FEEDBACK: {e}",
                     exc_info=True,
                 )
+                raise
             return []
         else:
             feedback_result = self.feedback_server.process_feedback(

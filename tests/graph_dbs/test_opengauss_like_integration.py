@@ -155,7 +155,9 @@ def test_default_feedback_keyword_replacement_real_mutation(feedback, kind):
         )
     before_b = db.export_graph(user_name="B", status=[], include_embedding=True)
     assert fb.DB_IDX_READY is False
-    result = fb.process_feedback("u", "A", [], "请将旧词改为新词", info={"agent_id": "app"})
+    result = fb.process_feedback(
+        "u", "A", [], "请将旧词改为新词", info={"agent_id": "app"}, corrected_answer=True
+    )
     updates = result["record"]["update"]
     assert result["answer"] == "updated" and len(updates) == 1 and result["record"]["add"] == []
     new_id = updates[0]["id"]
@@ -224,6 +226,19 @@ def test_default_feedback_sql_error_visible_and_recovers(feedback, database, per
             )
     assert db.get_node(key)["memory"] == "旧词 内容"
     assert db.get_node(key)["metadata"]["status"] == "activated"
+
+
+def test_answer_failure_preserves_real_feedback_update(feedback):
+    db, fb = feedback
+    key = str(uuid.uuid4())
+    db.add_node(
+        key, "旧词 内容", {"memory_type": "WorkingMemory", "status": "activated", "tags": []}
+    )
+    fb._generate_answer = Mock(side_effect=ValueError("optional model failure"))
+    result = fb.process_feedback("u", "A", [], "替换", corrected_answer=True)
+    assert result["answer"] == "" and result["answer_status"] == "unavailable"
+    assert result["record"]["update"][0]["id"] == key
+    assert db.get_node(key)["memory"] == "新词 内容"
 
 
 def test_feedback_http_and_actual_scheduler_handler_fail_on_storage(

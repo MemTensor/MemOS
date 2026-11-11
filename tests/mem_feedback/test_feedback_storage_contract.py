@@ -1,10 +1,11 @@
 """Regression branches around the Feedback boundaries changed for storage errors."""
 
+from threading import Event
 from unittest.mock import Mock
 
 import pytest
 
-from memos.exceptions import GraphDBError
+from memos.exceptions import GraphDBError, MemOSError
 from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
@@ -41,7 +42,6 @@ def test_nonkeyword_pure_add_contract(feedback, judge):
 @pytest.mark.parametrize(
     "judgements,expected",
     [
-        (None, []),
         ([], []),
         ([{"validity": "false", "user_attitude": "irrelevant"}], ["new"]),
         ([{"validity": "false", "user_attitude": "negative"}], []),
@@ -81,29 +81,39 @@ def test_core_valid_memory_and_empty_input(feedback):
         mem.memory == "fact" and mem.metadata.tags == ["x"] and mem.metadata.embedding == [1, 0, 0]
     )
     feedback._keyword_replace_judgement.side_effect = RuntimeError("model unavailable")
-    assert feedback.process_feedback_core("u", "A", [], "feedback") == {
-        "record": {"add": [], "update": []}
-    }
+    with pytest.raises(MemOSError, match="core"):
+        feedback.process_feedback_core("u", "A", [], "feedback")
 
 
 @pytest.mark.parametrize("error", [TimeoutError("timeout"), RuntimeError("model unavailable")])
-def test_feedback_optional_errors_keep_fallback(feedback, error):
+def test_feedback_core_errors_do_not_become_empty_records(feedback, error):
     feedback.process_feedback_core = Mock(side_effect=error)
-    assert feedback.process_feedback("u", "A", [], "feedback") == {
-        "answer": "",
-        "record": {"add": [], "update": []},
+    with pytest.raises(type(error)) as caught:
+        feedback.process_feedback("u", "A", [], "feedback")
+    assert caught.value is error
+
+
+def test_feedback_answer_and_core_execute_concurrently(feedback):
+    answer_started, core_started = Event(), Event()
+
+    def answer(*args, **kwargs):
+        answer_started.set()
+        assert core_started.wait(3)
+        return "answer"
+
+    def core(*args, **kwargs):
+        core_started.set()
+        assert answer_started.wait(3)
+        return {"record": {"add": ["stored"], "update": []}}
+
+    feedback._generate_answer = answer
+    feedback.process_feedback_core = core
+    result = feedback.process_feedback("u", "A", [], "feedback", corrected_answer=True)
+    assert result == {
+        "answer": "answer",
+        "answer_status": "generated",
+        "record": {"add": ["stored"], "update": []},
     }
-
-
-def test_feedback_pending_future_cancellation(feedback, monkeypatch):
-    pending = Mock()
-    monkeypatch.setattr(
-        "memos.mem_feedback.feedback.concurrent.futures.wait",
-        lambda *args, **kwargs: (set(), {pending}),
-    )
-    feedback.process_feedback_core = Mock(return_value={"record": {"add": [], "update": []}})
-    assert feedback.process_feedback("u", "A", [], "feedback")["answer"] == "answer"
-    pending.cancel.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -134,7 +144,7 @@ def test_existing_tfidf_branch_is_only_stub_regression(
     "text,tags,fail",
     [("no match", [], False), ("old text", [], False), ("old text", ["old", "new"], True)],
 )
-def test_keyword_replace_filter_tags_and_optional_update_failure(feedback, text, tags, fail):
+def test_keyword_replace_filter_tags_and_required_update_failure(feedback, text, tags, fail):
     memory = TextualMemoryItem(memory=text, metadata={"tags": tags})
     feedback.graph_store.search_by_keywords_like.return_value = [{"id": memory.id}]
     feedback.graph_store.get_node.return_value = memory.model_dump()
@@ -143,10 +153,16 @@ def test_keyword_replace_filter_tags_and_optional_update_failure(feedback, text,
         if fail
         else Mock(return_value={"id": memory.id})
     )
-    result = feedback.process_keyword_replace(
-        "u", "A", {"original": "old", "target": "new"}, info={"ignored": 1}
-    )
-    assert len(result["record"]["update"]) == int("old" in text and not fail)
+    if fail:
+        with pytest.raises(RuntimeError):
+            feedback.process_keyword_replace(
+                "u", "A", {"original": "old", "target": "new"}, info={"ignored": 1}
+            )
+    else:
+        result = feedback.process_keyword_replace(
+            "u", "A", {"original": "old", "target": "new"}, info={"ignored": 1}
+        )
+        assert len(result["record"]["update"]) == int("old" in text)
     if "old" in text:
         new = feedback._single_update_operation.call_args.args[1]
         assert new.memory == "new text" and new.metadata.tags == ["new"]
@@ -208,7 +224,8 @@ def test_scheduler_feedback_optional_errors_and_empty_batch(monkeypatch):
     handler.batch_handler("u", "A", [Mock()])
     handler.batch_handler("u", "A", [])
     handler.process_single_feedback.side_effect = RuntimeError("optional")
-    handler.batch_handler("u", "A", [Mock()])
+    with pytest.raises(RuntimeError):
+        handler.batch_handler("u", "A", [Mock()])
     monkeypatch.setattr(
         "memos.mem_scheduler.task_schedule_modules.base_handler.group_messages_by_user_and_mem_cube",
         lambda **kw: {"u": {"empty": [], "A": [Mock()]}},

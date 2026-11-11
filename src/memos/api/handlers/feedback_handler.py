@@ -2,6 +2,8 @@
 Feeback handler for memory add/update functionality.
 """
 
+from fastapi import HTTPException
+
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import APIFeedbackRequest, MemoryResponse
 from memos.log import get_logger
@@ -42,7 +44,11 @@ class FeedbackHandler(BaseHandler):
         """
         cube_view = self._build_cube_view(feedback_req)
 
-        process_record = cube_view.feedback_memories(feedback_req)
+        try:
+            process_record = cube_view.feedback_memories(feedback_req)
+        except Exception as error:
+            self.logger.exception("Feedback processing failed")
+            raise HTTPException(status_code=500, detail="Feedback processing failed") from error
 
         self.logger.info(f"[FeedbackHandler] Final feedback results count={len(process_record)}")
 

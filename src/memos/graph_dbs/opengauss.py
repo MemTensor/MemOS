@@ -1950,8 +1950,10 @@ class OpenGaussGraphDB(BaseGraphDB):
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int | str, user_name: str | None = None
     ) -> None:
-        """Trim a fixed locked set atomically; concurrent inserts await a later trim."""
+        """Trim atomically; digit strings are limited to 64 characters, including zeros."""
         scope = self._capacity_scope(memory_type, user_name)
+        if isinstance(keep_latest, str) and len(keep_latest) > 64:
+            raise ValueError("keep_latest digit strings must contain at most 64 characters")
         if isinstance(keep_latest, str) and re.fullmatch(r"[0-9]+", keep_latest):
             keep_latest = int(keep_latest)
         if type(keep_latest) is not int or keep_latest < 0:

@@ -13,7 +13,7 @@ from memos.configs.memory import MemFeedbackConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
-from memos.exceptions import GraphDBError
+from memos.exceptions import GraphDBError, LLMError, MemOSError
 from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
@@ -1070,10 +1070,11 @@ class MemFeedback(BaseMemFeedback):
                 except (GraphDBError, ValueError):
                     raise
                 except Exception as e:
-                    mem_id = future_to_info[future][0]
+                    mem_id = future_to_info[future]
                     logger.error(
-                        f"[Feedback Core DB] Exception during update operation for memory {mem_id}: {e}"
+                        "Feedback update failed for memory %s: %s", mem_id, e, exc_info=True
                     )
+                    raise
 
         return {"record": {"add": [], "update": update_results}}
 
@@ -1129,9 +1130,14 @@ class MemFeedback(BaseMemFeedback):
             if not chat_history:
                 return self._pure_add(user_name, feedback_content, feedback_time, info)
             else:
-                raw_judge = self._feedback_judgement(
-                    chat_history, feedback_content, feedback_time=feedback_time
-                )
+                try:
+                    raw_judge = self._feedback_judgement(
+                        chat_history, feedback_content, feedback_time=feedback_time
+                    )
+                except ValueError as error:
+                    raise LLMError("Feedback model produced invalid judgement data") from error
+                if not isinstance(raw_judge, list):
+                    raise LLMError("Feedback model did not return a judgement list")
                 valid_feedback = (
                     [item for item in raw_judge if check_validity(item)] if raw_judge else []
                 )
@@ -1165,26 +1171,29 @@ class MemFeedback(BaseMemFeedback):
                         + "\nUser feedback: "
                         + str(feedback_content)
                     )
-                    mem_item = make_mem_item(
-                        value,
-                        user_id=user_id,
-                        user_name=user_name,
-                        session_id=session_id,
-                        tags=tags,
-                        key=key,
-                        embedding=embedding,
-                        sources=[
-                            {
-                                "type": "feedback",
-                                "role": "user",
-                                "chat_time": feedback_time,
-                                "content": feedback_content,
-                            }
-                        ],
-                        background=background,
-                        type="fine",
-                        info=info,
-                    )
+                    try:
+                        mem_item = make_mem_item(
+                            value,
+                            user_id=user_id,
+                            user_name=user_name,
+                            session_id=session_id,
+                            tags=tags,
+                            key=key,
+                            embedding=embedding,
+                            sources=[
+                                {
+                                    "type": "feedback",
+                                    "role": "user",
+                                    "chat_time": feedback_time,
+                                    "content": feedback_content,
+                                }
+                            ],
+                            background=background,
+                            type="fine",
+                            info=info,
+                        )
+                    except ValueError as error:
+                        raise LLMError("Feedback model produced invalid memory data") from error
                     feedback_memories.append(mem_item)
 
                 mem_record = self._feedback_memory(
@@ -1203,13 +1212,11 @@ class MemFeedback(BaseMemFeedback):
                 )
                 return mem_record
 
-        except (GraphDBError, ValueError):
+        except (MemOSError, ValueError):
             raise
         except Exception as e:
-            logger.error(
-                f"[0107 Feedback Core: process_feedback_core] Error for user {user_name}: {e}"
-            )
-            return {"record": {"add": [], "update": []}}
+            logger.exception("Required feedback processing failed for user %s", user_name)
+            raise MemOSError("Feedback core processing failed") from e
 
     def process_feedback(
         self,
@@ -1221,7 +1228,7 @@ class MemFeedback(BaseMemFeedback):
         **kwargs,
     ):
         """
-        Process feedback with different modes.
+        Process memory feedback and independently generate an optional answer.
 
         Args:
             user_name: cube_ids
@@ -1230,16 +1237,23 @@ class MemFeedback(BaseMemFeedback):
             **kwargs: Additional arguments including async_mode
 
         Returns:
-            Dict with answer and/or memory operation records
+            Dict with answer, answer_status (not_requested/generated/unavailable),
+            and actual memory operation records. An unavailable answer is not
+            display text; callers decide how to present or retry it. Core failures
+            propagate and may follow partial writes; do not blindly retry them.
         """
         corrected_answer = kwargs.get("corrected_answer", False)
 
         with ContextThreadPoolExecutor(max_workers=2) as ex:
-            answer_future = ex.submit(
-                self._generate_answer,
-                chat_history,
-                feedback_content,
-                corrected_answer=corrected_answer,
+            answer_future = (
+                ex.submit(
+                    self._generate_answer,
+                    chat_history,
+                    feedback_content,
+                    corrected_answer=True,
+                )
+                if corrected_answer
+                else None
             )
             core_future = ex.submit(
                 self.process_feedback_core,
@@ -1250,30 +1264,19 @@ class MemFeedback(BaseMemFeedback):
                 info,
                 **kwargs,
             )
-            _done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
-            for fut in pending:
-                fut.cancel()
-            try:
-                answer = answer_future.result()
-                record = core_future.result()
-                task_id = kwargs.get("task_id", "default")
-
-                logger.info(
-                    f"[Feedback Core MemFeedback process] Feedback Completed : user {user_name} | task_id {task_id} | record {record}."
-                )
-
-                return {"answer": answer, "record": record["record"]}
-            except (GraphDBError, ValueError):
-                raise
-            except concurrent.futures.TimeoutError:
-                logger.error(
-                    f"[Feedback Core MemFeedback process] Timeout in sync mode for {user_name}",
-                    exc_info=True,
-                )
-                return {"answer": "", "record": {"add": [], "update": []}}
-            except Exception as e:
-                logger.error(
-                    f"[Feedback Core MemFeedback process] Error in concurrent tasks for {user_name}: {e}",
-                    exc_info=True,
-                )
-                return {"answer": "", "record": {"add": [], "update": []}}
+            answer = ""
+            answer_status = "not_requested"
+            if answer_future is not None:
+                answer_status = "unavailable"
+                try:
+                    candidate = answer_future.result()
+                    if isinstance(candidate, str) and candidate.strip():
+                        answer = candidate
+                        answer_status = "generated"
+                except Exception:
+                    logger.exception("Optional feedback answer generation failed")
+            # Always consume the core result, including when answer generation
+            # failed. Its exception must take precedence and its records are real.
+            record = core_future.result()
+            logger.info("Feedback completed for user %s, task %s", user_name, kwargs.get("task_id"))
+            return {"answer": answer, "answer_status": answer_status, "record": record["record"]}

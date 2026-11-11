@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import multiprocessing
 import time
 
 from contextlib import suppress
@@ -15,6 +14,7 @@ from memos.context.context import (
     get_current_trace_id,
     set_request_context,
 )
+from memos.exceptions import ConfigurationError
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.general_schemas import STARTUP_BY_PROCESS
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
@@ -286,32 +286,25 @@ class BaseSchedulerQueueMixin:
             logger.warning("Memory Scheduler consumer is already running")
             return
 
-        self._running = True
-
         if self.scheduler_startup_mode == STARTUP_BY_PROCESS:
-            self._stop_event = multiprocessing.Event()
-            self._consumer_process = multiprocessing.Process(
-                target=self._process_consumer,
-                daemon=True,
-                name="MessageConsumerProcess",
+            raise ConfigurationError(
+                "Internal process startup is unsupported; construct the Scheduler inside an "
+                "independent worker using run_scheduler_worker and thread startup mode. "
+                "Use Redis for tasks submitted across processes."
             )
-            self._consumer_process.start()
-            logger.info("Message consumer process started")
-        else:
-            self._consumer_thread = ContextThread(
-                target=self._message_consumer,
-                daemon=True,
-                name="MessageConsumerThread",
-            )
-            self._consumer_thread.start()
-            logger.info("Message consumer thread started")
-
-    def _process_consumer(self) -> None:
-        """Drain the child's accepted tasks before a graceful process exit."""
+        self._running = True
+        self._consumer_thread = ContextThread(
+            target=self._message_consumer,
+            daemon=True,
+            name="MessageConsumerThread",
+        )
         try:
-            self._message_consumer()
-        finally:
-            self.dispatcher.close()
+            self._consumer_thread.start()
+        except BaseException:
+            self._consumer_thread = None
+            self._running = False
+            raise
+        logger.info("Message consumer thread started")
 
     def stop_consumer(self) -> None:
         if not self._running:

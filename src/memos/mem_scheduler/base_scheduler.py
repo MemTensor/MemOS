@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING
 
 from memos.api.lifecycle import shutdown_components
 from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
-from memos.exceptions import MemOSError
+from memos.exceptions import ConfigurationError, MemOSError
 from memos.lifecycle import CloseState
 from memos.log import get_logger
+from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_scheduler.base_mixins import (
     BaseSchedulerMemoryMixin,
     BaseSchedulerQueueMixin,
@@ -60,7 +61,6 @@ if TYPE_CHECKING:
 
     from memos.llms.base import BaseLLM
     from memos.mem_cube.base import BaseMemCube
-    from memos.mem_feedback.simple_feedback import SimpleMemFeedback
     from memos.mem_scheduler.schemas.message_schemas import (
         ScheduleLogForWebItem,
         ScheduleMessageItem,
@@ -88,6 +88,7 @@ class BaseScheduler(
     def __init__(self, config: BaseSchedulerConfig):
         """Initialize the scheduler with the given configuration."""
         super().__init__()
+        self._owner_pid = os.getpid()
         self._close_state = CloseState()
         self._initialization_lock = threading.RLock()
         self._entry_local = threading.local()
@@ -311,6 +312,7 @@ class BaseScheduler(
 
     def close(self) -> None:
         """End this scheduler's lifecycle, draining users before its owned graph."""
+        self._ensure_owner_process()
         current = threading.current_thread()
         owned_threads = [self._consumer_thread, self._monitor_thread, self._io_loop_thread]
         if self.dispatcher_monitor is not None:
@@ -326,6 +328,7 @@ class BaseScheduler(
     @contextmanager
     def _lifecycle_entry(self) -> Iterator[None]:
         """Serialize component creation/start with the owner's shutdown barrier."""
+        self._ensure_owner_process()
         with self._initialization_lock:
             self._close_state.ensure_open()
             nested = getattr(self._entry_local, "active", False)
@@ -334,6 +337,12 @@ class BaseScheduler(
                 yield
             finally:
                 self._entry_local.active = nested
+
+    def _ensure_owner_process(self) -> None:
+        if os.getpid() != self._owner_pid:
+            raise ConfigurationError(
+                "Scheduler cannot be reused after fork; construct it inside the worker process"
+            )
 
     def _close_resources(self) -> None:
         errors = []
@@ -401,12 +410,23 @@ class BaseScheduler(
                 self.components = init_components()
             # Retain ownership even when close won the race; never publish late.
             self._close_state.ensure_open()
-            self.current_mem_cube = self.components["naive_mem_cube"]
-            self._feedback_server = self.components["feedback_server"]
+            if self.current_mem_cube is None:
+                self.current_mem_cube = self.components["naive_mem_cube"]
+            if self._feedback_server is None:
+                self._feedback_server = self.components["feedback_server"]
+                self._feedback_cube = self.current_mem_cube
 
     def start(self) -> None:
         with self._lifecycle_entry():
             super().start()
+
+    def stop(self) -> None:
+        self._ensure_owner_process()
+        super().stop()
+
+    def stop_consumer(self) -> None:
+        self._ensure_owner_process()
+        super().stop_consumer()
 
     def start_consumer(self) -> None:
         with self._lifecycle_entry():
@@ -464,20 +484,50 @@ class BaseScheduler(
 
     @property
     def feedback_server(self) -> SimpleMemFeedback:
-        """The memory cube associated with this MemChat."""
+        """Feedback bound to the current Cube, borrowing its dependencies."""
         with self._lifecycle_entry():
-            if self._feedback_server is None and not self._borrowed_components:
-                self._ensure_components()
+            if self._feedback_server is None:
+                if self._borrowed_components:
+                    feedback = self._feedback_for_borrowed_cube()
+                    self._close_state.ensure_open()
+                    self._feedback_server = feedback
+                    self._feedback_cube = self.current_mem_cube
+                else:
+                    self._ensure_components()
             return self._feedback_server
 
+    def _feedback_for_borrowed_cube(self) -> SimpleMemFeedback:
+        text_mem = getattr(self.current_mem_cube, "text_mem", None)
+        dependencies = {
+            "llm": getattr(text_mem, "extractor_llm", None),
+            "embedder": getattr(text_mem, "embedder", None),
+            "graph_store": getattr(text_mem, "graph_store", None),
+            "memory_manager": getattr(text_mem, "memory_manager", None),
+            "mem_reader": self.mem_reader,
+            "searcher": self.searcher,
+            "reranker": getattr(text_mem, "reranker", None),
+        }
+        missing = [name for name, value in dependencies.items() if value is None]
+        if missing:
+            raise ConfigurationError(
+                "Feedback requires an explicit feedback_server or current Cube dependencies: "
+                + ", ".join(missing)
+            )
+        return SimpleMemFeedback(**dependencies)
+
     @feedback_server.setter
-    def feedback_server(self, value: SimpleMemFeedback) -> None:
-        self._feedback_server = value
+    def feedback_server(self, value: SimpleMemFeedback | None) -> None:
+        with self._lifecycle_entry():
+            self._feedback_server = value
+            self._feedback_cube = None
 
     @mem_cube.setter
     def mem_cube(self, value: BaseMemCube) -> None:
         """The memory cube associated with this MemChat."""
         with self._lifecycle_entry():
+            if self._feedback_cube is not None and self._feedback_cube is not value:
+                self._feedback_server = None
+                self._feedback_cube = None
             self._borrowed_components = True
             self.current_mem_cube = value
             if self.retriever is not None:

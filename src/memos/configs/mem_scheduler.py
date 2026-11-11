@@ -2,7 +2,7 @@ import logging
 import os
 
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -28,6 +28,11 @@ from memos.mem_scheduler.schemas.general_schemas import (
 
 class BaseSchedulerConfig(BaseConfig):
     """Base configuration class for mem_scheduler."""
+
+    scheduler_startup_mode: Literal["thread"] = Field(
+        default="thread",
+        description="Create independent process workers inside the child; runtime resources cannot be inherited.",
+    )
 
     top_k: int = Field(
         default=DEFAULT_TOP_K,

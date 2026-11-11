@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import sys
 
 from copy import deepcopy
 from datetime import datetime
@@ -217,6 +218,30 @@ def test_invalid_capacity_before_borrow(capacity, keep):
     with pytest.raises(ValueError):
         db.remove_oldest_memory("WorkingMemory", keep)
     pool.getconn.assert_not_called()
+
+
+@pytest.mark.parametrize("keep", ["0" * 65, "9" * 65, "0" * 5000])
+def test_capacity_string_limit_is_independent_of_interpreter(capacity, keep):
+    db, pool, _, _ = capacity
+    previous = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(0)
+        with pytest.raises(ValueError, match="64"):
+            db.remove_oldest_memory("WorkingMemory", keep)
+    finally:
+        sys.set_int_max_str_digits(previous)
+    pool.getconn.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "keep",
+    ["0" * 64, "9" * 64, "02", 10**5000],
+    ids=["zeros", "digits", "leading-zero", "large-int"],
+)
+def test_capacity_text_boundary_and_unbounded_integer_remain_valid(capacity, keep):
+    db, pool, _, _ = capacity
+    db.remove_oldest_memory("WorkingMemory", keep)
+    pool.getconn.assert_called_once()
 
 
 @pytest.mark.parametrize(

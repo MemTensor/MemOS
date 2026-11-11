@@ -4,7 +4,6 @@ import json
 
 from typing import TYPE_CHECKING
 
-from memos.exceptions import GraphDBError
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.task_schemas import (
     LONG_TERM_MEMORY_TYPE,
@@ -30,16 +29,12 @@ class FeedbackMessageHandler(BaseSchedulerHandler):
         self, user_id: str, mem_cube_id: str, batch: list[ScheduleMessageItem]
     ) -> None:
         for message in batch:
-            try:
-                self.process_single_feedback(message)
-            except (GraphDBError, ValueError):
-                raise
-            except Exception as e:
-                logger.error(
-                    "Error processing feedbackMemory message: %s",
-                    e,
-                    exc_info=True,
-                )
+            self.process_single_feedback(message)
+
+    def handle_exception(self, e: Exception, message: str = "Error processing feedback") -> None:
+        """A required feedback failure must reach the dispatcher's failed task state."""
+        logger.error("%s: %s", message, e, exc_info=True)
+        raise e
 
     def process_single_feedback(self, message: ScheduleMessageItem) -> None:
         mem_cube = self.scheduler_context.get_mem_cube()
@@ -51,13 +46,9 @@ class FeedbackMessageHandler(BaseSchedulerHandler):
         try:
             feedback_data = json.loads(content) if isinstance(content, str) else content
             if not isinstance(feedback_data, dict):
-                logger.error(
-                    "Failed to decode feedback_data or it is not a dict: %s", feedback_data
-                )
-                return
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON content for feedback message: %s", content, exc_info=True)
-            return
+                raise ValueError("Feedback message content must be an object")
+        except json.JSONDecodeError as error:
+            raise ValueError("Feedback message content must be valid JSON") from error
 
         task_id = feedback_data.get("task_id") or message.task_id
         feedback_result = self.scheduler_context.get_feedback_server().process_feedback(

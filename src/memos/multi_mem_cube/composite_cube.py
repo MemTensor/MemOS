@@ -90,6 +90,9 @@ class CompositeCubeView(MemCubeView):
         for view in self.cube_views:
             self.logger.info(f"[CompositeCubeView] fan-out add to cube={view.cube_id}")
             results = view.feedback_memories(feedback_req)
-            all_results.extend(results)
+            if isinstance(results, dict):
+                all_results.append(results)
+            else:
+                all_results.extend(results)
 
         return all_results
