@@ -73,8 +73,8 @@ def test_actual_optimized_scheduler_lifecycle_joins_threads_and_shuts_executor(m
     monitor.start()
     task = scheduler.dispatcher.dispatcher_executor.submit(lambda: 42)
     assert task.result(timeout=2) == 42
-    shutdown = Mock(wraps=scheduler.dispatcher.shutdown)
-    monkeypatch.setattr(scheduler.dispatcher, "shutdown", shutdown)
+    close = Mock(wraps=scheduler.dispatcher.close)
+    monkeypatch.setattr(scheduler.dispatcher, "close", close)
     error = Mock()
     monkeypatch.setattr(lifecycle.logger, "exception", error)
     try:
@@ -89,14 +89,14 @@ def test_actual_optimized_scheduler_lifecycle_joins_threads_and_shuts_executor(m
         ):
             time.sleep(0.005)
         assert not any(t.is_alive() for t in scheduler.dispatcher.dispatcher_executor._threads)
-        shutdown.assert_called_once()
+        close.assert_called_once()
         assert scheduler._rabbitmq_stop_flag is True
         error.assert_not_called()
     finally:
         scheduler._running = False
         consumer.join(timeout=1)
         monitor.join(timeout=1)
-        scheduler.dispatcher.shutdown()
+        scheduler.close()
 
 
 def test_unexpected_join_error_is_not_hidden():
