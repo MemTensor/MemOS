@@ -906,8 +906,8 @@ class APIConfig:
     def get_postgres_config(user_id: str | None = None) -> dict[str, Any]:
         """Get PostgreSQL + pgvector configuration for MemOS graph storage.
 
-        Uses standard PostgreSQL with pgvector extension.
-        Schema: memos.memories, memos.edges
+        Uses standard PostgreSQL with pgvector. Shard count, index, and
+        full-text configuration keep the backend defaults unless overridden.
         """
         user_name = os.getenv("MEMOS_USER_NAME", "default")
         if user_id:
@@ -922,7 +922,7 @@ class APIConfig:
             "schema_name": os.getenv("MEMOS_SCHEMA", "memos"),
             "user_name": user_name,
             "use_multi_db": False,
-            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "384")),
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
             "maxconn": int(os.getenv("POSTGRES_MAX_CONN", "20")),
         }
 

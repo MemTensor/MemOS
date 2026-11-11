@@ -20,6 +20,10 @@
   </p>
 
   <p align="center">
+<a href="https://trendshift.io/repositories/18526?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-18526" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/18526" alt="MemTensor%2FMemOS | Trendshift" width="250" height="55"/></a>
+  </p>
+
+  <p align="center">
     <strong>English</strong> | <a href="README_ZH.md">中文</a>
   </p>
 </div>

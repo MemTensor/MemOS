@@ -1,5 +1,7 @@
+import { assertV4RowAdmission, releasedV4SessionFormatCodec } from "@deepseek-ai/dsh-session-format-v3-to-v4";
 import { describe, expect, it, vi } from "vitest";
 
+import { dshV4Event } from "../../helpers/deepseek-harness-v4.js";
 import type { MemoryCore } from "../../../agent-contract/memory-core.js";
 import {
   createDeepSeekHarnessBridge,
@@ -7,6 +9,7 @@ import {
   type DshSessionLike,
   type DshUserMessageLike,
 } from "../../../adapters/deepseek-harness/bridge.js";
+import { createDeepSeekHarnessRecallMessage } from "../../../adapters/deepseek-harness/index.js";
 import { DeepSeekHarnessLlmRouteContext } from "../../../adapters/deepseek-harness/host-llm.js";
 
 function userMessage(text: string): DshUserMessageLike {
@@ -19,16 +22,7 @@ function userMessage(text: string): DshUserMessageLike {
 }
 
 function recallMessage(text: string): DshUserMessageLike {
-  return {
-    id: `recall-${text.length}`,
-    role: "user",
-    content: [{ type: "text", text }],
-    source: {
-      kind: "plugin",
-      plugin: "memos-local-memory",
-      form: "recall",
-    },
-  };
+  return createDeepSeekHarnessRecallMessage(text) as unknown as DshUserMessageLike;
 }
 
 function makeCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
@@ -116,6 +110,61 @@ const session: DshSessionLike = {
 };
 
 describe("DeepSeek Harness bridge", () => {
+  it.each([undefined, "standard", "research"])(
+    "uses the configured memory profile for recall and capture with preset %s",
+    async (preset) => {
+      const core = makeCore();
+      const bridge = makeBridge(core);
+      const current = {
+        id: `preset-${preset ?? "headless"}`,
+        header: {
+          cwd: "/workspace/project",
+          ...(preset ? { agentPreset: preset } : {}),
+        },
+      };
+      bridge.onSessionEvent(current, {
+        type: "turn/start",
+        seq: 0,
+        time: 100,
+        data: { turn: 1 },
+      });
+      const prompt = userMessage("Synthetic memory lookup");
+      await bridge.beforeStep(
+        {
+          agent: { id: current.id, session: current },
+          messages: [prompt],
+          turn: 1,
+          step: 1,
+          signal: new AbortController().signal,
+        },
+        async () => ({ kind: "enter", messages: [prompt] }),
+      );
+      bridge.onSessionEvent(current, {
+        type: "assistant/message",
+        seq: 1,
+        time: 110,
+        data: {
+          turn: 1,
+          message: { content: [{ type: "text", text: "Synthetic answer" }] },
+        },
+      });
+      bridge.onSessionEvent(current, {
+        type: "turn/end",
+        seq: 2,
+        time: 120,
+        data: { turn: 1, reason: { kind: "completed" } },
+      });
+      await bridge.flush(current.id);
+      const scoped = expect.objectContaining({
+        namespace: expect.objectContaining({ profileId: "web" }),
+      });
+      expect(core.searchMemory).toHaveBeenCalledWith(scoped, expect.anything());
+      expect(core.prepareTurn).toHaveBeenCalledWith(scoped);
+      expect(core.onTurnEnd).toHaveBeenCalledWith(scoped);
+      await bridge.closeSession(current);
+    },
+  );
+
   it("prefers the persisted request route and falls back to agent defaults", () => {
     const routedSession: DshSessionLike = {
       id: "route-session",
@@ -539,7 +588,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(first.messages[1]).toMatchObject({
       role: "user",
       source: {
-        kind: "plugin",
+        kind: "plugin:memos-local-memory",
         plugin: "memos-local-memory",
         form: "recall",
       },
@@ -548,12 +597,24 @@ describe("DeepSeek Harness bridge", () => {
         text: expect.stringContaining("The user prefers concise technical answers."),
       }],
     });
+    // Pre-step persists the original query and recall together. Both must pass V4.
+    const batch = dshV4Event("agent/inbox/spliced", {
+      removedCount: 1,
+      inserted: first.messages,
+    });
+    expect(() => assertV4RowAdmission(batch)).not.toThrow();
+    expect(() => releasedV4SessionFormatCodec.encodeEvent(batch)).not.toThrow();
+    for (const message of first.messages) {
+      const event = dshV4Event("user/message", message);
+      expect(() => assertV4RowAdmission(event)).not.toThrow();
+      expect(() => releasedV4SessionFormatCodec.encodeEvent(event)).not.toThrow();
+    }
     expect(replayedFirstStep).toEqual({ kind: "enter", messages: [prompt] });
     expect(second).toEqual({ kind: "enter", messages: [] });
     expect(followUp).toMatchObject({
       kind: "enter",
       messages: [followUpPrompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
   });
@@ -590,7 +651,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(result).toMatchObject({
       kind: "enter",
       messages: [prompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
     expect(core.searchMemory).toHaveBeenCalledTimes(1);
@@ -637,7 +698,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(result).toMatchObject({
       kind: "enter",
       messages: [prompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
   });
@@ -682,7 +743,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(result).toMatchObject({
       kind: "enter",
       messages: [prompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
     expect(core.searchMemory).toHaveBeenCalledTimes(1);
@@ -836,7 +897,7 @@ describe("DeepSeek Harness bridge", () => {
     expect(result).toMatchObject({
       kind: "enter",
       messages: [retry, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
 
@@ -959,7 +1020,7 @@ describe("DeepSeek Harness bridge", () => {
     await expect(nextStep).resolves.toMatchObject({
       kind: "enter",
       messages: [secondPrompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
     expect(core.searchMemory).toHaveBeenCalledTimes(2);
@@ -1037,7 +1098,7 @@ describe("DeepSeek Harness bridge", () => {
     await expect(nextStep).resolves.toMatchObject({
       kind: "enter",
       messages: [secondPrompt, expect.objectContaining({
-        source: expect.objectContaining({ plugin: "memos-local-memory" }),
+        source: expect.objectContaining({ kind: "plugin:memos-local-memory" }),
       })],
     });
     expect(core.searchMemory).toHaveBeenCalledTimes(2);
