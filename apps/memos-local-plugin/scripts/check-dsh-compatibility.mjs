@@ -11,7 +11,7 @@ const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const versions = process.argv.slice(2);
 if (!versions.length) versions.push(
   "0.1.0-rc.6", "0.1.7-rc.2",
-  "0.2.0-rc.2", "0.2.1-rc.2", "0.2.1-rc.3",
+  "0.2.0-rc.2", "0.2.1-rc.2", "0.2.1-rc.3", "0.2.2-rc.1",
 );
 if (versions.some((version) => !/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(version))) {
   throw new Error("Expected explicit DSH versions, e.g. 0.2.1-rc.3");
@@ -32,7 +32,8 @@ for (const version of versions) {
     Object.entries(manifest.devDependencies)
       .filter(([name]) => name.startsWith("@deepseek-ai/"))
       .map(([name, value]) => [name,
-        name.startsWith("@deepseek-ai/dsh-") && name !== "@deepseek-ai/dsh-session-format-v3-to-v4"
+        name.startsWith("@deepseek-ai/dsh-") &&
+          (name !== "@deepseek-ai/dsh-session-format-v3-to-v4" || version === "0.2.2-rc.1")
           ? version : value]),
   );
   // Early DSH previews used caret peers. Letting npm choose their latest
@@ -49,6 +50,9 @@ for (const version of versions) {
     }));
     const next = new Set();
     for (const pkg of metadata) {
+      if (pkg.name === "@deepseek-ai/dsh-agent" && version === "0.2.2-rc.1") {
+        devDependencies["@deepseek-ai/cordis"] = pkg.peerDependencies["@deepseek-ai/cordis"];
+      }
       for (const name of Object.keys({ ...pkg.dependencies, ...pkg.peerDependencies })) {
         if (!name.startsWith("@deepseek-ai/dsh-") || name === "@deepseek-ai/dsh-session-format-v3-to-v4") continue;
         devDependencies[name] = version;
