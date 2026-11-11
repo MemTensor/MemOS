@@ -23,7 +23,9 @@ const KNOWN_FLAGS = new Set(["--status", "--models"]);
 // interactive sign-in that writes the default token file.
 const unknown = args.filter((a) => !KNOWN_FLAGS.has(a) && !a.startsWith("--file="));
 const fileArg = args.find((a) => a.startsWith("--file="));
-const file = fileArg ? fileArg.slice("--file=".length).trim() || undefined : undefined;
+const file = fileArg === undefined ? undefined : fileArg.slice("--file=".length).trim();
+const wantStatus = args.includes("--status");
+const wantModels = args.includes("--models");
 
 async function main() {
   if (unknown.length > 0) {
@@ -31,11 +33,14 @@ async function main() {
       `unknown argument(s): ${unknown.join(" ")} (use --status, --models or --file=<path>)`,
     );
   }
-  if (args.includes("--status")) {
+  // An explicit but empty --file= must not fall back to the default file.
+  if (fileArg !== undefined && !file) throw new Error("--file=<path> needs a non-empty path");
+  if (wantStatus && wantModels) throw new Error("use either --status or --models, not both");
+  if (wantStatus) {
     console.log(JSON.stringify(await describeCredentials(file), null, 2));
     return;
   }
-  if (args.includes("--models")) {
+  if (wantModels) {
     const { accessToken } = await getAccessToken({ file });
     const models = await listChatGptModels(accessToken);
     if (models.length === 0) console.log("No listed models returned.");

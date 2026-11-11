@@ -266,6 +266,35 @@ skillEvolver:
     expect(evolver?.apiKey).toBe("");
   });
 
+  it("inherits the main endpoint/key only as a pair (a slot endpoint alone gets no main key)", async () => {
+    const { bootstrapMemoryCore } = await import("../../../core/pipeline/memory-core.js");
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: `
+llm:
+  provider: openai_compatible
+  endpoint: https://openrouter.ai/api/v1
+  apiKey: sk-main
+  model: main
+skillEvolver:
+  provider: chatgpt
+  model: skill-fallback-model
+  endpoint: http://127.0.0.1:8080/v1
+`,
+    });
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "bootstrap-test",
+    });
+
+    const evolver = capturedLlmConfigs.find((cfg) => cfg.model === "skill-fallback-model");
+    expect(evolver?.endpoint).toBe("http://127.0.0.1:8080/v1");
+    expect(evolver?.apiKey).toBe("");
+  });
+
   it("wires l3Llm.chatgpt and inherits the main llm endpoint/key like skillEvolver", async () => {
     const { bootstrapMemoryCore } = await import("../../../core/pipeline/memory-core.js");
     home = await makeTmpHome({

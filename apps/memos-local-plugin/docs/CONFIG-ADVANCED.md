@@ -80,10 +80,10 @@ llm:
 
 `skillEvolver` and `l3Llm` accept the same `provider: chatgpt` and
 `chatgpt:` block (their `model` must be non-empty, as for any provider). A
-chatgpt `skillEvolver` / `l3Llm` with a blank `endpoint` / `apiKey` reuses
-the main `llm` block's for its fallback, but only when the main block is
-`openai_compatible` or `chatgpt`, so another provider's key is never sent to
-an OpenAI-compatible endpoint. With no fallback target at all (no `apiKey`
+chatgpt `skillEvolver` / `l3Llm` with both `endpoint` and `apiKey` blank
+reuses the main `llm` block's pair for its fallback, but only when the main
+block is `openai_compatible` or `chatgpt`. The pair is inherited together or
+not at all, so a key is never sent to an endpoint it was not set up for. With no fallback target at all (no `apiKey`
 and no `endpoint`), ChatGPT errors are reported as they are instead of
 falling back.
 

@@ -13,7 +13,11 @@
  *   - Access token ~1h; refresh token rotates on every refresh.
  *
  * Secrets rule: nothing in this file logs, prints or throws a token. Error
- * messages carry OAuth error codes only.
+ * messages carry OAuth error codes only. One known limit: on a re-sign-in
+ * the browser is opened with an `id_token_hint` (the previous ID token,
+ * which identifies the account but grants no API access) as a command-line
+ * argument to the OS URL opener, which other local users can see in the
+ * process list for that short moment. The printed address never carries it.
  */
 
 import {
@@ -201,6 +205,10 @@ async function withFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
   const owner = `${process.pid}.${randomBytes(8).toString("hex")}`;
   const started = Date.now();
   for (;;) {
+    // Checked on every pass, so no path below can spin past the wait limit.
+    if (Date.now() - started > LOCK_WAIT_MS) {
+      throw new ChatGptAuthError("lock_timeout", "timed out waiting for the ChatGPT token lock");
+    }
     try {
       const h = await fsp.open(lock, "wx", 0o600);
       await h.writeFile(owner);
@@ -208,17 +216,11 @@ async function withFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      try {
-        const st = await fsp.stat(lock);
-        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-          await fsp.rm(lock, { force: true });
-          continue;
-        }
-      } catch {
-        continue; // lock vanished between open and stat
-      }
-      if (Date.now() - started > LOCK_WAIT_MS) {
-        throw new ChatGptAuthError("lock_timeout", "timed out waiting for the ChatGPT token lock");
+      const st = await fsp.stat(lock).catch(() => null);
+      if (!st) continue; // lock vanished between open and stat: retry at once
+      if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+        await fsp.rm(lock, { force: true });
+        continue;
       }
       await new Promise((r) => setTimeout(r, 150));
     }
@@ -420,8 +422,15 @@ export async function runLogin(opts: LoginOptions = {}): Promise<LoginResult> {
   const state = b64url(randomBytes(24));
   const nonce = b64url(randomBytes(24));
 
-  const { server, port } = await listenLoopback(opts.port ?? DEFAULT_CALLBACK_PORT);
+  const preferredPort = opts.port ?? DEFAULT_CALLBACK_PORT;
+  const { server, port } = await listenLoopback(preferredPort);
   const redirectUri = `http://127.0.0.1:${port}${CALLBACK_PATH}`;
+  if (preferredPort !== 0 && port !== preferredPort) {
+    print(`Port ${preferredPort} is busy, so the sign-in callback uses ${redirectUri} instead.`);
+    if (savedClientId) {
+      print(`If sign-in fails with a redirect error, free port ${preferredPort} and run this again.`);
+    }
+  }
 
   const params = new URLSearchParams({
     response_type: "code",
@@ -449,7 +458,7 @@ export async function runLogin(opts: LoginOptions = {}): Promise<LoginResult> {
 
   let callback: URLSearchParams;
   try {
-    callback = await waitForCallback(server, opts.timeoutMs ?? 15 * 60_000);
+    callback = await waitForCallback(server, state, opts.timeoutMs ?? 15 * 60_000);
   } finally {
     server.close();
   }
@@ -491,7 +500,8 @@ export async function runLogin(opts: LoginOptions = {}): Promise<LoginResult> {
     throw new Error(`token exchange failed: ${tok.error ?? `HTTP ${tokenResp.status}`}`);
   }
   if (!tok.refresh_token) throw new Error("token exchange returned no refresh token (offline_access not granted)");
-  const scopes = (tok.scope ?? callback.get("scope") ?? "").split(/\s+/).filter(Boolean);
+  // RFC 6749 §5.1: `scope` may be omitted when the grant equals the request.
+  const scopes = (tok.scope ?? callback.get("scope") ?? CHATGPT_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
 
   let subject: string | undefined;
   let email: string | undefined;
@@ -613,13 +623,22 @@ function listenLoopback(preferred: number): Promise<{ server: http.Server; port:
   return tryPort(preferred).catch(() => tryPort(0));
 }
 
-function waitForCallback(server: http.Server, timeoutMs: number): Promise<URLSearchParams> {
+/**
+ * Resolves on the first callback that carries this sign-in's `state`.
+ * Stray requests (browser prefetch, retries, other local processes) get a
+ * 400 and the listener keeps waiting, so they cannot end the sign-in.
+ */
+function waitForCallback(server: http.Server, state: string, timeoutMs: number): Promise<URLSearchParams> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("sign-in timed out")), timeoutMs);
     server.on("request", (req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (url.pathname !== CALLBACK_PATH) {
         res.writeHead(404).end();
+        return;
+      }
+      if (url.searchParams.get("state") !== state) {
+        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("Unknown sign-in request.");
         return;
       }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

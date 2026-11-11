@@ -4,10 +4,12 @@
  */
 
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer, get as httpGet } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ChatGptAuthError,
@@ -235,27 +237,86 @@ describe("chatgpt-auth id_token verification", () => {
 });
 
 describe("chatgpt-auth runLogin", () => {
-  it("never prints the ID token: id_token_hint goes only to the browser URL", async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** GET a loopback URL with node:http (independent of a stubbed global fetch). */
+  function hit(url: URL): Promise<number> {
+    return new Promise((resolve, reject) => {
+      httpGet(url, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      }).on("error", reject);
+    });
+  }
+
+  /** Callback URL for the authorize URL handed to the browser. */
+  function callbackFor(authorizeUrl: string, extra: Record<string, string>): URL {
+    const u = new URL(authorizeUrl);
+    const redirect = new URL(u.searchParams.get("redirect_uri")!);
+    redirect.searchParams.set("state", u.searchParams.get("state")!);
+    for (const [k, v] of Object.entries(extra)) redirect.searchParams.set(k, v);
+    return redirect;
+  }
+
+  it("never prints the ID token, and ignores stray callbacks without this sign-in's state", async () => {
     const { file } = await tokenFixture({ id_token: "synthetic.id.token" });
     const printed: string[] = [];
     let browserUrl = "";
+    let strayStatus = 0;
     const login = runLogin({
       file,
       port: 0,
       print: (l) => printed.push(l),
       openBrowser: (url) => {
         browserUrl = url;
-        const u = new URL(url);
-        const redirect = new URL(u.searchParams.get("redirect_uri")!);
-        redirect.searchParams.set("state", u.searchParams.get("state")!);
-        redirect.searchParams.set("error", "access_denied");
-        void fetch(redirect).catch(() => undefined);
+        void (async () => {
+          const stray = callbackFor(url, { error: "access_denied" });
+          stray.searchParams.set("state", "not-this-sign-in");
+          strayStatus = await hit(stray);
+          await hit(callbackFor(url, { error: "access_denied" }));
+        })();
       },
       timeoutMs: 10_000,
     });
     await expect(login).rejects.toThrow("sign-in failed: access_denied");
+    expect(strayStatus).toBe(400);
     expect(new URL(browserUrl).searchParams.get("id_token_hint")).toBe("synthetic.id.token");
     expect(printed.join("\n")).not.toContain("synthetic.id.token");
     expect(printed.join("\n")).not.toContain("id_token_hint");
+  });
+
+  it("keeps the requested scopes when the token response omits `scope`, and reports a busy port", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "memos-chatgpt-login-"));
+    dirs.push(dir);
+    const file = join(dir, "chatgpt-oauth.json");
+    const blocker = createServer();
+    await new Promise<void>((r) => blocker.listen(0, "127.0.0.1", () => r()));
+    const busyPort = (blocker.address() as AddressInfo).port;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ access_token: "synthetic-access", refresh_token: "synthetic-refresh", expires_in: 3600 }, 200),
+      ),
+    );
+    const printed: string[] = [];
+    try {
+      const res = await runLogin({
+        file,
+        port: busyPort,
+        print: (l) => printed.push(l),
+        openBrowser: (url) => {
+          void hit(callbackFor(url, { code: "synthetic-code", client_id: "oaiapp_test" }));
+        },
+        timeoutMs: 10_000,
+      });
+      expect(res.scopes).toContain("chatgpt.tokens.use.direct");
+      expect(printed.some((l) => l.includes(`Port ${busyPort} is busy`))).toBe(true);
+      const saved = JSON.parse(await readFile(file, "utf8"));
+      expect(saved.scopes).toContain("chatgpt.tokens.use.direct");
+    } finally {
+      blocker.close();
+    }
   });
 });

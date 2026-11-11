@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { Value } from "@sinclair/typebox/value";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { resolveConfig } from "../../../core/config/index.js";
 import { ConfigSchema } from "../../../core/config/schema.js";
 import { createLlmClientWithProvider, makeProviderFor } from "../../../core/llm/client.js";
 import {
@@ -332,6 +333,47 @@ describe("ChatGptLlmProvider", () => {
     expect(fb.calls).toEqual({ complete: 0, stream: 0 });
   });
 
+  it("stream(): a failure after the first delta is thrown, and still pauses ChatGPT", async () => {
+    const failed: SseEvent[] = [
+      { type: "response.output_text.delta", delta: "partial" },
+      {
+        type: "response.failed",
+        response: { status: "failed", error: { code: "subscription_sharing_usage_limit_exceeded" } },
+      },
+    ];
+    const s = setup({ responses: [streamResponse(sse(failed))] });
+    await expect(collect(s.provider.stream(msgs, call, s.ctx))).rejects.toMatchObject({ code: "llm_rate_limited" });
+    expect(s.fb.calls.stream).toBe(0);
+    // Paused: the next call goes straight to the fallback without a ChatGPT request.
+    const next = await collect(s.provider.stream(msgs, call, s.ctx));
+    expect(next[0]?.delta).toBe("from-fallback");
+    expect(s.requests).toHaveLength(1);
+  });
+
+  it("surfaces unexpected local errors instead of re-sending the prompt to the fallback", async () => {
+    const fb = makeFallback();
+    const p = new ChatGptLlmProvider({
+      fallback: fb.provider,
+      getToken: async () => {
+        throw new TypeError("bug in local code");
+      },
+    });
+    const ctx = { config: baseConfig({}), log: noopLog } as LlmProviderCtx;
+    await expect(p.complete(msgs, call, ctx)).rejects.toMatchObject({ code: "llm_unavailable" });
+    expect(fb.calls.complete).toBe(0);
+  });
+
+  it("treats a connection dropped while reading the stream as a ChatGPT failure (falls back)", async () => {
+    const broken = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sse([{ type: "response.output_text.delta", delta: "x" }])));
+        controller.error(new TypeError("terminated"));
+      },
+    });
+    const s = setup({ responses: [new Response(broken, { status: 200 })] });
+    expect((await s.provider.complete(msgs, call, s.ctx)).text).toBe("from-fallback");
+  });
+
   it("still pauses after the server rejects the sign-in (HTTP 403)", async () => {
     const s = setup({ responses: [jsonResponse({ error: { code: "forbidden" } }, 403)] });
     expect((await s.provider.complete(msgs, call, s.ctx)).text).toBe("from-fallback");
@@ -365,6 +407,19 @@ describe("chatgpt provider registration", () => {
     expect([...Value.Errors(ConfigSchema, ok)].map((e) => `${e.path}: ${e.message}`)).toEqual([]);
     const bad = Value.Default(ConfigSchema, { skillEvolver: { provider: "not_a_provider", model: "x" } });
     expect([...Value.Errors(ConfigSchema, bad)].some((e) => e.path.startsWith("/skillEvolver/provider"))).toBe(true);
+  });
+
+  it("loading a chatgpt block raises no 'unknown config key' warning", () => {
+    const warnings: string[] = [];
+    resolveConfig(
+      {
+        llm: { provider: "chatgpt", chatgpt: { model: "m", fallback: true, tokenFile: "/tmp/t.json" } },
+        skillEvolver: { provider: "chatgpt", model: "x", chatgpt: { model: "m" } },
+        l3Llm: { provider: "chatgpt", model: "x", chatgpt: { fallback: false } },
+      },
+      warnings,
+    );
+    expect(warnings.filter((w) => w.includes("chatgpt"))).toEqual([]);
   });
 
   it("config schema rejects an unknown chatgpt.reasoningEffort", () => {

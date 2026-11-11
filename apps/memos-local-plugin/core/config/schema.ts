@@ -188,9 +188,10 @@ const SkillEvolverSchema = Type.Object({
   /** Extra HTTP headers for the provider request. */
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
   /**
-   * Only read when provider = "chatgpt". A blank endpoint / apiKey here
-   * inherits the main `llm` block's for the openai_compatible fallback
-   * when the main provider is openai_compatible or chatgpt.
+   * Only read when provider = "chatgpt". When this block's endpoint and
+   * apiKey are both blank, the openai_compatible fallback uses the main
+   * `llm` block's endpoint and apiKey, provided the main provider is
+   * openai_compatible or chatgpt.
    */
   chatgpt: Type.Optional(ChatGptSchema),
 }, { default: {} });

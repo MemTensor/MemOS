@@ -62,6 +62,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     openRouter: false,
     maxTokens: 1024,
     headers: {},
+    // Only read when provider = "chatgpt" (Sign in with ChatGPT).
+    chatgpt: { model: "", fallback: true, tokenFile: "" },
   },
   l3Llm: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -80,6 +82,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     openRouter: false,
     maxTokens: 4096,
     headers: {},
+    chatgpt: { model: "", fallback: true, tokenFile: "" },
   },
   skillEvolver: {
     // Empty by default — falls back to the shared `llm` settings.
@@ -96,6 +99,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     openRouter: false,
     maxTokens: 4096,
     headers: {},
+    chatgpt: { model: "", fallback: true, tokenFile: "" },
   },
   storage: {
     ftsTokenizer: "trigram",

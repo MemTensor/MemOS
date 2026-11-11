@@ -145,7 +145,12 @@ export class ChatGptLlmProvider implements LlmProvider {
       }
     } catch (err) {
       // Text already reached the caller: a silent switch would duplicate it.
-      if (emitted) throw this.toMemosError(err, cg, ctx);
+      // Still record the pause, as complete() does, so a repeatable failure
+      // (usage limit, not eligible, auth) is not retried on every call.
+      if (emitted) {
+        this.notePause(err, cg);
+        throw this.toMemosError(err, cg, ctx);
+      }
       yield* this.fallbackStream(messages, opts, ctx, cg, null, err);
     }
   }
@@ -220,7 +225,19 @@ export class ChatGptLlmProvider implements LlmProvider {
       }
       if (!resp.body) throw new ChatGptFailure("empty_body", resp.status, "ChatGPT returned an empty stream");
 
-      yield* parseResponsesStream(resp.body);
+      try {
+        yield* parseResponsesStream(resp.body);
+      } catch (err) {
+        if (err instanceof ChatGptFailure) throw err;
+        // A dropped connection or timeout while reading the body.
+        const name = (err as Error)?.name ?? "Error";
+        if (ctx.signal?.aborted) throw new ChatGptFailure("cancelled", null, "ChatGPT request was cancelled");
+        throw new ChatGptFailure(
+          name === "TimeoutError" ? "timeout" : "stream_interrupted",
+          null,
+          `ChatGPT stream failed (${name})`,
+        );
+      }
       return;
     }
   }
@@ -284,7 +301,11 @@ export class ChatGptLlmProvider implements LlmProvider {
   ): void {
     if (err) this.notePause(err, cg);
     const hasTarget = Boolean(ctx.config.apiKey) || Boolean(ctx.config.endpoint);
-    if (cg.fallback === false || ctx.signal?.aborted || !hasTarget) {
+    // Only ChatGPT outcomes (HTTP / stream / sign-in failures) fall back.
+    // Anything else is a local bug: surface it rather than re-sending the
+    // prompt to the fallback endpoint.
+    const chatgptOutcome = err instanceof ChatGptFailure || err instanceof ChatGptAuthError;
+    if (cg.fallback === false || ctx.signal?.aborted || !hasTarget || (err && !chatgptOutcome)) {
       throw this.toMemosError(err ?? pausedErr(pausedReason), cg, ctx);
     }
     ctx.log.warn("chatgpt.fallback", {

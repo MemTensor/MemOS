@@ -153,23 +153,26 @@ type DedicatedLlmConfig = {
 
 /**
  * Endpoint / apiKey for a dedicated LLM slot (skillEvolver, l3Llm). A
- * `chatgpt` slot with a blank endpoint or apiKey reuses the main `llm`
- * block's for its OpenAI-compatible fallback, but only when the main block
- * is itself OpenAI-compatible (`openai_compatible` or `chatgpt`), so a key
- * meant for another provider is never sent to an OpenAI-compatible endpoint.
+ * `chatgpt` slot with BOTH endpoint and apiKey blank reuses the main `llm`
+ * block's pair for its OpenAI-compatible fallback, and only when the main
+ * block is itself OpenAI-compatible (`openai_compatible` or `chatgpt`).
+ * The pair is inherited together or not at all, so a key is never sent to
+ * an endpoint it was not configured for.
  */
 function dedicatedFallbackTarget(
   slot: DedicatedLlmConfig | undefined,
   provider: string,
   mainLlm: ResolvedConfig["llm"],
 ): { endpoint: string; apiKey: string } {
+  const endpoint = slot?.endpoint ?? "";
+  const apiKey = slot?.apiKey ?? "";
   const inherit =
     provider === "chatgpt" &&
+    !endpoint &&
+    !apiKey &&
     (mainLlm.provider === "openai_compatible" || mainLlm.provider === "chatgpt");
-  return {
-    endpoint: slot?.endpoint || (inherit ? mainLlm.endpoint : ""),
-    apiKey: slot?.apiKey || (inherit ? mainLlm.apiKey : ""),
-  };
+  if (inherit) return { endpoint: mainLlm.endpoint, apiKey: mainLlm.apiKey };
+  return { endpoint, apiKey };
 }
 
 export interface BootstrapOptions {

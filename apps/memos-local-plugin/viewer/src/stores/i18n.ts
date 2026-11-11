@@ -921,7 +921,7 @@ const en = {
   "settings.summarizer.inherit":
     "Currently using the agent's model. Select a provider to override.",
   "settings.chatgpt.hint":
-    "Runs on your ChatGPT plan. Sign in once with `node scripts/chatgpt-login.mjs`; Test checks the sign-in. The model, endpoint and API key below are the OpenAI-compatible fallback. Set the ChatGPT model as `{path}` in config.yaml. For the Skill Evolver, the model field must not be blank, and a blank endpoint or API key reuses the Summarizer's when that one is OpenAI-compatible.",
+    "Runs on your ChatGPT plan. Sign in once with `node scripts/chatgpt-login.mjs`; Test checks the sign-in. The model, endpoint and API key below are the OpenAI-compatible fallback. Set the ChatGPT model as `{path}` in config.yaml. For the Skill Evolver, the model field must not be blank; leave both endpoint and API key blank to reuse the Summarizer's pair when that one is OpenAI-compatible.",
   "settings.model.tip.title": "Model selection tips",
   "settings.model.tip.embedding":
     "Embedding — the built-in model is small. For better recall, configure a dedicated model such as bge-m3 or text-embedding-3-large.",
@@ -1800,7 +1800,7 @@ const zh: Record<TranslationKey, string> = {
   "settings.summarizer.inherit":
     "当前使用 agent 的模型。选择 Provider 即可覆盖。",
   "settings.chatgpt.hint":
-    "使用你的 ChatGPT 套餐运行。先运行一次 `node scripts/chatgpt-login.mjs` 登录；“测试”会检查登录状态。下方的模型、Endpoint 和 API Key 是 OpenAI 兼容的回退设置。ChatGPT 模型请在 config.yaml 的 `{path}` 中设置。技能进化模型的模型字段不能留空；其 Endpoint 或 API Key 留空时，若摘要模型为 OpenAI 兼容，则沿用摘要模型的设置。",
+    "使用你的 ChatGPT 套餐运行。先运行一次 `node scripts/chatgpt-login.mjs` 登录；“测试”会检查登录状态。下方的模型、Endpoint 和 API Key 是 OpenAI 兼容的回退设置。ChatGPT 模型请在 config.yaml 的 `{path}` 中设置。技能进化模型的模型字段不能留空；若摘要模型为 OpenAI 兼容，将 Endpoint 和 API Key 都留空即可沿用摘要模型的这两项设置。",
   "settings.model.tip.title": "模型选择提示",
   "settings.model.tip.embedding":
     "嵌入模型：插件内置模型较小。为获得更精准的记忆检索，建议配置 bge-m3、text-embedding-3-large 等专业嵌入模型。",
