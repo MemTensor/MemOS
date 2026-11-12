@@ -159,6 +159,16 @@ class TextualMemoryMetadata(BaseModel):
         description="Internal algorithm metadata reserved for system use.",
     )
 
+    @field_validator("internal_info", mode="before")
+    @classmethod
+    def _decode_internal_info(cls, value: Any) -> Any:
+        # Neo4j stores dictionaries as JSON strings; decode them before model validation.
+        if isinstance(value, str):
+            value = json.loads(value)
+            if not isinstance(value, dict):
+                raise ValueError("internal_info JSON must decode to an object")
+        return value
+
     model_config = ConfigDict(extra="allow")
 
     covered_history: Any | None = Field(
@@ -211,6 +221,14 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     file_ids: list[str] | None = Field(
         default_factory=list,
         description="The ids of the files associated with the memory.",
+    )
+    knowledge_material_ids: list[str] = Field(
+        default_factory=list,
+        description="RawFileMemory ids that support this knowledge summary.",
+    )
+    knowledge_summary_ids: list[str] = Field(
+        default_factory=list,
+        description="Knowledge summary ids extracted from this raw file memory.",
     )
 
     @field_validator("sources", mode="before")

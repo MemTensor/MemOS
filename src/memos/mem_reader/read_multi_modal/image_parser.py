@@ -27,6 +27,18 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def is_sendable_image_url(url: str) -> bool:
+    """Return whether a vision API can accept this image address.
+
+    Accepted forms are http(s) URLs and ``data:image/...;base64,...`` payloads.
+    Relative paths such as ``images/<hash>.jpg`` are rejected.
+    """
+    candidate = url.strip().lower()
+    if candidate.startswith(("http://", "https://")):
+        return True
+    return candidate.startswith("data:image/") and "base64," in candidate
+
+
 class ImageParser(BaseMessageParser):
     """Parser for image_url content parts."""
 
@@ -175,6 +187,13 @@ class ImageParser(BaseMessageParser):
 
         if not url:
             logger.warning("[ImageParser] No image URL found in message")
+            return []
+
+        if not is_sendable_image_url(url):
+            logger.warning(
+                "[ImageParser] Skip image URL that cannot be sent to the vision model: %s",
+                url[:200],
+            )
             return []
 
         # Create source for this image
