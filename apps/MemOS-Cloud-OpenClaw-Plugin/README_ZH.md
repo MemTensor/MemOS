@@ -178,6 +178,8 @@ MEMOS_API_KEY=YOUR_TOKEN
   - `user_id`、`conversation_id`
   - `messages` 列表
   - 可选 `tags / info / agent_id / app_id`
+- Cloud Hub 当前会拒绝 `info` 中的 `local_state`、`state`、`localStats` 键（即使值不是 `null`）；插件会自动剔除这些保留键，其他自定义 `info` 字段保持不变。
+- 默认使用异步写入（`asyncMode: true`）；切换为同步模式处理较长内容时，建议调高 `timeoutMs` 或继续使用异步模式。
 
 ## 多Agent支持（Multi-Agent）
 插件内置对多Agent模式的支持（`agent_id` 参数）：
