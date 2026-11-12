@@ -14,6 +14,11 @@ import pytest
 from memos.exceptions import ConfigurationError
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from tests.mem_scheduler.process_support import (
+    STARTUP_TIMEOUT,
+    receive_probe_message,
+    spawned_probe,
+)
 
 
 def test_legacy_process_start_fails_before_mutating_running_state(monkeypatch):
@@ -130,7 +135,7 @@ class _ChildGraph:
     results: object
 
     def close(self):
-        self.results.put(("closed", os.getpid()))
+        self.results.send(("closed", os.getpid()))
 
 
 def _build_worker(incoming, results, release):
@@ -147,24 +152,28 @@ def _build_worker(incoming, results, release):
         return [ScheduleMessageItem(user_id="u", mem_cube_id="cube", label="test", content=content)]
 
     def handle(messages):
-        results.put(("started", os.getpid()))
+        results.send(("started", os.getpid()))
         assert release.wait(15)
-        results.put((messages[0].content, os.getpid()))
+        results.send((messages[0].content, os.getpid()))
 
     # The adapter represents an external data transport; no parent runtime
     # objects (scheduler, executor, connection or ordinary Queue) cross the boundary.
     scheduler.memos_message_queue.get_messages = receive
     scheduler.register_handlers({"test": handle})
-    results.put(("created", os.getpid()))
+    results.send(("created", os.getpid()))
     return scheduler
+
+
+def _run_worker(results, incoming, stop, release):
+    from memos.mem_scheduler.worker import run_scheduler_worker
+
+    run_scheduler_worker(partial(_build_worker, incoming, results, release), stop)
 
 
 @pytest.mark.parametrize("parent_busy", [False, True])
 def test_spawn_worker_handles_late_task_drains_and_preserves_parent(parent_busy):
-    from memos.mem_scheduler.worker import run_scheduler_worker
-
     ctx = multiprocessing.get_context("spawn")
-    incoming, results = ctx.Queue(), ctx.Queue()
+    incoming = ctx.Queue()
     stop, release = ctx.Event(), ctx.Event()
     parent_release, parent_started = Event(), Event()
     parent = BaseScheduler({"use_redis_queue": False, "thread_pool_max_workers": 1})
@@ -174,28 +183,42 @@ def test_spawn_worker_handles_late_task_drains_and_preserves_parent(parent_busy)
     def parent_work():
         parent_started.set()
         if parent_busy:
-            assert parent_release.wait(20)
+            # The parent stays busy throughout cold child startup. The outer
+            # finally always releases it, including failed startup/behavior checks.
+            parent_release.wait()
         return os.getpid()
 
     task = parent.dispatcher.dispatcher_executor.submit(parent_work)
-    child = ctx.Process(
-        target=run_scheduler_worker, args=(partial(_build_worker, incoming, results, release), stop)
-    )
     try:
         assert parent_started.wait(3)
         if not parent_busy:
             assert task.result(timeout=3) == os.getpid()
-        child.start()
-        assert results.get(timeout=10) == ("created", child.pid)
-        incoming.put("late-task-done")
-        assert results.get(timeout=5) == ("started", child.pid)
-        stop.set()
-        assert child.is_alive()  # accepted task still owns the graph
-        release.set()
-        assert results.get(timeout=5) == ("late-task-done", child.pid)
-        assert results.get(timeout=5) == ("closed", child.pid)
-        child.join(10)
-        assert child.exitcode == 0
+        with spawned_probe(_run_worker, incoming, stop, release) as (child, results):
+            try:
+                assert receive_probe_message(
+                    results, child, phase="worker startup", timeout=STARTUP_TIMEOUT
+                ) == ("created", child.pid)
+                incoming.put("late-task-done")
+                assert receive_probe_message(
+                    results, child, phase="task acceptance", timeout=5
+                ) == ("started", child.pid)
+                stop.set()
+                assert child.is_alive()  # accepted task still owns the graph
+                release.set()
+                assert receive_probe_message(results, child, phase="task drain", timeout=5) == (
+                    "late-task-done",
+                    child.pid,
+                )
+                assert receive_probe_message(results, child, phase="graph release", timeout=5) == (
+                    "closed",
+                    child.pid,
+                )
+                child.join(10)
+                assert child.exitcode == 0
+            finally:
+                stop.set()
+                release.set()
+                child.join(10)
         graph.close.assert_not_called()
         parent_release.set()
         assert task.result(timeout=3) == os.getpid()
@@ -204,16 +227,9 @@ def test_spawn_worker_handles_late_task_drains_and_preserves_parent(parent_busy)
         stop.set()
         release.set()
         parent_release.set()
-        if child.pid is not None:
-            child.join(10)
-            if child.is_alive():
-                child.terminate()
-                child.join(5)
-            child.close()
         parent.close()
-        for ipc in (incoming, results):
-            ipc.close()
-            ipc.join_thread()
+        incoming.close()
+        incoming.join_thread()
     graph.close.assert_called_once()
 
 

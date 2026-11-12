@@ -35,7 +35,7 @@ def test_dump_projection_and_load(memory, tmp_path, legacy, include):
     if not legacy:
         kwargs["status"] = []
     memory.graph_store.export_graph.assert_called_once_with(**kwargs)
-    data = json.loads((tmp_path / "memory.json").read_text())
+    data = json.loads((tmp_path / "memory.json").read_text(encoding="utf-8"))
     assert data == memory.graph_store.export_graph.return_value
     memory.load(str(tmp_path), user_name="A")
     memory.graph_store.import_graph.assert_called_once_with(data, user_name="A")
@@ -70,7 +70,7 @@ def test_load_io_failure(memory, tmp_path, monkeypatch):
 @pytest.mark.parametrize("failure", [GraphDBError("storage"), ValueError("invalid graph")])
 def test_storage_errors_preserve_identity_and_cause(memory, tmp_path, operation, failure):
     failure.__cause__ = OSError("original storage error")
-    (tmp_path / "memory.json").write_text('{"nodes": [], "edges": []}')
+    (tmp_path / "memory.json").write_text('{"nodes": [], "edges": []}', encoding="utf-8")
     getattr(
         memory.graph_store, "export_graph" if operation == "dump" else "import_graph"
     ).side_effect = failure
@@ -149,7 +149,7 @@ def test_atomic_publication_occurs_after_closed_complete_file(memory, tmp_path, 
     def observed_replace(source, destination):
         assert calls == ["fsync"]
         assert (
-            json.loads(module.Path(source).read_text())
+            json.loads(module.Path(source).read_text(encoding="utf-8"))
             == memory.graph_store.export_graph.return_value
         )
         calls.append("replace")
