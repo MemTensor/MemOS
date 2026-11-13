@@ -13,6 +13,35 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
+# Relationship types used across the codebase (see tree_text_memory/organize/*,
+# mem_scheduler handlers). Neo4j does not support parameterized relationship
+# types in MATCH patterns, so any dynamic `type` value must pass this allowlist
+# before being interpolated into Cypher.
+ALLOWED_EDGE_TYPES = (
+    "FOLLOWS",
+    "PARENT",
+    "MERGED_TO",
+    "RELATE",
+    "RELATED",
+    "RELATE_TO",
+    "INFERS",
+    "AGGREGATE_TO",
+    "CAUSE",
+    "CONDITION",
+    "CONFLICT",
+)
+
+
+def _validate_edge_type(type: str) -> str:
+    """Validate a relationship type against the allowlist; return it."""
+    if type != "ANY" and type not in ALLOWED_EDGE_TYPES:
+        raise ValueError(
+            f"Invalid relationship type: {type!r}. "
+            f"Must be one of {ALLOWED_EDGE_TYPES} or 'ANY'."
+        )
+    return type
+
+
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     node_id = item["id"]
     memory = item["memory"]
@@ -660,14 +689,63 @@ class Neo4jGraphDB(BaseGraphDB):
     ) -> list[str]:
         """
         Get connected node IDs in a specific direction and relationship type.
+
         Args:
             id: Source node ID.
-            type: Relationship type.
+            type: Relationship type to match, or 'ANY' to match all.
             direction: Edge direction to follow ('out', 'in', or 'both').
+                - 'out': nodes connected by edges leaving `id`
+                - 'in':  nodes connected by edges entering `id`
+                - 'both': nodes connected either way (deduplicated)
+            user_name (str, optional): User name for filtering in non-multi-db mode
+
         Returns:
             List of neighboring node IDs.
         """
-        raise NotImplementedError
+        if direction not in ("in", "out", "both"):
+            raise ValueError("Invalid direction. Must be 'in', 'out', or 'both'.")
+        _validate_edge_type(type)
+
+        user_name = user_name if user_name else self.config.user_name
+        rel_type = "" if type == "ANY" else f":{type}"
+
+        # 'both' uses an undirected pattern; Neo4j matches each edge in both
+        # orientations, so it traverses roughly 2x the edges of a directed
+        # query (correctness is preserved by the DISTINCT + b.id <> $id guard).
+        if direction == "out":
+            pattern = f"(a:Memory)-[r{rel_type}]->(b:Memory)"
+            where_clause = "a.id = $id"
+        elif direction == "in":
+            pattern = f"(b:Memory)-[r{rel_type}]->(a:Memory)"
+            where_clause = "a.id = $id"
+        else:  # both
+            pattern = f"(a:Memory)-[r{rel_type}]-(b:Memory)"
+            where_clause = "a.id = $id AND b.id <> $id"
+
+        params = {"id": id}
+        if not self.config.use_multi_db:
+            if not user_name:
+                raise ValueError("user_name is required in non-multi-db mode")
+            where_clause += " AND a.user_name = $user_name AND b.user_name = $user_name"
+            params["user_name"] = user_name
+        else:
+            # Contract: in multi-db mode each database is a single tenant, so
+            # no user filter is applied. This is a security assumption — if a
+            # database ever holds more than one user, tenant isolation breaks.
+            logger.debug(
+                "get_neighbors: use_multi_db=True, assuming per-tenant databases; "
+                "no user_name scoping applied"
+            )
+
+        query = f"""
+                MATCH {pattern}
+                WHERE {where_clause}
+                RETURN DISTINCT b.id AS neighbor_id
+            """
+
+        with self.driver.session(database=self.db_name) as session:
+            result = session.run(query, params)
+            return [record["neighbor_id"] for record in result]
 
     def get_neighbors_by_tag(
         self,
@@ -748,14 +826,59 @@ class Neo4jGraphDB(BaseGraphDB):
     ) -> list[str]:
         """
         Get the path of nodes from source to target within a limited depth.
+
+        Tenant isolation: in multi-db mode each database is expected to hold a
+        single tenant's graph, so no user filter is applied. In non-multi-db
+        mode a `user_name` filter is always applied (and required).
+
         Args:
             source_id: Starting node ID.
             target_id: Target node ID.
             max_depth: Maximum path length to traverse.
+            user_name (str, optional): User name for filtering in non-multi-db mode
         Returns:
             Ordered list of node IDs along the path.
         """
-        raise NotImplementedError
+        if not isinstance(max_depth, int) or isinstance(max_depth, bool):
+            raise TypeError(f"max_depth must be an int, got {type(max_depth).__name__!r}")
+        user_name = user_name if user_name else self.config.user_name
+
+        # Push the tenant filter into the endpoint node patterns so shortestPath
+        # constrains traversal to same-tenant endpoints. Applying it only via the
+        # WHERE all(...) below (after the path resolves) would drop the real
+        # same-user path when a shorter cross-tenant path exists, returning [].
+        node_filter = ""
+        all_filter = ""
+        params = {"source_id": source_id, "target_id": target_id}
+        if not self.config.use_multi_db:
+            if not user_name:
+                raise ValueError("user_name is required in non-multi-db mode")
+            node_filter = ", user_name: $user_name"
+            all_filter = "WHERE all(x IN nodes(p) WHERE x.user_name = $user_name)"
+            params["user_name"] = user_name
+        else:
+            # Contract: in multi-db mode each database is a single tenant, so
+            # no user filter is applied. This is a security assumption — if a
+            # database ever holds more than one user, paths can cross tenants.
+            logger.debug(
+                "get_path: use_multi_db=True, assuming per-tenant databases; "
+                "no user_name scoping applied"
+            )
+
+        # Neo4j does not allow parameters in variable-length hop bounds; the
+        # literal must be inlined. Cap it to avoid runaway traversal.
+        hops = max(1, min(max_depth, 10))
+        query = f"""
+                MATCH p = shortestPath((n:Memory {{id: $source_id{node_filter}}})-[*1..{hops}]-(m:Memory {{id: $target_id{node_filter}}}))
+                {all_filter}
+                RETURN [x IN nodes(p) | x.id] AS path_ids
+                LIMIT 1
+            """
+
+        with self.driver.session(database=self.db_name) as session:
+            result = session.run(query, params)
+            record = result.single()
+            return record["path_ids"] if record else []
 
     def get_subgraph(
         self,
@@ -834,7 +957,7 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             List of ordered node IDs in the chain.
         """
-        raise NotImplementedError
+        return self.get_neighbors(id, type, "out")
 
     # Search / recall operations
     def search_by_embedding(
