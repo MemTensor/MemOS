@@ -81,11 +81,10 @@ class OllamaLLM(BaseLLM):
         if isinstance(tool_calls, list) and len(tool_calls) > 0:
             return self.tool_call_parser(tool_calls)
 
-        str_thinking = (
-            f"<think>{response.message.thinking}</think>"
-            if hasattr(response.message, "thinking")
-            else ""
-        )
+        # ollama>=0.5 always defines Message.thinking (Optional, default None).
+        # hasattr is therefore always true and would stringify None into the reply.
+        thinking = response.message.thinking if hasattr(response.message, "thinking") else None
+        str_thinking = f"<think>{thinking}</think>" if thinking else ""
         str_response = response.message.content
         if self.config.remove_think_prefix:
             return remove_thinking_tags(str_response or "")
