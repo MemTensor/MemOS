@@ -12,6 +12,7 @@ from memos.api.handlers.formatters_handler import (
     format_memory_item,
     post_process_textual_mem,
 )
+from memos.exceptions import GraphDBError
 from memos.log import get_logger, summarize_search_request, summarize_search_results
 from memos.mem_reader.utils import parse_keep_filter_response
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
@@ -133,7 +134,7 @@ class SingleCubeView(MemCubeView):
         return memories_result
 
     @timed
-    def feedback_memories(self, feedback_req: APIFeedbackRequest) -> dict[str, Any]:
+    def feedback_memories(self, feedback_req: APIFeedbackRequest) -> dict[str, Any] | list:
         target_session_id = feedback_req.session_id or "default_session"
         if feedback_req.async_mode == "async":
             try:
@@ -156,6 +157,7 @@ class SingleCubeView(MemCubeView):
                     f"[SingleCubeView] cube={self.cube_id} Failed to submit FEEDBACK: {e}",
                     exc_info=True,
                 )
+                raise
             return []
         else:
             feedback_result = self.feedback_server.process_feedback(
@@ -216,6 +218,8 @@ class SingleCubeView(MemCubeView):
                 return []
             return text_memories
 
+        except (GraphDBError, ValueError):
+            raise
         except Exception as e:
             self.logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())
             return []
