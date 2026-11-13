@@ -3,6 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from ollama import Message
+
 from memos.configs.llm import LLMConfigFactory, OllamaLLMConfig
 from memos.llms.factory import LLMFactory
 from memos.llms.ollama import OllamaLLM
@@ -81,3 +83,29 @@ class TestOllamaLLM(unittest.TestCase):
             response,
             "<think>Analyzing your request...</think>Hello! How are you? I'm here to help and smile!",
         )
+
+    def test_generate_does_not_stringify_none_thinking(self):
+        """ollama>=0.5 Message.thinking defaults to None, so hasattr is always true."""
+        message = Message(role="assistant", content="Hello")
+        self.assertTrue(hasattr(message, "thinking"))
+        self.assertIsNone(message.thinking)
+
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.model_dump_json.return_value = "{}"
+        mock_response.message = message
+        mock_chat.return_value = mock_response
+
+        config = OllamaLLMConfig(
+            model_name_or_path="qwen3:0.6b",
+            temperature=0.8,
+            max_tokens=1024,
+            top_p=0.9,
+            top_k=50,
+        )
+        ollama = OllamaLLM(config)
+        ollama.client.chat = mock_chat
+
+        response = ollama.generate([{"role": "user", "content": "Hi"}])
+
+        self.assertEqual(response, "Hello")
