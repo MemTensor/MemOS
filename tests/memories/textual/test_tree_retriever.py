@@ -4,7 +4,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import (
+    DeferredTextualMemoryItem,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.memories.textual.tree_text_memory.retrieve.recall import GraphMemoryRetriever
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
 
@@ -77,7 +81,12 @@ def test_vector_recall_combines_and_dedups(retriever, mock_graph_store):
 
     results = retriever._vector_recall(vec, "LongTermMemory", top_k=5)
     assert len(results) == 2
-    assert all(isinstance(r, TextualMemoryItem) for r in results)
+    # Vector recall returns deferred candidates; they build into fully
+    # validated items with the same ids.
+    assert all(isinstance(r, DeferredTextualMemoryItem) for r in results)
+    built = [r.build() for r in results]
+    assert all(isinstance(b, TextualMemoryItem) for b in built)
+    assert {b.id for b in built} == {n1_id, n2_id}
 
 
 def test_vector_recall_uses_lightweight_hits_without_get_nodes(

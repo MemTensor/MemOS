@@ -5,7 +5,7 @@ import logging
 import uuid
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -392,3 +392,100 @@ def list_all_fields() -> list[str]:
     meta_all = sorted(set().union(*[set(m.model_fields.keys()) for m in meta_models]))
 
     return top + meta_all
+
+
+class _DeferredMetadata:
+    """Read-only passthrough view over a raw candidate metadata dict.
+
+    Field lookups first hit the raw dict; keys missing from the dict fall
+    back to the pydantic model field defaults, so pre-materialization
+    readers observe the same values a built item would expose (e.g.
+    ``memory_type`` -> ``"WorkingMemory"``, ``usage`` -> ``[]``). Unknown
+    names raise ``AttributeError`` so ``hasattr``/``getattr`` keep their
+    usual semantics. ``mode="before"`` validators are NOT replicated —
+    consumers that need validated objects (e.g. reranker strategies
+    reading ``sources``) must operate on materialized items.
+    """
+
+    __slots__ = ("_metadata",)
+
+    # Class-level cache of {field name: pydantic default} for the metadata
+    # models _coerce_metadata can produce from raw node dicts. Searched (a
+    # superset of the TreeNode/Textual fields) is listed LAST so it wins any
+    # field-name conflict with Preference — e.g. created_at keeps the
+    # TreeNode default_factory instead of Preference's None, matching what
+    # a recall node would actually build.
+    _FIELD_DEFAULTS: ClassVar[dict[str, Any] | None] = None
+
+    def __init__(self, metadata: dict):
+        self._metadata = metadata
+
+    @classmethod
+    def _field_defaults(cls) -> dict[str, Any]:
+        if cls._FIELD_DEFAULTS is None:
+            cls._FIELD_DEFAULTS = {
+                name: field.get_default(call_default_factory=True)
+                for model in (
+                    PreferenceTextualMemoryMetadata,
+                    SearchedTreeNodeTextualMemoryMetadata,
+                )
+                for name, field in model.model_fields.items()
+            }
+        return cls._FIELD_DEFAULTS
+
+    def __getattr__(self, name: str):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        try:
+            return self._metadata[name]
+        except KeyError:
+            defaults = self._field_defaults()
+            if name not in defaults:
+                raise AttributeError(name) from None
+            default = defaults[name]
+            # Copy mutable defaults so callers cannot corrupt the shared cache.
+            if isinstance(default, (list, dict, set)):
+                return default.copy()
+            return default
+
+
+class DeferredTextualMemoryItem:
+    """Validation-free view over a raw candidate node dict.
+
+    Recall paths wrap candidate node dicts in this view instead of eagerly
+    constructing a ``TextualMemoryItem``, so full pydantic validation runs
+    only for candidates that survive ranking and trimming (via ``build``)
+    rather than for every recalled candidate.
+
+    Contract (read-only): exposes ``id``, ``memory`` and ``metadata`` field
+    lookups, with metadata falling back to pydantic field defaults for
+    known fields and raising ``AttributeError`` for unknown ones. Raw node
+    values are passed through unchanged apart from those defaults —
+    ``mode="before"`` validators are not applied. The view is immutable:
+    consumers that mutate items or rely on validated objects (reranker
+    strategies, ``model_dump``) must call ``build()`` first.
+    """
+
+    __slots__ = ("_node",)
+
+    def __init__(self, node: dict):
+        self._node = node
+
+    @property
+    def id(self) -> str:
+        return self._node.get("id")
+
+    @property
+    def memory(self) -> str:
+        return self._node.get("memory")
+
+    @property
+    def metadata(self) -> _DeferredMetadata:
+        return _DeferredMetadata(self._node.get("metadata") or {})
+
+    def build(self) -> TextualMemoryItem:
+        """Materialize the deferred candidate with full validation."""
+        return TextualMemoryItem.from_dict(self._node)
+
+
+RetrievableMemoryItem = TextualMemoryItem | DeferredTextualMemoryItem
