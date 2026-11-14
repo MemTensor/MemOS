@@ -563,6 +563,27 @@ class Neo4jGraphDB(BaseGraphDB):
 
             return self._parse_node(node_dict)
 
+    def _build_get_nodes_query(self, ids: list[str], **kwargs) -> tuple[str, dict]:
+        """Build the ``get_nodes`` Cypher query and params.
+
+        Shared by ``get_nodes`` and any subclass override so the query
+        construction (user_name resolution, ``use_multi_db`` scoping,
+        ``cube_name`` override) cannot drift between implementations.
+        """
+        user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+        where_user = ""
+        params = {"ids": ids}
+
+        if not self.config.use_multi_db and (self.config.user_name or user_name):
+            where_user = " AND n.user_name = $user_name"
+            if kwargs.get("cube_name"):
+                params["user_name"] = kwargs["cube_name"]
+            else:
+                params["user_name"] = user_name
+
+        query = f"MATCH (n:Memory) WHERE n.id IN $ids{where_user} RETURN n"
+        return query, params
+
     def get_nodes(self, ids: list[str], **kwargs) -> list[dict[str, Any]]:
         """
         Retrieve the metadata and memory of a list of nodes.
@@ -578,18 +599,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         if not ids:
             return []
-        user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
-        where_user = ""
-        params = {"ids": ids}
-
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
-            where_user = " AND n.user_name = $user_name"
-            if kwargs.get("cube_name"):
-                params["user_name"] = kwargs["cube_name"]
-            else:
-                params["user_name"] = user_name
-
-        query = f"MATCH (n:Memory) WHERE n.id IN $ids{where_user} RETURN n"
+        query, params = self._build_get_nodes_query(ids, **kwargs)
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
