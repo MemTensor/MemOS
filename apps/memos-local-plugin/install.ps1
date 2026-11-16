@@ -344,7 +344,9 @@ function Prepare-StagedPackage {
         Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
         throw "Node.js executable not found for staged install"
     }
-    & $NodeForBridge -e 'if (Number(process.versions.node.split(".")[0]) < 22) { console.error("MemOS requires Node.js >=22 in the bridge runtime"); process.exit(1); }'
+    # Avoid nested quote loss when Windows PowerShell serializes native command
+    # arguments. String.fromCharCode keeps the JS expression quote-free.
+    & $NodeForBridge -e 'process.exit(Number(process.versions.node.split(String.fromCharCode(46))[0]) < 22 ? 1 : 0)'
     if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $StagedPrefix; throw "Bridge Node.js runtime is unsupported; existing installation is unchanged." }
 
     $NpmCommand = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
@@ -355,8 +357,10 @@ function Prepare-StagedPackage {
     }
 
     try {
-        Invoke-NativeChecked -Command "tar" -Arguments @(
-            "xzf", $BuiltTarball, "-C", $StagedPrefix, "--strip-components=1"
+        $WindowsTar = Join-Path $env:SystemRoot "System32\tar.exe"
+        if (-not (Test-Path $WindowsTar)) { throw "Windows tar.exe not found" }
+        Invoke-NativeChecked -Command $WindowsTar -Arguments @(
+            "-xzf", $BuiltTarball, "-C", $StagedPrefix, "--strip-components=1"
         ) -FailureMessage "Package extraction failed"
         if (-not (Test-Path (Join-Path $StagedPrefix "package.json"))) {
             throw "Package extraction failed: package.json missing"
@@ -385,7 +389,8 @@ function Prepare-StagedPackage {
             throw "better-sqlite3 is not loadable: SQLite prebuilt failed its staging smoke test. No source rebuild was attempted; existing installation is unchanged."
         }
 
-        Set-Content -Path (Join-Path $StagedPrefix ".memos-node-bin") -Value $NodeForBridge -Encoding UTF8
+        $NodeMarkerPath = Join-Path $StagedPrefix ".memos-node-bin"
+        [IO.File]::WriteAllText($NodeMarkerPath, "$NodeForBridge`n", (New-Object System.Text.UTF8Encoding $false))
         return $StagedPrefix
     } catch {
         Remove-Item -Recurse -Force $StagedPrefix -ErrorAction SilentlyContinue
