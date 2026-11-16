@@ -65,6 +65,7 @@ memos = "memos.cli:main"
 
 [project.entry-points."memos.plugins"]
 dream = "memos.dream:CommunityDreamPlugin"
+project_memory = "memos.project_memory:CommunityProjectMemoryPlugin"
 
 [project.optional-dependencies]
 # These are optional dependencies for various features of MemoryOS.
