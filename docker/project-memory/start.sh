@@ -81,9 +81,19 @@ compose_diag() {
   command -v colima >/dev/null 2>&1 && echo "装了 colima"
   command -v orb >/dev/null 2>&1 && echo "装了 OrbStack"
   cat <<'EOF'
-── 怎么装 compose（任选一种）──
-  Homebrew：brew install docker-compose
-  Docker Desktop：升级或重装到最新版（自带 compose）
+── 怎么装 compose ──
+有 Homebrew 的话，复制下面这一行执行：
+
+brew install docker-compose
+
+没有 Homebrew（提示 command not found: brew），复制下面这几行执行（直接从 GitHub 下官方二进制）：
+
+mkdir -p ~/.docker/cli-plugins
+ARCH=$(uname -m); [ "$ARCH" = arm64 ] && ARCH=aarch64
+curl -fL "https://github.com/docker/compose/releases/latest/download/docker-compose-darwin-$ARCH" -o ~/.docker/cli-plugins/docker-compose
+chmod +x ~/.docker/cli-plugins/docker-compose
+docker compose version
+
 装好后重新执行本脚本。
 EOF
 }
@@ -108,6 +118,16 @@ echo "Docker 正常；compose：$COMPOSE_BIN（$(compose version --short 2>/dev/
 if [ "$STOP" = "1" ]; then
   compose down
   exit 0
+fi
+# 内存：neo4j + qdrant + memos 合计约 2 GB，Colima 默认虚拟机只给 2 GB
+mem_bytes="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
+case "$mem_bytes" in '' | *[!0-9]*) mem_bytes=0 ;; esac
+if [ "$mem_bytes" -gt 0 ] && [ "$mem_bytes" -lt 3500000000 ]; then
+  mem_gb="$(awk -v b="$mem_bytes" 'BEGIN { printf "%.1f", b / 1073741824 }')"
+  echo "⚠ Docker 只有 ${mem_gb} GB 内存，三个容器可能起不来或被杀。"
+  if [ "$(docker context show 2>/dev/null)" = "colima" ]; then
+    echo "  Colima 可以这样调大（会重启 Colima，里面正在跑的容器会停）：colima stop && colima start --cpu 4 --memory 6"
+  fi
 fi
 
 # ── 2. 端口 ──────────────────────────────────────────────────────────────────
