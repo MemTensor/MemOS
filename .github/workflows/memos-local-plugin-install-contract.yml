@@ -1,0 +1,55 @@
+name: Local plugin installation contract
+
+on:
+  pull_request:
+    paths:
+      - 'apps/memos-local-plugin/**'
+      - '.github/workflows/memos-local-plugin-install-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['22', '24']
+        manager: [npm, pnpm]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/memos-local-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Pin installation tools
+        run: |
+          npm install --global npm@11.17.0 pnpm@11.7.0 --ignore-scripts --no-audit --no-fund
+          test "$(npm --version)" = 11.17.0
+          test "$(pnpm --version)" = 11.7.0
+      - name: Verify reviewed lock metadata
+        run: |
+          npm run lock:check
+          npm run verify:script-policy
+      - name: Clean npm installation
+        if: matrix.manager == 'npm'
+        run: npm ci --no-audit --no-fund
+      - name: Frozen pnpm installation
+        if: matrix.manager == 'pnpm'
+        run: pnpm install --frozen-lockfile
+      - name: SQLite and CPU ONNX runtime smoke
+        run: node scripts/verify-native-runtime.cjs
+      - name: Type check and build package
+        run: |
+          npm run lint
+          npm run build:package
+      - name: Check runtime and lock contracts
+        run: |
+          npm exec -- vitest run tests/unit/install/sqlite-install-contract.test.ts
+          git diff --exit-code -- package.json package-lock.json pnpm-lock.yaml
