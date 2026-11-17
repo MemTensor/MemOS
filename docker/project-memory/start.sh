@@ -8,7 +8,8 @@
 #   bash docker/project-memory/start.sh --stop       # 停服务（数据在命名卷里，不删）
 #
 # 可用环境变量：ENV_SRC（模型 key 的来源，默认 MemOS_DEV/env_example）、SMOKE_SCENARIO（all/decision/experience）
-# 兼容 macOS 自带的 bash 3.2。
+# 兼容 macOS 自带的 bash 3.2。注意：变量后面紧跟中文时一律写成 ${VAR}——
+# bash 3.2 会把紧跟的中文字节当成变量名的一部分（set -u 下直接报 unbound variable）。
 
 set -euo pipefail
 
@@ -64,8 +65,8 @@ find_compose() {
     local v
     v="$("$c" version --short 2>/dev/null || true)"
     case "$v" in
-      "" ) echo "跳过 $c：执行 version 失败" ;;
-      1.* | v1.*) echo "跳过 $c：版本 $v 太旧（需要 2.x 及以上）" ;;
+      "" ) echo "跳过 ${c}：执行 version 失败" ;;
+      1.* | v1.*) echo "跳过 ${c}：版本 $v 太旧（需要 2.x 及以上）" ;;
       *) COMPOSE_BIN="$c"; return 0 ;;
     esac
   done
@@ -116,7 +117,7 @@ if ! find_compose; then
   compose_diag
   die "找不到可用的 docker compose（2.x 及以上）"
 fi
-echo "Docker 正常；compose：$COMPOSE_BIN（$(compose version --short 2>/dev/null || true)）"
+echo "Docker 正常；compose：${COMPOSE_BIN}（$(compose version --short 2>/dev/null || true)）"
 if [ "$STOP" = "1" ]; then
   compose down
   exit 0
@@ -165,7 +166,7 @@ step "4/6 准备 .env"
 if [ -f "$REPO/.env" ] && grep -q '^PROJECT_MEMORY_GRAPH_DB=' "$REPO/.env"; then
   echo "沿用已有的 $REPO/.env（要重新生成就先删掉它）"
 else
-  [ -f "$ENV_SRC" ] || die "找不到模型 key 的来源文件 $ENV_SRC；用 ENV_SRC=/路径 bash $0 指定"
+  [ -f "$ENV_SRC" ] || die "找不到模型 key 的来源文件 ${ENV_SRC}；用 ENV_SRC=/路径 bash $0 指定"
   if [ -f "$REPO/.env" ]; then
     bak="$REPO/.env.bak.$(date +%Y%m%d%H%M%S)"
     cp "$REPO/.env" "$bak"
@@ -177,13 +178,13 @@ fi
 # ── 5. 构建与启动 ────────────────────────────────────────────────────────────
 step "5/6 构建镜像并启动容器"
 if [ "$REBUILD" = "1" ] || ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
-  echo "构建底座镜像 $BASE_IMAGE（第一次要装 120 多个 Python 包，几分钟到十几分钟）"
+  echo "构建底座镜像 ${BASE_IMAGE}（第一次要装 120 多个 Python 包，几分钟到十几分钟）"
   (cd "$REPO" && docker build -f docker/Dockerfile -t "$BASE_IMAGE" .) \
     || { net_hint; die "底座镜像构建失败"; }
 fi
 # 部署镜像也用 docker build 构建，compose 只负责起容器：新版 compose 构建时要求 buildx 插件，
 # Colima / 单独装的 docker CLI 往往没有；docker build 没有 buildx 时会退回旧构建器（会打印 DEPRECATED，可忽略）。
-echo "构建部署镜像 $APP_IMAGE（把当前代码打进镜像；有缓存时很快）"
+echo "构建部署镜像 ${APP_IMAGE}（把当前代码打进镜像；有缓存时很快）"
 (cd "$REPO" && docker build -f docker/project-memory/Dockerfile -t "$APP_IMAGE" .) \
   || die "部署镜像构建失败，日志见上"
 compose up -d || { net_hint; die "docker compose up 失败"; }
