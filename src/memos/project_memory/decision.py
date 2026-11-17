@@ -143,7 +143,9 @@ def verify(
             d.category = "共同约定"
         # 代码从消息元数据补说话人与时间：说话人就是这项结论的负责人
         d.user_id, d.name, d.time = m.user_id or m.name, m.speaker, m.chat_time
-        d.approved_by = [n for n in d.approved_by if n in members and n != d.name]
+        # 「已和谁确认」要能在原话里落到人身上：照原方案（T1 §2.3），名字须在成员名单里、
+        # 不是说话人本人，并且在那条消息里出现过。项目记忆实测里大模型常把「已和 X 确认」编出来。
+        d.approved_by = [n for n in d.approved_by if n in members and n != d.name and n in m.text]
         before = _agent_text_before(ordered, d.message_id)
         d.listed = [x for x in d.listed if contains(before, x)]
         kept.append(d)
@@ -220,6 +222,7 @@ class Plan:
     reason: str = ""
     guarded: list[str] = field(default_factory=list)  # 被护栏改掉的原因
     informed: dict[str, str] = field(default_factory=dict)
+    merge_with: str = ""  # rewrite 时并入某一项（decide 给，或负责人改投时由 apply 补）
 
 
 def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Decision]) -> Plan:
@@ -304,8 +307,14 @@ def new_decision(draft: DecisionDraft, ep: Episode, topic_id: str) -> Decision:
     return d
 
 
-def apply(dec: Decision, plan: Plan, draft: DecisionDraft, conversation_id: str) -> Decision | None:
-    """照 §5.2 的状态转移表改一条决策；返回 None 表示不写入（他已经在那一项里）。"""
+def apply(
+    dec: Decision, plan: Plan, draft: DecisionDraft, conversation_id: str
+) -> tuple[Decision | None, Plan]:
+    """照 §5.2 的状态转移表改一条决策。
+
+    返回（改后的决策，实际执行的动作）。决策为 None 表示不写入（他已经在那一项里）；
+    实际动作可能与 `plan.action` 不同：负责人改投某一项时，护栏把 join 处理成并入（rewrite）。
+    """
     out = Decision.from_node(dec.id, dec.content, {"project": dec.to_project()})
     u = draft.user_id
     out.user_labels[u] = draft.name
@@ -338,15 +347,39 @@ def apply(dec: Decision, plan: Plan, draft: DecisionDraft, conversation_id: str)
                     to_history(c, f"{draft.name} 改为支持另一项结论")
                     out.conflicts.remove(c)
 
-    if plan.action == OP_JOIN:
+    action = plan.action
+    if action == OP_JOIN and plan.same_as not in (None, "current"):
+        target = plan.same_as
+        if out.item_of(u) == target:
+            return None, plan
+        if u in out.user_ids and len(out.user_ids) == 1:
+            # 说话人是当前结论唯一的负责人，却改去支持某一项不一致结论。
+            # 「一位成员只占一项」和「当前结论有负责人」在这里冲突：移出他会让当前结论没人。
+            # 按语义处理成「并入那一项」——那一项成为当前结论，原结论进历史，其余各项保留。
+            action = OP_REWRITE
+            plan = Plan(
+                action=OP_REWRITE,
+                decision_id=plan.decision_id,
+                same_as=target,
+                model_action=plan.model_action,
+                reason=plan.reason,
+                guarded=[
+                    *plan.guarded,
+                    "负责人改去支持某一项不一致结论：并入那一项，原结论进历史",
+                ],
+                informed=plan.informed,
+                merge_with=target,
+            )
+
+    if action == OP_JOIN:
         target = plan.same_as or "current"
         if out.item_of(u) == target:
-            return None
+            return None, plan
         move_out(target)
         grp = out.user_ids if target == "current" else out.conflict(target).user_ids
         grp.append(u)
 
-    elif plan.action == OP_CONFLICT:
+    elif action == OP_CONFLICT:
         mine = out.item_of(u)
         if mine and mine.startswith("c"):
             c = out.conflict(mine)  # 他已有自己独占的一项：更新那一项
@@ -363,13 +396,25 @@ def apply(dec: Decision, plan: Plan, draft: DecisionDraft, conversation_id: str)
                 ConflictItem(_next_seq(out), new_item.content, new_item.time, [u], src)
             )
 
-    elif plan.action == OP_REWRITE:
+    elif action == OP_REWRITE:
         reason = draft.change_reason or f"{draft.name} 更新了这条决策"
         to_history(out.items()["current"], reason)
-        out.content, out.time, out.source, out.user_ids = new_item.content, new_item.time, src, [u]
+        if plan.merge_with:
+            # 并入某一项不一致结论：它成为当前结论，原结论进历史，其余各项保留
+            item = out.conflict(plan.merge_with)
+            out.conflicts = [x for x in out.conflicts if x.seq != item.seq]
+            out.content, out.time, out.source = item.content, item.time, item.source
+            out.user_ids = list(item.user_ids) + ([u] if u not in item.user_ids else [])
+        else:
+            out.content, out.time, out.source, out.user_ids = (
+                new_item.content,
+                new_item.time,
+                src,
+                [u],
+            )
         move_out("current")
 
-    elif plan.action == OP_RESOLVE:
+    elif action == OP_RESOLVE:
         chosen_key = plan.same_as or "current"
         chosen = out.items()[chosen_key]
         reason = f"{draft.name} 确定以「{_short(chosen.content)}」为准"
@@ -382,16 +427,17 @@ def apply(dec: Decision, plan: Plan, draft: DecisionDraft, conversation_id: str)
         out.conflicts = []
 
     else:
-        raise ValueError(f"未知动作 {plan.action}")
+        raise ValueError(f"未知动作 {action}")
 
     out.version += 1
+    out.rev = dec.rev
     out.check()
     gone = [c for s, c in before.items() if s not in {x.seq for x in out.conflicts}]
     landed = {h.content for h in out.history[h0:]} | {out.content}
     for c in gone:
         if c not in landed:
             raise InvariantError(f"不变式 2：不一致结论「{c}」被移走但没有进历史")
-    return out
+    return out, plan
 
 
 def _next_seq(d: Decision) -> int:

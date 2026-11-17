@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from memos.graph_dbs.base import ConcurrentUpdateError
+
+from .judge import ModelHub
 from .prompts import EXP_EXTRACT, EXP_FILTER, EXP_MERGE
 from .types import (
     CARD_FIELDS,
@@ -34,13 +38,13 @@ from .types import (
 
 
 if TYPE_CHECKING:
-    from .judge import ModelHub
     from .store import ProjectStore
 
 
 MIN_TOOL_CALLS = 3
 COMPLEX_TOOL_CALLS = 20
 RECALL_TOP_K = 10
+MAX_CAS_RETRIES = 3
 MAX_STEPS = 5
 MAX_ANCHORS = 5
 CONF_NEW, CONF_MAX, CONF_MIN = 0.5, 0.95, 0.1
@@ -134,11 +138,26 @@ def extract_card(hub: ModelHub, ep: Episode) -> tuple[ExperienceCard | None, str
     return card, f"quality_score={card.quality_score}"
 
 
+def _as_text(v: Any) -> Any:
+    """模型偶尔把字段写成对象（如 anchors 里放 {"file": "..."}）：取第一个字符串值。"""
+    if isinstance(v, dict):
+        for key in ("path", "file", "command", "text", "value"):
+            if isinstance(v.get(key), str):
+                return v[key]
+        return next((x for x in v.values() if isinstance(x, str)), None)
+    return v
+
+
 def _card_from(raw: dict[str, Any]) -> ExperienceCard:
     c = ExperienceCard()
     for k in CARD_FIELDS:
         if k in raw and raw[k] is not None:
-            setattr(c, k, list(raw[k]) if k == "anchors" else raw[k])
+            if k == "anchors":
+                items = raw[k] if isinstance(raw[k], list) else [raw[k]]
+                setattr(c, k, [t for t in (_as_text(x) for x in items) if isinstance(t, str)])
+            else:
+                v = _as_text(raw[k])
+                setattr(c, k, v if isinstance(v, str) else str(v))
     if c.exp_status not in (EXP_VERIFIED, EXP_CANDIDATE, EXP_FAILED):
         c.exp_status = EXP_CANDIDATE
     return c
@@ -149,14 +168,24 @@ def _card_from(raw: dict[str, Any]) -> ExperienceCard:
 
 def code_check(card: ExperienceCard, ep: Episode, from_note: bool) -> list[str]:
     notes: list[str] = []
-    tool_text = "\n".join(f"{m.tool_args}\n{m.text}" for m in ep.tools)
-    kept = [a for a in card.anchors if a and a in tool_text]
+    tool_text = _norm("\n".join(f"{m.tool_args}\n{m.text}" for m in ep.tools))
+    # 工具调用编号（b-exp-c1 这种）是记录的定位符，不是文件或命令；模型偶尔当成锚点
+    card.anchors = [
+        a for a in card.anchors if isinstance(a, str) and not re.fullmatch(r"[\w-]+-?[ca]\d+", a)
+    ]
+    kept = [a for a in card.anchors if a and _norm(a) in tool_text]
     if len(kept) < len(card.anchors):
         notes.append(f"锚点 {sorted(set(card.anchors) - set(kept))} 在本段工具调用里找不到，删掉")
     card.anchors = kept[:MAX_ANCHORS]
     if card.validation:
-        cmd = re.split(r"[，,；;]", card.validation)[0].strip()
-        if cmd and cmd not in tool_text:
+        # 模型常把「命令 → 结果」写成一句：只要其中有片段（命令或结果）在本段工具调用里出现过，
+        # 就算有据。任务编号、箭头这类装饰不算。
+        pieces = [
+            x.strip(" →✓\t")
+            for x in re.split(r"[，,；;→\n]", card.validation)
+            if len(_norm(x)) >= 6
+        ]
+        if pieces and not any(_norm(x) in tool_text for x in pieces):
             notes.append("validation 里的命令在本段工具调用里找不到，置空")
             card.validation = None
     if card.exp_status == EXP_VERIFIED and card.signal in ("", "none", None):
@@ -218,6 +247,19 @@ def steps(principle: str | None) -> list[str]:
     return parts or [principle.strip()]
 
 
+def _bigrams(text: str) -> set[str]:
+    text = (text or "").lower()
+    out: set[str] = set(re.findall(r"[a-z0-9_./#-]{2,}", text))
+    for seg in re.findall(r"[\u3400-\u9fff]+", text):
+        out.update(seg[i : i + 2] for i in range(len(seg) - 1))
+    return out
+
+
+def _norm(s: str) -> str:
+    s = unicodedata.normalize("NFKC", s or "")
+    return re.sub(r"\s+", "", s)
+
+
 def guard(
     action: str, card: ExperienceCard, target: ExperienceCard | None, merged: dict[str, Any] | None
 ) -> tuple[str, str]:
@@ -228,14 +270,22 @@ def guard(
         return "add_opposed", "没有证据的相反说法：新卡单独存为待验证"
     if action == EXP_REFUTE and not card.has_evidence():
         return "add_opposed", "refute 但新卡片没有证据"
-    if action == EXP_UPDATE and target is not None and merged is not None:
-        old_s, new_s = steps(target.principle), steps(merged.get("principle"))
-        if target.exp_status == EXP_VERIFIED and card.exp_status != EXP_VERIFIED and old_s != new_s:
-            return "add_opposed", "未验证的新卡想改已验证卡片的做法"
-        if not set(old_s) <= set(new_s):
-            if card.has_evidence():
-                return EXP_REFUTE, "update 删掉了已有步骤，且新卡有证据：按 refute"
-            return "add_opposed", "update 删掉了已有步骤，新卡没有证据"
+    if action in (EXP_UPDATE, EXP_REFUTE) and merged is not None:
+        n = len(steps(merged.get("principle")))
+        if n > MAX_STEPS:
+            # T2 §5.2 的合并约束：principle ≤5 步。模型给的合并结果超了就是不合规的输出，
+            # 不写进已有卡片（否则卡片会越并越长，后续每次 update 都像在删步骤）。
+            return "add_opposed", f"合并结果 {n} 步，超过 {MAX_STEPS} 步的约束：按新增（待验证）"
+    if (
+        action == EXP_UPDATE
+        and target is not None
+        and merged is not None
+        and target.exp_status == EXP_VERIFIED
+        and card.exp_status != EXP_VERIFIED
+        and steps(merged.get("principle")) != steps(target.principle)
+    ):
+        # T2 §5.2「已有卡片是 verified、新卡片不是 verified：不要改动 principle」
+        return "add_opposed", "未验证的新卡想改已验证卡片的做法：新卡单独存为待验证"
     return action, ""
 
 
@@ -366,7 +416,7 @@ def apply(
     k.sources.append(ev)
     if ep.topic_id and ep.topic_id not in k.topic_ids:
         k.topic_ids.append(ep.topic_id)
-    store.put_experience(k)
+    store.put_experience(k, expected_rev=target.rev)
     return {
         "op": action,
         "id": k.id,
@@ -420,24 +470,33 @@ def run(hub: ModelHub, store: ProjectStore, ep: Episode, log) -> list[dict[str, 
     card.space_id = ep.space_id
     card.time = ep.messages[-1].chat_time if ep.messages else now_iso()
 
-    ranked = store.recall_experiences(ep.space_id, card.index_text, RECALL_TOP_K)
-    cands = [k for _, k in ranked if lifecycle(k) != "archived"]
-    if not cands:
-        res = apply(store, ep, card, EXP_ADD, None, None, "没有召回到已有经验")
+    for attempt in range(MAX_CAS_RETRIES):
+        ranked = store.recall_experiences(ep.space_id, card.index_text, RECALL_TOP_K)
+        cands = [k for _, k in ranked if lifecycle(k) != "archived"]
+        if not cands:
+            res = apply(store, ep, card, EXP_ADD, None, None, "没有召回到已有经验")
+            log(
+                f"  经验新增 {res['id'][:8]}：{card.task_intent}"
+                f"（{card.exp_status}，{card.confidence}）"
+            )
+            return [res]
+
+        out = merge(hub, card, cands)
+        action = str(out.get("action") or EXP_ADD)
+        target = next((k for k in cands if k.id == out.get("target_id")), None)
+        merged = out.get("card") if isinstance(out.get("card"), dict) else None
+        final, guard_reason = guard(action, card, target, merged)
+        if final != action:
+            log(f"  经验护栏：模型给 {action}，改为 {final}（{guard_reason}）")
+        try:
+            res = apply(store, ep, card, final, target, merged, out.get("reason") or guard_reason)
+        except ConcurrentUpdateError:
+            log(f"  经验写回冲突（第 {attempt + 1} 次）：这张卡刚被别的任务改过，重读重判")
+            continue
         log(
-            f"  经验新增 {res['id'][:8]}：{card.task_intent}（{card.exp_status}，{card.confidence}）"
+            f"  经验 {res['op']} → {res['id'][:8]}（confidence {res.get('confidence')}）："
+            f"{res.get('reason', '')}"
         )
         return [res]
-
-    out = merge(hub, card, cands)
-    action = str(out.get("action") or EXP_ADD)
-    target = next((k for k in cands if k.id == out.get("target_id")), None)
-    merged = out.get("card") if isinstance(out.get("card"), dict) else None
-    final, guard_reason = guard(action, card, target, merged)
-    if final != action:
-        log(f"  经验护栏：模型给 {action}，改为 {final}（{guard_reason}）")
-    res = apply(store, ep, card, final, target, merged, out.get("reason") or guard_reason)
-    log(
-        f"  经验 {res['op']} → {res['id'][:8]}（confidence {res.get('confidence')}）：{res.get('reason', '')}"
-    )
-    return [res]
+    log(f"  经验写回连续冲突 {MAX_CAS_RETRIES} 次，放弃这一段")
+    return []

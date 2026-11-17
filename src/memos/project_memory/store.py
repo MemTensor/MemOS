@@ -79,6 +79,18 @@ def cosine(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b, strict=False)) / (na * nb)
 
 
+def _decision(n: dict[str, Any]) -> Decision:
+    d = Decision.from_node(n["id"], n.get("memory", ""), n["metadata"])
+    d.rev = n.get("rev")
+    return d
+
+
+def _experience(n: dict[str, Any]) -> ExperienceCard:
+    e = ExperienceCard.from_node(n["id"], n["metadata"])
+    e.rev = n.get("rev")
+    return e
+
+
 class ProjectStore:
     def __init__(self, graph_db: Any, embedder: Embedder | None = None):
         self.db = graph_db
@@ -95,7 +107,10 @@ class ProjectStore:
         props: dict[str, Any],
         embed_text: str | None = None,
         status: str = "activated",
+        expected_rev: int | None = None,
     ) -> None:
+        """写一行。`expected_rev` 不为空且库支持条件写（SQLite 的 rev）时，行被别人改过就抛
+        `ConcurrentUpdateError`，由调用方重读重判（经验方案 §3.2 ⑫）。"""
         meta = {
             "memory_type": memory_type,
             "memory_view": MEMORY_VIEW_PROJECT,
@@ -104,10 +119,17 @@ class ProjectStore:
             "updated_at": now_iso(),
             **props,
         }
-        if embed_text is not None and self.embedder is not None:
-            with contextlib.suppress(Exception):
-                meta["embedding"] = self.embedder([embed_text])[0]
-        self.db.add_node(id=node_id, memory=memory or "", metadata=meta, user_name=namespace)
+        if embed_text is not None:
+            meta["search_text"] = embed_text  # 全文索引文本（SQLite 的 memory_fts 用它）
+            if self.embedder is not None:
+                with contextlib.suppress(Exception):
+                    meta["embedding"] = self.embedder([embed_text])[0]
+        kwargs: dict[str, Any] = {}
+        if expected_rev is not None and getattr(self.db, "supports_cas", False):
+            kwargs["expected_rev"] = expected_rev
+        self.db.add_node(
+            id=node_id, memory=memory or "", metadata=meta, user_name=namespace, **kwargs
+        )
 
     def _get(self, node_id: str, namespace: str) -> dict[str, Any] | None:
         node = self.db.get_node(node_id, user_name=namespace)
@@ -176,6 +198,22 @@ class ProjectStore:
                         scores[h["id"]] = max(scores.get(h["id"], 0.0), float(h.get("score", 0.0)))
             except Exception:
                 pass
+        if by_id and hasattr(self.db, "search_by_fulltext"):
+            with contextlib.suppress(Exception):
+                for h in (
+                    self.db.search_by_fulltext(
+                        query_words=[text],
+                        top_k=max(top_k * 3, 20),
+                        scope=memory_type,
+                        user_name=namespace,
+                        search_filter=search_filter,
+                    )
+                    or []
+                ):
+                    if h.get("id") in by_id:
+                        # 全文分数按 0.8 折算后和向量分数取大（两路合并，照 Hindsight）
+                        s_ft = 0.8 * float(h.get("score", 0.0))
+                        scores[h["id"]] = max(scores.get(h["id"], 0.0), s_ft)
         get_text = index_text or (lambda n: n.get("memory", ""))
         for nid, n in by_id.items():
             lex = lexical_sim(text, get_text(n))
@@ -306,6 +344,13 @@ class ProjectStore:
     def put_episode(self, ep: Episode) -> None:
         self._put(ep.id, ep.conversation_id, PROJECT_EPISODE, ep.space_id, ep.to_props())
 
+    def open_episodes(self, space_id: str) -> list[Episode]:
+        nodes = self._nodes(
+            PROJECT_EPISODE, space_id, [{"field": "episode_state", "op": "=", "value": "open"}]
+        )
+        nodes.sort(key=lambda n: (n.get("metadata") or {}).get("create_time", ""))
+        return [Episode.from_node(n["id"], space_id, n["metadata"]) for n in nodes]
+
     def open_episode(self, space_id: str, conversation_id: str) -> Episode | None:
         nodes = self._nodes(
             PROJECT_EPISODE,
@@ -383,7 +428,7 @@ class ProjectStore:
 
     # ── 决策 ──────────────────────────────────────────────────────────────
 
-    def put_decision(self, d: Decision) -> None:
+    def put_decision(self, d: Decision, expected_rev: int | None = None) -> None:
         archived = [
             {
                 "version": max(1, d.version - 1),
@@ -400,24 +445,29 @@ class ProjectStore:
             "history": archived,
             "sources": [d.source.to_json()] + [h.source.to_json() for h in d.history],
         }
-        self._put(d.id, d.content, PROJECT_DECISION, d.space_id, props, embed_text=d.index_text)
+        self._put(
+            d.id,
+            d.content,
+            PROJECT_DECISION,
+            d.space_id,
+            props,
+            embed_text=d.index_text,
+            expected_rev=expected_rev,
+        )
 
     def get_decision(self, decision_id: str, space_id: str) -> Decision | None:
         node = self._get(decision_id, space_id)
         if not node or node["metadata"].get("memory_type") != PROJECT_DECISION:
             return None
-        return Decision.from_node(node["id"], node.get("memory", ""), node["metadata"])
+        return _decision(node)
 
     def list_decisions(self, space_id: str, topic_id: str | None = None) -> list[Decision]:
         extra = [{"field": "topic_id", "op": "=", "value": topic_id}] if topic_id else []
-        return [
-            Decision.from_node(n["id"], n.get("memory", ""), n["metadata"])
-            for n in self._nodes(PROJECT_DECISION, space_id, extra)
-        ]
+        return [_decision(n) for n in self._nodes(PROJECT_DECISION, space_id, extra)]
 
     # ── 经验 ──────────────────────────────────────────────────────────────
 
-    def put_experience(self, e: ExperienceCard) -> None:
+    def put_experience(self, e: ExperienceCard, expected_rev: int | None = None) -> None:
         self._put(
             e.id,
             e.memory_text,
@@ -426,13 +476,14 @@ class ProjectStore:
             e.to_props(),
             embed_text=e.index_text,
             status=e.node_status,
+            expected_rev=expected_rev,
         )
 
     def get_experience(self, exp_id: str, space_id: str) -> ExperienceCard | None:
         node = self._get(exp_id, space_id)
         if not node or node["metadata"].get("memory_type") != PROJECT_EXPERIENCE:
             return None
-        return ExperienceCard.from_node(node["id"], node["metadata"])
+        return _experience(node)
 
     def list_experiences(
         self, space_id: str, include_archived: bool = False
@@ -440,7 +491,7 @@ class ProjectStore:
         nodes = self._nodes(
             PROJECT_EXPERIENCE, space_id, status=None if include_archived else "activated"
         )
-        return [ExperienceCard.from_node(n["id"], n["metadata"]) for n in nodes]
+        return [_experience(n) for n in nodes]
 
     def recall_experiences(
         self, space_id: str, text: str, top_k: int = 10
@@ -454,4 +505,4 @@ class ProjectStore:
             nodes,
             index_text=lambda n: f"{(n['metadata'].get('info') or {}).get('task_intent', '')}\n{(n['metadata'].get('info') or {}).get('problem', '')}",
         )
-        return [(s, ExperienceCard.from_node(n["id"], n["metadata"])) for s, n in ranked]
+        return [(s, _experience(n)) for s, n in ranked]

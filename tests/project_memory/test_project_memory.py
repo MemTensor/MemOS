@@ -42,11 +42,30 @@ SPLIT = "本机整理结果存入单个 SQLite 库，按 space_id 分表。"
 # ── 装配 ───────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture
-def app():
-    client, sched, plugin = build_http_app()
+@pytest.fixture(params=["fake", "sqlite"])
+def app(request, tmp_path):
+    """同一批用例跑两遍存储：照 postgres 语义的内存版，和仓里的 SQLite 后端（含 FTS5 全文与条件写）。"""
+    graph_db = FakeGraphDB() if request.param == "fake" else _sqlite_db(tmp_path)
+    client, sched, plugin = build_http_app(graph_db=graph_db)
     yield client, sched, plugin
     reset_project_hooks()
+
+
+def _sqlite_db(tmp_path):
+    from memos.configs.graph_db import GraphDBConfigFactory
+    from memos.graph_dbs.factory import GraphStoreFactory
+
+    return GraphStoreFactory.from_config(
+        GraphDBConfigFactory.model_validate(
+            {
+                "backend": "sqlite",
+                "config": {
+                    "db_path": str(tmp_path / "pm.db"),
+                    "embedding_dimension": FakeEmbedder.dim,
+                },
+            }
+        )
+    )
 
 
 def _space(client, domains=("代码开发", "产品设计")) -> str:
@@ -300,8 +319,9 @@ def test_resubmitted_messages_are_deduplicated(app):
 # ── 决策：代码护栏与核对 ─────────────────────────────────────────────────────
 
 
-def test_guard_turns_model_rewrite_into_conflict():
-    client, sched, plugin = build_http_app(llm=RuleLLM(misbehave=True))
+def test_guard_turns_model_rewrite_into_conflict(tmp_path):
+    graph_db = _sqlite_db(tmp_path)
+    client, sched, plugin = build_http_app(llm=RuleLLM(misbehave=True), graph_db=graph_db)
     try:
         sid = _space(client)
         _run_all(client, sched, sid, DECISION_ROUNDS[:2])
@@ -315,6 +335,20 @@ def test_guard_turns_model_rewrite_into_conflict():
 
 def _episode(msgs: list[Msg]) -> Episode:
     return Episode(id="ep", space_id="s", conversation_id="c", messages=msgs)
+
+
+def test_approved_by_must_be_nameable_in_the_message():
+    """「已和用户B 确认」必须能在原话里落到那个名字上，否则不能凭它改写别人的结论。"""
+    m = Msg("m1", "member", "改为单库分表。", "2026-10-30T10:00:00+08:00", "user_c", "用户C")
+    ep = _episode([m])
+    fake = DecisionDraft("m1", "改为单库分表。", "单库分表", approved_by=["用户B"])
+    kept, _ = dec.verify(ep, [fake], ["用户B", "用户C"])
+    assert kept[0].approved_by == [], "原话里没提用户B"
+    real = DecisionDraft("m1", "改为单库分表。", "单库分表", approved_by=["用户B"])
+    m.text = "已和用户B 确认，改为单库分表。"
+    real.quote = m.text
+    kept, _ = dec.verify(ep, [real], ["用户B", "用户C"])
+    assert kept[0].approved_by == ["用户B"]
 
 
 def test_verify_drops_quote_mismatch_and_strips_unlisted():
@@ -385,7 +419,7 @@ def test_resolve_needs_informed_on_every_item():
     full = {**partial, "informed": {"current": "A 方案", "c1": "B 方案"}}
     plan = dec.decide(draft, full, {"d1": d})
     assert plan.action == "resolve"
-    after = dec.apply(d, plan, draft, "c")
+    after, plan = dec.apply(d, plan, draft, "c")
     assert (
         after.content == "B 方案"
         and after.conflicts == []
@@ -403,11 +437,27 @@ def test_member_switching_item_moves_emptied_conflict_to_history():
     plan = dec.decide(
         draft, {"decision_id": "d1", "same_as": "current", "action": "join"}, {"d1": d}
     )
-    after = dec.apply(d, plan, draft, "c")
+    after, plan = dec.apply(d, plan, draft, "c")
     assert after.conflicts == [] and after.history[0].content == "B 方案", (
         "被移空的不一致结论进历史，不凭空消失"
     )
     assert set(after.user_ids) == {"user_b", "user_c"}
+
+
+def test_owner_switching_merges_into_that_item():
+    """负责人是当前结论唯一的人，却改去支持某一项不一致结论：并入那一项，原结论进历史。"""
+    d = _decision()
+    d.user_ids = ["user_b"]
+    d.conflicts = [dec.ConflictItem(1, "B 方案", "2026-10-30T10:00:00+08:00", ["user_c"], Source())]
+    draft = DecisionDraft(
+        "m", "q", "B 方案", user_id="user_b", name="用户B", time="2026-10-31T10:00:00+08:00"
+    )
+    plan = dec.decide(draft, {"decision_id": "d1", "same_as": "c1", "action": "join"}, {"d1": d})
+    assert plan.action == "join"
+    after, plan = dec.apply(d, plan, draft, "c")
+    assert after.content == "B 方案" and after.conflicts == []
+    assert set(after.user_ids) == {"user_b", "user_c"}
+    assert after.history[0].content == "A 方案"
 
 
 def test_invariant_owner_not_empty():
@@ -441,8 +491,12 @@ def test_experience_guard():
     assert exp.guard("refute", weak, target, None)[0] == "add_opposed", "没有证据不能推翻"
     assert exp.guard("update", weak, target, {"principle": "并行就行"})[0] == "add_opposed"
     strong = ExperienceCard(principle="读之前入队", exp_status=EXP_VERIFIED, signal="test")
-    assert exp.guard("update", strong, target, {"principle": "读之前入队"})[0] == "refute", (
-        "删掉旧步骤且有证据 → refute"
+    assert exp.guard("update", strong, target, {"principle": "读之前入队"})[0] == "update", (
+        "有证据的 update 可以改"
+    )
+    oversized = {"principle": "；".join(f"{i}. 步骤{i}" for i in range(1, 8))}
+    assert exp.guard("update", strong, target, oversized)[0] == "add_opposed", (
+        "合并结果超过 5 步（T2 §5.2 的约束）→ 不写进已有卡片"
     )
     assert exp.guard("confirm", strong, None, None)[0] == "add"
 
@@ -483,3 +537,96 @@ def test_service_runs_inline_without_scheduler():
     )
     assert out["status"] == "completed"
     assert len(svc.store.list_decisions(sp.space_id)) == 1
+
+
+# ── SQLite 后端 ─────────────────────────────────────────────────────────────
+
+
+def test_sqlite_backend_mirrors_memory_table_and_cas(tmp_path):
+    from memos.graph_dbs.base import ConcurrentUpdateError
+
+    db = _sqlite_db(tmp_path)
+    assert db.supports_cas
+    db.add_node(
+        "a",
+        "本机整理结果存入单个 SQLite 库，按 space_id 分表",
+        {"memory_type": "X", "status": "activated", "tags": ["k1"]},
+        user_name="s1",
+    )
+    db.add_node(
+        "b", "向量索引存入 LanceDB", {"memory_type": "X", "status": "activated"}, user_name="s1"
+    )
+    db.add_node(
+        "c",
+        "本机整理结果存入单个 SQLite 库",
+        {"memory_type": "X", "status": "activated"},
+        user_name="s2",
+    )
+
+    assert db.get_by_metadata(
+        [{"field": "memory_type", "op": "=", "value": "X"}], user_name="s1"
+    ) == ["a", "b"]
+    assert db.get_by_metadata(
+        [{"field": "tags", "op": "contains", "value": "k1"}], user_name="s1"
+    ) == ["a"]
+    assert [
+        h["id"] for h in db.search_by_fulltext(["整理结果怎么存"], scope="X", user_name="s1")
+    ] == ["a"]
+
+    node = db.get_node("a", user_name="s1")
+    assert node["rev"] == 1
+    assert node["memory"].startswith("本机整理结果") and node["metadata"]["memory_type"] == "X"
+    assert node["metadata"]["user_name"] == "s1" and node["metadata"]["status"] == "activated"
+    db.add_node(
+        "a", "改", {"memory_type": "X", "status": "activated"}, user_name="s1", expected_rev=1
+    )
+    with pytest.raises(ConcurrentUpdateError):
+        db.add_node(
+            "a", "再改", {"memory_type": "X", "status": "activated"}, user_name="s1", expected_rev=1
+        )
+
+    db.delete_node("a", user_name="s1")
+    assert db.get_node("a") is None
+    assert db.search_by_fulltext(["整理结果"], scope="X", user_name="s1") == []
+
+
+def test_sqlite_vector_search(tmp_path):
+    emb = FakeEmbedder()
+    db = _sqlite_db(tmp_path)
+    vec = emb.embed(["决策存储方式"])[0]
+    db.add_node(
+        "d",
+        "决策存储方式",
+        {"memory_type": "Y", "status": "activated", "embedding": vec},
+        user_name="s1",
+    )
+    hits = db.search_by_embedding(emb.embed(["存储方式"])[0], top_k=3, scope="Y", user_name="s1")
+    assert hits and hits[0]["id"] == "d" and hits[0]["score"] > 0.5
+
+
+def test_concurrent_write_is_retried(tmp_path):
+    """两个任务同时改同一条决策：第二个撞上 rev 变化，重读重判后仍然写对。"""
+    db = _sqlite_db(tmp_path)
+    store = ProjectStore(db, FakeEmbedder().embed)
+    svc = ProjectMemoryService(store, ModelHub(RuleLLM(), graph_db=db))
+    sp = svc.create_space("s", "", [{"name": "代码开发"}])
+    from memos.api.product_models import APIADDRequest
+
+    rnd = DECISION_ROUNDS[0]
+    svc.accept(
+        APIADDRequest(
+            user_id=rnd["user_id"],
+            conversation_id=rnd["conversation_id"],
+            space_ids=sp.space_id,
+            allow_memory_view=["project"],
+            messages=rnd["messages"],
+        )
+    )
+    d = store.list_decisions(sp.space_id)[0]
+    stale = store.get_decision(d.id, sp.space_id)
+    d.content = d.content + "（别人先写了）"
+    store.put_decision(d, expected_rev=stale.rev)
+    from memos.graph_dbs.base import ConcurrentUpdateError
+
+    with pytest.raises(ConcurrentUpdateError):
+        store.put_decision(d, expected_rev=stale.rev)  # 同一 rev 再写一次会撞

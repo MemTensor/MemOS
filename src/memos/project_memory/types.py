@@ -414,6 +414,7 @@ class Decision:
     category: str = ""
     reason: str = ""
     user_labels: dict[str, str] = field(default_factory=dict)
+    rev: int | None = None  # 读出时库里的版本（SQLite 的 rev），写回时做条件更新；不落库
 
     def items(self) -> dict[str, ConflictItem]:
         """在用的各项 I(D)：current、c1、c2……（给第二次调用、也给代码护栏用）。"""
@@ -532,6 +533,7 @@ class ExperienceCard:
     node_status: str = "activated"  # activated | archived
     sources: list[dict[str, Any]] = field(default_factory=list)
     history: list[dict[str, Any]] = field(default_factory=list)
+    rev: int | None = None  # 同 Decision.rev
 
     @property
     def memory_text(self) -> str:

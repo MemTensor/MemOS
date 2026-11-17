@@ -6,7 +6,11 @@
 - end_topic：这件事在这一轮做完了 → 这一轮并进当前段，然后关段。
 拿不准或答不出按 follow_up（照经验方案：拿不准取 follow_up）。
 
-另外两条规则兜底（经验方案 §3.2 ③）：超过 64k token 或 500 条消息关段；Agent 写了经验稿立即关段。
+三条规则兜底（经验方案 §3.2 ③）：
+- 超过 64k token 或 500 条消息关段；
+- Agent 写了经验稿，立即关段；
+- 空闲超时：下一次提交比段内最后一条消息晚了 `IDLE_MINUTES` 分钟以上，就先关上一段
+  （模型看到的只有会话内容，判断不出「隔了一夜」；memmy 与本方案的 30 分钟空闲关段同义）。
 没传 conversation_id 的提交按 PRD「本次提交的消息单独整理」：自成一段，立即关。
 
 一轮 = 成员的一次输入 + Agent 对它的完整回复（含其间的工具调用）（PRD 术语）。
@@ -34,6 +38,7 @@ if TYPE_CHECKING:
 
 MAX_TOKENS = 64_000
 MAX_MESSAGES = 500
+IDLE_MINUTES = 30
 CHARS_PER_TOKEN = 2  # 中文按 2 字符 / token 粗估
 
 
@@ -49,6 +54,26 @@ def split_turns(msgs: list[Msg]) -> list[list[Msg]]:
     if cur:
         turns.append(cur)
     return turns
+
+
+def idle_minutes_between(prev_last: str, next_first: str) -> float | None:
+    from datetime import datetime
+
+    def parse(s: str):
+        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt)
+            except (TypeError, ValueError):
+                continue
+        try:
+            return datetime.fromisoformat(s)
+        except (TypeError, ValueError):
+            return None
+
+    a, b = parse(prev_last), parse(next_first)
+    if a is None or b is None:
+        return None
+    return (b - a).total_seconds() / 60.0
 
 
 def _tokens(msgs: list[Msg]) -> int:
@@ -118,6 +143,12 @@ def segment(
 
     cur = open_ep
     cur_msgs: list[Msg] = load(cur.message_ids) if cur else []
+    if cur and cur_msgs and new_msgs:
+        gap = idle_minutes_between(cur_msgs[-1].chat_time, new_msgs[0].chat_time)
+        if gap is not None and gap >= IDLE_MINUTES:
+            log(f"空闲 {gap:.0f} 分钟（≥{IDLE_MINUTES}），先关上一段")
+            prev_tail = close(cur, "idle_timeout")
+            cur, cur_msgs = None, []
     next_prev: list[str] = list(prev_tail or [])  # 上一段最后一轮，给下一段看懂指代
     for turn in split_turns(new_msgs):
         if cur is None:

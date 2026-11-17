@@ -241,6 +241,22 @@ class PostgresGraphDBConfig(BaseConfig):
         return self
 
 
+class SQLiteGraphDBConfig(BaseConfig):
+    """
+    SQLite configuration (single file, no server). Tables mirror the old `Memory` / `Edges` tables;
+    full-text via FTS5 (trigram, works for Chinese) and vectors via sqlite-vec when installed.
+
+    Example:
+    ---
+    db_path = "/data/memos/project_memory.db"
+    embedding_dimension = 1024
+    """
+
+    db_path: str = Field(..., description="Path of the SQLite file (':memory:' for tests)")
+    embedding_dimension: int = Field(default=1024, description="Dimension of vector embedding")
+    user_name: str | None = Field(default=None, description="Default user_name (logical isolation)")
+
+
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
     config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
@@ -250,6 +266,7 @@ class GraphDBConfigFactory(BaseModel):
         "neo4j-community": Neo4jCommunityGraphDBConfig,
         "polardb": PolarDBGraphDBConfig,
         "postgres": PostgresGraphDBConfig,
+        "sqlite": SQLiteGraphDBConfig,
     }
 
     @field_validator("backend")

@@ -7,8 +7,12 @@
   核心的 `ProjectMemoryMessageHandler` 按 Space 加锁后回调 `H.PROJECT_MEMORY_EXECUTE`；
 - `init_app` 注册新增接口：Space 4 个、领域 4 个、get_message（见 routes.py）。
 
-存储用插件上下文里的 `graph_db`（与核心同一个库）。要单独用一个库时，设
-`MEMOS_PROJECT_MEMORY_GRAPH_DB=own` 并在 `init_components` 前把 `context["shared"]["project_graph_db"]` 准备好。
+配置（见 config.py，全部可用环境变量覆盖，没配的退回核心的配置）：
+- 模型：`PROJECT_MEMORY_LLM_*`（抽取/更新/合并/归主题）、`PROJECT_MEMORY_JUDGE_LLM_*`（判别题）；
+  都没配时用插件上下文里的核心 `llm`。
+- 向量模型：`PROJECT_MEMORY_EMBEDDER_*`；没配时用核心的 `embedder`。
+- 存储：默认用项目记忆自己的 SQLite 库（`PROJECT_MEMORY_SQLITE_PATH`）；
+  `PROJECT_MEMORY_GRAPH_DB=shared` 时用核心的 graph_db。
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from typing import Any
 from memos.plugins.base import MemOSPlugin
 from memos.plugins.hook_defs import H
 
+from . import config as pm_config
 from .judge import ModelHub
 from .service import ProjectMemoryService
 from .store import ProjectStore
@@ -79,14 +84,20 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     def service(self) -> ProjectMemoryService:
         shared = self.context.get("shared") or {}
         if self._service is None:
-            graph_db = shared.get("project_graph_db") or shared.get("graph_db")
-            if graph_db is None:
-                raise RuntimeError("项目记忆需要 graph_db：插件上下文里没有")
-            embedder = shared.get("embedder")
+            own_embedder = pm_config.build_embedder()
+            core_embedder = shared.get("embedder")
+            embedder = own_embedder or core_embedder
+            graph_db = shared.get("project_graph_db") or pm_config.build_graph_db(
+                shared.get("graph_db")
+            )
             store = ProjectStore(
                 graph_db, embedder=embedder.embed if embedder is not None else None
             )
-            self._service = ProjectMemoryService(store, ModelHub(llm=shared.get("llm")))
+            llm = pm_config.build_llm() or shared.get("llm")
+            judge_llm = pm_config.build_llm("PROJECT_MEMORY_JUDGE_LLM")
+            self._service = ProjectMemoryService(
+                store, ModelHub(llm=llm, judge_llm=judge_llm, graph_db=graph_db)
+            )
         # 调度器的 submit 句柄在核心启动后期才写进上下文：每次取用时补上
         if self._service.submit is None and shared.get("submit_scheduler_messages"):
             self._service.submit = self._submit

@@ -14,12 +14,15 @@ import logging
 import threading
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+from memos.graph_dbs.base import ConcurrentUpdateError
 
 from . import decision as dec
 from . import experience as exp
 from . import topic as topic_mod
-from .segmenter import segment, split_turns
+from .judge import ModelHub
+from .segmenter import IDLE_MINUTES, idle_minutes_between, segment, split_turns
 from .store import ProjectStore, cosine, lexical_sim
 from .types import (
     OP_ADD,
@@ -36,10 +39,6 @@ from .types import (
 )
 
 
-if TYPE_CHECKING:
-    from .judge import ModelHub
-
-
 logger = logging.getLogger(__name__)
 
 PROJECT_MEMORY_TASK_LABEL = "project_memory"  # 与 mem_scheduler.schemas.task_schemas 一致
@@ -47,6 +46,7 @@ MAX_DOMAINS = 20
 DEFAULT_LIMIT = 9
 REL_MIN = 0.12  # 条目与 query 的最低相关度（二元组相似度；接真向量后在评测集上定）
 MAX_ENTRIES = 5
+MAX_CAS_RETRIES = 3
 
 Submit = Callable[[list[Any]], Any]
 
@@ -294,6 +294,13 @@ class ProjectMemoryService:
         task_id = payload["task_id"]
         try:
             conv = payload.get("conversation_id")
+            # 懒关段：先把这个 Space 里空闲超过阈值的段关掉（会话最后一段没有「下一轮」来触发，
+            # 照 memmy 的做法在每次整理前扫一遍；会话结束时接入方也可调 flush()）
+            for stale in self.store.open_episodes(space_id):
+                last = self.store.get_messages(space_id, stale.message_ids)
+                gap = idle_minutes_between(last[-1].chat_time, now_iso()) if last else None
+                if gap is not None and gap >= IDLE_MINUTES:
+                    result.merge(self._close_and_organize(stale, "idle_timeout"))
             new_msgs = self.store.get_messages(space_id, payload.get("message_node_ids") or [])
             open_ep = self.store.open_episode(space_id, conv) if conv else None
             prev_tail = [] if open_ep else self._last_tail(space_id, conv)
@@ -328,6 +335,29 @@ class ProjectMemoryService:
             self._finish_task(task_id, space_id, result.topic_ids, 0, error=str(e))
         self.last_trace = result.trace
         return result
+
+    def _close_and_organize(self, ep: Episode, reason: str) -> OrganizeResult:
+        msgs = self.store.get_messages(ep.space_id, ep.message_ids)
+        ep.state, ep.closed_reason = "closed", reason
+        ep.messages, ep.prev = msgs, self.store.get_messages(ep.space_id, ep.prev_message_ids)
+        self.store.put_episode(ep)
+        return self.organize(ep)
+
+    def flush(self, space_id: str, conversation_id: str | None = None) -> OrganizeResult:
+        """会话结束：把这个 Space（或这个会话）里还开着的段立即关掉并整理。
+
+        本地插件在会话结束时调；也可以由定时任务调。不调的话，这些段会在下一次同 Space 的
+        整理时按空闲超时关掉，最慢等到下一次有人写。
+        """
+        out = OrganizeResult()
+        with self._lock(space_id):
+            for ep in self.store.open_episodes(space_id):
+                if conversation_id and ep.conversation_id != conversation_id:
+                    continue
+                out.merge(self._close_and_organize(ep, "session_end"))
+        if out.trace:
+            self.last_trace = out.trace
+        return out
 
     def _last_tail(self, space_id: str, conv: str | None) -> list[str]:
         if not conv:
@@ -411,39 +441,54 @@ class ProjectMemoryService:
         rows = dec.update(self.hub, kept, existing, topic.name)
         touched: set[str] = set()
         for d, row in zip(kept, rows, strict=False):
-            cands = {x.id: x for x in self.store.list_decisions(ep.space_id, topic.id)}
-            if row.get("decision_id") in touched:  # 同一段里前一条已改过这条决策：按新状态重判
-                row = dec.update(self.hub, [d], list(cands.values()), topic.name)[0]
-            plan = dec.decide(d, row, cands)
-            for g in plan.guarded:
-                r.log(f"  决策护栏：{g}")
-            if plan.action == OP_ADD:
-                self._add(d, ep, topic, r, plan.reason)
-                continue
-            before = cands[plan.decision_id]
-            after = dec.apply(before, plan, d, ep.conversation_id)
-            if after is None:
-                r.log(f"  决策 {plan.action}：{d.name} 已在那一项里，不写入")
-                continue
-            self.store.put_decision(after)
-            touched.add(after.id)
-            r.decision_ops.append(
-                {
-                    "op": plan.action,
-                    "decision_id": after.id,
-                    "same_as": plan.same_as,
-                    "model_action": plan.model_action,
-                    "guarded": plan.guarded,
-                    "reason": plan.reason,
-                    "content": after.content,
-                    "conflicts": [c.content for c in after.conflicts],
-                    "history": [h.content for h in after.history],
-                }
-            )
-            r.log(
-                f"  决策 {plan.action}（{plan.same_as or '-'}）→ 当前结论「{after.content}」；"
-                f"不一致 {len(after.conflicts)} 项；历史 {len(after.history)} 项"
-            )
+            for attempt in range(MAX_CAS_RETRIES):
+                cands = {x.id: x for x in self.store.list_decisions(ep.space_id, topic.id)}
+                if attempt or row.get("decision_id") in touched:
+                    # 同一段里前一条已改过这条决策，或写回时发现被别人改过：按新状态重判
+                    row = dec.update(self.hub, [d], list(cands.values()), topic.name)[0]
+                plan = dec.decide(d, row, cands)
+                try:
+                    self._apply_plan(d, plan, cands, ep, topic, r, touched)
+                    break
+                except ConcurrentUpdateError:
+                    r.log(
+                        f"  决策写回冲突（第 {attempt + 1} 次）：这条决策刚被别的任务改过，重读重判"
+                    )
+            else:
+                r.log(f"  决策写回连续冲突 {MAX_CAS_RETRIES} 次，放弃这一条：{d.content}")
+
+    def _apply_plan(
+        self, d, plan, cands, ep: Episode, topic: Topic, r: OrganizeResult, touched: set[str]
+    ) -> None:
+        for g in plan.guarded:
+            r.log(f"  决策护栏：{g}")
+        if plan.action == OP_ADD:
+            self._add(d, ep, topic, r, plan.reason)
+            return
+        before = cands[plan.decision_id]
+        after, plan = dec.apply(before, plan, d, ep.conversation_id)
+        if after is None:
+            r.log(f"  决策 {plan.action}：{d.name} 已在那一项里，不写入")
+            return
+        self.store.put_decision(after, expected_rev=before.rev)
+        touched.add(after.id)
+        r.decision_ops.append(
+            {
+                "op": plan.action,
+                "decision_id": after.id,
+                "same_as": plan.same_as,
+                "model_action": plan.model_action,
+                "guarded": plan.guarded,
+                "reason": plan.reason,
+                "content": after.content,
+                "conflicts": [c.content for c in after.conflicts],
+                "history": [h.content for h in after.history],
+            }
+        )
+        r.log(
+            f"  决策 {plan.action}（{plan.same_as or '-'}）→ 当前结论「{after.content}」；"
+            f"不一致 {len(after.conflicts)} 项；历史 {len(after.history)} 项"
+        )
 
     def _add(self, d, ep: Episode, topic: Topic, r: OrganizeResult, reason: str) -> None:
         new = dec.new_decision(d, ep, topic.id)

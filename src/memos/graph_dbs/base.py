@@ -8,6 +8,13 @@ from typing import Any, Literal
 _VALID_FIELD_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
+class ConcurrentUpdateError(RuntimeError):
+    """A conditional write found the row changed since it was read (optimistic concurrency).
+
+    Raised by backends that support `add_node(..., expected_rev=n)` (`supports_cas = True`).
+    """
+
+
 class BaseGraphDB(ABC):
     """
     Abstract base class for a graph database interface used in a memory-augmented RAG system.

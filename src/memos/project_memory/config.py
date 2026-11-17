@@ -1,0 +1,140 @@
+"""项目记忆自己的配置：模型、向量模型、存储。全部走 MemOS 现成的工厂（LLMFactory / EmbedderFactory / GraphStoreFactory）。
+
+为什么单独配：核心的 `llm` 温度是 `MOS_CHAT_TEMPERATURE`（默认 0.8），项目记忆的提示词要求温度 0；
+判别题可以用更便宜的模型；项目记忆迁移前用自己的库（11/16 定）。没配的项一律退回核心的配置。
+
+| 环境变量 | 默认 | 说明 |
+| --- | --- | --- |
+| PROJECT_MEMORY_LLM_BACKEND | openai | LLMFactory 的 backend：openai / qwen / deepseek / vllm / ollama … |
+| PROJECT_MEMORY_LLM_MODEL | MOS_CHAT_MODEL | 抽取、更新、合并、归主题用的模型 |
+| PROJECT_MEMORY_LLM_API_BASE | OPENAI_API_BASE | |
+| PROJECT_MEMORY_LLM_API_KEY | OPENAI_API_KEY | |
+| PROJECT_MEMORY_LLM_TEMPERATURE | 0 | |
+| PROJECT_MEMORY_LLM_MAX_TOKENS | 4096 | |
+| PROJECT_MEMORY_JUDGE_LLM_* | 同上一组 | 判别题（段关系）用的模型，可换小模型；同名后缀 |
+| PROJECT_MEMORY_EMBEDDER_* | 核心的 embedder（MOS_EMBEDDER_*） | BACKEND / PROVIDER / MODEL / API_BASE / API_KEY / DIMENSION |
+| PROJECT_MEMORY_GRAPH_DB | sqlite | sqlite：自己的库；shared：用核心的 graph_db |
+| PROJECT_MEMORY_SQLITE_PATH | $MEMOS_BASE_PATH/.memos/project_memory.db | |
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+from pathlib import Path
+from typing import Any
+
+
+logger = logging.getLogger(__name__)
+
+
+def _env(name: str, *fallbacks: str, default: str | None = None) -> str | None:
+    for key in (name, *fallbacks):
+        val = os.getenv(key)
+        if val not in (None, ""):
+            return val
+    return default
+
+
+def llm_config(prefix: str = "PROJECT_MEMORY_LLM") -> dict[str, Any] | None:
+    """返回 LLMConfigFactory 的入参；没有任何可用的模型配置时返回 None。"""
+    base = "PROJECT_MEMORY_LLM"
+    model = _env(f"{prefix}_MODEL", f"{base}_MODEL", "MOS_CHAT_MODEL")
+    api_key = _env(f"{prefix}_API_KEY", f"{base}_API_KEY", "OPENAI_API_KEY")
+    if not model or not api_key:
+        return None
+    return {
+        "backend": _env(f"{prefix}_BACKEND", f"{base}_BACKEND", default="openai"),
+        "config": {
+            "model_name_or_path": model,
+            "api_key": api_key,
+            "api_base": _env(
+                f"{prefix}_API_BASE",
+                f"{base}_API_BASE",
+                "OPENAI_API_BASE",
+                default="https://api.openai.com/v1",
+            ),
+            "temperature": float(_env(f"{prefix}_TEMPERATURE", f"{base}_TEMPERATURE", default="0")),
+            "max_tokens": int(_env(f"{prefix}_MAX_TOKENS", f"{base}_MAX_TOKENS", default="4096")),
+            "top_p": 1.0,
+            "remove_think_prefix": True,
+        },
+    }
+
+
+def build_llm(prefix: str = "PROJECT_MEMORY_LLM") -> Any | None:
+    cfg = llm_config(prefix)
+    if cfg is None:
+        return None
+    from memos.configs.llm import LLMConfigFactory
+    from memos.llms.factory import LLMFactory
+
+    llm = LLMFactory.from_config(LLMConfigFactory.model_validate(cfg))
+    logger.info(
+        "[ProjectMemory] %s = %s/%s", prefix, cfg["backend"], cfg["config"]["model_name_or_path"]
+    )
+    return llm
+
+
+def embedder_config() -> dict[str, Any] | None:
+    p = "PROJECT_MEMORY_EMBEDDER"
+    backend = _env(f"{p}_BACKEND", "MOS_EMBEDDER_BACKEND")
+    if backend != "universal_api":
+        return None  # 其余后端（ollama 等）用核心的 embedder
+    key = _env(f"{p}_API_KEY", "MOS_EMBEDDER_API_KEY")
+    if not key:
+        return None
+    return {
+        "backend": "universal_api",
+        "config": {
+            "provider": _env(f"{p}_PROVIDER", "MOS_EMBEDDER_PROVIDER", default="openai"),
+            "api_key": key,
+            "model_name_or_path": _env(f"{p}_MODEL", "MOS_EMBEDDER_MODEL", default="bge-m3"),
+            "embedding_dims": int(_env(f"{p}_DIMENSION", "EMBEDDING_DIMENSION", default="1024")),
+            "base_url": _env(f"{p}_API_BASE", "MOS_EMBEDDER_API_BASE"),
+        },
+    }
+
+
+def build_embedder() -> Any | None:
+    cfg = embedder_config()
+    if cfg is None:
+        return None
+    from memos.configs.embedder import EmbedderConfigFactory
+    from memos.embedders.factory import EmbedderFactory
+
+    return EmbedderFactory.from_config(EmbedderConfigFactory.model_validate(cfg))
+
+
+def sqlite_path() -> str:
+    explicit = os.getenv("PROJECT_MEMORY_SQLITE_PATH")
+    if explicit:
+        return explicit
+    from memos import settings
+
+    return str(Path(settings.MEMOS_DIR) / "project_memory.db")
+
+
+def embedding_dims() -> int:
+    p = "PROJECT_MEMORY_EMBEDDER"
+    return int(_env(f"{p}_DIMENSION", "EMBEDDING_DIMENSION", default="1024"))
+
+
+def build_graph_db(
+    shared_graph_db: Any | None = None, embedding_dimension: int | None = None
+) -> Any:
+    """默认用项目记忆自己的 SQLite 库；PROJECT_MEMORY_GRAPH_DB=shared 时用核心的 graph_db。"""
+    kind = os.getenv("PROJECT_MEMORY_GRAPH_DB", "sqlite")
+    if kind == "shared":
+        if shared_graph_db is None:
+            raise RuntimeError("PROJECT_MEMORY_GRAPH_DB=shared，但插件上下文里没有 graph_db")
+        return shared_graph_db
+    from memos.configs.graph_db import GraphDBConfigFactory
+    from memos.graph_dbs.factory import GraphStoreFactory
+
+    dims = embedding_dimension or embedding_dims()
+    cfg = GraphDBConfigFactory.model_validate(
+        {"backend": "sqlite", "config": {"db_path": sqlite_path(), "embedding_dimension": dims}}
+    )
+    return GraphStoreFactory.from_config(cfg)

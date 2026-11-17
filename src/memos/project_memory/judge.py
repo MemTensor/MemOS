@@ -199,12 +199,26 @@ class NotWiredBackend:
 
 
 class ModelHub:
-    """按配置给每个调用点选后端。判别与生成可以分开配（Jev 只答判别题）。"""
+    """按配置给每个调用点选后端。判别与生成可以分开配（Jev 只答判别题）。
 
-    def __init__(self, llm: Any | None = None, judge_backend: str | None = None):
+    - `llm`：生成（抽取、更新、合并、归主题）与默认判别；
+    - `judge_llm`：判别题专用，可换更便宜的模型；不传就用 `llm`；
+    - `graph_db`：存储支持条件写（`supports_cas`）时，ModelError 之外的写冲突由服务层重试。
+    """
+
+    def __init__(
+        self,
+        llm: Any | None = None,
+        judge_backend: str | None = None,
+        judge_llm: Any | None = None,
+        graph_db: Any | None = None,
+    ):
+        self.graph_db = graph_db
         self.llm_backend = LLMBackend(llm) if llm is not None else None
+        judge_source = judge_llm if judge_llm is not None else llm
+        judge_llm_backend = LLMBackend(judge_source) if judge_source is not None else None
         kind = judge_backend or os.getenv(BACKEND_ENV, "llm")
-        self.judge_backend: Any = self.llm_backend if kind == "llm" else NotWiredBackend(kind)
+        self.judge_backend: Any = judge_llm_backend if kind == "llm" else NotWiredBackend(kind)
 
     def _require(self, b: Any) -> Any:
         if b is None:
@@ -215,6 +229,10 @@ class ModelHub:
         self, scope: str, state: dict[str, Any], questions: dict[str, Any]
     ) -> dict[str, Answer]:
         return self._require(self.judge_backend).answer(scope, state, questions)
+
+    @property
+    def supports_cas(self) -> bool:
+        return bool(getattr(self.graph_db, "supports_cas", False))
 
     def write(
         self,
