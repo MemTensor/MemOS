@@ -1,3 +1,5 @@
+import uuid
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -143,3 +145,26 @@ def test_searcher_respects_memory_type(mock_searcher):
     )
     # WorkingMemory triggers only once path A
     assert mock_searcher.graph_retriever.retrieve.call_args[1]["memory_scope"] == "WorkingMemory"
+
+
+def test_deduplicate_rawfile_results_uses_knowledge_summary_ids(mock_searcher):
+    summary_id = str(uuid.uuid4())
+    material_id = str(uuid.uuid4())
+    summary = TextualMemoryItem(
+        id=summary_id,
+        memory="summary",
+        metadata=TreeNodeTextualMemoryMetadata(memory_type="LongTermMemory"),
+    )
+    raw_file = TextualMemoryItem(
+        id=material_id,
+        memory="material",
+        metadata=TreeNodeTextualMemoryMetadata(
+            memory_type="RawFileMemory",
+            knowledge_summary_ids=[summary.id],
+        ),
+    )
+
+    result = mock_searcher._deduplicate_rawfile_results([summary, raw_file], user_name="cube-1")
+
+    assert result == [raw_file]
+    mock_searcher.graph_store.get_edges.assert_not_called()
