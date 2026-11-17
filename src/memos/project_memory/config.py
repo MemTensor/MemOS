@@ -13,7 +13,7 @@
 | PROJECT_MEMORY_LLM_MAX_TOKENS | 4096 | |
 | PROJECT_MEMORY_JUDGE_LLM_* | 同上一组 | 判别题（段关系）用的模型，可换小模型；同名后缀 |
 | PROJECT_MEMORY_EMBEDDER_* | 核心的 embedder（MOS_EMBEDDER_*） | BACKEND / PROVIDER / MODEL / API_BASE / API_KEY / DIMENSION |
-| PROJECT_MEMORY_GRAPH_DB | shared | sqlite：自己的 SQLite 文件库；postgres：自己的 Postgres（用 POSTGRES_* 与 PROJECT_MEMORY_POSTGRES_SCHEMA）；shared：直接用核心的 graph_db |
+| PROJECT_MEMORY_GRAPH_DB | sqlite | sqlite：自己的 SQLite 文件库；postgres：自己的 Postgres（用 POSTGRES_* 与 PROJECT_MEMORY_POSTGRES_SCHEMA）；shared：直接用核心的 graph_db（须支持 search_by_fulltext 与 rev 条件写，neo4j 两种后端都不支持） |
 | PROJECT_MEMORY_SQLITE_PATH | $MEMOS_BASE_PATH/.memos/project_memory.db | |
 """
 
@@ -144,11 +144,12 @@ def postgres_config(embedding_dimension: int | None = None) -> dict[str, Any]:
 def build_graph_db(
     shared_graph_db: Any | None = None, embedding_dimension: int | None = None
 ) -> Any:
-    """按 PROJECT_MEMORY_GRAPH_DB 选存储：shared（默认，用核心的 graph_db）/ sqlite / postgres。
+    """按 PROJECT_MEMORY_GRAPH_DB 选存储：sqlite（默认）/ postgres / shared（用核心的 graph_db）。
 
-    默认 shared：本地部署时核心就是一个库（Postgres），项目记忆跟它走，少一套配置。
+    默认 sqlite：核心常用的 neo4j-community 没有全文检索（search_by_fulltext 返回空）、也没有
+    rev 条件写，项目记忆放进去会少一路召回、并发写会丢更新。
     """
-    kind = os.getenv("PROJECT_MEMORY_GRAPH_DB", "shared")
+    kind = os.getenv("PROJECT_MEMORY_GRAPH_DB", "sqlite")
     if kind == "shared":
         if shared_graph_db is None:
             raise RuntimeError("PROJECT_MEMORY_GRAPH_DB=shared，但插件上下文里没有 graph_db")

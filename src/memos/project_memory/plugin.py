@@ -12,7 +12,7 @@
   都没配时用插件上下文里的核心 `llm`。
 - 向量模型：`PROJECT_MEMORY_EMBEDDER_*`；没配时用核心的 `embedder`。
 - 存储：默认用项目记忆自己的 SQLite 库（`PROJECT_MEMORY_SQLITE_PATH`）；
-  `PROJECT_MEMORY_GRAPH_DB=shared` 时用核心的 graph_db。
+  `PROJECT_MEMORY_GRAPH_DB=postgres` 用自己的 Postgres，`shared` 用核心的 graph_db。
 """
 
 from __future__ import annotations

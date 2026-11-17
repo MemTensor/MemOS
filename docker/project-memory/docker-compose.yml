@@ -1,4 +1,4 @@
-# 本地部署：MemOS 服务 + PostgreSQL(pgvector)，项目记忆与核心共用一个 Postgres。
+# 本地部署：MemOS 服务 + Neo4j（社区版）+ Qdrant，项目记忆用自己的 SQLite（命名卷）。
 #
 #   1) 生成 .env（从 MemOS_DEV/env_example 取模型 key，只取模型那几项）
 #        python3 docker/project-memory/make_env.py --env-file ../env_example
@@ -12,9 +12,9 @@
 #        docker compose -f docker/project-memory/docker-compose.yml logs -f memos
 #        docker compose -f docker/project-memory/docker-compose.yml down
 #
-# 为什么是 Postgres：三个后端里它最轻——只要标准 Postgres + pgvector 一个扩展；
-# Neo4j 要多一个 Java 进程、社区版配置里还写死要 Qdrant；PolarDB 要 polar_age 图引擎 + 中文分词。
-# 项目记忆默认跟核心用同一个 Postgres（不同 schema），少一套配置。
+# 核心用 neo4j-community：开源版默认后端，核心调用的 30 个图库方法实现了 28 个（Postgres 只有 19 个）；
+# 社区版不带向量索引，向量放在 Qdrant。
+# 项目记忆不放进 Neo4j：neo4j 两种后端的 search_by_fulltext 都是空实现、也没有 rev 条件写。
 
 name: memos-project-memory
 
@@ -29,36 +29,59 @@ services:
     env_file:
       - ../../.env
     depends_on:
-      postgres:
+      neo4j:
         condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - NEO4J_URI=bolt://neo4j:7687
     volumes:
-      - ../../.memos:/app/.memos
+      - promem_data:/data/project_memory
     networks:
       - memos_network
     restart: unless-stopped
 
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: memos-promem-postgres
+  neo4j:
+    image: neo4j:5.26.6
+    container_name: memos-promem-neo4j
     ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: memos
-      POSTGRES_PASSWORD: projectmemory
-      POSTGRES_DB: memos
+      - "7474:7474"
+      - "7687:7687"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U memos -d memos"]
+      test: wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1
       interval: 3s
-      timeout: 5s
+      timeout: 10s
       retries: 30
-      start_period: 5s
+      start_period: 10s
+    environment:
+      NEO4J_AUTH: neo4j/projectmemory
+      NEO4J_server_memory_heap_max__size: 512m
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - memos_network
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.3
+    container_name: memos-promem-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__SERVICE__HTTP_PORT: 6333
     networks:
       - memos_network
 
 volumes:
-  pg_data:
+  promem_data:
+  neo4j_data:
+  neo4j_logs:
+  qdrant_data:
 
 networks:
   memos_network:

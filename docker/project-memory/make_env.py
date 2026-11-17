@@ -6,7 +6,8 @@
 
 规则：
 - 只从源文件取下面这几项（其他项一律不抄，避免把公司 PolarDB / Redis 等共享服务的配置带进来）；
-- 输出的 .env 里 `NEO4J_URI` 指向 compose 里的 neo4j 容器，不指向本机或共享库；
+- 输出的 .env 里 `NEO4J_URI` / `QDRANT_HOST` 指向 compose 里的容器，不指向本机或共享库；
+- 源文件里没有的项用 DEFAULTS 补（env_example 里 `EMBEDDING_DIMENSION` 是注释掉的）；
 - 打印时只显示变量名与前 6 位，不打印完整 key。
 """
 
@@ -43,11 +44,14 @@ FROM_SOURCE = [
     "MEMSCHEDULER_MODEL",
 ]
 
+# 源文件里没有值时的默认（bge-m3 是 1024 维；核心多数配置的默认也是 1024）
+DEFAULTS = {"EMBEDDING_DIMENSION": "1024"}
+
 
 def render(source: dict[str, str | None]) -> str:
     template = (ROOT / "docker" / "project-memory" / "env.template").read_text(encoding="utf-8")
     for key in FROM_SOURCE:
-        val = source.get(key)
+        val = source.get(key) or DEFAULTS.get(key)
         if val:
             template = template.replace(f"__{key}__", val)
     missing = [k for k in FROM_SOURCE if f"__{k}__" in template]

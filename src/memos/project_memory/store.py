@@ -11,9 +11,9 @@
 | ProjectTaskMemory | 索引命名空间 | add 返回的任务：状态、更新了哪些主题 |
 | ProjectIndexMemory | 索引命名空间 | 主题 id → space、会话 → space（按 id 读时用） |
 
-存储可以是任何一个 `BaseGraphDB` 后端（默认用核心的，本地部署就是 Postgres；
-`PROJECT_MEMORY_GRAPH_DB=sqlite|postgres` 可以让项目记忆单独用一个库）。带上 `rev` 列的后端
-（postgres、sqlite）会走条件更新，其余后端退化为整行 upsert。
+存储可以是任何一个 `BaseGraphDB` 后端（默认是项目记忆自己的 SQLite 库；
+`PROJECT_MEMORY_GRAPH_DB=postgres|shared` 换成自己的 Postgres 或核心的 graph_db）。带上 `rev` 列的后端
+（postgres、sqlite）会走条件更新，其余后端（neo4j 两种、polardb）退化为整行 upsert。
 
 只调 `BaseGraphDB` 的公共方法，按开源 Postgres 后端的约定传参：
 `add_node(id, memory, metadata, user_name)`、`get_node(id, user_name=)`、`get_nodes(ids, user_name=)`、
