@@ -47,6 +47,7 @@ DEFAULT_LIMIT = 9
 REL_MIN = 0.12  # 条目与 query 的最低相关度（二元组相似度；接真向量后在评测集上定）
 MAX_ENTRIES = 5
 MAX_CAS_RETRIES = 3
+MAX_TRACE_LINES = 80
 
 Submit = Callable[[list[Any]], Any]
 
@@ -56,7 +57,7 @@ class ProjectMemoryService:
         self.store = store
         self.hub = hub
         self.submit = submit
-        self._locks: dict[str, threading.Lock] = {}
+        self._locks: dict[str, threading.RLock] = {}
         self._locks_guard = threading.Lock()
         self.last_trace: list[str] = []  # 最近一次整理的 trace（调试、演示用）
 
@@ -271,37 +272,44 @@ class ProjectMemoryService:
         with self._lock(space_id):
             self.run_item(space_id, payload)
 
-    def _lock(self, space_id: str) -> threading.Lock:
+    def _lock(self, space_id: str) -> threading.RLock:
+        """同一 Space 的整理与 flush 串行（可重入：同步路径在锁内调 run_item）。"""
         with self._locks_guard:
-            return self._locks.setdefault(space_id, threading.Lock())
+            return self._locks.setdefault(space_id, threading.RLock())
 
     # —— 调度入口（H.PROJECT_MEMORY_EXECUTE）——
     def execute(self, space_id: str, batch: list[Any]) -> None:
         items = sorted(batch, key=lambda m: getattr(m, "timestamp", None) or 0)
-        for item in items:
-            try:
-                payload = json.loads(item.content)
-            except (TypeError, ValueError):
-                logger.warning(
-                    "[ProjectMemory] 调度消息不是 JSON，跳过：%s",
-                    getattr(item, "content", "")[:200],
-                )
-                continue
-            self.run_item(space_id, payload)
+        with self._lock(space_id):
+            for item in items:
+                try:
+                    payload = json.loads(item.content)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "[ProjectMemory] 调度消息不是 JSON，跳过：%s",
+                        getattr(item, "content", "")[:200],
+                    )
+                    continue
+                self.run_item(space_id, payload)
 
     def run_item(self, space_id: str, payload: dict[str, Any]) -> OrganizeResult:
         result = OrganizeResult()
         task_id = payload["task_id"]
         try:
             conv = payload.get("conversation_id")
-            # 懒关段：先把这个 Space 里空闲超过阈值的段关掉（会话最后一段没有「下一轮」来触发，
-            # 照 memmy 的做法在每次整理前扫一遍；会话结束时接入方也可调 flush()）
+            new_msgs = self.store.get_messages(space_id, payload.get("message_node_ids") or [])
+            # 懒关段：先把这个 Space 里别的会话空闲超过阈值的段关掉（会话最后一段没有「下一轮」
+            # 来触发，照 memmy 的做法在每次整理前扫一遍；会话结束时接入方也可调 flush）。
+            # 「现在」取这批消息的时间而不是墙钟：导入历史会话时消息时间都很早，按墙钟会把
+            # 每一段都判成空闲。
+            ref = new_msgs[0].chat_time if new_msgs and new_msgs[0].chat_time else now_iso()
             for stale in self.store.open_episodes(space_id):
+                if conv and stale.conversation_id == conv:
+                    continue  # 本会话的段由 segment() 按消息时间判
                 last = self.store.get_messages(space_id, stale.message_ids)
-                gap = idle_minutes_between(last[-1].chat_time, now_iso()) if last else None
+                gap = idle_minutes_between(last[-1].chat_time, ref) if last else None
                 if gap is not None and gap >= IDLE_MINUTES:
                     result.merge(self._close_and_organize(stale, "idle_timeout"))
-            new_msgs = self.store.get_messages(space_id, payload.get("message_node_ids") or [])
             open_ep = self.store.open_episode(space_id, conv) if conv else None
             prev_tail = [] if open_ep else self._last_tail(space_id, conv)
             closed, still_open = segment(
@@ -328,11 +336,14 @@ class ProjectMemoryService:
                 result.topic_ids,
                 len(still_open.message_ids) if still_open else 0,
                 error="",
+                trace=result.trace,
             )
         except Exception as e:
             logger.exception("[ProjectMemory] 整理失败 space=%s task=%s", space_id, task_id)
             result.log(f"失败：{e}")
-            self._finish_task(task_id, space_id, result.topic_ids, 0, error=str(e))
+            self._finish_task(
+                task_id, space_id, result.topic_ids, 0, error=str(e), trace=result.trace
+            )
         self.last_trace = result.trace
         return result
 
@@ -343,18 +354,28 @@ class ProjectMemoryService:
         self.store.put_episode(ep)
         return self.organize(ep)
 
-    def flush(self, space_id: str, conversation_id: str | None = None) -> OrganizeResult:
+    def flush(
+        self,
+        space_id: str,
+        conversation_id: str | None = None,
+        task_id: str | None = None,
+    ) -> OrganizeResult:
         """会话结束：把这个 Space（或这个会话）里还开着的段立即关掉并整理。
 
         本地插件在会话结束时调；也可以由定时任务调。不调的话，这些段会在下一次同 Space 的
         整理时按空闲超时关掉，最慢等到下一次有人写。
+
+        传了 `task_id` 时把这次整理出的主题记到那个任务上（`get/status` 才看得到）。
         """
+        self.get_space(space_id)  # Space 不存在 → LookupError → 404
         out = OrganizeResult()
         with self._lock(space_id):
             for ep in self.store.open_episodes(space_id):
                 if conversation_id and ep.conversation_id != conversation_id:
                     continue
                 out.merge(self._close_and_organize(ep, "session_end"))
+            if task_id and out.topic_ids:
+                self._finish_task(task_id, space_id, out.topic_ids, 0, error="", trace=out.trace)
         if out.trace:
             self.last_trace = out.trace
         return out
@@ -378,11 +399,19 @@ class ProjectMemoryService:
         return [m.node_id for m in turns[-1]] if turns else []
 
     def _finish_task(
-        self, task_id: str, space_id: str, topic_ids: list[str], open_n: int, error: str
+        self,
+        task_id: str,
+        space_id: str,
+        topic_ids: list[str],
+        open_n: int,
+        error: str,
+        trace: list[str] | None = None,
     ) -> None:
         task = self.store.get_task(task_id)
         if task is None:
             return
+        if trace:
+            task.trace = (task.trace + trace)[-MAX_TRACE_LINES:]
         for t in topic_ids:
             if t not in task.memory_ids:
                 task.memory_ids.append(t)

@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import os
+
 from typing import TYPE_CHECKING
 
 from .judge import ModelHub, one
@@ -38,7 +40,7 @@ if TYPE_CHECKING:
 
 MAX_TOKENS = 64_000
 MAX_MESSAGES = 500
-IDLE_MINUTES = 30
+IDLE_MINUTES = int(os.getenv("PROJECT_MEMORY_IDLE_MINUTES", "30"))
 CHARS_PER_TOKEN = 2  # 中文按 2 字符 / token 粗估
 
 

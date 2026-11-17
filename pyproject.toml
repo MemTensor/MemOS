@@ -275,3 +275,4 @@ lint.isort.lines-after-imports = 2
 "src/memos/project_memory/**" = ["RUF002", "RUF003"]
 "tests/project_memory/**" = ["RUF002", "RUF003"]
 "examples/project_memory/**" = ["RUF002", "RUF003"]
+"docker/project-memory/**" = ["RUF002", "RUF003"]

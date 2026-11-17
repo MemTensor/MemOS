@@ -7,6 +7,10 @@
 | create/space、update/space、get/space、delete/space | /product/create_space、update_space、get_space、delete_space |
 | create/domains、update/domains、delete/domains、list/domains | /product/create_domains、update_domains、delete_domains、list_domains |
 | get/message（会话原文，项目记忆存的那一份） | /product/get_message |
+| （PRD 没有）会话结束，关掉还开着的段并整理 | /product/flush_project_memory |
+
+`flush_project_memory` 不在 PRD 里：段由模型逐轮判关，会话最后一段没有「下一轮」来触发，
+接入方在会话结束时调它；不调的话要等同 Space 下一次写入时按空闲超时关。是否进 PRD 待产品定。
 
 错误：Space 不存在 → 404；参数 / 配置错误（领域未登记、未配置领域、改名冲突、仍被引用）→ 400。
 """
@@ -66,6 +70,16 @@ class GetMessageRequest(BaseModel):
     conversation_id: str
     space_id: str | None = None
     message_limit_number: int | None = None
+
+
+class FlushRequest(BaseModel):
+    space_id: str
+    conversation_id: str | None = Field(None, description="只关这个会话的段；不传关整个 Space 的")
+    task_id: str | None = Field(
+        None,
+        description="把这个会话最后一次 add 的任务号带上，"
+        "整理出的主题会记到它上面，get/status 才看得到",
+    )
 
 
 def _ok(data: Any, message: str = "ok") -> dict[str, Any]:
@@ -146,5 +160,18 @@ def create_router(plugin) -> APIRouter:
             svc().get_message, req.conversation_id, req.space_id, req.message_limit_number
         )
         return _ok({"message_detail_list": msgs})
+
+    @router.post("/flush_project_memory", summary="Session end: close open episodes and organize")
+    def flush(req: FlushRequest):
+        out = guarded(svc().flush, req.space_id, req.conversation_id, req.task_id)
+        return _ok(
+            {
+                "space_id": req.space_id,
+                "memory_ids": out.topic_ids,
+                "decision_ops": out.decision_ops,
+                "experience_ops": out.experience_ops,
+                "trace": out.trace,
+            }
+        )
 
     return router

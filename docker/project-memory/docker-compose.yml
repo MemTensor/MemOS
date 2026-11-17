@@ -1,0 +1,87 @@
+# 本地部署：MemOS 服务 + Neo4j + Qdrant，项目记忆用自己的 SQLite（命名卷）。
+#
+#   1) 生成 .env（从 MemOS_DEV/env_example 取模型 key，只取模型那几项）
+#        python3 docker/project-memory/make_env.py --env-file ../env_example
+#   2) 构建基础镜像（仓库自带的 Dockerfile，作为 promem 的底座）
+#        docker build -f docker/Dockerfile -t memos-base:promem .
+#   3) 起服务
+#        docker compose -f docker/project-memory/docker-compose.yml up -d --build
+#   4) 冒烟（本机跑）
+#        python3 docker/project-memory/smoke.py --base http://127.0.0.1:8000
+#   5) 看日志 / 停
+#        docker compose -f docker/project-memory/docker-compose.yml logs -f memos
+#        docker compose -f docker/project-memory/docker-compose.yml down
+#
+# 与仓库自带 docker/docker-compose.yml 的区别：不挂载源码（跑镜像里的代码）、不用 --reload、
+# 项目记忆多一个 /data 卷、Neo4j 密码用部署专用值、不读 env_example 只在 .env 里放必要项。
+
+name: memos-project-memory
+
+services:
+  memos:
+    container_name: memos-promem
+    build:
+      context: ../..
+      dockerfile: docker/project-memory/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../../.env
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - NEO4J_URI=bolt://neo4j:7687
+    volumes:
+      - promem_data:/data/project_memory
+    networks:
+      - memos_network
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.26.6
+    container_name: memos-promem-neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1
+      interval: 3s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+    environment:
+      NEO4J_AUTH: neo4j/projectmemory
+      NEO4J_server_memory_heap_max__size: 512m
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - memos_network
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.3
+    container_name: memos-promem-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__SERVICE__HTTP_PORT: 6333
+    networks:
+      - memos_network
+
+volumes:
+  promem_data:
+  neo4j_data:
+  neo4j_logs:
+  qdrant_data:
+
+networks:
+  memos_network:
+    driver: bridge

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import uuid
 
 from dataclasses import asdict, dataclass, field
@@ -631,6 +632,7 @@ class TaskRecord:
     pending_spaces: list[str] = field(default_factory=list)
     open_episode_messages: int = 0
     error: str = ""
+    trace: list[str] = field(default_factory=list)  # 这个任务的整理过程（调试用，默认不返回）
     create_time: str = field(default_factory=now_iso)
     update_time: str = field(default_factory=now_iso)
 
@@ -653,6 +655,13 @@ class TaskRecord:
                 "project": {
                     "memory_ids": list(self.memory_ids),
                     "open_episode_messages": self.open_episode_messages,
+                    **({"error": self.error} if self.error else {}),
+                    # 调试：PROJECT_MEMORY_DEBUG_TRACE=true 时带上整理过程
+                    **(
+                        {"trace": list(self.trace)}
+                        if os.getenv("PROJECT_MEMORY_DEBUG_TRACE", "false").lower() == "true"
+                        else {}
+                    ),
                 },
             },
         }

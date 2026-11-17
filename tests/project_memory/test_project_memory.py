@@ -307,6 +307,22 @@ def test_follow_up_keeps_episode_open(app):
     )
 
 
+def test_flush_records_topics_on_the_task(app):
+    """会话结束调 flush：段立即关掉并整理，结果记到这个 add 的任务上（get/status 看得到）。"""
+    client, sched, plugin = app
+    sid = _space(client)
+    rnd = DECISION_ROUNDS[4]  # 第 5 轮：Agent 在列选项，段还开着
+    first = {**rnd, "messages": rnd["messages"][:2]}
+    task = _add(client, sid, first).json()["data"][0]["task_id"]
+    sched.drain()
+    assert _status(client, "user_b", task)["memory_views"]["project"]["memory_ids"] == []
+
+    out = plugin.service.flush(sid, rnd["conversation_id"], task_id=task)
+    assert out.topic_ids, "flush 会把开着的段关掉并整理"
+    st = _status(client, "user_b", task)
+    assert st["memory_views"]["project"]["memory_ids"] == out.topic_ids
+
+
 def test_resubmitted_messages_are_deduplicated(app):
     client, sched, plugin = app
     sid = _space(client)
