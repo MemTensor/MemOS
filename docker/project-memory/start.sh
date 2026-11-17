@@ -39,11 +39,29 @@ die() { printf '\n\033[31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
 net_hint() {
   cat >&2 <<'EOF'
 
-多半是网络问题（拉 Docker Hub 镜像或装 Python 包）。可以：
-  - Docker Desktop → Settings → Docker Engine，加 "registry-mirrors"（公司或云厂商的镜像加速地址）；
-  - 或 Settings → Resources → Proxies 配代理；
-然后重新执行本脚本（已经下好的部分不会重下）。
+多半是网络问题（拉镜像或装 Python 包）。直接重新执行本脚本通常就能过（已经下好的部分不会重下）；
+拉镜像一直失败时可换镜像站：DOCKER_MIRROR=<镜像站域名> bash start.sh
 EOF
+}
+
+# 拉镜像：本地有就跳过；先直连 Docker Hub（试两次），不通再走镜像站拉下来并改回原名。
+# 国内直连 Docker Hub 经常在取 token 时断开（auth.docker.io ... EOF）。
+# 默认镜像站 docker.m.daocloud.io（DaoCloud 的公开 Docker Hub 镜像），可用 DOCKER_MIRROR 换。
+MIRROR="${DOCKER_MIRROR:-docker.m.daocloud.io}"
+ensure_image() {
+  local img="$1" path i
+  if docker image inspect "$img" >/dev/null 2>&1; then
+    echo "已有 ${img}"
+    return 0
+  fi
+  for i in 1 2; do
+    echo "拉取 ${img}（直连 Docker Hub，第 ${i} 次）"
+    docker pull "$img" && return 0
+  done
+  case "$img" in */*) path="$img" ;; *) path="library/${img}" ;; esac
+  echo "直连拉不下来，改走镜像站 ${MIRROR}"
+  docker pull "${MIRROR}/${path}" && docker tag "${MIRROR}/${path}" "$img" && return 0
+  return 1
 }
 
 # 找 compose：优先 `docker compose`（插件），其次独立的 docker-compose（v2），
@@ -178,6 +196,7 @@ fi
 # ── 5. 构建与启动 ────────────────────────────────────────────────────────────
 step "5/6 构建镜像并启动容器"
 if [ "$REBUILD" = "1" ] || ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+  ensure_image python:3.11-slim || { net_hint; die "拉不下 python:3.11-slim"; }
   echo "构建底座镜像 ${BASE_IMAGE}（第一次要装 120 多个 Python 包，几分钟到十几分钟）"
   (cd "$REPO" && docker build -f docker/Dockerfile -t "$BASE_IMAGE" .) \
     || { net_hint; die "底座镜像构建失败"; }
@@ -187,6 +206,11 @@ fi
 echo "构建部署镜像 ${APP_IMAGE}（把当前代码打进镜像；有缓存时很快）"
 (cd "$REPO" && docker build -f docker/project-memory/Dockerfile -t "$APP_IMAGE" .) \
   || die "部署镜像构建失败，日志见上"
+# compose 里其余几个镜像（neo4j、qdrant）先拉好，compose 就不会再去 Docker Hub
+for img in $(sed -n 's/^[[:space:]]*image:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$HERE/docker-compose.yml"); do
+  [ "$img" = "$APP_IMAGE" ] && continue
+  ensure_image "$img" || { net_hint; die "拉不下 ${img}"; }
+done
 compose up -d || { net_hint; die "docker compose up 失败"; }
 
 printf '等服务就绪'
