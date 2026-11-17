@@ -18,6 +18,13 @@
 
 ## 起服务
 
+**一键**：在 Finder 里双击 `docker/project-memory/启动项目记忆服务.command`，或在终端执行
+`bash docker/project-memory/start.sh`。它依次检查 Docker 与端口、建一个只装 python-dotenv / httpx 的 venv、
+生成 `.env`、构建镜像、起容器、等 `/health`、灌一遍样例数据（保留），最后打印访问地址。可以重复执行；
+`--no-smoke` 只起服务，`--rebuild` 重建底座镜像，`--stop` 停服务。
+
+手动分步：
+
 ```bash
 cd MemOS_DEV/MemOS
 
