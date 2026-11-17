@@ -135,22 +135,29 @@ unset MEMOS_ENABLED_PLUGINS
 python -m pip install "smartcomment[viz]>=0.1.2"
 ```
 
-将 `/path/to/graph.json` 替换为 `index.md` 中对应的图文件路径：
+运行以下 Python 代码，将 `/path/to/graph.json` 替换为 `index.md` 中对应的图文件路径：
 
-```bash
-smartcomment-visualize /path/to/graph.json --backend pyvis --output trace.html
+```python
+import json
+from pathlib import Path
+
+from smartcomment.runtime import ExecNetwork
+
+data = json.loads(Path("/path/to/graph.json").read_text(encoding="utf-8"))
+graph = ExecNetwork.import_graph(data)
+graph.visualize(backend="pyvis", filename="trace.html", directed=True)
 ```
 
-在浏览器中打开 `trace.html`，即可交互查看执行图。如需导出 PNG，还要安装 Graphviz 系统程序，然后运行：
+在浏览器中打开 `trace.html`，即可交互查看执行图。如需导出 PNG，还要安装 Graphviz 系统程序，并将最后一行替换为：
 
-```bash
-smartcomment-visualize /path/to/graph.json --backend graphviz --output trace.png
+```python
+graph.visualize(backend="graphviz", filename="trace", format="png")
 ```
 
-导出 DOT 源文件无需安装可选的可视化依赖：
+导出 DOT 源文件无需安装可选的可视化依赖，将最后一行替换为：
 
-```bash
-smartcomment-visualize /path/to/graph.json --backend dot --output trace.dot
+```python
+Path("trace.dot").write_text(graph.visualize(backend="dot"), encoding="utf-8")
 ```
 
 ## 将检索结果追溯到来源
