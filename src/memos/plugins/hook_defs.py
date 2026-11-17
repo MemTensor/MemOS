@@ -92,6 +92,17 @@ class H:
     # dream — single-provider business hook
     DREAM_EXECUTE = "dream.execute"
 
+    # project memory (memory view `project`) — single-provider business hooks.
+    # The core only validates fields, routes requests, and runs the scheduler entry;
+    # the active project-memory plugin implements all of them.
+    PROJECT_MEMORY_ACCEPT = "project_memory.accept"
+    PROJECT_MEMORY_EXECUTE = "project_memory.execute"
+    PROJECT_MEMORY_SEARCH = "project_memory.search"
+    PROJECT_MEMORY_GET = "project_memory.get"
+    PROJECT_MEMORY_GET_BY_ID = "project_memory.get_by_id"
+    PROJECT_MEMORY_DELETE = "project_memory.delete"
+    PROJECT_MEMORY_TASK_STATUS = "project_memory.task_status"
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CE custom Hook declarations (@hookable-generated ones need not be declared here)
@@ -182,4 +193,48 @@ define_hook(
         "text_mem",
         "scheduler_context",
     ],
+)
+
+# ── project memory ────────────────────────────────────────────────────────────
+
+define_hook(
+    H.PROJECT_MEMORY_ACCEPT,
+    description="Accept an add request for the `project` view: store messages, enqueue work",
+    params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_EXECUTE,
+    description="Run project-memory organization for one space (scheduler entry)",
+    params=["space_id", "batch", "scheduler_context"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_SEARCH,
+    description="Search project memory and return topic_detail_list",
+    params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_GET,
+    description="List topics of a project space (get_memory with space_id)",
+    params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_GET_BY_ID,
+    description="Read one topic by id; return None when the id is not a project topic",
+    params=["memory_id"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_DELETE,
+    description="Delete topics of a project space (by memory_ids or whole space)",
+    params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_TASK_STATUS,
+    description="Status and memory_views of a project-memory task; None when unknown",
+    params=["task_id", "user_id"],
 )

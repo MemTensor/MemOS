@@ -34,3 +34,9 @@ class ChatCompletionSystemMessageParam(TypedDict, total=False):
 
     message_id: str | None
     """Optional unique identifier for the message"""
+
+    role_id: str | None
+    """Project memory: ID of the member who sent this message (same as user_id)."""
+
+    role_name: str | None
+    """Project memory: display name of the member, sent together with role_id."""

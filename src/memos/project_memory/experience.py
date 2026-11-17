@@ -1,154 +1,443 @@
-# -*- coding: utf-8 -*-
-"""经验模块：输入 → 抽取 → 相似识别与合并更新（经验方案 v1.1 §1–§3）。
+"""经验模块（《经验抽取 · 验证 · 维护 模块方案评审》§3.2 ④–⑫、§5）。
 
-每段最多 2 次模型调用：过滤（判两个信号）+ 抽卡片；Agent 写了稿件的段不再调抽取。
-合并：Space 内召回前 10 → 一次合并判定（creates / updates / deletes）→ 近重复复核。
-判定与生成都走 `judge()` / `write()`。
+    ④ 规则闸 → ⑤ 过滤（exp.filter）→ ⑥ 抽卡片（exp.extract，一次直出）→ ⑦ 代码校验
+    → ⑧ 召回候选 → ⑨ 合并判定（exp.merge）→ 证据护栏 guard → ⑪ 可信度维护 → ⑫ 写库
+
+默认两次调用（⑤ 判、⑥ 写）；`EXPERIENCE_EXTRACT_MODE=one_shot` 时跳过 ⑤，直接用一次直出的提示词
+（它自己先判两题，两题都答否就不出卡片）。Agent 写了经验稿的段不调 ⑤⑥，稿件直接当卡片进 ⑦。
+⑩ 近重复复核方案标为可选，没做。
 """
 
 from __future__ import annotations
 
-from typing import Any
+import os
+import re
 
-from .judge import judge, one, write
-from .types import EXP_CREATE, EXP_DELETE, EXP_UPDATE, Episode, ExperienceCard, Msg
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from .prompts import EXP_EXTRACT, EXP_FILTER, EXP_MERGE
+from .types import (
+    CARD_FIELDS,
+    EXP_ADD,
+    EXP_CANDIDATE,
+    EXP_CONFIRM,
+    EXP_FAILED,
+    EXP_REFUTE,
+    EXP_UPDATE,
+    EXP_VERIFIED,
+    Episode,
+    ExperienceCard,
+    new_uuid,
+    now_iso,
+)
 
 
-Q_HAS_EXPLORATION = "has_exploration"
-Q_HAS_USER_CORRECTION = "has_user_correction"
-Q_DEDUP = "same_card"
+if TYPE_CHECKING:
+    from .judge import ModelHub
+    from .store import ProjectStore
+
 
 MIN_TOOL_CALLS = 3
 COMPLEX_TOOL_CALLS = 20
-DEDUP_COSINE = 0.97
-MAX_CARDS_PER_SEGMENT = 2
+RECALL_TOP_K = 10
+MAX_STEPS = 5
+MAX_ANCHORS = 5
+CONF_NEW, CONF_MAX, CONF_MIN = 0.5, 0.95, 0.1
+STALE_DAYS = 90
+
+_SECRET = re.compile(
+    r"(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|(?i:(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+))"
+)
 
 
-# ── §2.1 规则闸（照 EverOS）──────────────────────────────────────────────────
+def redact(s: str | None) -> str | None:
+    return _SECRET.sub("[REDACTED:secret]", s) if s else s
 
 
-def passes_rule_gate(ep: Episode, tool_call_count: int | None = None) -> tuple[bool, str]:
-    """没有成员消息、不以 Agent 回复收尾、工具调用少于 3 次 → 跳过。"""
+# ── ④ 规则闸 ───────────────────────────────────────────────────────────────
+
+
+def rule_gate(ep: Episode) -> tuple[bool, str]:
     if not ep.members:
         return False, "没有成员消息"
-    if not ep.agents or ep.messages[-1].role != "agent":
+    if not ep.messages or ep.messages[-1].role != "agent":
         return False, "不是以 Agent 回复收尾"
-    n = tool_call_count if tool_call_count is not None else sum(1 for m in ep.messages if m.role == "tool")
+    if any(m.notes for m in ep.agents):
+        return True, "Agent 写了经验稿"
+    n = len(ep.tools)
     if n < MIN_TOOL_CALLS:
         return False, f"工具调用 {n} 次，少于 {MIN_TOOL_CALLS} 次"
     return True, f"工具调用 {n} 次"
 
 
-# ── §2.2 过滤（照 EverOS，两个信号）───────────────────────────────────────────
+# ── 段的文本（§5.1.1 的记录格式）──────────────────────────────────────────────
 
 
-def segment_payload(ep: Episode) -> dict[str, Any]:
-    return {
-        "segment_id": ep.id,
-        "space_id": ep.space_id,
-        "messages": [
-            {
-                "id": m.id,
-                "role": m.role if m.role != "member" else "user",
-                "text": m.text,
-                **({"name": m.name} if m.is_member else {}),
-                **({"args": m.tool_args, "output": m.tool_output} if m.role == "tool" else {}),
-            }
-            for m in ep.messages
-        ],
-        "notes": [],
-    }
+def segment_text(ep: Episode) -> str:
+    first, last = (ep.messages[0].chat_time, ep.messages[-1].chat_time) if ep.messages else ("", "")
+    names = "、".join(ep.member_names()) or "-"
+    head = (
+        f"[段 {ep.id[:8]} · {names} · {first} – {last} · 成员消息 {len(ep.members)} 条 · "
+        f"工具调用 {len(ep.tools)} 次]"
+    )
+    lines = [head]
+    for m in ep.messages:
+        if m.is_member:
+            lines.append(f"[成员 {m.id}] {m.text}")
+        elif m.role == "tool":
+            out = (m.text or "").strip().replace("\n", "\n    ")
+            lines.append(f"[工具 {m.id} · {m.tool_name or 'tool'}] {m.tool_args}".rstrip())
+            if out:
+                lines.append(f"  → {out}")
+        else:
+            lines.append(f"[Agent {m.id} · 自述] {m.text}")
+    return "\n".join(lines)
 
 
-def should_extract(
-    ep: Episode, tool_call_count: int | None = None, answers: dict[str, Any] | None = None
-) -> tuple[bool, str]:
-    n = tool_call_count if tool_call_count is not None else sum(1 for m in ep.messages if m.role == "tool")
-    if n > COMPLEX_TOOL_CALLS:
-        return True, f"工具调用 {n} 次，复杂任务，直接放行"
-    payload = segment_payload(ep)
-    payload["_answers"] = (answers or {})
-    qs = [Q_HAS_EXPLORATION, Q_HAS_USER_CORRECTION]
-    ans = judge("exp.filter", payload, qs)
-    a1, a2 = one(ans, Q_HAS_EXPLORATION), one(ans, Q_HAS_USER_CORRECTION)
-    if a1.value == "yes" or a2.value == "yes":
-        return True, a1.reason or a2.reason or "走过弯路 / 或被成员纠正"
-    return False, "两个信号都为假，不抽"
+# ── ⑤ 过滤 ─────────────────────────────────────────────────────────────────
 
 
-# ── §2.3 抽卡片（EverOS 两套提示词 + MemoraX 卡片字段）──────────────────────────
+def should_extract(hub: ModelHub, ep: Episode) -> tuple[bool, str]:
+    if len(ep.tools) > COMPLEX_TOOL_CALLS:
+        return True, f"工具调用 {len(ep.tools)} 次，复杂任务直接放行"
+    out = hub.write("exp.filter", EXP_FILTER, None, {"{{segment_text}}": segment_text(ep)})
+    a1, a2 = out.get("has_exploration"), out.get("has_user_correction")
+    ok = a1 == "是" or a2 == "是"  # 拿不准按假
+    return ok, f"has_exploration={a1} has_user_correction={a2}；{out.get('reason', '')}"
 
 
-def extract_card(ep: Episode, generated: dict[str, Any] | None = None, note: dict[str, Any] | None = None) -> ExperienceCard | None:
-    """有稿件时直接用稿件（0 次调用），否则一次调用抽一张卡片。"""
+# ── ⑥ 抽卡片 ───────────────────────────────────────────────────────────────
+
+
+def extract_card(hub: ModelHub, ep: Episode) -> tuple[ExperienceCard | None, str]:
+    note = next((n for m in ep.agents for n in m.notes), None)
     if note:
-        card = ExperienceCard.from_json(note)
-        card.space_id, card.topic_id = ep.space_id, ep.topic_id
-        card.time = card.time or (ep.messages[-1].chat_time if ep.messages else "")
-        card.user_ids = card.user_ids or ep.member_names()
-        return card
-
-    payload = segment_payload(ep)
-    payload["_generated"] = generated or {"cards": []}
-    out = write("exp.extract", "pm-experience-extract-v0.1", payload)
-    cards = out.get("cards") or out.get("card") or []
-    if isinstance(cards, dict):
-        cards = [cards]
-    if not cards:
-        return None
-    row = cards[0]
-    card = ExperienceCard.from_json(row)
-    card.space_id, card.topic_id = ep.space_id, ep.topic_id
-    card.time = card.time or (ep.messages[-1].chat_time if ep.messages else "")
-    if not card.user_ids:
-        card.user_ids = ep.member_names()
-    return card
+        card = _card_from(note)
+        card.signal = note.get("signal") or card.signal
+        card.exp_status = note.get("status") or card.exp_status
+        return card, "经验稿"
+    out = hub.write("exp.extract", EXP_EXTRACT, None, {"{{segment_text}}": segment_text(ep)})
+    if out.get("has_exploration") != "是" and out.get("has_user_correction") != "是":
+        return None, "两题都不是「是」，不出卡片"
+    raw = out.get("card")
+    if not isinstance(raw, dict):
+        return None, "card 为空"
+    card = _card_from(raw)
+    q = out.get("quality_score")
+    card.quality_score = float(q) if isinstance(q, int | float) else None
+    card.exp_status = raw.get("status") or EXP_CANDIDATE
+    card.signal = raw.get("signal") or "none"
+    if card.quality_score is not None and card.quality_score < 0.5:
+        card.exp_status = EXP_FAILED
+    return card, f"quality_score={card.quality_score}"
 
 
-# ── §3 合并判定（照 Hindsight）───────────────────────────────────────────────
+def _card_from(raw: dict[str, Any]) -> ExperienceCard:
+    c = ExperienceCard()
+    for k in CARD_FIELDS:
+        if k in raw and raw[k] is not None:
+            setattr(c, k, list(raw[k]) if k == "anchors" else raw[k])
+    if c.exp_status not in (EXP_VERIFIED, EXP_CANDIDATE, EXP_FAILED):
+        c.exp_status = EXP_CANDIDATE
+    return c
 
 
-def merge_card(
-    card: ExperienceCard,
-    candidates: list[ExperienceCard],
-    generated: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """一次调用决定 creates / updates / deletes。返回动作，存储层照写。"""
-    payload = {
-        "new": card.to_json(),
-        "existing": [
-            {
-                "id": c.id,
-                "task_intent": c.task_intent,
-                "problem": c.problem,
-                "principle": c.principle,
-                "form": c.form,
-                "status": c.status,
-                "confidence": c.confidence,
-                "time": c.time,
-            }
-            for c in candidates
-        ],
-        "_generated": generated or {},
+# ── ⑦ 代码校验 ─────────────────────────────────────────────────────────────
+
+
+def code_check(card: ExperienceCard, ep: Episode, from_note: bool) -> list[str]:
+    notes: list[str] = []
+    tool_text = "\n".join(f"{m.tool_args}\n{m.text}" for m in ep.tools)
+    kept = [a for a in card.anchors if a and a in tool_text]
+    if len(kept) < len(card.anchors):
+        notes.append(f"锚点 {sorted(set(card.anchors) - set(kept))} 在本段工具调用里找不到，删掉")
+    card.anchors = kept[:MAX_ANCHORS]
+    if card.validation:
+        cmd = re.split(r"[，,；;]", card.validation)[0].strip()
+        if cmd and cmd not in tool_text:
+            notes.append("validation 里的命令在本段工具调用里找不到，置空")
+            card.validation = None
+    if card.exp_status == EXP_VERIFIED and card.signal in ("", "none", None):
+        card.exp_status = EXP_CANDIDATE
+        notes.append("verified 但 signal=none，降为 candidate")
+    if card.exp_status == EXP_FAILED and card.principle and not card.principle.startswith("待验证"):
+        card.principle = "待验证：" + card.principle
+    for k in ("problem", "technical_context", "failed_shape", "principle", "validation"):
+        setattr(card, k, redact(getattr(card, k)))
+    return notes
+
+
+# ── ⑨ 合并判定 + 证据护栏 ───────────────────────────────────────────────────
+
+
+def merge_payload(card: ExperienceCard, cands: list[ExperienceCard]) -> tuple[dict, list[dict]]:
+    new = {
+        "id": "new",
+        "time": card.time,
+        "status": card.exp_status,
+        "signal": card.signal,
+        **card.card(),
     }
-    out = write("exp.merge", "pm-experience-merge-v0.1", payload)
+    olds = [
+        {
+            "id": c.id,
+            "time": c.time,
+            "status": c.exp_status,
+            "signal": c.signal,
+            "confidence": c.confidence,
+            "version": c.version,
+            **c.card(),
+        }
+        for c in cands
+    ]
+    return new, olds
 
-    actions: list[dict[str, Any]] = []
-    for row in out.get("creates") or []:
-        actions.append({"op": EXP_CREATE, "card": row})
-    for row in out.get("updates") or []:
-        actions.append({"op": EXP_UPDATE, "id": row.get("id"), "card": row.get("card") or {}, "reason": row.get("reason", "")})
-    for row in out.get("deletes") or []:
-        actions.append({"op": EXP_DELETE, "id": row.get("id"), "merged_into": row.get("merged_into"), "reason": row.get("reason", "")})
-    if not actions:
-        actions.append({"op": EXP_CREATE, "card": card.to_json()})
-    return {"actions": actions, "raw": out}
+
+def merge(hub: ModelHub, card: ExperienceCard, cands: list[ExperienceCard]) -> dict[str, Any]:
+    import json
+
+    new, olds = merge_payload(card, cands)
+    return hub.write(
+        "exp.merge",
+        EXP_MERGE,
+        None,
+        {
+            "{{new_card}}": json.dumps(new, ensure_ascii=False, indent=1),
+            "{{candidates}}": json.dumps(olds, ensure_ascii=False, indent=1),
+        },
+    )
 
 
-def dedup_pair(
-    a: ExperienceCard, b: ExperienceCard, answers: dict[str, Any] | None = None
-) -> tuple[bool, str]:
-    """近重复复核：任何重要细节不同就保留两张（Hindsight）。"""
-    payload = {"a": a.to_json(), "b": b.to_json(), "_answers": answers or {}}
-    ans = one(judge("exp.dedup", payload, [Q_DEDUP]), Q_DEDUP)
-    return ans.value == "yes", ans.reason or ans.value
+def steps(principle: str | None) -> list[str]:
+    if not principle:
+        return []
+    parts = re.split(r"(?:^|\s|；|;)\d+[.、．]\s*", principle)
+    parts = [p.strip(" ；;。") for p in parts if p and p.strip(" ；;。")]
+    return parts or [principle.strip()]
+
+
+def guard(
+    action: str, card: ExperienceCard, target: ExperienceCard | None, merged: dict[str, Any] | None
+) -> tuple[str, str]:
+    """§5.2 的证据护栏，从上到下取第一条。返回（动作，原因）；动作 add_opposed 表示 (add, k)。"""
+    if action in (EXP_UPDATE, EXP_REFUTE, EXP_CONFIRM) and target is None:
+        return EXP_ADD, "target_id 不在候选里，按新增"
+    if action == EXP_ADD and target is not None:
+        return "add_opposed", "没有证据的相反说法：新卡单独存为待验证"
+    if action == EXP_REFUTE and not card.has_evidence():
+        return "add_opposed", "refute 但新卡片没有证据"
+    if action == EXP_UPDATE and target is not None and merged is not None:
+        old_s, new_s = steps(target.principle), steps(merged.get("principle"))
+        if target.exp_status == EXP_VERIFIED and card.exp_status != EXP_VERIFIED and old_s != new_s:
+            return "add_opposed", "未验证的新卡想改已验证卡片的做法"
+        if not set(old_s) <= set(new_s):
+            if card.has_evidence():
+                return EXP_REFUTE, "update 删掉了已有步骤，且新卡有证据：按 refute"
+            return "add_opposed", "update 删掉了已有步骤，新卡没有证据"
+    return action, ""
+
+
+# ── ⑪ 可信度 + ⑫ 写库 ──────────────────────────────────────────────────────
+
+
+def _evidence(
+    action: str, card: ExperienceCard, ep: Episode, injected: bool = True
+) -> dict[str, Any]:
+    last = ep.agents[-1] if ep.agents else (ep.messages[-1] if ep.messages else None)
+    return {
+        "type": "chat",
+        "role": "assistant",
+        "message_id": last.id if last else "",
+        "chat_time": last.chat_time if last else card.time,
+        "content": (last.text[:200] if last else ""),
+        "role_id": ep.members[0].user_id if ep.members else "",
+        "conversation_id": ep.conversation_id,
+        "segment_id": ep.id,
+        "quality_score": card.quality_score,
+        "signal": card.signal,
+        "action": action,
+        "injected": injected,  # 不知道这段之前有没有被注入过：按注入过算（§5.3）
+    }
+
+
+def _clip(c: float) -> float:
+    return round(max(0.0, min(CONF_MAX, c)), 4)
+
+
+def _archive_version(store: ProjectStore, k: ExperienceCard, reason: str, replaced_by: str) -> None:
+    """旧版本另存一个 status=archived 的完整节点，history 留一条精简记录指过去（MemOS 现成约定）。"""
+    snap = ExperienceCard.from_node(new_uuid(), {**k.to_props(), "user_name": k.space_id})
+    snap.space_id = k.space_id
+    snap.node_status = "archived"
+    snap.merged_into = k.id
+    snap_props_reason = {"reason": reason, "replaced_by": replaced_by}
+    store.put_experience(snap)
+    k.history.append(
+        {
+            "version": k.version,
+            "memory": k.memory_text,
+            "update_type": "duplicate",
+            "archived_memory_id": snap.id,
+            "created_at": now_iso(),
+            **snap_props_reason,
+        }
+    )
+
+
+def apply(
+    store: ProjectStore,
+    ep: Episode,
+    card: ExperienceCard,
+    action: str,
+    target: ExperienceCard | None,
+    merged: dict[str, Any] | None,
+    reason: str,
+) -> dict[str, Any]:
+    author = ep.members[0].user_id if ep.members else ""
+    card.space_id, card.time = (
+        ep.space_id,
+        card.time or (ep.messages[-1].chat_time if ep.messages else now_iso()),
+    )
+    card.session_id = card.session_id or ep.conversation_id
+    card.user_id = card.user_id or author
+    card.author_ids = card.author_ids or [author]
+    if ep.topic_id and ep.topic_id not in card.topic_ids:
+        card.topic_ids.append(ep.topic_id)
+    signaled = card.signal not in ("", "none", None)
+
+    if action in (EXP_ADD, "add_opposed"):
+        card.confidence = CONF_NEW
+        if action == "add_opposed":
+            card.exp_status = EXP_CANDIDATE if card.exp_status == EXP_VERIFIED else card.exp_status
+        card.last_supported_at = card.time if signaled else ""
+        card.sources = [_evidence(EXP_ADD, card, ep)]
+        store.put_experience(card)
+        out = {
+            "op": action,
+            "id": card.id,
+            "task_intent": card.task_intent,
+            "confidence": card.confidence,
+            "reason": reason,
+        }
+        if action == "add_opposed" and target is not None:
+            target.sources.append(
+                {
+                    **_evidence(EXP_ADD, card, ep),
+                    "note": "有成员提出相反说法（未验证）",
+                    "opposed_by": card.id,
+                }
+            )
+            store.put_experience(target)
+            out["opposes"] = target.id
+        return out
+
+    assert target is not None
+    k = target
+    seen_conv = {s.get("conversation_id") for s in k.sources}
+    ev = _evidence(action, card, ep)
+    before = k.confidence
+
+    if action == EXP_CONFIRM:
+        if not (ev["injected"] and not signaled) and ep.conversation_id not in seen_conv:
+            k.confidence = _clip(k.confidence + 0.05)
+    elif action in (EXP_UPDATE, EXP_REFUTE):
+        _archive_version(store, k, reason, ev["message_id"])
+        for f in CARD_FIELDS:
+            if merged and f in merged and merged[f] is not None:
+                setattr(k, f, merged[f])
+        allowed = set(card.anchors) | set(target.anchors)
+        k.anchors = [a for a in k.anchors if a in allowed][:MAX_ANCHORS]
+        k.version += 1
+        k.confidence = _clip(k.confidence + (0.10 if action == EXP_UPDATE else -0.20))
+        for a in card.author_ids:
+            if a not in k.author_ids:
+                k.author_ids.append(a)
+        if action == EXP_REFUTE and card.validation:
+            k.validation = card.validation
+
+    if k.exp_status == EXP_CANDIDATE and action in (EXP_CONFIRM, EXP_UPDATE) and signaled:
+        k.exp_status = EXP_VERIFIED
+    if action in (EXP_UPDATE, EXP_REFUTE) or (action == EXP_CONFIRM and signaled):
+        k.last_supported_at = card.time
+    if k.confidence < CONF_MIN:
+        k.node_status = "archived"
+    k.sources.append(ev)
+    if ep.topic_id and ep.topic_id not in k.topic_ids:
+        k.topic_ids.append(ep.topic_id)
+    store.put_experience(k)
+    return {
+        "op": action,
+        "id": k.id,
+        "task_intent": k.task_intent,
+        "confidence": k.confidence,
+        "delta": round(k.confidence - before, 4),
+        "version": k.version,
+        "reason": reason,
+    }
+
+
+def lifecycle(k: ExperienceCard, now: datetime | None = None) -> str:
+    if k.node_status == "archived" or k.confidence < CONF_MIN or k.merged_into:
+        return "archived"
+    if k.last_supported_at:
+        try:
+            t = datetime.fromisoformat(k.last_supported_at)
+            now = now or datetime.now(t.tzinfo)
+            if (now - t).days > STALE_DAYS:
+                return "stale"
+        except ValueError:
+            pass
+    return "active"
+
+
+def visible(k: ExperienceCard, user_id: str) -> bool:
+    """vis(k, m)：已验证或失败经验对所有人可见；待验证只给作者本人。"""
+    return k.exp_status in (EXP_VERIFIED, EXP_FAILED) or user_id in k.author_ids
+
+
+# ── 一段的完整流程 ──────────────────────────────────────────────────────────
+
+
+def run(hub: ModelHub, store: ProjectStore, ep: Episode, log) -> list[dict[str, Any]]:
+    ok, why = rule_gate(ep)
+    if not ok:
+        log(f"  经验：规则闸不过（{why}）")
+        return []
+    from_note = any(m.notes for m in ep.agents)
+    if not from_note and os.getenv("EXPERIENCE_EXTRACT_MODE", "two_step") == "two_step":
+        ok, why = should_extract(hub, ep)
+        log(f"  经验过滤：{'抽' if ok else '不抽'}（{why}）")
+        if not ok:
+            return []
+    card, why = extract_card(hub, ep)
+    if card is None:
+        log(f"  经验：不出卡片（{why}）")
+        return []
+    for n in code_check(card, ep, from_note):
+        log(f"  经验校验：{n}")
+    card.space_id = ep.space_id
+    card.time = ep.messages[-1].chat_time if ep.messages else now_iso()
+
+    ranked = store.recall_experiences(ep.space_id, card.index_text, RECALL_TOP_K)
+    cands = [k for _, k in ranked if lifecycle(k) != "archived"]
+    if not cands:
+        res = apply(store, ep, card, EXP_ADD, None, None, "没有召回到已有经验")
+        log(
+            f"  经验新增 {res['id'][:8]}：{card.task_intent}（{card.exp_status}，{card.confidence}）"
+        )
+        return [res]
+
+    out = merge(hub, card, cands)
+    action = str(out.get("action") or EXP_ADD)
+    target = next((k for k in cands if k.id == out.get("target_id")), None)
+    merged = out.get("card") if isinstance(out.get("card"), dict) else None
+    final, guard_reason = guard(action, card, target, merged)
+    if final != action:
+        log(f"  经验护栏：模型给 {action}，改为 {final}（{guard_reason}）")
+    res = apply(store, ep, card, final, target, merged, out.get("reason") or guard_reason)
+    log(
+        f"  经验 {res['op']} → {res['id'][:8]}（confidence {res.get('confidence')}）：{res.get('reason', '')}"
+    )
+    return [res]

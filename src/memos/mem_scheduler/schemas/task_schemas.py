@@ -39,6 +39,8 @@ MEM_ARCHIVE_TASK_LABEL = "mem_archive"
 API_MIX_SEARCH_TASK_LABEL = "api_mix_search"
 PREF_ADD_TASK_LABEL = "pref_add"
 MEM_FEEDBACK_TASK_LABEL = "mem_feedback"
+# Project memory: one stream per space (user_id = mem_cube_id = space_id)
+PROJECT_MEMORY_TASK_LABEL = "project_memory"
 
 # Additional constants moved from general_schemas
 DEFAULT_MAX_QUERY_KEY_WORDS = 1000

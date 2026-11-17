@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """项目记忆（Project Memory）：MemOS 新增的一种记忆 view（`project`）。
 
 口径：基于 MemOS 现有能力实现，不另起一套存储。Space 对应一个 mem_cube，

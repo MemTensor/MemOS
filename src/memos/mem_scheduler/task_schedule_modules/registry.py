@@ -17,6 +17,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_READ_TASK_LABEL,
     MEM_UPDATE_TASK_LABEL,
     PREF_ADD_TASK_LABEL,
+    PROJECT_MEMORY_TASK_LABEL,
     QUERY_TASK_LABEL,
     TaskPriorityLevel,
 )
@@ -29,6 +30,7 @@ from .handlers.mem_read_handler import MemReadMessageHandler
 from .handlers.mem_reorganize_handler import MemReorganizeMessageHandler
 from .handlers.memory_update_handler import MemoryUpdateHandler
 from .handlers.pref_add_handler import PrefAddMessageHandler
+from .handlers.project_memory_handler import ProjectMemoryMessageHandler
 from .handlers.query_handler import QueryMessageHandler
 
 
@@ -43,6 +45,7 @@ class SchedulerHandlerRegistry:
         self.mem_reorganize = MemReorganizeMessageHandler(scheduler_context)
         self.mem_dream = MemDreamMessageHandler(scheduler_context)
         self.pref_add = PrefAddMessageHandler(scheduler_context)
+        self.project_memory = ProjectMemoryMessageHandler(scheduler_context)
 
     def build_dispatch_map(self) -> dict[str, Callable | tuple]:
         predefined_handlers = {
@@ -55,5 +58,6 @@ class SchedulerHandlerRegistry:
             MEM_DREAM_TASK_LABEL: self.mem_dream,
             PREF_ADD_TASK_LABEL: (self.pref_add, None, 600_000),
             MEM_FEEDBACK_TASK_LABEL: self.mem_feedback,
+            PROJECT_MEMORY_TASK_LABEL: (self.project_memory, TaskPriorityLevel.LEVEL_2, None),
         }
         return predefined_handlers

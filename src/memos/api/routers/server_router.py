@@ -18,6 +18,7 @@ import socket
 from fastapi import APIRouter, HTTPException, Query
 
 from memos.api import handlers
+from memos.api.handlers import project_view
 from memos.api.handlers.add_handler import AddHandler
 from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.chat_handler import ChatHandler
@@ -211,6 +212,11 @@ def scheduler_status(
     task_id: str | None = Query(None, description="Optional Task ID to query a specific task"),
 ):
     """Get scheduler running status."""
+    if task_id:
+        # memory view `project`: tasks are tracked by the project-memory plugin
+        project_task = project_view.task_status(task_id=task_id, user_id=user_id)
+        if project_task is not None:
+            return StatusResponse(data=[project_task])
     return handlers.scheduler_handler.handle_scheduler_status(
         user_id=user_id,
         task_id=task_id,
@@ -370,6 +376,12 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
 
 @router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
 def get_memories(memory_req: GetMemoryRequest):
+    if memory_req.space_id:
+        # memory view `project`: topics of one space
+        return GetMemoryResponse(
+            message="Memories retrieved successfully",
+            data=project_view.list_topics(memory_req),
+        )
     return handlers.memory_handler.handle_get_memories(
         get_mem_req=memory_req,
         naive_mem_cube=naive_mem_cube,
@@ -378,6 +390,13 @@ def get_memories(memory_req: GetMemoryRequest):
 
 @router.get("/get_memory/{memory_id}", summary="Get memory by id", response_model=GetMemoryResponse)
 def get_memory_by_id(memory_id: str):
+    topic = project_view.get_topic(memory_id)
+    if topic is not None:
+        # memory view `project`: the id is a topic id
+        return GetMemoryResponse(
+            message="Memory retrieved successfully",
+            data={"topic_detail_list": [topic]},
+        )
     return handlers.memory_handler.handle_get_memory(
         memory_id=memory_id,
         naive_mem_cube=naive_mem_cube,
@@ -396,6 +415,12 @@ def get_memory_by_ids(memory_ids: list[str]):
     "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
 )
 def delete_memories(memory_req: DeleteMemoryRequest):
+    if memory_req.space_id:
+        # memory view `project`: delete topics, keep the space, instructions and domains
+        return DeleteMemoryResponse(
+            message="Memories deleted successfully",
+            data=project_view.delete_topics(memory_req),
+        )
     return handlers.memory_handler.handle_delete_memories(
         delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
     )

@@ -1,70 +1,150 @@
-# -*- coding: utf-8 -*-
-"""项目记忆的最小 HTTP 面：给插件演示与联调用。
+"""项目记忆新增的接口（PRD「接口」一章里关系为「新增」的 9 个）。
 
-真正对外的接口是 `/product/*`（PRD 的 add/message、search/memory、get/memory…），
-那几个要在核心路由与 `product_models.py` 里加字段（缺口清单里的 A1–A4）。
-这里的路由只用一套独立的路径，避免主干还没改核心时碰现有接口。
+路径沿用 `/product` 的下划线写法，工程封装层（openmem v1）做 `create/space` → `/product/create_space` 的映射：
+
+| PRD 接口 | 本服务 |
+| --- | --- |
+| create/space、update/space、get/space、delete/space | /product/create_space、update_space、get_space、delete_space |
+| create/domains、update/domains、delete/domains、list/domains | /product/create_domains、update_domains、delete_domains、list_domains |
+| get/message（会话原文，项目记忆存的那一份） | /product/get_message |
+
+错误：Space 不存在 → 404；参数 / 配置错误（领域未登记、未配置领域、改名冲突、仍被引用）→ 400。
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .mock_data import CONV, SPACE, decision_final_turns, decision_turns, experience_segment
-from .pipeline import ProjectMemoryPipeline
-from .types import Msg
+
+class DomainItem(BaseModel):
+    name: str
+    description: str = ""
 
 
-class DemoIngestRequest(BaseModel):
-    space_id: str = SPACE
-    conversation_id: str = CONV
-    scenario: str = Field("decision", description="decision | decision_final | experience | all")
+class DomainUpdateItem(BaseModel):
+    name: str = Field(..., description="现有名称")
+    new_name: str | None = Field(None, description="改成的名称；不改名不传")
+    description: str | None = None
 
 
-class SearchRequestBody(BaseModel):
-    space_id: str = SPACE
-    query: str
-    limit: int = 9
+class CreateSpaceRequest(BaseModel):
+    space_name: str
+    instructions: str = ""
+    domains: list[DomainItem] | None = None
+
+
+class UpdateSpaceRequest(BaseModel):
+    space_id: str
+    space_name: str | None = None
+    instructions: str | None = None
+
+
+class SpaceIdRequest(BaseModel):
+    space_id: str
+
+
+class CreateDomainsRequest(BaseModel):
+    space_id: str
+    domains: list[DomainItem]
+
+
+class UpdateDomainsRequest(BaseModel):
+    space_id: str
+    domains: list[DomainUpdateItem]
+
+
+class DeleteDomainsRequest(BaseModel):
+    space_id: str
+    domains: list[str]
+
+
+class GetMessageRequest(BaseModel):
+    user_id: str | None = None
+    conversation_id: str
+    space_id: str | None = None
+    message_limit_number: int | None = None
+
+
+def _ok(data: Any, message: str = "ok") -> dict[str, Any]:
+    return {"code": 200, "message": message, "data": data}
 
 
 def create_router(plugin) -> APIRouter:
-    router = APIRouter(prefix="/project_memory", tags=["Project Memory (demo)"])
+    router = APIRouter(prefix="/product", tags=["Project Memory"])
 
-    @router.post("/demo_ingest", summary="用构造的样例跑一遍主干（mock add）")
-    def demo_ingest(body: DemoIngestRequest) -> dict:
-        from .mock_script import build_script
+    def svc():
+        return plugin.service
 
-        store = plugin.build_store()
-        pipe = ProjectMemoryPipeline(store, script=build_script())
-        out: dict = {"scenario": body.scenario, "runs": []}
+    def guarded(fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
-        if body.scenario in ("decision", "all"):
-            out["runs"].append(_run(pipe, body.space_id, body.conversation_id, decision_turns(), "决策六轮+第七轮"))
-        if body.scenario in ("decision_final", "all"):
-            out["runs"].append(_run(pipe, body.space_id, body.conversation_id, decision_final_turns(), "拍板两轮"))
-        if body.scenario in ("experience", "all"):
-            out["runs"].append(_run(pipe, body.space_id, body.conversation_id, experience_segment(), "经验一段"))
-        return out
+    @router.post("/create_space", summary="Create a project space (memory view `project`)")
+    def create_space(req: CreateSpaceRequest):
+        sp = guarded(
+            svc().create_space,
+            req.space_name,
+            req.instructions,
+            [d.model_dump() for d in req.domains or []],
+        )
+        return _ok(sp.to_api(), "Space created")
 
-    @router.post("/search", summary="按空间检索主题（PRD 的 search/memory 的 project 部分）")
-    def search(body: SearchRequestBody) -> dict:
-        from .mock_script import build_script
+    @router.post("/update_space", summary="Update space name / instructions")
+    def update_space(req: UpdateSpaceRequest):
+        return _ok(
+            guarded(svc().update_space, req.space_id, req.space_name, req.instructions).to_api()
+        )
 
-        pipe = ProjectMemoryPipeline(plugin.build_store(), script=build_script())
-        return pipe.search(body.space_id, body.query, body.limit)
+    @router.post("/get_space", summary="Get a project space")
+    def get_space(req: SpaceIdRequest):
+        return _ok(guarded(svc().get_space, req.space_id).to_api())
+
+    @router.post(
+        "/delete_space", summary="Delete a space with all its topics, instructions and domains"
+    )
+    def delete_space(req: SpaceIdRequest):
+        return _ok(guarded(svc().delete_space, req.space_id), "Space deleted")
+
+    @router.post("/create_domains", summary="Register domains (whole batch validated)")
+    def create_domains(req: CreateDomainsRequest):
+        return _ok(
+            {
+                "domains": guarded(
+                    svc().create_domains, req.space_id, [d.model_dump() for d in req.domains]
+                )
+            }
+        )
+
+    @router.post("/update_domains", summary="Rename / re-describe domains; renames sync to topics")
+    def update_domains(req: UpdateDomainsRequest):
+        return _ok(
+            {
+                "domains": guarded(
+                    svc().update_domains, req.space_id, [d.model_dump() for d in req.domains]
+                )
+            }
+        )
+
+    @router.post("/delete_domains", summary="Delete domains not referenced by any topic")
+    def delete_domains(req: DeleteDomainsRequest):
+        return _ok({"domains": guarded(svc().delete_domains, req.space_id, req.domains)})
+
+    @router.post("/list_domains", summary="Full domain list of a space")
+    def list_domains(req: SpaceIdRequest):
+        return _ok({"domains": guarded(svc().list_domains, req.space_id)})
+
+    @router.post("/get_message", summary="Conversation messages stored for project memory")
+    def get_message(req: GetMessageRequest):
+        msgs = guarded(
+            svc().get_message, req.conversation_id, req.space_id, req.message_limit_number
+        )
+        return _ok({"message_detail_list": msgs})
 
     return router
-
-
-def _run(pipe: ProjectMemoryPipeline, space_id: str, conv: str, msgs: list[Msg], label: str) -> dict:
-    res = pipe.ingest(space_id, conv, msgs)
-    return {
-        "label": label,
-        "task_id": res.task_id,
-        "topics": res.topic_ids,
-        "decision_ops": res.decision_ops,
-        "experience_ops": res.experience_ops,
-        "dropped": res.dropped,
-        "trace": res.trace,
-    }

@@ -1,145 +1,230 @@
-# -*- coding: utf-8 -*-
-"""判定与生成的统一接口：`judge()` / `write()`。
+"""判定与生成的统一接口：`judge()` / `write()`，后端可换。
 
-口径（T1 §2.2、经验方案开头）：业务代码只调这两个函数，后端可换——
-Jev 官方 API（`jev_api`）、大模型（`llm`）、交付的 Jev（`jev_self`）、本仓主干用的 `mock`。
-是非题一律三档「是 / 拿不准 / 否」再用，业务代码不读概率。
+口径（T1 §2.2）：业务代码只调这两个函数——
+- `judge(scope, state, questions)`：答一批是非题（noul）或选择题（choice）；是非题统一换成三档「是 / 拿不准 / 否」；
+- `write(scope, prompt, inputs)`：按提示词生成一个 JSON。
 
-主干先只实现 `mock`，其余三种后端骨架在这里留位（TODO），接的时候只改配置不改业务代码。
+后端：
+- `llm`（默认）：MemOS 已配置的大模型（插件上下文里的 `llm`，即 `BaseLLM.generate(messages)`）。
+  判别题用 `pm-judge-llm-v0.1` 包装成一次调用，只答 yes / no / unsure，直接对应三档；
+- `jev_api`、`jev_self`：Jev 官方 API / 交付的 Jev，接口已定，还没接；
+- 测试里用同一个 `LLMBackend` 配一个假的 llm，走的是真实的提示词拼装与 JSON 解析。
+
+换后端只改环境变量 `MEMOS_PROJECT_MEMORY_JUDGE_BACKEND`，业务代码不动。
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .prompts import JUDGE_LLM
 
-BINARY_YES = "yes"
-BINARY_UNSURE = "unsure"
-BINARY_NO = "no"
 
+logger = logging.getLogger(__name__)
+
+YES, UNSURE, NO = "yes", "unsure", "no"
 BACKEND_ENV = "MEMOS_PROJECT_MEMORY_JUDGE_BACKEND"
-
-
-# ── 三档 ───────────────────────────────────────────────────────────────────
 
 
 @dataclass
 class Answer:
-    """一道是非题的答案。带一句理由，进丢弃清单与 trace。"""
-
     question: str
-    value: str  # yes | unsure | no
+    value: str  # noul: yes|no|unsure；choice: 选项 id
     reason: str = ""
 
     @property
     def is_yes(self) -> bool:
-        return self.value == BINARY_YES
-
-    @property
-    def is_no(self) -> bool:
-        return self.value == BINARY_NO
+        return self.value == YES
 
 
-def answer_from_probability(question: str, p_yes: float, hi: float, lo: float, reason: str = "") -> Answer:
-    """把 [0,1] 换成三档。阈值按题分别标定（T1 附录 B.5），默认 0.7 / 0.3。"""
-    if p_yes >= hi:
-        return Answer(question, BINARY_YES, reason)
-    if p_yes <= lo:
-        return Answer(question, BINARY_NO, reason)
-    return Answer(question, BINARY_UNSURE, reason)
+class ModelError(RuntimeError):
+    """模型调用失败或输出解析不了。调度层据此把任务记为失败、可重试。"""
+
+
+class Backend(Protocol):
+    def answer(
+        self, scope: str, state: dict[str, Any], questions: dict[str, Any]
+    ) -> dict[str, Answer]: ...
+
+    def generate(
+        self, scope: str, prompt: str, inputs: Any, placeholders: dict[str, str] | None = None
+    ) -> dict[str, Any]: ...
+
+
+# ── 解析 ───────────────────────────────────────────────────────────────────
+
+
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
+def parse_json(text: str) -> dict[str, Any]:
+    """从模型输出里取出第一个 JSON 对象。容忍代码围栏与前后多余文字。"""
+    if not text:
+        raise ModelError("模型输出为空")
+    body = _FENCE.sub("", text.strip())
+    try:
+        out = json.loads(body)
+        if isinstance(out, dict):
+            return out
+    except json.JSONDecodeError:
+        pass
+    start = body.find("{")
+    while start != -1:
+        depth = 0
+        for i in range(start, len(body)):
+            if body[i] == "{":
+                depth += 1
+            elif body[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        out = json.loads(body[start : i + 1])
+                        if isinstance(out, dict):
+                            return out
+                    except json.JSONDecodeError:
+                        break
+        start = body.find("{", start + 1)
+    raise ModelError(f"模型输出不是 JSON：{text[:200]}")
+
+
+def split_prompt(prompt: str) -> tuple[str, str]:
+    """「[系统] … [用户] …」两段式提示词拆成 system / user 两条消息；没有标记就整段作 user。"""
+    if "[用户]" in prompt:
+        sys_part, user_part = prompt.split("[用户]", 1)
+        return sys_part.replace("[系统]", "", 1).strip(), user_part.strip()
+    return "", prompt.strip()
+
+
+def fill(prompt: str, placeholders: dict[str, str]) -> str:
+    """只做字面替换（提示词里有 JSON 样例，不能用 str.format）。"""
+    out = prompt
+    for k, v in placeholders.items():
+        out = out.replace(k, v)
+    return out
+
+
+def to_json_text(obj: Any) -> str:
+    return obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False, indent=1)
+
+
+def normalize_noul(v: Any) -> str:
+    if isinstance(v, dict):
+        v = v.get("noul", v.get("value"))
+    if isinstance(v, int | float) and not isinstance(v, bool):
+        return (
+            YES if v >= 0.7 else NO if v <= 0.3 else UNSURE
+        )  # Jev 类后端给概率时的初值（T1 附录 B.5）
+    s = str(v or "").strip().lower()
+    if s in ("yes", "是", "true"):
+        return YES
+    if s in ("no", "否", "false"):
+        return NO
+    return UNSURE
 
 
 # ── 后端 ───────────────────────────────────────────────────────────────────
 
 
-class JudgeBackend(Protocol):
-    def answer(self, scope: str, payload: dict[str, Any], questions: list[str]) -> dict[str, Answer]:
-        """给定一批题与材料，逐题答三档。"""
+class LLMBackend:
+    """用 MemOS 已配置的大模型答判别题、做生成。"""
 
-    def generate(self, scope: str, prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """生成类调用：按 scope 的提示词把 payload 写成一个 JSON。"""
+    def __init__(self, llm: Any, retries: int = 1):
+        self.llm = llm
+        self.retries = retries
 
+    def _call(self, scope: str, system: str, user: str) -> dict[str, Any]:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user})
+        last: Exception | None = None
+        for _ in range(self.retries + 1):
+            try:
+                raw = self.llm.generate(messages)
+                return parse_json(raw)
+            except Exception as e:
+                last = e
+                logger.warning("[ProjectMemory] %s 调用失败，重试：%s", scope, e)
+        raise ModelError(f"{scope}: {last}")
 
-class MockJudgeBackend:
-    """主干用的后端：替身，答案由调用方在 `payload["_answers"]` 里直接给定。
-
-    这样主干能整条跑通、样例可复现，算法环节本身不必等模型。真实后端只需实现同一接口。
-    """
-
-    def answer(self, scope: str, payload: dict[str, Any], questions: list[str]) -> dict[str, Answer]:
-        preset = payload.get("_answers") or {}
-        out: dict[str, Answer] = {}
-        for q in questions:
-            if isinstance(preset, str):  # 单题直给
-                out[q] = Answer(q, preset, "")
-                continue
-            v = preset.get(q, BINARY_UNSURE)
-            if isinstance(v, dict):
-                out[q] = Answer(q, v.get("value", BINARY_UNSURE), v.get("reason", ""))
-            else:
-                out[q] = Answer(q, v, "")
-        return out
-
-    def generate(self, scope: str, prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
-        preset = payload.get("_generated")
-        if preset is None:
-            raise RuntimeError(
-                f"mock 后端没有给 {scope} 的生成结果：把期望结果放进 payload['_generated']"
+    def answer(
+        self, scope: str, state: dict[str, Any], questions: dict[str, Any]
+    ) -> dict[str, Answer]:
+        system, user = split_prompt(
+            fill(
+                JUDGE_LLM, {"{state}": to_json_text(state), "{questions}": to_json_text(questions)}
             )
-        return json.loads(json.dumps(preset))
+        )
+        out = self._call(scope, system, user)
+        answers = out.get("answers") or {}
+        result: dict[str, Answer] = {}
+        for q, spec in questions.items():
+            got = answers.get(q)
+            if spec.get("type") == "choice":
+                val = got.get("choice") if isinstance(got, dict) else got
+                if val not in (spec.get("criteria") or {}):
+                    val = ""
+                result[q] = Answer(q, str(val or ""))
+            else:
+                result[q] = Answer(q, normalize_noul(got))
+        return result
+
+    def generate(
+        self, scope: str, prompt: str, inputs: Any, placeholders: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        ph = dict(placeholders or {})
+        if inputs is not None:
+            ph.setdefault("{inputs}", to_json_text(inputs))
+        system, user = split_prompt(fill(prompt, ph))
+        return self._call(scope, system, user)
 
 
-class NotImplementedBackend:
-    """占位：Jev 官方 API / 大模型 / 交付的 Jev。接口已定，接的时候照 MockJudgeBackend 的形状实现。"""
+class NotWiredBackend:
+    """Jev 官方 API / 交付的 Jev：接口已定，还没接。"""
 
     def __init__(self, kind: str):
         self.kind = kind
 
-    def answer(self, scope: str, payload: dict[str, Any], questions: list[str]) -> dict[str, Answer]:
-        raise NotImplementedError(
-            f"判定后端 {self.kind} 还没接：业务代码不用改，实现 JudgeBackend 的 answer/generate 即可"
-        )
+    def answer(self, scope, state, questions):
+        raise ModelError(f"判定后端 {self.kind} 还没接；把 {BACKEND_ENV} 设为 llm")
 
-    def generate(self, scope: str, prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
-        raise NotImplementedError(
-            f"判定后端 {self.kind} 还没接：业务代码不用改，实现 JudgeBackend 的 answer/generate 即可"
-        )
+    def generate(self, scope, prompt, inputs, placeholders=None):
+        raise ModelError(f"判定后端 {self.kind} 不做生成；生成固定走 llm")
 
 
-_BACKENDS: dict[str, JudgeBackend] = {}
+class ModelHub:
+    """按配置给每个调用点选后端。判别与生成可以分开配（Jev 只答判别题）。"""
+
+    def __init__(self, llm: Any | None = None, judge_backend: str | None = None):
+        self.llm_backend = LLMBackend(llm) if llm is not None else None
+        kind = judge_backend or os.getenv(BACKEND_ENV, "llm")
+        self.judge_backend: Any = self.llm_backend if kind == "llm" else NotWiredBackend(kind)
+
+    def _require(self, b: Any) -> Any:
+        if b is None:
+            raise ModelError("项目记忆没有可用的大模型：插件上下文里没有 llm")
+        return b
+
+    def judge(
+        self, scope: str, state: dict[str, Any], questions: dict[str, Any]
+    ) -> dict[str, Answer]:
+        return self._require(self.judge_backend).answer(scope, state, questions)
+
+    def write(
+        self,
+        scope: str,
+        prompt: str,
+        inputs: Any = None,
+        placeholders: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return self._require(self.llm_backend).generate(scope, prompt, inputs, placeholders)
 
 
-def get_backend(kind: str | None = None) -> JudgeBackend:
-    kind = kind or os.getenv(BACKEND_ENV, "mock")
-    if kind not in _BACKENDS:
-        if kind == "mock":
-            _BACKENDS[kind] = MockJudgeBackend()
-        else:
-            _BACKENDS[kind] = NotImplementedBackend(kind)
-    return _BACKENDS[kind]
-
-
-def set_backend(kind: str, backend: JudgeBackend) -> None:
-    """替换后端（测试或接真模型时用）。"""
-    _BACKENDS[kind] = backend
-
-
-# ── 业务代码只调这两个 ─────────────────────────────────────────────────────
-
-
-def judge(scope: str, payload: dict[str, Any], questions: list[str], kind: str | None = None) -> dict[str, Answer]:
-    """答一批是非题。scope 是调用点编号，例如 `dec.gate`、`dec.same_problem`、`exp.filter`。"""
-    return get_backend(kind).answer(scope, payload, questions)
-
-
-def write(scope: str, prompt: str, payload: dict[str, Any], kind: str | None = None) -> dict[str, Any]:
-    """生成一次结构化结果。scope 例如 `dec.extract`、`exp.extract`、`exp.merge`。"""
-    return get_backend(kind).generate(scope, prompt, payload)
-
-
-def one(answers: dict[str, Answer], question: str) -> Answer:
-    return answers.get(question) or Answer(question, BINARY_UNSURE, "题没答")
+def one(answers: dict[str, Answer], q: str) -> Answer:
+    return answers.get(q) or Answer(q, UNSURE)

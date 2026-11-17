@@ -269,3 +269,9 @@ lint.ignore = [
 ]
 lint.isort.lines-between-types = 1
 lint.isort.lines-after-imports = 2
+
+[tool.ruff.lint.per-file-ignores]
+# Project memory is documented in Chinese (prompts and design notes follow the Chinese design docs).
+"src/memos/project_memory/**" = ["RUF002", "RUF003"]
+"tests/project_memory/**" = ["RUF002", "RUF003"]
+"examples/project_memory/**" = ["RUF002", "RUF003"]
