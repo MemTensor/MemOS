@@ -83,6 +83,11 @@ def my_callback(self, results, **kwargs):
 The runtime omits `hook_context` when the callback's signature accepts neither form.
 Hooks that do **not** provide context will never pass it, even if you declare the parameter.
 
+For `@hookable(..., context_builder=...)`, an explicit non-`None` context is reused,
+including when passed positionally to the decorated method. An omitted or `None`
+context is built automatically. Methods that do not accept `hook_context` receive
+only their business arguments; their hooks still receive the context.
+
 ### Context scope
 
 - **Search** builds a context for `search.before` and `search.after`. Each intermediate

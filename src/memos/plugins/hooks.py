@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_hooks: dict[str, list[Callable]] = defaultdict(list)
+_hooks: dict[str, list[tuple[Callable, bool]]] = defaultdict(list)
 
 
 def _accepts_hook_context(callback: Callable) -> bool:
@@ -41,7 +41,7 @@ def _accepts_hook_context(callback: Callable) -> bool:
     )
 
 
-def _invoke_hook_callback(callback: Callable, kwargs: dict[str, Any]) -> Any:
+def _invoke_hook_callback(callback: Callable, accepts_context: bool, kwargs: dict[str, Any]) -> Any:
     """Invoke one callback while preserving legacy exact-signature Hooks.
 
     ``hook_context`` is additive framework metadata. Older callbacks that use
@@ -49,7 +49,7 @@ def _invoke_hook_callback(callback: Callable, kwargs: dict[str, Any]) -> Any:
     arguments. Context-aware callbacks and callbacks with ``**kwargs`` receive
     the complete contract.
     """
-    if "hook_context" not in kwargs or _accepts_hook_context(callback):
+    if "hook_context" not in kwargs or accepts_context:
         return callback(**kwargs)
 
     legacy_kwargs = dict(kwargs)
@@ -67,7 +67,7 @@ def register_hook(name: str, callback: Callable) -> None:
             name,
             getattr(callback, "__qualname__", repr(callback)),
         )
-    _hooks[name].append(callback)
+    _hooks[name].append((callback, _accepts_hook_context(callback)))
     logger.debug(
         "Hook registered: %s -> %s",
         name,
@@ -84,7 +84,7 @@ def register_hooks(names: list[str], callback: Callable) -> None:
 def trigger_hook(name: str, **kwargs: Any) -> Any:
     """Trigger a hook, invoking all registered callbacks in order.
 
-    - Zero overhead when no callbacks are registered
+    - No callback inspection when triggering hooks
     - Undeclared hook names will log a warning and be skipped
     - pipe_key is auto-fetched from HookSpec, supports piped return value passing
     """
@@ -97,9 +97,9 @@ def trigger_hook(name: str, **kwargs: Any) -> Any:
 
     pipe_key = spec.pipe_key
 
-    for cb in _hooks.get(name, []):
+    for cb, accepts_context in _hooks.get(name, []):
         try:
-            rv = _invoke_hook_callback(cb, kwargs)
+            rv = _invoke_hook_callback(cb, accepts_context, kwargs)
             if pipe_key is not None and rv is not None:
                 kwargs[pipe_key] = rv
         except Exception:
@@ -126,9 +126,9 @@ def trigger_single_hook(name: str, **kwargs: Any) -> Any:
     if len(callbacks) > 1:
         raise RuntimeError(f"Multiple plugins registered single-provider hook: {name}")
 
-    cb = callbacks[0]
+    cb, accepts_context = callbacks[0]
     try:
-        return _invoke_hook_callback(cb, kwargs)
+        return _invoke_hook_callback(cb, accepts_context, kwargs)
     except Exception:
         logger.exception(
             "Single hook %s callback %s failed",
@@ -174,19 +174,43 @@ def hookable(
     )
 
     def decorator(func):
+        signature = inspect.signature(func)
+        accepts_context = _accepts_hook_context(func)
+        context_parameter = signature.parameters.get("hook_context")
+        if context_parameter is not None and context_parameter.kind in {
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        }:
+            context_parameter = None
+
+        def prepare_call(self, request, args, kwargs):
+            hook_context = kwargs.get("hook_context")
+            bound = None
+            if context_parameter is not None:
+                bound = signature.bind_partial(self, request, *args, **kwargs)
+                hook_context = bound.arguments.get("hook_context")
+            if hook_context is None and context_builder is not None:
+                hook_context = context_builder(self, request)
+
+            call_kwargs = dict(kwargs)
+            if bound is not None and context_builder is not None:
+                bound.arguments["hook_context"] = hook_context
+                bound.apply_defaults()
+                args, call_kwargs = bound.args[2:], bound.kwargs
+            elif not accepts_context:
+                call_kwargs.pop("hook_context", None)
+            elif context_builder is not None:
+                call_kwargs["hook_context"] = hook_context
+            return hook_context, args, call_kwargs
+
         if asyncio.iscoroutinefunction(func):
 
             @wraps(func)
             async def async_wrapper(self, request, *args, **kwargs):
-                hook_context = kwargs.get("hook_context")
-                if hook_context is None and context_builder is not None:
-                    hook_context = context_builder(self, request)
+                hook_context, args, call_kwargs = prepare_call(self, request, args, kwargs)
                 before_kwargs = {"request": request}
-                call_kwargs = dict(kwargs)
                 if context_builder is not None:
                     before_kwargs["hook_context"] = hook_context
-                    if _accepts_hook_context(func):
-                        call_kwargs["hook_context"] = hook_context
 
                 rv = trigger_hook(f"{name}.before", **before_kwargs)
                 request = rv if rv is not None else request
@@ -202,15 +226,10 @@ def hookable(
 
         @wraps(func)
         def sync_wrapper(self, request, *args, **kwargs):
-            hook_context = kwargs.get("hook_context")
-            if hook_context is None and context_builder is not None:
-                hook_context = context_builder(self, request)
+            hook_context, args, call_kwargs = prepare_call(self, request, args, kwargs)
             before_kwargs = {"request": request}
-            call_kwargs = dict(kwargs)
             if context_builder is not None:
                 before_kwargs["hook_context"] = hook_context
-                if _accepts_hook_context(func):
-                    call_kwargs["hook_context"] = hook_context
 
             rv = trigger_hook(f"{name}.before", **before_kwargs)
             request = rv if rv is not None else request
