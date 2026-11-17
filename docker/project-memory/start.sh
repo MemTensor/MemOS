@@ -22,14 +22,12 @@ BASE_IMAGE="memos-base:promem"
 
 SMOKE=1
 REBUILD=0
+STOP=0
 for arg in "$@"; do
   case "$arg" in
     --no-smoke) SMOKE=0 ;;
     --rebuild) REBUILD=1 ;;
-    --stop)
-      docker compose -f "$HERE/docker-compose.yml" down
-      exit 0
-      ;;
+    --stop) STOP=1 ;;
     *) echo "不认识的参数：$arg" >&2; exit 2 ;;
   esac
 done
@@ -45,15 +43,72 @@ net_hint() {
 然后重新执行本脚本（已经下好的部分不会重下）。
 EOF
 }
-compose() { docker compose -f "$HERE/docker-compose.yml" "$@"; }
+
+# 找 compose：优先 `docker compose`（插件），其次独立的 docker-compose（v2），
+# 再找 Docker Desktop / Homebrew 自带但没挂到 docker 插件目录上的 v2 二进制。
+COMPOSE_BIN=""
+find_compose() {
+  if docker compose version >/dev/null 2>&1; then COMPOSE_BIN="docker compose"; return 0; fi
+  local c brew_prefix=""
+  command -v brew >/dev/null 2>&1 && brew_prefix="$(brew --prefix 2>/dev/null || true)"
+  for c in \
+    "$(command -v docker-compose 2>/dev/null || true)" \
+    "/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose" \
+    "$HOME/.docker/cli-plugins/docker-compose" \
+    "/usr/local/lib/docker/cli-plugins/docker-compose" \
+    "/opt/homebrew/lib/docker/cli-plugins/docker-compose" \
+    "${brew_prefix:+$brew_prefix/opt/docker-compose/bin/docker-compose}" \
+    "$HOME/.orbstack/bin/docker-compose"; do
+    [ -n "$c" ] && [ -x "$c" ] || continue
+    local v
+    v="$("$c" version --short 2>/dev/null || true)"
+    case "$v" in
+      v2.* | 2.* | v3.* | 3.*) COMPOSE_BIN="$c"; return 0 ;;
+      1.*) echo "跳过 $c：版本 $v 太旧（需要 2.x）" ;;
+    esac
+  done
+  return 1
+}
+compose_diag() {
+  echo "── 诊断信息（贴给 Claude 也行）──"
+  echo "docker：$(command -v docker)"
+  docker version --format '客户端 {{.Client.Version}}；服务端 {{.Server.Version}}（{{.Server.Platform.Name}}）' 2>&1 || true
+  echo "当前 context：$(docker context show 2>&1 || true)"
+  echo "docker compose version 的报错："
+  docker compose version 2>&1 | sed 's/^/  /' || true
+  ls -l "$HOME/.docker/cli-plugins" 2>/dev/null | sed 's/^/  /' || echo "  ~/.docker/cli-plugins 不存在"
+  [ -d /Applications/Docker.app ] && echo "装了 Docker Desktop：/Applications/Docker.app" || echo "没有 /Applications/Docker.app"
+  command -v colima >/dev/null 2>&1 && echo "装了 colima"
+  command -v orb >/dev/null 2>&1 && echo "装了 OrbStack"
+  cat <<'EOF'
+── 怎么装 compose（任选一种）──
+  Homebrew：brew install docker-compose
+  Docker Desktop：升级或重装到最新版（自带 compose）
+装好后重新执行本脚本。
+EOF
+}
+compose() {
+  if [ "$COMPOSE_BIN" = "docker compose" ]; then
+    docker compose -f "$HERE/docker-compose.yml" "$@"
+  else
+    "$COMPOSE_BIN" -f "$HERE/docker-compose.yml" "$@"
+  fi
+}
 
 # ── 1. Docker ────────────────────────────────────────────────────────────────
 step "1/6 检查 Docker"
 command -v docker >/dev/null 2>&1 \
   || die "没找到 docker 命令：先安装 Docker Desktop（https://www.docker.com/products/docker-desktop/）并打开它"
 docker info >/dev/null 2>&1 || die "Docker 没在运行：打开 Docker Desktop，等它显示 Engine running 后重试"
-docker compose version >/dev/null 2>&1 || die "docker compose 不可用：请升级 Docker Desktop"
-echo "Docker 正常"
+if ! find_compose; then
+  compose_diag
+  die "找不到可用的 docker compose（2.x）"
+fi
+echo "Docker 正常；compose：$COMPOSE_BIN（$(compose version --short 2>/dev/null || true)）"
+if [ "$STOP" = "1" ]; then
+  compose down
+  exit 0
+fi
 
 # ── 2. 端口 ──────────────────────────────────────────────────────────────────
 step "2/6 检查端口 8000 / 7474 / 7687 / 6333"
@@ -138,7 +193,7 @@ cat <<EOF
   健康检查                      $BASE_URL/health
   Neo4j 浏览器（核心记忆）      http://localhost:7474   账号 neo4j / projectmemory
   Qdrant 面板（核心向量）       http://localhost:6333/dashboard
-看日志：docker compose -f "$HERE/docker-compose.yml" logs -f memos
+看日志：$COMPOSE_BIN -f "$HERE/docker-compose.yml" logs -f memos
 停服务：bash "$HERE/start.sh" --stop
 ────────────────────────────────────────────────────────────
 EOF
