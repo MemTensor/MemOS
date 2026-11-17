@@ -173,7 +173,10 @@ class HTTPBGERerankerStrategy(BaseReranker):
         if not documents:
             return []
 
-        headers = {"Content-Type": "application/json", **self.headers_extra}
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        headers.update(self.headers_extra)
         payload = {"model": self.model, "query": query, "documents": documents}
 
         try:
