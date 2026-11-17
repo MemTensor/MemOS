@@ -1,19 +1,20 @@
-# 本地部署：MemOS 服务 + Neo4j + Qdrant，项目记忆用自己的 SQLite（命名卷）。
+# 本地部署：MemOS 服务 + PostgreSQL(pgvector)，项目记忆与核心共用一个 Postgres。
 #
 #   1) 生成 .env（从 MemOS_DEV/env_example 取模型 key，只取模型那几项）
 #        python3 docker/project-memory/make_env.py --env-file ../env_example
-#   2) 构建基础镜像（仓库自带的 Dockerfile，作为 promem 的底座）
+#   2) 构建基础镜像（仓库自带的 Dockerfile）+ 部署镜像
 #        docker build -f docker/Dockerfile -t memos-base:promem .
 #   3) 起服务
 #        docker compose -f docker/project-memory/docker-compose.yml up -d --build
-#   4) 冒烟（本机跑）
+#   4) 冒烟（本机跑；整理是异步的，脚本会轮询 get/status）
 #        python3 docker/project-memory/smoke.py --base http://127.0.0.1:8000
-#   5) 看日志 / 停
+#   5) 看日志 / 停（数据在命名卷里，down 不删）
 #        docker compose -f docker/project-memory/docker-compose.yml logs -f memos
 #        docker compose -f docker/project-memory/docker-compose.yml down
 #
-# 与仓库自带 docker/docker-compose.yml 的区别：不挂载源码（跑镜像里的代码）、不用 --reload、
-# 项目记忆多一个 /data 卷、Neo4j 密码用部署专用值、不读 env_example 只在 .env 里放必要项。
+# 为什么是 Postgres：三个后端里它最轻——只要标准 Postgres + pgvector 一个扩展；
+# Neo4j 要多一个 Java 进程、社区版配置里还写死要 Qdrant；PolarDB 要 polar_age 图引擎 + 中文分词。
+# 项目记忆默认跟核心用同一个 Postgres（不同 schema），少一套配置。
 
 name: memos-project-memory
 
@@ -28,59 +29,36 @@ services:
     env_file:
       - ../../.env
     depends_on:
-      neo4j:
+      postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_started
-    environment:
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-      - NEO4J_URI=bolt://neo4j:7687
     volumes:
-      - promem_data:/data/project_memory
+      - ../../.memos:/app/.memos
     networks:
       - memos_network
     restart: unless-stopped
 
-  neo4j:
-    image: neo4j:5.26.6
-    container_name: memos-promem-neo4j
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: memos-promem-postgres
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: memos
+      POSTGRES_PASSWORD: projectmemory
+      POSTGRES_DB: memos
     healthcheck:
-      test: wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1
+      test: ["CMD-SHELL", "pg_isready -U memos -d memos"]
       interval: 3s
-      timeout: 10s
+      timeout: 5s
       retries: 30
-      start_period: 10s
-    environment:
-      NEO4J_AUTH: neo4j/projectmemory
-      NEO4J_server_memory_heap_max__size: 512m
+      start_period: 5s
     volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-    networks:
-      - memos_network
-
-  qdrant:
-    image: qdrant/qdrant:v1.15.3
-    container_name: memos-promem-qdrant
-    ports:
-      - "6333:6333"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    environment:
-      QDRANT__SERVICE__GRPC_PORT: 6334
-      QDRANT__SERVICE__HTTP_PORT: 6333
+      - pg_data:/var/lib/postgresql/data
     networks:
       - memos_network
 
 volumes:
-  promem_data:
-  neo4j_data:
-  neo4j_logs:
-  qdrant_data:
+  pg_data:
 
 networks:
   memos_network:

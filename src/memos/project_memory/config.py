@@ -13,7 +13,7 @@
 | PROJECT_MEMORY_LLM_MAX_TOKENS | 4096 | |
 | PROJECT_MEMORY_JUDGE_LLM_* | 同上一组 | 判别题（段关系）用的模型，可换小模型；同名后缀 |
 | PROJECT_MEMORY_EMBEDDER_* | 核心的 embedder（MOS_EMBEDDER_*） | BACKEND / PROVIDER / MODEL / API_BASE / API_KEY / DIMENSION |
-| PROJECT_MEMORY_GRAPH_DB | sqlite | sqlite：自己的库；shared：用核心的 graph_db |
+| PROJECT_MEMORY_GRAPH_DB | shared | sqlite：自己的 SQLite 文件库；postgres：自己的 Postgres（用 POSTGRES_* 与 PROJECT_MEMORY_POSTGRES_SCHEMA）；shared：直接用核心的 graph_db |
 | PROJECT_MEMORY_SQLITE_PATH | $MEMOS_BASE_PATH/.memos/project_memory.db | |
 """
 
@@ -121,11 +121,34 @@ def embedding_dims() -> int:
     return int(_env(f"{p}_DIMENSION", "EMBEDDING_DIMENSION", default="1024"))
 
 
+def postgres_config(embedding_dimension: int | None = None) -> dict[str, Any]:
+    """项目记忆自己的 Postgres（与核心同一个实例、不同 schema，便于分开清理与迁移）。"""
+    user = os.getenv("PROJECT_MEMORY_POSTGRES_USER") or os.getenv("POSTGRES_USER", "postgres")
+    return {
+        "host": os.getenv("PROJECT_MEMORY_POSTGRES_HOST") or os.getenv("POSTGRES_HOST", "postgres"),
+        "port": int(
+            os.getenv("PROJECT_MEMORY_POSTGRES_PORT") or os.getenv("POSTGRES_PORT", "5432")
+        ),
+        "user": user,
+        "password": os.getenv("PROJECT_MEMORY_POSTGRES_PASSWORD")
+        if os.getenv("PROJECT_MEMORY_POSTGRES_PASSWORD") is not None
+        else os.getenv("POSTGRES_PASSWORD", ""),
+        "db_name": os.getenv("PROJECT_MEMORY_POSTGRES_DB") or os.getenv("POSTGRES_DB", "postgres"),
+        "schema_name": os.getenv("PROJECT_MEMORY_POSTGRES_SCHEMA", "project_memory"),
+        "user_name": os.getenv("PROJECT_MEMORY_POSTGRES_USER_NAME", "project_memory"),
+        "use_multi_db": False,
+        "embedding_dimension": embedding_dimension or embedding_dims(),
+    }
+
+
 def build_graph_db(
     shared_graph_db: Any | None = None, embedding_dimension: int | None = None
 ) -> Any:
-    """默认用项目记忆自己的 SQLite 库；PROJECT_MEMORY_GRAPH_DB=shared 时用核心的 graph_db。"""
-    kind = os.getenv("PROJECT_MEMORY_GRAPH_DB", "sqlite")
+    """按 PROJECT_MEMORY_GRAPH_DB 选存储：shared（默认，用核心的 graph_db）/ sqlite / postgres。
+
+    默认 shared：本地部署时核心就是一个库（Postgres），项目记忆跟它走，少一套配置。
+    """
+    kind = os.getenv("PROJECT_MEMORY_GRAPH_DB", "shared")
     if kind == "shared":
         if shared_graph_db is None:
             raise RuntimeError("PROJECT_MEMORY_GRAPH_DB=shared，但插件上下文里没有 graph_db")
@@ -134,7 +157,13 @@ def build_graph_db(
     from memos.graph_dbs.factory import GraphStoreFactory
 
     dims = embedding_dimension or embedding_dims()
-    cfg = GraphDBConfigFactory.model_validate(
-        {"backend": "sqlite", "config": {"db_path": sqlite_path(), "embedding_dimension": dims}}
-    )
-    return GraphStoreFactory.from_config(cfg)
+    if kind == "sqlite":
+        cfg = {
+            "backend": "sqlite",
+            "config": {"db_path": sqlite_path(), "embedding_dimension": dims},
+        }
+    elif kind == "postgres":
+        cfg = {"backend": "postgres", "config": postgres_config(dims)}
+    else:
+        raise ValueError(f"PROJECT_MEMORY_GRAPH_DB 只支持 shared / sqlite / postgres，收到 {kind}")
+    return GraphStoreFactory.from_config(GraphDBConfigFactory.model_validate(cfg))

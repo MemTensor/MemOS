@@ -11,6 +11,10 @@
 | ProjectTaskMemory | 索引命名空间 | add 返回的任务：状态、更新了哪些主题 |
 | ProjectIndexMemory | 索引命名空间 | 主题 id → space、会话 → space（按 id 读时用） |
 
+存储可以是任何一个 `BaseGraphDB` 后端（默认用核心的，本地部署就是 Postgres；
+`PROJECT_MEMORY_GRAPH_DB=sqlite|postgres` 可以让项目记忆单独用一个库）。带上 `rev` 列的后端
+（postgres、sqlite）会走条件更新，其余后端退化为整行 upsert。
+
 只调 `BaseGraphDB` 的公共方法，按开源 Postgres 后端的约定传参：
 `add_node(id, memory, metadata, user_name)`、`get_node(id, user_name=)`、`get_nodes(ids, user_name=)`、
 `get_by_metadata(filters=[{field, op, value}], status=, user_name=)`、`delete_node(id, user_name=)`、
@@ -79,15 +83,20 @@ def cosine(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b, strict=False)) / (na * nb)
 
 
+def _rev(n: dict[str, Any]) -> int | None:
+    rev = n.get("rev")
+    return int(rev) if isinstance(rev, int | float) else None
+
+
 def _decision(n: dict[str, Any]) -> Decision:
     d = Decision.from_node(n["id"], n.get("memory", ""), n["metadata"])
-    d.rev = n.get("rev")
+    d.rev = _rev(n)
     return d
 
 
 def _experience(n: dict[str, Any]) -> ExperienceCard:
     e = ExperienceCard.from_node(n["id"], n["metadata"])
-    e.rev = n.get("rev")
+    e.rev = _rev(n)
     return e
 
 
