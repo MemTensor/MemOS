@@ -135,22 +135,29 @@ To use the `smartcomment` visualization tools, install the optional dependencies
 python -m pip install "smartcomment[viz]>=0.1.2"
 ```
 
-Replace `/path/to/graph.json` with a graph path from `index.md`:
+Run the following Python code, replacing `/path/to/graph.json` with a graph path from `index.md`:
 
-```bash
-smartcomment-visualize /path/to/graph.json --backend pyvis --output trace.html
+```python
+import json
+from pathlib import Path
+
+from smartcomment.runtime import ExecNetwork
+
+data = json.loads(Path("/path/to/graph.json").read_text(encoding="utf-8"))
+graph = ExecNetwork.import_graph(data)
+graph.visualize(backend="pyvis", filename="trace.html", directed=True)
 ```
 
-Open `trace.html` in a browser to explore the graph. To export a PNG, also install the Graphviz system application and run:
+Open `trace.html` in a browser to explore the graph. To export a PNG, also install the Graphviz system application and replace the last line with:
 
-```bash
-smartcomment-visualize /path/to/graph.json --backend graphviz --output trace.png
+```python
+graph.visualize(backend="graphviz", filename="trace", format="png")
 ```
 
-DOT export works without the optional visualization dependencies:
+To export DOT without the optional visualization dependencies, replace the last line with:
 
-```bash
-smartcomment-visualize /path/to/graph.json --backend dot --output trace.dot
+```python
+Path("trace.dot").write_text(graph.visualize(backend="dot"), encoding="utf-8")
 ```
 
 ## Trace search results back to their sources
