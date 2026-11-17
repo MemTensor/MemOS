@@ -200,6 +200,13 @@ def main() -> int:
             )
 
     print("\n冒烟：" + ("全部通过" if ok else "有不通过项"))
+    if args.keep:
+        body = json.dumps({"space_id": sid})
+        print(f"数据已保留，space_id = {sid}")
+        print(
+            f"查看主题、决策、经验：curl -s -X POST {args.base}/product/get_memory "
+            f"-H 'Content-Type: application/json' -d '{body}' | python3 -m json.tool"
+        )
     return 0 if ok else 1
 
 
