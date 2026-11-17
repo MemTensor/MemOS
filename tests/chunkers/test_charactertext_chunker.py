@@ -12,11 +12,11 @@ plain text.
 
 import pytest
 
-
-langchain_text_splitters = pytest.importorskip("langchain_text_splitters")
-
 from memos.chunkers.base import BaseChunker
 from memos.chunkers.charactertext_chunker import CharacterTextChunker
+
+
+pytest.importorskip("langchain_text_splitters")
 
 
 URL = "https://example.com/install"
