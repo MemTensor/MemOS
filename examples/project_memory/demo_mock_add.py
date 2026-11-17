@@ -9,11 +9,13 @@
 
 接真模型、真库（SQLite 文件库，数据留在磁盘上）：
 
-    set -a; . ../env_example; set +a                      # OPENAI_API_KEY / QWEN_API_KEY 等
-    export PROJECT_MEMORY_LLM_MODEL=qwen3.7-flash
-    export PROJECT_MEMORY_LLM_BACKEND=qwen
-    export PROJECT_MEMORY_LLM_API_KEY="$QWEN_API_KEY"
-    export PROJECT_MEMORY_LLM_API_BASE="$QWEN_API_BASE"
+    # 用测试专用的 key，逐个 export；不要 source 整份 env 文件（里面有非 shell 语法，值会被打进日志）
+    export PROJECT_MEMORY_LLM_MODEL=gpt-4o-mini
+    export PROJECT_MEMORY_LLM_API_BASE=<网关地址>
+    export PROJECT_MEMORY_LLM_API_KEY=<测试 key>
+    export PROJECT_MEMORY_EMBEDDER_BACKEND=universal_api PROJECT_MEMORY_EMBEDDER_PROVIDER=openai
+    export PROJECT_MEMORY_EMBEDDER_MODEL=bge-m3 PROJECT_MEMORY_EMBEDDER_DIMENSION=1024
+    export PROJECT_MEMORY_EMBEDDER_API_BASE=<向量服务地址> PROJECT_MEMORY_EMBEDDER_API_KEY=<测试 key>
     export PROJECT_MEMORY_SQLITE_PATH=/tmp/memos/project_memory.db
     MEMOS_BASE_PATH=/tmp/memos python examples/project_memory/demo_mock_add.py --live
 
