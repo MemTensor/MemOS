@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from memos.plugins import hooks
 from memos.plugins.hook_context import build_hook_context
 from memos.plugins.hook_defs import H, define_hook, get_hook_spec
 from memos.plugins.hooks import hookable, register_hook, trigger_hook, trigger_single_hook
@@ -189,8 +190,11 @@ def test_hookable_shares_and_reuses_context_for_async_operation():
 
 
 @pytest.mark.parametrize("is_async", [False, True])
-def test_hookable_supports_method_without_context_parameter(is_async):
+@pytest.mark.parametrize("with_builder", [False, True])
+@pytest.mark.parametrize("supplied", ["omitted", "keyword", "none"])
+def test_hookable_supports_method_without_context_parameter(is_async, with_builder, supplied):
     context = build_hook_context(source="test")
+    supplied_context = object()
     observed = []
 
     async def async_run(self, request):
@@ -200,12 +204,122 @@ def test_hookable_supports_method_without_context_parameter(is_async):
         return request
 
     class Handler:
-        run = hookable("without_context", context_builder=lambda _self, _request: context)(
+        run = hookable(
+            "without_context",
+            context_builder=(lambda _self, _request: context) if with_builder else None,
+        )(async_run if is_async else sync_run)
+
+    for name in ("without_context.before", "without_context.after"):
+        register_hook(name, lambda **kwargs: observed.append(kwargs.get("hook_context")))
+    kwargs = (
+        {}
+        if supplied == "omitted"
+        else {"hook_context": supplied_context if supplied == "keyword" else None}
+    )
+    result = Handler().run("request", **kwargs)
+    assert (asyncio.run(result) if is_async else result) == "request"
+    expected = (supplied_context if supplied == "keyword" else context) if with_builder else None
+    assert observed == [expected, expected]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("positional_only", [False, True])
+@pytest.mark.parametrize("supplied", ["positional", "none", "omitted"])
+def test_hookable_reuses_positional_context(is_async, positional_only, supplied):
+    built_context = object()
+    supplied_context = object()
+    observed = []
+
+    def run(self, request, marker="marker", hook_context=None):
+        return request, marker, hook_context
+
+    def positional_run(self, request, marker="marker", hook_context=None, /):
+        return request, marker, hook_context
+
+    async def async_run(self, request, marker="marker", hook_context=None):
+        return request, marker, hook_context
+
+    async def async_positional_run(self, request, marker="marker", hook_context=None, /):
+        return request, marker, hook_context
+
+    operation = positional_run if positional_only else run
+    if is_async:
+        operation = async_positional_run if positional_only else async_run
+
+    class Handler:
+        run = hookable("positional_context", context_builder=lambda *_: built_context)(operation)
+
+    for name in ("positional_context.before", "positional_context.after"):
+        register_hook(name, lambda **kwargs: observed.append(kwargs["hook_context"]))
+    args = (
+        ()
+        if supplied == "omitted"
+        else ("marker", supplied_context if supplied == "positional" else None)
+    )
+    result = Handler().run("request", *args)
+    expected = supplied_context if supplied == "positional" else built_context
+    assert (asyncio.run(result) if is_async else result) == ("request", "marker", expected)
+    assert observed == [expected, expected]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_hook_signatures_are_inspected_only_during_setup(monkeypatch, is_async):
+    context = object()
+    calls = []
+
+    class LegacyCallback:
+        __hash__ = None
+
+        def __call__(self, *, request):
+            calls.append(request)
+            return request
+
+    def sync_run(self, request, *, hook_context=None):
+        return hook_context
+
+    async def async_run(self, request, *, hook_context=None):
+        return hook_context
+
+    class Handler:
+        run = hookable("cached_context", context_builder=lambda *_: context)(
             async_run if is_async else sync_run
         )
 
-    for name in ("without_context.before", "without_context.after"):
-        register_hook(name, lambda **kwargs: observed.append(kwargs["hook_context"]))
+    register_hook("cached_context.before", LegacyCallback())
+    register_hook("cached_context.after", lambda **kwargs: kwargs["result"])
+    define_hook("cached_single", description="Signature caching", params=["request"])
+    register_hook("cached_single", LegacyCallback())
+
+    def unexpected_inspection(*_args, **_kwargs):
+        pytest.fail("Hook invocation must not inspect callback signatures")
+
+    monkeypatch.setattr(hooks.inspect, "signature", unexpected_inspection)
+    for _ in range(2):
+        result = Handler().run("request")
+        assert (asyncio.run(result) if is_async else result) is context
+        assert (
+            trigger_single_hook("cached_single", request="single", hook_context=context) == "single"
+        )
+    assert calls == ["request", "single", "request", "single"]
+    hooks._hooks.clear()
+    result = Handler().run("without callbacks")
+    assert (asyncio.run(result) if is_async else result) is context
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_hookable_builds_required_context_parameter(is_async):
+    context = object()
+
+    def sync_run(self, request, *, hook_context):
+        return hook_context
+
+    async def async_run(self, request, *, hook_context):
+        return hook_context
+
+    class Handler:
+        run = hookable("required_context", context_builder=lambda *_: context)(
+            async_run if is_async else sync_run
+        )
+
     result = Handler().run("request")
-    assert (asyncio.run(result) if is_async else result) == "request"
-    assert observed == [context, context]
+    assert (asyncio.run(result) if is_async else result) is context

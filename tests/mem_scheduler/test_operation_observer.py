@@ -188,6 +188,13 @@ def test_mem_read_handler_exposes_each_memory_operation(
     message.redis_message_id = "synthetic-redis-id"
     message.info = {"custom_tags": ["synthetic-tag"], "is_upload_skill": True}
     message.chat_history = [{"role": "user", "content": "synthetic history"}]
+    monkeypatch.setattr(
+        ScheduleMessageItem,
+        "model_dump",
+        MagicMock(
+            side_effect=AssertionError("Correlation metadata must not dump message payloads")
+        ),
+    )
     events = []
     monkeypatch.setattr(
         "memos.mem_scheduler.task_schedule_modules.handlers.mem_read_handler.is_playground_api",

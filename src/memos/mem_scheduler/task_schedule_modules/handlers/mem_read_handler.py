@@ -96,7 +96,15 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 info=info,
                 chat_history=chat_history,
                 user_context=user_context,
-                operation_context=message.model_dump(),
+                operation_context={
+                    "item_id": message.item_id,
+                    "trace_id": message.trace_id,
+                    "user_id": user_id,
+                    "session_id": message.session_id,
+                    "task_id": message.task_id,
+                    "label": message.label,
+                    "cube_id": mem_cube_id,
+                },
             )
 
             logger.info(
