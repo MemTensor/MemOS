@@ -16,8 +16,6 @@ __pycache__/
 *.py[cod]
 
 # Tests and tool output
-tests
-test_*.py
 *_test.py
 conftest.py
 .pytest_cache/
