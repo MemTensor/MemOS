@@ -73,6 +73,24 @@ def test_get_cache_merge(kv_memory):
     assert dynamic_cache_layer_count(merged) == 1
 
 
+def test_concat_layer_reports_initialized_and_full_seq_length(kv_memory):
+    """Merged caches retain their full sequence through the first update (#2313)."""
+    seq_len = 5
+    item1 = KVCacheItem(memory=make_dynamic_cache(seq_len=seq_len))
+    item2 = KVCacheItem(memory=make_dynamic_cache(seq_len=seq_len))
+    kv_memory.add([item1, item2])
+
+    merged = kv_memory.get_cache([item1.id, item2.id])
+    assert merged is not None
+    assert dynamic_cache_layer_count(merged) == 1
+    assert merged.get_seq_length() == 2 * seq_len
+
+    merged.update(torch.zeros(1, 2, 1, 4), torch.ones(1, 2, 1, 4), 0)
+    assert merged.get_seq_length() == 2 * seq_len + 1
+    assert item1.memory.get_seq_length() == seq_len
+    assert item2.memory.get_seq_length() == seq_len
+
+
 def test_delete_and_get_all(kv_memory):
     # Test delete and get_all functionality
     item = KVCacheItem(memory=make_filled_cache())
