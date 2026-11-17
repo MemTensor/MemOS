@@ -45,7 +45,7 @@ MIN_TOOL_CALLS = 3
 COMPLEX_TOOL_CALLS = 20
 RECALL_TOP_K = 10
 MAX_CAS_RETRIES = 3
-MAX_STEPS = 5
+MAX_STEPS = 8  # 11/17 由 5 放宽到 8：真实模型合并两张卡常给 6–8 步
 MAX_ANCHORS = 5
 CONF_NEW, CONF_MAX, CONF_MIN = 0.5, 0.95, 0.1
 STALE_DAYS = 90
@@ -273,7 +273,7 @@ def guard(
     if action in (EXP_UPDATE, EXP_REFUTE) and merged is not None:
         n = len(steps(merged.get("principle")))
         if n > MAX_STEPS:
-            # T2 §5.2 的合并约束：principle ≤5 步。模型给的合并结果超了就是不合规的输出，
+            # T2 §5.2 的合并约束：principle ≤8 步（原为 5）。模型给的合并结果超了就是不合规的输出，
             # 不写进已有卡片（否则卡片会越并越长，后续每次 update 都像在删步骤）。
             return "add_opposed", f"合并结果 {n} 步，超过 {MAX_STEPS} 步的约束：按新增（待验证）"
     if (

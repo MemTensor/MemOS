@@ -66,7 +66,7 @@ docker compose -f docker/project-memory/docker-compose.yml down
 
 - `--scenario decision`：七轮（六段）全过，每轮 `get/status` 一个主题；决策走了 add → conflict（护栏把模型的
   rewrite 改成 conflict）→ join → conflict → rewrite 定案；
-- `--scenario experience`：三段全过；B 新建（0.5）→ D 补充（0.6，旧版归档）→ E 被护栏降为新增待验证（见已知问题）；
+- `--scenario experience`：三段全过；B 新建（0.5）→ D 补充（0.6，旧版归档）→ E 被护栏降为新增待验证（上限 5 步时 8 步超限；放宽到 8 步后这次合并成 10 步，仍超限，见已知问题）；
 - 项目记忆落在 SQLite 文件库，Neo4j 里只有核心记忆。单测 37 条全过。
 
 docker 本身（镜像构建、compose 编排、命名卷、healthcheck）没在这里跑过，第一次在你机器上跑请留意
@@ -81,9 +81,9 @@ docker 本身（镜像构建、compose 编排、命名卷、healthcheck）没在
 
 ## 已知问题
 
-- **真实模型有时给出超过 5 步的 principle**。T2 §5.2 约束 `principle ≤5 步`，护栏（合并结果超限就不写进
-  已有卡）会把 update 降成「新增待验证」，经验三段可能落成 3 张卡而不是 1 张主卡 + 归档。要么放宽约束，
-  要么在提示词里更强地要求「≤5 步、每步一句」。待定。
+- **合并后的 principle 仍可能超过上限**。上限已由 5 步放宽到 8 步（11/17），但合并模型倾向于把两张卡的步骤
+  直接拼接（会有「运行测试以验证功能」「运行测试以验证导入结果」这种同义重复），几轮合并后照样超限；超限时护栏
+  把 update 降成「新增待验证」。实跑：第 2 段合并为 8 步、通过；第 3 段合并为 10 步、被降级。
 - 单机进程内队列（`MEMSCHEDULER_USE_REDIS_QUEUE=false`）；多副本要换 Redis 队列。同一 Space 的串行锁
   只在单进程内有效（`rev` 条件写只保护单条记录）。
 - 项目记忆的库与核心的 Neo4j 是两个库：清空、迁移要分开做。

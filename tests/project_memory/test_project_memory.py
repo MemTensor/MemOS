@@ -510,9 +510,11 @@ def test_experience_guard():
     assert exp.guard("update", strong, target, {"principle": "读之前入队"})[0] == "update", (
         "有证据的 update 可以改"
     )
-    oversized = {"principle": "；".join(f"{i}. 步骤{i}" for i in range(1, 8))}
+    eight = {"principle": "；".join(f"{i}. 步骤{i}" for i in range(1, 9))}
+    assert exp.guard("update", strong, target, eight)[0] == "update", "8 步以内可以合并"
+    oversized = {"principle": "；".join(f"{i}. 步骤{i}" for i in range(1, 10))}
     assert exp.guard("update", strong, target, oversized)[0] == "add_opposed", (
-        "合并结果超过 5 步（T2 §5.2 的约束）→ 不写进已有卡片"
+        "合并结果超过 8 步（T2 §5.2 的约束）→ 不写进已有卡片"
     )
     assert exp.guard("confirm", strong, None, None)[0] == "add"
 
