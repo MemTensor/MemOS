@@ -33,6 +33,7 @@ import type {
 } from "./dto.js";
 import type { CoreEvent } from "./events.js";
 import type { LogRecord } from "./log-record.js";
+import type { MemoryImportBundle, MemoryImportOptions, MemoryImportResult } from "./import.js";
 
 // ─── Public lifecycle / status ────────────────────────────────────────────────
 
@@ -588,13 +589,7 @@ export interface MemoryCore {
     worldModels: WorldModelDTO[];
     skills: SkillDTO[];
   }>;
-  importBundle(bundle: {
-    version?: number;
-    traces?: unknown[];
-    policies?: unknown[];
-    worldModels?: unknown[];
-    skills?: unknown[];
-  }): Promise<{ imported: number; skipped: number }>;
+  importBundle(bundle: MemoryImportBundle, options?: MemoryImportOptions): Promise<MemoryImportResult>;
 
   // ── embedding maintenance ──
   embeddingMaintenanceStats(): Promise<EmbeddingMaintenanceStats>;

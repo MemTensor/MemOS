@@ -159,6 +159,16 @@ class TextualMemoryMetadata(BaseModel):
         description="Internal algorithm metadata reserved for system use.",
     )
 
+    @field_validator("internal_info", mode="before")
+    @classmethod
+    def _decode_internal_info(cls, value: Any) -> Any:
+        # Neo4j stores dictionaries as JSON strings; decode them before model validation.
+        if isinstance(value, str):
+            value = json.loads(value)
+            if not isinstance(value, dict):
+                raise ValueError("internal_info JSON must decode to an object")
+        return value
+
     model_config = ConfigDict(extra="allow")
 
     covered_history: Any | None = Field(

@@ -264,6 +264,73 @@ class TestPolarDBExtractFieldsFromProperties:
     def test_polardb_declares_lightweight_vector_search_support(self, polardb_instance):
         assert polardb_instance.supports_lightweight_vector_search is True
 
+    @pytest.mark.parametrize(
+        "stored_user_id,expected_user_id",
+        [
+            ("1234567890123456789", "1234567890123456789"),
+            (1234567890123456789, "1234567890123456789"),
+            ('"1234567890123456789"', "1234567890123456789"),
+            ("00123", "00123"),
+            (None, None),
+            ("null", None),
+        ],
+    )
+    def test_lightweight_numeric_user_id_can_be_recalled(
+        self, polardb_instance, stored_user_id, expected_user_id
+    ):
+        from memos.memories.textual.tree_text_memory.retrieve.recall import GraphMemoryRetriever
+
+        polardb_instance.db_name = "test_db"
+        polardb_instance.config = {"user_name": "default_user"}
+        polardb_instance._build_user_name_and_kb_ids_conditions_sql = MagicMock(return_value=[])
+        polardb_instance._build_filter_conditions_sql = MagicMock(return_value=[])
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            (
+                1,
+                None,
+                None,
+                '"00000000-0000-4000-8000-000000000001"',
+                0.2,
+                '"synthetic knowledge"',
+                '"LongTermMemory"',
+                stored_user_id,
+                '["synthetic"]',
+                '{"test":true}',
+                "0.9",
+                "true",
+                0.8,
+            )
+        ]
+        connection = MagicMock()
+        connection.cursor.return_value.__enter__.return_value = cursor
+
+        @contextmanager
+        def fake_connection():
+            yield connection
+
+        polardb_instance._get_connection = fake_connection
+        hits = polardb_instance.search_by_embedding(
+            vector=[0.1] * 1024,
+            user_name="knowledge-cube",
+            light_weight_mode=True,
+            return_fields=[
+                "memory",
+                "memory_type",
+                "user_id",
+                "tags",
+                "info",
+                "confidence",
+                "is_fast",
+            ],
+        )
+        memory = GraphMemoryRetriever._memory_item_from_vector_hit(hits[0])
+        assert memory.metadata.user_id == expected_user_id
+        assert memory.metadata.tags == ["synthetic"]
+        assert memory.metadata.info == {"test": True}
+        assert memory.metadata.confidence == 0.9
+        assert memory.metadata.is_fast is True
+
 
 class TestFieldNameValidation:
     """Tests for _validate_return_fields injection prevention."""

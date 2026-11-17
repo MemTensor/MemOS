@@ -27,6 +27,13 @@ export interface EmbeddingConfig {
   provider: EmbeddingProviderName;
   endpoint?: string;
   model: string;
+  local?: {
+    remoteHost?: string;
+    modelPath?: string;
+    cacheDir?: string;
+    offline?: boolean;
+    loadTimeoutMs?: number;
+  };
   dimensions: number;
   apiKey?: string;
   /** OpenRouter provider routing — providers to skip. */
