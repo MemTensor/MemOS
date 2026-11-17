@@ -33,7 +33,8 @@ python3 docker/project-memory/make_env.py --env-file ../env_example
 
 # 2) 构建底座镜像（仓库自带的 Dockerfile）+ 部署镜像
 docker build -f docker/Dockerfile -t memos-base:promem .
-docker compose -f docker/project-memory/docker-compose.yml up -d --build
+docker build -f docker/project-memory/Dockerfile -t memos-promem:local .
+docker compose -f docker/project-memory/docker-compose.yml up -d   # 不加 --build：新版 compose 构建要 buildx 插件
 
 # 3) 冒烟（走 HTTP；整理是异步的，脚本会轮询 get/status）
 python3 docker/project-memory/smoke.py --base http://127.0.0.1:8000

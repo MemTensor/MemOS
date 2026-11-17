@@ -19,6 +19,7 @@ SMOKE_SCENARIO="${SMOKE_SCENARIO:-all}"
 VENV="${PROMEM_VENV:-$HERE/.venv}"
 BASE_URL="http://127.0.0.1:8000"
 BASE_IMAGE="memos-base:promem"
+APP_IMAGE="memos-promem:local"
 
 SMOKE=1
 REBUILD=0
@@ -63,8 +64,9 @@ find_compose() {
     local v
     v="$("$c" version --short 2>/dev/null || true)"
     case "$v" in
-      v2.* | 2.* | v3.* | 3.*) COMPOSE_BIN="$c"; return 0 ;;
-      1.*) echo "跳过 $c：版本 $v 太旧（需要 2.x）" ;;
+      "" ) echo "跳过 $c：执行 version 失败" ;;
+      1.* | v1.*) echo "跳过 $c：版本 $v 太旧（需要 2.x 及以上）" ;;
+      *) COMPOSE_BIN="$c"; return 0 ;;
     esac
   done
   return 1
@@ -112,7 +114,7 @@ command -v docker >/dev/null 2>&1 \
 docker info >/dev/null 2>&1 || die "Docker 没在运行：打开 Docker Desktop，等它显示 Engine running 后重试"
 if ! find_compose; then
   compose_diag
-  die "找不到可用的 docker compose（2.x）"
+  die "找不到可用的 docker compose（2.x 及以上）"
 fi
 echo "Docker 正常；compose：$COMPOSE_BIN（$(compose version --short 2>/dev/null || true)）"
 if [ "$STOP" = "1" ]; then
@@ -179,7 +181,12 @@ if [ "$REBUILD" = "1" ] || ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1;
   (cd "$REPO" && docker build -f docker/Dockerfile -t "$BASE_IMAGE" .) \
     || { net_hint; die "底座镜像构建失败"; }
 fi
-compose up -d --build || { net_hint; die "docker compose up 失败"; }
+# 部署镜像也用 docker build 构建，compose 只负责起容器：新版 compose 构建时要求 buildx 插件，
+# Colima / 单独装的 docker CLI 往往没有；docker build 没有 buildx 时会退回旧构建器（会打印 DEPRECATED，可忽略）。
+echo "构建部署镜像 $APP_IMAGE（把当前代码打进镜像；有缓存时很快）"
+(cd "$REPO" && docker build -f docker/project-memory/Dockerfile -t "$APP_IMAGE" .) \
+  || die "部署镜像构建失败，日志见上"
+compose up -d || { net_hint; die "docker compose up 失败"; }
 
 printf '等服务就绪'
 healthy=0
