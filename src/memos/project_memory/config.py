@@ -166,6 +166,11 @@ def build_graph_db(
 
     dims = embedding_dimension or embedding_dims()
     if kind == "sqlite":
+        logger.warning(
+            "项目记忆存在 SQLite 文件 %s：只适合单进程。多 worker / 多副本部署请设 "
+            "PROJECT_MEMORY_GRAPH_DB=postgres，否则并行整理会丢更新、重复建主题",
+            sqlite_path(),
+        )
         cfg = {
             "backend": "sqlite",
             "config": {"db_path": sqlite_path(), "embedding_dimension": dims},
