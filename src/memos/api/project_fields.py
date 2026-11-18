@@ -99,7 +99,13 @@ class ProjectSearchFields(BaseModel):
     @classmethod
     def _extract_project_view(cls, data: Any) -> Any:
         """Set project_view flags; keep 'project' in the view list so that
-        has_project_view can detect it even when the plugin is not loaded."""
+        has_project_view can detect it even when the plugin is not loaded.
+
+        Also fills readable_cube_ids from space_ids: the enterprise version's
+        validator requires readable_cube_ids, but a project-only search is served
+        by the plugin and never touches those cubes.  A Space is a cube
+        (user_name = space_id), so the value is semantically correct.
+        """
         if not isinstance(data, dict):
             return data
         views = data.get("include_memory_view")
@@ -110,6 +116,12 @@ class ProjectSearchFields(BaseModel):
             data = dict(data)
             data["project_view_flag"] = True
             data["project_view_only_flag"] = only
+            if not data.get("readable_cube_ids"):
+                spaces = data.get("space_ids")
+                if isinstance(spaces, str):
+                    spaces = [spaces]
+                if spaces:
+                    data["readable_cube_ids"] = list(spaces)
         return data
 
 
