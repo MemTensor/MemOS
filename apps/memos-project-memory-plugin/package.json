@@ -1,0 +1,36 @@
+{
+  "name": "memos-project-memory-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Local project memory capture and search for coding agents",
+  "bin": {
+    "memos-pm": "dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=24.12.0"
+  },
+  "files": [
+    "dist",
+    "viewer",
+    "skills",
+    "README.md",
+    "docs"
+  ],
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build.mjs",
+    "lint": "node scripts/check.mjs",
+    "start": "node dist/runtime/main.js",
+    "mock": "node dev/memos-mock/server.ts",
+    "prepack": "npm run build",
+    "dev": "node src/runtime/main.ts",
+    "viewer": "node dist/runtime/open.js",
+    "test:package": "node scripts/smoke-package.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "@types/node": "^25.9.1"
+  }
+}

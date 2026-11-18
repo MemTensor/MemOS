@@ -1,0 +1,17 @@
+{
+  "score": 97,
+  "threshold": 90,
+  "threshold_pass": true,
+  "verdict": "pass",
+  "category_match": true,
+  "reference_images": [
+    "../multi-space/relations.png"
+  ],
+  "generated_screenshot": "projects.png",
+  "differences": [
+    "移除独立任务展示卡片，仅保留绑定操作和绑定关系两个卡片。"
+  ],
+  "suggestions": [],
+  "reasoning": "原有卡片布局、侧栏和表格保持一致，页面更简洁；浏览器验证绑定抽屉、会话轨迹和保留数据均正常。",
+  "next_actions": []
+}

@@ -1,0 +1,9 @@
+{
+  "score": 98,
+  "verdict": "pass",
+  "category_match": true,
+  "differences": [],
+  "suggestions": [],
+  "reasoning": "会话列表保留宿主名称和时间；详情基础信息仅含宿主会话 ID、目录、创建时间；映射区块已移除，排版无溢出。",
+  "next_actions": []
+}

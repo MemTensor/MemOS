@@ -1,0 +1,9 @@
+{
+  "url": "http://127.0.0.1:50539",
+  "trajectoryCount": 1,
+  "pendingBatches": 1,
+  "messageCount": 2,
+  "originalContentPreserved": true,
+  "attempts": 0,
+  "backup": "/Users/niu/.memos-project-memory/memory.sqlite.before-turn-batches-1794987526493.sqlite"
+}

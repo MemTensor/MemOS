@@ -1,0 +1,83 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Store } from '../../src/storage/store.ts';
+import { PluginService } from '../../src/server/service.ts';
+
+test('native session title persists, follows rename and never changes task identity or uploads', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'pm-title-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const service=new PluginService(dir,{codexRoots:[]});
+ const event={agentType:'deepseek-harness',nativeSessionId:'native',cwd:'/project',event:'trace-available' as const,title:'Greeting'};
+ const response=await service.event({...event,event:'turn-start',turnKey:'first-input'});
+ const session=service.store.session(response.sessionId)!;
+ assert.equal(session.title,'Greeting');
+ const identity={id:session.id,taskId:session.taskId,objectId:session.objectId,currentTurnId:session.currentTurnId};
+ await service.event({...event,title:'New name'});
+ await service.event({...event,title:undefined});
+ await service.event({...event,title:'   '});
+ assert.equal(service.store.session(session.id)!.title,'New name');
+ assert.deepEqual(Object.fromEntries(Object.keys(identity).map(k=>[k,service.store.session(session.id)![k as keyof typeof session]])),identity);
+ for(const table of ['traces','batches'])assert.equal(service.store.rows(`SELECT * FROM ${table}`).length,0);
+ assert.equal(service.store.rows('SELECT * FROM turns').length,1);
+ service.close();
+ const reopened=new Store(join(dir,'memory.sqlite'));t.after(()=>reopened.close());
+ assert.equal(reopened.session(session.id)!.title,'New name');
+ assert.equal(reopened.state().sessions[0]!.title,'New name');
+ assert.equal(reopened.sessionDetail(session.id).session!.title,'New name');
+});
+
+test('Codex native index rename updates while rollout content and cursor stay unchanged', async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'pm-title-codex-')),root=join(dir,'host'),sources=join(root,'sessions');
+ await mkdir(sources,{recursive:true});
+ const service=new PluginService(join(dir,'data'),{codexRoots:[sources]});t.after(async()=>{service.close();await rm(dir,{recursive:true,force:true});});
+ const rows=[{type:'session_meta',payload:{id:'native',cwd:dir,source:'cli'}},{type:'event_msg',payload:{type:'task_started',turn_id:'turn'}},{type:'response_item',payload:{type:'message',id:'u',role:'user',content:'你好'}},{type:'event_msg',payload:{type:'task_complete',turn_id:'turn'}}];
+ const path=join(sources,'rollout.jsonl');await writeFile(path,rows.map((row,i)=>JSON.stringify({...row,ordinal:i,timestamp:`2026-01-01T00:00:0${i}Z`})).join('\n')+'\n');
+ const index=join(root,'session_index.jsonl');await writeFile(index,JSON.stringify({id:'native',thread_name:'Greeting',updated_at:'2026-01-01T00:00:00Z'})+'\n');
+ await service.event({agentType:'codex-cli',nativeSessionId:'native',cwd:dir,event:'turn-end',nativeTurnId:'turn',raw:{transcript_path:path}});
+ await service.captureCodex(true);
+ assert.equal(service.store.state().sessions[0]!.title,'Greeting');
+ const before=service.store.rows('SELECT * FROM traces'),batches=service.store.rows('SELECT * FROM batches');
+ await writeFile(index,JSON.stringify({id:'native',thread_name:'Renamed',updated_at:'2026-01-02T00:00:00Z'})+'\n');
+ await service.captureCodex(true);
+ assert.equal(service.store.state().sessions[0]!.title,'Renamed');
+ assert.deepEqual(service.store.rows('SELECT * FROM traces'),before);
+ assert.deepEqual(service.store.rows('SELECT * FROM batches'),batches);
+});
+
+test('older cached title cannot undo a live rename, including after service restart', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'pm-title-order-')),path=join(dir,'memory.sqlite');t.after(()=>rm(dir,{recursive:true,force:true}));
+ let store=new Store(path);t.after(()=>store.close());
+ const identity={agentType:'deepseek-harness',nativeSessionId:'native',cwd:'/project'};
+ const session=store.registerSession({...identity,title:'Greeting',titleRevision:22});
+ store.registerSession({...identity,title:'Renamed live',titleRevision:24});
+ store.setSessionTitle(session.id,'Greeting',23);
+ assert.equal(store.session(session.id)!.title,'Renamed live');
+ store.close();store=new Store(path);
+ store.setSessionTitle(session.id,'Greeting',23);
+ store.registerSession({...identity,title:'unversioned old title'});
+ assert.equal(store.session(session.id)!.title,'Renamed live');
+ store.setSessionTitle(session.id,'Renamed while offline',30);
+ assert.equal(store.session(session.id)!.title,'Renamed while offline');
+ assert.equal(store.session(session.id)!.titleRevision,30);
+ assert.equal(store.rows('SELECT * FROM traces').length,0);
+});
+
+test('DSH backfill and later cache rename update existing names without overriding a newer event', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'pm-title-dsh-')),home=join(dir,'host'),cache=join(home,'storages/session_projcache/sessions');
+ await mkdir(cache,{recursive:true});
+ const previous=process.env.DSH_HOME;process.env.DSH_HOME=home;
+ const service=new PluginService(join(dir,'data'),{codexRoots:[]});
+ t.after(async()=>{service.close();if(previous===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=previous;await rm(dir,{recursive:true,force:true});});
+ const identity={agentType:'deepseek-harness',nativeSessionId:'native',cwd:'/project'};
+ const session=service.store.registerSession(identity);
+ const cacheTitle=(val:string,seq:number)=>writeFile(join(cache,'native.json'),JSON.stringify({version:7,record:{identity:{cwd:'/project',createdAt:1},rows:{title:{ver:1,seq,val}}}}));
+ await cacheTitle('Greeting',22);await service.refreshSessionTitles();
+ assert.equal(service.store.session(session.id)!.title,'Greeting');
+ await service.event({...identity,event:'trace-available',title:'Live name',titleRevision:24});
+ await service.refreshSessionTitles();assert.equal(service.store.session(session.id)!.title,'Live name');
+ await cacheTitle('Renamed offline',30);await service.refreshSessionTitles();
+ assert.equal(service.store.session(session.id)!.title,'Renamed offline');
+ for(const table of ['turns','traces','batches'])assert.equal(service.store.rows(`SELECT * FROM ${table}`).length,0);
+});

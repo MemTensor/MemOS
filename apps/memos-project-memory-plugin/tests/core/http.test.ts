@@ -1,0 +1,20 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { mkdtempSync,rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { PluginService } from '../../src/server/service.ts';
+import { createLocalServer } from '../../src/server/http.ts';
+test('local API exposes config safely, creates projects, and rejects cross-origin mutations',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'pm-http-')),service=new PluginService(dir),server=createLocalServer(service);server.listen(0,'127.0.0.1');await once(server,'listening');
+ t.after(async()=>{await new Promise<void>(r=>server.close(()=>r()));service.close();rmSync(dir,{recursive:true});});
+ const addr=server.address();assert.ok(addr&&typeof addr!=='string');const base=`http://127.0.0.1:${addr.port}`;
+ const health=await (await fetch(base+'/api/health')).json() as any;
+ assert.equal(health.apiVersion,3);assert.equal(health.pid,process.pid);assert.equal(typeof health.runtimeRevision,'string');assert.ok(health.runtimeRevision.length>0);
+ let response=await fetch(base+'/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({apiKey:'private-value'})});const config=await response.json() as any;assert.equal(config.keyConfigured,true);assert.equal(config.apiKey,undefined);
+ response=await fetch(base+'/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Demo',root:'/demo'})});assert.equal(response.status,200);
+ response=await fetch(base+'/api/projects',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://evil.example'},body:JSON.stringify({name:'Other',root:'/other'})});assert.equal(response.status,403);
+ const state=await (await fetch(base+'/api/state')).json() as any;assert.equal(state.projects.length,1);
+ assert.equal((await fetch(base+'/')).status,200);
+});

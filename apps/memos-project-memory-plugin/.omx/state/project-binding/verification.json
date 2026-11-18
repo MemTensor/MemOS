@@ -1,0 +1,37 @@
+{
+  "date": "2026-11-18",
+  "environment": "isolated temporary SQLite + MemOS HTTP mock + headless Chrome",
+  "tests": {
+    "total": 100,
+    "passed": 96,
+    "failed": 0,
+    "skipped": 4,
+    "skip_reason": "installed DSH components require MEMOS_PM_DSH_ROOT"
+  },
+  "typecheck": "passed",
+  "syntax_lint": "passed",
+  "build": "passed",
+  "browser": [
+    "Agent-filtered project list",
+    "directory filled from selected project",
+    "two agent directories bound to two different spaces",
+    "invalid Space preserves user input and creates no project",
+    "SQLite session routing adopts project binding",
+    "fixed binding controls locked",
+    "projects preserved after page reload",
+    "390px viewport without horizontal overflow",
+    "zero page errors"
+  ],
+  "parameters_reused": [
+    "name",
+    "root",
+    "spaceId",
+    "objectId",
+    "agentType"
+  ],
+  "new_database_columns": [],
+  "limitations": [
+    "real cloud API compatibility remains unverified",
+    "hosts without a direct discovery reader use captured SQLite session directories"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "pass": true,
+  "checks": [
+    "compact relation columns with user project names and no directory paths",
+    "0/1/multiple spaces",
+    "right drawer and collapsible list",
+    "Space names and full IDs",
+    "copy then unbind SVG order",
+    "clipboard copy for each specific ID",
+    "delete only selected SQLite relation",
+    "last removal preserves project and empty list",
+    "Escape close restores focus",
+    "reload preserves unbind",
+    "cloud Spaces retained",
+    "first operation card can bind again",
+    "390px mobile drawer fits viewport",
+    "zero page errors"
+  ]
+}

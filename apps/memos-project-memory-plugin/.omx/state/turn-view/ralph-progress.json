@@ -1,0 +1,9 @@
+{
+  "score": 95,
+  "verdict": "pass",
+  "category_match": true,
+  "differences": [],
+  "suggestions": [],
+  "reasoning": "采用 memmy-agent 的轮次摘要列表与右侧详情交互，内容框均为白色。当前一轮压缩为单个摘要框，详情条目默认折叠；展开正文限定280px并滚动，未出现页面被长回复撑高。",
+  "next_actions": []
+}

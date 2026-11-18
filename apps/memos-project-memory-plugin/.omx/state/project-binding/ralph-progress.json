@@ -1,0 +1,20 @@
+{
+  "score": 95,
+  "threshold": 90,
+  "threshold_pass": true,
+  "verdict": "pass",
+  "category_match": true,
+  "reference_images": [
+    "before.png"
+  ],
+  "generated_screenshots": [
+    "bound.png",
+    "mobile-viewport.png"
+  ],
+  "differences": [
+    "项目登记表单改为 Agent、已有本地项目下拉选择及 Space ID 输入。"
+  ],
+  "suggestions": [],
+  "reasoning": "桌面沿用原工作台样式，移动端字段纵向排列；390px视口无横向溢出，绑定后状态清楚。",
+  "next_actions": []
+}

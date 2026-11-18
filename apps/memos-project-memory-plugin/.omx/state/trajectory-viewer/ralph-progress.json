@@ -1,0 +1,29 @@
+{
+  "score": 92,
+  "verdict": "pass",
+  "category_match": true,
+  "differences": [
+    "保留原有工作空间左侧导航和页面标题栏",
+    "轨迹正文继续以安全纯文本保留原始 Markdown 标记"
+  ],
+  "suggestions": [],
+  "reasoning": "实际 Viewer 截图确认顶部 Agent、项目、时间筛选和两栏阅读布局清晰，嵌套卡片已取消，左侧工作空间导航未改变。",
+  "threshold": 90,
+  "threshold_pass": true,
+  "next_actions": [],
+  "screenshot": "/Users/niu/Documents/ChatGPT/MemOS项目记忆/drafts/viewer-trajectory-implemented.png",
+  "checks": {
+    "testsPassed": 187,
+    "testsSkipped": 4,
+    "testsFailed": 0,
+    "typecheck": "passed",
+    "lint": "passed",
+    "build": "passed",
+    "outsideSessionHtml": "unchanged",
+    "browser": "Agent/project/date filters, empty state, execution folding, real transcript verified"
+  },
+  "limitations": [
+    "未实测移动端视口",
+    "Markdown 保持原始文本展示"
+  ]
+}

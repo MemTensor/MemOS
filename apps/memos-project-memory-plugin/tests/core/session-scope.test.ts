@@ -1,0 +1,26 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { mkdtempSync,rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { PluginService } from '../../src/server/service.ts';
+import { createLocalServer } from '../../src/server/http.ts';
+
+test('session listing requires a project scope and never mixes same-name projects',async t=>{
+    const dir=mkdtempSync(join(tmpdir(),'pm-session-scope-')),service=new PluginService(dir,{codexRoots:[]}),server=createLocalServer(service);
+    server.listen(0,'127.0.0.1');await once(server,'listening');
+    t.after(async()=>{await new Promise<void>(r=>server.close(()=>r()));service.close();rmSync(dir,{recursive:true,force:true});});
+    const address=server.address();assert.ok(address&&typeof address!=='string');const base=`http://127.0.0.1:${address.port}`;
+    const a=service.store.createProject('same','/one'),b=service.store.createProject('same','/two');
+    service.store.registerSession({agentType:'test',nativeSessionId:'a',cwd:'/one'});
+    service.store.registerSession({agentType:'test',nativeSessionId:'b',cwd:'/two'});
+    service.store.registerSession({agentType:'test',nativeSessionId:'standalone',cwd:'/other'});
+    const read=async(path:string)=>await(await fetch(base+path)).json() as any;
+    assert.equal((await fetch(base+'/api/sessions')).status,400);
+    assert.equal((await fetch(base+'/api/sessions?projectId=missing')).status,404);
+    const first=await read(`/api/sessions?projectId=${a.id}`),second=await read(`/api/sessions?projectId=${b.id}`);
+    assert.deepEqual(first.sessions.map((s:any)=>s.nativeSessionId),['a']);
+    assert.deepEqual(second.sessions.map((s:any)=>s.nativeSessionId),['b']);
+    assert.deepEqual((await read('/api/sessions?scope=unassigned')).sessions.map((s:any)=>s.nativeSessionId),['standalone']);
+});

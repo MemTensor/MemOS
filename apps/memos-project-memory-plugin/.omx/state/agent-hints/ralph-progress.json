@@ -1,0 +1,9 @@
+{
+  "score": 97,
+  "verdict": "pass",
+  "category_match": true,
+  "differences": [],
+  "suggestions": [],
+  "reasoning": "中文使用提示使用正文列表，Codex 权限操作可读；无提示的 Agent 隐藏说明，未展示开发验证记录。",
+  "next_actions": []
+}

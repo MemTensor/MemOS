@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-18",
+  "environment": "temporary SQLite + independent MemOS HTTP mock + headless Chrome",
+  "tests": {
+    "total": 115,
+    "passed": 111,
+    "failed": 0,
+    "skipped": 4,
+    "skip_reason": "installed DSH integration requires MEMOS_PM_DSH_ROOT"
+  },
+  "typecheck": "passed",
+  "syntax_lint": "passed",
+  "build": "passed",
+  "cli": "real Node CLI child -> local HTTP -> one cloud search request with all bound space_ids",
+  "migration": "legacy single-Space database backed up and converted; accepted payload targets and retry counters retained",
+  "first_card_html_sha256": "8485197887b10931f29df3bd9142b1b82e0b1eeb8cea859dcacc523a100e6b31",
+  "browser_evidence": "browser-verification.json",
+  "visual_verdict": "ralph-progress.json",
+  "live_cloud_verified": false,
+  "published": false
+}
