@@ -657,7 +657,7 @@ class QueueScheduler:
     def drain(self) -> int:
         from unittest.mock import Mock
 
-        from memos.mem_scheduler.schemas.task_schemas import PROJECT_MEMORY_TASK_LABEL
+        from memos.mem_scheduler.task_schedule_modules.handlers.project_memory_handler import PROJECT_MEMORY_TASK_LABEL
         from memos.mem_scheduler.task_schedule_modules.handlers.project_memory_handler import (
             ProjectMemoryMessageHandler,
         )
@@ -678,6 +678,9 @@ def reset_project_hooks() -> None:
     from memos.plugins.hooks import _hooks
 
     for name in [v for k, v in vars(H).items() if k.startswith("PROJECT_MEMORY_")]:
+        _hooks.pop(name, None)
+    # Also clear the add/search intercept/after hooks registered by the plugin.
+    for name in ("add.intercept", "add.after", "search.intercept", "search.after"):
         _hooks.pop(name, None)
 
 
@@ -749,6 +752,9 @@ def build_http_app(
                 "graph_db": graph_db,
                 "embedder": embedder,
                 "llm": llm,
+                # Pin the judge model to the same stub so tests never reach a real
+                # model configured through PROJECT_MEMORY_JUDGE_LLM_* in .env.
+                "project_judge_llm": llm,
                 "submit_scheduler_messages": sched.submit_messages,
             }
         }

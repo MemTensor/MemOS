@@ -17,10 +17,10 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_READ_TASK_LABEL,
     MEM_UPDATE_TASK_LABEL,
     PREF_ADD_TASK_LABEL,
-    PROJECT_MEMORY_TASK_LABEL,
     QUERY_TASK_LABEL,
     TaskPriorityLevel,
 )
+from .handlers.project_memory_handler import PROJECT_MEMORY_TASK_LABEL
 
 from .handlers.add_handler import AddMessageHandler
 from .handlers.answer_handler import AnswerMessageHandler

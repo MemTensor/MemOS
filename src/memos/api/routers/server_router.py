@@ -216,7 +216,13 @@ def scheduler_status(
         # memory view `project`: tasks are tracked by the project-memory plugin
         project_task = project_view.task_status(task_id=task_id, user_id=user_id)
         if project_task is not None:
-            return StatusResponse(data=[project_task])
+            # Project task status carries memory_views which StatusResponseItem
+            # does not model; return as raw JSON to bypass response_model validation.
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                content={"code": 200, "message": "Memory get status successfully",
+                         "data": [project_task]}
+            )
     return handlers.scheduler_handler.handle_scheduler_status(
         user_id=user_id,
         task_id=task_id,

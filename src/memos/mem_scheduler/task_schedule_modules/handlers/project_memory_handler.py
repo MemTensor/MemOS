@@ -5,7 +5,6 @@ import threading
 from typing import TYPE_CHECKING, ClassVar
 
 from memos.log import get_logger
-from memos.mem_scheduler.schemas.task_schemas import PROJECT_MEMORY_TASK_LABEL
 from memos.mem_scheduler.task_schedule_modules.base_handler import BaseSchedulerHandler
 from memos.plugins.hook_defs import H
 from memos.plugins.hooks import _hooks, trigger_single_hook
@@ -16,6 +15,11 @@ if TYPE_CHECKING:
 
 
 logger = get_logger(__name__)
+
+# Scheduler label for project-memory tasks.  Declared here (not in
+# task_schemas.py) so that task_schemas.py stays at the open-source baseline
+# and merges cleanly into the enterprise version.
+PROJECT_MEMORY_TASK_LABEL = "project_memory"
 
 
 class ProjectMemoryMessageHandler(BaseSchedulerHandler):

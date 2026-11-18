@@ -41,7 +41,7 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
-PROJECT_MEMORY_TASK_LABEL = "project_memory"  # 与 mem_scheduler.schemas.task_schemas 一致
+PROJECT_MEMORY_TASK_LABEL = "project_memory"  # re-exported for callers; source of truth is handler
 MAX_DOMAINS = 20
 DEFAULT_LIMIT = 9
 REL_MIN = 0.12  # 条目与 query 的最低相关度（二元组相似度；接真向量后在评测集上定）
@@ -184,8 +184,16 @@ class ProjectMemoryService:
 
     def accept(self, req: Any) -> dict[str, Any]:
         """add/message 受理（同步部分）：校验、存消息、建任务、按 Space 入队。"""
-        space_ids: list[str] = list(req.space_ids or [])
-        domains: list[str] = list(getattr(req, "domains", None) or [])
+        from memos.api.project_fields import normalize_str_list
+
+        space_ids: list[str] = normalize_str_list(getattr(req, "space_ids", None), "space_ids")
+        domains: list[str] = normalize_str_list(getattr(req, "domains", None), "domains")
+        # user_id 可能是字符串（开源版）也可能是字符串数组（企业版允许多 cube）
+        raw_uid = req.user_id
+        if isinstance(raw_uid, list):
+            user_id = raw_uid[0] if raw_uid else ""
+        else:
+            user_id = raw_uid or ""
         spaces = [self.get_space(s) for s in space_ids]  # 任一不存在 → 「Space 不存在」
         for sp in spaces:
             if not sp.domains:
@@ -199,8 +207,9 @@ class ProjectMemoryService:
         conv = getattr(req, "conversation_id", None) or getattr(req, "session_id", None) or None
         if conv == "default_session":
             conv = None
-        user_id = req.user_id if isinstance(req.user_id, str) else ""
-        agent_id = req.agent_id if isinstance(getattr(req, "agent_id", None), str) else ""
+        # user_id already resolved above (handles str or list); re-use it.
+        raw_agent = getattr(req, "agent_id", None)
+        agent_id = (raw_agent[0] if isinstance(raw_agent, list) and raw_agent else raw_agent) or ""
         msgs = parse_messages(req.messages or [], user_id)
         task = TaskRecord(
             task_id=getattr(req, "task_id", None) or new_uuid(),
@@ -769,14 +778,26 @@ def parse_messages(raw: list[Any], user_id: str) -> list[Msg]:
     - user → 成员消息（说话人取 role_id / role_name，没传就用请求的 user_id）；
     - assistant 正文 → Agent 回复；assistant 的 tool_calls → 每个调用一条工具记录；
     - tool → 并进对应 tool_call_id 的工具记录作为返回（找不到就单独一条）。
+
+    chat_time 没有时区偏移时，补 +00:00（UTC）。工程层应统一补时区；
+    这里兜底是为了避免同一 Space 里混用带时区与不带时区的时间戳导致切段报错。
     """
+    import re as _re
+
+    _TZ_PAT = _re.compile(r"[+-]\d{2}:?\d{2}$|Z$")
+
+    def _ensure_tz(t: str) -> str:
+        if t and not _TZ_PAT.search(t):
+            return t + "+00:00"
+        return t
+
     out: list[Msg] = []
     calls: dict[str, Msg] = {}
     now = now_iso()
     for i, r in enumerate(raw):
         r = dict(r) if isinstance(r, dict) else {"role": "user", "content": str(r)}
         role = r.get("role", "user")
-        t = r.get("chat_time") or now
+        t = _ensure_tz(r.get("chat_time") or now)
         mid = r.get("message_id") or f"m{i + 1:04d}-{new_uuid()[:8]}"
         if role == "user":
             out.append(

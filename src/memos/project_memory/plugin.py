@@ -44,6 +44,7 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     def on_load(self) -> None:
         self.context: dict[str, Any] = {"shared": {}, "configs": {}}
         self._service: ProjectMemoryService | None = None
+        # Core single-provider hooks (project-memory business logic)
         self.register_hook(
             H.PROJECT_MEMORY_ACCEPT, lambda request, **kw: self.service.accept(request)
         )
@@ -67,6 +68,13 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             H.PROJECT_MEMORY_TASK_STATUS,
             lambda task_id, user_id, **kw: self.service.task_status(task_id, user_id),
         )
+        # Intercept / after hooks so the add and search handlers don't need edits.
+        # intercept: when only `project` is requested, bypass the personal-memory pipeline.
+        # after: when both are requested, append project results to the core result.
+        self.register_hook("add.intercept", self._add_intercept)
+        self.register_hook("add.after", self._add_after)
+        self.register_hook("search.intercept", self._search_intercept)
+        self.register_hook("search.after", self._search_after)
         logger.info("[ProjectMemory] plugin loaded")
 
     def init_components(self, context: dict) -> None:
@@ -84,17 +92,22 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     def service(self) -> ProjectMemoryService:
         shared = self.context.get("shared") or {}
         if self._service is None:
-            own_embedder = pm_config.build_embedder()
             core_embedder = shared.get("embedder")
-            embedder = own_embedder or core_embedder
-            graph_db = shared.get("project_graph_db") or pm_config.build_graph_db(
+            # Prefer the shared (test/core) embedder; only build our own when
+            # the shared context doesn't provide one.
+            embedder = core_embedder or pm_config.build_embedder()
+            graph_db = shared.get("project_graph_db") or shared.get("graph_db") or pm_config.build_graph_db(
                 shared.get("graph_db")
             )
             store = ProjectStore(
                 graph_db, embedder=embedder.embed if embedder is not None else None
             )
-            llm = pm_config.build_llm() or shared.get("llm")
-            judge_llm = pm_config.build_llm("PROJECT_MEMORY_JUDGE_LLM")
+            llm = shared.get("llm") or pm_config.build_llm()
+            # An explicit judge model can be supplied by the host (tests, embedding
+            # services); otherwise fall back to PROJECT_MEMORY_JUDGE_LLM_*.
+            judge_llm = shared.get("project_judge_llm") or pm_config.build_llm(
+                "PROJECT_MEMORY_JUDGE_LLM"
+            )
             self._service = ProjectMemoryService(
                 store, ModelHub(llm=llm, judge_llm=judge_llm, graph_db=graph_db)
             )
@@ -102,6 +115,87 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         if self._service.submit is None and shared.get("submit_scheduler_messages"):
             self._service.submit = self._submit
         return self._service
+
+    def _add_intercept(self, request: Any) -> Any | None:
+        """Called by hookable('add').intercept before handle_add_memories runs."""
+        from memos.api.handlers.project_view import has_project_view, only_project
+        from fastapi import HTTPException
+
+        if not has_project_view(request):
+            return None
+
+        # Validate required fields for project memory
+        raw_uid = request.user_id
+        user_id = (raw_uid[0] if isinstance(raw_uid, list) and raw_uid else raw_uid) or ""
+        space_ids_raw = getattr(request, "space_ids", None)
+        if isinstance(space_ids_raw, str):
+            space_ids_raw = [space_ids_raw] if space_ids_raw.strip() else None
+        if not user_id or not space_ids_raw:
+            raise HTTPException(
+                status_code=422,
+                detail="user_id and space_ids are required when using project memory",
+            )
+
+        try:
+            result = self.service.accept(request)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        if only_project(request):
+            return {"code": 200, "message": "Project memory task accepted", "data": [result]}
+        self._pending_add_result = result
+        return None
+
+    def _add_after(self, request: Any, result: Any) -> Any:
+        """Appends project-memory task info to a mixed-view add result."""
+        pending = getattr(self, "_pending_add_result", None)
+        self._pending_add_result = None
+        if pending is None:
+            return result
+        try:
+            if hasattr(result, "data") and isinstance(result.data, list):
+                result.data.append(pending)
+            elif isinstance(result, dict) and isinstance(result.get("data"), list):
+                result["data"].append(pending)
+        except Exception:
+            pass
+        return result
+
+    def _search_intercept(self, request: Any) -> Any | None:
+        """Called by hookable('search').intercept before handle_search_memories runs."""
+        from memos.api.handlers.project_view import has_project_view, only_project, _fill_readable_cube_ids
+
+        if not has_project_view(request):
+            return None
+        _fill_readable_cube_ids(request)
+        try:
+            topics = self.service.search(request)
+        except (LookupError, ValueError) as e:
+            from fastapi import HTTPException
+            status = 404 if isinstance(e, LookupError) else 400
+            raise HTTPException(status_code=status, detail=str(e)) from e
+        if only_project(request):
+            return {"code": 200, "message": "Search completed successfully",
+                    "data": {"topic_detail_list": topics}}
+        self._pending_search_topics = topics
+        return None
+
+    def _search_after(self, request: Any, result: Any) -> Any:
+        """Appends topic_detail_list to a mixed-view search result."""
+        topics = getattr(self, "_pending_search_topics", None)
+        self._pending_search_topics = None
+        if topics is None:
+            return result
+        try:
+            if hasattr(result, "data") and isinstance(result.data, dict):
+                result.data["topic_detail_list"] = topics
+            elif isinstance(result, dict) and isinstance(result.get("data"), dict):
+                result["data"]["topic_detail_list"] = topics
+        except Exception:
+            pass
+        return result
 
     def _submit(self, items: list) -> None:
         self.context["shared"]["submit_scheduler_messages"](items)

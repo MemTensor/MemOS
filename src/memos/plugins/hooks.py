@@ -106,6 +106,11 @@ def hookable(name: str):
     Auto-declares before/after Hooks (idempotent); no need to manually define_hook in hook_defs.py.
     Supports piped return values: before can modify request, after can modify result.
     Compatible with both sync and async methods.
+
+    Also declares a single-provider ``name.intercept`` hook: when a plugin registers it and
+    the callback returns a value other than ``None``, that value is the result and the
+    decorated method (and ``name.after``) is skipped. A plugin that serves a whole request
+    kind on its own (e.g. a memory view) uses it instead of editing the handler body.
     """
     from memos.plugins.hook_defs import define_hook
 
@@ -116,11 +121,33 @@ def hookable(name: str):
         pipe_key="request",
     )
     define_hook(
+        f"{name}.intercept",
+        description=f"Serve {name} instead of the core; return None to fall through",
+        params=["request"],
+    )
+    define_hook(
         f"{name}.after",
         description=f"After {name} executes; can modify result",
         params=["request", "result"],
         pipe_key="result",
     )
+
+    def _intercept(request):
+        if not _hooks.get(f"{name}.intercept"):
+            # No intercept hook registered.  If the request asks for a view that
+            # is only served by a plugin (e.g. project memory), and the plugin is
+            # not loaded, raise 400 instead of falling through to the core pipeline.
+            if getattr(request, "project_view_only_flag", False):
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "memory view `project` is not enabled on this server; "
+                        "set MEMOS_ENABLED_PLUGINS=project_memory"
+                    ),
+                )
+            return None
+        return trigger_single_hook(f"{name}.intercept", request=request)
 
     def decorator(func):
         if asyncio.iscoroutinefunction(func):
@@ -129,6 +156,9 @@ def hookable(name: str):
             async def async_wrapper(self, request, *args, **kwargs):
                 rv = trigger_hook(f"{name}.before", request=request)
                 request = rv if rv is not None else request
+                early = _intercept(request)
+                if early is not None:
+                    return early
                 result = await func(self, request, *args, **kwargs)
                 rv = trigger_hook(f"{name}.after", request=request, result=result)
                 result = rv if rv is not None else result
@@ -140,6 +170,9 @@ def hookable(name: str):
         def sync_wrapper(self, request, *args, **kwargs):
             rv = trigger_hook(f"{name}.before", request=request)
             request = rv if rv is not None else request
+            early = _intercept(request)
+            if early is not None:
+                return early
             result = func(self, request, *args, **kwargs)
             rv = trigger_hook(f"{name}.after", request=request, result=result)
             result = rv if rv is not None else result

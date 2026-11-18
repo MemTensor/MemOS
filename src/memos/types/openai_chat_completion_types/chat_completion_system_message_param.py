@@ -36,7 +36,7 @@ class ChatCompletionSystemMessageParam(TypedDict, total=False):
     """Optional unique identifier for the message"""
 
     role_id: str | None
-    """Project memory: ID of the member who sent this message (same as user_id)."""
+    """Optional identifier for the speaker in multi-role scenarios."""
 
     role_name: str | None
-    """Project memory: display name of the member, sent together with role_id."""
+    """Optional display name for the speaker in multi-role scenarios."""

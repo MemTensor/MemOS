@@ -5,6 +5,7 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, Field, model_validator
 
 # Import message types from core types module
+from memos.api.project_fields import ProjectAddFields, ProjectScopeFields, ProjectSearchFields
 from memos.log import get_logger
 from memos.types import MessageList, MessagesType, PermissionDict, SearchMode
 
@@ -23,37 +24,6 @@ class BaseResponse(BaseModel, Generic[T]):
     code: int = Field(200, description="Response status code")
     message: str = Field(..., description="Response message")
     data: T | None = Field(None, description="Response data")
-
-
-# ─── Project memory (memory view `project`) ───────────────────────────────────
-
-PROJECT_MEMORY_VIEW = "project"
-PROJECT_MAX_SPACES = 20
-
-
-def normalize_str_list(value: Any, field_name: str) -> list[str] | None:
-    """Accept a string or a list of strings (PRD rule for space_ids / domains).
-
-    `None` stays `None` (field not provided). Empty string, empty list, null or
-    blank items raise ValueError, which the API maps to a parameter error.
-    """
-    if value is None:
-        return None
-    if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, list) or not value:
-        raise ValueError(f"{field_name} must be a non-empty string or string array")
-    out: list[str] = []
-    for item in value:
-        if not isinstance(item, str) or not item.strip():
-            raise ValueError(f"{field_name} must not contain null or empty values")
-        if item not in out:
-            out.append(item)
-    return out
-
-
-def wants_project_view(views: list[str] | None) -> bool:
-    return bool(views) and PROJECT_MEMORY_VIEW in views
 
 
 # Product API Models
@@ -394,7 +364,7 @@ class SearchRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
 
 
-class APISearchRequest(BaseRequest):
+class APISearchRequest(BaseRequest, ProjectSearchFields):
     """Request model for searching memories."""
 
     # ==== Basic inputs ====
@@ -417,27 +387,6 @@ class APISearchRequest(BaseRequest):
     mode: SearchMode = Field(
         SearchMode.FAST,
         description="Search mode: fast, fine, or mixture.",
-    )
-
-    # ==== Project memory ====
-    include_memory_view: list[str] | None = Field(
-        None,
-        description=(
-            "Memory views to search. Contains `project` to search project memory; "
-            "`project` is never included by default."
-        ),
-    )
-    space_ids: str | list[str] | None = Field(
-        None, description="Project spaces to search. Required when `project` is requested."
-    )
-    domains: str | list[str] | None = Field(
-        None, description="Registered domain names to narrow project memory search."
-    )
-    conversation_id: str | None = Field(
-        None, description="Current conversation; topics sourced from it are prioritized."
-    )
-    memory_limit_number: int | None = Field(
-        None, description="Max items returned; project memory counts topics. Max 25."
     )
 
     session_id: str | None = Field(
@@ -654,23 +603,10 @@ class APISearchRequest(BaseRequest):
                 "This field is deprecated and ignored."
             )
 
-        # Project memory scope
-        self.space_ids = normalize_str_list(self.space_ids, "space_ids")
-        self.domains = normalize_str_list(self.domains, "domains")
-        if self.conversation_id and not self.session_id:
-            self.session_id = self.conversation_id
-        if wants_project_view(self.include_memory_view):
-            if not self.user_id or not self.space_ids:
-                raise ValueError("user_id and space_ids are required when using project memory")
-            if len(self.space_ids) > PROJECT_MAX_SPACES:
-                raise ValueError(f"space_ids accepts at most {PROJECT_MAX_SPACES} spaces")
-        if self.memory_limit_number is not None and not 1 <= self.memory_limit_number <= 25:
-            raise ValueError("memory_limit_number must be between 1 and 25")
-
         return self
 
 
-class APIADDRequest(BaseRequest):
+class APIADDRequest(BaseRequest, ProjectAddFields):
     """Request model for creating memories."""
 
     # Model-level example so the interactive docs (/docs) show a copy-paste-ready
@@ -714,26 +650,6 @@ class APIADDRequest(BaseRequest):
         ),
     )
 
-    # ==== Project memory ====
-    allow_memory_view: list[str] | None = Field(
-        None,
-        description=(
-            "Memory views to generate. Contains `project` to build project memory; "
-            "only `project` means no personal memory is generated."
-        ),
-    )
-    space_ids: str | list[str] | None = Field(
-        None, description="Project spaces to organize into. Required when `project` is requested."
-    )
-    domains: str | list[str] | None = Field(
-        None, description="Candidate registered domains for this write."
-    )
-    conversation_id: str | None = Field(
-        None, description="Conversation ID (alias of session_id for project memory)."
-    )
-    agent_id: str | list[str] | None = Field(
-        None, description="Agent of the conversation, e.g. claude-code / codex."
-    )
     mode: Literal["fast", "fine"] | None = Field(
         None,
         description=(
@@ -913,23 +829,6 @@ class APIADDRequest(BaseRequest):
                 self.info = {}
             self.info.setdefault("source", self.source)
 
-        # Project memory scope
-        self.space_ids = normalize_str_list(self.space_ids, "space_ids")
-        self.domains = normalize_str_list(self.domains, "domains")
-        if self.conversation_id and not self.session_id:
-            self.session_id = self.conversation_id
-        if (
-            self.session_id
-            and not self.conversation_id
-            and wants_project_view(self.allow_memory_view)
-        ):
-            self.conversation_id = self.session_id
-        if wants_project_view(self.allow_memory_view):
-            if not self.user_id or not self.space_ids:
-                raise ValueError("user_id and space_ids are required when using project memory")
-            if len(self.space_ids) > PROJECT_MAX_SPACES:
-                raise ValueError(f"space_ids accepts at most {PROJECT_MAX_SPACES} spaces")
-
         return self
 
 
@@ -1042,16 +941,10 @@ class AddStatusRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID")
 
 
-class GetMemoryRequest(BaseRequest):
+class GetMemoryRequest(BaseRequest, ProjectScopeFields):
     """Request model for getting memories."""
 
-    mem_cube_id: str | None = Field(None, description="Cube ID (required unless space_id is set)")
-    space_id: str | None = Field(
-        None, description="Project space; returns its topics (topic_detail_list)."
-    )
-    size: int | None = Field(
-        None, description="Project memory: topics per space, most recent first"
-    )
+    mem_cube_id: str = Field(..., description="Cube ID")
     user_id: str | None = Field(None, description="User ID")
     include_preference: bool = Field(True, description="Whether to return preference memory")
     include_tool_memory: bool = Field(True, description="Whether to return tool memory")
@@ -1068,12 +961,6 @@ class GetMemoryRequest(BaseRequest):
         None, description="Number of items per page. If None, exports all data without pagination."
     )
 
-    @model_validator(mode="after")
-    def _require_scope(self) -> "GetMemoryRequest":
-        if not self.mem_cube_id and not self.space_id and type(self) is GetMemoryRequest:
-            raise ValueError("one of mem_cube_id or space_id is required")
-        return self
-
 
 class GetMemoryDashboardRequest(GetMemoryRequest):
     """Request model for getting memories for dashboard."""
@@ -1085,13 +972,6 @@ class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
     writable_cube_ids: list[str] | None = Field(None, description="Writable cube IDs")
-    space_id: str | None = Field(
-        None,
-        description=(
-            "Project memory: clear all topics of this space (keeps the space, its "
-            "instructions and domains). With memory_ids, deletes those topics only."
-        ),
-    )
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(
@@ -1116,6 +996,10 @@ class DeleteMemoryRequest(BaseRequest):
             "(Internal) Whether to automatically delete related WorkingMemory nodes "
             "based on working_binding metadata when deleting by memory_ids."
         ),
+    )
+    space_id: str | None = Field(
+        None,
+        description="Project memory: delete topics of this space (keeps the space itself).",
     )
 
     @model_validator(mode="after")
@@ -1489,9 +1373,6 @@ class StatusResponseItem(BaseModel):
     task_id: str = Field(..., description="The ID of the task")
     status: Literal["in_progress", "completed", "waiting", "failed", "cancelled"] = Field(
         ..., description="The current status of the task"
-    )
-    memory_views: dict[str, Any] | None = Field(
-        None, description="Memory view changes; `project.memory_ids` lists updated topics"
     )
 
 
