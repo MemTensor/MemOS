@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -127,9 +125,9 @@ def test_scope_mismatch_cannot_run_a_mutation(graph):
 
 def test_foreign_upsert_cannot_take_over_a_lifecycle_owned_id(graph):
     memory_id = add(graph)
-    with pytest.raises(MemOSMemoryError):
-        graph.add_node(memory_id, "Foreign replacement", {"source": "dream"}, user_name="cube-b")
+    graph.add_node(memory_id, "Other tenant's memory", {"source": "dream"}, user_name="cube-b")
     assert graph.get_node(memory_id, user_name="cube-a")["memory"] == "Synthetic memory"
+    assert graph.get_node(memory_id, user_name="cube-b")["memory"] == "Other tenant's memory"
 
 
 def test_callback_failure_rolls_back_the_entire_batch(graph):
@@ -190,13 +188,20 @@ def test_legacy_write_semantics_and_embedding_survive_managed_updates(graph):
     fields = {"memory": "Merged", "new": 2}
     graph.update_node(memory_id, fields, user_name="cube-a")
     assert fields == {"memory": "Merged", "new": 2}
-    assert graph.get_node(memory_id, user_name="cube-a")["metadata"]["old"] == 1
-    graph.add_node(memory_id, "Replaced", {"status": "archived", "new": 3}, user_name="cube-a")
+    merged = graph.get_node(memory_id, include_embedding=True, user_name="cube-a")
+    assert merged["metadata"]["old"] == 1
+    assert merged["metadata"]["embedding"] == [1, 0, 0]
+    graph.add_node(
+        memory_id,
+        "Replaced",
+        {"status": "archived", "new": 3, "embedding": [0, 1, 0]},
+        user_name="cube-a",
+    )
     result = graph.get_node(memory_id, include_embedding=True, user_name="cube-a")
     assert result["memory"] == "Replaced"
     assert "old" not in result["metadata"]
     assert result["metadata"]["status"] == "archived"
-    assert json.loads(result["metadata"]["embedding"]) == [1, 0, 0]
+    assert result["metadata"]["embedding"] == [0, 1, 0]
 
 
 @pytest.mark.parametrize(

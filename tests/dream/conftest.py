@@ -30,6 +30,8 @@ def graph():
         schema_name=schema,
         user_name="cube-a",
         embedding_dimension=3,
+        shard_count=2,
+        fulltext_config="simple",
     )
     backend = PostgresGraphDB(config)
     yield backend
@@ -37,5 +39,7 @@ def graph():
     conn = psycopg2.connect(dsn)
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+        for remainder in range(config.shard_count):
+            shard = f"{schema}_graph_{remainder}"
+            cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(shard)))
     conn.close()

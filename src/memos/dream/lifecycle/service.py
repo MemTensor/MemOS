@@ -125,7 +125,11 @@ class DreamLifecycleService:
         )
         if (state.created_at - now).total_seconds() > self.config.future_tolerance_seconds:
             raise LifecycleError("Memory creation is in the future")
-        return {**metadata, LIFECYCLE_METADATA_KEY: state.model_dump(mode="json")}
+        return {
+            **metadata,
+            "created_at": state.created_at.isoformat(),
+            LIFECYCLE_METADATA_KEY: state.model_dump(mode="json"),
+        }
 
     def _state(
         self, memory_id: str, cube_id: str, metadata: dict[str, Any], now: datetime
