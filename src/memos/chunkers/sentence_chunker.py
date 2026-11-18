@@ -41,7 +41,7 @@ class SentenceChunker(BaseChunker):
 
         logger.info(f"Initialized SentenceChunker with config: {config}")
 
-    def chunk(self, text: str) -> list[str] | list[Chunk]:
+    def chunk(self, text: str) -> list[Chunk]:
         """Chunk the given text into smaller chunks based on sentences."""
         protected_text, url_map = self.protect_urls(text)
         chonkie_chunks = self.chunker.chunk(protected_text)
@@ -49,8 +49,14 @@ class SentenceChunker(BaseChunker):
         chunks = []
         for c in chonkie_chunks:
             restored_text = self.restore_urls(c.text, url_map)
-            restored_sentences = [self.restore_urls(s, url_map) for s in c.sentences]
-            chunk = Chunk(text=restored_text, token_count=c.token_count, sentences=restored_sentences)
+            # Chonkie 1.3+ returns base chunks without sentence metadata.
+            restored_sentences = [
+                self.restore_urls(sentence if isinstance(sentence, str) else sentence.text, url_map)
+                for sentence in getattr(c, "sentences", ())
+            ]
+            chunk = Chunk(
+                text=restored_text, token_count=c.token_count, sentences=restored_sentences
+            )
             chunks.append(chunk)
 
         logger.debug(f"Generated {len(chunks)} chunks from input text")
