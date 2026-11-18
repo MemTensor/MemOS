@@ -144,6 +144,10 @@ export class ViewerServer {
   private notifPollTimer?: ReturnType<typeof setInterval>;
   private lastKnownNotifCount = 0;
   private hubHeartbeatTimer?: ReturnType<typeof setInterval>;
+  // Serialize read/modify/write cycles for the shared OpenClaw config. Multiple
+  // Viewer PATCH requests can arrive in the same event-loop turn, and concurrent
+  // writers otherwise race with the gateway's config watcher and lose updates.
+  private configWriteLock: Promise<void> = Promise.resolve();
   private static readonly HUB_HEARTBEAT_INTERVAL_MS = 45_000;
   private static readonly STALE_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
   private staleFinalizeRunning = false;
@@ -3140,6 +3144,10 @@ export class ViewerServer {
 
   private handleSaveConfig(req: http.IncomingMessage, res: http.ServerResponse): void {
     this.readBody(req, async (body) => {
+      const previousWrite = this.configWriteLock;
+      let releaseWrite!: () => void;
+      this.configWriteLock = new Promise<void>((resolve) => { releaseWrite = resolve; });
+      await previousWrite;
       try {
         const newCfg = JSON.parse(body);
         const cfgPath = this.getOpenClawConfigPath();
@@ -3274,6 +3282,8 @@ export class ViewerServer {
         this.log.warn(`handleSaveConfig error: ${e}`);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: String(e) }));
+      } finally {
+        releaseWrite();
       }
     });
   }
