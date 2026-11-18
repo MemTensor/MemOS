@@ -68,7 +68,7 @@ class RerankerFactory:
                 concate_len=min(max(c.get("concate_len", 1000), 4), 8000),
                 headers_extra=headers_extra,
                 rerank_source=c.get("rerank_source"),
-                reranker_strategy=c.get("reranker_strategy"),
+                reranker_strategy=c.get("reranker_strategy", "single_turn"),
             )
 
         raise ValueError(f"Unknown reranker backend: {cfg.backend}")
