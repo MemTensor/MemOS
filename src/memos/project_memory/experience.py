@@ -363,7 +363,6 @@ def apply(
             card.exp_status = EXP_CANDIDATE if card.exp_status == EXP_VERIFIED else card.exp_status
         card.last_supported_at = card.time if signaled else ""
         card.sources = [_evidence(EXP_ADD, card, ep)]
-        store.put_experience(card)
         out = {
             "op": action,
             "id": card.id,
@@ -372,6 +371,7 @@ def apply(
             "reason": reason,
         }
         if action == "add_opposed" and target is not None:
+            # 先条件写被反对的那张卡：撞了就整体重判，不会留下一张多出来的新卡
             target.sources.append(
                 {
                     **_evidence(EXP_ADD, card, ep),
@@ -379,8 +379,9 @@ def apply(
                     "opposed_by": card.id,
                 }
             )
-            store.put_experience(target)
+            store.put_experience(target, expected_rev=target.rev)
             out["opposes"] = target.id
+        store.put_experience(card)
         return out
 
     assert target is not None
@@ -450,7 +451,15 @@ def visible(k: ExperienceCard, user_id: str) -> bool:
 # ── 一段的完整流程 ──────────────────────────────────────────────────────────
 
 
-def run(hub: ModelHub, store: ProjectStore, ep: Episode, log) -> list[dict[str, Any]]:
+def run(hub: ModelHub, store: ProjectStore, ep: Episode, log, lock=None) -> list[dict[str, Any]]:
+    """一段的经验流程：闸 → 过滤 → 抽卡 → 召回 → 合并判断 → 写回。
+
+    并发：抽卡与合并判断不加锁。改已有卡靠条件写（撞了重读重判）；新建卡时（`lock` 不为空）
+    拿这个 Space 的经验锁复核一次：判断之后如果别的段新建了相近的卡，重新判断，避免两段同时
+    各建一张同样的卡。
+    """
+    from .locks import exp_key
+
     ok, why = rule_gate(ep)
     if not ok:
         log(f"  经验：规则闸不过（{why}）")
@@ -470,33 +479,47 @@ def run(hub: ModelHub, store: ProjectStore, ep: Episode, log) -> list[dict[str, 
     card.space_id = ep.space_id
     card.time = ep.messages[-1].chat_time if ep.messages else now_iso()
 
-    for attempt in range(MAX_CAS_RETRIES):
+    def _cands() -> list[ExperienceCard]:
         ranked = store.recall_experiences(ep.space_id, card.index_text, RECALL_TOP_K)
-        cands = [k for _, k in ranked if lifecycle(k) != "archived"]
+        return [k for _, k in ranked if lifecycle(k) != "archived"]
+
+    for attempt in range(MAX_CAS_RETRIES):
+        cands = _cands()
+        seen = {k.id for k in cands}
         if not cands:
-            res = apply(store, ep, card, EXP_ADD, None, None, "没有召回到已有经验")
+            final, target, merged, reason = EXP_ADD, None, None, "没有召回到已有经验"
+        else:
+            out = merge(hub, card, cands)
+            action = str(out.get("action") or EXP_ADD)
+            target = next((k for k in cands if k.id == out.get("target_id")), None)
+            merged = out.get("card") if isinstance(out.get("card"), dict) else None
+            final, guard_reason = guard(action, card, target, merged)
+            if final != action:
+                log(f"  经验护栏：模型给 {action}，改为 {final}（{guard_reason}）")
+            reason = out.get("reason") or guard_reason
+        last = attempt == MAX_CAS_RETRIES - 1
+        try:
+            if final in (EXP_ADD, "add_opposed") and lock is not None:
+                with lock(exp_key(ep.space_id)):
+                    if not last and {k.id for k in _cands()} - seen:
+                        log(f"  经验：判断期间别的段新建了相近的卡（第 {attempt + 1} 次），重判")
+                        continue
+                    res = apply(store, ep, card, final, target, merged, reason)
+            else:
+                res = apply(store, ep, card, final, target, merged, reason)
+        except ConcurrentUpdateError:
+            log(f"  经验写回冲突（第 {attempt + 1} 次）：这张卡刚被别的任务改过，重读重判")
+            continue
+        if final == EXP_ADD and not cands:
             log(
                 f"  经验新增 {res['id'][:8]}：{card.task_intent}"
                 f"（{card.exp_status}，{card.confidence}）"
             )
-            return [res]
-
-        out = merge(hub, card, cands)
-        action = str(out.get("action") or EXP_ADD)
-        target = next((k for k in cands if k.id == out.get("target_id")), None)
-        merged = out.get("card") if isinstance(out.get("card"), dict) else None
-        final, guard_reason = guard(action, card, target, merged)
-        if final != action:
-            log(f"  经验护栏：模型给 {action}，改为 {final}（{guard_reason}）")
-        try:
-            res = apply(store, ep, card, final, target, merged, out.get("reason") or guard_reason)
-        except ConcurrentUpdateError:
-            log(f"  经验写回冲突（第 {attempt + 1} 次）：这张卡刚被别的任务改过，重读重判")
-            continue
-        log(
-            f"  经验 {res['op']} → {res['id'][:8]}（confidence {res.get('confidence')}）："
-            f"{res.get('reason', '')}"
-        )
+        else:
+            log(
+                f"  经验 {res['op']} → {res['id'][:8]}（confidence {res.get('confidence')}）："
+                f"{res.get('reason', '')}"
+            )
         return [res]
     log(f"  经验写回连续冲突 {MAX_CAS_RETRIES} 次，放弃这一段")
     return []

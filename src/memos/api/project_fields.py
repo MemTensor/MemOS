@@ -18,10 +18,10 @@ things:
 
 from __future__ import annotations
 
-import re
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, model_validator
+
 
 PROJECT_MEMORY_VIEW = "project"
 PROJECT_MAX_SPACES = 20
@@ -37,9 +37,7 @@ def normalize_str_list(value: str | list[str] | None, field: str) -> list[str]:
     out: list[str] = []
     for item in items:
         if item is None or (isinstance(item, str) and item.strip() == ""):
-            raise ValueError(
-                f"{field} must not contain null or empty values"
-            )
+            raise ValueError(f"{field} must not contain null or empty values")
         key = item if isinstance(item, str) else str(item)
         if key not in seen:
             seen.add(key)
@@ -92,8 +90,8 @@ class ProjectSearchFields(BaseModel):
     )
 
     # Internal flags set by the before-validator; excluded from API schema.
-    project_view_flag: bool = Field(default=False, exclude=True, repr=False)
-    project_view_only_flag: bool = Field(default=False, exclude=True, repr=False)
+    project_view_flag: Annotated[bool, Field(exclude=True, repr=False)] = False
+    project_view_only_flag: Annotated[bool, Field(exclude=True, repr=False)] = False
 
     @model_validator(mode="before")
     @classmethod
@@ -152,8 +150,8 @@ class ProjectAddFields(BaseModel):
         description="Conversation / session identifier (alias of session_id for project memory).",
     )
 
-    project_view_flag: bool = Field(default=False, exclude=True, repr=False)
-    project_view_only_flag: bool = Field(default=False, exclude=True, repr=False)
+    project_view_flag: Annotated[bool, Field(exclude=True, repr=False)] = False
+    project_view_only_flag: Annotated[bool, Field(exclude=True, repr=False)] = False
 
     @model_validator(mode="before")
     @classmethod

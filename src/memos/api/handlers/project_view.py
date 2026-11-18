@@ -19,7 +19,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from memos.api.project_fields import PROJECT_MEMORY_VIEW, ProjectAddFields, ProjectSearchFields
+from memos.api.project_fields import PROJECT_MEMORY_VIEW
 from memos.plugins.hook_defs import H
 from memos.plugins.hooks import _hooks, trigger_single_hook
 
@@ -60,8 +60,7 @@ def has_project_view(request: Any) -> bool:
     if getattr(request, "project_view_flag", False):
         return True
     return wants_project_view(
-        getattr(request, "allow_memory_view", None)
-        or getattr(request, "include_memory_view", None)
+        getattr(request, "allow_memory_view", None) or getattr(request, "include_memory_view", None)
     )
 
 
@@ -70,6 +69,7 @@ def require_plugin_or_400(request: Any) -> None:
     raise 400.  Called by the hookable intercept guard."""
     if has_project_view(request) and not project_enabled():
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail=(

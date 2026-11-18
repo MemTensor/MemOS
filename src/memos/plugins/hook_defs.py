@@ -102,6 +102,8 @@ class H:
     PROJECT_MEMORY_GET_BY_ID = "project_memory.get_by_id"
     PROJECT_MEMORY_DELETE = "project_memory.delete"
     PROJECT_MEMORY_TASK_STATUS = "project_memory.task_status"
+    # optional: distributed lock for multi-replica deployments (see project_memory/locks.py)
+    PROJECT_MEMORY_LOCK = "project_memory.lock"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -231,6 +233,15 @@ define_hook(
     H.PROJECT_MEMORY_DELETE,
     description="Delete topics of a project space (by memory_ids or whole space)",
     params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_LOCK,
+    description=(
+        "Optional. Return a context manager that holds a lock on `key` across processes; "
+        "when not registered, project memory uses in-process locks"
+    ),
+    params=["key"],
 )
 
 define_hook(

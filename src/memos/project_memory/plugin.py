@@ -26,6 +26,7 @@ from memos.plugins.hook_defs import H
 
 from . import config as pm_config
 from .judge import ModelHub
+from .locks import InProcessLocks
 from .service import ProjectMemoryService
 from .store import ProjectStore
 
@@ -44,6 +45,9 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     def on_load(self) -> None:
         self.context: dict[str, Any] = {"shared": {}, "configs": {}}
         self._service: ProjectMemoryService | None = None
+        self._local_locks = InProcessLocks()
+        # 混合视图请求：intercept 里算好的项目记忆结果，after 里按请求取回（并发请求互不干扰）
+        self._pending: dict[tuple[str, int], Any] = {}
         # Core single-provider hooks (project-memory business logic)
         self.register_hook(
             H.PROJECT_MEMORY_ACCEPT, lambda request, **kw: self.service.accept(request)
@@ -96,8 +100,10 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             # Prefer the shared (test/core) embedder; only build our own when
             # the shared context doesn't provide one.
             embedder = core_embedder or pm_config.build_embedder()
-            graph_db = shared.get("project_graph_db") or shared.get("graph_db") or pm_config.build_graph_db(
-                shared.get("graph_db")
+            graph_db = (
+                shared.get("project_graph_db")
+                or shared.get("graph_db")
+                or pm_config.build_graph_db(shared.get("graph_db"))
             )
             store = ProjectStore(
                 graph_db, embedder=embedder.embed if embedder is not None else None
@@ -109,7 +115,9 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
                 "PROJECT_MEMORY_JUDGE_LLM"
             )
             self._service = ProjectMemoryService(
-                store, ModelHub(llm=llm, judge_llm=judge_llm, graph_db=graph_db)
+                store,
+                ModelHub(llm=llm, judge_llm=judge_llm, graph_db=graph_db),
+                lock=self._lock,
             )
         # 调度器的 submit 句柄在核心启动后期才写进上下文：每次取用时补上
         if self._service.submit is None and shared.get("submit_scheduler_messages"):
@@ -118,8 +126,9 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
 
     def _add_intercept(self, request: Any) -> Any | None:
         """Called by hookable('add').intercept before handle_add_memories runs."""
-        from memos.api.handlers.project_view import has_project_view, only_project
         from fastapi import HTTPException
+
+        from memos.api.handlers.project_view import has_project_view, only_project
 
         if not has_project_view(request):
             return None
@@ -145,13 +154,12 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
 
         if only_project(request):
             return {"code": 200, "message": "Project memory task accepted", "data": [result]}
-        self._pending_add_result = result
+        self._pending[("add", id(request))] = result
         return None
 
     def _add_after(self, request: Any, result: Any) -> Any:
         """Appends project-memory task info to a mixed-view add result."""
-        pending = getattr(self, "_pending_add_result", None)
-        self._pending_add_result = None
+        pending = self._pending.pop(("add", id(request)), None)
         if pending is None:
             return result
         try:
@@ -165,7 +173,11 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
 
     def _search_intercept(self, request: Any) -> Any | None:
         """Called by hookable('search').intercept before handle_search_memories runs."""
-        from memos.api.handlers.project_view import has_project_view, only_project, _fill_readable_cube_ids
+        from memos.api.handlers.project_view import (
+            _fill_readable_cube_ids,
+            has_project_view,
+            only_project,
+        )
 
         if not has_project_view(request):
             return None
@@ -174,18 +186,21 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             topics = self.service.search(request)
         except (LookupError, ValueError) as e:
             from fastapi import HTTPException
+
             status = 404 if isinstance(e, LookupError) else 400
             raise HTTPException(status_code=status, detail=str(e)) from e
         if only_project(request):
-            return {"code": 200, "message": "Search completed successfully",
-                    "data": {"topic_detail_list": topics}}
-        self._pending_search_topics = topics
+            return {
+                "code": 200,
+                "message": "Search completed successfully",
+                "data": {"topic_detail_list": topics},
+            }
+        self._pending[("search", id(request))] = topics
         return None
 
     def _search_after(self, request: Any, result: Any) -> Any:
         """Appends topic_detail_list to a mixed-view search result."""
-        topics = getattr(self, "_pending_search_topics", None)
-        self._pending_search_topics = None
+        topics = self._pending.pop(("search", id(request)), None)
         if topics is None:
             return result
         try:
@@ -196,6 +211,17 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         except Exception:
             pass
         return result
+
+    def _lock(self, key: str):
+        """项目记忆的按键锁：工程注册了 `H.PROJECT_MEMORY_LOCK`（分布式锁）就用它，否则进程内锁。
+
+        每次取锁时查一次钩子，企业版扩展插件晚于本插件加载也能生效。
+        """
+        from memos.plugins.hooks import _hooks, trigger_single_hook
+
+        if _hooks.get(H.PROJECT_MEMORY_LOCK):
+            return trigger_single_hook(H.PROJECT_MEMORY_LOCK, key=key)
+        return self._local_locks(key)
 
     def _submit(self, items: list) -> None:
         self.context["shared"]["submit_scheduler_messages"](items)

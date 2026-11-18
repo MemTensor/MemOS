@@ -219,9 +219,13 @@ def scheduler_status(
             # Project task status carries memory_views which StatusResponseItem
             # does not model; return as raw JSON to bypass response_model validation.
             from fastapi.responses import JSONResponse
+
             return JSONResponse(
-                content={"code": 200, "message": "Memory get status successfully",
-                         "data": [project_task]}
+                content={
+                    "code": 200,
+                    "message": "Memory get status successfully",
+                    "data": [project_task],
+                }
             )
     return handlers.scheduler_handler.handle_scheduler_status(
         user_id=user_id,

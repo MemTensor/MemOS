@@ -20,7 +20,6 @@ from memos.mem_scheduler.schemas.task_schemas import (
     QUERY_TASK_LABEL,
     TaskPriorityLevel,
 )
-from .handlers.project_memory_handler import PROJECT_MEMORY_TASK_LABEL
 
 from .handlers.add_handler import AddMessageHandler
 from .handlers.answer_handler import AnswerMessageHandler
@@ -30,7 +29,7 @@ from .handlers.mem_read_handler import MemReadMessageHandler
 from .handlers.mem_reorganize_handler import MemReorganizeMessageHandler
 from .handlers.memory_update_handler import MemoryUpdateHandler
 from .handlers.pref_add_handler import PrefAddMessageHandler
-from .handlers.project_memory_handler import ProjectMemoryMessageHandler
+from .handlers.project_memory_handler import PROJECT_MEMORY_TASK_LABEL, ProjectMemoryMessageHandler
 from .handlers.query_handler import QueryMessageHandler
 
 

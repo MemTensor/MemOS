@@ -70,7 +70,7 @@ class FakeGraphDB:
         **kwargs,
     ) -> list[str]:
         out = []
-        for r in self.rows.values():
+        for r in list(self.rows.values()):  # 并发用例里别的线程可能正在写
             p = r["properties"]
             if user_name and r["user_name"] != user_name:
                 continue
@@ -102,7 +102,7 @@ class FakeGraphDB:
         **kwargs,
     ) -> list[dict]:
         hits = []
-        for r in self.rows.values():
+        for r in list(self.rows.values()):  # 并发用例里别的线程可能正在写
             p = r["properties"]
             if r["embedding"] is None or (user_name and r["user_name"] != user_name):
                 continue
@@ -657,8 +657,8 @@ class QueueScheduler:
     def drain(self) -> int:
         from unittest.mock import Mock
 
-        from memos.mem_scheduler.task_schedule_modules.handlers.project_memory_handler import PROJECT_MEMORY_TASK_LABEL
         from memos.mem_scheduler.task_schedule_modules.handlers.project_memory_handler import (
+            PROJECT_MEMORY_TASK_LABEL,
             ProjectMemoryMessageHandler,
         )
 

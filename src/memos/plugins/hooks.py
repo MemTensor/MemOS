@@ -139,6 +139,7 @@ def hookable(name: str):
             # not loaded, raise 400 instead of falling through to the core pipeline.
             if getattr(request, "project_view_only_flag", False):
                 from fastapi import HTTPException
+
                 raise HTTPException(
                     status_code=400,
                     detail=(

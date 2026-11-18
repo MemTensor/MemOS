@@ -1,7 +1,15 @@
 """项目记忆服务：接口层与调度层只调这里。
 
-写入：accept()（add 受理，同步）→ 调度消息 `project_memory`（一个 Space 一条流）→ execute()（异步）
-      → 切段 → 每个关掉的段：归主题 → 决策（两次调用）→ 经验 → 写库 → 任务记录更新主题 id。
+写入：accept()（add 受理，同步）→ 调度消息 `project_memory`（一个会话一条流）→ execute()（异步）
+      → 切段 → 每个关掉的段：归主题 → 决策（两次调用）‖ 经验 → 写库 → 任务记录更新主题 id。
+
+并发（同一 Space 内也并行，见 locks.py）：
+- 不同会话的段并行整理；同一会话按轮次顺序（会话锁）。
+- 抽取类的大模型调用（归主题判断、决策判定与抽取、经验过滤与抽卡、经验合并判断）不加锁；
+  一段之内决策与经验两条线并行。
+- 改同一主题（摘要、时间线、决策更新）排队（主题锁）；新建主题、新建经验卡前在 Space 级的锁里
+  复核一次，防止两段各建一个；改已有经验卡靠条件写。
+- 锁默认是进程内的；多副本部署由工程注册 `H.PROJECT_MEMORY_LOCK` 换成分布式锁。
 读取：search()（search/memory）、list_topics()（get/memory + space_id）、get_topic()（get/memory/{id}）。
 管理：Space 4 个、领域 4 个、delete()、task_status()、get_message()。
 """
@@ -9,11 +17,14 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
-import threading
+import os
+import re
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from memos.graph_dbs.base import ConcurrentUpdateError
@@ -22,6 +33,7 @@ from . import decision as dec
 from . import experience as exp
 from . import topic as topic_mod
 from .judge import ModelHub
+from .locks import InProcessLocks, conv_key, task_key, topic_key, topics_key
 from .segmenter import IDLE_MINUTES, idle_minutes_between, segment, split_turns
 from .store import ProjectStore, cosine, lexical_sim
 from .types import (
@@ -50,15 +62,25 @@ MAX_CAS_RETRIES = 3
 MAX_TRACE_LINES = 80
 
 Submit = Callable[[list[Any]], Any]
+_TZ_SUFFIX = re.compile(r"[+-]\d{2}:?\d{2}$|Z$")  # chat_time 末尾的时区偏移
 
 
 class ProjectMemoryService:
-    def __init__(self, store: ProjectStore, hub: ModelHub, submit: Submit | None = None):
+    def __init__(
+        self,
+        store: ProjectStore,
+        hub: ModelHub,
+        submit: Submit | None = None,
+        lock: Callable[[str], Any] | None = None,
+    ):
         self.store = store
         self.hub = hub
         self.submit = submit
-        self._locks: dict[str, threading.RLock] = {}
-        self._locks_guard = threading.Lock()
+        # `key -> 上下文管理器`；默认进程内锁，插件会在工程注册了分布式锁时换掉
+        self.lock: Callable[[str], Any] = lock or InProcessLocks()
+        self.parallel_episode = (
+            os.getenv("PROJECT_MEMORY_PARALLEL_EPISODE", "true").lower() == "true"
+        )
         self.last_trace: list[str] = []  # 最近一次整理的 trace（调试、演示用）
 
     # ═════════════════════════════════ Space ═════════════════════════════════
@@ -190,10 +212,7 @@ class ProjectMemoryService:
         domains: list[str] = normalize_str_list(getattr(req, "domains", None), "domains")
         # user_id 可能是字符串（开源版）也可能是字符串数组（企业版允许多 cube）
         raw_uid = req.user_id
-        if isinstance(raw_uid, list):
-            user_id = raw_uid[0] if raw_uid else ""
-        else:
-            user_id = raw_uid or ""
+        user_id = (raw_uid[0] if raw_uid else "") if isinstance(raw_uid, list) else raw_uid or ""
         spaces = [self.get_space(s) for s in space_ids]  # 任一不存在 → 「Space 不存在」
         for sp in spaces:
             if not sp.domains:
@@ -269,7 +288,10 @@ class ProjectMemoryService:
             from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
             item = ScheduleMessageItem(
-                user_id=space_id,  # 一个 Space 一条流：流键 = 前缀:space:space:project_memory
+                # 一个会话一条流：调度器按 (user_id, mem_cube_id) 分组派给线程池，
+                # 同一 Space 的不同会话因此并行。mem_cube_id 与 task_id 不动——企业版
+                # 调度完成后经 RabbitMQ 回写任务状态，工程层按 (mem_cube_id, task_id) 对账。
+                user_id=stream_owner(space_id, payload.get("conversation_id")),
                 mem_cube_id=space_id,
                 label=PROJECT_MEMORY_TASK_LABEL,
                 content=json.dumps(payload, ensure_ascii=False),
@@ -278,28 +300,21 @@ class ProjectMemoryService:
             )
             self.submit([item])
             return
-        with self._lock(space_id):
-            self.run_item(space_id, payload)
-
-    def _lock(self, space_id: str) -> threading.RLock:
-        """同一 Space 的整理与 flush 串行（可重入：同步路径在锁内调 run_item）。"""
-        with self._locks_guard:
-            return self._locks.setdefault(space_id, threading.RLock())
+        self.run_item(space_id, payload)
 
     # —— 调度入口（H.PROJECT_MEMORY_EXECUTE）——
     def execute(self, space_id: str, batch: list[Any]) -> None:
         items = sorted(batch, key=lambda m: getattr(m, "timestamp", None) or 0)
-        with self._lock(space_id):
-            for item in items:
-                try:
-                    payload = json.loads(item.content)
-                except (TypeError, ValueError):
-                    logger.warning(
-                        "[ProjectMemory] 调度消息不是 JSON，跳过：%s",
-                        getattr(item, "content", "")[:200],
-                    )
-                    continue
-                self.run_item(space_id, payload)
+        for item in items:
+            try:
+                payload = json.loads(item.content)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[ProjectMemory] 调度消息不是 JSON，跳过：%s",
+                    getattr(item, "content", "")[:200],
+                )
+                continue
+            self.run_item(space_id, payload)
 
     def run_item(self, space_id: str, payload: dict[str, Any]) -> OrganizeResult:
         result = OrganizeResult()
@@ -310,35 +325,34 @@ class ProjectMemoryService:
             # 懒关段：先把这个 Space 里别的会话空闲超过阈值的段关掉（会话最后一段没有「下一轮」
             # 来触发，照 memmy 的做法在每次整理前扫一遍；会话结束时接入方也可调 flush）。
             # 「现在」取这批消息的时间而不是墙钟：导入历史会话时消息时间都很早，按墙钟会把
-            # 每一段都判成空闲。
+            # 每一段都判成空闲。每个别的会话单独拿它的锁、用完就放，不与本会话的锁嵌套。
             ref = new_msgs[0].chat_time if new_msgs and new_msgs[0].chat_time else now_iso()
             for stale in self.store.open_episodes(space_id):
                 if conv and stale.conversation_id == conv:
                     continue  # 本会话的段由 segment() 按消息时间判
-                last = self.store.get_messages(space_id, stale.message_ids)
-                gap = idle_minutes_between(last[-1].chat_time, ref) if last else None
-                if gap is not None and gap >= IDLE_MINUTES:
-                    result.merge(self._close_and_organize(stale, "idle_timeout"))
-            open_ep = self.store.open_episode(space_id, conv) if conv else None
-            prev_tail = [] if open_ep else self._last_tail(space_id, conv)
-            closed, still_open = segment(
-                self.hub,
-                space_id,
-                conv,
-                open_ep,
-                new_msgs,
-                load=lambda ids: self.store.get_messages(space_id, ids),
-                domains=payload.get("domains") or [],
-                task_id=task_id,
-                log=result.log,
-                prev_tail=prev_tail,
-            )
-            for ep in closed:
-                ep.agent_id = ep.agent_id or payload.get("agent_id", "")
-                result.merge(self.organize(ep))
-            if still_open is not None:
-                still_open.agent_id = still_open.agent_id or payload.get("agent_id", "")
-                self.store.put_episode(still_open)
+                result.merge(self._close_if_idle(space_id, stale, ref))
+
+            with self.lock(conv_key(space_id, conv or f"task-{task_id}")):
+                open_ep = self.store.open_episode(space_id, conv) if conv else None
+                prev_tail = [] if open_ep else self._last_tail(space_id, conv)
+                closed, still_open = segment(
+                    self.hub,
+                    space_id,
+                    conv,
+                    open_ep,
+                    new_msgs,
+                    load=lambda ids: self.store.get_messages(space_id, ids),
+                    domains=payload.get("domains") or [],
+                    task_id=task_id,
+                    log=result.log,
+                    prev_tail=prev_tail,
+                )
+                for ep in closed:
+                    ep.agent_id = ep.agent_id or payload.get("agent_id", "")
+                    result.merge(self.organize(ep))
+                if still_open is not None:
+                    still_open.agent_id = still_open.agent_id or payload.get("agent_id", "")
+                    self.store.put_episode(still_open)
             self._finish_task(
                 task_id,
                 space_id,
@@ -355,6 +369,23 @@ class ProjectMemoryService:
             )
         self.last_trace = result.trace
         return result
+
+    def _close_if_idle(self, space_id: str, stale: Episode, ref: str) -> OrganizeResult:
+        """别的会话的段空闲超时就关掉整理。拿那个会话的锁后重读一次：别的线程可能刚处理过它。"""
+        conv = stale.conversation_id or f"episode-{stale.id}"
+        with self.lock(conv_key(space_id, conv)):
+            cur = (
+                self.store.open_episode(space_id, stale.conversation_id)
+                if stale.conversation_id
+                else stale
+            )
+            if cur is None or cur.id != stale.id:
+                return OrganizeResult()
+            last = self.store.get_messages(space_id, cur.message_ids)
+            gap = idle_minutes_between(last[-1].chat_time, ref) if last else None
+            if gap is None or gap < IDLE_MINUTES:
+                return OrganizeResult()
+            return self._close_and_organize(cur, "idle_timeout")
 
     def _close_and_organize(self, ep: Episode, reason: str) -> OrganizeResult:
         msgs = self.store.get_messages(ep.space_id, ep.message_ids)
@@ -378,13 +409,21 @@ class ProjectMemoryService:
         """
         self.get_space(space_id)  # Space 不存在 → LookupError → 404
         out = OrganizeResult()
-        with self._lock(space_id):
-            for ep in self.store.open_episodes(space_id):
-                if conversation_id and ep.conversation_id != conversation_id:
-                    continue
-                out.merge(self._close_and_organize(ep, "session_end"))
-            if task_id and out.topic_ids:
-                self._finish_task(task_id, space_id, out.topic_ids, 0, error="", trace=out.trace)
+        for ep in self.store.open_episodes(space_id):
+            if conversation_id and ep.conversation_id != conversation_id:
+                continue
+            conv = ep.conversation_id or f"episode-{ep.id}"
+            with self.lock(conv_key(space_id, conv)):
+                cur = (
+                    self.store.open_episode(space_id, ep.conversation_id)
+                    if ep.conversation_id
+                    else ep
+                )
+                if cur is None or cur.id != ep.id:
+                    continue  # 别的线程刚关过
+                out.merge(self._close_and_organize(cur, "session_end"))
+        if task_id and out.topic_ids:
+            self._finish_task(task_id, space_id, out.topic_ids, 0, error="", trace=out.trace)
         if out.trace:
             self.last_trace = out.trace
         return out
@@ -416,21 +455,23 @@ class ProjectMemoryService:
         error: str,
         trace: list[str] | None = None,
     ) -> None:
-        task = self.store.get_task(task_id)
-        if task is None:
-            return
-        if trace:
-            task.trace = (task.trace + trace)[-MAX_TRACE_LINES:]
-        for t in topic_ids:
-            if t not in task.memory_ids:
-                task.memory_ids.append(t)
-        task.pending_spaces = [s for s in task.pending_spaces if s != space_id]
-        task.open_episode_messages += open_n
-        if error:
-            task.status, task.error = "failed", error
-        elif not task.pending_spaces and task.status != "failed":
-            task.status = "completed"
-        self.store.put_task(task)
+        # 一次 add 写进多个 Space 时，各 Space 的整理会并行累加到同一条任务记录上
+        with self.lock(task_key(task_id)):
+            task = self.store.get_task(task_id)
+            if task is None:
+                return
+            if trace:
+                task.trace = (task.trace + trace)[-MAX_TRACE_LINES:]
+            for t in topic_ids:
+                if t not in task.memory_ids:
+                    task.memory_ids.append(t)
+            task.pending_spaces = [s for s in task.pending_spaces if s != space_id]
+            task.open_episode_messages += open_n
+            if error:
+                task.status, task.error = "failed", error
+            elif not task.pending_spaces and task.status != "failed":
+                task.status = "completed"
+            self.store.put_task(task)
 
     # —— 一段的整理 ——
     def organize(self, ep: Episode) -> OrganizeResult:
@@ -440,19 +481,54 @@ class ProjectMemoryService:
         r.log(f"关段（{ep.closed_reason}）：{len(ep.messages)} 条消息")
         space = self.get_space(ep.space_id)
         domains = ep.domains or space.domain_names()
-        topic = topic_mod.assign(self.hub, self.store, space, ep, domains, r.log)
+        topic = self._assign_topic(space, ep, domains, r)
         if topic is None:
             self.store.put_episode(ep)
             return r
         ep.topic_id = topic.id
         r.topic_ids.append(topic.id)
 
-        self._run_decisions(ep, topic, r)
-        r.experience_ops += exp.run(self.hub, self.store, ep, r.log)
+        # 决策与经验改的是不同的记录、互不依赖对方的结果：一段之内两条线并行
+        r_dec, r_exp = OrganizeResult(), OrganizeResult()
+
+        def run_exp() -> None:
+            r_exp.experience_ops += exp.run(self.hub, self.store, ep, r_exp.log, lock=self.lock)
+
+        if self.parallel_episode:
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="pm-exp") as pool:
+                fut = pool.submit(_with_context(run_exp))
+                self._run_decisions(ep, topic, r_dec)
+                fut.result()
+        else:
+            self._run_decisions(ep, topic, r_dec)
+            run_exp()
+        r.merge(r_dec)
+        r.merge(r_exp)
         self.store.put_episode(ep)
         return r
 
+    def _assign_topic(
+        self, space: Space, ep: Episode, domains: list[str], r: OrganizeResult
+    ) -> Topic | None:
+        """归主题：判断不加锁；并入已有主题拿主题锁，新建主题拿主题列表锁并先复核。"""
+        sid = space.space_id
+        choice = topic_mod.choose(self.hub, self.store, space, ep, domains, r.log)
+        if choice.skip:
+            return None
+        if choice.topic_id is None:
+            with self.lock(topics_key(sid)):
+                if topic_mod.changed_since(self.store, sid, choice):
+                    r.log("归主题：判断期间别的段新建了主题，带上新主题重判")
+                    choice = topic_mod.choose(self.hub, self.store, space, ep, domains, r.log)
+                    if choice.skip:
+                        return None
+                if choice.topic_id is None:
+                    return topic_mod.apply(self.store, space, ep, choice, domains, r.log)
+        with self.lock(topic_key(sid, choice.topic_id)):
+            return topic_mod.apply(self.store, space, ep, choice, domains, r.log)
+
     def _run_decisions(self, ep: Episode, topic: Topic, r: OrganizeResult) -> None:
+        # 判定与抽取只看这一段，不加锁
         existing = self.store.list_decisions(ep.space_id, topic.id)
         members = ep.member_names()
         for d in existing:
@@ -470,30 +546,36 @@ class ProjectMemoryService:
         if not kept:
             return
 
-        existing = sorted(existing, key=lambda d: d.time, reverse=True)[: dec.MAX_TOPIC_DECISIONS]
-        if not existing:  # 召回为空：不调第二次，直接新增
-            for d in kept:
-                self._add(d, ep, topic, r, "主题里还没有决策")
-            return
+        # 更新要和这个主题已有的决策比：同一主题排队，否则两段相反的结论会都当新增、分歧丢失
+        with self.lock(topic_key(ep.space_id, topic.id)):
+            existing = self.store.list_decisions(ep.space_id, topic.id)  # 拿锁后重读
+            existing = sorted(existing, key=lambda d: d.time, reverse=True)[
+                : dec.MAX_TOPIC_DECISIONS
+            ]
+            if not existing:  # 召回为空：不调第二次，直接新增
+                for d in kept:
+                    self._add(d, ep, topic, r, "主题里还没有决策")
+                return
 
-        rows = dec.update(self.hub, kept, existing, topic.name)
-        touched: set[str] = set()
-        for d, row in zip(kept, rows, strict=False):
-            for attempt in range(MAX_CAS_RETRIES):
-                cands = {x.id: x for x in self.store.list_decisions(ep.space_id, topic.id)}
-                if attempt or row.get("decision_id") in touched:
-                    # 同一段里前一条已改过这条决策，或写回时发现被别人改过：按新状态重判
-                    row = dec.update(self.hub, [d], list(cands.values()), topic.name)[0]
-                plan = dec.decide(d, row, cands)
-                try:
-                    self._apply_plan(d, plan, cands, ep, topic, r, touched)
-                    break
-                except ConcurrentUpdateError:
-                    r.log(
-                        f"  决策写回冲突（第 {attempt + 1} 次）：这条决策刚被别的任务改过，重读重判"
-                    )
-            else:
-                r.log(f"  决策写回连续冲突 {MAX_CAS_RETRIES} 次，放弃这一条：{d.content}")
+            rows = dec.update(self.hub, kept, existing, topic.name)
+            touched: set[str] = set()
+            for d, row in zip(kept, rows, strict=False):
+                for attempt in range(MAX_CAS_RETRIES):
+                    cands = {x.id: x for x in self.store.list_decisions(ep.space_id, topic.id)}
+                    if attempt or row.get("decision_id") in touched:
+                        # 同一段里前一条已改过这条决策，或写回时发现被别人改过：按新状态重判
+                        row = dec.update(self.hub, [d], list(cands.values()), topic.name)[0]
+                    plan = dec.decide(d, row, cands)
+                    try:
+                        self._apply_plan(d, plan, cands, ep, topic, r, touched)
+                        break
+                    except ConcurrentUpdateError:
+                        r.log(
+                            f"  决策写回冲突（第 {attempt + 1} 次）："
+                            "这条决策刚被别的任务改过，重读重判"
+                        )
+                else:
+                    r.log(f"  决策写回连续冲突 {MAX_CAS_RETRIES} 次，放弃这一条：{d.content}")
 
     def _apply_plan(
         self, d, plan, cands, ep: Episode, topic: Topic, r: OrganizeResult, touched: set[str]
@@ -782,12 +864,9 @@ def parse_messages(raw: list[Any], user_id: str) -> list[Msg]:
     chat_time 没有时区偏移时，补 +00:00（UTC）。工程层应统一补时区；
     这里兜底是为了避免同一 Space 里混用带时区与不带时区的时间戳导致切段报错。
     """
-    import re as _re
-
-    _TZ_PAT = _re.compile(r"[+-]\d{2}:?\d{2}$|Z$")
 
     def _ensure_tz(t: str) -> str:
-        if t and not _TZ_PAT.search(t):
+        if t and not _TZ_SUFFIX.search(t):
             return t + "+00:00"
         return t
 
@@ -847,3 +926,23 @@ def parse_messages(raw: list[Any], user_id: str) -> list[Msg]:
                     )
                 )
     return out
+
+
+def stream_owner(space_id: str, conversation_id: str | None) -> str:
+    """调度消息的 user_id：一个会话一条流。
+
+    会话 id 常带冒号（如 `claude-code:b-1029`），而调度器的状态键按冒号切分，所以取哈希。
+    没有会话 id 的提交自成一段，用 Space 本身。
+    """
+    if not conversation_id:
+        return space_id
+    h = hashlib.sha1(conversation_id.encode("utf-8")).hexdigest()[:12]
+    return f"{space_id}.{h}"
+
+
+def _with_context(fn: Callable[[], Any]) -> Callable[[], Any]:
+    """把当前的 contextvars（请求上下文、trace id）带进线程池。"""
+    import contextvars
+
+    ctx = contextvars.copy_context()
+    return lambda: ctx.run(fn)
