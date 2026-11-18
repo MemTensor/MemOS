@@ -40,7 +40,11 @@ from memos.mem_scheduler.schemas.task_schemas import (
     ANSWER_TASK_LABEL,
     QUERY_TASK_LABEL,
 )
-from memos.templates.cloud_service_prompt import get_cloud_chat_prompt
+from memos.templates.cloud_service_prompt import (
+    get_cloud_chat_dynamic_context,
+    get_cloud_chat_prompt,
+    get_cloud_chat_stable_prompt,
+)
 from memos.templates.mos_prompts import (
     FURTHER_SUGGESTION_PROMPT,
     get_memos_prompt,
@@ -158,21 +162,20 @@ class ChatHandler(BaseHandler):
                 memories_list, chat_req.threshold or 0.5
             )
 
-            # Step 2: Build system prompt
-            system_prompt = self._build_system_prompt(
+            # Step 2: Build cache-friendly message list (Issue #2524):
+            # stable system prompt first, then chat history, then a dynamic
+            # context message carrying the current time / retrieved memories
+            # / preferences, then the current user query. The reorder keeps
+            # [stable_system, ...prior_history] identical across turns so
+            # provider prefix caches can reuse the history.
+            history_info = chat_req.history[-20:] if chat_req.history else []
+            current_messages = self._assemble_cacheable_messages(
                 query=chat_req.query,
+                history=history_info,
                 memories=filtered_memories,
                 pref_string=search_response.data.get("pref_string", ""),
                 base_prompt=chat_req.system_prompt,
             )
-
-            # Prepare message history
-            history_info = chat_req.history[-20:] if chat_req.history else []
-            current_messages = [
-                {"role": "system", "content": system_prompt},
-                *history_info,
-                {"role": "user", "content": chat_req.query},
-            ]
 
             self.logger.info("[Cloud Service] Starting to generate chat complete response...")
 
@@ -306,21 +309,18 @@ class ChatHandler(BaseHandler):
                     # Filter memories by threshold
                     filtered_memories = self._filter_memories_by_threshold(memories_list)
 
-                    # Step 2: Build system prompt with memories
-                    system_prompt = self._build_system_prompt(
+                    # Step 2: Build cache-friendly message list (Issue #2524)
+                    history_info = chat_req.history[-20:] if chat_req.history else []
+                    current_messages = self._assemble_cacheable_messages(
                         query=chat_req.query,
+                        history=history_info,
                         memories=filtered_memories,
                         pref_string=search_response.data.get("pref_string", ""),
                         base_prompt=chat_req.system_prompt,
                     )
-
-                    # Prepare messages
-                    history_info = chat_req.history[-20:] if chat_req.history else []
-                    current_messages = [
-                        {"role": "system", "content": system_prompt},
-                        *history_info,
-                        {"role": "user", "content": chat_req.query},
-                    ]
+                    # Backward-compatible: expose the stable prompt in the log
+                    # (callers used to log ``system_prompt`` here).
+                    system_prompt = current_messages[0]["content"]
 
                     self.logger.info(
                         f"[Cloud Service] chat stream user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}, "
@@ -599,7 +599,11 @@ class ChatHandler(BaseHandler):
                     )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference}, ensure_ascii=False)}\n\n"
 
-                    # Step 2: Build system prompt with memories
+                    # Step 2: Build cache-friendly message list (Issue #2524).
+                    # Playground uses enhance-mode prompts: the stable prompt
+                    # carries the fixed persona / instructions, and the dynamic
+                    # context carries the current time + memories + preferences
+                    # for this turn.
                     lang = detect_lang(chat_req.query)
                     if pref_string:
                         pref_string += (
@@ -607,17 +611,36 @@ class ChatHandler(BaseHandler):
                             if lang == "zh"
                             else "\n#warning\n- In thinking content, do not appear the reference number and id [1,2,3]etc. otherwise it will cause reference error."
                         )
-                    system_prompt = self._build_enhance_system_prompt(
-                        filtered_memories, pref_string, lang=lang
+
+                    stable_prompt = self._build_enhance_stable_prompt(lang=lang)
+                    dynamic_ctx = self._build_enhance_dynamic_context(
+                        memories_list=filtered_memories,
+                        pref_string=pref_string,
+                        lang=lang,
                     )
 
-                    # Prepare messages
                     history_info = chat_req.history[-20:] if chat_req.history else []
+                    # Issue #2524 OCR round 2 (finding #6): deliver the per-turn
+                    # dynamic context as a user-role framing message. A
+                    # mid-conversation ``{"role": "system"}`` message is
+                    # ambiguous for several provider APIs and can trigger
+                    # 400s (Azure OpenAI, some Anthropic routers, several
+                    # OpenAI-compatible proxies). Wrapping the context in a
+                    # user turn with an explicit "[Context for this turn]"
+                    # header keeps the shape unambiguous while preserving
+                    # the stable prefix (system + history) for caching.
                     current_messages = [
-                        {"role": "system", "content": system_prompt},
+                        {"role": "system", "content": stable_prompt},
                         *history_info,
+                        {
+                            "role": "user",
+                            "content": "[Context for this turn]\n" + dynamic_ctx,
+                        },
                         {"role": "user", "content": chat_req.query},
                     ]
+                    # Downstream code still expects a ``system_prompt`` symbol
+                    # for logging / speed-improvement estimation.
+                    system_prompt = stable_prompt + "\n\n" + dynamic_ctx
 
                     self.logger.info(
                         f"[PLAYGROUND CHAT] user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}, "
@@ -832,33 +855,31 @@ class ChatHandler(BaseHandler):
                         # Filter memories by threshold
                         filtered_memories = self._filter_memories_by_threshold(memories_list)
 
-                        # Step 2: Build system prompt with memories
-                        system_prompt = self._build_system_prompt(
-                            query=chat_req.query,
-                            memories=filtered_memories,
-                            pref_string=search_response.data.get("pref_string", ""),
-                            base_prompt=chat_req.system_prompt,
-                        )
-
+                        pref_string_for_prompt = search_response.data.get("pref_string", "")
                         self.logger.info(
-                            f"[ChatBusinessHandler] chat stream user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}, "
-                            f"current_system_prompt: {system_prompt}"
+                            f"[ChatBusinessHandler] chat stream user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}"
                         )
                     else:
-                        system_prompt = self._build_system_prompt(
-                            query=chat_req.query,
-                            memories=None,
-                            pref_string=None,
-                            base_prompt=chat_req.system_prompt,
-                        )
+                        filtered_memories = None
+                        pref_string_for_prompt = None
 
-                    # Prepare messages
+                    # Build cache-friendly message list (Issue #2524)
                     history_info = chat_req.history[-20:] if chat_req.history else []
-                    current_messages = [
-                        {"role": "system", "content": system_prompt},
-                        *history_info,
-                        {"role": "user", "content": chat_req.query},
-                    ]
+                    current_messages = self._assemble_cacheable_messages(
+                        query=chat_req.query,
+                        history=history_info,
+                        memories=filtered_memories,
+                        pref_string=pref_string_for_prompt,
+                        base_prompt=chat_req.system_prompt,
+                    )
+                    if chat_req.need_search:
+                        # Only log the full assembled system prompt when we
+                        # actually ran retrieval; otherwise this fires on
+                        # every no-search request and floods the logs.
+                        system_prompt = current_messages[0]["content"]
+                        self.logger.info(
+                            f"[ChatBusinessHandler] current_system_prompt: {system_prompt}"
+                        )
 
                     # Step 3: Generate streaming response from LLM
                     if (
@@ -1103,6 +1124,210 @@ class ChatHandler(BaseHandler):
             + mem_block_o
             + f"\n\n{pref_string}"
         )
+
+    # ------------------------------------------------------------------
+    # Prefix-cache-friendly message assembly (Issue #2524)
+    # ------------------------------------------------------------------
+    #
+    # The handlers above used to send the per-turn retrieval and current
+    # time as the first (system) message, with chat history after it.
+    # Because the first message changed every turn, provider prefix caches
+    # could not reuse the chat history that followed.
+    #
+    # The helpers below split the single system blob into:
+    #   * a stable system prompt (constant across turns in one conversation),
+    #     emitted as ``messages[0]`` so that the history that follows is part
+    #     of the shared prefix, and
+    #   * a per-turn dynamic context message that carries the current time,
+    #     retrieved memories, and preferences, inserted immediately before
+    #     the final user turn.
+    #
+    # Call sites use ``_assemble_cacheable_messages`` to produce the full
+    # ``messages`` list. Legacy callers that pass a ``base_prompt`` with
+    # ``{memories}`` keep the single-system shape for backward compatibility.
+
+    def _format_memories_for_dynamic_block(self, memories: list | None) -> str:
+        """Return the memory list rendered as "1. ...\\n2. ..." (empty when
+        there are no memories). Mirrors ``_build_system_prompt`` so legacy
+        and cache-friendly paths produce the same memory text."""
+        if not memories:
+            return ""
+        rendered: list[str] = []
+        for i, memory in enumerate(memories, 1):
+            text_memory = memory.get("memory", "") if isinstance(memory, dict) else str(memory)
+            rendered.append(f"{i}. {text_memory}")
+        return "\n".join(rendered)
+
+    def _build_stable_system_prompt(
+        self,
+        *,
+        query: str,
+        base_prompt: str | None,
+    ) -> str:
+        """Return the stable (cross-turn constant) system prompt.
+
+        * If ``base_prompt`` is ``None``: return the stable cloud chat
+          prompt for the detected language (no ``{current_time}``, no
+          ``{memories}`` substitution).
+        * If ``base_prompt`` contains ``{memories}``: this is the legacy
+          single-string path; the caller is expected to use the legacy
+          assembly instead (``_assemble_cacheable_messages`` detects this
+          and falls back automatically). The method still returns the
+          base_prompt text with ``{memories}`` stripped so it is safe to
+          emit as a stable prefix.
+        * Otherwise return ``base_prompt`` as-is.
+        """
+        if base_prompt is None:
+            lang = detect_lang(query)
+            return get_cloud_chat_stable_prompt(lang=lang)
+        if "{memories}" in base_prompt:
+            # Caller used the legacy single-string pattern. The stable half
+            # is the template with the memory slot removed.
+            return base_prompt.replace("{memories}", "").rstrip()
+        return base_prompt
+
+    def _build_dynamic_context_message(
+        self,
+        *,
+        memories: list | None,
+        pref_string: str | None,
+        lang: str,
+        include_time: bool = True,
+    ) -> str | None:
+        """Return the per-turn dynamic context, or ``None`` when there is
+        nothing dynamic to emit.
+
+        The returned string is intended to be sent as a system message
+        placed immediately before the final user turn.
+        """
+        memories_text = self._format_memories_for_dynamic_block(memories)
+        pref_text = (pref_string or "").strip()
+        # If there is no memory and no preference content, skip the dynamic
+        # context message entirely — emitting a timestamp-only system
+        # message defeats the ``Optional`` return type and injects noise
+        # with no payload. The ``include_time`` kwarg is kept so callers can
+        # still ask for the stamp when they do have memories/prefs to say.
+        if not memories_text and not pref_text:
+            return None
+        return get_cloud_chat_dynamic_context(
+            memories_block=memories_text,
+            pref_string=pref_text or None,
+            lang=lang,
+        )
+
+    def _assemble_cacheable_messages(
+        self,
+        *,
+        query: str,
+        history: list[dict] | None,
+        memories: list | None,
+        pref_string: str | None,
+        base_prompt: str | None,
+        lang: str | None = None,
+        include_dynamic_time: bool = True,
+    ) -> list[dict]:
+        """Build the provider ``messages`` list in prefix-cache-friendly order.
+
+        Shape (default path):
+            [stable system, *history, dynamic context (optional), user]
+
+        Legacy path — triggered when ``base_prompt`` contains ``{memories}``:
+            [legacy system(stable + inline memories), *history, user]
+        """
+        history_list = list(history or [])
+
+        # Legacy backward-compatible path for custom ``base_prompt``.
+        if base_prompt and "{memories}" in base_prompt:
+            legacy_system = self._build_system_prompt(
+                query=query,
+                memories=memories,
+                pref_string=pref_string,
+                base_prompt=base_prompt,
+            )
+            return [
+                {"role": "system", "content": legacy_system},
+                *history_list,
+                {"role": "user", "content": query},
+            ]
+
+        stable_system = self._build_stable_system_prompt(query=query, base_prompt=base_prompt)
+        resolved_lang = lang or detect_lang(query)
+        dynamic_ctx = self._build_dynamic_context_message(
+            memories=memories,
+            pref_string=pref_string,
+            lang=resolved_lang,
+            include_time=include_dynamic_time,
+        )
+
+        messages: list[dict] = [{"role": "system", "content": stable_system}]
+        messages.extend(history_list)
+        if dynamic_ctx:
+            # Issue #2524 OCR round 2 (finding #6): keep the per-turn
+            # context in a user-role framing message rather than a
+            # mid-conversation system message. See the playground path above
+            # for the full rationale.
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "[Context for this turn]\n" + dynamic_ctx,
+                }
+            )
+        messages.append({"role": "user", "content": query})
+        return messages
+
+    def _build_enhance_stable_prompt(
+        self,
+        *,
+        lang: str = "en",
+        tone: str = "friendly",
+        verbosity: str = "mid",
+    ) -> str:
+        """Return the stable (cross-turn constant) enhance-mode system prompt."""
+        # ``get_memos_prompt`` substitutes ``{date}`` into the body, so the
+        # literal string we pass is what the model will see on the "Current
+        # Date" line. Use a clearly synthetic sentinel so the model does not
+        # mistake the placeholder for a real date value (OCR round 2
+        # finding #5 — "(see dynamic context)" still rendered as a literal
+        # "# Current Date: (see dynamic context)" line). The real date is
+        # emitted in the dynamic context from
+        # ``_build_enhance_dynamic_context`` and takes precedence.
+        sys_body = get_memos_prompt(
+            date="N/A — see context below",
+            tone=tone,
+            verbosity=verbosity,
+            mode="enhance",
+            lang=lang,
+        )
+        return sys_body
+
+    def _build_enhance_dynamic_context(
+        self,
+        *,
+        memories_list: list,
+        pref_string: str = "",
+        lang: str = "en",
+    ) -> str:
+        """Return the per-turn dynamic context for the enhance (playground)
+        chat endpoint (current time + PersonalMemory + OuterMemory + prefs)."""
+        now = datetime.now()
+        formatted_date = now.strftime("%Y-%m-%d %H:%M (%A)")
+        mem_block_o, mem_block_p = self._format_mem_block(memories_list)
+        pref_block = (pref_string or "").strip()
+        header_time = (
+            f"# 当前上下文\n- 当前时间: {formatted_date}"
+            if lang == "zh"
+            else f"# Current Context\n- Current Time: {formatted_date}"
+        )
+        parts = [
+            header_time,
+            "# Memories\n## PersonalMemory (ordered)\n"
+            + mem_block_p
+            + "\n## OuterMemory (from Internet Search, ordered)\n"
+            + mem_block_o,
+        ]
+        if pref_block:
+            parts.append(pref_block)
+        return "\n\n".join(parts)
 
     def _format_mem_block(
         self, memories_all: list, max_items: int = 10, max_chars_each: int = 1600
