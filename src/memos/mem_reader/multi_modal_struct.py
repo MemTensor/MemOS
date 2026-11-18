@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
+from memos.exceptions import EmbedderError
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
 from memos.mem_reader.read_multi_modal.base import _derive_key
 from memos.mem_reader.read_pref_memory.process_preference_memory import process_preference_fine
@@ -116,28 +117,68 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         )
 
     def _embed_memory_items(self, items: list[TextualMemoryItem]) -> None:
-        """Compute embeddings for a list of memory items in-place.
-
-        Attempts a single batch call first; falls back to per-item calls if the
-        batch fails.  Errors are logged but never raised so callers always
-        continue normally.
-        """
-        valid = [w for w in items if w and w.memory]
+        """Assign vectors only after the whole batch has usable results."""
+        valid = [item for item in items if item.memory]
         if not valid:
             return
-        texts = [w.memory for w in valid]
+        texts = [item.memory for item in valid]
         try:
             embeddings = self.embedder.embed(texts)
-            for w, emb in zip(valid, embeddings, strict=True):
-                w.metadata.embedding = emb
-        except Exception as e:
-            logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
-            logger.warning("[EMBED_FALLBACK] batch_size=%d", len(texts))
-            for w in valid:
+            if len(embeddings) != len(valid) or any(not vector for vector in embeddings):
+                raise EmbedderError("Embedding batch returned missing vectors")
+        except Exception:
+            logger.warning("Embedding batch failed; retrying %d items individually", len(valid))
+            embeddings = []
+            for text in texts:
                 try:
-                    w.metadata.embedding = self.embedder.embed([w.memory])[0]
-                except Exception as e2:
-                    logger.error(f"[MultiModalStruct] Error computing embedding for item: {e2}")
+                    [vector] = self.embedder.embed([text])
+                    if not vector:
+                        raise EmbedderError("Embedding response contains an empty vector")
+                except Exception:
+                    raise EmbedderError("Could not embed a memory window") from None
+                embeddings.append(vector)
+
+        for item, vector in zip(valid, embeddings, strict=True):
+            item.metadata.embedding = vector
+
+    def _fits_embedding_window(self, text: str, max_tokens: int) -> bool:
+        config = getattr(self.embedder, "config", None)
+        limit = getattr(config, "max_tokens", None)
+        # BaseEmbedder enforces its configured limit with a character slice.
+        if type(limit) is int and limit > 0 and len(text) > limit:
+            return False
+        return self._count_tokens(text) <= max_tokens
+
+    def _split_embedding_text(self, text: str, max_tokens: int) -> list[str]:
+        """Split oversized text without losing any suffix to provider truncation."""
+        pieces = []
+        while text and not self._fits_embedding_window(text, max_tokens):
+            low, high, best = 1, len(text) - 1, 0
+            while low <= high:
+                middle = (low + high) // 2
+                if self._fits_embedding_window(text[:middle], max_tokens):
+                    best = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if not best:
+                raise EmbedderError("Memory input cannot fit the embedding window")
+            # Prefer a nearby word or punctuation boundary when it fits.
+            start = best // 2
+            boundary = max(
+                (
+                    start + match.end()
+                    for match in re.finditer(r"[\s。！？；，.!?;]", text[start:best])
+                ),
+                default=best,
+            )
+            if self._fits_embedding_window(text[:boundary], max_tokens):
+                best = boundary
+            pieces.append(text[:best])
+            text = text[best:]
+        if text:
+            pieces.append(text)
+        return pieces
 
     def _split_large_memory_item(
         self, item: TextualMemoryItem, max_tokens: int
@@ -156,13 +197,23 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if not item_text:
             return [item]
 
-        item_tokens = self._count_tokens(item_text)
-        if item_tokens <= max_tokens:
+        if self._fits_embedding_window(item_text, max_tokens):
             return [item]
 
-        # Use chunker to split the text
         try:
-            chunks = self.chunker.chunk(item_text)
+            try:
+                chunks = [
+                    chunk if isinstance(chunk, str) else chunk.text
+                    for chunk in self.chunker.chunk(item_text)
+                ]
+            except Exception:
+                chunks = []
+            # Keep configured boundaries when the chunker preserves the whole source.
+            if "".join(chunks) != item_text:
+                chunks = [item_text]
+            chunks = [
+                piece for chunk in chunks for piece in self._split_embedding_text(chunk, max_tokens)
+            ]
             split_items = []
             source_info = dict(item.metadata.info or {})
             source_internal_info = dict(item.metadata.internal_info or {})
@@ -170,11 +221,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             chunk_total = len(chunks)
 
             def _create_chunk_item(chunk_idx: int, chunk):
-                # Different chunkers are not fully consistent:
-                # some return Chunk-like objects with `.text`, while others return raw strings.
-                chunk_text = chunk.text if hasattr(chunk, "text") else chunk
-                if not chunk_text or not chunk_text.strip():
-                    return None
+                chunk_text = chunk
                 chunk_info = {
                     "user_id": item.metadata.user_id,
                     "session_id": item.metadata.session_id,
@@ -212,12 +259,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     if split_item is not None:
                         split_items.append(split_item)
 
-            return split_items if split_items else [item]
-        except Exception as e:
-            logger.warning(
-                f"[MultiModalStruct] Failed to split large memory item: {e}. Returning original item."
-            )
-            return [item]
+            return split_items
+        except EmbedderError:
+            raise
+        except Exception:
+            raise EmbedderError("Could not split memory into embedding windows") from None
 
     def _concat_multi_modal_memories(
         self, all_memory_items: list[TextualMemoryItem], max_tokens=None, overlap=200
@@ -236,50 +282,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         max_tokens = max_tokens or self.chat_window_max_tokens
 
-        # Split large memory items before processing
-        processed_items = []
-        # control whether to parallel chunk large memory items
-        parallel_chunking = True
-
-        if parallel_chunking:
-            # parallel chunk large memory items, but keep the original order
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                # Create a list to hold futures with their original index
-                futures = []
-                for idx, item in enumerate(all_memory_items):
-                    if (item.memory or "") and self._count_tokens(item.memory) > max_tokens:
-                        future = executor.submit(self._split_large_memory_item, item, max_tokens)
-                        futures.append(
-                            (idx, future, True)
-                        )  # True indicates this item needs splitting
-                    else:
-                        futures.append((idx, item, False))  # False indicates no splitting needed
-
-                # Process results in original order
-                temp_results = [None] * len(all_memory_items)
-                for idx, future_or_item, needs_splitting in futures:
-                    if needs_splitting:
-                        # Wait for the future to complete and get the split items
-                        split_items = future_or_item.result()
-                        temp_results[idx] = split_items
-                    else:
-                        # No splitting needed, use the original item
-                        temp_results[idx] = [future_or_item]
-
-                # Flatten the results while preserving order
-                for items in temp_results:
-                    processed_items.extend(items)
-        else:
-            # serial chunk large memory items
-            for item in all_memory_items:
-                item_text = item.memory or ""
-                item_tokens = self._count_tokens(item_text)
-                if item_tokens > max_tokens:
-                    # Split the large item into multiple chunks
-                    split_items = self._split_large_memory_item(item, max_tokens)
-                    processed_items.extend(split_items)
-                else:
-                    processed_items.append(item)
+        # Preserve input order and submit only oversized items to the pool.
+        with ContextThreadPoolExecutor(max_workers=4) as executor:
+            splits = [
+                [item]
+                if self._fits_embedding_window(item.memory or "", max_tokens)
+                else executor.submit(self._split_large_memory_item, item, max_tokens)
+                for item in all_memory_items
+            ]
+            processed_items = [
+                item
+                for split in splits
+                for item in (split if isinstance(split, list) else split.result())
+            ]
 
         # If only one item after processing, compute embedding and return
         if len(processed_items) == 1:
@@ -300,34 +315,22 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             **(first_item.metadata.info or {}),
         }
 
-        for _idx, item in enumerate(processed_items):
+        for item in processed_items:
             item_text = item.memory or ""
-            # Ensure line ends with newline (same format as simple_struct)
-            line = item_text if item_text.endswith("\n") else f"{item_text}\n"
-
-            # Check if adding this item would exceed max_tokens (same logic as _iter_chat_windows)
-            # Note: After splitting large items, each item should be <= max_tokens,
-            # but we still check to handle edge cases
-            if self._count_tokens(cur_text + line) > max_tokens and cur_text:
-                # Yield current window
+            if cur_text and not self._fits_embedding_window(cur_text + item_text, max_tokens):
                 window = self._build_window_from_items(buf_items, info)
                 if window:
                     windows.append(window)
 
-                # Keep overlap: remove items until remaining tokens <= overlap
-                # (same logic as _iter_chat_windows)
-                while (
-                    buf_items
-                    and self._count_tokens("".join([it.memory or "" for it in buf_items])) > overlap
+                while buf_items and (
+                    self._count_tokens(cur_text) > overlap
+                    or not self._fits_embedding_window(cur_text + item_text, max_tokens)
                 ):
                     buf_items.pop(0)
-                # Recalculate cur_text from remaining items
-                cur_text = "".join([it.memory or "" for it in buf_items])
+                    cur_text = "".join(part.memory or "" for part in buf_items)
 
-            # Add item to current window
             buf_items.append(item)
-            # Recalculate cur_text from all items in buffer (same as _iter_chat_windows)
-            cur_text = "".join([it.memory or "" for it in buf_items])
+            cur_text += item_text
 
         # Yield final window if any items remain
         if buf_items:
@@ -1349,6 +1352,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     res_memory = future.result()
                     if res_memory is not None:
                         memory_list.append(res_memory)
+                except EmbedderError:
+                    raise
                 except Exception as e:
                     logger.error(f"Task failed with exception: {e}")
                     logger.error(traceback.format_exc())
