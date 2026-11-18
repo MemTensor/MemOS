@@ -12,6 +12,7 @@ from memos.log import get_logger
 from memos.reranker.strategies import RerankerStrategyFactory
 from memos.utils import timed
 
+from ._http_auth import BearerTokenAuth
 from .base import BaseReranker
 
 
@@ -173,16 +174,14 @@ class HTTPBGERerankerStrategy(BaseReranker):
         if not documents:
             return []
 
-        headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        headers.update(self.headers_extra)
+        headers = {"Content-Type": "application/json", **self.headers_extra}
+        auth = BearerTokenAuth(self.token) if self.token else None
         payload = {"model": self.model, "query": query, "documents": documents}
 
         try:
             # Make the HTTP request to the reranker service
             resp = requests.post(
-                self.reranker_url, headers=headers, json=payload, timeout=self.timeout
+                self.reranker_url, headers=headers, auth=auth, json=payload, timeout=self.timeout
             )
             resp.raise_for_status()
             data = resp.json()

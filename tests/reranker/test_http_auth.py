@@ -13,17 +13,25 @@ from memos.reranker.http_bge_strategy import HTTPBGERerankerStrategy
 @pytest.mark.parametrize("backend", ["http_bge", "http_bge_strategy"])
 @pytest.mark.parametrize("use_factory", [False, True])
 @pytest.mark.parametrize(
-    ("token", "extra", "expected_auth"),
+    ("token", "extra", "has_netrc", "expected_auth"),
     [
-        ("test-token", {}, "Bearer test-token"),
-        ("", {}, None),
-        ("test-token", {"authorization": "Bearer custom-token"}, "Bearer custom-token"),
+        ("test-token", {}, False, "Bearer test-token"),
+        ("", {}, False, None),
+        ("test-token", {"authorization": "Bearer custom-token"}, False, "Bearer custom-token"),
+        ("test-token", {}, True, "Bearer test-token"),
+        ("test-token", {"authorization": "Bearer custom-token"}, True, "Bearer custom-token"),
+        ("", {}, True, "Basic dGVzdC11c2VyOnRlc3QtcGFzcw=="),
     ],
 )
 def test_http_reranker_authenticates_prepared_request(
-    monkeypatch, backend, use_factory, token, extra, expected_auth
+    monkeypatch, tmp_path, backend, use_factory, token, extra, has_netrc, expected_auth
 ):
     """Keep request preparation and ranking real; replace only the HTTP service."""
+    netrc_path = tmp_path / "netrc"
+    if has_netrc:
+        netrc_path.write_text("machine reranker.example.test login test-user password test-pass\n")
+        netrc_path.chmod(0o600)
+    monkeypatch.setenv("NETRC", str(netrc_path))
     headers_extra = {"X-Test-Header": "preserved", **extra}
     original_headers = headers_extra.copy()
     received = []
