@@ -5,11 +5,7 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.log import get_logger
-from memos.memories.textual.item import (
-    DeferredTextualMemoryItem,
-    RetrievableMemoryItem,
-    TextualMemoryItem,
-)
+from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
 
@@ -94,7 +90,7 @@ class GraphMemoryRetriever:
         user_name: str | None = None,
         id_filter: dict | None = None,
         use_fast_graph: bool = False,
-    ) -> list[RetrievableMemoryItem]:
+    ) -> list[TextualMemoryItem]:
         """
         Perform hybrid memory retrieval:
         - Run graph-based lookup from dispatch plan.
@@ -213,14 +209,9 @@ class GraphMemoryRetriever:
         if memory_scope not in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
             raise ValueError(f"Unsupported memory scope: {memory_scope}")
 
-        # Materialize deferred candidates first: this path mutates metadata
-        # in place below and must hand out real items.
-        graph_results = [
-            item.build() if isinstance(item, DeferredTextualMemoryItem) else item
-            for item in self._vector_recall(
-                query_embedding, memory_scope, top_k, cube_name=cube_name, user_name=user_name
-            )
-        ]
+        graph_results = self._vector_recall(
+            query_embedding, memory_scope, top_k, cube_name=cube_name, user_name=user_name
+        )
 
         for result_i in graph_results:
             result_i.metadata.memory_type = "OuterMemory"
@@ -236,7 +227,7 @@ class GraphMemoryRetriever:
         query_embedding: list[list[float]] | None = None,
         search_filter: dict | None = None,
         user_name: str | None = None,
-    ) -> list[RetrievableMemoryItem]:
+    ) -> list[TextualMemoryItem]:
         """Retrieve from mixed and memory"""
         vector_results = self._vector_recall(
             query_embedding or [],
@@ -376,7 +367,12 @@ class GraphMemoryRetriever:
                 final_nodes = [result for result in temp_results if result is not None]
             return final_nodes
 
-    def _vector_recall(
+    def _vector_recall(self, *args, **kwargs) -> list[TextualMemoryItem]:
+        return [
+            TextualMemoryItem.from_dict(node) for node in self._vector_recall_nodes(*args, **kwargs)
+        ]
+
+    def _vector_recall_nodes(
         self,
         query_embedding: list[list[float]],
         memory_scope: str,
@@ -387,7 +383,7 @@ class GraphMemoryRetriever:
         search_filter: dict | None = None,
         search_priority: dict | None = None,
         user_name: str | None = None,
-    ) -> list[RetrievableMemoryItem]:
+    ) -> list[dict]:
         """
         Perform vector-based similarity retrieval using query embedding.
         # TODO: tackle with post-filter and pre-filter(5.18+) better.
@@ -486,7 +482,7 @@ class GraphMemoryRetriever:
                 hit.get("memory") is not None and hit.get("memory_type") is not None
                 for hit in lightweight_hits
             ):
-                return [self._memory_item_from_vector_hit(hit) for hit in lightweight_hits]
+                return [self._node_from_vector_hit(hit) for hit in lightweight_hits]
             logger.warning(
                 "Lightweight vector search returned incomplete fields; falling back to get_nodes"
             )
@@ -522,25 +518,17 @@ class GraphMemoryRetriever:
                 node["metadata"]["relativity"] = id_to_hit.get(rid, {}).get("score", 0.0)
                 ordered_nodes.append(node)
 
-        # Deferred candidates: full pydantic validation runs later, only for
-        # items that survive ranking and trimming (searcher._sort_and_trim).
-        return [DeferredTextualMemoryItem(n) for n in ordered_nodes]
+        return ordered_nodes
 
     @staticmethod
-    def _memory_item_from_vector_hit(hit: dict) -> TextualMemoryItem:
+    def _node_from_vector_hit(hit: dict) -> dict:
         metadata = {
             key: value
             for key, value in hit.items()
             if key not in {"id", "memory", "score"} and value is not None
         }
         metadata["relativity"] = hit.get("score", 0.0)
-        return TextualMemoryItem.from_dict(
-            {
-                "id": hit["id"],
-                "memory": hit["memory"],
-                "metadata": metadata,
-            }
-        )
+        return {"id": hit["id"], "memory": hit["memory"], "metadata": metadata}
 
     def _bm25_recall(
         self,
@@ -667,6 +655,4 @@ class GraphMemoryRetriever:
                 node["metadata"]["relativity"] = id_to_score.get(rid, 0.0)
                 ordered_nodes.append(node)
 
-        # Deferred candidates: full pydantic validation runs later, only for
-        # items that survive ranking and trimming (searcher._sort_and_trim).
-        return [DeferredTextualMemoryItem(n) for n in ordered_nodes]
+        return [TextualMemoryItem.from_dict(n) for n in ordered_nodes]

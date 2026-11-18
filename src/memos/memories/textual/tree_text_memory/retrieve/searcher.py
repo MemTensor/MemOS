@@ -8,12 +8,7 @@ from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger, summarize_textual_memories
-from memos.memories.textual.item import (
-    DeferredTextualMemoryItem,
-    RetrievableMemoryItem,
-    SearchedTreeNodeTextualMemoryMetadata,
-    TextualMemoryItem,
-)
+from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     FastTokenizer,
@@ -38,15 +33,6 @@ from .task_goal_parser import TaskGoalParser
 
 
 logger = get_logger(__name__)
-
-
-def _materialize_candidate(item: RetrievableMemoryItem) -> TextualMemoryItem:
-    """Build deferred candidates into fully validated items; pass items through."""
-    if isinstance(item, DeferredTextualMemoryItem):
-        return item.build()
-    return item
-
-
 KEYWORD_EXTRACT_TOP_K = 3
 KEYWORD_ALLOW_POS = ("n", "nr", "nrt", "ns", "nt", "nz", "vn", "v", "t", "eng", "m")
 COT_DICT = {
@@ -94,17 +80,12 @@ class Searcher:
         enabled: bool,
         *,
         query: str,
-        graph_results: list[RetrievableMemoryItem],
+        graph_results: list[TextualMemoryItem],
         top_k: int,
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
-        # Reranker strategies enrich and mutate items (e.g. single_turn
-        # reassigns ``item.memory``), and deferred views are read-only, so
-        # materialize before reranking. The disabled path materializes too,
-        # so Searcher.retrieve() never returns deferred views to callers.
         if not enabled or self.reranker is None:
-            return [(_materialize_candidate(item), 0.0) for item in graph_results[:top_k]]
-        graph_results = [_materialize_candidate(item) for item in graph_results]
+            return [(item, 0.0) for item in graph_results[:top_k]]
         return self.reranker.rerank(
             query=query,
             graph_results=graph_results,
@@ -173,7 +154,7 @@ class Searcher:
 
     def post_retrieve(
         self,
-        retrieved_results: list[tuple[RetrievableMemoryItem, float]],
+        retrieved_results: list[tuple[TextualMemoryItem, float]],
         top_k: int,
         user_name: str | None = None,
         info=None,
@@ -277,9 +258,7 @@ class Searcher:
 
         full_recall = kwargs.get("full_recall", False)
         if full_recall:
-            # full_recall callers receive untrimmed results and may treat them
-            # as fully constructed items; materialize deferred candidates here.
-            return [(_materialize_candidate(item), score) for item, score in retrieved_results]
+            return retrieved_results
 
         final_results = self.post_retrieve(
             retrieved_results=retrieved_results,
@@ -1134,15 +1113,15 @@ class Searcher:
         logger.info(f"[SIMPLESEARCH] Query words: {query_words}")
         query_embeddings = self.embedder.embed(query_words)
 
-        items = self.graph_retriever.retrieve_from_mixed(
+        candidate_nodes = self.graph_retriever._vector_recall_nodes(
             top_k=top_k * 2,
             memory_scope=None,
             query_embedding=query_embeddings,
             search_filter=search_filter,
             user_name=user_name,
         )
-        logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
-        documents = [getattr(item, "memory", "") for item in items]
+        logger.info(f"[SIMPLESEARCH] Items count: {len(candidate_nodes)}")
+        documents = [node["memory"] for node in candidate_nodes]
         if not documents:
             return []
         documents_embeddings = self.embedder.embed(documents)
@@ -1151,11 +1130,13 @@ class Searcher:
             return []
         similarity_matrix = cosine_similarity_matrix(documents_embeddings)
         selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)
-        selected_items = [items[i] for i in selected_indices]
+        rerank = bool(kwargs.get("rerank", True))
+        if not rerank or self.reranker is None:
+            selected_indices = selected_indices[:top_k]
+        selected_items = [TextualMemoryItem.from_dict(candidate_nodes[i]) for i in selected_indices]
         logger.info(
             f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}"
         )
-        rerank = bool(kwargs.get("rerank", True))
         return self._maybe_rerank(
             rerank,
             query=query,
@@ -1200,7 +1181,6 @@ class Searcher:
             for item, score in sorted_tool_schema_results:
                 if plugin and round(score, 2) == 0.00:
                     continue
-                item = _materialize_candidate(item)
                 meta_data = item.metadata.model_dump()
                 meta_data["relativity"] = score
                 final_items.append(
@@ -1221,7 +1201,6 @@ class Searcher:
             for item, score in sorted_tool_trajectory_results:
                 if plugin and round(score, 2) == 0.00:
                     continue
-                item = _materialize_candidate(item)
                 meta_data = item.metadata.model_dump()
                 meta_data["relativity"] = score
                 final_items.append(
@@ -1244,7 +1223,6 @@ class Searcher:
             for item, score in sorted_skill_results:
                 if plugin and round(score, 2) == 0.00:
                     continue
-                item = _materialize_candidate(item)
                 meta_data = item.metadata.model_dump()
                 meta_data["relativity"] = score
                 final_items.append(
@@ -1267,7 +1245,6 @@ class Searcher:
             for item, score in sorted_pref_results:
                 if plugin and round(score, 2) == 0.00:
                     continue
-                item = _materialize_candidate(item)
                 meta_data = item.metadata.model_dump()
                 meta_data["relativity"] = score
                 final_items.append(
@@ -1291,7 +1268,6 @@ class Searcher:
         for item, score in sorted_results:
             if plugin and round(score, 2) == 0.00:
                 continue
-            item = _materialize_candidate(item)
             meta_data = item.metadata.model_dump()
             meta_data["relativity"] = score
             final_items.append(
