@@ -303,18 +303,18 @@ class MOS(MOSCore):
                 None, base_prompt=base_prompt
             )
 
-        synthesis_tail = SYNTHESIS_PROMPT.format(qa_text=qa_text)
-        # Issue #2524: keep the leading system message byte-identical across
-        # turns. ``synthesis_tail`` embeds the per-call sub-questions and
-        # sub-answers so it changes every turn — append it as its own system
-        # message *after* the chat history (together with the dynamic
-        # context) instead of concatenating it into ``stable_system``.
-        current_messages: list[dict] = [{"role": "system", "content": stable_system}]
-        current_messages.extend(chat_history.chat_history)
+        system_prompt = f"{stable_system}\n\n{SYNTHESIS_PROMPT}"
+        turn_context = f"Sub-questions and answers:\n{qa_text}"
         if dynamic_ctx:
-            current_messages.append({"role": "system", "content": dynamic_ctx})
-        current_messages.append({"role": "system", "content": synthesis_tail})
-        current_messages.append({"role": "user", "content": original_query})
+            turn_context = f"{dynamic_ctx}\n\n{turn_context}"
+        current_messages = [
+            {"role": "system", "content": system_prompt},
+            *chat_history.chat_history,
+            {
+                "role": "user",
+                "content": f"[Context for this turn]\n{turn_context}\n[User question]\n{original_query}",
+            },
+        ]
 
         # Handle activation memory if enabled (same as core method)
         past_key_values = None

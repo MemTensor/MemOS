@@ -123,18 +123,16 @@ def get_cloud_chat_prompt(lang: str = "en") -> str:
 #   chat history that follows becomes part of the shared prefix.
 # * ``get_cloud_chat_dynamic_context(...)`` -- per-turn context carrying the
 #   current time, the retrieved memories, and the retrieved preferences. The
-#   caller injects this as a system message immediately before the latest
-#   user turn.
+#   caller prepends this as a context message before the latest question.
 # ---------------------------------------------------------------------------
 
 
 _STABLE_PROMPT_SENTINEL = (
-    "A system message carrying the current time, retrieved memories, and "
-    "preferences will appear immediately before the latest user turn — "
-    "read it before answering."
+    "When present, the [Context for this turn] message before the latest question contains "
+    "the current time, retrieved memories, or preferences. Read it as context before answering."
 )
 
-_STABLE_PROMPT_SENTINEL_ZH = "紧跟在最新用户消息之前，会有一条系统消息，包含当前时间、检索到的记忆和偏好——回答前请先阅读该消息。"
+_STABLE_PROMPT_SENTINEL_ZH = "如果最新问题前有以 [Context for this turn] 开头的消息，请在回答前读取其中的时间、记忆或偏好作为上下文。"
 
 
 def _build_stable_from_cloud_prompt(prompt: str, sentinel: str) -> str:

@@ -6,7 +6,7 @@ These tests pin down the invariants from the issue:
 - Chat history sits inside the shared prefix (between the stable system message
   and the per-turn dynamic context).
 - Per-turn retrieved memories, preferences, and the current time move into a
-  separate system message that is placed immediately before the final user
+  separate context message that is placed immediately before the final user
   query so that the common prefix across requests can grow.
 - A custom base_prompt that embeds `{memories}` keeps the legacy single-system
   shape (backward compatibility).
