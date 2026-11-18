@@ -74,8 +74,11 @@ class H:
 
     # Search extension point before core threshold/dedup/rerank processing.
     SEARCH_MEMORY_RESULTS = "search.memory_results"
+    SEARCH_RESULTS_AFTER_THRESHOLD = "search.results.after_threshold"
+    SEARCH_RESULTS_AFTER_DEDUP = "search.results.after_dedup"
     SEARCH_RESULTS_AFTER_RERANK = "search.results.after_rerank"
     SEARCH_CONTEXT_RENDER = "search.context.render"
+    SEARCH_POST_PROCESS_FAILED = "search.post_process.failed"
 
     # Custom Hook (manually triggered via trigger_hook)
     ADD_MEMORIES_POST_PROCESS = "add.memories.post_process"
@@ -91,6 +94,18 @@ class H:
 
     # dream — single-provider business hook
     DREAM_EXECUTE = "dream.execute"
+
+    # textual memory — write boundary
+    TEXT_MEMORY_ADD_AFTER = "text_memory.add.after"
+    TEXT_MEMORY_ADD_FAILED = "text_memory.add.failed"
+
+    # scheduler — memory operation boundaries inside task handlers
+    SCHEDULER_MEMORY_OPERATION_AFTER = "scheduler.memory.operation.after"
+    SCHEDULER_MEMORY_OPERATION_FAILED = "scheduler.memory.operation.failed"
+
+    # mem_reader — memory extraction
+    MEM_READER_EXTRACT_AFTER = "mem_reader.extract.after"
+    MEM_READER_EXTRACT_FAILED = "mem_reader.extract.failed"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -112,27 +127,64 @@ define_hook(
 )
 
 define_hook(
+    H.SEARCH_BEFORE,
+    description="Before search executes; can modify request",
+    params=["hook_context", "request"],
+    pipe_key="request",
+)
+
+define_hook(
+    H.SEARCH_AFTER,
+    description="After search executes; can modify result",
+    params=["hook_context", "request", "result"],
+    pipe_key="result",
+)
+
+define_hook(
     H.SEARCH_MEMORY_RESULTS,
     description=(
         "Allow plugins to merge additional search result buckets before core "
         "threshold, deduplication, and reranking."
     ),
-    params=["handler", "search_req", "results"],
+    params=["hook_context", "handler", "search_req", "results"],
+    pipe_key="results",
+)
+
+define_hook(
+    H.SEARCH_RESULTS_AFTER_THRESHOLD,
+    description="Allow plugins to observe or update search results after threshold filtering.",
+    params=["hook_context", "handler", "search_req", "results"],
+    pipe_key="results",
+)
+
+define_hook(
+    H.SEARCH_RESULTS_AFTER_DEDUP,
+    description="Allow plugins to observe or update search results after deduplication.",
+    params=["hook_context", "handler", "search_req", "results"],
     pipe_key="results",
 )
 
 define_hook(
     H.SEARCH_RESULTS_AFTER_RERANK,
     description="Allow plugins to update search results after core rerank and before rendering.",
-    params=["handler", "search_req", "results"],
+    params=["hook_context", "handler", "search_req", "results"],
     pipe_key="results",
 )
 
 define_hook(
     H.SEARCH_CONTEXT_RENDER,
     description="Render final search context after retrieval, rerank, and result-level plugins.",
-    params=["handler", "search_req", "results"],
+    params=["hook_context", "handler", "search_req", "results"],
     pipe_key="results",
+)
+
+define_hook(
+    H.SEARCH_POST_PROCESS_FAILED,
+    description=(
+        "Observe a failure during core search result processing: "
+        "threshold filtering, deduplication, or reranking"
+    ),
+    params=["hook_context", "handler", "search_req", "error"],
 )
 
 define_hook(
@@ -181,5 +233,67 @@ define_hook(
         "signal_snapshot",
         "text_mem",
         "scheduler_context",
+    ],
+)
+
+# Operation-boundary Hooks. Their business data remains explicit in the
+# normal keyword-argument contract. HookContext only carries correlation
+# metadata.
+define_hook(
+    H.TEXT_MEMORY_ADD_AFTER,
+    description="Observe or replace CubeView Textual Memory output after add returns",
+    params=["hook_context", "text_memory", "memories", "kwargs", "result"],
+    pipe_key="result",
+)
+
+define_hook(
+    H.TEXT_MEMORY_ADD_FAILED,
+    description="Observe CubeView Textual Memory input and output after add fails",
+    params=["hook_context", "text_memory", "memories", "kwargs", "error"],
+)
+
+define_hook(
+    H.SCHEDULER_MEMORY_OPERATION_AFTER,
+    description="Observe or replace a successful Scheduler memory operation result",
+    params=["hook_context", "operation", "operation_input", "result"],
+    pipe_key="result",
+)
+
+define_hook(
+    H.SCHEDULER_MEMORY_OPERATION_FAILED,
+    description="Observe a failed Scheduler memory operation and its error",
+    params=["hook_context", "operation", "operation_input", "error"],
+)
+
+define_hook(
+    H.MEM_READER_EXTRACT_AFTER,
+    description="Observe or replace MemReader output after extraction completes",
+    params=[
+        "hook_context",
+        "mem_reader",
+        "scene_data",
+        "type",
+        "info",
+        "mode",
+        "user_name",
+        "kwargs",
+        "result",
+    ],
+    pipe_key="result",
+)
+
+define_hook(
+    H.MEM_READER_EXTRACT_FAILED,
+    description="Observe MemReader extraction input and propagated error after processing fails",
+    params=[
+        "hook_context",
+        "mem_reader",
+        "scene_data",
+        "type",
+        "info",
+        "mode",
+        "user_name",
+        "kwargs",
+        "error",
     ],
 )

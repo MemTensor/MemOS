@@ -17,6 +17,7 @@ import numpy as np
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
+from memos.context.context import get_current_trace_id
 from memos.dream.contextualization import CONTEXT_MEMORY_TYPE
 from memos.log import get_logger, summarize_search_request, summarize_search_results
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -25,6 +26,7 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
+from memos.plugins.hook_context import HookContext, build_hook_context
 from memos.plugins.hook_defs import H
 from memos.plugins.hooks import hookable, trigger_hook
 
@@ -67,8 +69,14 @@ class SearchHandler(BaseHandler):
             "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
         )
 
-    @hookable("search")
-    def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
+    @hookable(
+        "search",
+        context_builder=lambda handler, request: handler._build_search_hook_context(request),
+    )
+    def handle_search_memories(
+        self,
+        search_req: APISearchRequest,
+    ) -> SearchResponse:
         """
         Main handler for search memories endpoint.
 
@@ -98,44 +106,75 @@ class SearchHandler(BaseHandler):
         results = cube_view.search_memories(search_req_local)
         hooked_results = trigger_hook(
             H.SEARCH_MEMORY_RESULTS,
+            hook_context=self._build_search_hook_context(search_req_local),
             handler=self,
             search_req=search_req_local,
             results=results,
         )
         if hooked_results is not None:
             results = hooked_results
-        if not search_req_local.relativity:
-            search_req_local.relativity = 0
-        self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
-        results = self._apply_relativity_threshold(results, search_req_local.relativity)
+        try:
+            if not search_req_local.relativity:
+                search_req_local.relativity = 0
+            self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
+            results = self._apply_relativity_threshold(results, search_req_local.relativity)
+            hooked_results = trigger_hook(
+                H.SEARCH_RESULTS_AFTER_THRESHOLD,
+                hook_context=self._build_search_hook_context(search_req_local),
+                handler=self,
+                search_req=search_req_local,
+                results=results,
+            )
+            if hooked_results is not None:
+                results = hooked_results
 
-        if search_req_local.dedup == "sim":
-            results = self._dedup_text_memories(results, search_req.top_k)
-            self._strip_embeddings(results)
-        elif search_req_local.dedup == "mmr":
-            pref_top_k = getattr(search_req_local, "pref_top_k", 6)
-            results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
-            self._strip_embeddings(results)
+            if search_req_local.dedup == "sim":
+                results = self._dedup_text_memories(results, search_req.top_k)
+                self._strip_embeddings(results)
+            elif search_req_local.dedup == "mmr":
+                pref_top_k = getattr(search_req_local, "pref_top_k", 6)
+                results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
+                self._strip_embeddings(results)
+            hooked_results = trigger_hook(
+                H.SEARCH_RESULTS_AFTER_DEDUP,
+                hook_context=self._build_search_hook_context(search_req_local),
+                handler=self,
+                search_req=search_req_local,
+                results=results,
+            )
+            if hooked_results is not None:
+                results = hooked_results
 
-        text_mem = results["text_mem"]
-        results["text_mem"] = rerank_knowledge_mem(
-            self.reranker,
-            query=search_req.query,
-            text_mem=text_mem,
-            top_k=search_req_local.top_k,
-            file_mem_proportion=0.5,
-        )
-        hooked_results = trigger_hook(
-            H.SEARCH_RESULTS_AFTER_RERANK,
-            handler=self,
-            search_req=search_req_local,
-            results=results,
-        )
-        if hooked_results is not None:
-            results = hooked_results
+            text_mem = results["text_mem"]
+            results["text_mem"] = rerank_knowledge_mem(
+                self.reranker,
+                query=search_req.query,
+                text_mem=text_mem,
+                top_k=search_req_local.top_k,
+                file_mem_proportion=0.5,
+            )
+            hooked_results = trigger_hook(
+                H.SEARCH_RESULTS_AFTER_RERANK,
+                hook_context=self._build_search_hook_context(search_req_local),
+                handler=self,
+                search_req=search_req_local,
+                results=results,
+            )
+            if hooked_results is not None:
+                results = hooked_results
+        except Exception as error:
+            trigger_hook(
+                H.SEARCH_POST_PROCESS_FAILED,
+                hook_context=self._build_search_hook_context(search_req_local),
+                handler=self,
+                search_req=search_req_local,
+                error=error,
+            )
+            raise
 
         hooked_results = trigger_hook(
             H.SEARCH_CONTEXT_RENDER,
+            hook_context=self._build_search_hook_context(search_req_local),
             handler=self,
             search_req=search_req_local,
             results=results,
@@ -1070,6 +1109,17 @@ class SearchHandler(BaseHandler):
             return list(dict.fromkeys(search_req.readable_cube_ids))
 
         return [search_req.user_id]
+
+    def _build_search_hook_context(self, search_req: APISearchRequest) -> HookContext:
+        mode = search_req.mode.value if hasattr(search_req.mode, "value") else str(search_req.mode)
+        return build_hook_context(
+            source="api.search",
+            trace_id=get_current_trace_id(),
+            user_id=search_req.user_id,
+            session_id=search_req.session_id or "default_session",
+            cube_ids=self._resolve_cube_ids(search_req),
+            attributes={"mode": mode},
+        )
 
     def _build_cube_view(self, search_req: APISearchRequest, searcher=None) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(search_req)

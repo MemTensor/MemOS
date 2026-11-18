@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class MemOSPlugin:
     """MemOS plugin base class.
 
-    Provides three unified registration methods. Plugin developers need only
+    Provides unified registration methods. Plugin developers need only
     inherit from this class and register capabilities via self.register_*
     in init_app.
 

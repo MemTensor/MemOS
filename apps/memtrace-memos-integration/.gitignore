@@ -1,0 +1,33 @@
+# Local runtime state and credentials
+/.memos/
+/.env
+/.env.*
+/logs/
+/tmp/
+*.log
+
+# Python environments and generated packages
+/.venv/
+/venv/
+/build/
+/dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+# Tests and tool output
+*_test.py
+conftest.py
+.pytest_cache/
+.ruff_cache/
+.tests/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Editor and operating system files
+/.idea/
+/.vscode/
+.DS_Store

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memos-smartcomment-integration"
+version = "0.1.0"
+description = "Non-invasive smartcomment execution-graph tracing for MemOS"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "MemoryOS>=2.0.27",
+    "smartcomment>=0.1.2",
+]
+
+[project.entry-points."memos.plugins"]
+smartcomment = "memos_smartcomment.plugin:SmartCommentPlugin"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memos_smartcomment*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-ignore = ["N999"]

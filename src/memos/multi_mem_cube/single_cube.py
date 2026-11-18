@@ -12,6 +12,7 @@ from memos.api.handlers.formatters_handler import (
     format_memory_item,
     post_process_textual_mem,
 )
+from memos.context.context import get_current_trace_id
 from memos.log import get_logger, summarize_search_request, summarize_search_results
 from memos.mem_reader.utils import parse_keep_filter_response
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
@@ -22,6 +23,9 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 from memos.memories.textual.item import TextualMemoryItem
 from memos.multi_mem_cube.views import MemCubeView
+from memos.plugins.hook_context import HookContext, build_hook_context
+from memos.plugins.hook_defs import H
+from memos.plugins.hooks import trigger_hook
 from memos.search import resolve_filter_for_cube, search_text_memories
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
@@ -671,6 +675,32 @@ class SingleCubeView(MemCubeView):
             self.logger.error(f"[add_before_search] LLM execution error: {e}")
             return memory_list
 
+    def _build_text_memory_add_hook_data(
+        self,
+        *,
+        add_req: APIADDRequest,
+        user_context: UserContext,
+        text_memory: Any,
+        memories: list[TextualMemoryItem],
+        session_id: str,
+        sync_mode: str,
+        extract_mode: str,
+    ) -> tuple[dict[str, Any], HookContext]:
+        hook_input = {
+            "text_memory": text_memory,
+            "memories": memories,
+            "kwargs": {"user_name": user_context.mem_cube_id},
+        }
+        return hook_input, build_hook_context(
+            trace_id=get_current_trace_id(),
+            user_id=add_req.user_id,
+            session_id=session_id,
+            task_id=add_req.task_id,
+            cube_ids=[self.cube_id],
+            source="cube_view.text_mem.add",
+            attributes={"sync_mode": sync_mode, "extract_mode": extract_mode},
+        )
+
     @timed
     def _process_text_mem(
         self,
@@ -744,10 +774,37 @@ class SingleCubeView(MemCubeView):
 
         # Stage 3: write_db
         with timed_stage("add", "write_db", cube_id=self.cube_id) as ts_db:
-            mem_ids_local: list[str] = self.naive_mem_cube.text_mem.add(
-                mem_group,
-                user_name=user_context.mem_cube_id,
+            text_memory = self.naive_mem_cube.text_mem
+            hook_input, hook_context = self._build_text_memory_add_hook_data(
+                add_req=add_req,
+                user_context=user_context,
+                text_memory=text_memory,
+                memories=mem_group,
+                session_id=target_session_id,
+                sync_mode=sync_mode,
+                extract_mode=extract_mode,
             )
+
+            try:
+                mem_ids_local: list[str] = text_memory.add(
+                    mem_group, user_name=user_context.mem_cube_id
+                )
+            except Exception as error:
+                trigger_hook(
+                    H.TEXT_MEMORY_ADD_FAILED,
+                    hook_context=hook_context,
+                    **hook_input,
+                    error=error,
+                )
+                raise
+            hook_result = trigger_hook(
+                H.TEXT_MEMORY_ADD_AFTER,
+                hook_context=hook_context,
+                **hook_input,
+                result=mem_ids_local,
+            )
+            if hook_result is not None:
+                mem_ids_local = hook_result
 
             self.logger.info(
                 f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "

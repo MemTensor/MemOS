@@ -43,11 +43,11 @@ def test_search_pipeline_hook_specs_are_registered():
 
     assert after_rerank is not None
     assert after_rerank.pipe_key == "results"
-    assert after_rerank.params == ["handler", "search_req", "results"]
+    assert after_rerank.params == ["hook_context", "handler", "search_req", "results"]
 
     assert render is not None
     assert render.pipe_key == "results"
-    assert render.params == ["handler", "search_req", "results"]
+    assert render.params == ["hook_context", "handler", "search_req", "results"]
 
 
 def test_rerank_knowledge_mem_preserves_conversation_sources_by_default():

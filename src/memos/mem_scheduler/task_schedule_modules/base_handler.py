@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from memos.log import get_logger
+from memos.mem_scheduler.task_schedule_modules.operation_observer import (
+    SchedulerOperationObserver,
+)
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 
 
@@ -33,6 +36,25 @@ class BaseSchedulerHandler:
 
     def handle_exception(self, e: Exception, message: str = "Error processing messages") -> None:
         logger.error(f"{message}: {e}", exc_info=True)
+
+    def observe_operation(
+        self,
+        operation_name: str,
+        *,
+        operation: str,
+        operation_context: dict[str, Any],
+        operation_input: dict[str, Any],
+        capture_failure: bool = False,
+    ) -> SchedulerOperationObserver:
+        """Expose a scheduler operation through the standard plugin Hook contract."""
+        source = f"scheduler.{self.expected_task_label}.{operation_name}"
+        return SchedulerOperationObserver(
+            source=source,
+            operation=operation,
+            operation_context=operation_context,
+            operation_input=operation_input,
+            capture_failure=capture_failure,
+        )
 
     def process_grouped_messages(
         self,
