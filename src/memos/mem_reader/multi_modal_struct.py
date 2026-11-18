@@ -4,6 +4,7 @@ import re
 import traceback
 import uuid
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from memos import log
@@ -15,7 +16,11 @@ from memos.mem_reader.read_pref_memory.process_preference_memory import process_
 from memos.mem_reader.read_skill_memory.process_skill_memory import process_skill_memory_fine
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.plugins.hook_defs import H
 from memos.plugins.hooks import trigger_hook, trigger_single_hook
 from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_MERGE_PROMPT_ZH
@@ -29,6 +34,28 @@ if TYPE_CHECKING:
 
 
 logger = log.get_logger(__name__)
+
+
+def _freeze_source_value(value: Any) -> Hashable:
+    """Ignore mapping order and preserve sequence order in provenance."""
+    if isinstance(value, dict):
+        return dict, frozenset((key, _freeze_source_value(item)) for key, item in value.items())
+    if isinstance(value, list | tuple):
+        return type(value), tuple(_freeze_source_value(item) for item in value)
+    return type(value), value
+
+
+def _source_signature(source: SourceMessage | dict[str, Any]) -> Hashable:
+    """Include all supplied provenance fields when deduplicating a window."""
+    try:
+        data = source.model_dump() if isinstance(source, SourceMessage) else source
+        signature = frozenset(
+            (key, _freeze_source_value(value)) for key, value in data.items() if value is not None
+        )
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        # Keep opaque provenance distinct unless it is the same object.
+        return id(source)
+    return signature
 
 
 class MultiModalStructMemReader(SimpleStructMemReader):
@@ -166,6 +193,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     memory_type=item.metadata.memory_type,
                     tags=item.metadata.tags or [],
                     key=item.metadata.key,
+                    # A chunk can land in a different window from the first chunk.
                     sources=item.metadata.sources or [],
                     background=item.metadata.background or "",
                     need_embed=False,
@@ -332,6 +360,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Collect all memory texts and sources
         memory_texts = []
         all_sources = []
+        # Keep one copy of each source per window while preserving its first position.
+        seen_source_sigs: set[Hashable] = set()
         roles = set()
         aggregated_file_ids: list[str] = []
         ingest_batch_ids: set[str] = set()
@@ -346,6 +376,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 item_sources = [item_sources]
 
             for source in item_sources:
+                sig = _source_signature(source)
+                if sig in seen_source_sigs:
+                    continue
+                seen_source_sigs.add(sig)
                 # Add source to all_sources
                 all_sources.append(source)
 
