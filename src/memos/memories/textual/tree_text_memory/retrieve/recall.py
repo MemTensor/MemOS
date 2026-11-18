@@ -367,7 +367,12 @@ class GraphMemoryRetriever:
                 final_nodes = [result for result in temp_results if result is not None]
             return final_nodes
 
-    def _vector_recall(
+    def _vector_recall(self, *args, **kwargs) -> list[TextualMemoryItem]:
+        return [
+            TextualMemoryItem.from_dict(node) for node in self._vector_recall_nodes(*args, **kwargs)
+        ]
+
+    def _vector_recall_nodes(
         self,
         query_embedding: list[list[float]],
         memory_scope: str,
@@ -378,7 +383,7 @@ class GraphMemoryRetriever:
         search_filter: dict | None = None,
         search_priority: dict | None = None,
         user_name: str | None = None,
-    ) -> list[TextualMemoryItem]:
+    ) -> list[dict]:
         """
         Perform vector-based similarity retrieval using query embedding.
         # TODO: tackle with post-filter and pre-filter(5.18+) better.
@@ -477,7 +482,7 @@ class GraphMemoryRetriever:
                 hit.get("memory") is not None and hit.get("memory_type") is not None
                 for hit in lightweight_hits
             ):
-                return [self._memory_item_from_vector_hit(hit) for hit in lightweight_hits]
+                return [self._node_from_vector_hit(hit) for hit in lightweight_hits]
             logger.warning(
                 "Lightweight vector search returned incomplete fields; falling back to get_nodes"
             )
@@ -513,23 +518,17 @@ class GraphMemoryRetriever:
                 node["metadata"]["relativity"] = id_to_hit.get(rid, {}).get("score", 0.0)
                 ordered_nodes.append(node)
 
-        return [TextualMemoryItem.from_dict(n) for n in ordered_nodes]
+        return ordered_nodes
 
     @staticmethod
-    def _memory_item_from_vector_hit(hit: dict) -> TextualMemoryItem:
+    def _node_from_vector_hit(hit: dict) -> dict:
         metadata = {
             key: value
             for key, value in hit.items()
             if key not in {"id", "memory", "score"} and value is not None
         }
         metadata["relativity"] = hit.get("score", 0.0)
-        return TextualMemoryItem.from_dict(
-            {
-                "id": hit["id"],
-                "memory": hit["memory"],
-                "metadata": metadata,
-            }
-        )
+        return {"id": hit["id"], "memory": hit["memory"], "metadata": metadata}
 
     def _bm25_recall(
         self,

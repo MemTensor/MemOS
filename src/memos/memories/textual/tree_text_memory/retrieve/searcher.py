@@ -1113,15 +1113,15 @@ class Searcher:
         logger.info(f"[SIMPLESEARCH] Query words: {query_words}")
         query_embeddings = self.embedder.embed(query_words)
 
-        items = self.graph_retriever.retrieve_from_mixed(
+        candidate_nodes = self.graph_retriever._vector_recall_nodes(
             top_k=top_k * 2,
             memory_scope=None,
             query_embedding=query_embeddings,
             search_filter=search_filter,
             user_name=user_name,
         )
-        logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
-        documents = [getattr(item, "memory", "") for item in items]
+        logger.info(f"[SIMPLESEARCH] Items count: {len(candidate_nodes)}")
+        documents = [node["memory"] for node in candidate_nodes]
         if not documents:
             return []
         documents_embeddings = self.embedder.embed(documents)
@@ -1130,11 +1130,13 @@ class Searcher:
             return []
         similarity_matrix = cosine_similarity_matrix(documents_embeddings)
         selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)
-        selected_items = [items[i] for i in selected_indices]
+        rerank = bool(kwargs.get("rerank", True))
+        if not rerank or self.reranker is None:
+            selected_indices = selected_indices[:top_k]
+        selected_items = [TextualMemoryItem.from_dict(candidate_nodes[i]) for i in selected_indices]
         logger.info(
             f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}"
         )
-        rerank = bool(kwargs.get("rerank", True))
         return self._maybe_rerank(
             rerank,
             query=query,

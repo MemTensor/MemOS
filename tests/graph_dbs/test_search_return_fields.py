@@ -276,7 +276,7 @@ class TestPolarDBExtractFieldsFromProperties:
         ],
     )
     def test_lightweight_numeric_user_id_can_be_recalled(
-        self, polardb_instance, stored_user_id, expected_user_id
+        self, polardb_instance, stored_user_id, expected_user_id, monkeypatch
     ):
         from memos.memories.textual.tree_text_memory.retrieve.recall import GraphMemoryRetriever
 
@@ -324,7 +324,14 @@ class TestPolarDBExtractFieldsFromProperties:
                 "is_fast",
             ],
         )
-        memory = GraphMemoryRetriever._memory_item_from_vector_hit(hits[0])
+        monkeypatch.setenv("MEMOS_POLARDB_LIGHTWEIGHT_SEARCH_ENABLED", "true")
+        graph_store = MagicMock(supports_lightweight_vector_search=True)
+        graph_store.search_by_embedding.return_value = hits
+        retriever = GraphMemoryRetriever(graph_store, MagicMock())
+        [memory] = retriever.retrieve_from_mixed(
+            top_k=1, query_embedding=[[0.1] * 1024], user_name="knowledge-cube"
+        )
+        graph_store.get_nodes.assert_not_called()
         assert memory.metadata.user_id == expected_user_id
         assert memory.metadata.tags == ["synthetic"]
         assert memory.metadata.info == {"test": True}
