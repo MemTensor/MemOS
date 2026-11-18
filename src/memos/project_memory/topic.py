@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .prompts import TOPIC_ASSIGN
-from .types import Episode, Space, Topic, now_iso
+from .types import Episode, Fenced, Space, Topic, as_list, later, new_uuid, now_iso
 
 
 if TYPE_CHECKING:
@@ -52,7 +52,11 @@ def choose(
     text = "\n".join(m.text for m in ep.messages if m.role != "tool")
     ranked = store.recall_topics(space.space_id, text, MAX_TOPICS_IN_PROMPT, domains=None)
     topics = [t for _, t in ranked]
-    allowed = [d for d in space.domains if d.name in domains] or space.domains
+    # 调用方给了候选领域就只在其中整理；给的领域已全被删改时不整理（PRD），没给才用全部领域
+    allowed = [d for d in space.domains if d.name in domains] if domains else space.domains
+    if not allowed:
+        log(f"归主题：候选领域 {domains} 已不在这个 Space 里，这一段不整理")
+        return TopicChoice(skip=True, seen_ids=seen)
     inputs = {
         "instructions": space.instructions,
         "domains": [{"name": d.name, "description": d.description} for d in allowed],
@@ -79,14 +83,21 @@ def choose(
     }
     out = hub.write("topic.assign", TOPIC_ASSIGN, inputs)
     if out.get("skip"):
-        log("归主题：skip（领域不在范围内或看不出是哪项工作），这一段不整理")
+        reason = (
+            out.get("skip_reason")
+            if out.get("skip_reason") in ("out_of_domain", "unclear")
+            else "out_of_domain"
+        )
+        ep.skip_reason = reason
+        log(f"归主题：skip（{'看不出是哪项工作' if reason == 'unclear' else '领域不在范围内'}）")
         return TopicChoice(skip=True, seen_ids=seen)
 
     names = [d.name for d in allowed]
     picked = next((t for t in topics if t.id == out.get("topic_id")), None)
     if picked is not None and picked.domain not in names:
-        log(f"归主题：模型选的主题领域「{picked.domain}」不在本次范围，按新建处理")
-        picked = None
+        # PRD：内容所属领域不在本次 domains 里就不整理（不再在范围内另建一个主题）
+        log(f"归主题：模型选的主题领域「{picked.domain}」不在本次范围，这一段不整理")
+        return TopicChoice(skip=True, seen_ids=seen)
     return TopicChoice(
         topic_id=picked.id if picked is not None else None,
         new_topic=out.get("new_topic") or {},
@@ -102,9 +113,13 @@ def apply(
 ) -> Topic | None:
     if choice.skip:
         return None
-    allowed = [d for d in space.domains if d.name in domains] or space.domains
+    allowed = [d for d in space.domains if d.name in domains] if domains else space.domains
+    if not allowed:
+        return None
     names = [d.name for d in allowed]
     topic = store.get_topic(choice.topic_id) if choice.topic_id else None  # 重读最新的
+    if choice.topic_id and topic is None:
+        raise Fenced("要并入的主题已被删除")
     if topic is None:
         new = choice.new_topic
         domain = new.get("domain") if new.get("domain") in names else names[0]
@@ -115,6 +130,9 @@ def apply(
             summary=(new.get("summary") or "")[:80],
             description=(new.get("description") or "")[:400],
         )
+        # 主题时间取消息发生的时间（导入历史会话时不是导入那一刻）
+        if ep.messages and ep.messages[0].chat_time:
+            topic.create_time = ep.messages[0].chat_time
         log(f"归主题：新建「{topic.name}」（{topic.domain}）")
     else:
         if choice.summary:
@@ -128,13 +146,22 @@ def apply(
         if content:
             topic.timeline.append(
                 {
+                    "id": new_uuid(),
                     "content": str(content)[:100],
                     "time": ep.messages[-1].chat_time if ep.messages else now_iso(),
                     "user_ids": _member_ids(ep),
                 }
             )
     _add_source(topic, ep)
-    store.put_topic(topic)
+    last = ep.messages[-1].chat_time if ep.messages else None
+    topic.update_time = later(topic.update_time if choice.topic_id else None, last or now_iso())
+    for x in topic.timeline:  # 新加的进展条目建索引，按 ID 单独读取时用
+        if x.get("id") and not x.get("indexed"):
+            store.put_index(
+                f"timeline:{x['id']}", {"space_id": topic.space_id, "topic_id": topic.id}
+            )
+            x["indexed"] = True
+    store.put_topic(topic, touch=False)
     return topic
 
 
@@ -155,12 +182,21 @@ def _member_ids(ep: Episode) -> list[str]:
 
 
 def _add_source(topic: Topic, ep: Episode) -> None:
+    """一个会话一项；没传会话 ID 的写入，同一成员、同一 Agent 记为一项（PRD）。"""
     conv = ep.conversation_id or None
     uids = _member_ids(ep)
+    agents = sorted(as_list(ep.agent_id))
     for s in topic.sources:
-        if s.get("conversation_id") == conv and conv is not None:
+        if conv is not None and s.get("conversation_id") == conv:
             have = s.get("user_id") if isinstance(s.get("user_id"), list) else [s.get("user_id")]
             s["user_id"] = sorted({*[u for u in have if u], *uids})
+            return
+        if (
+            conv is None
+            and s.get("conversation_id") is None
+            and sorted(as_list(s.get("user_id"))) == sorted(uids)
+            and sorted(as_list(s.get("agent_id"))) == agents
+        ):
             return
     topic.sources.append(
         {"conversation_id": conv, "user_id": uids, "agent_id": ep.agent_id or None}

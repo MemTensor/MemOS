@@ -17,10 +17,14 @@
 
 from __future__ import annotations
 
+import os
+
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from .errors import from_service
 
 
 class DomainItem(BaseModel):
@@ -95,10 +99,8 @@ def create_router(plugin) -> APIRouter:
     def guarded(fn, *a, **kw):
         try:
             return fn(*a, **kw)
-        except LookupError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+        except (LookupError, ValueError) as e:
+            raise from_service(e) from e
 
     @router.post("/create_space", summary="Create a project space (memory view `project`)")
     def create_space(req: CreateSpaceRequest):
@@ -168,9 +170,14 @@ def create_router(plugin) -> APIRouter:
             {
                 "space_id": req.space_id,
                 "memory_ids": out.topic_ids,
+                "failed_episodes": out.failed_episodes,
                 "decision_ops": out.decision_ops,
                 "experience_ops": out.experience_ops,
-                "trace": out.trace,
+                **(
+                    {"trace": out.trace}
+                    if os.getenv("PROJECT_MEMORY_DEBUG_TRACE", "false").lower() == "true"
+                    else {}
+                ),
             }
         )
 

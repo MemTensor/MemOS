@@ -113,6 +113,7 @@ def segment(
     task_id: str,
     log: Callable[[str], None],
     prev_tail: list[str] | None = None,
+    epoch: int = 0,
 ) -> tuple[list[Episode], Episode | None]:
     """把新消息并进 episode。返回（这次关掉的段，仍开着的段）。
 
@@ -128,6 +129,7 @@ def segment(
             prev_message_ids=prev_tail,
             domains=list(domains),
             task_ids=[task_id],
+            epoch=epoch,
         )
 
     def close(ep: Episode, reason: str) -> list[str]:
@@ -157,6 +159,7 @@ def segment(
             cur, cur_msgs = start(next_prev), []
         if task_id not in cur.task_ids:
             cur.task_ids.append(task_id)
+        cur.epoch = max(cur.epoch, epoch)
         for d in domains:
             if d not in cur.domains:
                 cur.domains.append(d)

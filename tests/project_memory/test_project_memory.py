@@ -35,6 +35,7 @@ from memos.project_memory.types import (
     InvariantError,
     Msg,
     Source,
+    time_key,
 )
 
 
@@ -131,18 +132,25 @@ def test_space_and_domain_crud(app):
         "/product/create_domains", json={"space_id": sid, "domains": [{"name": "运营物料"}]}
     )
     assert [d["name"] for d in r.json()["data"]["domains"]] == ["代码开发", "产品设计", "运营物料"]
-    # 整批校验：有一个重名，整批都不落
+    # 已有的同名领域跳过、保留原说明，其余照常创建（PRD）
+    before = {d["name"]: d["description"] for d in r.json()["data"]["domains"]}
     r = client.post(
         "/product/create_domains",
-        json={"space_id": sid, "domains": [{"name": "测试"}, {"name": "代码开发"}]},
+        json={
+            "space_id": sid,
+            "domains": [{"name": "测试"}, {"name": "代码开发", "description": "新说明"}],
+        },
     )
-    assert r.status_code == 400
-    assert (
-        len(client.post("/product/list_domains", json={"space_id": sid}).json()["data"]["domains"])
-        == 3
-    )
+    assert r.status_code == 200
+    after = {d["name"]: d["description"] for d in r.json()["data"]["domains"]}
+    assert list(after) == ["代码开发", "产品设计", "运营物料", "测试"]
+    assert after["代码开发"] == before["代码开发"]
 
-    r = client.post("/product/delete_domains", json={"space_id": sid, "domains": ["运营物料"]})
+    # 已不存在的名称忽略（PRD）
+    r = client.post(
+        "/product/delete_domains",
+        json={"space_id": sid, "domains": ["运营物料", "测试", "没有这个"]},
+    )
     assert r.status_code == 200 and len(r.json()["data"]["domains"]) == 2
 
     assert client.post("/product/get_space", json={"space_id": "nope"}).status_code == 404
@@ -223,6 +231,7 @@ def test_search_get_and_delete(app):
         "space_ids": [sid],
         "include_memory_view": ["project"],
         "memory_limit_number": 3,
+        "relativity": 0,  # 替身向量的分数偏低，这里只看结构；门槛另有用例
     }
     data = client.post("/product/search", json=body).json()["data"]
     assert list(data) == ["topic_detail_list"], "只要 project 时不走个人记忆"
@@ -498,7 +507,9 @@ def test_experience_confidence_follows_confirm_and_update(app):
     k = exps[0]
     assert k.confidence == pytest.approx(0.65), "新建 0.5 → 再次确认 +0.05 → 补充 +0.10"
     assert k.version == 2 and k.exp_status == EXP_VERIFIED
-    assert set(k.author_ids) == {"user_b", "user_e"}
+    # 证实、更新、反驳都把成员补进 user_ids，time 取最近一次（PRD）
+    assert set(k.author_ids) == {"user_b", "user_d", "user_e"}
+    assert k.time == max((s["chat_time"] for s in k.sources), key=time_key)
     assert len(k.sources) == 3 and len(k.history) == 1
     archived = plugin.service.store.list_experiences(sid, include_archived=True)
     assert len(archived) == 2, "旧版本另存为 archived 节点"
