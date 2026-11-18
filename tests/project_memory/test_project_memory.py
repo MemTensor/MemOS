@@ -680,3 +680,66 @@ def test_project_scope_checks_on_add_and_search():
             assert r.status_code == 422, (extra, r.text)
     finally:
         reset_project_hooks()
+
+
+def test_naive_chat_time_gets_configured_offset(monkeypatch):
+    """没带时区的 chat_time 按 PROJECT_MEMORY_NAIVE_TZ 补；与带时区的混在同一会话里也不报错。"""
+    from memos.project_memory.service import ensure_tz
+
+    monkeypatch.setenv("PROJECT_MEMORY_NAIVE_TZ", "+08:00")
+    assert ensure_tz("2026-10-28 12:00:00") == "2026-10-28T12:00:00+08:00"
+    assert ensure_tz("2026-10-28T12:00:00Z") == "2026-10-28T12:00:00Z"  # 带了就不动
+    assert ensure_tz("不是时间") == "不是时间"
+
+    client, sched, _ = build_http_app(graph_db=FakeGraphDB())
+    try:
+        sid = _space(client)
+        rnd = DECISION_ROUNDS[0]
+        naive = [{**m, "chat_time": m["chat_time"][:19].replace("T", " ")} for m in rnd["messages"]]
+        tasks = []
+        for msgs in (naive, rnd["messages"]):  # 先不带时区、再带时区，同一会话
+            r = _add(client, sid, {**rnd, "messages": msgs})
+            tasks.append(r.json()["data"][0]["task_id"])
+            sched.drain()
+        assert all(_status(client, "user_b", t)["status"] == "completed" for t in tasks)
+    finally:
+        reset_project_hooks()
+
+
+def test_internal_view_flags_cannot_be_forged_and_stay_out_of_schema():
+    """内部标志只按视图算：调用方传 true 不起作用；接口字段列表与序列化里都没有。"""
+    from memos.api.product_models import APIADDRequest, APISearchRequest
+
+    forged = {"project_view_flag": True, "project_view_only_flag": True}
+    r = APIADDRequest.model_validate({"user_id": "u", "messages": [], **forged})
+    assert (r.project_view_flag, r.project_view_only_flag) == (False, False)
+    r = APIADDRequest.model_validate(
+        {"user_id": "u", "messages": [], "allow_memory_view": ["project"], "space_ids": "s"}
+    )
+    assert (r.project_view_flag, r.project_view_only_flag) == (True, True)
+    assert "project_view_flag" not in r.model_dump()
+    for model in (APIADDRequest, APISearchRequest):
+        props = model.model_json_schema()["properties"]
+        assert "project_view_flag" not in props and "project_view_only_flag" not in props
+
+
+def test_expected_4xx_are_not_logged_as_hook_failures(monkeypatch):
+    """Space 不存在、缺字段这类预期的 4xx 不经通用钩子触发器，不打带堆栈的 ERROR。"""
+    import memos.plugins.hooks as hooks_mod
+
+    logged: list[str] = []
+    monkeypatch.setattr(hooks_mod.logger, "exception", lambda msg, *a, **k: logged.append(msg % a))
+    client, _, _ = build_http_app(graph_db=FakeGraphDB())
+    try:
+        rnd = DECISION_ROUNDS[0]
+        assert _add(client, "no-such-space", rnd).status_code == 404
+        r = client.post(
+            "/product/search",
+            json={"user_id": "u", "query": "x", "include_memory_view": ["project"]},
+        )
+        assert r.status_code == 422
+        r = client.post("/product/get_memory", json={"space_id": "no-such-space"})
+        assert r.status_code == 404
+        assert logged == []
+    finally:
+        reset_project_hooks()

@@ -148,7 +148,15 @@ def hookable(name: str):
                     ),
                 )
             return None
-        return trigger_single_hook(f"{name}.intercept", request=request)
+        callbacks = _hooks[f"{name}.intercept"]
+        if len(callbacks) > 1:
+            raise RuntimeError(
+                f"Multiple plugins registered single-provider hook: {name}.intercept"
+            )
+        # Called directly rather than via trigger_single_hook: a plugin answering with an
+        # HTTP 4xx (e.g. "Space not found") is a normal outcome, not an error to log with a
+        # traceback. Unexpected exceptions still reach the global exception handler.
+        return callbacks[0](request=request)
 
     def decorator(func):
         if asyncio.iscoroutinefunction(func):

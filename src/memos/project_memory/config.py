@@ -19,6 +19,7 @@
 | PROJECT_MEMORY_POSTGRES_SCHEMA | project_memory | 表建在这个 schema 下，与核心的表分开 |
 | PROJECT_MEMORY_POSTGRES_MAX_CONNECTIONS | 10 | 连接池上限；并行整理时每个线程占一个 |
 | PROJECT_MEMORY_PARALLEL_EPISODE | true | 一段之内决策与经验两条线并行 |
+| PROJECT_MEMORY_NAIVE_TZ | 服务器本地时区 | 没带时区的 chat_time 按这个偏移理解，如 `+08:00`（只认偏移写法） |
 """
 
 from __future__ import annotations

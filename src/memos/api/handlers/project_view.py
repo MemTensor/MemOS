@@ -21,7 +21,7 @@ from fastapi import HTTPException
 
 from memos.api.project_fields import PROJECT_MEMORY_VIEW
 from memos.plugins.hook_defs import H
-from memos.plugins.hooks import _hooks, trigger_single_hook
+from memos.plugins.hooks import _hooks
 
 
 __all__ = [
@@ -92,6 +92,19 @@ def _fill_readable_cube_ids(request: Any) -> None:
             object.__setattr__(request, "readable_cube_ids", list(space_ids))
 
 
+def _single(hook: str, **kwargs: Any) -> Any:
+    """Call the one plugin callback of a single-provider hook.
+
+    Called directly rather than through the generic trigger (which logs every exception
+    with a traceback): "Space not found" and parameter errors from the plugin are expected
+    4xx answers, not server errors.
+    """
+    callbacks = _hooks.get(hook) or []
+    if len(callbacks) != 1:
+        raise RuntimeError(f"hook {hook} needs exactly one provider, found {len(callbacks)}")
+    return callbacks[0](**kwargs)
+
+
 def _require_plugin() -> None:
     if not project_enabled():
         raise HTTPException(
@@ -106,7 +119,7 @@ def _require_plugin() -> None:
 def _call(hook: str, **kwargs: Any) -> Any:
     _require_plugin()
     try:
-        return trigger_single_hook(hook, **kwargs)
+        return _single(hook, **kwargs)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
@@ -129,7 +142,7 @@ def list_topics(request: Any) -> dict[str, Any]:
 def get_topic(memory_id: str) -> dict[str, Any] | None:
     if not project_enabled():
         return None
-    return trigger_single_hook(H.PROJECT_MEMORY_GET_BY_ID, memory_id=memory_id)
+    return _single(H.PROJECT_MEMORY_GET_BY_ID, memory_id=memory_id)
 
 
 def delete_topics(request: Any) -> dict[str, Any]:
@@ -139,4 +152,4 @@ def delete_topics(request: Any) -> dict[str, Any]:
 def task_status(task_id: str, user_id: str) -> dict[str, Any] | None:
     if not project_enabled():
         return None
-    return trigger_single_hook(H.PROJECT_MEMORY_TASK_STATUS, task_id=task_id, user_id=user_id)
+    return _single(H.PROJECT_MEMORY_TASK_STATUS, task_id=task_id, user_id=user_id)

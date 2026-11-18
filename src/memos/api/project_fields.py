@@ -18,9 +18,10 @@ things:
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema  # noqa: TC002 - pydantic needs it at runtime
 
 
 PROJECT_MEMORY_VIEW = "project"
@@ -89,9 +90,10 @@ class ProjectSearchFields(BaseModel):
         ),
     )
 
-    # Internal flags set by the before-validator; excluded from API schema.
-    project_view_flag: Annotated[bool, Field(exclude=True, repr=False)] = False
-    project_view_only_flag: Annotated[bool, Field(exclude=True, repr=False)] = False
+    # Internal flags computed from the view list by the before-validator (client input is
+    # overwritten); hidden from the OpenAPI schema and excluded from serialization.
+    project_view_flag: SkipJsonSchema[bool] = Field(default=False, exclude=True)
+    project_view_only_flag: SkipJsonSchema[bool] = Field(default=False, exclude=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -110,16 +112,15 @@ class ProjectSearchFields(BaseModel):
         if isinstance(views, str):
             views = [views]
         _, requested, only = _extract_project(views)
-        if requested:
-            data = dict(data)
-            data["project_view_flag"] = True
-            data["project_view_only_flag"] = only
-            if not data.get("readable_cube_ids"):
-                spaces = data.get("space_ids")
-                if isinstance(spaces, str):
-                    spaces = [spaces]
-                if spaces:
-                    data["readable_cube_ids"] = list(spaces)
+        data = dict(data)
+        data["project_view_flag"] = requested  # always recomputed from the views
+        data["project_view_only_flag"] = only
+        if requested and not data.get("readable_cube_ids"):
+            spaces = data.get("space_ids")
+            if isinstance(spaces, str):
+                spaces = [spaces]
+            if spaces:
+                data["readable_cube_ids"] = list(spaces)
         return data
 
 
@@ -150,8 +151,10 @@ class ProjectAddFields(BaseModel):
         description="Conversation / session identifier (alias of session_id for project memory).",
     )
 
-    project_view_flag: Annotated[bool, Field(exclude=True, repr=False)] = False
-    project_view_only_flag: Annotated[bool, Field(exclude=True, repr=False)] = False
+    # Internal flags computed from the view list by the before-validator (client input is
+    # overwritten); hidden from the OpenAPI schema and excluded from serialization.
+    project_view_flag: SkipJsonSchema[bool] = Field(default=False, exclude=True)
+    project_view_only_flag: SkipJsonSchema[bool] = Field(default=False, exclude=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -164,10 +167,10 @@ class ProjectAddFields(BaseModel):
         if isinstance(views, str):
             views = [views]
         _, requested, only = _extract_project(views)
+        data = dict(data)
+        data["project_view_flag"] = requested  # always recomputed from the views
+        data["project_view_only_flag"] = only
         if requested:
-            data = dict(data)
-            data["project_view_flag"] = True
-            data["project_view_only_flag"] = only
             # Sync conversation_id <-> session_id alias
             if data.get("conversation_id") and not data.get("session_id"):
                 data["session_id"] = data["conversation_id"]

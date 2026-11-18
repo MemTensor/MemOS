@@ -197,6 +197,10 @@ PROJECT_MEMORY_POSTGRES_SCHEMA=project_memory
 PGENV
     echo "项目记忆存储已从 SQLite 改为 Postgres（原 .env 备份在 ${bak}；SQLite 里的旧数据不迁移）"
   fi
+  if ! grep -q '^PROJECT_MEMORY_NAIVE_TZ=' "$REPO/.env"; then
+    echo 'PROJECT_MEMORY_NAIVE_TZ=+08:00' >> "$REPO/.env"
+    echo "已补 PROJECT_MEMORY_NAIVE_TZ=+08:00（没带时区的 chat_time 按北京时间理解）"
+  fi
 else
   [ -f "$ENV_SRC" ] || die "找不到模型 key 的来源文件 ${ENV_SRC}；用 ENV_SRC=/路径 bash $0 指定"
   if [ -f "$REPO/.env" ]; then

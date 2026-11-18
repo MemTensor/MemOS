@@ -25,6 +25,7 @@ import re
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from memos.graph_dbs.base import ConcurrentUpdateError
@@ -64,6 +65,29 @@ MAX_TRACE_LINES = 80
 
 Submit = Callable[[list[Any]], Any]
 _TZ_SUFFIX = re.compile(r"[+-]\d{2}:?\d{2}$|Z$")  # chat_time 末尾的时区偏移
+_OFFSET = re.compile(r"^[+-]\d{2}:\d{2}$")
+
+
+def naive_tz() -> timezone:
+    """没带时区的 chat_time 按哪个时区理解：`PROJECT_MEMORY_NAIVE_TZ`（如 `+08:00`），
+    没配就用服务器本地时区。只认偏移量写法：精简镜像里常没有时区数据库，按名字配会悄悄退回 UTC。"""
+    raw = (os.getenv("PROJECT_MEMORY_NAIVE_TZ") or "").strip()
+    if _OFFSET.match(raw):
+        sign = -1 if raw[0] == "-" else 1
+        hours, minutes = int(raw[1:3]), int(raw[4:6])
+        return timezone(sign * timedelta(hours=hours, minutes=minutes))
+    return datetime.now().astimezone().tzinfo  # type: ignore[return-value]
+
+
+def ensure_tz(t: str) -> str:
+    """给没带时区的时间补上时区；带了的原样返回，解析不了的也原样返回。"""
+    if not t or _TZ_SUFFIX.search(t):
+        return t
+    try:
+        dt = datetime.fromisoformat(t)
+    except ValueError:
+        return t
+    return dt.replace(tzinfo=naive_tz()).isoformat(timespec="seconds")
 
 
 class ProjectMemoryService:
@@ -866,14 +890,10 @@ def parse_messages(raw: list[Any], user_id: str) -> list[Msg]:
     - assistant 正文 → Agent 回复；assistant 的 tool_calls → 每个调用一条工具记录；
     - tool → 并进对应 tool_call_id 的工具记录作为返回（找不到就单独一条）。
 
-    chat_time 没有时区偏移时，补 +00:00（UTC）。工程层应统一补时区；
-    这里兜底是为了避免同一 Space 里混用带时区与不带时区的时间戳导致切段报错。
+    chat_time 没带时区时按 `naive_tz()` 补（与没传 chat_time 时取的服务器时间同一套时区）。
+    工程层仍应按调用方的时区补齐；这里兜底，避免同一 Space 里带时区与不带时区的时间混用、
+    切段相减时报错。
     """
-
-    def _ensure_tz(t: str) -> str:
-        if t and not _TZ_SUFFIX.search(t):
-            return t + "+00:00"
-        return t
 
     out: list[Msg] = []
     calls: dict[str, Msg] = {}
@@ -881,7 +901,7 @@ def parse_messages(raw: list[Any], user_id: str) -> list[Msg]:
     for i, r in enumerate(raw):
         r = dict(r) if isinstance(r, dict) else {"role": "user", "content": str(r)}
         role = r.get("role", "user")
-        t = _ensure_tz(r.get("chat_time") or now)
+        t = ensure_tz(r.get("chat_time") or now)
         mid = r.get("message_id") or f"m{i + 1:04d}-{new_uuid()[:8]}"
         if role == "user":
             out.append(
