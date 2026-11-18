@@ -29,6 +29,18 @@ def test_should_keep_update_accepts_small_edit():
     assert should_keep_update(new_text, old_text)
 
 
+def test_should_keep_update_accepts_small_edit_in_repetitive_chinese():
+    old_text = "春夏秋冬山川河流" * 70
+    new_text = old_text[:10] + "海" + old_text[11:]
+    assert should_keep_update(new_text, old_text)
+
+
+def test_should_keep_update_accepts_small_edit_in_repetitive_english():
+    old_text = " ".join(["The customer prefers email notifications."] * 50)
+    new_text = old_text.replace("prefers", "uses", 1)
+    assert should_keep_update(new_text, old_text)
+
+
 def test_should_keep_update_rejects_large_rewrite():
     assert not should_keep_update("zzzzzzzzzz", "aaaaaaaaaa")
 

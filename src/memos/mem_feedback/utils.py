@@ -30,13 +30,7 @@ def estimate_tokens(text: str) -> int:
 
 
 def should_keep_update(new_text: str, old_text: str) -> bool:
-    """
-    Determine whether the update should be skipped
-        Rule:
-        1. If the length of old_text is less than 50 and the modification ratio is less than 50% => returns True
-        2. If the length of old_text is greater than or equal to 50 and the modification ratio is less than 15% => returns True
-        3. Return False in other cases
-    """
+    """Keep a non-identical update if its ordered edit ratio is below the length threshold."""
 
     old_len = estimate_tokens(old_text)
 
@@ -44,7 +38,8 @@ def should_keep_update(new_text: str, old_text: str) -> bool:
         # Compare character order as well as content. A character-set score
         # treats a complete reordering of facts as unchanged, which can let a
         # destructive feedback update pass the small-edit guard.
-        character_similarity = SequenceMatcher(None, text1, text2).ratio()
+        # Repeated characters and words are meaningful in memory text.
+        character_similarity = SequenceMatcher(None, text1, text2, autojunk=False).ratio()
 
         # Word-level matching catches fact reordering that still shares many
         # character subsequences. For text without whitespace (for example,
@@ -52,7 +47,7 @@ def should_keep_update(new_text: str, old_text: str) -> bool:
         words1 = text1.split()
         words2 = text2.split()
         if len(words1) > 1 and len(words2) > 1:
-            word_similarity = SequenceMatcher(None, words1, words2).ratio()
+            word_similarity = SequenceMatcher(None, words1, words2, autojunk=False).ratio()
             return min(character_similarity, word_similarity)
 
         return character_similarity
