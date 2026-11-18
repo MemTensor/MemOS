@@ -4,6 +4,7 @@ import re
 import traceback
 import uuid
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from memos import log
@@ -15,7 +16,11 @@ from memos.mem_reader.read_pref_memory.process_preference_memory import process_
 from memos.mem_reader.read_skill_memory.process_skill_memory import process_skill_memory_fine
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.plugins.hook_defs import H
 from memos.plugins.hooks import trigger_hook, trigger_single_hook
 from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_MERGE_PROMPT_ZH
@@ -31,45 +36,26 @@ if TYPE_CHECKING:
 logger = log.get_logger(__name__)
 
 
-def _source_signature(source: Any) -> tuple:
-    """Stable, hashable signature for a `SourceMessage` (or dict) used by
-    `_build_window_from_items` to deduplicate sources across constituent
-    items of a sliding window.
+def _freeze_source_value(value: Any) -> Hashable:
+    """Ignore mapping order and preserve sequence order in provenance."""
+    if isinstance(value, dict):
+        return dict, frozenset((key, _freeze_source_value(item)) for key, item in value.items())
+    if isinstance(value, list | tuple):
+        return type(value), tuple(_freeze_source_value(item) for item in value)
+    return type(value), value
 
-    Two sources that reference the same origin message — same role, same
-    content, same locators, AND same extra provenance (url, page, offset,
-    span, local_confidence, …) — collapse to the same signature regardless
-    of object identity. See issue #2453.
 
-    `SourceMessage` declares ``model_config = ConfigDict(extra="allow")`` so
-    callers can attach arbitrary provenance attributes. The signature
-    therefore folds in every non-None key returned by ``model_dump`` (not
-    just the six known fields): two paragraphs from the same document that
-    differ only in ``page`` / ``offset`` must remain distinct after dedup.
-
-    For objects that cannot be introspected (unexpected shapes) or that
-    carry unhashable extra values (e.g. a ``dict`` or ``list`` in a
-    provenance field), fall back to Python object identity so a mystery
-    source is at worst treated as unique rather than being incorrectly
-    collapsed with another.
-    """
-    if hasattr(source, "model_dump"):
-        try:
-            data = source.model_dump()
-        except Exception:  # pragma: no cover — defensive
-            return (id(source),)
-    elif isinstance(source, dict):
-        data = source
-    else:
-        return (id(source),)
-    # Fully-deterministic signature across all fields, including extras
-    # allowed by SourceMessage's ConfigDict(extra="allow").
+def _source_signature(source: SourceMessage | dict[str, Any]) -> Hashable:
+    """Include all supplied provenance fields when deduplicating a window."""
     try:
-        return tuple(sorted((k, v) for k, v in data.items() if v is not None))
-    except TypeError:
-        # Unhashable value in an extra field (e.g. a dict / list) — fall
-        # back to identity so we never silently collapse distinct sources.
-        return (id(source),)
+        data = source.model_dump() if isinstance(source, SourceMessage) else source
+        signature = frozenset(
+            (key, _freeze_source_value(value)) for key, value in data.items() if value is not None
+        )
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        # Keep opaque provenance distinct unless it is the same object.
+        return id(source)
+    return signature
 
 
 class MultiModalStructMemReader(SimpleStructMemReader):
@@ -200,20 +186,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     "chunk_index": chunk_idx,
                     "chunk_total": chunk_total,
                 }
-                # Attach `sources` to the owning chunk only (issue #2453).
-                # If every chunk inherited the full parent `sources` list, the
-                # sliding-window aggregator (`_build_window_from_items`) would
-                # concatenate N copies of the same `SourceMessage` into one
-                # window — bloating storage, retrieval context, and provenance
-                # dedup. The parent sources belong to one semantic origin, so
-                # chunk 0 owns them; chunks 1..N-1 are discoverable via
-                # ingest_batch_id + chunk_index.
-                is_owning_chunk = chunk_idx == 0
-                if is_owning_chunk:
-                    chunk_sources = item.metadata.sources or []
-                    chunk_internal_info["source_chunk_index"] = 0
-                else:
-                    chunk_sources = []
                 # Create a new memory item for each chunk, preserving original metadata
                 split_item = self._make_memory_item(
                     value=chunk_text,
@@ -221,7 +193,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     memory_type=item.metadata.memory_type,
                     tags=item.metadata.tags or [],
                     key=item.metadata.key,
-                    sources=chunk_sources,
+                    # A chunk can land in a different window from the first chunk.
+                    sources=item.metadata.sources or [],
                     background=item.metadata.background or "",
                     need_embed=False,
                 )
@@ -387,14 +360,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Collect all memory texts and sources
         memory_texts = []
         all_sources = []
-        # Dedup sources by a stable signature (issue #2453): a sliding
-        # window can legitimately contain multiple items that share the
-        # same origin SourceMessage (e.g. several chunks of one long
-        # input, or two parsers that both reference the same raw doc).
-        # Without dedup the window — and every downstream fine item —
-        # ends up carrying N identical copies, bloating storage and
-        # re-injecting the same original text N times at retrieval.
-        seen_source_sigs: set = set()
+        # Keep one copy of each source per window while preserving its first position.
+        seen_source_sigs: set[Hashable] = set()
         roles = set()
         aggregated_file_ids: list[str] = []
         ingest_batch_ids: set[str] = set()
@@ -411,12 +378,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             for source in item_sources:
                 sig = _source_signature(source)
                 if sig in seen_source_sigs:
-                    # Still extract role even if we drop the duplicate,
-                    # so memory_type classification stays correct.
-                    if hasattr(source, "role") and source.role:
-                        roles.add(source.role)
-                    elif isinstance(source, dict) and source.get("role"):
-                        roles.add(source.get("role"))
                     continue
                 seen_source_sigs.add(sig)
                 # Add source to all_sources
