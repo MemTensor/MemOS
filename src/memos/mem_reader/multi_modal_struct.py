@@ -156,39 +156,74 @@ class MultiModalStructMemReader(SimpleStructMemReader):
     def _split_large_memory_item(
         self, item: TextualMemoryItem, max_tokens: int
     ) -> list[TextualMemoryItem]:
-        """Split a source into individually embeddable chunks."""
+        """
+        Split a single memory item that exceeds max_tokens into multiple chunks.
+
+        Args:
+            item: TextualMemoryItem to split
+            max_tokens: Maximum tokens per chunk
+
+        Returns:
+            List of TextualMemoryItem chunks
+        """
         item_text = item.memory or ""
+        if not item_text:
+            return [item]
+
         if self._fits_embedding_window(item_text, max_tokens):
             return [item]
 
-        chunks = self._split_embedding_text(item_text, max_tokens)
-        source_internal_info = dict(item.metadata.internal_info or {})
-        batch_id = str(source_internal_info.get("ingest_batch_id") or uuid.uuid4())
-        info = {
-            "user_id": item.metadata.user_id,
-            "session_id": item.metadata.session_id,
-            **(item.metadata.info or {}),
-        }
-        split_items = []
-        for index, text in enumerate(chunks):
-            chunk = self._make_memory_item(
-                value=text,
-                info=info,
-                memory_type=item.metadata.memory_type,
-                tags=item.metadata.tags or [],
-                key=item.metadata.key,
-                sources=item.metadata.sources or [],
-                background=item.metadata.background or "",
-                need_embed=False,
-            )
-            chunk.metadata.internal_info = {
-                **source_internal_info,
-                "ingest_batch_id": batch_id,
-                "chunk_index": index,
-                "chunk_total": len(chunks),
-            }
-            split_items.append(chunk)
-        return split_items
+        try:
+            chunks = self._split_embedding_text(item_text, max_tokens)
+            split_items = []
+            source_info = dict(item.metadata.info or {})
+            source_internal_info = dict(item.metadata.internal_info or {})
+            ingest_batch_id = str(source_internal_info.get("ingest_batch_id") or uuid.uuid4())
+            chunk_total = len(chunks)
+
+            def _create_chunk_item(chunk_idx: int, chunk):
+                chunk_text = chunk
+                chunk_info = {
+                    "user_id": item.metadata.user_id,
+                    "session_id": item.metadata.session_id,
+                    **source_info,
+                }
+                chunk_internal_info = {
+                    **source_internal_info,
+                    "ingest_batch_id": ingest_batch_id,
+                    "chunk_index": chunk_idx,
+                    "chunk_total": chunk_total,
+                }
+                # Create a new memory item for each chunk, preserving original metadata
+                split_item = self._make_memory_item(
+                    value=chunk_text,
+                    info=chunk_info,
+                    memory_type=item.metadata.memory_type,
+                    tags=item.metadata.tags or [],
+                    key=item.metadata.key,
+                    sources=item.metadata.sources or [],
+                    background=item.metadata.background or "",
+                    need_embed=False,
+                )
+                split_item.metadata.internal_info = chunk_internal_info
+                return split_item
+
+            # Use thread pool to parallel process chunks, but keep the original order
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [
+                    executor.submit(_create_chunk_item, chunk_idx, chunk)
+                    for chunk_idx, chunk in enumerate(chunks)
+                ]
+                for future in futures:
+                    split_item = future.result()
+                    if split_item is not None:
+                        split_items.append(split_item)
+
+            return split_items
+        except EmbedderError:
+            raise
+        except Exception:
+            raise EmbedderError("Could not split memory into embedding windows") from None
 
     def _concat_multi_modal_memories(
         self, all_memory_items: list[TextualMemoryItem], max_tokens=None, overlap=200
