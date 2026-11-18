@@ -27,6 +27,7 @@ src/memos/plugins/
 ├── base.py                # MemOSPlugin base class
 ├── manager.py             # Plugin discovery, loading, and initialization
 ├── hooks.py               # Hook registration and trigger runtime
+├── hook_context.py        # Operation correlation metadata
 ├── hook_defs.py           # Core Hook declarations and constants
 └── component_bootstrap.py # Runtime component context bootstrap helpers
 ```
@@ -264,27 +265,81 @@ Core Hook names are defined in `memos.plugins.hook_defs.H`.
 Common extension points include:
 
 ```python
+# Memory add
 H.ADD_BEFORE
 H.ADD_AFTER
+
+# Search pipeline
 H.SEARCH_BEFORE
 H.SEARCH_AFTER
 H.SEARCH_MEMORY_RESULTS
+H.SEARCH_RESULTS_AFTER_THRESHOLD   # after score threshold filtering
+H.SEARCH_RESULTS_AFTER_DEDUP       # after deduplication
+H.SEARCH_RESULTS_AFTER_RERANK      # after reranking
+H.SEARCH_CONTEXT_RENDER
+H.SEARCH_POST_PROCESS_FAILED       # threshold / dedup / rerank exception escaped
+
+# MemReader extraction
 H.MEM_READER_PRE_EXTRACT
 H.MEMORY_ITEMS_AFTER_FINE_EXTRACT
+H.MEM_READER_EXTRACT_AFTER
+H.MEM_READER_EXTRACT_FAILED
+
+# Textual memory writes
+H.TEXT_MEMORY_ADD_AFTER
+H.TEXT_MEMORY_ADD_FAILED
+
+# Scheduler operations
+H.SCHEDULER_MEMORY_OPERATION_AFTER
+H.SCHEDULER_MEMORY_OPERATION_FAILED
+
+# Dream
 H.DREAM_EXECUTE
 ```
 
-Hook callbacks receive keyword arguments. Some Hooks define a `pipe_key`; when a
-callback returns a non-`None` value, that value replaces the named argument for
-later callbacks and for the caller.
+Hook callbacks receive keyword arguments and run synchronously in registration
+order. Some Hooks define a `pipe_key`; when a callback returns a non-`None` value,
+that value replaces the named argument for later callbacks and for the caller.
+Return `None` to leave the current value unchanged.
 
-For example, `add.after` can replace `result`:
+Some Hooks carry a `hook_context` argument with operation correlation metadata
+(trace, user, session, task, and cube IDs). Declare `hook_context` as a keyword
+parameter to access it, or read it from `**kwargs`. The runtime silently omits
+`hook_context` for callbacks that accept neither — existing callbacks with a
+fixed signature stay compatible. Always include `**kwargs` in new callbacks so
+future additive arguments do not require a signature change.
+
+For example, a plugin can observe a search operation and cap its requested result
+count through the `search.before` request pipeline:
 
 ```python
-def on_add_after(*, request, result, **kwargs):
-    result.metadata["handled_by"] = "foo"
-    return result
+from memos.log import get_logger
+from memos.plugins import H, MemOSPlugin
+
+
+logger = get_logger(__name__)
+
+
+def on_search_before(*, hook_context, request, **kwargs):
+    logger.info("Search operation: %s", hook_context.operation_id)
+    return request.model_copy(update={"top_k": min(request.top_k, 20)})
+
+
+class SearchLimitPlugin(MemOSPlugin):
+    name = "search_limit"
+
+    def on_load(self) -> None:
+        self.register_hook(H.SEARCH_BEFORE, on_search_before)
 ```
+
+Expose the plugin through an entry point as described in
+[Registering a Plugin](#registering-a-plugin). The callback above changes the
+request's `top_k`; subsequent pipeline stages and plugins still control the final
+response.
+
+For trigger order, keyword parameters, replacement rules, failure boundaries,
+`HookContext` fields, and so on, see the
+[Pipeline Hook Reference](HOOKS.md).
 
 ### Defining Plugin-Owned Hooks
 

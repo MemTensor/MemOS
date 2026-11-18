@@ -13,10 +13,13 @@ from memos import log
 from memos.chunkers import ChunkerFactory
 from memos.configs.llm import LLMConfigFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
-from memos.context.context import ContextThreadPoolExecutor
+from memos.context.context import ContextThreadPoolExecutor, get_current_trace_id
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
+from memos.plugins.hook_context import HookContext, build_hook_context
+from memos.plugins.hook_defs import H
+from memos.plugins.hooks import trigger_hook
 
 
 if TYPE_CHECKING:
@@ -476,6 +479,33 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         return chat_read_nodes
 
+    def _build_extract_hook_data(
+        self,
+        scene_data: SceneDataInput,
+        type: str,
+        info: dict[str, Any],
+        mode: str,
+        user_name: str | None,
+        kwargs: dict[str, Any],
+    ) -> tuple[dict[str, Any], HookContext]:
+        hook_input = {
+            "mem_reader": self,
+            "scene_data": scene_data,
+            "type": type,
+            "info": info,
+            "mode": mode,
+            "user_name": user_name,
+            "kwargs": kwargs,
+        }
+        return hook_input, build_hook_context(
+            trace_id=get_current_trace_id(),
+            user_id=info.get("user_id") if isinstance(info, dict) else None,
+            session_id=info.get("session_id") if isinstance(info, dict) else None,
+            cube_ids=[user_name] if user_name else None,
+            source="mem_reader.extract",
+            attributes={"mode": mode, "type": type},
+        )
+
     def get_memory(
         self,
         scene_data: SceneDataInput,
@@ -509,27 +539,56 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         Raises:
             ValueError: If scene_data is empty or if info dictionary is missing required fields
         """
-        if not scene_data:
-            raise ValueError("scene_data is empty")
-
-        # Validate info dictionary format
-        if not isinstance(info, dict):
-            raise ValueError("info must be a dictionary")
-
-        required_fields = {"user_id", "session_id"}
-        missing_fields = required_fields - set(info.keys())
-        if missing_fields:
-            raise ValueError(f"info dictionary is missing required fields: {missing_fields}")
-
-        if not all(isinstance(info[field], str) for field in required_fields):
-            raise ValueError("user_id and session_id must be strings")
-
-        # Backward compatibility, after coercing scene_data, we only tackle
-        # with standard scene_data type: MessagesType
-        standard_scene_data = coerce_scene_data(scene_data, type)
-        return self._read_memory(
-            standard_scene_data, type, info, mode, user_name=user_name, **kwargs
+        # Build Hook business arguments and correlation context.
+        hook_input, hook_context = self._build_extract_hook_data(
+            scene_data,
+            type,
+            info,
+            mode,
+            user_name,
+            kwargs,
         )
+
+        try:
+            if not scene_data:
+                raise ValueError("scene_data is empty")
+
+            # Validate info dictionary format
+            if not isinstance(info, dict):
+                raise ValueError("info must be a dictionary")
+
+            required_fields = {"user_id", "session_id"}
+            missing_fields = required_fields - set(info.keys())
+            if missing_fields:
+                raise ValueError(f"info dictionary is missing required fields: {missing_fields}")
+
+            if not all(isinstance(info[field], str) for field in required_fields):
+                raise ValueError("user_id and session_id must be strings")
+
+            # Backward compatibility, after coercing scene_data, we only tackle
+            # with standard scene_data type: MessagesType
+            standard_scene_data = coerce_scene_data(scene_data, type)
+            result = self._read_memory(
+                standard_scene_data, type, info, mode, user_name=user_name, **kwargs
+            )
+        except Exception as error:
+            trigger_hook(
+                H.MEM_READER_EXTRACT_FAILED,
+                hook_context=hook_context,
+                **hook_input,
+                error=error,
+            )
+            raise
+
+        hook_result = trigger_hook(
+            H.MEM_READER_EXTRACT_AFTER,
+            hook_context=hook_context,
+            **hook_input,
+            result=result,
+        )
+        if hook_result is not None:
+            result = hook_result
+        return result
 
     def rewrite_memories(
         self, messages: list[dict], memory_list: list[TextualMemoryItem], user_only: bool = True
@@ -756,7 +815,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if not input_memories:
             return []
 
-        memory_list = []
+        memory_list = [[] for _ in input_memories]
 
         if type == "chat":
             processing_func = self._process_transfer_chat_data
@@ -767,15 +826,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(processing_func, scene_data_info, custom_tags, **kwargs)
-                for scene_data_info in input_memories
-            ]
+            futures = {
+                executor.submit(processing_func, scene_data_info, custom_tags, **kwargs): index
+                for index, scene_data_info in enumerate(input_memories)
+            }
             for future in concurrent.futures.as_completed(futures):
                 try:
                     res_memory = future.result()
                     if res_memory is not None:
-                        memory_list.append(res_memory)
+                        memory_list[futures[future]] = res_memory
                 except Exception as e:
                     logger.error(f"Task failed with exception: {e}")
                     logger.error(traceback.format_exc())
