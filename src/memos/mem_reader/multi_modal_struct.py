@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
+from memos.exceptions import EmbedderError
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
 from memos.mem_reader.read_multi_modal.base import _derive_key
 from memos.mem_reader.read_pref_memory.process_preference_memory import process_preference_fine
@@ -89,96 +90,90 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         )
 
     def _embed_memory_items(self, items: list[TextualMemoryItem]) -> None:
-        """Compute embeddings for a list of memory items in-place.
-
-        Attempts a single batch call first; falls back to per-item calls if the
-        batch fails. The per-item retry truncates each text to the embedder budget before
-        calling, so a single over-limit item cannot leave the whole batch without
-        embeddings (issue #2461). Errors are logged but never raised so callers always
-        continue normally.
-        """
-        valid = [w for w in items if w and w.memory]
+        """Assign vectors only after the whole batch has usable results."""
+        valid = [item for item in items if item.memory]
         if not valid:
             return
-        texts = [w.memory for w in valid]
+        texts = [item.memory for item in valid]
         try:
             embeddings = self.embedder.embed(texts)
-            for w, emb in zip(valid, embeddings, strict=True):
-                w.metadata.embedding = emb
-        except Exception as e:
-            logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
-            logger.warning("[EMBED_FALLBACK] batch_size=%d", len(texts))
-            budget = self._get_embed_budget()
-            for w in valid:
-                text = w.memory or ""
-                payload = self._truncate_to_budget(text, budget)
-                if payload != text:
-                    logger.warning(
-                        "[EMBED_TRUNCATE] fallback truncated %d-token text to budget %d",
-                        self._count_tokens_safe(text),
-                        budget,
-                    )
+            if len(embeddings) != len(valid) or any(not vector for vector in embeddings):
+                raise EmbedderError("Embedding batch returned missing vectors")
+        except Exception:
+            logger.warning("Embedding batch failed; retrying %d items individually", len(valid))
+            embeddings = []
+            for text in texts:
                 try:
-                    w.metadata.embedding = self.embedder.embed([payload])[0]
-                except Exception as e2:
-                    logger.error(f"[MultiModalStruct] Error computing embedding for item: {e2}")
+                    [vector] = self.embedder.embed([text])
+                    if not vector:
+                        raise EmbedderError("Embedding response contains an empty vector")
+                except Exception:
+                    raise EmbedderError("Could not embed a memory window") from None
+                embeddings.append(vector)
+
+        for item, vector in zip(valid, embeddings, strict=True):
+            item.metadata.embedding = vector
+
+    def _fits_embedding_window(self, text: str, max_tokens: int) -> bool:
+        config = getattr(self.embedder, "config", None)
+        limit = getattr(config, "max_tokens", None)
+        # BaseEmbedder enforces its configured limit with a character slice.
+        if type(limit) is int and limit > 0 and len(text) > limit:
+            return False
+        return self._count_tokens(text) <= max_tokens
+
+    def _split_embedding_text(self, text: str, max_tokens: int) -> list[str]:
+        """Split oversized text without losing any suffix to provider truncation."""
+        pieces = []
+        while text and not self._fits_embedding_window(text, max_tokens):
+            low, high, best = 1, len(text) - 1, 0
+            while low <= high:
+                middle = (low + high) // 2
+                if self._fits_embedding_window(text[:middle], max_tokens):
+                    best = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if not best:
+                raise EmbedderError("Memory input cannot fit the embedding window")
+            # Prefer a nearby word or punctuation boundary when it fits.
+            start = best // 2
+            boundary = max(
+                (
+                    start + match.end()
+                    for match in re.finditer(r"[\s。！？；，.!?;]", text[start:best])
+                ),
+                default=best,
+            )
+            if self._fits_embedding_window(text[:boundary], max_tokens):
+                best = boundary
+            pieces.append(text[:best])
+            text = text[best:]
+        if text:
+            pieces.append(text)
+        return pieces
 
     def _split_large_memory_item(
         self, item: TextualMemoryItem, max_tokens: int
     ) -> list[TextualMemoryItem]:
-        """
-        Split a single memory item that exceeds max_tokens into multiple chunks.
-
-        The chunker is the primary splitter, but its output is not trusted blindly: some
-        backends (e.g. ``sentence``/chonkie) do not recognise CJK sentence terminators and
-        can hand back a chunk that is still larger than the budget. Every produced chunk is
-        therefore re-checked and hard-split when it still exceeds the budget, guaranteeing
-        that nothing over the embedder's per-item limit is ever sent to it (issue #2461).
-
-        Args:
-            item: TextualMemoryItem to split
-            max_tokens: Maximum tokens per chunk
-
-        Returns:
-            List of TextualMemoryItem chunks
-        """
+        """Split a source into individually embeddable chunks."""
         item_text = item.memory or ""
-        if not item_text:
+        if self._fits_embedding_window(item_text, max_tokens):
             return [item]
 
-        item_tokens = self._count_tokens_safe(item_text)
-        if item_tokens <= max_tokens:
-            return [item]
-
-        # The chunker is best-effort: any failure here (unsupported backend API, empty
-        # output) must NOT fall back to the original over-budget item, which is exactly the
-        # silent no-vector write of issue #2461. Hard-split instead.
-        raw_texts = self._chunk_within_budget(item_text, max_tokens)
-        if not raw_texts:
-            return [item]
-
-        split_items = []
-        source_info = dict(item.metadata.info or {})
+        chunks = self._split_embedding_text(item_text, max_tokens)
         source_internal_info = dict(item.metadata.internal_info or {})
-        ingest_batch_id = str(source_internal_info.get("ingest_batch_id") or uuid.uuid4())
-        chunk_total = len(raw_texts)
-
-        def _create_chunk_item(chunk_idx: int, chunk_text: str):
-            chunk_info = {
-                "user_id": item.metadata.user_id,
-                "session_id": item.metadata.session_id,
-                **source_info,
-            }
-            chunk_internal_info = {
-                **source_internal_info,
-                "ingest_batch_id": ingest_batch_id,
-                "chunk_index": chunk_idx,
-                "chunk_total": chunk_total,
-            }
-            # Create a new memory item for each chunk, preserving original metadata
-            split_item = self._make_memory_item(
-                value=chunk_text,
-                info=chunk_info,
+        batch_id = str(source_internal_info.get("ingest_batch_id") or uuid.uuid4())
+        info = {
+            "user_id": item.metadata.user_id,
+            "session_id": item.metadata.session_id,
+            **(item.metadata.info or {}),
+        }
+        split_items = []
+        for index, text in enumerate(chunks):
+            chunk = self._make_memory_item(
+                value=text,
+                info=info,
                 memory_type=item.metadata.memory_type,
                 tags=item.metadata.tags or [],
                 key=item.metadata.key,
@@ -186,60 +181,14 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 background=item.metadata.background or "",
                 need_embed=False,
             )
-            split_item.metadata.internal_info = chunk_internal_info
-            return split_item
-
-        try:
-            # Use thread pool to parallel process chunks, but keep the original order
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [
-                    executor.submit(_create_chunk_item, chunk_idx, chunk_text)
-                    for chunk_idx, chunk_text in enumerate(raw_texts)
-                ]
-                for future in futures:
-                    split_item = future.result()
-                    if split_item is not None:
-                        split_items.append(split_item)
-        except Exception as e:
-            logger.warning(
-                f"[MultiModalStruct] Failed building split item: {e}. Returning original item."
-            )
-            return [item]
-
-        return split_items if split_items else [item]
-
-    def _chunk_within_budget(self, text: str, max_tokens: int) -> list[str]:
-        """Split ``text`` with the chunker, guaranteeing every piece fits ``max_tokens``.
-
-        Chunker output is re-checked per chunk and hard-split when it still exceeds the
-        budget. If the chunker raises or produces nothing usable, the hard split runs over
-        the raw text so the caller never receives an over-budget item (issue #2461).
-        """
-        raw_texts: list[str] = []
-        try:
-            # Materialise inside the guard: some chunkers raise lazily while iterating.
-            chunks = list(self.chunker.chunk(text))
-        except Exception as e:
-            logger.warning(
-                f"[MultiModalStruct] Chunker failed ({e}); falling back to a hard split."
-            )
-            return self._hard_split_text(text, max_tokens)
-
-        for chunk in chunks:
-            # Different chunkers are not fully consistent: some return Chunk-like
-            # objects with `.text`, while others return raw strings.
-            chunk_text = chunk.text if hasattr(chunk, "text") else chunk
-            if not chunk_text or not chunk_text.strip():
-                continue
-            if self._count_tokens_safe(chunk_text) > max_tokens:
-                raw_texts.extend(self._hard_split_text(chunk_text, max_tokens))
-            else:
-                raw_texts.append(chunk_text)
-
-        if not raw_texts:
-            # The chunker cannot segment this text at all; hard-split it directly.
-            return self._hard_split_text(text, max_tokens)
-        return raw_texts
+            chunk.metadata.internal_info = {
+                **source_internal_info,
+                "ingest_batch_id": batch_id,
+                "chunk_index": index,
+                "chunk_total": len(chunks),
+            }
+            split_items.append(chunk)
+        return split_items
 
     def _concat_multi_modal_memories(
         self, all_memory_items: list[TextualMemoryItem], max_tokens=None, overlap=200
@@ -256,72 +205,21 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if not all_memory_items:
             return []
 
-        max_tokens = max_tokens or self._get_embed_budget()
+        max_tokens = max_tokens or self.chat_window_max_tokens
 
-        # Split large memory items before processing
-        processed_items = []
-        # control whether to parallel chunk large memory items
-        parallel_chunking = True
-
-        if parallel_chunking:
-            # parallel chunk large memory items, but keep the original order
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                # Create a list to hold futures with their original index
-                futures = []
-                for idx, item in enumerate(all_memory_items):
-                    if (item.memory or "") and self._count_tokens_safe(item.memory) > max_tokens:
-                        future = executor.submit(self._split_large_memory_item, item, max_tokens)
-                        futures.append(
-                            (idx, future, True)
-                        )  # True indicates this item needs splitting
-                    else:
-                        futures.append((idx, item, False))  # False indicates no splitting needed
-
-                # Process results in original order
-                temp_results = [None] * len(all_memory_items)
-                for idx, future_or_item, needs_splitting in futures:
-                    if needs_splitting:
-                        # Wait for the future to complete and get the split items
-                        split_items = future_or_item.result()
-                        temp_results[idx] = split_items
-                    else:
-                        # No splitting needed, use the original item
-                        temp_results[idx] = [future_or_item]
-
-                # Flatten the results while preserving order
-                for items in temp_results:
-                    processed_items.extend(items)
-        else:
-            # serial chunk large memory items
-            for item in all_memory_items:
-                item_text = item.memory or ""
-                item_tokens = self._count_tokens_safe(item_text)
-                if item_tokens > max_tokens:
-                    # Split the large item into multiple chunks
-                    split_items = self._split_large_memory_item(item, max_tokens)
-                    processed_items.extend(split_items)
-                else:
-                    processed_items.append(item)
-
-        # Guard: nothing over the embed budget may proceed. If an item is still oversized
-        # after splitting (chunker produced nothing usable and the hard split could not
-        # segment it either), emit the items directly instead of aggregating them into an
-        # even larger window — that aggregation is what produced the silent no-vector write
-        # in issue #2461. The per-item embedding step truncates as a final safety net.
-        oversize = [
-            it for it in processed_items if self._count_tokens_safe(it.memory or "") > max_tokens
-        ]
-        if oversize:
-            logger.warning(
-                "[MultiModalStruct] %d item(s) still exceed the embed budget (%d tokens) "
-                "after splitting; emitting them directly so the embedder can truncate "
-                "rather than silently dropping the vector",
-                len(oversize),
-                max_tokens,
-            )
-            with timed_stage("add", "embedding", window_count=len(processed_items)):
-                self._embed_memory_items(processed_items)
-            return processed_items
+        # Preserve input order and submit only oversized items to the pool.
+        with ContextThreadPoolExecutor(max_workers=4) as executor:
+            splits = [
+                [item]
+                if self._fits_embedding_window(item.memory or "", max_tokens)
+                else executor.submit(self._split_large_memory_item, item, max_tokens)
+                for item in all_memory_items
+            ]
+            processed_items = [
+                item
+                for split in splits
+                for item in (split if isinstance(split, list) else split.result())
+            ]
 
         # If only one item after processing, compute embedding and return
         if len(processed_items) == 1:
@@ -342,35 +240,22 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             **(first_item.metadata.info or {}),
         }
 
-        for _idx, item in enumerate(processed_items):
+        for item in processed_items:
             item_text = item.memory or ""
-            # Ensure line ends with newline (same format as simple_struct)
-            line = item_text if item_text.endswith("\n") else f"{item_text}\n"
-
-            # Check if adding this item would exceed max_tokens (same logic as _iter_chat_windows)
-            # Note: After splitting large items, each item should be <= max_tokens,
-            # but we still check to handle edge cases
-            if self._count_tokens_safe(cur_text + line) > max_tokens and cur_text:
-                # Yield current window
+            if cur_text and not self._fits_embedding_window(cur_text + item_text, max_tokens):
                 window = self._build_window_from_items(buf_items, info)
                 if window:
                     windows.append(window)
 
-                # Keep overlap: remove items until remaining tokens <= overlap
-                # (same logic as _iter_chat_windows)
-                while (
-                    buf_items
-                    and self._count_tokens_safe("".join([it.memory or "" for it in buf_items]))
-                    > overlap
+                while buf_items and (
+                    self._count_tokens(cur_text) > overlap
+                    or not self._fits_embedding_window(cur_text + item_text, max_tokens)
                 ):
                     buf_items.pop(0)
-                # Recalculate cur_text from remaining items
-                cur_text = "".join([it.memory or "" for it in buf_items])
+                    cur_text = "".join(part.memory or "" for part in buf_items)
 
-            # Add item to current window
             buf_items.append(item)
-            # Recalculate cur_text from all items in buffer (same as _iter_chat_windows)
-            cur_text = "".join([it.memory or "" for it in buf_items])
+            cur_text += item_text
 
         # Yield final window if any items remain
         if buf_items:
@@ -1364,6 +1249,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     res_memory = future.result()
                     if res_memory is not None:
                         memory_list.append(res_memory)
+                except EmbedderError:
+                    raise
                 except Exception as e:
                     logger.error(f"Task failed with exception: {e}")
                     logger.error(traceback.format_exc())

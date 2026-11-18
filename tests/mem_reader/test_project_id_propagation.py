@@ -260,10 +260,7 @@ class TestMultiModalProjectIdPropagation(unittest.TestCase):
         _assert_fields(self, result)
 
     def test_split_large_memory_item_assigns_shared_ingest_batch_id(self):
-        # Token count proportional to length so chunker output survives the new
-        # post-chunker budget re-check (see issue #2461).
-        self.reader._count_tokens = lambda text: len(text)
-        self.reader.chunker.chunk.return_value = ["chunk one", "chunk two"]
+        self.reader._count_tokens = len
 
         def fake_make_memory_item(
             *,
