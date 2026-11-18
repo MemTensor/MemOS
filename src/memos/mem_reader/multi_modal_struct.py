@@ -174,7 +174,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             return [item]
 
         try:
-            chunks = self._split_embedding_text(item_text, max_tokens)
+            try:
+                chunks = [
+                    chunk if isinstance(chunk, str) else chunk.text
+                    for chunk in self.chunker.chunk(item_text)
+                ]
+            except Exception:
+                chunks = []
+            # Keep configured boundaries when the chunker preserves the whole source.
+            if "".join(chunks) != item_text:
+                chunks = [item_text]
+            chunks = [
+                piece for chunk in chunks for piece in self._split_embedding_text(chunk, max_tokens)
+            ]
             split_items = []
             source_info = dict(item.metadata.info or {})
             source_internal_info = dict(item.metadata.internal_info or {})
