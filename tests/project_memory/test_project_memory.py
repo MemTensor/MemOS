@@ -654,3 +654,29 @@ def test_concurrent_write_is_retried(kind, tmp_path):
 
     with pytest.raises(ConcurrentUpdateError):
         store.put_decision(d, expected_rev=stale.rev)  # 同一 rev 再写一次会撞
+
+
+def test_project_scope_checks_on_add_and_search():
+    """带 project 时 user_id / space_ids 必填、最多 20 个、不能有空值：写入与检索都在插件里查，返回 422。"""
+    client, _, _ = build_http_app(graph_db=FakeGraphDB())
+    try:
+        sid = _space(client)
+        msgs = DECISION_ROUNDS[0]["messages"]
+        cases = [
+            {"user_id": "u"},  # 缺 space_ids
+            {"user_id": "u", "space_ids": [f"s{i}" for i in range(21)]},
+            {"user_id": "u", "space_ids": [sid, " "]},
+        ]
+        for extra in cases:
+            r = client.post(
+                "/product/add",
+                json={**extra, "allow_memory_view": ["project"], "messages": msgs},
+            )
+            assert r.status_code == 422, (extra, r.text)
+            r = client.post(
+                "/product/search",
+                json={**extra, "include_memory_view": ["project"], "query": "x"},
+            )
+            assert r.status_code == 422, (extra, r.text)
+    finally:
+        reset_project_hooks()

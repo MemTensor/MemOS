@@ -132,17 +132,7 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         if not has_project_view(request):
             return None
 
-        # Validate required fields for project memory
-        raw_uid = request.user_id
-        user_id = (raw_uid[0] if isinstance(raw_uid, list) and raw_uid else raw_uid) or ""
-        space_ids_raw = getattr(request, "space_ids", None)
-        if isinstance(space_ids_raw, str):
-            space_ids_raw = [space_ids_raw] if space_ids_raw.strip() else None
-        if not user_id or not space_ids_raw:
-            raise HTTPException(
-                status_code=422,
-                detail="user_id and space_ids are required when using project memory",
-            )
+        _require_scope(request)
 
         try:
             result = self.service.accept(request)
@@ -180,6 +170,7 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
 
         if not has_project_view(request):
             return None
+        _require_scope(request)
         _fill_readable_cube_ids(request)
         try:
             topics = self.service.search(request)
@@ -228,3 +219,29 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     def on_shutdown(self) -> None:
         self._service = None
         logger.info("[ProjectMemory] plugin stopped")
+
+
+def _require_scope(request: Any) -> None:
+    """带 project 的写入与检索：user_id、space_ids 必填，space_ids 最多 20 个（PRD 规则）。
+
+    在插件里校验而不是放进共享的请求模型：企业版的请求模型自己有一套校验，两边叠加会互相干扰。
+    """
+    from fastapi import HTTPException
+
+    from memos.api.project_fields import PROJECT_MAX_SPACES, normalize_str_list
+
+    raw_uid = request.user_id
+    user_id = (raw_uid[0] if isinstance(raw_uid, list) and raw_uid else raw_uid) or ""
+    try:
+        spaces = normalize_str_list(getattr(request, "space_ids", None), "space_ids")
+        normalize_str_list(getattr(request, "domains", None), "domains")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if not user_id or not spaces:
+        raise HTTPException(
+            status_code=422, detail="user_id and space_ids are required when using project memory"
+        )
+    if len(spaces) > PROJECT_MAX_SPACES:
+        raise HTTPException(
+            status_code=422, detail=f"space_ids accepts at most {PROJECT_MAX_SPACES} spaces"
+        )
