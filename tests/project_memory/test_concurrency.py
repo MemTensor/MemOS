@@ -279,3 +279,31 @@ def test_plugin_storage_follows_config_not_core_graph_db(tmp_path, monkeypatch):
     monkeypatch.setenv("PROJECT_MEMORY_GRAPH_DB", "shared")
     plugin.init_components({"shared": {"graph_db": core_db, "llm": RuleLLM()}})
     assert plugin.service.store.db is core_db
+
+
+def test_topic_limit_defaults_to_9_and_caps_at_25():
+    """条数：没传用 9；传了超过 25 按 25 截断，不报错（/product 不再校验，交给工程层）。"""
+    from types import SimpleNamespace
+
+    client, sched, plugin = build_http_app(llm=RuleLLM(), graph_db=FakeGraphDB())
+    svc = plugin.service
+    seen: list[int] = []
+    real = svc.store.recall_topics
+
+    def spy(space_id, query, k, domains=None):
+        seen.append(k)
+        return real(space_id, query, k, domains=domains)
+
+    svc.store.recall_topics = spy
+    sid = _space(client)
+    base = {"query": "x", "space_ids": [sid], "user_id": "u", "domains": None}
+    svc.search(SimpleNamespace(**base, memory_limit_number=10, model_fields_set=set()))
+    svc.search(
+        SimpleNamespace(**base, memory_limit_number=30, model_fields_set={"memory_limit_number"})
+    )
+    assert seen == [9 * 2, 25 * 2]  # recall 取 limit 的两倍
+    r = client.post(
+        "/product/search",
+        json={**base, "include_memory_view": ["project"], "memory_limit_number": 30},
+    )
+    assert r.status_code == 200, r.text

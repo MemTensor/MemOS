@@ -55,7 +55,8 @@ logger = logging.getLogger(__name__)
 
 PROJECT_MEMORY_TASK_LABEL = "project_memory"  # re-exported for callers; source of truth is handler
 MAX_DOMAINS = 20
-DEFAULT_LIMIT = 9
+DEFAULT_LIMIT = 9  # PRD search/memory 的默认条数
+MAX_LIMIT = 25  # PRD 的上限；超过按上限截断、不报错（校验在工程层）
 REL_MIN = 0.12  # 条目与 query 的最低相关度（二元组相似度；接真向量后在评测集上定）
 MAX_ENTRIES = 5
 MAX_CAS_RETRIES = 3
@@ -621,7 +622,11 @@ class ProjectMemoryService:
     # ═════════════════════════════════ 读取 ══════════════════════════════════
 
     def search(self, req: Any) -> list[dict[str, Any]]:
-        limit = getattr(req, "memory_limit_number", None) or DEFAULT_LIMIT
+        # 没显式传就用项目记忆自己的默认值：企业版请求模型里这个字段默认 10、上限 30，
+        # 是给个人记忆用的，不能直接拿来当主题条数
+        explicit = "memory_limit_number" in (getattr(req, "model_fields_set", None) or set())
+        given = getattr(req, "memory_limit_number", None) if explicit else None
+        limit = max(1, min(int(given or DEFAULT_LIMIT), MAX_LIMIT))
         query = req.query
         conv = getattr(req, "conversation_id", None) or getattr(req, "session_id", None)
         user_id = req.user_id
