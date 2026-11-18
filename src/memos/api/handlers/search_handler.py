@@ -12,7 +12,6 @@ import os
 from contextlib import suppress
 from typing import Any
 
-from memos.api.handlers import project_view
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
@@ -85,16 +84,6 @@ class SearchHandler(BaseHandler):
             summarize_search_request(search_req),
         )
 
-        # ---- memory view `project`: topics come from the project-memory plugin ----
-        topic_detail_list = None
-        if project_view.wants_project_view(search_req.include_memory_view):
-            topic_detail_list = project_view.search_topics(search_req)
-            if project_view.only_project(search_req.include_memory_view):
-                return SearchResponse(
-                    message="Search completed successfully",
-                    data={"topic_detail_list": topic_detail_list},
-                )
-
         # Use deepcopy to avoid modifying the original request object
         search_req_local = copy.deepcopy(search_req)
 
@@ -156,9 +145,6 @@ class SearchHandler(BaseHandler):
             "[SearchHandler] Final search result summary: %s",
             summarize_search_results(results),
         )
-
-        if topic_detail_list is not None:
-            results["topic_detail_list"] = topic_detail_list
 
         return SearchResponse(
             message="Search completed successfully",

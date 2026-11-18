@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from memos.configs.graph_db import PostgresGraphDBConfig
 from memos.dependency import require_python_package
-from memos.graph_dbs.base import BaseGraphDB, ConcurrentUpdateError
+from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
 
 
@@ -40,30 +40,7 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
-_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_CJK_RUN = re.compile(r"[\u3400-\u9fff]{2,}")
-_WORD = re.compile(r"[A-Za-z0-9_./#-]{2,}")
-
-
-def _fts_terms(words: list[str]) -> list[str]:
-    """Split query words into matchable terms: words for latin/digits, bigrams for CJK (deduped)."""
-    out: list[str] = []
-    for w in words or []:
-        for run in _CJK_RUN.findall(w or ""):
-            out += [run[i : i + 2] for i in range(len(run) - 1)]
-        out += _WORD.findall(w or "")
-    seen: list[str] = []
-    for t in out:
-        t = t.replace("'", "")
-        if t and t not in seen:
-            seen.append(t)
-    return [t.replace(" ", "") for t in seen[:64] if t.replace(" ", "")]
-
-
 class PostgresGraphDB(BaseGraphDB):
-    # `add_node(..., expected_rev=n)` does a conditional write (see `rev` column).
-    supports_cas = True
-
     """PostgreSQL + pgvector implementation of a graph memory store."""
 
     @require_python_package(
@@ -156,16 +133,10 @@ class PostgresGraphDB(BaseGraphDB):
                         properties JSONB NOT NULL DEFAULT '{{}}',
                         embedding vector({dim}),
                         user_name TEXT,
-                        rev BIGINT NOT NULL DEFAULT 0,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW()
                     )
                 """)
-                # Existing databases: add `rev` for conditional writes (same contract as SQLite).
-                cur.execute(
-                    f"ALTER TABLE {self.schema}.memories "
-                    "ADD COLUMN IF NOT EXISTS rev BIGINT NOT NULL DEFAULT 0"
-                )
 
                 # Create edges table
                 cur.execute(f"""
@@ -272,19 +243,9 @@ class PostgresGraphDB(BaseGraphDB):
             self._put_conn(conn)
 
     def add_node(
-        self,
-        id: str,
-        memory: str,
-        metadata: dict[str, Any],
-        user_name: str | None = None,
-        expected_rev: int | None = None,
+        self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
     ) -> None:
-        """Add a memory node.
-
-        `expected_rev` enables optimistic concurrency: the write only applies when the stored
-        row is still at that revision, otherwise `ConcurrentUpdateError` is raised (same
-        contract as the SQLite backend). Without it behaviour is unchanged (upsert).
-        """
+        """Add a memory node."""
         user_name = user_name or self.user_name
         metadata = _prepare_node_metadata(metadata.copy())
 
@@ -302,71 +263,16 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                if expected_rev is not None:
-                    # Conditional write: only when the row is still at `expected_rev`.
-                    if embedding:
-                        cur.execute(
-                            f"""
-                            INSERT INTO {self.schema}.memories
-                            (id, memory, properties, embedding, user_name, rev, created_at, updated_at)
-                            VALUES (%s, %s, %s, %s::vector, %s, 1, %s, %s)
-                            ON CONFLICT (id) DO UPDATE SET
-                                memory = EXCLUDED.memory,
-                                properties = EXCLUDED.properties,
-                                embedding = EXCLUDED.embedding,
-                                rev = {self.schema}.memories.rev + 1,
-                                updated_at = EXCLUDED.updated_at
-                            WHERE {self.schema}.memories.rev = %s
-                        """,
-                            (
-                                id,
-                                memory,
-                                json.dumps(metadata),
-                                embedding,
-                                user_name,
-                                created_at,
-                                updated_at,
-                                expected_rev,
-                            ),
-                        )
-                    else:
-                        cur.execute(
-                            f"""
-                            INSERT INTO {self.schema}.memories
-                            (id, memory, properties, user_name, rev, created_at, updated_at)
-                            VALUES (%s, %s, %s, %s, 1, %s, %s)
-                            ON CONFLICT (id) DO UPDATE SET
-                                memory = EXCLUDED.memory,
-                                properties = EXCLUDED.properties,
-                                rev = {self.schema}.memories.rev + 1,
-                                updated_at = EXCLUDED.updated_at
-                            WHERE {self.schema}.memories.rev = %s
-                        """,
-                            (
-                                id,
-                                memory,
-                                json.dumps(metadata),
-                                user_name,
-                                created_at,
-                                updated_at,
-                                expected_rev,
-                            ),
-                        )
-                    if cur.rowcount == 0:
-                        raise ConcurrentUpdateError(
-                            f"{id}: expected rev {expected_rev}, row changed or missing"
-                        )
-                elif embedding:
+                if embedding:
                     cur.execute(
                         f"""
                         INSERT INTO {self.schema}.memories
-                        (id, memory, properties, embedding, user_name, rev, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s::vector, %s, 1, %s, %s)
+                        (id, memory, properties, embedding, user_name, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s::vector, %s, %s, %s)
                         ON CONFLICT (id) DO UPDATE SET
                             memory = EXCLUDED.memory,
                             properties = EXCLUDED.properties,
                             embedding = EXCLUDED.embedding,
-                            rev = {self.schema}.memories.rev + 1,
                             updated_at = EXCLUDED.updated_at
                     """,
                         (
@@ -383,12 +289,11 @@ class PostgresGraphDB(BaseGraphDB):
                     cur.execute(
                         f"""
                         INSERT INTO {self.schema}.memories
-                        (id, memory, properties, user_name, rev, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, 1, %s, %s)
+                        (id, memory, properties, user_name, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO UPDATE SET
                             memory = EXCLUDED.memory,
                             properties = EXCLUDED.properties,
-                            rev = {self.schema}.memories.rev + 1,
                             updated_at = EXCLUDED.updated_at
                     """,
                         (id, memory, json.dumps(metadata), user_name, created_at, updated_at),
@@ -479,7 +384,7 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cols = "id, memory, properties, created_at, updated_at, rev"
+                cols = "id, memory, properties, created_at, updated_at"
                 if include_embedding:
                     cols += ", embedding"
                 cur.execute(
@@ -506,7 +411,7 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cols = "id, memory, properties, created_at, updated_at, rev"
+                cols = "id, memory, properties, created_at, updated_at"
                 if include_embedding:
                     cols += ", embedding"
                 cur.execute(
@@ -530,10 +435,8 @@ class PostgresGraphDB(BaseGraphDB):
             "memory": row[1] or "",
             "metadata": props,
         }
-        if len(row) > 5:
-            result["rev"] = row[5]
-        if include_embedding and len(row) > 6:
-            result["metadata"]["embedding"] = row[6]
+        if include_embedding and len(row) > 5:
+            result["metadata"]["embedding"] = row[5]
         return result
 
     @staticmethod
@@ -956,73 +859,6 @@ class PostgresGraphDB(BaseGraphDB):
                 return results
         finally:
             self._put_conn(conn)
-
-    def search_by_fulltext(
-        self,
-        query_words: list[str],
-        top_k: int = 10,
-        scope: str | None = None,
-        status: str | None = None,
-        threshold: float | None = None,
-        search_filter: dict | None = None,
-        user_name: str | None = None,
-        filter: dict | None = None,
-        knowledgebase_ids: list[str] | None = None,
-        **kwargs,
-    ) -> list[dict]:
-        """Keyword search over `memory` and `properties` text.
-
-        Chinese has no word boundaries and `to_tsquery('simple', ...)` treats a CJK run as a
-        single token, so matching goes through bigrams with `ILIKE` instead (same trick as
-        the SQLite backend's trigram index). No zhparser / jieba dictionary needed in the DB.
-        Score = share of query bigrams matched, in [0, 1]; word order is not considered.
-
-        Returns `[{id, score}]`, highest first — same shape as `search_by_embedding`.
-        """
-        terms = _fts_terms(query_words)
-        if not terms:
-            return []
-        user_name = user_name or self.user_name
-        where = []
-        params: list[Any] = []
-        if user_name:
-            where.append("user_name = %s")
-            params.append(user_name)
-        if scope:
-            where.append("properties->>'memory_type' = %s")
-            params.append(scope)
-        if status:
-            where.append("properties->>'status' = %s")
-            params.append(status)
-        else:
-            where.append("(properties->>'status' = 'activated' OR properties->>'status' IS NULL)")
-        for k, v in (search_filter or {}).items():
-            if not self._is_safe_field_name(k):
-                raise ValueError(f"invalid field name: {k}")
-            where.append(f"properties->>'{k}' = %s")
-            params.append(str(v))
-
-        hits_expr = " + ".join(
-            ["CASE WHEN (memory || ' ' || properties::text) ILIKE %s THEN 1 ELSE 0 END"]
-            * len(terms)
-        )
-        like_params = [f"%{t}%" for t in terms]
-        sql = (
-            f"SELECT id, ({hits_expr})::float / {len(terms)} AS score FROM {self.schema}.memories "
-            f"WHERE {' AND '.join(where)} AND ({hits_expr}) > 0 "
-            f"ORDER BY score DESC, updated_at DESC LIMIT %s"
-        )
-        conn = self._get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(sql, [*like_params, *params, *like_params, top_k])
-                rows = cur.fetchall()
-        finally:
-            self._put_conn(conn)
-        hits = [{"id": r[0], "score": float(r[1])} for r in rows]
-        if threshold is not None:
-            hits = [h for h in hits if h["score"] >= threshold]
-        return hits
 
     def get_by_metadata(
         self,

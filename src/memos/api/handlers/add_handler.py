@@ -7,7 +7,6 @@ using dependency injection for better modularity and testability.
 
 from pydantic import validate_call
 
-from memos.api.handlers import project_view
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import APIADDRequest, APIFeedbackRequest, MemoryResponse
 from memos.memories.textual.item import (
@@ -64,16 +63,6 @@ class AddHandler(BaseHandler):
             if len(add_req.info) < info_len:
                 self.logger.warning(f"[AddHandler] info fields can not contain {exclude_fields}.")
 
-        # ---- memory view `project`: handled by the project-memory plugin ----
-        project_result = None
-        if project_view.wants_project_view(add_req.allow_memory_view):
-            project_result = project_view.accept_add(add_req)
-            if project_view.only_project(add_req.allow_memory_view):
-                return MemoryResponse(
-                    message="Project memory task accepted",
-                    data=[project_result],
-                )
-
         cube_view = self._build_cube_view(add_req)
 
         @validate_call
@@ -120,9 +109,6 @@ class AddHandler(BaseHandler):
         results = cube_view.add_memories(add_req)
 
         self.logger.info(f"[AddHandler] Final add results count={len(results)}")
-
-        if project_result is not None:
-            results = [*results, project_result]
 
         return MemoryResponse(
             message="Memory added successfully",
