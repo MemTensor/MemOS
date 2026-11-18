@@ -96,21 +96,20 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     def service(self) -> ProjectMemoryService:
         shared = self.context.get("shared") or {}
         if self._service is None:
-            core_embedder = shared.get("embedder")
-            # Prefer the shared (test/core) embedder; only build our own when
-            # the shared context doesn't provide one.
-            embedder = core_embedder or pm_config.build_embedder()
-            graph_db = (
-                shared.get("project_graph_db")
-                or shared.get("graph_db")
-                or pm_config.build_graph_db(shared.get("graph_db"))
+            # 优先级：宿主显式注入的 project_*（测试、嵌入式使用）> PROJECT_MEMORY_* 配置
+            # > 核心的同名组件。存储不退回核心的 graph_db，除非 PROJECT_MEMORY_GRAPH_DB=shared。
+            embedder = (
+                shared.get("project_embedder")
+                or pm_config.build_embedder()
+                or shared.get("embedder")
+            )
+            graph_db = shared.get("project_graph_db") or pm_config.build_graph_db(
+                shared.get("graph_db")
             )
             store = ProjectStore(
                 graph_db, embedder=embedder.embed if embedder is not None else None
             )
-            llm = shared.get("llm") or pm_config.build_llm()
-            # An explicit judge model can be supplied by the host (tests, embedding
-            # services); otherwise fall back to PROJECT_MEMORY_JUDGE_LLM_*.
+            llm = shared.get("project_llm") or pm_config.build_llm() or shared.get("llm")
             judge_llm = shared.get("project_judge_llm") or pm_config.build_llm(
                 "PROJECT_MEMORY_JUDGE_LLM"
             )

@@ -21,7 +21,9 @@ from memos.project_memory.testing import (
     FakeGraphDB,
     RuleLLM,
     build_http_app,
+    make_test_db,
     reset_project_hooks,
+    storage_kinds,
 )
 from memos.project_memory.types import (
     EXP_CANDIDATE,
@@ -37,15 +39,16 @@ from memos.project_memory.types import (
 
 
 SPLIT = "本机整理结果存入单个 SQLite 库，按 space_id 分表。"
+CAS_KINDS = [k for k in storage_kinds() if k != "fake"]  # 带 rev 条件写的存储
 
 
 # ── 装配 ───────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture(params=["fake", "sqlite"])
+@pytest.fixture(params=storage_kinds())
 def app(request, tmp_path):
-    """同一批用例跑两遍存储：照 postgres 语义的内存版，和仓里的 SQLite 后端（含 FTS5 全文与条件写）。"""
-    graph_db = FakeGraphDB() if request.param == "fake" else _sqlite_db(tmp_path)
+    """同一批用例跑几种存储：内存版、SQLite（FTS5 全文与条件写）；设了 PG_TEST_DSN 时再跑项目记忆自己的 Postgres。"""
+    graph_db = make_test_db(request.param, tmp_path / request.param)
     client, sched, plugin = build_http_app(graph_db=graph_db)
     yield client, sched, plugin
     reset_project_hooks()
@@ -560,10 +563,11 @@ def test_service_runs_inline_without_scheduler():
 # ── SQLite 后端 ─────────────────────────────────────────────────────────────
 
 
-def test_sqlite_backend_mirrors_memory_table_and_cas(tmp_path):
+@pytest.mark.parametrize("kind", CAS_KINDS)
+def test_sqlite_backend_mirrors_memory_table_and_cas(kind, tmp_path):
     from memos.graph_dbs.base import ConcurrentUpdateError
 
-    db = _sqlite_db(tmp_path)
+    db = make_test_db(kind, tmp_path)
     assert db.supports_cas
     db.add_node(
         "a",
@@ -608,9 +612,10 @@ def test_sqlite_backend_mirrors_memory_table_and_cas(tmp_path):
     assert db.search_by_fulltext(["整理结果"], scope="X", user_name="s1") == []
 
 
-def test_sqlite_vector_search(tmp_path):
+@pytest.mark.parametrize("kind", CAS_KINDS)
+def test_sqlite_vector_search(kind, tmp_path):
     emb = FakeEmbedder()
-    db = _sqlite_db(tmp_path)
+    db = make_test_db(kind, tmp_path)
     vec = emb.embed(["决策存储方式"])[0]
     db.add_node(
         "d",
@@ -622,9 +627,10 @@ def test_sqlite_vector_search(tmp_path):
     assert hits and hits[0]["id"] == "d" and hits[0]["score"] > 0.5
 
 
-def test_concurrent_write_is_retried(tmp_path):
+@pytest.mark.parametrize("kind", CAS_KINDS)
+def test_concurrent_write_is_retried(kind, tmp_path):
     """两个任务同时改同一条决策：第二个撞上 rev 变化，重读重判后仍然写对。"""
-    db = _sqlite_db(tmp_path)
+    db = make_test_db(kind, tmp_path)
     store = ProjectStore(db, FakeEmbedder().embed)
     svc = ProjectMemoryService(store, ModelHub(RuleLLM(), graph_db=db))
     sp = svc.create_space("s", "", [{"name": "代码开发"}])

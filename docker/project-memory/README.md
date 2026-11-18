@@ -1,6 +1,6 @@
 # 本地部署（项目记忆 · promem_dev）
 
-在本地起一个真服务：MemOS 服务 + Neo4j 社区版 + Qdrant，项目记忆用自己的 SQLite 文件库。
+在本地起一个真服务：MemOS 服务 + Neo4j 社区版 + Qdrant，项目记忆用自己的 PostgreSQL（pgvector 镜像，容器名 memos-promem-postgres，本机端口 5433）。
 
 ## 为什么是这个组合
 
@@ -14,7 +14,9 @@
 
 社区版不带向量索引，向量放在 Qdrant，所以是两个容器。
 
-项目记忆不放进 Neo4j，用自己的 SQLite：neo4j 两种后端的 `search_by_fulltext` 都只有一行 `return []`，也没有 `rev` 条件写——放进去会少一路召回，并发整理同一条决策会丢更新。SQLite 库两样都有（FTS5 中文三元组 + `add_node(..., expected_rev=n)`）。
+项目记忆不放进 Neo4j：neo4j 两种后端的 `search_by_fulltext` 都只有一行 `return []`，也没有 `rev` 条件写——放进去会少一路召回，并发整理同一条决策会丢更新。
+
+项目记忆用自己的 PostgreSQL（`src/memos/project_memory/pg_backend.py`，不经核心的 postgres 后端）：多个副本 / worker 共享同一份数据，带 `rev` 条件写（`add_node(..., expected_rev=n)`）与中文二元组全文检索，表建在 schema `project_memory` 下、结构照老库 `Memory` 表。单进程试用也可以改回 SQLite 文件库（`PROJECT_MEMORY_GRAPH_DB=sqlite`，数据在命名卷 `promem_data`）。<mark>从 SQLite 换到 Postgres 时旧数据不迁移</mark>。
 
 ## 起服务
 
@@ -59,12 +61,15 @@ docker compose -f docker/project-memory/docker-compose.yml down
 | 核心模型 | `MOS_CHAT_MODEL`、`OPENAI_API_KEY/BASE`、`MEMRADER_*`、`EMBEDDING_DIMENSION=1024` |
 | 核心库 | `GRAPH_DB_BACKEND=neo4j-community`、`NEO4J_URI=bolt://neo4j:7687`、`NEO4J_PASSWORD=projectmemory`、`QDRANT_HOST=qdrant` |
 | 调度 | `MEMSCHEDULER_USE_REDIS_QUEUE=false`（单机进程内队列） |
-| 项目记忆 | `MEMOS_ENABLED_PLUGINS=project_memory`、`PROJECT_MEMORY_GRAPH_DB=sqlite`、`PROJECT_MEMORY_SQLITE_PATH=/data/project_memory/project_memory.db` |
+| 项目记忆 | `MEMOS_ENABLED_PLUGINS=project_memory`、`PROJECT_MEMORY_GRAPH_DB=postgres`、`PROJECT_MEMORY_POSTGRES_USER/PASSWORD/DB/SCHEMA`（主机与端口在 compose 的 `environment` 里） |
 | 项目记忆模型 | `PROJECT_MEMORY_LLM_*`（温度 0）、`PROJECT_MEMORY_JUDGE_LLM_*`、`PROJECT_MEMORY_EMBEDDER_*` |
 | 段管理 | `PROJECT_MEMORY_IDLE_MINUTES=30`、`PROJECT_MEMORY_DEBUG_TRACE=false` |
 
-`PROJECT_MEMORY_GRAPH_DB` 三个取值：`sqlite`（默认）、`postgres`（自己一个 schema，用 `PROJECT_MEMORY_POSTGRES_*`）、
+`PROJECT_MEMORY_GRAPH_DB` 三个取值：`postgres`（本部署用；代码里不设时默认 `sqlite`）、`sqlite`（单文件，只适合单进程）、
 `shared`（核心那个 graph_db 实例；核心是 neo4j 时不建议，原因见上）。
+
+并发：同一 Space 的不同会话并行整理（一个会话一条调度流），锁默认是进程内的。多副本部署时由工程注册
+`H.PROJECT_MEMORY_LOCK`（比如 Redis 锁），见 `src/memos/project_memory/locks.py`。
 
 ## 已验证到哪一步（沙箱，不是 docker）
 

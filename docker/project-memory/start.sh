@@ -182,7 +182,21 @@ echo "Python 环境：$VENV"
 # ── 4. .env ──────────────────────────────────────────────────────────────────
 step "4/6 准备 .env"
 if [ -f "$REPO/.env" ] && grep -q '^PROJECT_MEMORY_GRAPH_DB=' "$REPO/.env"; then
-  echo "沿用已有的 $REPO/.env（要重新生成就先删掉它）"
+  echo "沿用已有的 ${REPO}/.env（要重新生成就先删掉它）"
+  # 11/18 起项目记忆存到自己的 Postgres（compose 里的 pm-postgres）；旧 .env 还是 SQLite 时就地升级
+  if ! grep -q '^PROJECT_MEMORY_POSTGRES_DB=' "$REPO/.env"; then
+    bak="${REPO}/.env.bak.$(date +%Y%m%d%H%M%S)"
+    cp "$REPO/.env" "$bak"
+    sed -i.tmp 's/^PROJECT_MEMORY_GRAPH_DB=.*/PROJECT_MEMORY_GRAPH_DB=postgres/' "$REPO/.env"
+    rm -f "${REPO}/.env.tmp"
+    cat >> "$REPO/.env" <<'PGENV'
+PROJECT_MEMORY_POSTGRES_USER=memos
+PROJECT_MEMORY_POSTGRES_PASSWORD=projectmemory
+PROJECT_MEMORY_POSTGRES_DB=project_memory
+PROJECT_MEMORY_POSTGRES_SCHEMA=project_memory
+PGENV
+    echo "项目记忆存储已从 SQLite 改为 Postgres（原 .env 备份在 ${bak}；SQLite 里的旧数据不迁移）"
+  fi
 else
   [ -f "$ENV_SRC" ] || die "找不到模型 key 的来源文件 ${ENV_SRC}；用 ENV_SRC=/路径 bash $0 指定"
   if [ -f "$REPO/.env" ]; then

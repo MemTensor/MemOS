@@ -672,6 +672,66 @@ class QueueScheduler:
         return n
 
 
+_PG_TEST_STORES: list[Any] = []
+
+
+def storage_kinds() -> list[str]:
+    """用例要跑的存储：内存版、SQLite；设了 PG_TEST_DSN 时再加项目记忆自己的 Postgres。"""
+    import os
+
+    return ["fake", "sqlite"] + (["postgres"] if os.getenv("PG_TEST_DSN") else [])
+
+
+def make_test_db(kind: str, path: Any) -> Any:
+    """按种类建一个空库：fake / sqlite（放在 path 下）/ postgres（每次一个新 schema，用完删）。"""
+    import os
+    import uuid
+
+    from pathlib import Path
+
+    if kind == "fake":
+        return FakeGraphDB()
+    if kind == "sqlite":
+        from memos.configs.graph_db import GraphDBConfigFactory
+        from memos.graph_dbs.factory import GraphStoreFactory
+
+        Path(path).mkdir(parents=True, exist_ok=True)
+        return GraphStoreFactory.from_config(
+            GraphDBConfigFactory.model_validate(
+                {
+                    "backend": "sqlite",
+                    "config": {
+                        "db_path": str(Path(path) / "pm.db"),
+                        "embedding_dimension": FakeEmbedder.dim,
+                    },
+                }
+            )
+        )
+    if kind == "postgres":
+        from .pg_backend import ProjectPostgresStore
+
+        db = ProjectPostgresStore(
+            {
+                "dsn": os.environ["PG_TEST_DSN"],
+                "schema_name": f"pmtest_{uuid.uuid4().hex[:12]}",
+                "embedding_dimension": FakeEmbedder.dim,
+            }
+        )
+        _PG_TEST_STORES.append(db)
+        return db
+    raise ValueError(kind)
+
+
+def drop_test_dbs() -> None:
+    """删掉用例建的 Postgres schema。"""
+    while _PG_TEST_STORES:
+        db = _PG_TEST_STORES.pop()
+        try:
+            db.drop_schema()
+        finally:
+            db.close()
+
+
 def reset_project_hooks() -> None:
     """单实现钩子全局只能有一个回调：重复装配前先清掉。"""
     from memos.plugins.hook_defs import H
@@ -752,8 +812,10 @@ def build_http_app(
                 "graph_db": graph_db,
                 "embedder": embedder,
                 "llm": llm,
-                # Pin the judge model to the same stub so tests never reach a real
-                # model configured through PROJECT_MEMORY_JUDGE_LLM_* in .env.
+                # 显式注入项目记忆用的组件：不受仓库根 .env 里 PROJECT_MEMORY_* 的影响
+                "project_graph_db": graph_db,
+                "project_embedder": embedder,
+                "project_llm": llm,
                 "project_judge_llm": llm,
                 "submit_scheduler_messages": sched.submit_messages,
             }

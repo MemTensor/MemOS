@@ -24,7 +24,9 @@ from memos.project_memory.testing import (
     FakeGraphDB,
     RuleLLM,
     build_http_app,
+    make_test_db,
     reset_project_hooks,
+    storage_kinds,
 )
 
 
@@ -40,26 +42,8 @@ class SlowLLM(RuleLLM):
         return super().generate(messages, **kwargs)
 
 
-def _sqlite_db(tmp_path):
-    from memos.configs.graph_db import GraphDBConfigFactory
-    from memos.graph_dbs.factory import GraphStoreFactory
-
-    return GraphStoreFactory.from_config(
-        GraphDBConfigFactory.model_validate(
-            {
-                "backend": "sqlite",
-                "config": {"db_path": str(tmp_path / "pm.db"), "embedding_dimension": 8},
-            }
-        )
-    )
-
-
 def _db(kind: str, tmp_path, name: str):
-    if kind == "fake":
-        return FakeGraphDB()
-    path = tmp_path / name
-    path.mkdir(exist_ok=True)
-    return _sqlite_db(path)
+    return make_test_db(kind, tmp_path / name)
 
 
 def _space(client) -> str:
@@ -146,7 +130,7 @@ def _clean_hooks():
     reset_project_hooks()
 
 
-@pytest.mark.parametrize("kind", ["fake", "sqlite"])
+@pytest.mark.parametrize("kind", storage_kinds())
 def test_two_members_disagree_in_parallel(kind, tmp_path):
     """两人在各自会话里给出相反结论，同时整理：一个主题、一条决策、一项分歧。"""
     client, sched, plugin = build_http_app(llm=RuleLLM(), graph_db=_db(kind, tmp_path, "seq"))
@@ -168,7 +152,7 @@ def test_two_members_disagree_in_parallel(kind, tmp_path):
     assert _state(plugin, sid) == expected
 
 
-@pytest.mark.parametrize("kind", ["fake", "sqlite"])
+@pytest.mark.parametrize("kind", storage_kinds())
 def test_parallel_conversations_are_faster(kind, tmp_path):
     """6 个会话各做一件小事：并行整理的总耗时明显少于顺序，且只建一个主题。"""
     rounds = [_task_round(k) for k in range(6)]
@@ -218,3 +202,80 @@ def test_lock_can_be_replaced_by_engineering():
     kinds = {k.split(":", 1)[0] for k in keys}
     assert {"conv", "topics", "topic", "task"} <= kinds, kinds
     assert _state(plugin, sid) == (1, 1, 1)
+
+
+def _second_handle(kind: str, db, tmp_path):
+    """同一份数据的第二个连接（模拟另一个副本）。"""
+    if kind == "sqlite":
+        return make_test_db("sqlite", tmp_path / "rep")  # 同一个文件
+    import os
+
+    from memos.project_memory.pg_backend import ProjectPostgresStore
+
+    return ProjectPostgresStore(
+        {"dsn": os.environ["PG_TEST_DSN"], "schema_name": db.schema, "embedding_dimension": db.dim}
+    )
+
+
+@pytest.mark.parametrize("kind", [k for k in storage_kinds() if k != "fake"])
+def test_two_replicas_share_storage_and_lock(kind, tmp_path):
+    """两个副本连同一个库、用同一把锁（工程注册的分布式锁的替身）：结果与顺序整理一致。"""
+    from memos.api.product_models import APIADDRequest
+    from memos.project_memory.judge import ModelHub
+    from memos.project_memory.service import ProjectMemoryService
+    from memos.project_memory.store import ProjectStore
+    from memos.project_memory.testing import FakeEmbedder
+
+    db1 = make_test_db(kind, tmp_path / "rep")
+    db2 = _second_handle(kind, db1, tmp_path)
+    shared_lock = InProcessLocks()  # 两个副本共用：相当于工程注册的 Redis 锁
+    emb = FakeEmbedder().embed
+    replicas = [
+        ProjectMemoryService(ProjectStore(db, emb), ModelHub(SlowLLM(0.05)), lock=shared_lock)
+        for db in (db1, db2)
+    ]
+    sid = replicas[0].create_space("并发", "", [{"name": "代码开发"}]).space_id
+
+    def write(svc, rnd):
+        svc.accept(
+            APIADDRequest(
+                user_id=rnd["user_id"],
+                conversation_id=rnd["conversation_id"],
+                space_ids=sid,
+                allow_memory_view=["project"],
+                messages=rnd["messages"],
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for f in [
+            pool.submit(write, svc, rnd)
+            for svc, rnd in zip(replicas, DECISION_ROUNDS[:2], strict=False)
+        ]:
+            f.result()
+
+    store = replicas[0].store
+    decisions = store.list_decisions(sid)
+    assert (len(store.list_topics(sid)), len(decisions)) == (1, 1)
+    assert sum(len(d.conflicts) for d in decisions) == 1
+    if kind == "postgres":
+        db2.close()
+
+
+def test_plugin_storage_follows_config_not_core_graph_db(tmp_path, monkeypatch):
+    """部署时项目记忆按 PROJECT_MEMORY_GRAPH_DB 建自己的库，不会落进核心的 graph_db。"""
+    from memos.project_memory.plugin import CommunityProjectMemoryPlugin
+
+    core_db = FakeGraphDB()
+    monkeypatch.setenv("PROJECT_MEMORY_GRAPH_DB", "sqlite")
+    monkeypatch.setenv("PROJECT_MEMORY_SQLITE_PATH", str(tmp_path / "own.db"))
+    reset_project_hooks()
+    plugin = CommunityProjectMemoryPlugin()
+    plugin.on_load()
+    plugin.init_components({"shared": {"graph_db": core_db, "llm": RuleLLM()}})
+    db = plugin.service.store.db
+    assert db is not core_db and type(db).__name__ == "SQLiteGraphDB"
+
+    monkeypatch.setenv("PROJECT_MEMORY_GRAPH_DB", "shared")
+    plugin.init_components({"shared": {"graph_db": core_db, "llm": RuleLLM()}})
+    assert plugin.service.store.db is core_db

@@ -1,4 +1,4 @@
-# 本地部署：MemOS 服务 + Neo4j（社区版）+ Qdrant，项目记忆用自己的 SQLite（命名卷）。
+# 本地部署：MemOS 服务 + Neo4j（社区版）+ Qdrant，项目记忆用自己的 PostgreSQL（pgvector）。
 #
 #   1) 生成 .env（从 MemOS_DEV/env_example 取模型 key，只取模型那几项）
 #        python3 docker/project-memory/make_env.py --env-file ../env_example
@@ -17,6 +17,9 @@
 # 核心用 neo4j-community：开源版默认后端，核心调用的 30 个图库方法实现了 28 个（Postgres 只有 19 个）；
 # 社区版不带向量索引，向量放在 Qdrant。
 # 项目记忆不放进 Neo4j：neo4j 两种后端的 search_by_fulltext 都是空实现、也没有 rev 条件写。
+# 项目记忆的 Postgres（pm-postgres）：多个副本 / worker 共享同一份数据，带 rev 条件写与中文全文；
+# 表建在 schema project_memory 下，结构照老库 Memory 表。改回单文件 SQLite：.env 里
+# PROJECT_MEMORY_GRAPH_DB=sqlite（数据在命名卷 promem_data）。
 
 name: memos-project-memory
 
@@ -36,10 +39,14 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      pm-postgres:
+        condition: service_healthy
     environment:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - NEO4J_URI=bolt://neo4j:7687
+      - PROJECT_MEMORY_POSTGRES_HOST=pm-postgres
+      - PROJECT_MEMORY_POSTGRES_PORT=5432
     volumes:
       - promem_data:/data/project_memory
     networks:
@@ -80,7 +87,28 @@ services:
     networks:
       - memos_network
 
+  pm-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: memos-promem-postgres
+    ports:
+      - "5433:5432"   # 本机用 5433 连进来看数据，避开本机已有的 5432
+    environment:
+      POSTGRES_USER: memos
+      POSTGRES_PASSWORD: projectmemory
+      POSTGRES_DB: project_memory
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memos -d project_memory"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    volumes:
+      - pm_pg_data:/var/lib/postgresql/data
+    networks:
+      - memos_network
+
 volumes:
+  pm_pg_data:
   promem_data:
   neo4j_data:
   neo4j_logs:

@@ -13,8 +13,12 @@
 | PROJECT_MEMORY_LLM_MAX_TOKENS | 4096 | |
 | PROJECT_MEMORY_JUDGE_LLM_* | 同上一组 | 判别题（段关系）用的模型，可换小模型；同名后缀 |
 | PROJECT_MEMORY_EMBEDDER_* | 核心的 embedder（MOS_EMBEDDER_*） | BACKEND / PROVIDER / MODEL / API_BASE / API_KEY / DIMENSION |
-| PROJECT_MEMORY_GRAPH_DB | sqlite | sqlite：自己的 SQLite 文件库；postgres：自己的 Postgres（用 POSTGRES_* 与 PROJECT_MEMORY_POSTGRES_SCHEMA）；shared：直接用核心的 graph_db（须支持 search_by_fulltext 与 rev 条件写，neo4j 两种后端都不支持） |
+| PROJECT_MEMORY_GRAPH_DB | sqlite | sqlite：自己的 SQLite 文件（单进程、本机试用）；postgres：项目记忆自己的 Postgres 表（pg_backend.py，多副本共享，带 rev 条件写与中文全文）；shared：直接用核心的 graph_db（须支持 search_by_fulltext 与 rev 条件写，neo4j 两种后端都不支持） |
 | PROJECT_MEMORY_SQLITE_PATH | $MEMOS_BASE_PATH/.memos/project_memory.db | |
+| PROJECT_MEMORY_POSTGRES_HOST / PORT / USER / PASSWORD / DB | 退回 POSTGRES_* | 也可用 PROJECT_MEMORY_POSTGRES_DSN 一次给全 |
+| PROJECT_MEMORY_POSTGRES_SCHEMA | project_memory | 表建在这个 schema 下，与核心的表分开 |
+| PROJECT_MEMORY_POSTGRES_MAX_CONNECTIONS | 10 | 连接池上限；并行整理时每个线程占一个 |
+| PROJECT_MEMORY_PARALLEL_EPISODE | true | 一段之内决策与经验两条线并行 |
 """
 
 from __future__ import annotations
@@ -135,6 +139,8 @@ def postgres_config(embedding_dimension: int | None = None) -> dict[str, Any]:
         else os.getenv("POSTGRES_PASSWORD", ""),
         "db_name": os.getenv("PROJECT_MEMORY_POSTGRES_DB") or os.getenv("POSTGRES_DB", "postgres"),
         "schema_name": os.getenv("PROJECT_MEMORY_POSTGRES_SCHEMA", "project_memory"),
+        "dsn": os.getenv("PROJECT_MEMORY_POSTGRES_DSN") or None,
+        "max_connections": int(os.getenv("PROJECT_MEMORY_POSTGRES_MAX_CONNECTIONS", "10")),
         "user_name": os.getenv("PROJECT_MEMORY_POSTGRES_USER_NAME", "project_memory"),
         "use_multi_db": False,
         "embedding_dimension": embedding_dimension or embedding_dims(),
@@ -164,7 +170,10 @@ def build_graph_db(
             "config": {"db_path": sqlite_path(), "embedding_dimension": dims},
         }
     elif kind == "postgres":
-        cfg = {"backend": "postgres", "config": postgres_config(dims)}
+        # 项目记忆自己的 Postgres 存储（插件目录里的新文件，不经核心的 postgres 后端）
+        from .pg_backend import ProjectPostgresStore
+
+        return ProjectPostgresStore(postgres_config(dims))
     else:
         raise ValueError(f"PROJECT_MEMORY_GRAPH_DB 只支持 shared / sqlite / postgres，收到 {kind}")
     return GraphStoreFactory.from_config(GraphDBConfigFactory.model_validate(cfg))
