@@ -15,13 +15,23 @@ import random
 import re
 import time
 
-from contextlib import suppress
+from collections.abc import Callable
+from contextlib import contextmanager, suppress
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 from memos.configs.graph_db import PostgresGraphDBConfig
 from memos.dependency import require_python_package
-from memos.graph_dbs.base import BaseGraphDB
+from memos.exceptions import MemoryError as MemOSMemoryError
+from memos.graph_dbs.base import (
+    MANAGED_LIFECYCLE_KEY,
+    MANAGED_LIFECYCLE_VERSION,
+    BaseGraphDB,
+    NodeMetadataResult,
+    NodeMetadataUpdate,
+    preserve_managed_metadata,
+)
 from memos.log import get_logger
 
 
@@ -45,6 +55,7 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 class PostgresGraphDB(BaseGraphDB):
     """PostgreSQL + pgvector implementation of a graph memory store."""
 
+    supports_atomic_lifecycle = True
     supports_lightweight_vector_search = True
     prefer_lightweight_vector_search = True
 
@@ -451,15 +462,30 @@ class PostgresGraphDB(BaseGraphDB):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    INSERT INTO {memories}
+                    INSERT INTO {memories} AS existing
                     (id, memory, properties, embedding, user_name, created_at, updated_at)
                     VALUES {values_sql}
                     ON CONFLICT (user_name, id) DO UPDATE SET
                         memory = EXCLUDED.memory,
-                        properties = EXCLUDED.properties,
+                        properties = CASE
+                            WHEN existing.properties ? '{MANAGED_LIFECYCLE_KEY}' THEN
+                                (CASE
+                                    WHEN jsonb_typeof(existing.properties->'{MANAGED_LIFECYCLE_KEY}'->'version') = 'number'
+                                        AND existing.properties->'{MANAGED_LIFECYCLE_KEY}'->>'version' = '{MANAGED_LIFECYCLE_VERSION}'
+                                        AND existing.properties->'{MANAGED_LIFECYCLE_KEY}'->'protect_archived_status' = 'false'::jsonb
+                                    THEN EXCLUDED.properties
+                                    ELSE (EXCLUDED.properties - 'status') ||
+                                        CASE WHEN existing.properties ? 'status'
+                                            THEN jsonb_build_object('status', existing.properties->'status')
+                                            ELSE '{{}}'::jsonb END
+                                END) || jsonb_build_object(
+                                    '{MANAGED_LIFECYCLE_KEY}', existing.properties->'{MANAGED_LIFECYCLE_KEY}'
+                                )
+                            ELSE EXCLUDED.properties
+                        END,
                         embedding = EXCLUDED.embedding,
                         updated_at = EXCLUDED.updated_at
-                    WHERE "Memory".user_name = EXCLUDED.user_name
+                    WHERE existing.user_name = EXCLUDED.user_name
                     """,
                     params,
                 )
@@ -467,46 +493,167 @@ class PostgresGraphDB(BaseGraphDB):
             self._put_conn(conn)
 
     def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
-        """Update node fields."""
-        user_name = user_name or self.user_name
+        """Merge current properties under a row lock without erasing lifecycle evidence."""
+        from psycopg2 import sql
+
         if not fields:
             return
-        fields = fields.copy()
-
-        # Get current node
-        current = self.get_node(id, user_name=user_name)
-        if not current:
-            return
-
-        # Merge properties
-        props = current.get("metadata", {}).copy()
+        user_name = user_name or self.user_name
+        fields = deepcopy(fields)
         embedding = fields.pop("embedding", None)
-        memory = fields.pop("memory", current.get("memory", ""))
-        props.update(fields)
-        props["updated_at"] = datetime.now(timezone.utc).isoformat()
-        memories = self._physical_table("memories", user_name)
+        with self._metadata_transaction() as conn, conn.cursor() as cur:
+            table = sql.SQL(self._physical_table("memories", user_name, conn))
+            cur.execute(
+                sql.SQL(
+                    "SELECT memory, properties FROM {} WHERE id = %s AND user_name = %s FOR UPDATE"
+                ).format(table),
+                (id, user_name),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return
+            memory = fields.pop("memory", row[0])
+            properties = preserve_managed_metadata(row[1], {**row[1], **fields})
+            properties["updated_at"] = datetime.now(timezone.utc).isoformat()
+            parameters = [memory, json.dumps(properties, allow_nan=False)]
+            embedding_clause = sql.SQL("")
+            if embedding:
+                embedding_clause = sql.SQL(f", embedding = %s::halfvec({self._vector_dim()})")
+                parameters.append(embedding)
+            parameters.extend([id, user_name])
+            cur.execute(
+                sql.SQL(
+                    "UPDATE {} SET memory = %s, properties = %s::jsonb{}"
+                    ", updated_at = NOW() WHERE id = %s AND user_name = %s"
+                ).format(table, embedding_clause),
+                parameters,
+            )
 
+    @contextmanager
+    def _metadata_transaction(self):
+        """Borrow one connection, roll back failures, and restore pool state."""
+        conn = self._get_conn()
+        reusable = True
+        try:
+            conn.autocommit = False
+            yield conn
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                reusable = False
+            raise
+        finally:
+            if reusable:
+                try:
+                    conn.autocommit = True
+                except Exception:
+                    reusable = False
+            if reusable:
+                self._put_conn(conn)
+            else:
+                with suppress(Exception):
+                    self.pool.putconn(conn, close=True)
+                with suppress(Exception):
+                    conn.close()
+
+    @staticmethod
+    def _lifecycle_scope(user_name: str) -> None:
+        if not isinstance(user_name, str) or not user_name.strip():
+            raise MemOSMemoryError("Lifecycle operations require an explicit scope")
+
+    def mutate_nodes_metadata(
+        self,
+        ids: list[str],
+        reducer: Callable[[str, dict[str, Any]], NodeMetadataUpdate],
+        *,
+        user_name: str,
+    ) -> list[NodeMetadataResult]:
+        """Atomically reduce a bounded scoped batch using stable row-lock ordering.
+
+        Missing nodes return found=False. Every callback sees a detached current
+        snapshot. None/empty patches do not update timestamps; callback or SQL
+        failure rolls back all prior updates in this batch.
+        """
+        from psycopg2 import sql
+
+        self._lifecycle_scope(user_name)
+        if len(ids) > 1000 or any(not isinstance(item, str) or not item for item in ids):
+            raise MemOSMemoryError("Lifecycle batches require at most 1000 nonempty IDs")
+        ordered = list(dict.fromkeys(ids))
+        if not ordered:
+            return []
+        results = {}
+        with self._metadata_transaction() as conn, conn.cursor() as cur:
+            table = sql.SQL(self._physical_table("memories", user_name, conn))
+            cur.execute(
+                sql.SQL(
+                    "SELECT id, properties, created_at, updated_at FROM {} "
+                    'WHERE user_name = %s AND id = ANY(%s) ORDER BY id COLLATE "C" '
+                    "FOR UPDATE"
+                ).format(table),
+                (user_name, ordered),
+            )
+            rows = cur.fetchall()
+            for memory_id, properties, created_at, updated_at in rows:
+                snapshot = deepcopy(properties)
+                snapshot.setdefault("created_at", created_at.isoformat())
+                snapshot.setdefault("updated_at", updated_at.isoformat())
+                patch = reducer(memory_id, snapshot)
+                if not isinstance(patch, NodeMetadataUpdate):
+                    raise MemOSMemoryError("Metadata reducer must return NodeMetadataUpdate")
+                if patch.fields is not None and not isinstance(patch.fields, dict):
+                    raise MemOSMemoryError("Metadata patch must be a dictionary or None")
+                changed = bool(patch.fields) and any(
+                    key not in properties or properties[key] != value
+                    for key, value in patch.fields.items()
+                )
+                if changed:
+                    merged = {**properties, **patch.fields}
+                    cur.execute(
+                        sql.SQL(
+                            "UPDATE {} SET properties = %s::jsonb, "
+                            "updated_at = NOW() WHERE id = %s AND user_name = %s"
+                        ).format(table),
+                        (json.dumps(merged, allow_nan=False), memory_id, user_name),
+                    )
+                results[memory_id] = NodeMetadataResult(
+                    memory_id, True, bool(changed), patch.result
+                )
+        return [results.get(item, NodeMetadataResult(item, False)) for item in ordered]
+
+    def list_lifecycle_nodes(
+        self, *, user_name: str, after: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Fetch metadata-only Dream candidates in a stable scoped keyset page."""
+        from psycopg2 import sql
+
+        self._lifecycle_scope(user_name)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise MemOSMemoryError("Lifecycle page limit must be between 1 and 1000")
+        if after is not None and (not isinstance(after, str) or not after):
+            raise MemOSMemoryError("Lifecycle cursor must be a nonempty ID")
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                if embedding:
-                    cur.execute(
-                        f"""
-                        UPDATE {memories}
-                        SET memory = %s, properties = %s, embedding = %s::halfvec({self._vector_dim()}), updated_at = NOW()
-                        WHERE id = %s AND user_name = %s
-                    """,
-                        (memory, json.dumps(props), embedding, id, user_name),
-                    )
-                else:
-                    cur.execute(
-                        f"""
-                        UPDATE {memories}
-                        SET memory = %s, properties = %s, updated_at = NOW()
-                        WHERE id = %s AND user_name = %s
-                    """,
-                        (memory, json.dumps(props), id, user_name),
-                    )
+                cur.execute(
+                    sql.SQL("""
+                    SELECT id, properties, created_at, updated_at FROM {table}
+                    WHERE user_name = %s AND (%s::text IS NULL OR id COLLATE "C" > %s)
+                        AND (properties ? %s OR properties->>'source' = 'dream'
+                            OR properties->'internal_info' ? 'dream')
+                    ORDER BY id COLLATE "C" LIMIT %s
+                """).format(table=sql.SQL(self._physical_table("memories", user_name, conn))),
+                    (user_name, after, after, MANAGED_LIFECYCLE_KEY, limit),
+                )
+                result = []
+                for memory_id, properties, created_at, updated_at in cur.fetchall():
+                    metadata = dict(properties)
+                    metadata.setdefault("created_at", created_at.isoformat())
+                    metadata.setdefault("updated_at", updated_at.isoformat())
+                    result.append({"id": memory_id, "metadata": metadata})
+                return result
         finally:
             self._put_conn(conn)
 
