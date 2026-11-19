@@ -1171,7 +1171,7 @@ class Searcher:
 
         Note:
             Never mutates the input items: selected textual items are returned
-            as shallow copies (``model_copy``, no revalidation) carrying the
+            as independent copies (``model_copy``, no revalidation) carrying the
             final ``relativity``; other metadata types are rebuilt into
             ``SearchedTreeNodeTextualMemoryMetadata`` as before.
         """
@@ -1277,10 +1277,10 @@ class Searcher:
                 continue
             metadata = item.metadata
             if isinstance(metadata, SearchedTreeNodeTextualMemoryMetadata):
-                # Decouple from caller-owned items: shallow-copy without
+                # Decouple from caller-owned items: deep-copy metadata without
                 # revalidation (cheap), writing the final score on the copy
                 # with the same float() coercion the rebuild path applies.
-                metadata = metadata.model_copy(update={"relativity": float(score)})
+                metadata = metadata.model_copy(deep=True, update={"relativity": float(score)})
                 final_items.append(item.model_copy(update={"metadata": metadata}))
             else:
                 # Type upgrade (e.g. graph/bm25 results without relativity):

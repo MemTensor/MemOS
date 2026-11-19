@@ -304,3 +304,20 @@ def test_sort_and_trim_coerces_numpy_score(mock_searcher):
 
     assert isinstance(result[0].metadata.relativity, float)
     assert result[0].metadata.relativity == 0.9
+
+
+def test_sort_and_trim_isolates_nested_metadata_between_results(mock_searcher):
+    item, score = make_searched_item("independent", 0.9)
+    item.metadata.tags = ["original"]
+    item.metadata.info = {"nested": {"values": ["original"]}}
+    original = item.model_dump()
+
+    first = mock_searcher._sort_and_trim([(item, score)], top_k=1)[0]
+    second = mock_searcher._sort_and_trim([(item, score)], top_k=1)[0]
+    first.metadata.tags.append("changed")
+    first.metadata.sources[0].content = "changed"
+    first.metadata.info["nested"]["values"].append("changed")
+    first.metadata.embedding[0] = 0.9
+
+    assert item.model_dump() == original
+    assert second.to_dict() == rebuild_like_before(item, score).to_dict()
