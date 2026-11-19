@@ -18,6 +18,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .judge import ModelError
 from .prompts import DECISION_EXTRACT, DECISION_UPDATE
 from .types import (
     OP_ADD,
@@ -196,10 +197,43 @@ def update_inputs(
     return {"new": new, "decisions": olds}
 
 
+def _require_complete_updates(
+    rows: Any, count: int, decisions: list[Decision]
+) -> list[dict[str, Any]]:
+    if not isinstance(rows, list) or len(rows) != count:
+        raise ModelError("Decision update must return one result for each Draft")
+    candidates = {decision.id: decision for decision in decisions}
+    by_n: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        index = row.get("n") if isinstance(row, dict) else None
+        if type(index) is not int or not 1 <= index <= count or index in by_n:
+            raise ModelError("Decision update has an invalid or duplicate Draft number")
+        target = row.get("decision_id")
+        same_as = row.get("same_as")
+        if target is None:
+            if "decision_id" not in row or row.get("action") != OP_ADD or same_as is not None:
+                raise ModelError("Decision update must explicitly select add for a new Decision")
+        elif not isinstance(target, str) or target not in candidates:
+            raise ModelError("Decision update references a Decision outside the snapshot")
+        elif same_as is not None and (
+            not isinstance(same_as, str) or same_as not in candidates[target].items()
+        ):
+            raise ModelError("Decision update references an unknown Decision option")
+        by_n[index] = row
+    return [by_n[index] for index in range(1, count + 1)]
+
+
 def update(
-    hub: ModelHub, drafts: list[DecisionDraft], decisions: list[Decision], topic_name: str
+    hub: ModelHub,
+    drafts: list[DecisionDraft],
+    decisions: list[Decision],
+    topic_name: str,
+    *,
+    require_complete: bool = False,
 ) -> list[dict[str, Any]]:
     out = hub.write("dec.update", DECISION_UPDATE, update_inputs(drafts, decisions, topic_name))
+    if require_complete:
+        return _require_complete_updates(out.get("results"), len(drafts), decisions)
     rows = [r for r in out.get("results") or [] if isinstance(r, dict)]
     by_n = {int(r.get("n", 0) or 0): r for r in rows}
     return [

@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 
 from memos.project_memory.add_merge import prepare_merge, rebase_append_only, rewrite_metadata
+from memos.project_memory.judge import ModelError
 
 
 class Writer:
@@ -264,3 +265,34 @@ def test_resolution_does_not_archive_a_newer_choice(draft_time, should_resolve):
     else:
         assert result["conflicts"][0]["content"] == "Export hourly."
         assert result["history"] == []
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [{"n": 1, "action": "rewrite", "decision_id": "outside-snapshot"}],
+        [{"n": 1, "action": "rewrite", "decision_id": None}],
+        [{"n": 1, "action": "add"}],
+        [{"n": 1, "action": "add", "decision_id": None}] * 2,
+        [{"n": 1, "action": "join", "decision_id": "export-cadence", "same_as": "c2"}],
+    ],
+)
+def test_invalid_decision_update_cannot_add_a_new_current_decision(rows):
+    plan = plan_with_disagreement({"kind": "decision", "content": "Export weekly."})
+    writer = Writer({"dec.update": {"results": rows}})
+
+    with pytest.raises(ModelError, match="Decision update"):
+        prepare_merge(writer, plan)
+
+
+def test_explicit_new_decision_is_allowed_when_existing_decisions_are_unrelated():
+    plan = plan_with_disagreement({"kind": "decision", "content": "Export CSV."})
+    writer = Writer({"dec.update": {"results": [{"n": 1, "action": "add", "decision_id": None}]}})
+
+    change = prepare_merge(writer, plan)
+
+    assert [entry["content"] for entry in change["topics"][0]["topic"]["decisions"]] == [
+        "Export daily.",
+        "Export CSV.",
+    ]

@@ -99,7 +99,11 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
         row["id"]: _topic_decision(row, episode, topic_id) for row in snapshot["decisions"]
     }
     prior = list(candidates.values())
-    model = decision.update(hub, [draft], prior, snapshot["topic_name"])[0] if prior else {}
+    model = (
+        decision.update(hub, [draft], prior, snapshot["topic_name"], require_complete=True)[0]
+        if prior
+        else {}
+    )
     plan = decision.decide(draft, model, candidates)
     conversation = episode.get("conversation_id") or ""
     target = candidates.get(plan.decision_id or "")
