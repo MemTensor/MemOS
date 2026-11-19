@@ -2,11 +2,23 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from memos.project_memory.add_algorithm import organize_episode, recall_candidates
+from memos.project_memory.add_algorithm import (
+    _ASSIGN,
+    _ASSIGN_BATCH,
+    organize_episode,
+    recall_candidates,
+)
 from memos.project_memory.judge import ModelError
 
 
 NOW = datetime(2026, 11, 19, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("prompt", [_ASSIGN, _ASSIGN_BATCH], ids=["direct", "batch"])
+def test_assignment_prompt_compares_decision_subjects_across_implementations(prompt):
+    assert "同一具体决策事项" in prompt
+    assert "即使方案可独立实施" in prompt
+    assert "不确定用 stage" in prompt
 
 
 class Writer:

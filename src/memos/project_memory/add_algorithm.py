@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 _ASSIGN = """[系统]
 判断 Episode 是否推进候选 Topic 的同一项工作。只依据轨迹摘要、资源锚点和上下文，不能因名字相似归入。
 两个工作同时满足可独立交付且结论不影响既有决策时，应新开工作，此步返回 stage。
+先核对本段与候选是否涉及同一具体决策事项。证据明确时，对该事项提出不同结论、修订或定案仍属同一工作，即使方案可独立实施。
 正面依据为实际操作共同资源、上段承接、明确指代或摘要和描述所指的具体目标吻合。
 输出 JSON：{\"action\":\"attach\"/\"stage\",\"topic_id\":候选ID,
 \"relationship\":\"same_work\"/\"other\",\"independently_deliverable\":布尔值,
@@ -37,6 +38,7 @@ _ASSIGN = """[系统]
 _ASSIGN_BATCH = """[系统]
 逐条独立判断 Episode 是否推进其候选 Topic 的同一项工作。每条只能用该条的候选和证据。
 依据轨迹摘要、资源锚点和上下文，仅名字相似无效。可独立交付且不影响既有决策时应暂存。
+先核对本段与候选是否涉及同一具体决策事项。证据明确时，对该事项提出不同结论、修订或定案仍属同一工作，即使方案可独立实施。
 为每个 episode_id 原样返回一行，不得重复、遗漏或从其他行借用 Topic ID。
 输出 JSON {"assignments":[{"episode_id":输入ID,"action":"stage"},
 {"episode_id":输入ID,"action":"attach","topic_id":该条候选ID,"relationship":"same_work",
