@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from memos.plugins.result_kinds import apply_relativity_to_plugin_kinds
@@ -170,17 +172,17 @@ def test_mixed_search_goes_through_core_buckets(app):
     _all(client, sched, sid, DECISION_ROUNDS[:2])
 
     class Req:
-        include_memory_view = ["text_mem", "project"]
+        include_memory_view: ClassVar[list[str]] = ["text_mem", "project"]
         project_view_flag = True
         project_view_only_flag = False
         query = "本机整理结果怎么存"
-        space_ids = [sid]
+        space_ids: ClassVar[list[str]] = [sid]
         domains = None
         user_id = "u"
         conversation_id = None
         project_item_types = None
         project_result_format = None
-        model_fields_set: set = set()
+        model_fields_set: ClassVar[set[str]] = set()
 
     results = plugin._search_add_bucket(search_req=Req(), results={"text_mem": []})
     assert results["project_mem"][0]["memories"]

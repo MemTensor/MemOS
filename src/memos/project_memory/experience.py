@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 
 from memos.graph_dbs.base import ConcurrentUpdateError
 
-from .judge import ModelHub
 from .prompts import EXP_EXTRACT, EXP_FILTER, EXP_MERGE
 from .types import (
     CARD_FIELDS,
@@ -40,6 +39,7 @@ from .types import (
 
 
 if TYPE_CHECKING:
+    from .judge import ModelHub
     from .store import ProjectStore
 
 
