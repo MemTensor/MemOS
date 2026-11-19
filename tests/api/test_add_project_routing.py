@@ -14,7 +14,7 @@ from memos.plugins.hooks import _hooks
     [
         (["project"], False, False),
         (["text_mem", "project"], False, True),
-        (["text_mem", "project"], True, False),
+        (["text_mem", "project"], True, True),
     ],
 )
 def test_project_add_routes_in_handler(monkeypatch, views, duplicate, runs_personal):

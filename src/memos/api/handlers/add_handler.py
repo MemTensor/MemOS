@@ -45,8 +45,8 @@ class AddHandler(BaseHandler):
         project = None
         if project_view.has_project_view(add_req):
             project = dict(project_view.accept_add(add_req))
-            duplicate = project.pop("_duplicate", False)
-            if project_view.only_project(add_req) or duplicate:
+            project.pop("_duplicate", None)
+            if project_view.only_project(add_req):
                 return MemoryResponse(message="Project memory task accepted", data=[project])
             add_req.task_id = project["task_id"]
 
