@@ -145,14 +145,13 @@ def normalize_turns(
     if not isinstance(raw_messages, list):
         raise AddRequestError("INVALID_PARAMS", "messages must be a list")
     turns: list[list[dict[str, Any]]] = []
+    leading_system: list[dict[str, Any]] = []
     message_ids: set[str] = set()
     for position, raw in enumerate(raw_messages):
         if not isinstance(raw, dict):
             raise AddRequestError("INVALID_PARAMS", "message must be an object")
         role = raw.get("role")
-        if role == "system":
-            continue
-        if not isinstance(role, str) or role not in {"user", "assistant", "tool"}:
+        if not isinstance(role, str) or role not in {"user", "assistant", "tool", "system"}:
             raise AddRequestError("INVALID_PARAMS", "unsupported message role")
         message_id = (
             raw.get("message_id")
@@ -190,7 +189,12 @@ def normalize_turns(
         message["content_sha256"] = message_fingerprint(
             message, explicit_time=bool(raw.get("chat_time"))
         )
-        if role == "user" or not turns:
+        if role == "system" and not turns:
+            leading_system.append(message)
+            continue
+        if not turns:
+            turns.append(leading_system)
+        elif role == "user":
             turns.append([])
         turns[-1].append(message)
     if not turns:
@@ -198,8 +202,13 @@ def normalize_turns(
     return turns
 
 
+def turn_source(turn: list[dict[str, Any]]) -> dict[str, Any]:
+    """Ignore raw system context when determining the Turn identity and boundary."""
+    return next(message for message in turn if message["role"] != "system")
+
+
 def task_boundary(turn: list[dict[str, Any]]) -> str | None:
-    first = turn[0]
+    first = turn_source(turn)
     if first["role"] == "user":
         if _TASK_SWITCH.match(first["content"]):
             return "switch"

@@ -155,3 +155,32 @@ def test_preserves_assistant_tool_link_and_full_original_output(add_store):
     assert call["tool_calls"][0]["id"] == output["tool_call_id"] == "call"
     assert call["raw_sha256"] != call["content_sha256"]
     assert output["content"] == raw_output
+
+
+def test_keeps_system_source_without_turn_or_anchor_authority(add_store):
+    _spaces(add_store, "space-a")
+    observed_roles = []
+
+    def collect(messages, _bindings):
+        observed_roles.extend(message["role"] for message in messages)
+        return []
+
+    accept = AddAcceptance(add_store, anchor_collector=collect)
+    request = _request("task-a", "message-a", conversation_id=None)
+    system = {
+        "role": "system",
+        "message_id": "system",
+        "content": "new task. Reference: src/internal.py",
+    }
+    request.messages.insert(0, system)
+    episode = add_store.load_episode(accept.accept(request).closed_episode_ids[0])
+    assert [row["role"] for row in episode["messages"]] == ["system", "user"]
+    assert [row["turn_id"] for row in episode["messages"]] == ["message-a", "message-a"]
+    assert episode["turns"][0]["turn_id"] == "message-a"
+    assert episode["messages"][0]["role_id"] is None
+    assert observed_roles == ["user"]
+    request.task_id = "system-only"
+    request.messages = [system]
+    with pytest.raises(AddRequestError) as error:
+        accept.accept(request)
+    assert error.value.reason == "INVALID_PARAMS"
