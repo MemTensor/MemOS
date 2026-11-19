@@ -429,7 +429,7 @@ async function runAll(
             config: deps.config,
             signal: opts.signal,
             deadlineAt: opts.deadlineAt,
-            timeoutMs: filterTimeoutMs(opts.deadlineAt),
+            timeoutMs: filterTimeoutMs(opts.deadlineAt, deps.config.llmFilterTimeoutMs),
             malformedRetries: opts.llmFilterMalformedRetries,
           },
         );
@@ -490,7 +490,7 @@ async function runAll(
           config: deps.config,
           signal: opts.signal,
           deadlineAt: opts.deadlineAt,
-          timeoutMs: filterTimeoutMs(opts.deadlineAt),
+          timeoutMs: filterTimeoutMs(opts.deadlineAt, deps.config.llmFilterTimeoutMs),
           malformedRetries: opts.llmFilterMalformedRetries,
         },
       );
@@ -688,9 +688,13 @@ async function runAll(
   }
 }
 
-function filterTimeoutMs(deadlineAt?: number): number | undefined {
+/** Default cap for a single LLM filter call when the operator has not
+ *  configured `llmFilterTimeoutMs` (kept from the legacy hard-coded value). */
+const DEFAULT_FILTER_TIMEOUT_MS = 2_000;
+
+function filterTimeoutMs(deadlineAt: number | undefined, capMs?: number): number | undefined {
   if (deadlineAt === undefined) return undefined;
-  return Math.max(1, Math.min(2_000, deadlineAt - Date.now()));
+  return Math.max(1, Math.min(capMs ?? DEFAULT_FILTER_TIMEOUT_MS, deadlineAt - Date.now()));
 }
 
 function emptyResult(

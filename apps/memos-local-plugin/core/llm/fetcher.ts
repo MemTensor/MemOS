@@ -338,7 +338,15 @@ function isTransientError(err: unknown): boolean {
 function isTimeout(err: unknown): boolean {
   if (err instanceof Error) {
     if (err.name === "TimeoutError") return true;
-    if ((err as { code?: string }).code === "ABORT_ERR") return true;
+    // An AbortError whose *reason* is a TimeoutError comes from
+    // AbortSignal.timeout(); a plain AbortError without that reason comes
+    // from a caller ctrl.abort() and must NOT be classified as a timeout.
+    if (err.name === "AbortError") {
+      const reason: unknown = (err as { reason?: unknown }).reason;
+      if (reason instanceof Error && reason.name === "TimeoutError") return true;
+    }
+    const code: unknown = (err as { code?: unknown }).code;
+    if (code === "ABORT_ERR" || code === 20) return true;
     if (/timeout|ETIMEDOUT/i.test(err.message ?? "")) return true;
   }
   return false;
@@ -374,10 +382,20 @@ function remainingDeadlineMs(deadlineAt?: number, nowMs: number = Date.now()): n
 function mergeSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
   if (!a) return b;
   const ctrl = new AbortController();
-  const forward = () => ctrl.abort();
-  if (a.aborted || b.aborted) ctrl.abort();
-  a.addEventListener("abort", forward, { once: true });
-  b.addEventListener("abort", forward, { once: true });
+  // Forward the abort *reason*: without it, `AbortSignal.timeout()`'s
+  // `TimeoutError` is flattened into a bare `AbortError` and downstream
+  // timeout classification can no longer tell a budget timeout from a
+  // caller cancellation (issue #2499).
+  const forwardFrom = (from: AbortSignal) => () => ctrl.abort(from.reason);
+  // Prefer the TimeoutError reason so downstream classification stays accurate
+  // even when both signals fire simultaneously.
+  const immediateReason =
+    (a.aborted && a.reason instanceof Error && a.reason.name === "TimeoutError")
+      ? a.reason
+      : a.aborted ? a.reason : b.reason;
+  if (a.aborted || b.aborted) ctrl.abort(immediateReason);
+  a.addEventListener("abort", forwardFrom(a), { once: true });
+  b.addEventListener("abort", forwardFrom(b), { once: true });
   return ctrl.signal;
 }
 
