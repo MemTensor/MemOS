@@ -146,3 +146,11 @@ export async function serviceRequest<T = any>(path: string, body?: unknown, meth
         throw new Error(typeof result.error === 'string' ? result.error : '本地服务请求失败');
     return result;
 }
+
+/** Binding is scoped to this host and workspace; never reuse an activation cache. */
+export async function isMemoryActive(agentType: string, cwd: string, nativeSessionId?: string, parentNativeSessionId?: string): Promise<boolean> {
+ const query = new URLSearchParams({ agentType, cwd });
+ if (nativeSessionId) query.set('nativeSessionId', nativeSessionId);
+ if (parentNativeSessionId) query.set('parentNativeSessionId', parentNativeSessionId);
+ return (await serviceRequest<{ active: boolean }>(`/api/activation?${query}`)).active === true;
+}

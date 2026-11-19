@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve, sep, basename } from 'node:path';
 import { readFile, readdir } from 'node:fs/promises';
 import type { AgentEvent, EventResult, Message, TraceInput } from '../types.ts';
-import { object, textField, readTranscript } from './transcript.ts';
+import { object, textField, readTranscript, observed } from './transcript.ts';
 import { normalizeTaskTrace } from './task-trace.ts';
 
 const standardEvents = ['SessionStart','UserPromptSubmit','PostToolUse','Stop','SessionEnd','PreCompact'];
@@ -45,14 +45,20 @@ async function kimiTranscript(sessionId: string, env: NodeJS.ProcessEnv): Promis
  return undefined;
 }
 
-export async function normalizeHook(agentType:string,input:unknown,options:{event?:string;env?:NodeJS.ProcessEnv}={}):Promise<AgentEvent> {
- const raw=object(input); const env=options.env ?? process.env; const name=eventName(raw,options.event);
+function hookIdentity(agentType:string,input:unknown,env:NodeJS.ProcessEnv) {
+ const raw=object(input);
  const camel=['copilot-cli','grok-build','antigravity-cli'].includes(agentType);
  const nativeSessionId=agentType==='cursor-cli' ? textField(raw,'conversation_id','session_id') : camel ? textField(raw,'sessionId','conversationId','session_id') : textField(raw,'session_id','sessionId');
  if (!nativeSessionId) throw new Error(`${agentType}: hook has no native session ID`);
  const roots=raw.workspace_roots ?? raw.workspacePaths;
  const cwd=textField(raw,'cwd','workspaceRoot') ?? env.DEVIN_PROJECT_DIR ?? (Array.isArray(roots)&&roots.length===1&&typeof roots[0]==='string'?roots[0]:undefined);
  if (!cwd) throw new Error(`${agentType}: unambiguous workspace path required`);
+ return {nativeSessionId,cwd};
+}
+
+export async function normalizeHook(agentType:string,input:unknown,options:{event?:string;env?:NodeJS.ProcessEnv}={}):Promise<AgentEvent> {
+ const raw=object(input); const env=options.env ?? process.env; const name=eventName(raw,options.event);
+ const {nativeSessionId,cwd}=hookIdentity(agentType,input,env);
  const nativeTurnId=textField(raw,'prompt_id','promptId','generation_id','turn_id','turnId');
  const event:AgentEvent={agentType,nativeSessionId,cwd,event:isStart(name)?'session-start':isPrompt(name)?'turn-start':normalizedName(name)==='sessionend'?'session-end':isEnd(name)?'turn-end':'trace-available',raw};
  if (nativeTurnId) event.nativeTurnId=nativeTurnId;
@@ -146,8 +152,14 @@ export function hookOutput(agentType:string,name:string,result:EventResult,input
  return '';
 }
 
-export async function processHook(agentType:string,input:unknown,options:{event?:string;env?:NodeJS.ProcessEnv;request?:(event:AgentEvent)=>Promise<EventResult>;emit?:(output:unknown)=>void;markDelivered?:(sessionId:string)=>Promise<void>}={}):Promise<unknown> {
+export async function processHook(agentType:string,input:unknown,options:{event?:string;env?:NodeJS.ProcessEnv;request?:((event:AgentEvent)=>Promise<EventResult>) & {activation?:typeof import('./client.ts').isMemoryActive};emit?:(output:unknown)=>void;markDelivered?:(sessionId:string)=>Promise<void>}={}):Promise<unknown> {
+ const receipt=observed(object(input));
+ const identity=hookIdentity(agentType,input,options.env??process.env);
+ const activation=options.request ? options.request.activation : (await import('./client.ts')).isMemoryActive;
+ if(activation&&!await activation(agentType,identity.cwd,identity.nativeSessionId))return '';
  const event=await normalizeHook(agentType,input,options);
+ const current=event.records?.at(-1);
+ if(current?.sourceId.startsWith('hook:'))current.raw=receipt;
  const request=options.request ?? (async(event:AgentEvent)=>{
    const {ensureService,serviceRequest}=await import('./client.ts');await ensureService();
    return serviceRequest<EventResult>('/api/events',event);
@@ -155,7 +167,7 @@ export async function processHook(agentType:string,input:unknown,options:{event?
  const result=await request(event);
  // Subagent transcripts belong to a different session even when the envelope carries the parent ID.
  const raw=object(input);const childPath=textField(raw,'agent_transcript_path');const childId=textField(raw,'agent_id','agentId');
- if(agentType!=='codex-cli'&&childPath&&childId){
+ if(agentType!=='codex-cli'&&childPath&&childId&&(!activation||await activation(agentType,event.cwd,childId,event.nativeSessionId))){
   const child:AgentEvent={...event,event:normalizedName(eventName(raw,options.event))==='subagentstop'?'session-end':'trace-available',nativeSessionId:childId,parentNativeSessionId:event.nativeSessionId,nativeTurnId:undefined,turnKey:undefined,records:await readTranscript(childPath,`${agentType}:${childId}`)};
   attributeTranscriptTurns(child.records!,child);
   await request(child);
@@ -166,7 +178,7 @@ export async function processHook(agentType:string,input:unknown,options:{event?
  const output=hookOutput(agentType,name,display,input);
  if(output!==''&&options.emit){
   options.emit(output);
-  if(result.overview&&!result.overviewDelivered&&normalizedName(name)!=='pretooluse'){
+  if(result.sessionId&&result.overview&&!result.overviewDelivered&&normalizedName(name)!=='pretooluse'){
    const mark=options.markDelivered ?? (async(sessionId:string)=>{const {serviceRequest}=await import('./client.ts');await serviceRequest('/api/context-delivery',{sessionId});});
    await mark(result.sessionId);
   }

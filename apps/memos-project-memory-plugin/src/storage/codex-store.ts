@@ -79,7 +79,7 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
         }
         return [...merged.values()];
     }
-    apply(snapshots: CodexSnapshot[], options: { prepareUploads?: boolean } = {}) {
+    apply(snapshots: CodexSnapshot[], options: { prepareUploads?: boolean; requireBinding?: boolean } = {}) {
         return this.transaction(() => {
             for (const snapshot of snapshots) {
                 if (!snapshot.sourcePath || !snapshot.nativeSessionId) continue;
@@ -113,9 +113,9 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
                     }
                 }
             }
-            this.reconcile();
+            this.reconcile(options.requireBinding);
             this.pruneEmptySessions();
-            if (options.prepareUploads) this.prepareUploads();
+            if (options.prepareUploads) this.prepareUploads(options.requireBinding);
             return { rounds: Number(this.store.row('SELECT count(*) AS n FROM codex_rounds')?.n ?? 0) };
         });
     }
@@ -170,16 +170,22 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
             return removed;
         });
     }
-    private reconcile() {
+    private reconcile(requireBinding = false) {
         const metadata = this.metadata(), executions = this.executions();
         const local = new Map<string, Session>();
+        const frozen = new Set(this.store.rows("SELECT * FROM sessions WHERE agentType='codex-cli'").filter(row => {
+            const scope = this.store.memory.get(String(row.objectId)); return scope ? !scope.spaceIds.length : requireBinding;
+        }).map(row => String(row.id)));
+        const frozenIds = [...frozen], placeholders = frozenIds.map(() => '?').join(',') || "''";
         // Establish main identities first. Child execution directories never change root project routing.
         for (const source of metadata.values()) if (source.sourceKind === 'user' && isAbsolute(source.cwd)) {
             const cwd = resolve(source.cwd);
             let session = this.store.row("SELECT * FROM sessions WHERE agentType='codex-cli' AND nativeSessionId=?", source.nativeSessionId) as unknown as Session | undefined;
+            if (requireBinding && !session && !this.store.memory.resolve('codex-cli', cwd)) continue;
             if (!session && !source.gaps.length && !executions.some(execution => execution.nativeSessionId === source.nativeSessionId)
                 && !this.store.row('SELECT 1 FROM codex_event_meta WHERE originSessionId=? LIMIT 1', source.nativeSessionId)
                 && !this.store.row('SELECT 1 FROM codex_context_reservations WHERE nativeSessionId=? LIMIT 1', source.nativeSessionId)) continue;
+            if (session && frozen.has(session.id)) { local.set(source.nativeSessionId, session); continue; }
             const task = session && this.store.row('SELECT t.projectId,p.root FROM tasks t LEFT JOIN projects p ON p.id=t.projectId WHERE t.id=?', session.taskId);
             const conflict = source.gaps.includes('source_directory_conflict') ? '多个原始轨迹的目录不一致'
                 : task?.projectId && !(cwd + sep).startsWith(join(resolve(String(task.root)), sep)) ? '原始目录与已登记项目不一致' : undefined;
@@ -213,12 +219,12 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
             const candidates = executions.filter(execution => execution.nativeTurnId === rootTurnId && metadata.get(execution.nativeSessionId)?.sourceKind === 'user');
             return candidates.length === 1 ? local.get(candidates[0]!.nativeSessionId) : undefined;
         };
-        const userRoots = new Set(executions.filter(execution => metadata.get(execution.nativeSessionId)?.sourceKind === 'user' && this.store.row(`SELECT m.sourceId FROM codex_event_meta m JOIN traces t ON t.id=m.traceId WHERE m.originSessionId=? AND m.nativeTurnId=? AND json_extract(t.message,'$.role')='user' AND EXISTS(SELECT 1 FROM codex_event_sources es WHERE es.sourceId=m.sourceId) LIMIT 1`, execution.nativeSessionId, execution.nativeTurnId)).map(execution => executionKey(execution.nativeSessionId, execution.rootTurnId)));
+        const userRoots = new Set(executions.filter(execution => metadata.get(execution.nativeSessionId)?.sourceKind === 'user' && (execution.gaps.includes('binding_boundary') || this.store.row(`SELECT m.sourceId FROM codex_event_meta m JOIN traces t ON t.id=m.traceId WHERE m.originSessionId=? AND m.nativeTurnId=? AND json_extract(t.message,'$.role')='user' AND EXISTS(SELECT 1 FROM codex_event_sources es WHERE es.sourceId=m.sourceId) LIMIT 1`, execution.nativeSessionId, execution.nativeTurnId))).map(execution => executionKey(execution.nativeSessionId, execution.rootTurnId)));
         const groups = new Map<string, Execution[]>();
-        this.store.db.exec('DELETE FROM codex_execution_map');
+        this.store.db.prepare(`DELETE FROM codex_execution_map WHERE ownerSessionId NOT IN (${placeholders})`).run(...frozenIds);
         for (const execution of executions) {
             const rootOwner = owner(execution.nativeSessionId, execution.rootTurnId);
-            if (!rootOwner || !userRoots.has(executionKey(rootOwner.nativeSessionId, execution.rootTurnId))) continue;
+            if (!rootOwner || frozen.has(rootOwner.id) || !userRoots.has(executionKey(rootOwner.nativeSessionId, execution.rootTurnId))) continue;
             const source = metadata.get(execution.nativeSessionId)!;
             if (source.sourceKind === 'subagent' && !local.has(execution.nativeSessionId)) {
                 const child = this.store.registerSession({ agentType: 'codex-cli', nativeSessionId: source.nativeSessionId, cwd: rootOwner.cwd, parentNativeSessionId: source.parentNativeSessionId });
@@ -232,8 +238,8 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
             this.store.db.prepare('INSERT INTO codex_execution_map VALUES(?,?,?,?,?,?)').run(execution.nativeSessionId, execution.nativeTurnId, turn.id, rootOwner.id, execution.status, execution.startedAt ?? null);
             const group = groups.get(turn.id) ?? []; group.push(execution); groups.set(turn.id, group);
         }
-        this.store.db.exec(`UPDATE codex_rounds SET captureStatus='incomplete',gaps='["source_replaced_or_unresolved"]' WHERE conversationId NOT IN(SELECT conversationId FROM codex_execution_map)`);
-        this.store.db.exec(`UPDATE traces SET sessionId=NULL,conversationId=NULL WHERE id IN (SELECT traceId FROM codex_event_meta)`);
+        this.store.db.prepare(`UPDATE codex_rounds SET captureStatus='incomplete',gaps='["source_replaced_or_unresolved"]' WHERE ownerSessionId NOT IN (${placeholders}) AND conversationId NOT IN(SELECT conversationId FROM codex_execution_map)`).run(...frozenIds);
+        this.store.db.prepare(`UPDATE traces SET sessionId=NULL,conversationId=NULL WHERE (sessionId IS NULL OR sessionId NOT IN (${placeholders})) AND id IN (SELECT traceId FROM codex_event_meta)`).run(...frozenIds);
         for (const [conversationId, group] of groups) {
             const ownerSessionId = group[0]!.ownerSessionId!;
             for (const execution of group) this.store.db.prepare(`UPDATE traces SET sessionId=?,conversationId=? WHERE id IN (SELECT m.traceId FROM codex_event_meta m WHERE m.originSessionId=? AND m.nativeTurnId=? AND EXISTS(SELECT 1 FROM codex_event_sources s WHERE s.sourceId=m.sourceId))`).run(ownerSessionId, conversationId, execution.nativeSessionId, execution.nativeTurnId);
@@ -246,10 +252,10 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
             const completedAt = maximum(group.map(execution => execution.completedAt));
             const gaps = new Set<string>();
             for (const execution of group) {
-                for (const gap of execution.gaps) gaps.add(gap);
+                for (const gap of execution.gaps) if (gap !== 'binding_boundary') gaps.add(gap);
                 for (const gap of metadata.get(execution.nativeSessionId)?.gaps ?? []) gaps.add(gap);
             }
-            if (!root || !hasUser) gaps.add('root_user_input_missing');
+            if (!root || (!hasUser && !root.gaps.includes('binding_boundary'))) gaps.add('root_user_input_missing');
             for (const row of records) if (Number(this.store.row('SELECT count(DISTINCT messageHash) AS n FROM codex_event_sources WHERE sourceId=?', String(row.sourceId))?.n ?? 0) > 1) gaps.add('source_content_conflict');
             const missing: string[] = [];
             for (const execution of group) for (const expected of execution.expectedChildren) {
@@ -272,14 +278,15 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
             this.store.db.prepare(`INSERT INTO codex_rounds(conversationId,ownerSessionId,rootTurnId,startedAt,completedAt,executionStatus,captureStatus,eventSetHash,version,gaps) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversationId) DO UPDATE SET startedAt=excluded.startedAt,completedAt=excluded.completedAt,executionStatus=excluded.executionStatus,captureStatus=excluded.captureStatus,eventSetHash=excluded.eventSetHash,version=excluded.version,gaps=excluded.gaps`).run(conversationId, ownerSessionId, group[0]!.rootTurnId, startedAt ?? null, completedAt ?? null, executionStatus, captureStatus, fingerprint, prior ? Number(prior.version) + Number(prior.eventSetHash !== fingerprint) : 1, JSON.stringify([...gaps, ...missing.map(id => `missing_child:${id}`)]));
             this.store.db.prepare('UPDATE turns SET createdAt=COALESCE(?,createdAt),completedAt=? WHERE id=?').run(startedAt ?? null, captureStatus === 'complete' ? completedAt ?? now() : null, conversationId);
         }
-        this.store.db.exec('DELETE FROM codex_context_reservations WHERE EXISTS(SELECT 1 FROM codex_execution_map m WHERE m.nativeSessionId=codex_context_reservations.nativeSessionId AND m.nativeTurnId=codex_context_reservations.nativeTurnId)');
+        this.store.db.prepare(`DELETE FROM codex_context_reservations WHERE EXISTS(SELECT 1 FROM codex_execution_map m WHERE m.nativeSessionId=codex_context_reservations.nativeSessionId AND m.nativeTurnId=codex_context_reservations.nativeTurnId AND m.ownerSessionId NOT IN (${placeholders}))`).run(...frozenIds);
         // The source parser, not a historical hook arrival, selects the most recent active context.
         for (const [nativeId, session] of local) {
+            if (frozen.has(session.id)) continue;
             const latest = executions.filter(execution => execution.nativeSessionId === nativeId && execution.conversationId).sort((a, b) => String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? ''))).at(-1);
             const reservation = this.store.row('SELECT conversationId FROM codex_context_reservations WHERE nativeSessionId=? ORDER BY createdAt DESC,rowid DESC LIMIT 1', nativeId);
             if (reservation || latest) this.store.db.prepare('UPDATE sessions SET currentTurnId=? WHERE id=?').run(reservation ? String(reservation.conversationId) : latest!.conversationId!, session.id);
         }
-        this.store.db.prepare(`UPDATE batches SET status='blocked',error='旧版 Codex 轨迹需原始记录回放修复' WHERE uploaded=0 AND status='pending' AND sessionId IN(SELECT id FROM sessions WHERE agentType='codex-cli') AND NOT EXISTS(SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conversationId)`).run();
+        this.store.db.prepare(`UPDATE batches SET status='blocked',error='旧版 Codex 轨迹需原始记录回放修复' WHERE uploaded=0 AND status='pending' AND sessionId IN(SELECT id FROM sessions WHERE agentType='codex-cli') AND sessionId NOT IN (${placeholders}) AND NOT EXISTS(SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conversationId)`).run(...frozenIds);
     }
     private callRecord(records: Row[], execution: Execution, callId: string) {
         return records.find(row => row.originSessionId === execution.nativeSessionId && row.nativeTurnId === execution.nativeTurnId && ((row.message as { tool_calls?: { id?: string }[] }).tool_calls ?? []).some(call => call.id === callId));
@@ -305,10 +312,13 @@ AND NOT EXISTS (SELECT 1 FROM codex_rounds r WHERE r.conversationId=batches.conv
         const records = this.roundRecords(conversationId);
         return orderTraceRecords(records, this.dependencyEdges(records, this.executions())).records;
     }
-    prepareUploads() {
+    prepareUploads(requireBinding = false) {
         this.transaction(() => {
             const batches = new Map(this.store.batches().map(batch => [batch.conversationId, batch]));
             for (const round of this.store.rows('SELECT * FROM codex_rounds ORDER BY startedAt,ownerSessionId,conversationId')) {
+                const owner = this.store.session(String(round.ownerSessionId));
+                const scope = owner && this.store.memory.get(owner.objectId);
+                if (scope ? !scope.spaceIds.length : requireBinding) continue;
                 const id = String(round.conversationId), existing = batches.get(id);
                 if (existing?.attempts || existing?.uploaded) {
                     if (!round.snapshotHash) {

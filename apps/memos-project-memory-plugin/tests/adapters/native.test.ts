@@ -58,7 +58,7 @@ test('Cline core session and run identity remain distinct from transcript identi
  const events:AgentEvent[]=[];const plugin=createPlugin(async e=>{events.push(e);return response(e);});
  plugin.setup({}, {session:{sessionId:'core-1'},workspaceInfo:{rootPath:'/project'}});
  const snapshot={agentId:'agent-1',conversationId:'transcript-1',runId:'run-1',messages:[]};
- const context=await plugin.hooks.beforeRun({snapshot});assert.match(context.appendContext,/turn=run-1/);
+ const context=await plugin.hooks.beforeRun({snapshot});assert.match(context.appendContext??'',/turn=run-1/);
  await plugin.hooks.afterTool({snapshot,toolCall:{toolCallId:'t1'},result:{content:'ok'}});
  assert.equal(events.at(-1)?.nativeSessionId,'core-1');assert.equal(events.at(-1)?.turnKey,'run-1');
  await plugin.hooks.beforeRun({snapshot:{...snapshot,runId:'run-2'}});

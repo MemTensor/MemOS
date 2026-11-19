@@ -9,6 +9,7 @@ import { PluginService } from '../../src/server/service.ts';
 test('native session title persists, follows rename and never changes task identity or uploads', async t => {
  const dir=await mkdtemp(join(tmpdir(),'pm-title-'));t.after(()=>rm(dir,{recursive:true,force:true}));
  const service=new PluginService(dir,{codexRoots:[]});
+ service.store.bindProject('Project','/project','space',service.config.value.baseUrl,'deepseek-harness');
  const event={agentType:'deepseek-harness',nativeSessionId:'native',cwd:'/project',event:'trace-available' as const,title:'Greeting'};
  const response=await service.event({...event,event:'turn-start',turnKey:'first-input'});
  const session=service.store.session(response.sessionId)!;
@@ -32,6 +33,8 @@ test('Codex native index rename updates while rollout content and cursor stay un
  const dir=await mkdtemp(join(tmpdir(),'pm-title-codex-')),root=join(dir,'host'),sources=join(root,'sessions');
  await mkdir(sources,{recursive:true});
  const service=new PluginService(join(dir,'data'),{codexRoots:[sources]});t.after(async()=>{service.close();await rm(dir,{recursive:true,force:true});});
+ const binding=service.store.bindProject('Project',dir,'space',service.config.value.baseUrl,'codex-cli');
+ service.store.db.prepare('UPDATE capture_windows SET startedAt=? WHERE scopeId=?').run('2025-01-01T00:00:00.000Z',binding.scopeId);
  const rows=[{type:'session_meta',payload:{id:'native',cwd:dir,source:'cli'}},{type:'event_msg',payload:{type:'task_started',turn_id:'turn'}},{type:'response_item',payload:{type:'message',id:'u',role:'user',content:'你好'}},{type:'event_msg',payload:{type:'task_complete',turn_id:'turn'}}];
  const path=join(sources,'rollout.jsonl');await writeFile(path,rows.map((row,i)=>JSON.stringify({...row,ordinal:i,timestamp:`2026-01-01T00:00:0${i}Z`})).join('\n')+'\n');
  const index=join(root,'session_index.jsonl');await writeFile(index,JSON.stringify({id:'native',thread_name:'Greeting',updated_at:'2026-01-01T00:00:00Z'})+'\n');
@@ -71,6 +74,7 @@ test('DSH backfill and later cache rename update existing names without overridi
  const service=new PluginService(join(dir,'data'),{codexRoots:[]});
  t.after(async()=>{service.close();if(previous===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=previous;await rm(dir,{recursive:true,force:true});});
  const identity={agentType:'deepseek-harness',nativeSessionId:'native',cwd:'/project'};
+ service.store.bindProject('Project','/project','space',service.config.value.baseUrl,'deepseek-harness');
  const session=service.store.registerSession(identity);
  const cacheTitle=(val:string,seq:number)=>writeFile(join(cache,'native.json'),JSON.stringify({version:7,record:{identity:{cwd:'/project',createdAt:1},rows:{title:{ver:1,seq,val}}}}));
  await cacheTitle('Greeting',22);await service.refreshSessionTitles();
@@ -78,6 +82,9 @@ test('DSH backfill and later cache rename update existing names without overridi
  await service.event({...identity,event:'trace-available',title:'Live name',titleRevision:24});
  await service.refreshSessionTitles();assert.equal(service.store.session(session.id)!.title,'Live name');
  await cacheTitle('Renamed offline',30);await service.refreshSessionTitles();
+ assert.equal(service.store.session(session.id)!.title,'Renamed offline');
+ service.store.unbind(session.objectId,'space');
+ await cacheTitle('Inactive rename',40);await service.refreshSessionTitles();
  assert.equal(service.store.session(session.id)!.title,'Renamed offline');
  for(const table of ['turns','traces','batches'])assert.equal(service.store.rows(`SELECT * FROM ${table}`).length,0);
 });

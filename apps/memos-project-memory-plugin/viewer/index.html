@@ -18,7 +18,40 @@
     <header class="topbar"><div><h1 id="page-title">项目记忆概览</h1></div><div class="top-actions"><span id="connection" class="badge">正在连接</span><button id="refresh" class="secondary" type="button"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>刷新</button></div></header>
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
     <section id="overview" class="page"><div id="metrics" class="metrics"></div><div class="two-col"><section class="card"><div class="card-heading"><h2>最近会话</h2><button data-page="sessions" class="text-button" type="button">查看全部 →</button></div><div id="recent-sessions"></div></section><section class="card"><div class="card-heading"><h2>同步与连接</h2><button data-page="settings" class="text-button" type="button">管理 →</button></div><div id="sync-summary"></div><div class="actions"><button id="pause-overview" type="button">暂停上传</button><button id="sync-now" class="secondary" type="button">同步待上传批次</button></div></section></div><section class="card"><h2>当前诊断</h2><div id="overview-diagnostics"></div></section></section>
-    <section id="projects" class="page" hidden><section class="card"><h2>绑定项目与 Space</h2><form id="project-form" class="inline-form"><label>Agent<select name="agentType" required><option value="">选择 Agent</option></select></label><label class="grow">本地项目<select name="root" required disabled><option value="">先选择 Agent</option></select></label><label>Space ID<input name="spaceId" required disabled placeholder="输入要绑定的 Space ID" spellcheck="false"></label><button type="submit" disabled>绑定 Space</button></form><p id="project-directory" class="hint mono" hidden></p></section><section class="card binding-relations"><h2>绑定关系</h2><div id="project-list"></div></section></section>
+    <section id="projects" class="page" hidden>
+      <section class="card project-binding-card" aria-labelledby="project-binding-title">
+        <div class="project-card-heading"><h2 id="project-binding-title">绑定项目与 Space</h2><p class="hint">先选择 Agent 和本地项目，再选择空间的绑定方式。</p></div>
+        <form id="project-form">
+          <div class="project-form-body">
+            <div class="project-selection">
+              <label>Agent<select name="agentType" required><option value="">选择 Agent</option></select></label>
+              <div><label>本地项目<select name="root" required disabled><option value="">先选择 Agent</option></select></label><p id="project-directory" class="project-directory mono" hidden></p></div>
+            </div>
+            <div class="project-space-section">
+              <p class="project-field-label">绑定方式</p>
+              <div class="project-space-tabs" role="tablist" aria-label="选择绑定方式">
+                <button id="space-mode-create" class="project-space-tab" type="button" role="tab" aria-selected="true" aria-controls="project-space-panel"><span aria-hidden="true">＋</span>新建 Space</button>
+                <button id="space-mode-bind" class="project-space-tab" type="button" role="tab" aria-selected="false" aria-controls="project-space-panel" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m10 13 4-4M8 15l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 3 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg>绑定已有 Space</button>
+              </div>
+              <div id="project-space-panel" role="tabpanel" aria-labelledby="space-mode-create">
+                <div class="project-space-entry">
+                  <label id="space-create-field">Space 名称<input name="spaceName" required disabled placeholder="例如：MemOS 开发记忆" autocomplete="off" aria-describedby="project-space-help"></label>
+                  <label id="space-bind-field" hidden>Space ID<input name="spaceId" disabled placeholder="输入要绑定的 Space ID" spellcheck="false" autocomplete="off" aria-describedby="project-space-help"></label>
+                  <button type="submit" disabled><span id="project-submit-label">新建并绑定</span></button>
+                </div>
+                <p id="project-space-help" class="hint">创建后自动绑定到所选 Agent 与项目，无需手动填写 Space ID。</p>
+              </div>
+            </div>
+          </div>
+          <div class="project-card-foot"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-9h.01"/></svg><p>当前绑定仅对 <strong id="project-target-agent">所选 Agent</strong> 在此项目中生效。同一项目可绑定多个 Space。</p></div>
+        </form>
+      </section>
+      <section class="card binding-relations"><div class="card-heading"><div class="project-relations-title"><h2>绑定关系</h2><span id="binding-count" class="project-binding-count">0</span></div><small>点击 Space 查看名称与 ID</small></div><div id="project-list"></div><p class="project-table-caption">新绑定的 Space 从绑定时刻起接收新内容；已有会话可通过“上传历史”补传。</p></section>
+    </section>
+    <dialog id="space-create-dialog" class="space-create-dialog" aria-labelledby="space-create-title">
+      <div class="space-create-body"><div class="space-create-icon" aria-hidden="true">＋</div><h2 id="space-create-title">确认新建 Space</h2><p class="hint">创建成功后，该空间将自动加入所选项目的绑定关系。</p><dl class="space-create-summary"><dt>Space 名称</dt><dd id="space-confirm-name"></dd><dt>Agent</dt><dd id="space-confirm-agent"></dd><dt>本地项目</dt><dd id="space-confirm-project"></dd></dl></div>
+      <div class="space-create-actions"><button id="space-create-cancel" class="secondary" type="button">取消</button><button id="space-create-confirm" type="button">确认新建并绑定</button></div>
+    </dialog>
     <section id="sessions" class="page" hidden>
       <form id="session-filters" class="trace-scopebar" aria-label="会话范围筛选">
         <label class="trace-scope-field">Agent<select name="agent" aria-label="选择 Agent"><option value="">全部 Agent</option></select></label>

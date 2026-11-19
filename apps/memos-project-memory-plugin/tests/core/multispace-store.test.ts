@@ -40,7 +40,9 @@ test('project binding records the selected Agent before any session and shares a
     const state = store.state().projects[0]!;
     assert.equal(state.name, '我的业务项目');
     assert.deepEqual(state.agentTypes, ['claude-code', 'codex-cli']);
-    assert.deepEqual(state.spaceIds, ['one', 'two']);
+    assert.deepEqual(store.binding(project.scopeId)?.spaceIds,['one']);
+    assert.deepEqual(store.binding(same.scopeId)?.spaceIds,['two']);
+    assert.notEqual(project.scopeId,same.scopeId);
     assert.equal(state.spaceId, undefined);
     store.registerSession({ agentType: 'pi', nativeSessionId: 'new', cwd: '/workspace/shared/src' });
     assert.deepEqual(store.state().projects[0]!.agentTypes, ['claude-code', 'codex-cli', 'pi']);
@@ -50,32 +52,28 @@ test('project binding records the selected Agent before any session and shares a
 test('removing a shared Space only unbinds the selected project', () => {
   const store = new Store(':memory:');
   try {
-    const first = store.bindProject('项目甲', '/workspace/first', 'shared', 'http://cloud');
-    const other = store.bindProject('项目乙', '/workspace/other', 'shared', 'http://cloud');
-    store.unbind(first.id, 'shared');
-    assert.deepEqual(store.binding(first.id)?.spaceIds, []);
-    assert.deepEqual(store.binding(other.id)?.spaceIds, ['shared']);
+    const first = store.bindProject('项目甲', '/workspace/first', 'shared', 'http://cloud','claude-code');
+    const other = store.bindProject('项目乙', '/workspace/other', 'shared', 'http://cloud','claude-code');
+    store.unbind(first.scopeId, 'shared');
+    assert.deepEqual(store.binding(first.scopeId)?.spaceIds, []);
+    assert.deepEqual(store.binding(other.scopeId)?.spaceIds, ['shared']);
     assert.equal(store.rows('SELECT * FROM bindings WHERE spaceId=?', 'shared').length, 1);
   } finally { store.close(); }
 });
 
-test('adopting standalone sessions preserves their spaces as a union without orphaning old binding rows', () => {
-  const store = new Store(':memory:');
-  try {
-    const first = store.registerSession({ agentType: 'claude-code', nativeSessionId: 'one', cwd: '/workspace/shared' });
-    const other = store.registerSession({ agentType: 'codex-cli', nativeSessionId: 'two', cwd: '/workspace/shared/src' });
-    store.bind(first.objectId, 'one', 'http://cloud', '空间一');
-    store.bind(other.objectId, 'two', 'http://cloud', '空间二');
-    const project = store.bindProject('Shared', '/workspace/shared', 'three', 'http://cloud', 'pi', '空间三');
-    assert.deepEqual(store.binding(project.id)?.spaceIds, ['one', 'two', 'three']);
-    assert.equal(store.binding(first.objectId), undefined);
-    assert.equal(store.binding(other.objectId), undefined);
-    assert.equal(store.session(first.id)?.objectId, project.id);
-    assert.equal(store.session(other.id)?.objectId, project.id);
-    store.unbind(project.id, 'one');
-    assert.equal(store.rows('SELECT * FROM bindings WHERE spaceId=?', 'one').length, 0);
-    assert.deepEqual(store.state().projects[0]!.agentTypes, ['claude-code', 'codex-cli', 'pi']);
-  } finally { store.close(); }
+test('binding one Agent never adopts other Agents or unions their legacy spaces', () => {
+ const store=new Store(':memory:');
+ try {
+  const first=store.registerSession({agentType:'claude-code',nativeSessionId:'one',cwd:'/workspace/shared'});
+  const other=store.registerSession({agentType:'codex-cli',nativeSessionId:'two',cwd:'/workspace/shared/src'});
+  store.bind(first.objectId,'one','http://cloud');store.bind(other.objectId,'two','http://cloud');
+  const project=store.bindProject('Shared','/workspace/shared','three','http://cloud','pi');
+  assert.deepEqual(store.binding(project.scopeId)?.spaceIds,['three']);
+  assert.equal(store.session(first.id)?.objectId,first.objectId);
+  assert.equal(store.session(other.id)?.objectId,other.objectId);
+  assert.deepEqual(store.binding(first.objectId)?.spaceIds,['one']);
+  assert.deepEqual(store.binding(other.objectId)?.spaceIds,['two']);
+ } finally {store.close();}
 });
 
 test('multi-space migration backs up real legacy SQLite and retains single bindings and attempted payload targets', () => {
@@ -118,10 +116,11 @@ test('multi-space migration backs up real legacy SQLite and retains single bindi
 test('cross-connection and uncertain bindings still roll back project adoption', () => {
   const store = new Store(':memory:');
   try {
+    const project=store.bindProject('Project','/workspace/project','old-space','http://old','pi');
     const session = store.registerSession({ agentType: 'pi', nativeSessionId: 'old', cwd: '/workspace/project' });
-    store.bind(session.objectId, 'old-space', 'http://old');
-    assert.throws(() => store.bindProject('Project', '/workspace/project', 'new-space', 'http://new'), /连接|绑定不可更改/);
-    assert.equal(store.state().projects.length, 0);
+    assert.throws(() => store.bindProject('Project', '/workspace/project', 'new-space', 'http://new','pi'), /连接|绑定不可更改/);
+    assert.equal(store.state().projects.length, 1);
+    assert.equal(session.objectId,project.scopeId);
     assert.equal(store.session(session.id)?.objectId, session.objectId);
     store.setCreating('creating-object', 'http://cloud', 'uncertain');
     assert.throws(() => store.unbind('creating-object', 'any'), /尚待确认|不存在/);

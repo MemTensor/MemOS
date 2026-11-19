@@ -1,3 +1,4 @@
+import { observed } from '../../_shared/transcript.ts';
 import { Bridge, message, type Data, type Send } from '../../opencode-v1/extension/bridge.ts';
 /** Cline CLI AgentPlugin. Runtime snapshot.conversationId is transcript identity, not a user turn. */
 export function createPlugin(send?:Send) {
@@ -17,16 +18,16 @@ export function createPlugin(send?:Send) {
   },
   hooks:{
    async beforeRun({snapshot}:{snapshot:Data}){
-    const {sid,bridge}=resolve(snapshot);const key=snapshot.runId;
+    const {sid,bridge}=resolve(snapshot);if(!await bridge.active(sid))return {};const key=snapshot.runId;
     if(!key)throw new Error('Cline beforeRun requires runId');
     const records=(snapshot.messages??[]).filter((m:Data)=>m.id).map((m:Data)=>({sourceId:`message:${m.id}`,raw:m,message:message(m)}));
-    await bridge.turn(sid,key,records);const appendContext=bridge.historyContext(sid);await bridge.delivered(sid);return {appendContext};
+    await bridge.turn(sid,key,records);const appendContext=bridge.historyContext(sid);if(!appendContext)return {};await bridge.delivered(sid);return {appendContext};
    },
    async beforeModel({snapshot}:{snapshot:Data}){const {sid,bridge}=resolve(snapshot);await bridge.trace(sid,{type:'beforeModel',snapshot});},
-   async afterModel(event:Data){const {sid,bridge}=resolve(event.snapshot);await bridge.trace(sid,event,event.assistantMessage?.id?`message:${event.assistantMessage.id}`:undefined,message(event.assistantMessage??{}),event.snapshot.runId);},
-   async afterTool(event:Data){const {sid,bridge}=resolve(event.snapshot);await bridge.trace(sid,event,`tool:${event.toolCall.toolCallId}`,{role:'tool',content:event.result?.content??JSON.stringify(event.result),tool_call_id:event.toolCall.toolCallId,...((event.toolCall.name??event.toolCall.toolName)!==undefined?{name:event.toolCall.name??event.toolCall.toolName}:{}),...((event.toolCall.arguments??event.toolCall.args??event.toolCall.input)!==undefined?{tool_input:event.toolCall.arguments??event.toolCall.args??event.toolCall.input}:{})},event.snapshot.runId);},
-   async onEvent(event:Data){if(event.snapshot){const {sid,bridge}=resolve(event.snapshot);await bridge.trace(sid,event);}},
-   async afterRun(event:Data){const {sid,bridge}=resolve(event.snapshot),key=event.snapshot.runId;for(const m of event.result?.messages??[])if(m.id)await bridge.trace(sid,m,`message:${m.id}`,message(m),key);await bridge.dispatch(sid,'turn-end',undefined,key);},
+   async afterModel(event:Data){const {sid,bridge}=resolve(event.snapshot);await bridge.trace(sid,observed(event),event.assistantMessage?.id?`message:${event.assistantMessage.id}`:undefined,message(event.assistantMessage??{}),event.snapshot.runId);},
+   async afterTool(event:Data){const {sid,bridge}=resolve(event.snapshot);await bridge.trace(sid,observed(event),`tool:${event.toolCall.toolCallId}`,{role:'tool',content:event.result?.content??JSON.stringify(event.result),tool_call_id:event.toolCall.toolCallId,...((event.toolCall.name??event.toolCall.toolName)!==undefined?{name:event.toolCall.name??event.toolCall.toolName}:{}),...((event.toolCall.arguments??event.toolCall.args??event.toolCall.input)!==undefined?{tool_input:event.toolCall.arguments??event.toolCall.args??event.toolCall.input}:{})},event.snapshot.runId);},
+   async onEvent(event:Data){if(event.snapshot){const {sid,bridge}=resolve(event.snapshot);await bridge.trace(sid,observed(event));}},
+   async afterRun(event:Data){const {sid,bridge}=resolve(event.snapshot),key=event.snapshot.runId;if(!await bridge.active(sid))return;for(const m of event.result?.messages??[])if(m.id)await bridge.trace(sid,m,`message:${m.id}`,message(m),key);await bridge.dispatch(sid,'turn-end',undefined,key);},
   },
  };
 }

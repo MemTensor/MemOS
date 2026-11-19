@@ -9,6 +9,14 @@ export function textField(value: Record<string, unknown>, ...keys: string[]): st
   for (const key of keys) if (typeof value[key] === 'string' && value[key]) return value[key] as string;
   return undefined;
 }
+/** Only real-time host callbacks may use receipt time; transcript replay never calls this. */
+export function observed(raw: Record<string, any>): Record<string, any> {
+  const times = [raw.occurredAt, raw.timestamp, raw.createdAt, raw.time, raw.payload?.timestamp,
+    raw.message?.timestamp, raw.info?.time?.created, raw.data?.timestamp, raw.data?.message?.timestamp];
+  return times.some(value => typeof value === 'string' || typeof value === 'number')
+    ? raw : { ...raw, occurredAt: new Date().toISOString() };
+}
+
 export function asMessage(raw: unknown): Message | undefined {
   const row = object(raw);
   const candidate = object(row.message);

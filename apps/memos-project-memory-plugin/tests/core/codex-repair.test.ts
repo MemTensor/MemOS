@@ -14,13 +14,13 @@ async function fixture(t: any) {
     await Promise.all([mkdir(dataDir), mkdir(sourceRoot), mkdir(project)]);
     t.after(() => rm(directory, { recursive: true, force: true }));
     const store = new Store(join(dataDir, 'memory.sqlite'));
-    const registered = store.createProject('Fixture', project);
-    store.db.prepare('INSERT INTO project_agents(projectId,agentType) VALUES(?,?)').run(registered.id, 'codex-cli');
+    store.bindProject('Fixture',project,'space','http://cloud','codex-cli');
+    store.db.exec("UPDATE capture_windows SET startedAt='2025-01-01T00:00:00.000Z'");
     const session = store.registerSession({agentType:'codex-cli',nativeSessionId:'fixture-session',cwd:project});
     store.startTurn(session.id, 'transcript:old-input');
-    store.capture(session.id, [{sourceId:'old-user',raw:{role:'user',content:'Task'}}]);
+    store.capture(session.id, [{sourceId:'old-user',raw:{role:'user',content:'Task',timestamp:'2026-11-18T01:00:02.000Z'}}]);
     store.startTurn(session.id, 'native-turn');
-    store.capture(session.id, [{sourceId:'old-answer',raw:{role:'assistant',content:'Answer'}}]);
+    store.capture(session.id, [{sourceId:'old-answer',raw:{role:'assistant',content:'Answer',timestamp:'2026-11-18T01:00:05.000Z'}}]);
     store.finalizeTurn(session.id,'native-turn');
     const sent = store.batches()[0]!;
     store.updateBatch(sent.id,{attempts:1,uploaded:true,status:'accepted',taskId:'existing-cloud-task'});

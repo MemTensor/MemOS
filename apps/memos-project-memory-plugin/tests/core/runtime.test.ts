@@ -45,7 +45,7 @@ async function stop(directory: string) {
 }
 
 test('source hooks and built CLI share one runtime revision and API contract', async () => {
-  assert.equal(LOCAL_API_VERSION, 3);
+  assert.equal(LOCAL_API_VERSION, 5);
   assert.match(currentRuntimeRevision(), /\S+/);
   const built = new URL('../../dist/runtime/revision.js', import.meta.url);
   if (existsSync(built)) assert.equal((await import(built.href)).currentRuntimeRevision(), currentRuntimeRevision());
@@ -66,7 +66,7 @@ test('managed legacy service is replaced on the same port, preserving SQLite and
   assert.equal(await ensure(directory), old.url);
   assert.equal(JSON.parse(readFileSync(join(directory, 'service.json'), 'utf8')).pid, endpoint.pid);
   const restored = new Store(join(directory, 'memory.sqlite'));
-  assert.deepEqual(restored.binding(project.id)?.spaceIds, ['saved-space']); restored.close();
+  assert.deepEqual(restored.binding(project.scopeId)?.spaceIds, ['saved-space']); restored.close();
 });
 
 test('same API with an obsolete build revision is replaced but explicit URL overrides are left alone', async t => {

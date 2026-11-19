@@ -73,7 +73,8 @@ async function fixture(t: any) {
     const sources = join(dir, 'sessions'), project = join(dir, 'project');
     await mkdir(sources); await mkdir(project);
     const service = new PluginService(join(dir, 'data'), { codexRoots: [sources] });
-    service.store.createProject('Fixture', project);
+    service.store.bindProject('Fixture', project, 'space', service.config.value.baseUrl, 'codex-cli');
+    service.store.db.exec("UPDATE capture_windows SET startedAt='2025-01-01T00:00:00.000Z'");
     t.after(async () => { if (service.store.db.isOpen) service.close(); await rm(dir, { recursive: true, force: true }); });
     return { dir, sources, project, service };
 }
@@ -81,6 +82,8 @@ async function fixture(t: any) {
 test('startup reconciles unchanged source metadata without requiring another hook or new trace', async t => {
     const { dir, sources, service } = await fixture(t);
     const path = join(sources, 'rollout-local.jsonl'), cwd = join(dir, 'local');
+    service.store.bindProject('Local',cwd,'space',service.config.value.baseUrl,'codex-cli');
+    service.store.db.exec("UPDATE capture_windows SET startedAt='2025-01-01T00:00:00.000Z'");
     await writeFile(path, jsonl([meta('local', cwd), start('t'), message('u', 'user', 'task', 2), message('a', 'assistant', 'done', 3), end('t', 4)]));
     await service.event(await normalizeHook('codex-cli', { session_id: 'local', cwd, transcript_path: path, turn_id: 't', hook_event_name: 'Stop' }));
     const session = service.store.rows("SELECT * FROM sessions WHERE nativeSessionId='local'")[0]!;
@@ -92,7 +95,7 @@ test('startup reconciles unchanged source metadata without requiring another hoo
     try {
         await restarted.captureCodex(true);
         assert.equal(restarted.store.session(String(session.id))!.cwd, cwd);
-        assert.equal(restarted.store.row('SELECT name FROM tasks WHERE id=?', String(session.taskId))!.name, 'local');
+        assert.equal(restarted.store.memory.forSession(restarted.store.session(String(session.id))!)?.root, cwd);
         assert.deepEqual(restarted.store.rows('SELECT * FROM codex_sources'), reader);
     } finally { restarted.close(); }
 });
@@ -170,7 +173,8 @@ test('receipts survive missing files and restart; auxiliary sources never create
     const data=join(dir,'data'),path=join(sources,'rollout-delayed.jsonl');
     let service=new PluginService(data,{codexRoots:[sources]});
     t.after(async()=>{service.close();await rm(dir,{recursive:true,force:true});});
-    service.store.createProject('Fixture',project);
+    service.store.bindProject('Fixture',project,'space',service.config.value.baseUrl,'codex-cli');
+    service.store.db.exec("UPDATE capture_windows SET startedAt='2025-01-01T00:00:00.000Z'");
     await service.event(await normalizeHook('codex-cli',{session_id:'delayed',turn_id:'t',cwd:project,transcript_path:path,hook_event_name:'UserPromptSubmit',prompt:'task'}));
     assert.equal(service.store.state().sessions.length,0);
     service.close();

@@ -35,6 +35,40 @@ test('Codex metadata discovers dated and archived sessions without interpreting 
   assert.deepEqual(await discoverProjects('codex-cli', { home }), [{ name: 'archive', root: '/work/archive' }, { name: 'codex', root: '/work/codex' }]);
 });
 
+test('Codex discovers desktop projects without sessions and rereads new projects on refresh', async t => {
+  const { home, save } = await fixture(t);
+  const path = '.codex/.codex-global-state.json';
+  assert.deepEqual(await discoverProjects('codex-cli', { home }), []);
+  const state = { padding: 'x'.repeat(70000), 'local-projects': {
+    first: { name: '项目记忆测试场', rootPaths: ['/work/new-project'] },
+    invalid: { name: 'Invalid', rootPaths: [null, 42, 'relative'] },
+    malformed: { rootPaths: '/not-an-array' },
+  } };
+  await save(path, JSON.stringify(state));
+  assert.deepEqual(await discoverProjects('codex-cli', { home }), [{ name: '项目记忆测试场', root: '/work/new-project' }]);
+  await save('.codex/sessions/2026/11/18/rollout-one.jsonl', JSON.stringify({ type: 'session_meta', payload: { cwd: '/work/new-project/' } }) + '\n');
+  await save(path, JSON.stringify({ ...state, 'local-projects': { ...state['local-projects'], second: { rootPaths: ['/work/second'] } } }));
+  assert.deepEqual(await discoverProjects('codex-cli', { home }), [
+    { name: '项目记忆测试场', root: '/work/new-project' }, { name: 'second', root: '/work/second' },
+  ]);
+  await save(path, '{broken');
+  assert.deepEqual(await discoverProjects('codex-cli', { home }), [{ name: 'new-project', root: '/work/new-project' }]);
+});
+
+test('Codex desktop projects honor CODEX_HOME', async t => {
+  const { home, save } = await fixture(t);
+  await save('custom-codex/.codex-global-state.json', JSON.stringify({ 'local-projects': { one: { name: 'Custom', rootPaths: ['/work/custom'] } } }));
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = join(home, 'custom-codex');
+  try {
+    assert.deepEqual(await discoverProjects('codex-cli'), [{ name: 'Custom', root: '/work/custom' }]);
+    assert.deepEqual(await discoverProjects('codex-cli', { home }), []);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
+  }
+});
+
 test('DeepSeek reads session headers in current zstd generations without decoding lossy directory names', async t => {
   const { home, save } = await fixture(t);
   await save('.dsh/sessions/--encoded--/one/session.v3.jsonl.zstd', zstdCompressSync(Buffer.from(JSON.stringify({ type: 'session', id: 'one', cwd: '/work/项目-with-hyphen' }) + '\n')));

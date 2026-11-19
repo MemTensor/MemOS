@@ -11,7 +11,7 @@ import { PluginService } from '../../src/server/service.ts';
 import { createLocalServer } from '../../src/server/http.ts';
 import { createMockServer, getMockState } from '../../dev/memos-mock/server.ts';
 
-test('multiple spaces use one upload and one search request; HTTP unbind removes one ID and preserves an empty list', async t => {
+test('multiple spaces receive independent uploads and use one search request; HTTP unbind removes one ID and preserves an empty list', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'memos-multispace-'));
   const mock = createMockServer(); mock.listen(0, '127.0.0.1'); await once(mock, 'listening');
   const address = mock.address(); assert.ok(address && typeof address !== 'string');
@@ -24,21 +24,21 @@ test('multiple spaces use one upload and one search request; HTTP unbind removes
   const spaces = await Promise.all(['Team A', 'Team B'].map(space_name => service.cloud.call<{ space_id: string }>('create/space', { space_name })));
   const project = await service.bindProject({ name: 'User project', root: '/multi/project', spaceId: spaces[0]!.space_id, agentType: 'test-agent' });
   await service.bindProject({ name: 'User project', root: '/multi/project', spaceId: spaces[1]!.space_id, agentType: 'test-agent' });
-  await service.bind(project.id, spaces[1]!.space_id);
+  await service.bind(project.scopeId, spaces[1]!.space_id);
   const ids = spaces.map(space => space.space_id);
-  assert.deepEqual(service.store.binding(project.id)?.spaceIds, ids);
+  assert.deepEqual(service.store.binding(project.scopeId)?.spaceIds, ids);
   const knownProjects = await (await fetch(url + '/api/projects?agentType=test-agent')).json() as any[];
-  assert.equal(knownProjects[0]?.name, 'User project'); assert.equal(knownProjects[0]?.root, '/multi/project');
-  const details = await (await fetch(`${url}/api/projects/${project.id}/spaces`)).json();
+  assert.deepEqual(knownProjects, [], 'an unconfigured fixture Agent cannot discover projects, even when it has a saved binding');
+  const details = await (await fetch(`${url}/api/projects/${project.scopeId}/spaces`)).json();
   assert.deepEqual(details, [{ spaceId: ids[0], name: 'Team A' }, { spaceId: ids[1], name: 'Team B' }]);
   const input = { agentType: 'test-agent', nativeSessionId: 'session', cwd: '/multi/project' };
-  const identity = await service.event({ ...input, event: 'turn-start', turnKey: 'first', records: [{ sourceId: 'user', raw: { role: 'user', content: 'one task' } }] });
+  const identity = await service.event({ ...input, event: 'turn-start', turnKey: 'first', records: [{ sourceId: 'user', raw: { timestamp: new Date().toISOString(), role: 'user', content: 'one task' } }] });
   assert.ok(identity.overview);
   await service.event({ ...input, event: 'turn-end', turnKey: 'first' });
   await service.sync();
-  assert.equal(getMockState(mock).uploads.length, 1);
-  assert.deepEqual(getMockState(mock).uploads[0]?.space_ids, ids);
-  assert.deepEqual(service.store.batches()[0]?.spaceIds, ids);
+  assert.equal(getMockState(mock).uploads.length, 2);
+  assert.deepEqual(getMockState(mock).uploads.map(upload => upload.space_ids), ids.map(id => [id]));
+  assert.deepEqual(new Set(service.store.batches()[0]?.spaceIds), new Set(ids));
   const result = await service.search({ sessionId: identity.sessionId, conversationId: identity.conversationId!, query: '接口' });
   assert.equal(result.status, 'FOUND'); assert.equal(result.data?.topics.length, 2);
   const searches = getMockState(mock).requests.filter(request => request.path.endsWith('search/memory'));
@@ -49,30 +49,30 @@ test('multiple spaces use one upload and one search request; HTTP unbind removes
   assert.equal(afterCLI.length, searches.length + 1);
   assert.deepEqual(afterCLI.at(-1)?.body.space_ids, ids);
   const acceptedTask = getMockState(mock).tasks.values().next().value;
-  assert.equal(acceptedTask?.memory_views.project.memory_ids.length, 2);
+  assert.equal(acceptedTask?.memory_views.project.memory_ids.length, 1);
   await assert.rejects(service.cloud.call('add/message', { user_id: 'test', space_ids: [ids[0], 'unknown'], messages: [{ role: 'user', content: 'no partial write' }] }), /HTTP 400/);
   await assert.rejects(service.cloud.call('search/memory', { user_id: 'test', query: 'invalid scope', space_ids: [ids[0], 'unknown'] }), /HTTP 404/);
-  assert.equal(getMockState(mock).uploads.length, 1);
-  const unbind = (spaceId: string) => fetch(url + '/api/bind', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ objectId: project.id, spaceId }) });
+  assert.equal(getMockState(mock).uploads.length, 2);
+  const unbind = (spaceId: string) => fetch(url + '/api/bind', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ objectId: project.scopeId, spaceId }) });
   assert.equal((await unbind(ids[0]!)).status, 200);
-  assert.deepEqual(service.store.binding(project.id)?.spaceIds, [ids[1]]);
+  assert.deepEqual(service.store.binding(project.scopeId)?.spaceIds, [ids[1]]);
   assert.equal((await unbind(ids[1]!)).status, 200);
   assert.equal((await unbind(ids[1]!)).status, 200);
-  assert.deepEqual(service.store.binding(project.id)?.spaceIds, []);
+  assert.deepEqual(service.store.binding(project.scopeId)?.spaceIds, []);
   assert.equal(getMockState(mock).spaces.size, 2);
-  await service.event({ ...input, event: 'turn-start', turnKey: 'second', records: [{ sourceId: 'next', raw: { role: 'user', content: 'wait locally' } }] });
+  await service.event({ ...input, event: 'turn-start', turnKey: 'second', records: [{ sourceId: 'next', raw: { timestamp: new Date().toISOString(), role: 'user', content: 'wait locally' } }] });
   await service.event({ ...input, event: 'turn-end', turnKey: 'second' });
   await service.sync();
-  assert.equal(getMockState(mock).spaces.size, 2); assert.equal(getMockState(mock).uploads.length, 1);
+  assert.equal(getMockState(mock).spaces.size, 2); assert.equal(getMockState(mock).uploads.length, 2);
   const second = service.store.session(identity.sessionId)!;
   assert.equal((await service.search({ sessionId: second.id, conversationId: second.currentTurnId!, query: '接口' })).status, 'UNAVAILABLE');
   const state = service.store.state();
   assert.deepEqual(state.projects[0]?.spaceIds, []); assert.deepEqual(state.projects[0]?.agentTypes, ['test-agent']);
   service.close(); service = new PluginService(directory);
-  assert.deepEqual(service.store.binding(project.id)?.spaceIds, []);
-  await service.bind(project.id, ids[0]!);
+  assert.deepEqual(service.store.binding(project.scopeId)?.spaceIds, []);
+  await service.bind(project.scopeId, ids[0]!);
   await service.sync();
-  assert.equal(getMockState(mock).uploads.length, 2); assert.deepEqual(getMockState(mock).uploads[1]?.space_ids, [ids[0]]);
+  assert.equal(getMockState(mock).uploads.length, 2); assert.equal(service.store.rows('SELECT * FROM turns').length, 1);
 });
 
 test('an empty registered project never creates an automatic Space', async t => {
@@ -84,11 +84,11 @@ test('an empty registered project never creates an automatic Space', async t => 
   service.configure({ baseUrl: `http://127.0.0.1:${address.port}/api/openmem/v1`, apiKey: 'mock-key' });
   service.store.createProject('Empty', '/empty/project');
   const input = { agentType: 'test', nativeSessionId: 'empty', cwd: '/empty/project' };
-  await service.event({ ...input, event: 'turn-start', turnKey: 'u1', records: [{ sourceId: 'u1', raw: { role: 'user', content: 'wait' } }] });
+  await service.event({ ...input, event: 'turn-start', turnKey: 'u1', records: [{ sourceId: 'u1', raw: { timestamp: new Date().toISOString(), role: 'user', content: 'wait' } }] });
   await service.event({ ...input, event: 'turn-end', turnKey: 'u1' });
   await service.sync();
   assert.equal(getMockState(mock).requests.length, 0);
-  assert.equal(service.store.batches()[0]?.attempts, 0);
+  assert.equal(service.store.batches().length, 0); assert.equal(service.store.state().sessions.length, 0);
 });
 
 test('unbinding during a failed upload removes that ID from the retry without sending a second batch', async t => {
@@ -96,21 +96,21 @@ test('unbinding during a failed upload removes that ID from the retry without se
   const service = new PluginService(directory);
   t.after(() => { service.close(); rmSync(directory, { recursive: true, force: true }); });
   service.configure({ baseUrl: 'http://cloud.test', apiKey: 'test-key' });
-  const project = service.store.createProject('Retry', '/retry');
-  service.store.bind(project.id, 'space-a', 'http://cloud.test'); service.store.bind(project.id, 'space-b', 'http://cloud.test');
+  const project = service.store.bindProject('Retry', '/retry', 'space-a', 'http://cloud.test', 'test');
+  service.store.bind(project.scopeId, 'space-a', 'http://cloud.test'); service.store.bind(project.scopeId, 'space-b', 'http://cloud.test');
   const input = { agentType: 'test', nativeSessionId: 'retry', cwd: '/retry' };
   service.cloud.call = async <T>(endpoint: string, body: any): Promise<T> => {
     if (endpoint === 'get/memory') return { topic_detail_list: [] } as T;
     if (endpoint === 'get/status') return { status: 'completed' } as T;
     sends.push(body.space_ids);
-    if (sends.length === 1) { service.store.unbind(project.id, 'space-a'); throw new Error('network failed'); }
+    if (sends.length === 1) { service.store.unbind(project.scopeId, 'space-a'); throw new Error('network failed'); }
     return { success: true, task_id: 'task' } as T;
   };
   const sends: string[][] = [];
-  await service.event({ ...input, event: 'turn-start', turnKey: 'u1', records: [{ sourceId: 'u1', raw: { role: 'user', content: 'task' } }] });
+  await service.event({ ...input, event: 'turn-start', turnKey: 'u1', records: [{ sourceId: 'u1', raw: { timestamp: new Date().toISOString(), role: 'user', content: 'task' } }] });
   await service.event({ ...input, event: 'turn-end', turnKey: 'u1' }); await service.sync();
-  assert.deepEqual(sends, [['space-a', 'space-b'], ['space-b']]);
-  assert.equal(service.store.batches().length, 1); assert.equal(service.store.batches()[0]?.attempts, 2);
+  assert.deepEqual(sends, [['space-a'], ['space-b']]);
+  assert.equal(service.store.batches().length, 1); assert.equal(service.store.batches()[0]?.attempts, 1);
 });
 
 test('unbinding while the initial overview is waiting skips removed spaces and does not cache their content', async t => {
@@ -118,8 +118,8 @@ test('unbinding while the initial overview is waiting skips removed spaces and d
   const service = new PluginService(directory);
   t.after(() => { service.close(); rmSync(directory, { recursive: true, force: true }); });
   service.configure({ baseUrl: 'http://cloud.test', apiKey: 'test-key' });
-  const project = service.store.createProject('Overview', '/overview');
-  service.store.bind(project.id, 'space-a', 'http://cloud.test'); service.store.bind(project.id, 'space-b', 'http://cloud.test');
+  const project = service.store.bindProject('Overview', '/overview', 'space-a', 'http://cloud.test', 'test');
+  service.store.bind(project.scopeId, 'space-a', 'http://cloud.test'); service.store.bind(project.scopeId, 'space-b', 'http://cloud.test');
   const reads: string[] = [];
   let release!: () => void, started!: () => void;
   const waiting = new Promise<void>(resolve => { release = resolve; });
@@ -130,8 +130,9 @@ test('unbinding while the initial overview is waiting skips removed spaces and d
   };
   const result = service.event({ agentType: 'test', nativeSessionId: 'overview', cwd: '/overview', event: 'turn-start', turnKey: 'first-input' });
   await startedRead;
-  service.store.unbind(project.id, 'space-a'); service.store.unbind(project.id, 'space-b'); release();
+  service.store.unbind(project.scopeId, 'space-a'); service.store.unbind(project.scopeId, 'space-b'); release();
   const context = await result;
   assert.deepEqual(reads, ['space-a']);
-  assert.equal(context.overview, ''); assert.equal(service.store.session(context.sessionId)?.overview, '');
+  assert.equal(context.overview, ''); assert.equal(context.sessionId, '');
+  assert.equal(service.store.row("SELECT overview FROM sessions WHERE nativeSessionId='overview'")?.overview, null);
 });

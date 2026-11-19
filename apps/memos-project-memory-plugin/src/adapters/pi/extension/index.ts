@@ -7,6 +7,7 @@ export default function extension(pi:API, send?:Send) {
  const get=(ctx:Context)=>{const id=ctx.sessionManager.getSessionId();let b=bridges.get(id);if(!b){b=new Bridge('pi',ctx.cwd,send);bridges.set(id,b);}return b;};
  const replay=async(ctx:Context,key=get(ctx).turns.get(ctx.sessionManager.getSessionId()))=>{
   const b=get(ctx),sid=ctx.sessionManager.getSessionId(),ids=seen.get(sid)??new Set<string>();seen.set(sid,ids);
+  if(!await b.active(sid))return;
   for(const entry of ctx.sessionManager.getEntries())if(entry.id&&!ids.has(entry.id)){
    await b.trace(sid,entry,`entry:${entry.id}`,message(entry.message??{}),key);ids.add(entry.id);
   }
@@ -18,7 +19,7 @@ export default function extension(pi:API, send?:Send) {
   if(!key)return;
   inputs.delete(sid);
   await b.turn(sid,key);
-  const content=b.historyContext(sid);await b.delivered(sid);
+  const content=b.historyContext(sid);if(!content)return;await b.delivered(sid);
   return {message:{customType:'memos-project-memory',content,display:false}};
  });
  // message_end precedes SessionManager persistence. Replay existing durable rows now;

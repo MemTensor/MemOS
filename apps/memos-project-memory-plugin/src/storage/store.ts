@@ -7,6 +7,7 @@ import { normalizeTaskTrace } from '../adapters/_shared/task-trace.ts';
 import { sanitizeStoredContent } from './sanitize-content.ts';
 import { stripImages } from '../adapters/_shared/image-content.ts';
 import { CodexStorage } from './codex-store.ts';
+import { MemoryScopes } from './memory-scopes.ts';
 import type { CodexSnapshot } from '../adapters/codex-cli/types.ts';
 export interface Session {
     id: string;
@@ -50,6 +51,7 @@ const now = () => new Date().toISOString();
 export class Store {
     db: DatabaseSync;
     codex: CodexStorage;
+    memory: MemoryScopes;
     constructor(path: string) {
         this.db = new DatabaseSync(path);
         this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS diagnostics(id INTEGER PRIMARY KEY AUTOINCREMENT,mess
         this.migrateTaskTraces(path);
         this.migrateTurnBatches(path);
         this.migrateSpaceBindings(path);
+        this.memory = new MemoryScopes(this, path);
         this.codex = new CodexStorage(this, path);
     }
     private migrateSpaceBindings(path: string) {
@@ -96,7 +99,7 @@ UPDATE batches SET spaceIds=CASE WHEN spaceIds IS NULL THEN NULL ELSE json_array
             }
             this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS bindings_empty ON bindings(objectId) WHERE spaceId IS NULL;
 CREATE TABLE IF NOT EXISTS project_agents(projectId TEXT NOT NULL REFERENCES projects(id),agentType TEXT NOT NULL,PRIMARY KEY(projectId,agentType));
-INSERT OR IGNORE INTO project_agents SELECT t.projectId,s.agentType FROM sessions s JOIN tasks t ON t.id=s.taskId WHERE t.projectId IS NOT NULL;`);
+INSERT OR IGNORE INTO project_agents(projectId,agentType) SELECT t.projectId,s.agentType FROM sessions s JOIN tasks t ON t.id=s.taskId WHERE t.projectId IS NOT NULL;`);
             if (Number(this.row('PRAGMA user_version')?.user_version) < 3) this.db.exec('PRAGMA user_version=3');
             this.db.exec('COMMIT');
         } catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -175,40 +178,29 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
         const cwd = resolve(root);
         return this.rows('SELECT * FROM projects ORDER BY length(root) DESC,createdAt,rowid').find(project => cwd === project.root || cwd.startsWith(String(project.root).endsWith(sep) ? String(project.root) : String(project.root) + sep)) as unknown as Project | undefined;
     }
-    bindProject(name: string, root: string, spaceId: string, baseUrl: string, agentType?: string, spaceName = ''): Project {
-        if (!name.trim() || !isAbsolute(root) || !spaceId.trim())
-            throw new Error('项目名称、绝对目录与 Space ID不能为空');
+    bindProject(name: string, root: string, spaceId: string, baseUrl: string, agentType?: string, spaceName = ''): Project & { scopeId: string } {
+        if (!name.trim() || !isAbsolute(root) || !spaceId.trim() || !agentType?.trim())
+            throw new Error('请选择 Agent，并提供项目名称、绝对目录与 Space ID');
         root = resolve(root);
         spaceId = spaceId.trim();
         this.db.exec('BEGIN');
         try {
             const project = this.row('SELECT * FROM projects WHERE root=? ORDER BY createdAt,rowid LIMIT 1', root) as unknown as Project | undefined ?? this.createProject(name, root);
-            const sessions = this.rows('SELECT s.* FROM sessions s JOIN tasks t ON t.id=s.taskId WHERE t.projectId IS NULL').filter(session => this.projectForDirectory(String(session.cwd))?.id === project.id);
-            for (const objectId of new Set([project.id, ...sessions.map(session => String(session.objectId))])) {
-                const binding = this.binding(objectId);
-                if (binding?.status === 'creating' || binding?.status === 'uncertain')
-                    throw new Error('空间创建结果尚待确认');
-                if (binding && binding.baseUrl !== baseUrl)
-                    throw new Error('绑定所属云连接不可更改');
-            }
+            const scopeId = this.memory.ensure(project.id, agentType);
+            const sessions = this.rows('SELECT s.* FROM sessions s JOIN tasks t ON t.id=s.taskId WHERE s.agentType=? AND (t.projectId IS NULL OR t.projectId=?)', agentType, project.id).filter(session => this.projectForDirectory(String(session.cwd))?.id === project.id);
+            this.bind(scopeId, spaceId, baseUrl, spaceName);
             for (const session of sessions) {
-                for (const space of this.spaces(String(session.objectId)))
-                    this.bind(project.id, space.spaceId, baseUrl, space.name);
                 // Preserve session/turn identities, raw traces, payloads and retry counters.
-                this.db.prepare('UPDATE tasks SET projectId=?,objectId=? WHERE id=?').run(project.id, project.id, String(session.taskId));
-                this.db.prepare('UPDATE sessions SET objectId=? WHERE id=?').run(project.id, String(session.id));
-                this.db.prepare('UPDATE batches SET objectId=? WHERE sessionId=?').run(project.id, String(session.id));
-                this.db.prepare('DELETE FROM bindings WHERE objectId=?').run(String(session.objectId));
-                this.associateProject(project.id, String(session.agentType));
+                this.db.prepare('UPDATE tasks SET projectId=?,objectId=? WHERE id=?').run(project.id, scopeId, String(session.taskId));
+                this.db.prepare('UPDATE sessions SET objectId=?,overview=NULL,overviewDelivered=0 WHERE id=?').run(scopeId, String(session.id));
+                this.db.prepare('UPDATE batches SET objectId=? WHERE sessionId=?').run(scopeId, String(session.id));
             }
-            this.bind(project.id, spaceId, baseUrl, spaceName);
-            if (agentType) this.associateProject(project.id, agentType);
             this.db.exec('COMMIT');
-            return project;
+            return { ...project, scopeId };
         } catch (error) { this.db.exec('ROLLBACK'); throw error; }
     }
     private associateProject(projectId: string, agentType: string) {
-        this.db.prepare('INSERT OR IGNORE INTO project_agents VALUES(?,?)').run(projectId, agentType);
+        this.memory.ensure(projectId, agentType);
     }
     registerSession(event: Pick<AgentEvent, 'agentType' | 'nativeSessionId' | 'cwd' | 'parentNativeSessionId' | 'title' | 'titleRevision'>): Session {
         if (!event.agentType || !event.nativeSessionId || !event.cwd)
@@ -221,8 +213,10 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
             return this.session(String(known.id))!;
         }
         const cwd = resolve(event.cwd);
-        const project = this.projectForDirectory(cwd);
-        const taskId = randomUUID(), objectId = String(project?.id ?? taskId), id = randomUUID(), createdAt = now();
+        const parent = event.parentNativeSessionId ? this.row('SELECT * FROM sessions WHERE agentType=? AND nativeSessionId=?', event.agentType, event.parentNativeSessionId) as unknown as Session | undefined : undefined;
+        const scope = (parent && this.memory.forSession(parent)) || this.memory.resolve(event.agentType, cwd);
+        const project = scope ? this.row('SELECT * FROM projects WHERE id=?', scope.projectId) as unknown as Project : this.projectForDirectory(cwd);
+        const taskId = randomUUID(), objectId = String(scope?.id ?? project?.id ?? taskId), id = randomUUID(), createdAt = now();
         const ownTransaction = !this.db.isTransaction;
         if (ownTransaction) this.db.exec('BEGIN');
         try {
@@ -268,8 +262,8 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
         const session = this.session(sessionId);
         return !!conversationId && !!session && (session.agentType === 'codex-cli' ? this.codex.validContext(session, conversationId) : session.currentTurnId === conversationId);
     }
-    applyCodexSnapshots(snapshots: CodexSnapshot[], options: { prepareUploads?: boolean } = {}) { return this.codex.apply(snapshots, options); }
-    prepareCodexUploads() { this.codex.prepareUploads(); }
+    applyCodexSnapshots(snapshots: CodexSnapshot[], options: { prepareUploads?: boolean; requireBinding?: boolean } = {}) { return this.codex.apply(snapshots, options); }
+    prepareCodexUploads(requireBinding = false) { this.codex.prepareUploads(requireBinding); }
     reserveCodexContext(nativeSessionId: string, nativeTurnId: string, rootTurnId?: string, source?: CodexSnapshot) { return this.codex.reserveContext(nativeSessionId, nativeTurnId, rootTurnId, source); }
     contextForCodex(nativeSessionId: string, nativeTurnId?: string) { return this.codex.context(nativeSessionId, nativeTurnId); }
     binding(objectId: string): Binding | undefined {
@@ -284,11 +278,11 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
     setSpaceName(objectId: string, spaceId: string, name: string) {
         this.db.prepare('UPDATE bindings SET name=? WHERE objectId=? AND spaceId=?').run(name, objectId, spaceId);
     }
-    objectName(objectId: string) { return String(this.row('SELECT name FROM projects WHERE id=? UNION ALL SELECT name FROM tasks WHERE id=?', objectId, objectId)?.name ?? '项目记忆'); }
+    objectName(objectId: string) { return this.memory.get(objectId)?.name ?? String(this.row('SELECT name FROM projects WHERE id=? UNION ALL SELECT name FROM tasks WHERE id=?', objectId, objectId)?.name ?? '项目记忆'); }
     bind(objectId: string, spaceId: string, baseUrl: string, name = '') {
         if (!spaceId.trim())
             throw new Error('Space ID不能为空');
-        if (!this.row('SELECT id FROM projects WHERE id=? UNION ALL SELECT id FROM tasks WHERE id=?', objectId, objectId))
+        if (!this.memory.get(objectId) && !this.row('SELECT id FROM projects WHERE id=? UNION ALL SELECT id FROM tasks WHERE id=?', objectId, objectId))
             throw new Error('绑定对象不存在');
         spaceId = spaceId.trim();
         const old = this.binding(objectId);
@@ -299,10 +293,17 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
             if (name) this.setSpaceName(objectId, spaceId, name);
             return old;
         }
-        this.db.prepare('DELETE FROM bindings WHERE objectId=? AND spaceId IS NULL').run(objectId);
-        this.db.prepare('INSERT INTO bindings VALUES(?,?,?,?,?)').run(objectId, spaceId, baseUrl, name, 'bound');
-        this.db.prepare('UPDATE sessions SET overview=NULL WHERE objectId=?').run(objectId);
-        return this.binding(objectId)!;
+        const own = !this.db.isTransaction;
+        if (own) this.db.exec('BEGIN');
+        try {
+            const boundAt = now();
+            this.db.prepare('DELETE FROM bindings WHERE objectId=? AND spaceId IS NULL').run(objectId);
+            this.db.prepare('INSERT INTO bindings(objectId,spaceId,baseUrl,name,status,boundAt) VALUES(?,?,?,?,?,?)').run(objectId, spaceId, baseUrl, name, 'bound', boundAt);
+            this.memory.activate(objectId, boundAt);
+            this.db.prepare('UPDATE sessions SET overview=NULL,overviewDelivered=0 WHERE objectId=?').run(objectId);
+            if (own) this.db.exec('COMMIT');
+            return this.binding(objectId)!;
+        } catch (error) { if (own) this.db.exec('ROLLBACK'); throw error; }
     }
     unbind(objectId: string, spaceId: string): Binding {
         const binding = this.binding(objectId);
@@ -311,8 +312,13 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
         this.db.exec('BEGIN');
         try {
             const removed = this.db.prepare('DELETE FROM bindings WHERE objectId=? AND spaceId=?').run(objectId, spaceId.trim());
-            if (!this.binding(objectId))
-                this.db.prepare('INSERT INTO bindings VALUES(?,NULL,?,?,?)').run(objectId, binding.baseUrl, '', 'unbound');
+            if (removed.changes && this.row("SELECT name FROM sqlite_master WHERE type='table' AND name='batch_deliveries'"))
+                this.db.prepare("UPDATE batch_deliveries SET status='cancelled' WHERE spaceId=? AND baseUrl=? AND status IN ('pending','sending') AND batchId IN(SELECT id FROM batches WHERE objectId=?)")
+                    .run(spaceId.trim(), binding.baseUrl, objectId);
+            if (!this.binding(objectId)) {
+                this.db.prepare('INSERT INTO bindings(objectId,spaceId,baseUrl,name,status) VALUES(?,NULL,?,?,?)').run(objectId, binding.baseUrl, '', 'unbound');
+                this.memory.deactivate(objectId, now());
+            }
             if (removed.changes) this.db.prepare('UPDATE sessions SET overview=NULL WHERE objectId=?').run(objectId);
             this.db.exec('COMMIT');
             return this.binding(objectId)!;
@@ -323,7 +329,7 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
         if (binding?.spaceIds.length) throw new Error('已有空间关联');
         if (binding && binding.baseUrl !== baseUrl) throw new Error('绑定所属云连接不可更改');
         if (binding) this.db.prepare('UPDATE bindings SET status=? WHERE objectId=? AND spaceId IS NULL').run(status, objectId);
-        else this.db.prepare('INSERT INTO bindings VALUES(?,NULL,?,?,?)').run(objectId, baseUrl, '', status);
+        else this.db.prepare('INSERT INTO bindings(objectId,spaceId,baseUrl,name,status) VALUES(?,NULL,?,?,?)').run(objectId, baseUrl, '', status);
     }
     setOverview(sessionId: string, overview: string) { this.db.prepare('UPDATE sessions SET overview=? WHERE id=?').run(overview, sessionId); }
     markContextDelivered(sessionId: string) {
@@ -336,10 +342,16 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
         const session = this.session(sessionId);
         if (!session)
             throw new Error('会话不存在');
+        const scope = this.memory.get(session.objectId);
+        if (scope && !scope.spaceIds.length) return 0;
         let added = 0;
         this.db.exec('BEGIN');
         try {
             for (const input of records) {
+                if (scope) {
+                    // A replay-created turn is not evidence that its source records are new.
+                    if (!this.memory.allows(scope.id, this.memory.recordTime(input.raw))) continue;
+                }
                 const record = stripImages(normalizeTaskTrace(session.agentType, input));
                 if (!record?.message) continue;
                 if (!record.sourceId)
@@ -419,7 +431,7 @@ JOIN batches previous ON previous.id=sibling.batchId WHERE t.batchId=b.id AND (p
             return { ...project, ...scope(String(project.id)), agentTypes: this.rows('SELECT agentType FROM project_agents WHERE projectId=? ORDER BY agentType', String(project.id)).map(row => String(row.agentType)), sessionCount: members.length, turnCount: members.reduce((total, session) => total + Number(session.turnCount ?? this.row('SELECT count(*) AS n FROM turns WHERE sessionId=?', String(session.id))?.n ?? 0), 0), earliestOccurredAt: times[0] ?? null, lastOccurredAt: recent.at(-1) ?? null };
         });
         const quarantinedSessions = this.rows("SELECT s.id,s.nativeSessionId,s.createdAt FROM sessions s WHERE s.agentType='codex-cli' AND NOT EXISTS(SELECT 1 FROM codex_source_meta m WHERE m.nativeSessionId=s.nativeSessionId AND m.sourceKind IN ('user','subagent'))");
-        return { projects, quarantinedSessions, tasks: this.rows('SELECT * FROM tasks').map((task): Row => ({ ...task, ...scope(String(task.objectId)) })), sessions, batches: this.batches(), recalls: this.rows('SELECT * FROM recalls ORDER BY createdAt DESC').map((r): Row => ({ ...r, data: JSON.parse(String(r.data)) })), diagnostics: this.rows('SELECT * FROM diagnostics ORDER BY id DESC LIMIT 100') };
+        return { projects, bindings: this.memory.all(), quarantinedSessions, tasks: this.rows('SELECT * FROM tasks').map((task): Row => ({ ...task, ...scope(String(task.objectId)) })), sessions, batches: this.batches(), recalls: this.rows('SELECT * FROM recalls ORDER BY createdAt DESC').map((r): Row => ({ ...r, data: JSON.parse(String(r.data)) })), diagnostics: this.rows('SELECT * FROM diagnostics ORDER BY id DESC LIMIT 100') };
     }
     sessionDetail(id: string, page = 1, size = 50, unit: 'trace' | 'turn' = 'trace') {
         if (this.codex.hasSession(id)) return this.codex.detail(id, page, size, unit);

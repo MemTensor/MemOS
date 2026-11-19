@@ -14,7 +14,10 @@ async function fixture(t:any) {
  const dir=await mkdtemp(join(tmpdir(),'pm-codex-upload-')),sources=join(dir,'sources'),project=join(dir,'project');await mkdir(sources);await mkdir(project);
  const path=join(sources,'rollout.jsonl'),data=join(dir,'data');let service=new PluginService(data,{codexRoots:[sources]});
  t.after(async()=>{service.close();await rm(dir,{recursive:true,force:true});});
- const p=service.store.createProject('Fixture',project);service.configure({baseUrl:'https://fixture.invalid',apiKey:'fixture'});service.store.bind(p.id,'space','https://fixture.invalid');
+ service.configure({baseUrl:'https://fixture.invalid',apiKey:'fixture'});
+ const p=service.store.bindProject('Fixture',project,'space','https://fixture.invalid','codex-cli');
+ service.store.db.prepare('UPDATE capture_windows SET startedAt=? WHERE scopeId=?').run('2025-01-01T00:00:00.000Z',p.scopeId);
+ service.store.db.prepare('UPDATE bindings SET boundAt=? WHERE objectId=?').run('2025-01-01T00:00:00.000Z',p.scopeId);
  await writeFile(path,line('session_meta',{id:'main',cwd:project,source:'cli'},0)+start('one',1)+msg('u1','user','first task',2)+msg('a1','assistant','first answer',3)+end('one',4)+start('two',5)+msg('u2','user','second task',6)+msg('a2','assistant','second answer',7)+end('two',8));
  return {service,path,project,data,sources,replace:(value:PluginService)=>{service=value;}};
 }

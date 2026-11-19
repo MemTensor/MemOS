@@ -8,6 +8,8 @@ const rows=(items:object[])=>items.map((row,i)=>JSON.stringify({timestamp:`2026-
 async function fixture(t:any){
  const dir=await mkdtemp(join(tmpdir(),'pm-empty-codex-')),sources=join(dir,'sessions'),cwd=join(dir,'project');await mkdir(sources);await mkdir(cwd);
  const service=new PluginService(join(dir,'data'),{codexRoots:[sources]});t.after(async()=>{service.close();await rm(dir,{recursive:true,force:true});});
+ service.store.bindProject('project',cwd,'space',service.config.value.baseUrl,'codex-cli');
+ service.store.db.exec("UPDATE capture_windows SET startedAt='2025-01-01T00:00:00.000Z'");
  const path=join(sources,'rollout.jsonl');await writeFile(path,rows([{type:'session_meta',payload:{id:'empty',cwd,source:'vscode'}}]));
  return {service,path,cwd};
 }
@@ -26,7 +28,7 @@ test('metadata-only session leaves no SQLite rows and later activity is captured
 
 test('empty source discovered within a registered project is not persisted',async t=>{
  const {service,cwd}=await fixture(t);
- const project=service.store.createProject('project',cwd);service.store.db.prepare('INSERT INTO project_agents VALUES(?,?)').run(project.id,'codex-cli');
+
  await service.captureCodex(true);await service.captureCodex(true);
  for(const table of ['sessions','tasks','codex_source_meta','codex_sources'])assert.equal(service.store.rows(`SELECT * FROM ${table}`).length,0,table);
  assert.equal(service.store.state().projects[0]!.sessionCount,0);

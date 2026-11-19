@@ -89,22 +89,41 @@ export function sessionTraceCard(session, selected, time, onOpen) {
   return card;
 }
 
-export function projectBindingTable(projects, agents, openSpaces) {
+export function projectBindingTable(projects, agents, openSpaces, uploadHistory, scanHistory) {
   const table = el('table', '', 'binding-table'), head = el('thead'), heading = el('tr'), body = el('tbody');
-  for (const title of ['Agent', '项目名称', '已绑定 Space']) { const cell = el('th', title); cell.setAttribute('scope', 'col'); heading.append(cell); }
+  for (const title of ['Agent', '项目名称', '已绑定 Space', '历史会话上传']) { const cell = el('th', title); cell.setAttribute('scope', 'col'); heading.append(cell); }
   head.append(heading);
   const names = new Map(agents.map(agent => [agent.agentId, agent.name]));
   for (const project of projects) {
     const row = el('tr'), agent = el('td'), name = el('td', project.name, 'binding-project-name'), spaces = el('td');
+    if (project.root) name.append(el('small', project.root, 'mono binding-project-directory'));
     agent.setAttribute('data-label', 'Agent'); name.setAttribute('data-label', '项目名称'); spaces.setAttribute('data-label', '已绑定 Space');
-    const agentTypes = [...new Set(project.agentTypes ?? [])];
-    for (const type of agentTypes) agent.append(el('span', names.get(type) ?? type, 'binding-agent'));
-    if (!agentTypes.length) agent.append(el('span', '待识别', 'hint'));
+    agent.append(el('span', names.get(project.agentType) ?? project.agentType ?? '待识别', 'binding-agent'));
     const count = project.spaceIds?.length ?? 0;
     const open = el('button', count ? `${count} 个 Space` : '未绑定 Space', 'text-button space-list-open');
-    open.type = 'button'; open.setAttribute('aria-label', `查看 ${project.name} 的 Space 列表`);
+    open.type = 'button'; open.setAttribute('data-scope-id', project.id); open.setAttribute('aria-label', `查看 ${project.name} 的 Space 列表`);
     open.addEventListener('click', () => openSpaces(project, open)); spaces.append(open);
-    row.append(agent, name, spaces); body.append(row);
+    const history = el('td'), progress = project.history;
+    history.setAttribute('data-label', '历史会话上传');
+    if (!progress || (!progress.uploadError && ['pending', 'scanning'].includes(progress.status))) history.append(el('span', '--', 'hint'));
+    else {
+      const scanFailed = progress.status === 'failed', uploadError = !scanFailed && progress.uploadError;
+      const complete = progress.status === 'ready' && progress.pending === 0 && progress.recordCount !== 0;
+      const label = scanFailed ? '重试扫描' : uploadError ? '上传历史失败' : progress.uploading ? '上传中…' : complete ? '已上传历史' : '上传历史';
+      const upload = el('button', label, `secondary history-upload${uploadError ? ' history-upload-failed' : ''}`);
+      upload.type = 'button';
+      upload.disabled = !scanFailed && (!!uploadError || progress.uploading || !progress.pending || !count);
+      if (scanFailed && progress.error) upload.title = progress.error;
+      if (!upload.disabled) upload.addEventListener('click', () => (scanFailed ? scanHistory : uploadHistory)?.(project, upload));
+      history.append(upload);
+      if (uploadError) history.append(el('p', uploadError, 'history-upload-error'));
+    }
+    if (progress?.warning) history.append(el('p', progress.warning, 'hint'));
+    if (scanHistory && progress?.status === 'ready' && count && !progress.uploading) {
+      const scan = el('button', '扫描历史', 'text-button'); scan.type = 'button';
+      scan.addEventListener('click', () => scanHistory(project, scan)); history.append(scan);
+    }
+    row.append(agent, name, spaces, history); body.append(row);
   }
   table.append(head, body);
   return table;

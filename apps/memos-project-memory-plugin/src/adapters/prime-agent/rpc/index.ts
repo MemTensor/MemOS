@@ -1,3 +1,4 @@
+import { observed } from '../../_shared/transcript.ts';
 import { readFile } from 'node:fs/promises';
 import { executionMessage } from '../../_shared/task-trace.ts';
 import { randomUUID } from 'node:crypto';
@@ -15,15 +16,15 @@ export class PrimeController {
   if(this.busy)throw new Error('Prime is processing an input; wait for agent_end before submitting another');
   if(!this.sessionId)await this.initialize();this.busy=true;
   try {
-   await this.bridge.turn(this.sessionId,inputId,this.sessionFile?[]:[{sourceId:`input:${inputId}`,raw:{text,images},message:{role:'user',content:text}}]);
+   await this.bridge.turn(this.sessionId,inputId,this.sessionFile?[]:[{sourceId:`input:${inputId}`,raw:observed({text,images}),message:{role:'user',content:text}}]);
    const context=this.bridge.historyContext(this.sessionId);
-   const submitted=`${text}\n\n<memos-project-memory-context>\n${context}\n</memos-project-memory-context>`;
+   const submitted=context?`${text}\n\n<memos-project-memory-context>\n${context}\n</memos-project-memory-context>`:text;
    await this.bridge.trace(this.sessionId,{original:text,injected:context,submitted},`submission:${inputId}`);
    const accepted=await this.rpc.request('prompt',{message:submitted,...(images?{images}:{})});await this.bridge.delivered(this.sessionId);return accepted;
   }catch(error){this.busy=false;throw error;}
  }
  async replay(key=this.bridge.turns.get(this.sessionId)){
-  if(!this.sessionFile)return;
+  if(!this.sessionFile||!await this.bridge.active(this.sessionId))return;
   let content:string;try{content=await readFile(this.sessionFile,'utf8');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
   for(const line of content.split('\n')){if(!line.trim())continue;let record:Data;try{record=JSON.parse(line);}catch{continue;}
    if(typeof record.id==='string'&&!this.seenEntries.has(record.id)){await this.bridge.trace(this.sessionId,record,`entry:${record.id}`,message(record.message??{}),key);this.seenEntries.add(record.id);}
@@ -34,12 +35,12 @@ export class PrimeController {
   const key=this.bridge.turns.get(this.sessionId);
   if(['message_end','tool_execution_start','tool_execution_end'].includes(event.type)){
    if(this.sessionFile)await this.replay(key);
-   else if(event.type==='message_end'&&typeof event.message?.id==='string')await this.bridge.trace(this.sessionId,event,`message:${event.message.id}`,message(event.message),key);
-   else if(event.type!=='message_end'&&typeof event.toolCallId==='string')await this.bridge.trace(this.sessionId,event,`tool:${event.toolCallId}:${event.type}`,executionMessage(event),key);
+   else if(event.type==='message_end'&&typeof event.message?.id==='string')await this.bridge.trace(this.sessionId,observed(event),`message:${event.message.id}`,message(event.message),key);
+   else if(event.type!=='message_end'&&typeof event.toolCallId==='string')await this.bridge.trace(this.sessionId,observed(event),`tool:${event.toolCallId}:${event.type}`,executionMessage(event),key);
    return;
   }
   if(event.type==='agent_end'){await this.replay(key);await this.bridge.dispatch(this.sessionId,'turn-end',undefined,key);this.busy=false;}
-  else await this.bridge.trace(this.sessionId,event,undefined,undefined,key);
+  else await this.bridge.trace(this.sessionId,observed(event),undefined,undefined,key);
  }
 
 }

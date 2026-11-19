@@ -12,10 +12,13 @@ test('session listing requires a project scope and never mixes same-name project
     server.listen(0,'127.0.0.1');await once(server,'listening');
     t.after(async()=>{await new Promise<void>(r=>server.close(()=>r()));service.close();rmSync(dir,{recursive:true,force:true});});
     const address=server.address();assert.ok(address&&typeof address!=='string');const base=`http://127.0.0.1:${address.port}`;
-    const a=service.store.createProject('same','/one'),b=service.store.createProject('same','/two');
+    const a=service.store.bindProject('same','/one','space',service.config.value.baseUrl,'test'),b=service.store.bindProject('same','/two','space',service.config.value.baseUrl,'test');
     service.store.registerSession({agentType:'test',nativeSessionId:'a',cwd:'/one'});
     service.store.registerSession({agentType:'test',nativeSessionId:'b',cwd:'/two'});
-    service.store.registerSession({agentType:'test',nativeSessionId:'standalone',cwd:'/other'});
+    const retained=service.store.registerSession({agentType:'test',nativeSessionId:'standalone',cwd:'/other'});
+    service.store.bind(retained.objectId,'legacy-space',service.config.value.baseUrl);
+    service.store.unbind(retained.objectId,'legacy-space');
+    service.store.registerSession({agentType:'test',nativeSessionId:'never-bound',cwd:'/never-bound'});
     const read=async(path:string)=>await(await fetch(base+path)).json() as any;
     assert.equal((await fetch(base+'/api/sessions')).status,400);
     assert.equal((await fetch(base+'/api/sessions?projectId=missing')).status,404);
@@ -23,4 +26,5 @@ test('session listing requires a project scope and never mixes same-name project
     assert.deepEqual(first.sessions.map((s:any)=>s.nativeSessionId),['a']);
     assert.deepEqual(second.sessions.map((s:any)=>s.nativeSessionId),['b']);
     assert.deepEqual((await read('/api/sessions?scope=unassigned')).sessions.map((s:any)=>s.nativeSessionId),['standalone']);
+    assert.equal((await read('/api/state')).sessions.length,3);
 });

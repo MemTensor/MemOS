@@ -108,3 +108,58 @@ Mock 使用真正 HTTP，与插件业务服务分进程/实例；不做模型记
 - 97项测试通过，4项需DSH环境的集成测试跳过；类型检查、lint、构建通过。新回归模拟Homebrew版本切换、不同Node目标与无稳定链接。
 - 本机Codex9项MemOS hook已更新为 `/opt/homebrew/opt/node/bin/node`，原脚本路径保留；其他hook保持一致，无重复项。Stop命令已通过隔离本地HTTP端点执行验证。
 - 修改前配置备份：`~/.memos-project-memory/backups/codex-node-path-1794989897372/`。本地服务已重启，Codex需重新加载配置并按其提示复核变更的hook。
+
+
+## 2026-11-18：Agent＋项目绑定准入与历史补传
+
+- 完整回归：307 项，303 通过、4 项既有宿主环境测试跳过、0 失败。`typecheck`、`lint`、`build`、`git diff --check` 通过。
+- 隔离 HTTP＋Mock：未绑定不入库；绑定后扫描不导入正文；点击历史上传才入库并发送；重复点击幂等；新增 Space 仅补缺失目标；暂停排队与恢复发送；最后解绑拒绝新工作且旧详情保留。
+- 绑定边界：进行中轮次只采新增内容；重绑不补采停用间隙；读云或上传等待中解绑不会复活旧工作；不同 Agent 与跨目录子会话路由隔离。
+- 实际数据库迁移及修复前均备份。构建触发宿主自动更新时，发现旧 Codex reader 过滤会使旧轨迹丢失来源关联；已停服，从自动迁移前快照恢复来源关联，保留更新后的新增正文，并修复重绑后的冻结逻辑。恢复演练及上线后复核：旧轨迹 session/conversation 关联变化为 0，已确认上传快照变化为 0，既有 272 条孤立来源没有新增。未删除历史记录。
+- 备份：`~/.memos-project-memory/backups/before-binding-activation-1795007581803.sqlite`；最近迁移前快照：`~/.memos-project-memory/memory.sqlite.before-agent-bindings-1795007838149.sqlite`；恢复前含新增内容快照：`~/.memos-project-memory/backups/before-source-association-recovery-1795008017094.sqlite`。
+- 本地 API v4 已在原端口 60500 运行；Viewer 实际核验“历史会话上传”列、Agent＋项目行、已完成扫描后的可用按钮。当前 Codex 与 DSH 两个 scope 扫描均 ready。原暂停上传设置保留，没有点击实际历史上传。
+- 已更新现有 Codex 和 DSH 接入及 Skill。已运行的 DSH 进程需重启以重新加载原生扩展。
+- 边界：真实云端未做新增上传验收；无可验证原生历史读取器的宿主只支持补传插件已采集完整轮次，界面明确提示范围；整轮超出既有上传容量仍保留 blocked，不截断内容。
+
+
+## 2026-11-19：历史上传完成与失败状态
+
+- 完成显示灰色禁用“已上传历史”；暂停、配置缺失、连接不一致、发送失败、超限或云端处理失败显示红色禁用“上传历史失败”，同时显示原因。扫描失败仍单独提供重试扫描。
+- 使用现有配置与逐Space回执推导状态，仅补充history.uploadError；无新配置、数据库表或依赖。已成功历史不会因后来暂停而被误标失败；被成功补传覆盖的旧失败回执不再阻塞展示。
+- Viewer保留POST/网络错误，不被后续状态刷新或成功提示覆盖。实际localhost页面已核验红色禁用按钮及暂停说明。
+- 完整回归最终316项：312通过、4项既有跳过、0失败；typecheck、lint、build、diff检查通过。首次全量运行有一项既有并发启动端口用例波动，单独10项runtime测试及最终全量重跑均通过。
+- 当前本地paused=true保持不变，2项历史投递仍pending、attempts=0、无接收确认。本次没有解除暂停或发送用户历史。配置默认paused=false，上传错误不自动修改该开关；现有配置没有变更审计，无法追溯最早开启暂停的操作者及时间。
+
+## 2026-11-19：Agent 项目缓存与轻量刷新
+
+- 仅已完成接入的 Agent 可以发现项目；当前 Agent 的请求只检查其自身接入状态。首次无缓存时发现，之后复用后台服务缓存；显式刷新合并新增目录。Claude、Pi、DSH 的项目目录取得有效头部身份后不再逐会话读取。未绑定项目不读取历史正文。
+- Viewer 为各 Agent 保留项目列表及选择；刷新期间保留可用选项，绑定/解绑只合并绑定状态。项目页使用 GET /api/bind，不再等待会话、标题、完整批次与检索数据；版本探测只在 Agent 接入页执行。GET /api/adapters/installed 只读取接入元数据。
+- 新项目首次绑定后台扫描历史；已知项目只从 SQLite 更新已完成轮次索引。新增 Space、状态轮询及普通刷新不重扫宿主历史；提供显式“扫描历史”操作。服务重启后项目缓存重新建立，已有 scope 先使用 SQLite 索引，未导入历史可手动扫描。无新增数据库表、依赖或定时任务。
+- 修改范围：src/adapters/{projects,installer}.ts、src/server/{service,http,history}.ts、viewer/{app,view}.js；新增 tests/core/project-cache.test.ts、tests/viewer-project-cache.test.ts，并更新 bound-codex-history、multispace、viewer-history 与 viewer 回归；同步 README、contracts 与 local-api 文档。
+- 新增回归先在旧实现失败；最终全量 327 项，323 通过、4 项既有 DSH 环境测试跳过、0 失败。typecheck、lint（语法检查）、build、git diff --check 通过。测试使用临时宿主目录、临时数据库与隔离 HTTP 服务。
+- 浏览器工具不可用（没有可用 browser/native surface），未完成真实浏览器交互验收；项目选择、缓存、刷新期间可用性、切换恢复、过期响应与绑定状态通过 DOM/VM 交互回归和实际 HTTP 测试验证。未重启现有服务、未修改宿主接入配置、未发送真实云端请求。源码构建已更新，重新通过 Viewer 入口打开后受管服务会检查构建版本。
+
+
+## 显式新建 Space 与项目绑定（2026-11-19）
+
+- 沿用已采纳的 Viewer 草稿：Agent／项目选择在上方，下方切换新建与已有 Space；新建必须输入名称并确认，请求期间锁定目标与重复提交。成功后更新绑定关系；名称、完整 ID、复制与解绑复用原 Space 列表。已检查桌面与 390px 手机断点，并修正窄屏目录和历史提示的列对齐。
+- 扩展已有 `POST /api/projects` 与 `bindProject`，只增加必要的 `spaceName`，与 `spaceId` 互斥。创建请求只有 `space_name`；直接用创建响应的 ID、名称调用既有 Store 事务，不再查询一次 `get/space`。无新增依赖、数据库表、字段或迁移，无任意名称长度常量、创建重试队列或补偿删除。
+- 创建成功但绑定失败时 HTTP 保留已知 ID，Viewer 转到已有 Space 绑定并保留该 ID；创建失败保留输入，结果未确认不自动重试。成功提交后即清空输入，后续刷新失败会明确提示已保存，避免误操作再次创建。
+- 本地 API 由 v4 升到 v5，继续使用现有版本与构建标记升级机制。原因是旧进程可能读取新 Viewer 静态文件，却将 `spaceName` 当作纯项目注册并返回假成功。回归先证明旧实现接受 v4，再证明新版拒绝 v4、接受 v5；真实浏览器也观察到旧实例的更新提示。
+
+### 本轮修改文件
+
+- 产品：`src/server/service.ts`、`src/server/http.ts`、`src/runtime/revision.ts`、`viewer/index.html`、`viewer/app.js`、`viewer/style.css`、`viewer/view.js`。
+- 新增测试：`tests/core/create-space.test.ts`、`tests/viewer-space-create.test.ts`。
+- 适配既有测试：`tests/core/http.test.ts`、`tests/core/runtime.test.ts`、`tests/viewer-history.test.ts`、`tests/viewer-project-cache.test.ts`、`tests/viewer.test.ts`。旧布局哈希改成新布局结构与行为要求。
+- 文档：`README.md`、`docs/local-api.md`、`docs/contracts.md`、本文件。
+
+### 实际验证
+
+- 后端新增6项测试先全部失败，再实现后通过。Viewer新增模式、确认、取消、防重、恢复及刷新失败测试也先验证缺失行为；没有将 Mock 创建接入到真实个人数据目录。
+- 最终 `npm test`：340 项，336 通过、0 失败、4 跳过。4项跳过仍是缺少 `MEMOS_PM_DSH_ROOT` 的既有真实组件组合测试，不作为本功能的验收证据。
+- `npm run typecheck`、`npm run lint`、`npm run build`、限定插件目录的 `git diff --check` 均通过。lint 仍仅代表语法检查。
+- 真实 Viewer＋独立本地 Mock HTTP 联调：取消确认后创建请求为0；确认一次后创建请求为1，body仅 `space_name`；列表中出现绑定，Space详情显示完整名称和返回的ID。
+- 在同一独立测试 SQLite 上重启服务、刷新页面，原名称与ID完整保留。随后用编译后的 API v5 在新进程打开该数据库，再通过 Viewer 新建第二个 Space，关系从1个变为2个，不覆盖原空间；重启编译后服务并重新读取，两个名称及ID仍一致。Mock重建时显式预置前一阶段fixture空间，以保留对外服务端fixture状态；持久化证据来自原SQLite重新打开，不是重新提交绑定。
+- 任务工作区 `drafts/space-create-mock-evidence.json` 保存实际创建请求和重启后的绑定；`space-create-viewer-implemented.jpg` 为最终绑定页，`space-persisted-mock.jpg` 为首次重启后的名称／ID详情，`space-mobile-mock.jpg` 为窄屏检查截图。
+- 验证仅覆盖 Mock，不代表真实 MemOS 联调或22宿主完整实机验收。创建请求超时的远端结果仍可能未知；不声称云端创建与本地事务具备原子性或严格幂等。没有打包、发布或修改用户现有记忆库。

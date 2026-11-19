@@ -1,5 +1,5 @@
 import { createReadStream, type Dirent } from 'node:fs';
-import { readdir } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createZstdDecompress } from 'node:zlib';
 import { object } from './_shared/transcript.ts';
 
-type Project = { name: string; root: string };
+export type Project = { name: string; root: string };
 
 async function entries(path: string): Promise<Dirent[]> {
   try { return await readdir(path, { withFileTypes: true }); }
@@ -54,26 +54,48 @@ export async function discoverProjects(agentType: string, options: { home?: stri
   const home = options.home ?? homedir();
   const base = (variable: string, fallback: string) => options.home ? join(home, fallback) : process.env[variable] || join(home, fallback);
   const projects = new Map<string, Project>();
-  const add = (value: unknown) => {
+  const add = (value: unknown, name?: unknown) => {
     if (typeof value !== 'string' || !isAbsolute(value)) return;
     const root = resolve(value);
-    projects.set(root, { name: basename(root) || root, root });
+    projects.set(root, { name: typeof name === 'string' && name.trim() ? name.trim() : basename(root) || root, root });
+  };
+  const fromHeader = async (path: string, select: (row: Record<string, unknown>) => unknown) => {
+    for (const line of (await header(path)).split('\n')) {
+      const cwd = select(parse(line));
+      if (typeof cwd === 'string' && isAbsolute(cwd)) { add(cwd); return true; }
+    }
+    return false;
   };
   const fromHeaders = async (paths: string[], select: (row: Record<string, unknown>) => unknown) => {
-    for (const path of paths) {
-      for (const line of (await header(path)).split('\n')) {
-        const cwd = select(parse(line));
-        if (typeof cwd === 'string' && isAbsolute(cwd)) { add(cwd); break; }
+    for (const path of paths) await fromHeader(path, select);
+  };
+  // Claude and Pi group sessions by project directory. One valid header is
+  // enough to identify a directory; session enumeration belongs to history.
+  const fromDirectories = async (root: string, select: (row: Record<string, unknown>) => unknown) => {
+    for (const entry of await entries(root)) {
+      const path = join(root, entry.name);
+      if (entry.isFile() && entry.name.endsWith('.jsonl')) await fromHeader(path, select);
+      else if (entry.isDirectory()) for (const file of await files(path, 0, name => name.endsWith('.jsonl'))) {
+        if (await fromHeader(file, select)) break;
       }
     }
   };
   if (agentType === 'claude-code') {
-    await fromHeaders(await files(join(base('CLAUDE_CONFIG_DIR', '.claude'), 'projects'), 1, name => name.endsWith('.jsonl')),
-      row => row.cwd);
+    await fromDirectories(join(base('CLAUDE_CONFIG_DIR', '.claude'), 'projects'), row => row.cwd);
   } else if (agentType === 'codex-cli') {
+    const codexHome = base('CODEX_HOME', '.codex');
     for (const directory of ['sessions', 'archived_sessions']) {
-      await fromHeaders(await files(join(base('CODEX_HOME', '.codex'), directory), 3, name => /^rollout-.*\.jsonl$/.test(name)),
+      await fromHeaders(await files(join(codexHome, directory), 3, name => /^rollout-.*\.jsonl$/.test(name)),
         row => row.type === 'session_meta' ? object(row.payload).cwd : undefined);
+    }
+    // Desktop projects exist before their first session. Read the full state:
+    // local-projects may occur beyond the bounded transcript header window.
+    const state = parse(await readFile(join(codexHome, '.codex-global-state.json'), 'utf8').catch(() => '{}'));
+    for (const value of Object.values(object(state['local-projects']))) {
+      const project = object(value);
+      if (Array.isArray(project.rootPaths)) {
+        for (const root of project.rootPaths) add(root, project.name);
+      }
     }
   } else if (agentType === 'deepseek-harness') {
     const root = join(base('DSH_HOME', '.dsh'), 'sessions');
@@ -84,7 +106,7 @@ export async function discoverProjects(agentType: string, options: { home?: stri
         const directory = join(root, project.name, session.name);
         const logs = (await entries(directory)).filter(entry => entry.isFile() && /^session(?:\.v\d+)?\.jsonl(?:\.zstd)?$/.test(entry.name));
         logs.sort((a, b) => Number(/\.v(\d+)/.exec(b.name)?.[1] ?? 0) - Number(/\.v(\d+)/.exec(a.name)?.[1] ?? 0) || Number(b.name.endsWith('.zstd')) - Number(a.name.endsWith('.zstd')));
-        if (logs[0]) await fromHeaders([join(directory, logs[0].name)], row => row.type === 'session' ? row.cwd : undefined);
+        if (logs[0] && await fromHeader(join(directory, logs[0].name), row => row.type === 'session' ? row.cwd : undefined)) break;
       }
     }
   } else if (agentType === 'kimi-code') {
@@ -100,7 +122,7 @@ export async function discoverProjects(agentType: string, options: { home?: stri
       add(parse(await header(path)).cwd);
     }
   } else if (agentType === 'pi') {
-    await fromHeaders(await files(join(base('PI_CODING_AGENT_DIR', '.pi/agent'), 'sessions'), 1, name => name.endsWith('.jsonl')),
+    await fromDirectories(join(base('PI_CODING_AGENT_DIR', '.pi/agent'), 'sessions'),
       row => row.type === 'session' ? row.cwd : undefined);
   } else if (agentType === 'opencode-v1' || agentType === 'opencode-v2') {
     const data = options.home ? join(home, '.local/share') : process.env.XDG_DATA_HOME || join(home, '.local/share');

@@ -1,3 +1,5 @@
+import { observed } from '../../_shared/transcript.ts';
+import type { AgentEvent } from '../../types.ts';
 import { randomUUID } from 'node:crypto';
 import { normalizeTaskTrace } from '../../_shared/task-trace.ts';
 import { Bridge, message, sendEvent, type Data, type Send } from '../../opencode-v1/extension/bridge.ts';
@@ -50,7 +52,7 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
   };
   const bridgeFor = (state: SessionState) => {
     if (!state.bridge) {
-      state.bridge = new Bridge('deepseek-harness', state.session.header.cwd, event => {
+      state.bridge = new Bridge('deepseek-harness', state.session.header.cwd, Object.assign((event:AgentEvent) => {
         // DSH owns naming and renames. Read its latest logged title, including
         // sessions that were already loaded when this extension attached.
         if (event.event !== 'turn-start' && !(event.event === 'trace-available' && !event.records)) return send(event);
@@ -58,7 +60,7 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
         const title = latest?.data?.title;
         if (typeof title !== 'string' || !title.trim()) return send(event);
         return send({ ...event, title, ...(Number.isSafeInteger(latest.seq) && latest.seq >= 0 ? { titleRevision: latest.seq } : {}) });
-      });
+      }, {activation:send.activation,delivered:send.delivered}));
       if (state.turnKey) state.bridge.turns.set(state.session.id, state.turnKey);
     }
     return state.bridge;
@@ -69,13 +71,15 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
     state.text = unavailable;
     warn();
   };
+  const clear = (state: SessionState) => { state.text = ''; state.overview = undefined; state.turnKey = undefined; };
   const queue = (state: SessionState, operation: () => Promise<unknown>) => {
-    state.pending = state.pending.then(operation).then(() => {}, () => { failed(state); });
+    state.pending = state.pending.then(operation).then(result => { if (result && typeof result === 'object' && 'sessionId' in result && !result.sessionId) clear(state); }, () => { failed(state); });
   };
   const acknowledge = async (state: SessionState) => {
     const overview = state.overview;
     if (!overview?.committed || overview.acknowledged) return;
     try {
+      if (!await bridgeFor(state).active(state.session.id)) { clear(state); return; }
       await send.delivered?.(overview.localSessionId);
       overview.acknowledged = true;
     } catch {
@@ -113,7 +117,7 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
       queue(state, () => bridgeFor(state).dispatch(session.id, 'trace-available'));
       return;
     }
-    const record = normalizeTaskTrace('deepseek-harness', { sourceId: `event:${event.seq}`, raw: event });
+    const record = normalizeTaskTrace('deepseek-harness', { sourceId: `event:${event.seq}`, raw: observed(event) });
     if (!record && event.type !== 'turn/end') return;
     const state = known ?? get(session);
     queue(state, () => record
@@ -127,6 +131,8 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
     agents.set(payload.agent, state);
     await state.pending;
     if (!isCurrent()) return next();
+    try { if (!await bridgeFor(state).active(session.id)) { clear(state); return next(); } }
+    catch { failed(state); return next(); }
     await acknowledge(state);
     if (!isCurrent()) return next();
     const input = payload.messages.find((item: Data) => item.source?.kind === 'user');
@@ -136,8 +142,9 @@ export function apply(ctx: Context, _config: unknown = {}, send: Send = sendEven
       try {
         if (!input.id) throw new Error('DeepSeek user message identity missing');
         state.turnKey = input.id;
-        const result = await bridgeFor(state).turn(session.id, input.id, [{ sourceId: `message:${input.id}`, raw: input, message: message(input) }]);
+        const result = await bridgeFor(state).turn(session.id, input.id, [{ sourceId: `message:${input.id}`, raw: observed(input), message: message(input) }]);
         if (!isCurrent()) return next();
+        if (!result.sessionId && !result.conversationId && !result.context && !result.identifiers) { clear(state); return next(); }
         if (typeof result.sessionId !== 'string' || !result.sessionId.trim()
           || typeof result.conversationId !== 'string' || !result.conversationId.trim()) {
           throw new Error('MemOS local session or user turn identity missing');

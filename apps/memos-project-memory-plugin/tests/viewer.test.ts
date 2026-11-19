@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 
 // Minimal DOM checks text-only rendering without adding a browser runtime dependency.
 class Node {
@@ -18,20 +17,20 @@ class Node {
 // @ts-expect-error viewer is deliberately plain browser JavaScript
 const { details, filterSessions, statusLabel, taskTraceEntries, taskTurnCard, projectBindingTable, spaceBindingItem, projectSessionGroups, sessionStartedAt, traceOccurredAt, projectTraceCard, sessionTraceCard } = await import('../viewer/view.js');
 
-test('project bindings use agent and user project names, keep paths out, and support zero, one or many spaces', async () => {
+test('project bindings show Agent, project name and directory with zero, one or many spaces', async () => {
   const opened: string[] = [];
   const table = projectBindingTable([
-    { id: 'empty', name: '用户定义项目甲', root: '/secret/project/path', agentTypes: ['codex-cli'], spaceIds: [] },
-    { id: 'one', name: '用户定义项目乙', root: '/secret/other/path', agentTypes: ['claude-code'], spaceIds: ['space-1'] },
-    { id: 'many', name: '跨 Agent 项目', root: '/secret/shared/path', agentTypes: ['codex-cli', 'claude-code'], spaceIds: ['space-2', 'space-3'] },
+    { id: 'empty', name: '用户定义项目甲', root: '/secret/project/path', agentType: 'codex-cli', spaceIds: [] },
+    { id: 'one', name: '用户定义项目乙', root: '/secret/other/path', agentType: 'claude-code', spaceIds: ['space-1'] },
+    { id: 'many', name: '跨 Agent 项目', root: '/secret/shared/path', agentType: 'codex-cli', spaceIds: ['space-2', 'space-3'] },
   ], [{ agentId: 'codex-cli', name: 'Codex CLI' }, { agentId: 'claude-code', name: 'Claude Code' }], (project: any) => opened.push(project.id)) as Node;
   assert.equal(table.tagName, 'table');
-  assert.ok(!table.text.includes('/secret'));
   assert.ok(!table.text.includes('space-1'));
   assert.match(table.text, /Codex CLI.*用户定义项目甲.*未绑定 Space/);
   assert.match(table.text, /Claude Code.*用户定义项目乙.*1 个 Space/);
   assert.match(table.text, /跨 Agent 项目.*2 个 Space/);
   const rows = table.children[1].children;
+  assert.deepEqual(rows.map(row => row.children[1].children[0].text), ['/secret/project/path', '/secret/other/path', '/secret/shared/path']);
   await rows[2].children[2].children[0].listeners.click();
   assert.deepEqual(opened, ['many']);
 });
@@ -55,12 +54,20 @@ test('space detail keeps full code, copy icon, then unbind icon and acts on the 
   assert.deepEqual(removed, [space.spaceId]);
 });
 
-test('binding operation card markup stays unchanged while relationship display gets its own card', async () => {
+test('project binding form separates project selection from Space modes and confirmation', async () => {
   const html = await readFile(new URL('../viewer/index.html', import.meta.url), 'utf8');
-  const start = html.indexOf('<section class="card"><h2>绑定项目与 Space</h2>');
-  const card = html.slice(start, html.indexOf('</section>', start) + '</section>'.length);
-  assert.equal(createHash('sha256').update(card).digest('hex'), '8485197887b10931f29df3bd9142b1b82e0b1eeb8cea859dcacc523a100e6b31');
-  assert.match(html, /<section class="card binding-relations"><h2>绑定关系<\/h2><div id="project-list">/);
+  const projects = html.slice(html.indexOf('<section id="projects"'), html.indexOf('<section id="sessions"'));
+  assert.match(projects, /<form id="project-form">[\s\S]*class="project-selection"[\s\S]*name="agentType"[\s\S]*name="root"[\s\S]*id="project-directory"/);
+  assert.ok(projects.indexOf('class="project-selection"') < projects.indexOf('role="tablist"'));
+  assert.match(projects, /id="space-mode-create"[^>]*role="tab"[^>]*aria-selected="true"/);
+  assert.match(projects, /id="space-mode-bind"[^>]*role="tab"[^>]*aria-selected="false"/);
+  assert.match(projects, /id="project-space-panel" role="tabpanel" aria-labelledby="space-mode-create"/);
+  assert.match(projects, /id="space-create-field"[\s\S]*name="spaceName"[^>]*required[^>]*disabled/);
+  assert.match(projects, /id="space-bind-field" hidden[\s\S]*name="spaceId"[^>]*disabled/);
+  assert.match(projects, /class="card binding-relations"[\s\S]*绑定关系[\s\S]*id="project-list"/);
+  assert.match(projects, /<dialog id="space-create-dialog"[^>]*aria-labelledby="space-create-title"/);
+  for (const id of ['space-confirm-name', 'space-confirm-agent', 'space-confirm-project', 'space-create-cancel', 'space-create-confirm'])
+    assert.ok(projects.includes(`id="${id}"`), `confirmation must expose ${id}`);
 });
 
 test('trace details preserve full malicious-looking content as text', () => {
@@ -244,4 +251,67 @@ test('session source timestamps compare instants across timezone offsets', () =>
     {id:'earlier',projectId:'p',sourceStartedAt:'2026-11-18T09:00:00+08:00'},
   ]});
   assert.deepEqual(group.sessions.map((session:any)=>session.id),['earlier','later']);
+});
+
+test('history upload controls follow scan and per-Space delivery state for each Agent binding', async () => {
+  const uploads: string[] = [], scans: string[] = [];
+  const scopes = [
+    { id: 'pending', history: { status: 'pending', pending: 0 } },
+    { id: 'scanning', history: { status: 'scanning', pending: 0 } },
+    { id: 'available', history: { status: 'ready', pending: 2 } },
+    { id: 'complete', history: { status: 'ready', pending: 0, warning: '仅包含插件已采集会话，该 Agent 未提供本地历史读取接口' } },
+    { id: 'new-space', history: { status: 'ready', pending: 1 } },
+    { id: 'uploading', history: { status: 'ready', pending: 2, uploading: true } },
+    { id: 'failed', history: { status: 'failed', error: '扫描失败', pending: 0 } },
+  ].map(scope => ({ ...scope, name: '同一项目', agentType: 'codex-cli', spaceIds: ['space'] }));
+  const table = projectBindingTable(scopes, [{ agentId: 'codex-cli', name: 'Codex CLI' }], () => {},
+    (scope: any) => uploads.push(scope.id), (scope: any) => scans.push(scope.id)) as Node;
+  const cells = table.children[1].children.map(row => row.children[3]);
+  assert.equal(table.children[0].text, 'Agent项目名称已绑定 Space历史会话上传');
+  assert.equal(cells[0].text, '--'); assert.equal(cells[1].text, '--');
+  assert.equal(cells[2].children[0].text, '上传历史'); assert.equal((cells[2].children[0] as any).disabled, false);
+  assert.equal((cells[3].children[0] as any).disabled, true);assert.match(cells[3].text,/仅包含插件已采集会话/);
+  assert.equal((cells[4].children[0] as any).disabled, false);
+  assert.equal(cells[5].text, '上传中…'); assert.equal((cells[5].children[0] as any).disabled, true);
+  assert.equal(cells[6].text, '重试扫描');
+  await cells[2].children[0].listeners.click(); await cells[4].children[0].listeners.click(); await cells[6].children[0].listeners.click();
+  assert.deepEqual(uploads, ['available', 'new-space']); assert.deepEqual(scans, ['failed']);
+});
+
+test('history completion is visibly final while an empty catalog is not labelled uploaded', () => {
+  const records = [
+    { status: 'ready', pending: 0, recordCount: 2 },
+    { status: 'ready', pending: 0 },
+    { status: 'ready', pending: 0, recordCount: 0 },
+    { status: 'ready', pending: 1, recordCount: 2 },
+  ];
+  const table = projectBindingTable(records.map((history, id) => ({ id: String(id), agentType: 'codex-cli', name: '项目', spaceIds: ['space'], history })), [], () => {}) as Node;
+  const controls = table.children[1].children.map(row => row.children[3].children[0]);
+  assert.deepEqual(controls.map(control => control.text), ['已上传历史', '已上传历史', '上传历史', '上传历史']);
+  assert.deepEqual(controls.map(control => (control as any).disabled), [true, true, true, false]);
+});
+
+test('a ready history catalog can be rescanned explicitly without triggering upload', async () => {
+  const scans: string[] = [], uploads: string[] = [];
+  const table = projectBindingTable([{ id: 'scope', name: 'Project', agentType: 'codex-cli', spaceIds: ['A'],
+    history: { status: 'ready', pending: 0, recordCount: 0 } }], [], () => {},
+    (scope: any) => uploads.push(scope.id), (scope: any) => scans.push(scope.id)) as Node;
+  const cell = table.children[1].children[0].children[3];
+  const scan = cell.children.find(child => child.text === '扫描历史')!;
+  await scan.listeners.click(); assert.deepEqual(scans, ['scope']); assert.deepEqual(uploads, []);
+});
+
+test('blocked history upload is disabled red with a visible reason instead of an uploading or successful state', async () => {
+  const reasons = ['上传已暂停，请先恢复上传', '未配置 API Key', '云连接已变更', '目标 Space 上传失败：HTTP 500'];
+  const records = reasons.map((uploadError, index) => ({ status: 'ready', pending: index === 0 ? 0 : 2, recordCount: 2, uploading: true, uploadError }));
+  const table = projectBindingTable(records.map((history, id) => ({ id: String(id), agentType: 'codex-cli', name: '项目', spaceIds: ['space'], history })), [], () => {}) as Node;
+  const cells = table.children[1].children.map(row => row.children[3]);
+  for (const [index, cell] of cells.entries()) {
+    const control = cell.children[0];
+    assert.equal(control.text, '上传历史失败');assert.equal((control as any).disabled, true);
+    assert.ok(control.className.includes('history-upload-failed'));
+    assert.ok(cell.children.slice(1).some(child => child.text === reasons[index]), 'failure reason must be visible, not just a tooltip');
+  }
+  const stylesheet = await readFile(new URL('../viewer/style.css', import.meta.url), 'utf8');
+  assert.match(stylesheet, /\.history-upload-failed:disabled\s*\{[^}]*color:#bd4c4c/);
 });

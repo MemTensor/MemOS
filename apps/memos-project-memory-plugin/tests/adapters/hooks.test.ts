@@ -95,6 +95,7 @@ test('installed entry executes stdin -> HTTP capture -> host context JSON',async
  const server=createServer(async(req,res)=>{
   res.setHeader('Content-Type','application/json');
   if(req.url==='/api/health'){res.end(JSON.stringify({service:'memos-project-memory-plugin'}));return;}
+  if(req.url?.startsWith('/api/activation?')){res.end(JSON.stringify({active:true}));return;}
   if(req.url==='/api/context-delivery'){res.end('{}');return;}
   const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));received.push(JSON.parse(Buffer.concat(chunks).toString()));res.end(JSON.stringify(result));
  });
