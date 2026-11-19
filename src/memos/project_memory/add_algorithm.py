@@ -89,6 +89,7 @@ def recall_candidates(
     ranked: list[tuple[float, dict]] | None = None,
     *,
     limit: int = 20,
+    degraded: bool | None = None,
 ) -> list[dict]:
     """Fuse indexed and scoped local signals using weighted reciprocal ranks."""
     domains = set(episode.get("domains") or [])
@@ -166,7 +167,7 @@ def recall_candidates(
                 "shared_anchors": shared[tid],
                 "previous": tid in previous,
                 "must_consider": tid in certain,
-                "degraded": ranked is None,
+                "degraded": ranked is None if degraded is None else degraded,
             },
         }
         for tid in order

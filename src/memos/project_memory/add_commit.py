@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from memos.exceptions import MemOSError
 
 from .add_evidence import text_at
+from .add_index import topic_item_content
 from .add_merge import VersionConflictError
 from .add_store import json_value
 
@@ -59,14 +60,14 @@ def _assert_witnesses(cursor: Any, episode: dict) -> None:
                     )
 
 
-def _experience_content(item: dict) -> str:
-    card = item.get("card") or item.get("info") or {}
-    return "｜".join(
-        str(card[key]) for key in ("task_intent", "problem", "principle") if card.get(key)
-    )
-
-
-def refresh_topic_items(cursor: Any, topic: dict, version: int) -> None:
+def refresh_topic_items(
+    cursor: Any,
+    topic: dict,
+    version: int,
+    *,
+    item_embeddings: dict[str, str] | None = None,
+    model_id: str | None = None,
+) -> None:
     """Update the derived projection in the same transaction as its Topic."""
     cursor.execute(
         "DELETE FROM topic_items WHERE space_id = %s AND topic_id = %s",
@@ -81,11 +82,8 @@ def refresh_topic_items(cursor: Any, topic: dict, version: int) -> None:
         for item in topic.get(field) or []:
             if item.get("archived"):
                 continue
-            content = (
-                _experience_content(item)[:200]
-                if kind == "experience"
-                else item.get("content") or ""
-            )
+            content = topic_item_content(kind, item)
+            vector = (item_embeddings or {}).get(item["id"])
             rows.append(
                 (
                     item["id"],
@@ -97,13 +95,15 @@ def refresh_topic_items(cursor: Any, topic: dict, version: int) -> None:
                     item.get("user_ids") or [],
                     version,
                     content,
+                    vector,
+                    model_id if vector is not None else None,
                 )
             )
     if rows:
         cursor.executemany(
             """INSERT INTO topic_items (id, topic_id, space_id, kind, content, time, user_ids,
-                                        topic_version, search_tsv)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('simple', %s))""",
+                                        topic_version, search_tsv, embedding, embedding_model_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('simple', %s),%s::vector,%s)""",
             rows,
         )
 
@@ -142,13 +142,16 @@ def _topic_edit(cursor: Any, edit: dict, key: str, current: dict, scoped: dict[s
     index_text = "\n".join(
         (topic["topic_name"], topic["topic_summary"], topic["topic_description"])
     )
+    vector = edit.get("embedding")
+    model_id = edit.get("embedding_model_id") if vector is not None else None
     expected = edit["expected_version"]
     if expected is None:
         cursor.execute(
             """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary, topic_description,
                                    decisions, experiences, timeline, sources, anchors, anchor_keys,
-                                   update_time, last_commit_key, search_tsv, create_time, created_by_episode_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('simple',%s),%s,%s)
+                                   update_time, last_commit_key, search_tsv, create_time, created_by_episode_id,
+                                   embedding, embedding_model_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('simple',%s),%s,%s,%s::vector,%s)
                ON CONFLICT (id) DO NOTHING RETURNING version""",
             (
                 topic["id"],
@@ -159,6 +162,8 @@ def _topic_edit(cursor: Any, edit: dict, key: str, current: dict, scoped: dict[s
                 index_text,
                 topic["create_time"],
                 current["id"],
+                vector,
+                model_id,
             ),
         )
     else:
@@ -166,14 +171,20 @@ def _topic_edit(cursor: Any, edit: dict, key: str, current: dict, scoped: dict[s
             """UPDATE topics SET topic_summary = %s, topic_description = %s, decisions = %s,
                      experiences = %s, timeline = %s, sources = %s, anchors = %s, anchor_keys = %s,
                      update_time = %s, last_commit_key = %s, search_tsv = to_tsvector('simple',%s),
-                     embedding = NULL, embedding_model_id = NULL, version = version + 1, committed_at = now()
+                     embedding = %s::vector, embedding_model_id = %s, version = version + 1, committed_at = now()
                WHERE id = %s AND space_id = %s AND domain_id = %s AND version = %s RETURNING version""",
-            (*content, index_text, topic["id"], space, domain_id, expected),
+            (*content, index_text, vector, model_id, topic["id"], space, domain_id, expected),
         )
     written = cursor.fetchone()
     if written is None:
         raise VersionConflictError("A target Topic changed while preparing this Episode")
-    refresh_topic_items(cursor, topic, written["version"])
+    refresh_topic_items(
+        cursor,
+        topic,
+        written["version"],
+        item_embeddings=edit.get("item_embeddings"),
+        model_id=model_id,
+    )
 
 
 def _staged_episodes(cursor: Any, changes: dict, episode: dict) -> dict[str, dict]:
