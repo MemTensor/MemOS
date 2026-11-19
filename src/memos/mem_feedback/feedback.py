@@ -7,12 +7,13 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
-from tenacity import retry, stop_after_attempt, wait_random_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_random_exponential
 
 from memos.configs.memory import MemFeedbackConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
+from memos.exceptions import GraphDBError
 from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
@@ -116,7 +117,11 @@ class MemFeedback(BaseMemFeedback):
     def _embed_once(self, texts):
         return self.embedder.embed(texts)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, min=4, max=10))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_random_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_not_exception_type((GraphDBError, ValueError)),
+    )
     def _retry_db_operation(self, operation):
         try:
             return operation()
@@ -1062,6 +1067,8 @@ class MemFeedback(BaseMemFeedback):
                 try:
                     result = future.result()
                     update_results.append(result)
+                except (GraphDBError, ValueError):
+                    raise
                 except Exception as e:
                     mem_id = future_to_info[future][0]
                     logger.error(
@@ -1196,6 +1203,8 @@ class MemFeedback(BaseMemFeedback):
                 )
                 return mem_record
 
+        except (GraphDBError, ValueError):
+            raise
         except Exception as e:
             logger.error(
                 f"[0107 Feedback Core: process_feedback_core] Error for user {user_name}: {e}"
@@ -1254,6 +1263,8 @@ class MemFeedback(BaseMemFeedback):
                 )
 
                 return {"answer": answer, "record": record["record"]}
+            except (GraphDBError, ValueError):
+                raise
             except concurrent.futures.TimeoutError:
                 logger.error(
                     f"[Feedback Core MemFeedback process] Timeout in sync mode for {user_name}",

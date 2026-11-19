@@ -13,6 +13,8 @@ from memos.context.context import (
     generate_trace_id,
     set_request_context,
 )
+from memos.exceptions import MemOSError
+from memos.lifecycle import CloseState
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.task_threads import ThreadManager
@@ -61,6 +63,10 @@ class SchedulerDispatcher(BaseSchedulerModule):
     ):
         super().__init__()
         self.config = config
+        self._close_state = CloseState()
+        self._worker_context = threading.local()
+        self._retired_executors = []
+        self._closed_executors = set()
 
         # Main dispatcher thread pool
         self.max_workers = max_workers
@@ -82,7 +88,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
         self.thread_name_prefix = "dispatcher"
         if self.enable_parallel_dispatch:
             self.dispatcher_executor = ContextThreadPoolExecutor(
-                max_workers=self.max_workers, thread_name_prefix=self.thread_name_prefix
+                max_workers=self.max_workers,
+                thread_name_prefix=self.thread_name_prefix,
+                initializer=self._mark_worker,
             )
             logger.info(f"Max works of dispatcher is set to {self.max_workers}")
         else:
@@ -771,6 +779,35 @@ class SchedulerDispatcher(BaseSchedulerModule):
         except Exception as e:
             logger.error(f"Multiple tasks execution failed: {e}", exc_info=True)
             raise
+
+    def _mark_worker(self) -> None:
+        """Identify this owner's workers before their first submitted task."""
+        self._worker_context.active = True
+
+    def is_worker_thread(self) -> bool:
+        """Include workers from retired pools, which keep the same owner marker."""
+        return getattr(self._worker_context, "active", False)
+
+    def close(self) -> None:
+        """Drain all current and retired executors after recovery is disabled."""
+        if self.is_worker_thread():
+            raise MemOSError("Dispatcher cannot close from its own worker")
+        self._close_state.close(self._close_executors)
+
+    def _close_executors(self) -> None:
+        self._running = False
+        errors = []
+        for executor in [self.dispatcher_executor, *self._retired_executors]:
+            if executor is None or executor in self._closed_executors:
+                continue
+            try:
+                executor.shutdown(wait=True, cancel_futures=True)
+                self._closed_executors.add(executor)
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise MemOSError("Dispatcher executors have not all exited") from errors[0]
+        self._futures.clear()
 
     def shutdown(self) -> None:
         """Gracefully shutdown the dispatcher."""

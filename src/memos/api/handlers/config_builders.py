@@ -26,7 +26,7 @@ from memos.memories.textual.prefer_text_memory.config import (
 )
 
 
-def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
+def build_graph_db_config(user_id: str | None = "default") -> GraphDBConfigFactory:
     """
     Build graph database configuration.
 
@@ -36,23 +36,7 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
     Returns:
         Validated graph database configuration dictionary
     """
-    graph_db_backend_map = {
-        "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
-        "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
-        "polardb": APIConfig.get_polardb_config(user_id=user_id),
-        "postgres": APIConfig.get_postgres_config(user_id=user_id),
-    }
-
-    # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
-    graph_db_backend = os.getenv(
-        "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
-    ).lower()
-    return GraphDBConfigFactory.model_validate(
-        {
-            "backend": graph_db_backend,
-            "config": graph_db_backend_map[graph_db_backend],
-        }
-    )
+    return GraphDBConfigFactory.model_validate(APIConfig.get_graph_db_config(user_id))
 
 
 def build_vec_db_config() -> dict[str, Any]:

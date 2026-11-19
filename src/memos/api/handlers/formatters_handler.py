@@ -177,16 +177,14 @@ def rerank_knowledge_mem(
     """
     Rerank knowledge memories and keep conversation memories.
     """
-    memid2cubeid = {}
-    memories_list = []
+    knowledge_mem = []
+    conversation_mem = []
     for memory_group in text_mem:
         cube_id = memory_group["cube_id"]
-        memories = memory_group["memories"]
-        memories_list.extend(memories)
-        for memory in memories:
-            memid2cubeid[memory["id"]] = cube_id
+        knowledge, conversation = separate_knowledge_and_conversation_mem(memory_group["memories"])
+        knowledge_mem.extend((cube_id, memory) for memory in knowledge)
+        conversation_mem.extend((cube_id, memory) for memory in conversation)
 
-    knowledge_mem, conversation_mem = separate_knowledge_and_conversation_mem(memories_list)
     knowledge_mem_top_k = max(int(top_k * file_mem_proportion), int(top_k - len(conversation_mem)))
     # rerank set unuse
     reranked_knowledge_mem = knowledge_mem
@@ -194,12 +192,12 @@ def rerank_knowledge_mem(
     # Sort by relativity in descending order
     reranked_knowledge_mem = sorted(
         reranked_knowledge_mem,
-        key=lambda item: item.get("metadata", {}).get("relativity", 0.0),
+        key=lambda pair: pair[1].get("metadata", {}).get("relativity", 0.0),
         reverse=True,
     )
     # Combine the extracted memory with its original file source.
     is_chinese_query = detect_lang(query) == "zh"
-    for item in reranked_knowledge_mem:
+    for _, item in reranked_knowledge_mem:
         memory = item.get("memory", "")
         source_content = item["metadata"]["sources"][0]["content"]
         if is_chinese_query:
@@ -209,18 +207,18 @@ def rerank_knowledge_mem(
         item["metadata"]["sources"] = []
 
     if strip_conversation_sources:
-        for item in conversation_mem:
+        for _, item in conversation_mem:
             item.setdefault("metadata", {})["sources"] = []
 
     # deduplicate: remove items with duplicate memory content
     original_count = len(reranked_knowledge_mem)
     seen_memories = set[Any]()
     deduplicated_knowledge_mem = []
-    for item in reranked_knowledge_mem:
+    for cube_id, item in reranked_knowledge_mem:
         memory_content = item.get("memory", "")
         if memory_content and memory_content not in seen_memories:
             seen_memories.add(memory_content)
-            deduplicated_knowledge_mem.append(item)
+            deduplicated_knowledge_mem.append((cube_id, item))
     deduplicated_count = len(deduplicated_knowledge_mem)
     logger.info(
         f"After filtering duplicate knowledge base text from sources, count changed from {original_count} to {deduplicated_count}"
@@ -231,8 +229,7 @@ def rerank_knowledge_mem(
     cubeid2memories = {}
     text_mem_res = []
 
-    for memory in reranked_knowledge_mem + conversation_mem[:conversation_mem_top_k]:
-        cube_id = memid2cubeid[memory["id"]]
+    for cube_id, memory in reranked_knowledge_mem + conversation_mem[:conversation_mem_top_k]:
         if cube_id not in cubeid2memories:
             cubeid2memories[cube_id] = []
         cubeid2memories[cube_id].append(memory)

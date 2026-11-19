@@ -94,7 +94,8 @@ class OptimizedScheduler(GeneralScheduler):
         )
 
         # Submit async task
-        self.memos_message_queue.submit_messages([message])
+        with self._lifecycle_entry():
+            self.memos_message_queue.submit_messages([message])
         logger.info(f"Submitted async fine search task for user {search_req.user_id}")
         return async_task_id
 

@@ -257,7 +257,7 @@ class GraphStructureReorganizer:
             if _check_deadline("[GraphStructureReorganize] Before loading candidates"):
                 return
             raw_nodes = self.graph_store.get_structure_optimization_candidates(
-                scope, user_name=user_name
+                scope, include_embedding=True, user_name=user_name
             )
             nodes = [GraphDBNode(**n) for n in raw_nodes]
 

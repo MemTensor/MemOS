@@ -4,6 +4,7 @@ import json
 
 from typing import TYPE_CHECKING
 
+from memos.exceptions import GraphDBError
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.task_schemas import (
     LONG_TERM_MEMORY_TYPE,
@@ -31,6 +32,8 @@ class FeedbackMessageHandler(BaseSchedulerHandler):
         for message in batch:
             try:
                 self.process_single_feedback(message)
+            except (GraphDBError, ValueError):
+                raise
             except Exception as e:
                 logger.error(
                     "Error processing feedbackMemory message: %s",

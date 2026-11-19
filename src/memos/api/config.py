@@ -927,6 +927,44 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_opengauss_config(user_id: str | None = None) -> dict[str, Any]:
+        """Read the selected openGauss connection without development credentials."""
+        user_name = os.getenv("MEMOS_USER_NAME", "default")
+        if user_id:
+            user_name = f"memos_{user_id.replace('-', '')}"
+        return {
+            "host": os.getenv("OPENGAUSS_HOST", ""),
+            "port": int(os.getenv("OPENGAUSS_PORT", "5432")),
+            "user": os.getenv("OPENGAUSS_USER", ""),
+            "password": os.getenv("OPENGAUSS_PASSWORD", ""),
+            "db_name": os.getenv("OPENGAUSS_DB", ""),
+            "user_name": user_name,
+            "use_multi_db": False,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
+            "minconn": int(os.getenv("OPENGAUSS_MIN_CONN", "1")),
+            "maxconn": int(os.getenv("OPENGAUSS_MAX_CONN", "20")),
+            "connect_timeout": int(os.getenv("OPENGAUSS_CONNECT_TIMEOUT", "10")),
+            "connection_wait_timeout": int(os.getenv("OPENGAUSS_CONNECTION_WAIT_TIMEOUT", "30")),
+        }
+
+    @staticmethod
+    def get_graph_db_config(user_id: str | None = "default") -> dict[str, Any]:
+        """Select a graph backend before evaluating its environment configuration."""
+        getters = {
+            "neo4j-community": APIConfig.get_neo4j_community_config,
+            "neo4j": APIConfig.get_neo4j_config,
+            "polardb": APIConfig.get_polardb_config,
+            "postgres": APIConfig.get_postgres_config,
+            "opengauss": APIConfig.get_opengauss_config,
+        }
+        backend = os.getenv(
+            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+        ).lower()
+        if backend not in getters:
+            raise ValueError(f"Invalid graph DB backend: {backend}")
+        return {"backend": backend, "config": getters[backend](user_id=user_id)}
+
+    @staticmethod
     def get_mysql_config() -> dict[str, Any]:
         """Get MySQL configuration."""
         return {
@@ -1215,73 +1253,53 @@ class APIConfig:
 
         default_config = MOSConfig(**config_dict)
 
-        neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
-        neo4j_config = APIConfig.get_neo4j_config(user_id)
-        polardb_config = APIConfig.get_polardb_config(user_id)
+        graph_db_config = APIConfig.get_graph_db_config(user_id=user_id)
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
             else None
         )
-        postgres_config = APIConfig.get_postgres_config(user_id=user_id)
-        graph_db_backend_map = {
-            "neo4j-community": neo4j_community_config,
-            "neo4j": neo4j_config,
-            "polardb": polardb_config,
-            "postgres": postgres_config,
-        }
-        # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
-        graph_db_backend = os.getenv(
-            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
-        ).lower()
-        if graph_db_backend in graph_db_backend_map:
-            # Create MemCube config
+        # Create MemCube config
 
-            default_cube_config = GeneralMemCubeConfig.model_validate(
-                {
-                    "user_id": user_id,
-                    "cube_id": f"{user_name}_default_cube",
-                    "text_mem": {
-                        "backend": "tree_text",
-                        "config": {
-                            "extractor_llm": {"backend": "openai", "config": openai_config},
-                            "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                            "graph_db": {
-                                "backend": graph_db_backend,
-                                "config": graph_db_backend_map[graph_db_backend],
-                            },
-                            "embedder": APIConfig.get_embedder_config(),
-                            "internet_retriever": internet_config,
-                            "reranker": APIConfig.get_reranker_config(),
-                            "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
-                            == "true",
-                            "memory_size": {
-                                "WorkingMemory": int(os.getenv("MOS_WORKING_MEMORY", 20)),
-                                "LongTermMemory": int(os.getenv("MOS_LONGTERM_MEMORY", 1e6)),
-                                "UserMemory": int(os.getenv("MOS_USER_MEMORY", 1e6)),
-                            },
-                            "search_strategy": {
-                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
-                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
-                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
-                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
-                            },
-                            "include_embedding": bool(
-                                os.getenv("INCLUDE_EMBEDDING", "false") == "true"
-                            ),
+        default_cube_config = GeneralMemCubeConfig.model_validate(
+            {
+                "user_id": user_id,
+                "cube_id": f"{user_name}_default_cube",
+                "text_mem": {
+                    "backend": "tree_text",
+                    "config": {
+                        "extractor_llm": {"backend": "openai", "config": openai_config},
+                        "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                        "graph_db": graph_db_config,
+                        "embedder": APIConfig.get_embedder_config(),
+                        "internet_retriever": internet_config,
+                        "reranker": APIConfig.get_reranker_config(),
+                        "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower() == "true",
+                        "memory_size": {
+                            "WorkingMemory": int(os.getenv("MOS_WORKING_MEMORY", 20)),
+                            "LongTermMemory": int(os.getenv("MOS_LONGTERM_MEMORY", 1e6)),
+                            "UserMemory": int(os.getenv("MOS_USER_MEMORY", 1e6)),
                         },
+                        "search_strategy": {
+                            "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
+                            "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                            "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                            "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
+                        },
+                        "include_embedding": bool(
+                            os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+                        ),
                     },
-                    "act_mem": {}
-                    if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
-                    else APIConfig.get_activation_vllm_config(),
-                    "para_mem": {},
-                    "pref_mem": {}
-                    if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
-                    else APIConfig.get_preference_memory_config(),
-                }
-            )
-        else:
-            raise ValueError(f"Invalid graph DB backend: {graph_db_backend}")
+                },
+                "act_mem": {}
+                if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
+                else APIConfig.get_activation_vllm_config(),
+                "para_mem": {},
+                "pref_mem": {}
+                if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
+                else APIConfig.get_preference_memory_config(),
+            }
+        )
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
 
@@ -1298,69 +1316,49 @@ class APIConfig:
             return None
 
         openai_config = APIConfig.get_openai_config()
-        neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
-        neo4j_config = APIConfig.get_neo4j_config(user_id="default")
-        polardb_config = APIConfig.get_polardb_config(user_id="default")
-        postgres_config = APIConfig.get_postgres_config(user_id="default")
-        graph_db_backend_map = {
-            "neo4j-community": neo4j_community_config,
-            "neo4j": neo4j_config,
-            "polardb": polardb_config,
-            "postgres": postgres_config,
-        }
+        graph_db_config = APIConfig.get_graph_db_config(user_id="default")
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
             else None
         )
-        # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
-        graph_db_backend = os.getenv(
-            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
-        ).lower()
-        if graph_db_backend in graph_db_backend_map:
-            return GeneralMemCubeConfig.model_validate(
-                {
-                    "user_id": "default",
-                    "cube_id": "default_cube",
-                    "text_mem": {
-                        "backend": "tree_text",
-                        "config": {
-                            "extractor_llm": {"backend": "openai", "config": openai_config},
-                            "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                            "graph_db": {
-                                "backend": graph_db_backend,
-                                "config": graph_db_backend_map[graph_db_backend],
-                            },
-                            "embedder": APIConfig.get_embedder_config(),
-                            "reranker": APIConfig.get_reranker_config(),
-                            "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
-                            == "true",
-                            "internet_retriever": internet_config,
-                            "memory_size": {
-                                "WorkingMemory": int(os.getenv("MOS_WORKING_MEMORY", 20)),
-                                "LongTermMemory": int(os.getenv("MOS_LONGTERM_MEMORY", 1e6)),
-                                "UserMemory": int(os.getenv("MOS_USER_MEMORY", 1e6)),
-                            },
-                            "search_strategy": {
-                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
-                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
-                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
-                                "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
-                            },
-                            "mode": os.getenv("ASYNC_MODE", "sync"),
-                            "include_embedding": bool(
-                                os.getenv("INCLUDE_EMBEDDING", "false") == "true"
-                            ),
+        return GeneralMemCubeConfig.model_validate(
+            {
+                "user_id": "default",
+                "cube_id": "default_cube",
+                "text_mem": {
+                    "backend": "tree_text",
+                    "config": {
+                        "extractor_llm": {"backend": "openai", "config": openai_config},
+                        "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                        "graph_db": graph_db_config,
+                        "embedder": APIConfig.get_embedder_config(),
+                        "reranker": APIConfig.get_reranker_config(),
+                        "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower() == "true",
+                        "internet_retriever": internet_config,
+                        "memory_size": {
+                            "WorkingMemory": int(os.getenv("MOS_WORKING_MEMORY", 20)),
+                            "LongTermMemory": int(os.getenv("MOS_LONGTERM_MEMORY", 1e6)),
+                            "UserMemory": int(os.getenv("MOS_USER_MEMORY", 1e6)),
                         },
+                        "search_strategy": {
+                            "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
+                            "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                            "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                            "fulltext": bool(os.getenv("FULLTEXT_CALL", "false") == "true"),
+                        },
+                        "mode": os.getenv("ASYNC_MODE", "sync"),
+                        "include_embedding": bool(
+                            os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+                        ),
                     },
-                    "act_mem": {}
-                    if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
-                    else APIConfig.get_activation_vllm_config(),
-                    "para_mem": {},
-                    "pref_mem": {}
-                    if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
-                    else APIConfig.get_preference_memory_config(),
-                }
-            )
-        else:
-            raise ValueError(f"Invalid graph DB backend: {graph_db_backend}")
+                },
+                "act_mem": {}
+                if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
+                else APIConfig.get_activation_vllm_config(),
+                "para_mem": {},
+                "pref_mem": {}
+                if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
+                else APIConfig.get_preference_memory_config(),
+            }
+        )

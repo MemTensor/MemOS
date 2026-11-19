@@ -160,12 +160,12 @@ class BaseSchedulerQueueMixin:
             self.memos_message_queue.submit_messages(messages=queued_msgs)
 
     def _message_consumer(self) -> None:
-        while self._running:
+        while self._running and not self._stop_event.is_set():
             try:
                 if self.enable_parallel_dispatch and self.dispatcher:
                     running_tasks = self.dispatcher.get_running_task_count()
                     if running_tasks >= self.dispatcher.max_workers:
-                        time.sleep(self._consume_interval)
+                        self._stop_event.wait(self._consume_interval)
                         continue
 
                 messages = self.memos_message_queue.get_messages(batch_size=self.consume_batch)
@@ -215,8 +215,7 @@ class BaseSchedulerQueueMixin:
                             set_request_context(prev_context)
                     try:
                         with suppress(Exception):
-                            if messages:
-                                self.dispatcher.on_messages_enqueued(messages)
+                            self.dispatcher.on_messages_enqueued(messages)
 
                         if len(messages) >= self.consume_batch:
                             unique_labels = sorted({msg.label for msg in messages})
@@ -231,12 +230,12 @@ class BaseSchedulerQueueMixin:
                     except Exception as e:
                         logger.error("Error dispatching messages: %s", e)
 
-                time.sleep(self._consume_interval)
+                self._stop_event.wait(self._consume_interval)
 
             except Exception as e:
                 if "No messages available in Redis queue" not in str(e):
                     logger.error("Unexpected error in message consumer: %s", e, exc_info=True)
-                time.sleep(self._consume_interval)
+                self._stop_event.wait(self._consume_interval)
 
     def _monitor_loop(self):
         while self._running:
@@ -261,7 +260,7 @@ class BaseSchedulerQueueMixin:
             except Exception as e:
                 logger.error("Error in metrics monitor loop: %s", e, exc_info=True)
 
-            time.sleep(15)
+            self._stop_event.wait(15)
 
     def start(self) -> None:
         if self.enable_parallel_dispatch:
@@ -290,8 +289,9 @@ class BaseSchedulerQueueMixin:
         self._running = True
 
         if self.scheduler_startup_mode == STARTUP_BY_PROCESS:
+            self._stop_event = multiprocessing.Event()
             self._consumer_process = multiprocessing.Process(
-                target=self._message_consumer,
+                target=self._process_consumer,
                 daemon=True,
                 name="MessageConsumerProcess",
             )
@@ -306,12 +306,20 @@ class BaseSchedulerQueueMixin:
             self._consumer_thread.start()
             logger.info("Message consumer thread started")
 
+    def _process_consumer(self) -> None:
+        """Drain the child's accepted tasks before a graceful process exit."""
+        try:
+            self._message_consumer()
+        finally:
+            self.dispatcher.close()
+
     def stop_consumer(self) -> None:
         if not self._running:
             logger.warning("Memory Scheduler consumer is not running")
             return
 
         self._running = False
+        self._stop_event.set()
 
         if self.scheduler_startup_mode == STARTUP_BY_PROCESS and self._consumer_process:
             if self._consumer_process.is_alive():
@@ -326,14 +334,15 @@ class BaseSchedulerQueueMixin:
                         logger.info("Consumer process terminated")
                 else:
                     logger.info("Consumer process stopped")
-            self._consumer_process = None
+            if not self._consumer_process.is_alive():
+                self._consumer_process = None
         elif self._consumer_thread and self._consumer_thread.is_alive():
             self._consumer_thread.join(timeout=5.0)
             if self._consumer_thread.is_alive():
                 logger.warning("Consumer thread did not stop gracefully")
             else:
                 logger.info("Consumer thread stopped")
-            self._consumer_thread = None
+                self._consumer_thread = None
 
         logger.info("Memory Scheduler consumer stopped")
 
@@ -347,13 +356,13 @@ class BaseSchedulerQueueMixin:
         if self._monitor_thread:
             self._monitor_thread.join(timeout=2.0)
 
-        if self.dispatcher:
-            logger.info("Shutting down dispatcher...")
-            self.dispatcher.shutdown()
-
         if self.dispatcher_monitor:
             logger.info("Shutting down monitor...")
             self.dispatcher_monitor.stop()
+
+        if self.dispatcher:
+            logger.info("Shutting down dispatcher...")
+            self.dispatcher.shutdown()
 
     @property
     def handlers(self) -> dict[str, Callable]:

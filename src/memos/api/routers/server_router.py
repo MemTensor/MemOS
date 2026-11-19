@@ -16,6 +16,7 @@ import random as _random
 import socket
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from memos.api import handlers
 from memos.api.handlers.add_handler import AddHandler
@@ -247,7 +248,12 @@ def scheduler_wait(
     )
 
 
-@router.get("/scheduler/wait/stream", summary="Stream scheduler progress for a user")
+@router.get(
+    "/scheduler/wait/stream",
+    summary="Stream scheduler progress for a user",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+)
 def scheduler_wait_stream(
     user_name: str,
     timeout_seconds: float = 120.0,
@@ -282,7 +288,12 @@ def chat_complete(chat_req: APIChatCompleteRequest):
     return chat_handler.handle_chat_complete(chat_req)
 
 
-@router.post("/chat/stream", summary="Chat with MemOS")
+@router.post(
+    "/chat/stream",
+    summary="Chat with MemOS",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+)
 def chat_stream(chat_req: ChatRequest):
     """
     Chat with MemOS for a specific user. Returns SSE stream.
@@ -297,7 +308,12 @@ def chat_stream(chat_req: ChatRequest):
     return chat_handler.handle_chat_stream(chat_req)
 
 
-@router.post("/chat/stream/playground", summary="Chat with MemOS playground")
+@router.post(
+    "/chat/stream/playground",
+    summary="Chat with MemOS playground",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+)
 def chat_stream_playground(chat_req: ChatPlaygroundRequest):
     """
     Chat with MemOS for a specific user. Returns SSE stream.
@@ -451,7 +467,12 @@ def exist_mem_cube_id(request: ExistMemCubeIdRequest):
     )
 
 
-@router.post("/chat/stream/business_user", summary="Chat with MemOS for business user")
+@router.post(
+    "/chat/stream/business_user",
+    summary="Chat with MemOS for business user",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+)
 def chat_stream_business_user(chat_req: ChatBusinessRequest):
     """(inner) Chat with MemOS for a specific business user. Returns SSE stream."""
     if chat_handler is None:

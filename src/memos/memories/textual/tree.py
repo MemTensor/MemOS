@@ -14,7 +14,10 @@ from memos.configs.reranker import RerankerConfigFactory
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
+from memos.exceptions import MemoryError
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
+from memos.graph_dbs.opengauss import OpenGaussGraphDB
+from memos.lifecycle import CloseState
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.mem_reader.read_multi_modal.utils import detect_lang
@@ -55,50 +58,69 @@ class TreeTextMemory(BaseTextMemory):
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
 
-        self.search_strategy = config.search_strategy
-        self.bm25_retriever = (
-            EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
-        )
+        self._close_state = CloseState()
+        self._owns_graph_store = True
+        try:
+            self.search_strategy = config.search_strategy
+            self.bm25_retriever = (
+                EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
+            )
 
-        if config.reranker is None:
-            default_cfg = RerankerConfigFactory.model_validate(
-                {
-                    "backend": "cosine_local",
-                    "config": {
-                        "level_weights": {"topic": 1.0, "concept": 1.0, "fact": 1.0},
-                        "level_field": "background",
-                    },
-                }
+            if config.reranker is None:
+                default_cfg = RerankerConfigFactory.model_validate(
+                    {
+                        "backend": "cosine_local",
+                        "config": {
+                            "level_weights": {"topic": 1.0, "concept": 1.0, "fact": 1.0},
+                            "level_field": "background",
+                        },
+                    }
+                )
+                self.reranker = RerankerFactory.from_config(default_cfg)
+            else:
+                self.reranker = RerankerFactory.from_config(config.reranker)
+            self.is_reorganize = config.reorganize
+            self.memory_manager: MemoryManager = MemoryManager(
+                self.graph_store,
+                self.embedder,
+                self.extractor_llm,
+                memory_size=config.memory_size
+                or {
+                    "WorkingMemory": 20,
+                    "LongTermMemory": 1500,
+                    "UserMemory": 480,
+                },
+                is_reorganize=self.is_reorganize,
             )
-            self.reranker = RerankerFactory.from_config(default_cfg)
-        else:
-            self.reranker = RerankerFactory.from_config(config.reranker)
-        self.is_reorganize = config.reorganize
-        self.memory_manager: MemoryManager = MemoryManager(
-            self.graph_store,
-            self.embedder,
-            self.extractor_llm,
-            memory_size=config.memory_size
-            or {
-                "WorkingMemory": 20,
-                "LongTermMemory": 1500,
-                "UserMemory": 480,
-            },
-            is_reorganize=self.is_reorganize,
-        )
-        # Create internet retriever if configured
-        self.internet_retriever = None
-        if config.internet_retriever is not None:
-            self.internet_retriever = InternetRetrieverFactory.from_config(
-                config.internet_retriever, self.embedder
-            )
-            logger.info(
-                f"Internet retriever initialized with backend: {config.internet_retriever.backend}"
-            )
-        else:
-            logger.info("No internet retriever configured")
-        self.tokenizer = None
-        self.include_embedding = config.include_embedding or False
+            # Create internet retriever if configured
+            self.internet_retriever = None
+            if config.internet_retriever is not None:
+                self.internet_retriever = InternetRetrieverFactory.from_config(
+                    config.internet_retriever, self.embedder
+                )
+                logger.info(
+                    f"Internet retriever initialized with backend: {config.internet_retriever.backend}"
+                )
+            else:
+                logger.info("No internet retriever configured")
+            self.tokenizer = None
+            self.include_embedding = config.include_embedding or False
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                logger.exception("Failed to close graph after text memory initialization failure")
+            raise
+
+    def close(self) -> None:
+        """Release the graph created by this memory; injected graphs are borrowed."""
+
+        def release() -> None:
+            close = getattr(self.graph_store, "close", None)
+            if self._owns_graph_store and callable(close):
+                close()
+
+        self._close_state.close(release)
 
     def add(
         self,
@@ -384,11 +406,22 @@ class TreeTextMemory(BaseTextMemory):
         page_size: int | None = None,
         filter: dict | None = None,
         memory_type: list[str] | None = None,
+        *,
+        all_cubes: bool | None = None,
+        exclude_user_name: str | None = None,
     ) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
+        scope = {}
+        if all_cubes is not None or exclude_user_name is not None:
+            if not isinstance(self.graph_store, OpenGaussGraphDB):
+                raise ValueError("This graph backend does not support explicit Cube ranges")
+            if all_cubes is not None:
+                scope["all_cubes"] = all_cubes
+            if exclude_user_name is not None:
+                scope["exclude_user_name"] = exclude_user_name
         graph_output = self.graph_store.export_graph(
             user_name=user_name,
             user_id=user_id,
@@ -396,6 +429,7 @@ class TreeTextMemory(BaseTextMemory):
             page_size=page_size,
             filter=filter,
             memory_type=memory_type,
+            **scope,
         )
         return graph_output
 
@@ -502,43 +536,47 @@ class TreeTextMemory(BaseTextMemory):
             self.graph_store.update_node(related_id, updates, user_name=user_name)
 
     def load(self, dir: str, user_name: str | None = None) -> None:
+        """Read a graph file and merge it atomically into the selected Cube."""
+        memory_file = os.path.join(dir, self.config.memory_filename)
         try:
-            memory_file = os.path.join(dir, self.config.memory_filename)
-
-            if not os.path.exists(memory_file):
-                logger.warning(f"Memory file not found: {memory_file}")
-                return
-
             with open(memory_file, encoding="utf-8") as f:
                 memories = json.load(f)
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise MemoryError(f"Unable to read memory file: {memory_file}") from error
 
-            self.graph_store.import_graph(memories, user_name=user_name)
-            logger.info(f"Loaded {len(memories)} memories from {memory_file}")
-
-        except FileNotFoundError:
-            logger.error(f"Memory file not found in directory: {dir}")
-        except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON from memory file: {e}")
-        except Exception as e:
-            logger.error(f"An error occurred while loading memories: {e}")
+        self.graph_store.import_graph(memories, user_name=user_name)
+        logger.info("Loaded memories from %s", memory_file)
 
     def dump(self, dir: str, include_embedding: bool = False, user_name: str | None = None) -> None:
-        """Dump memories to os.path.join(dir, self.config.memory_filename)"""
+        """Publish a single-Cube graph file after it has been fully written."""
+        options = {"status": []} if isinstance(self.graph_store, OpenGaussGraphDB) else {}
+        json_memories = self.graph_store.export_graph(
+            include_embedding=include_embedding, user_name=user_name, **options
+        )
+        memory_file = os.path.join(dir, self.config.memory_filename)
+        temporary_path = None
         try:
-            json_memories = self.graph_store.export_graph(
-                include_embedding=include_embedding, user_name=user_name
-            )
-
             os.makedirs(dir, exist_ok=True)
-            memory_file = os.path.join(dir, self.config.memory_filename)
-            with open(memory_file, "w", encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=dir, prefix=".memos-", suffix=".json", delete=False
+            ) as f:
+                temporary_path = f.name
                 json.dump(json_memories, f, indent=4, ensure_ascii=False)
-
-            logger.info(f"Dumped {len(json_memories.get('nodes'))} memories to {memory_file}")
-
-        except Exception as e:
-            logger.error(f"An error occurred while dumping memories: {e}")
-            raise
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, memory_file)
+            temporary_path = None
+        except (OSError, TypeError, ValueError) as error:
+            raise MemoryError(f"Unable to write memory file: {memory_file}") from error
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.exception("Unable to remove unpublished memory file %s", temporary_path)
+        logger.info("Dumped memories to %s", memory_file)
 
     def drop(self, keep_last_n: int = 30) -> None:
         """
