@@ -1,9 +1,18 @@
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
+from memos.project_memory.add_commit import refresh_topic_items
 from memos.project_memory.add_merge import prepare_merge, rebase_append_only, rewrite_metadata
+from memos.project_memory.add_store import json_value
+from memos.project_memory.add_view import RelationalProjectView
 from memos.project_memory.judge import ModelError
+from memos.project_memory.service import ProjectMemoryService
+from tests.project_memory import test_add_store
+
+
+add_store = test_add_store.add_store
 
 
 class Writer:
@@ -80,7 +89,13 @@ def test_existing_decision_rewrite_retains_history_and_does_not_mutate_snapshot(
     data["assignments"][0]["topic"]["decisions"] = [initial]
     frozen = deepcopy(data)
     writer = Writer(
-        {"dec.update": {"results": [{"n": 1, "decision_id": "same-decision", "action": "rewrite"}]}}
+        {
+            "dec.update": {
+                "results": [
+                    {"n": 1, "decision_id": "same-decision", "same_as": None, "action": "rewrite"}
+                ]
+            }
+        }
     )
     change = prepare_merge(writer, data)
     proposed = change["topics"][0]["topic"]
@@ -288,7 +303,13 @@ def test_invalid_decision_update_cannot_add_a_new_current_decision(rows):
 
 def test_explicit_new_decision_is_allowed_when_existing_decisions_are_unrelated():
     plan = plan_with_disagreement({"kind": "decision", "content": "Export CSV."})
-    writer = Writer({"dec.update": {"results": [{"n": 1, "action": "add", "decision_id": None}]}})
+    writer = Writer(
+        {
+            "dec.update": {
+                "results": [{"n": 1, "action": "add", "decision_id": None, "same_as": None}]
+            }
+        }
+    )
 
     change = prepare_merge(writer, plan)
 
@@ -296,3 +317,144 @@ def test_explicit_new_decision_is_allowed_when_existing_decisions_are_unrelated(
         "Export daily.",
         "Export CSV.",
     ]
+
+
+def with_stance(topic, author, content, hour, *, same_as=None, confirms=None):
+    draft = {
+        "kind": "decision",
+        "draft_id": f"{author}-{hour}",
+        "content": content,
+        "quote": content,
+        "authors": [author],
+        "author_name": author.title(),
+        "chat_time": f"2026-11-19T{hour:02}:00:00Z",
+        "final": confirms is not None,
+        "listed": list((confirms or {}).values()),
+    }
+    writer = Writer()
+    if topic is not None:
+        (existing,) = topic["decisions"]
+        writer.output["dec.update"] = {
+            "results": [
+                {
+                    "n": 1,
+                    "decision_id": existing["id"],
+                    "same_as": same_as,
+                    "action": "resolve" if confirms else "join" if same_as else "conflict",
+                    "informed": confirms or {},
+                }
+            ]
+        }
+    change = prepare_merge(writer, plan_for(draft, topic))
+    return change["topics"][0]["topic"]
+
+
+@pytest.mark.parametrize("reaffirm", [False, True], ids=["join", "reaffirm"])
+def test_newer_member_stance_survives_out_of_order_rewrite(reaffirm):
+    topic = with_stance(None, "alice", "Export daily.", 1)
+    topic = with_stance(topic, "bob", "Export daily.", 2 if reaffirm else 5, same_as="current")
+    if reaffirm:
+        (before_reaffirmation,) = topic["decisions"]
+        topic = with_stance(topic, "bob", "Export daily.", 5, same_as="current")
+        (after_reaffirmation,) = topic["decisions"]
+        assert after_reaffirmation["version"] == before_reaffirmation["version"]
+
+    (before,) = topic["decisions"]
+    assert before["user_ids"] == ["alice", "bob"]
+    assert before["time"] == "2026-11-19T01:00:00+00:00"
+    late = with_stance(topic, "bob", "Export weekly.", 3)
+    assert late["decisions"] == [before]
+
+    fresh = with_stance(topic, "bob", "Export weekly.", 6)
+    (rewritten,) = fresh["decisions"]
+    assert rewritten["content"] == "Export weekly."
+    assert rewritten["history"][0]["user_ids"] == ["alice", "bob"]
+
+
+def test_late_move_cannot_withdraw_a_newer_stance_on_an_alternative():
+    topic = with_stance(None, "alice", "Export daily.", 1)
+    topic = with_stance(topic, "bob", "Export hourly.", 2)
+    topic = with_stance(topic, "carol", "Export hourly.", 5, same_as="c1")
+
+    late = with_stance(topic, "carol", "Export daily.", 3, same_as="current")
+    assert late["decisions"] == topic["decisions"]
+
+
+def test_resolution_respects_newer_member_support_on_an_active_alternative():
+    topic = with_stance(None, "alice", "Export daily.", 1)
+    topic = with_stance(topic, "bob", "Export hourly.", 2)
+    topic = with_stance(topic, "bob", "Export hourly.", 5, same_as="c1")
+    (before,) = topic["decisions"]
+    assert before["conflicts"][0]["time"] == "2026-11-19T02:00:00+00:00"
+
+    disclosed = {"current": "Export daily.", "c1": "Export hourly."}
+    late = with_stance(topic, "carol", "Export daily.", 3, same_as="current", confirms=disclosed)
+    assert late["decisions"] == [before]
+
+    fresh = with_stance(topic, "carol", "Export daily.", 6, same_as="current", confirms=disclosed)
+    (resolved,) = fresh["decisions"]
+    assert resolved["conflicts"] == []
+    assert resolved["history"][0]["content"] == "Export hourly."
+
+
+def test_rewrite_uses_replaced_current_stances_not_unrelated_alternative_stances():
+    topic = with_stance(None, "alice", "Export daily.", 1)
+    alternative = with_stance(topic, "carol", "Export hourly.", 5)
+
+    allowed = with_stance(alternative, "alice", "Export weekly.", 3)
+    (decision,) = allowed["decisions"]
+    assert decision["content"] == "Export weekly."
+    assert decision["conflicts"][0]["content"] == "Export hourly."
+
+    supported = with_stance(alternative, "bob", "Export daily.", 5, same_as="current")
+    late = with_stance(supported, "alice", "Export weekly.", 3)
+    assert late["decisions"] == supported["decisions"]
+
+
+def test_archived_member_stance_still_fences_an_older_statement():
+    topic = with_stance(None, "alice", "Export daily.", 1)
+    topic = with_stance(topic, "bob", "Export daily.", 5, same_as="current")
+    topic = with_stance(topic, "alice", "Export weekly.", 6)
+    (current,) = topic["decisions"]
+    assert current["user_ids"] == ["alice"]
+
+    late = with_stance(topic, "bob", "Export hourly.", 3)
+    assert late["decisions"] == [current]
+
+
+def test_relational_search_and_get_keep_member_stance_times_private(add_store):
+    topic = with_stance(None, "alice", "Export daily.", 1)
+    topic = with_stance(topic, "bob", "Export daily.", 5, same_as="current")
+    (stored,) = topic["decisions"]
+    decision_id = stored["id"]
+    with add_store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO spaces (id, project_id, space_name) VALUES ('space', 'project-a', 'A')"
+        )
+        cur.execute(
+            "INSERT INTO domains (id, space_id, domain) VALUES ('domain', 'space', 'product')"
+        )
+        cur.execute(
+            """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary,
+                                   topic_description, decisions, create_time, update_time)
+               VALUES ('topic', 'space', 'domain', 'Exports', 'Export daily.', '', %s, %s, %s)""",
+            (json_value(topic["decisions"]), topic["create_time"], topic["update_time"]),
+        )
+        refresh_topic_items(cur, topic, 1)
+    (projected_topic,) = add_store.read_topics("space")
+    (projected_decision,) = projected_topic["decisions"]
+    assert projected_decision["_member_stance_times"]["bob"] == "2026-11-19T05:00:00+00:00"
+
+    service = ProjectMemoryService(RelationalProjectView(add_store), Writer())
+    request = SimpleNamespace(
+        space_ids=["space"], query="Export daily", project_item_types=["decision"]
+    )
+    (search_topic,) = service.search_result(request)["topic_detail_list"]
+    request.project_result_format = "item"
+    (search_item,) = service.search_result(request)["project_item_list"]
+    (get_topic,) = service.get_by_id("topic")["topic_detail_list"]
+    (get_item,) = service.get_by_id(decision_id)["project_item_list"]
+    for row in (search_topic["decisions"][0], search_item, get_topic["decisions"][0], get_item):
+        assert row["id"] == decision_id
+        assert row["time"] == "2026-11-19T01:00:00+00:00"
+        assert "_member_stance_times" not in row
