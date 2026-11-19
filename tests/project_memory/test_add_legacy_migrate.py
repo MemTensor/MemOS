@@ -131,3 +131,45 @@ def test_partial_legacy_episode_is_readable_without_being_resubmitted(add_store)
     view.clear_space_topics("legacy-space")
     assert view.legacy_task_status("task", "owner") is None
     assert view.list_messages("legacy-space", "chat") == []
+
+
+def test_legacy_postgres_source_remains_unchanged(add_store):
+    import os
+
+    from uuid import uuid4
+
+    from memos.project_memory.add_legacy import read_legacy_postgres
+    from memos.project_memory.pg_backend import ProjectPostgresStore
+
+    dsn = os.environ["PG_TEST_DSN"]
+    schema = f"legacy_source_{uuid4().hex}"
+    legacy = ProjectPostgresStore({"dsn": dsn, "schema_name": schema, "embedding_dimension": 3})
+    try:
+        for node in _legacy_snapshot():
+            legacy.add_node(
+                id=node["id"],
+                memory=node["memory"],
+                metadata=node["metadata"],
+                user_name=node["metadata"]["user_name"],
+            )
+
+        snapshot = read_legacy_postgres(dsn, schema)
+        plan = plan_migration(snapshot, {"legacy-space": "project-a"}, "project-a")
+        apply_migration(add_store, plan)
+        assert read_legacy_postgres(dsn, schema) == snapshot
+        assert add_store.load_episode("episode")["outcome"] == "committed"
+        assert len(add_store.read_topics("legacy-space")) == 2
+    finally:
+        legacy.drop_schema()
+        legacy.close()
+
+
+def test_migration_rolls_back_space_on_failed_topic_insert(add_store):
+    from psycopg2.errors import ForeignKeyViolation
+
+    plan = plan_migration(_legacy_snapshot(), {"legacy-space": "project-a"}, "project-a")
+    plan.topics[-1]["domain_id"] = "not-in-source"
+    with pytest.raises(ForeignKeyViolation):
+        apply_migration(add_store, plan)
+    assert add_store.read_space("legacy-space") is None
+    assert add_store.read_topics("legacy-space") == []
