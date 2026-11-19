@@ -118,7 +118,9 @@ class AddAcceptance:
             ctx = _Request(task_id, user_id, agent_id, conversation_id, conversation_key, now)
             turns = normalize_turns(request.messages, task_id, user_id, member_map, now)
             owners = self._owners(cursor, ctx, spaces, turns)
-            exact_replay = self._replayed_task(cursor, ctx, scopes, turns, owners)
+            exact_replay = self._replayed_task(
+                cursor, ctx, len(scopes), turns, owners, set(domains)
+            )
             self._store_messages(cursor, ctx, turns)
             if exact_replay:
                 return AcceptedAdd(exact_replay, [], duplicate=True)
@@ -187,9 +189,10 @@ class AddAcceptance:
         self,
         cursor: Any,
         ctx: _Request,
-        scopes: list[dict[str, Any]],
+        space_count: int,
         turns: list[list[dict[str, Any]]],
         owners: dict[tuple[str, str], dict[str, Any]],
+        explicit_domains: set[str],
     ) -> str | None:
         cursor.execute(
             """SELECT space_id, conversation_key, turn_id, user_id FROM episode_turns
@@ -197,7 +200,7 @@ class AddAcceptance:
             (self.store.project_id, ctx.task_id),
         )
         previous = cursor.fetchall()
-        complete = len(owners) == len(scopes) * len(turns)
+        complete = len(owners) == space_count * len(turns)
         matched_tasks = {row["task_id"] for row in owners.values()}
         if previous:
             # A caller-supplied Task ID cannot authorize writes to a second request.
@@ -221,9 +224,8 @@ class AddAcceptance:
             raise AddRequestError(
                 "TASK_REPLAY_CONFLICT", "replay does not identify a single owned Task", 409
             )
-        requested_domains = {scope["id"]: set(scope["domains"]) for scope in scopes}
-        if any(
-            set(row["domains"]) != requested_domains[row["space_id"]] for row in owners.values()
+        if explicit_domains and any(
+            set(row["domains"]) != explicit_domains for row in owners.values()
         ):
             raise AddRequestError(
                 "TASK_REPLAY_CONFLICT", "replay does not match the original domains", 409
