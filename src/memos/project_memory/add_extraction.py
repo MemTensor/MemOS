@@ -8,7 +8,9 @@ import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from .add_evidence import anchor_keys, collect_anchors, quote_ref, text_at
+from memos.log import get_logger
+
+from .add_evidence import anchor_keys, collect_anchors, key_tokens, quote_ref, text_at
 from .judge import ModelError
 from .types import stable_uuid
 
@@ -41,6 +43,7 @@ _KINDS = {"decision", "experience", "timeline"}
 _ROLE_MEMBER = {"user", "member"}
 _ROLE_AGENT = {"assistant", "agent"}
 _OMITTED = " …[省略]… "
+logger = get_logger(__name__)
 
 
 def jsonable(value: Any) -> Any:
@@ -151,7 +154,8 @@ def _draft(
     content = raw.get("content")
     field = raw.get("source_path", "/content")
     if (
-        kind not in _KINDS
+        not isinstance(kind, str)
+        or kind not in _KINDS
         or not isinstance(content, str)
         or not content.strip()
         or not isinstance(field, str)
@@ -168,6 +172,12 @@ def _draft(
     contexts = _context_refs(raw.get("context"), previous)
     if origin == "adopted" and not (member_statement and contexts):
         return None
+    contextual_text = []
+    for context in contexts:
+        stored = text_at(previous[context["message_id"]], context["source_path"]) or ""
+        contextual_text.append(stored[context["start"] : context["end"]])
+    if not key_tokens(content).issubset(key_tokens("\n".join([raw["quote"], *contextual_text]))):
+        return None
     origin = "adopted" if origin == "adopted" else "member" if member_statement else "delegated"
     author = member.get("role_id") or member.get("origin_user_id") or member.get("user_id")
     if not author:
@@ -179,6 +189,7 @@ def _draft(
         "turn_ids": [str(member.get("turn_id") or member["message_id"])],
         "message_ids": [str(row["message_id"])],
         "user_id": member.get("origin_user_id") or member.get("user_id") or author,
+        "agent_id": member.get("agent_id"),
         "conversation_id": episode.get("conversation_id"),
     }
     text = text_at(row, field) or ""
@@ -255,6 +266,10 @@ def extract_episode(
     prior = _input_rows(previous_messages, [])
     current = _input_rows(messages, anchors)
     result["input_truncations"] = _bounded_input(prior, current, input_budget)
+    if result["input_truncations"]:
+        logger.info(
+            "Project Episode extraction compressed %d messages", len(result["input_truncations"])
+        )
     model_inputs = {
         "prior": prior,
         "episode": current,
@@ -294,6 +309,9 @@ def extract_episode(
             valid[draft["draft_id"]] = draft
     if valid and not summary.strip():
         raise ModelError("An Episode with accepted drafts requires a summary")
+    corpus = "\n".join(row.get("content") or "" for row in messages + previous_messages)
+    if not key_tokens(summary).issubset(key_tokens(corpus)):
+        summary = "。".join(draft["content"] for draft in valid.values())
     result.update(episode_summary=summary.strip()[:200], drafts=list(valid.values()))
     if valid:
         result["extract_status"] = "drafted"

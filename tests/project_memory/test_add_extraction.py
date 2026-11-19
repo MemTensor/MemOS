@@ -93,3 +93,23 @@ def test_invalid_model_result_does_not_turn_into_a_skip():
     writer = Writer({"episode_summary": "some text"})
     with pytest.raises(ModelError):
         extract_episode(writer, {"id": "episode"}, [row("msg", "user", "更新项目版本")])
+
+
+def test_draft_rejects_numeric_value_missing_from_the_witness():
+    writer = Writer(
+        {
+            "episode_summary": "调整池容量",
+            "drafts": [
+                {
+                    "kind": "decision",
+                    "content": "使用 64 个连接",
+                    "message_id": "one",
+                    "quote": "确认限制为 32 个连接",
+                },
+            ],
+        }
+    )
+    result = extract_episode(
+        writer, {"id": "episode"}, [row("one", "user", "确认限制为 32 个连接")]
+    )
+    assert result["drafts"] == []

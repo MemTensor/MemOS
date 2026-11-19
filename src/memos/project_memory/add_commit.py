@@ -10,6 +10,7 @@ from .add_evidence import text_at
 from .add_index import topic_item_content
 from .add_merge import VersionConflictError
 from .add_store import json_value
+from .types import time_key
 
 
 if TYPE_CHECKING:
@@ -293,7 +294,8 @@ def commit_changeset(
     with store.transaction() as cursor:
         # Lock in the same order as Space clear and domain maintenance.
         cursor.execute(
-            "SELECT * FROM spaces WHERE project_id = %s AND id = %s FOR UPDATE", (project, space)
+            "SELECT *, clock_timestamp() AS commit_clock FROM spaces WHERE project_id = %s AND id = %s FOR UPDATE",
+            (project, space),
         )
         scope = cursor.fetchone()
         if scope is None:
@@ -309,8 +311,9 @@ def commit_changeset(
             or current["outcome"] != "pending"
         ):
             raise VersionConflictError("ChangeSet is from an inactive processing attempt")
-        found_token = ((current.get("organize_result") or {}).get("work") or {}).get("token")
-        if work_token is not None and work_token != found_token:
+        work = (current.get("organize_result") or {}).get("work") or {}
+        expired = work.get("until") and time_key(work["until"]) <= time_key(scope["commit_clock"])
+        if work_token is not None and (work_token != work.get("token") or expired):
             raise VersionConflictError("ChangeSet worker no longer owns its processing lease")
         if scope["cleared_at"] is not None and scope["cleared_at"] >= current["opened_at"]:
             raise EpisodeFenceError("Space was cleared after this Episode was accepted")

@@ -116,3 +116,33 @@ def test_m05_adds_experience_from_draft_with_evidence():
     assert experience["user_ids"] == ["user"]
     assert change["kind"] == "append"
     assert not writer.calls
+
+
+def test_same_conversation_provenance_merges_members_additively():
+    data = plan_for({"kind": "timeline", "content": "池大小设为 16"})
+    topic = data["assignments"][0]["topic"]
+    topic["sources"] = [{"conversation_id": "session", "user_id": "earlier", "agent_id": "cli"}]
+    change = prepare_merge(Writer(), data)
+    assert change["kind"] == "append"
+    (source,) = change["topics"][0]["topic"]["sources"]
+    assert source["user_id"] == ["earlier", "user"]
+    concurrent = {
+        **topic,
+        "version": 2,
+        "sources": [{"conversation_id": "session", "user_id": "concurrent"}],
+    }
+    rebased = rebase_append_only(change, [concurrent])
+    (source,) = rebased["topics"][0]["topic"]["sources"]
+    assert source["user_id"] == ["concurrent", "earlier", "user"]
+
+
+def test_experience_update_preserves_migrated_topic_links():
+    data = plan_for({"kind": "experience", "content": "池大小设为 16"})
+    data["assignments"][0]["topic"]["experiences"] = [
+        {"id": "old", "card": {"principle": "池大小设为 16"}, "legacy_topic_ids": ["secondary"]},
+    ]
+    writer = Writer({"exp.merge": {"action": "confirm", "target_id": "old"}})
+    change = prepare_merge(writer, data)
+    (row,) = change["topics"][0]["topic"]["experiences"]
+    assert row["id"] == "old"
+    assert row["legacy_topic_ids"] == ["secondary"]

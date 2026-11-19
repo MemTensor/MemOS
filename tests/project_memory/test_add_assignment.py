@@ -99,6 +99,38 @@ def test_name_only_match_is_staged():
     assert plan["staging"]["episode_id"] == "new"
 
 
+def test_mention_only_anchor_does_not_establish_same_work():
+    ep = episode(
+        "new",
+        anchor_keys=["path:README.md"],
+        anchors=[
+            {"path": "README.md", "status": "unresolved", "change_kind": "mention"},
+        ],
+    )
+    writer = Writer(
+        [
+            {
+                "action": "attach",
+                "topic_id": "top",
+                "relationship": "same_work",
+                "positive_basis": "shared_anchor",
+                "independently_deliverable": False,
+                "affects_existing_decisions": True,
+            }
+        ]
+    )
+    previous = topic(
+        "top",
+        "project",
+        anchor_keys=["path:README.md"],
+        anchors=[
+            {"path": "README.md", "status": "unresolved", "change_kind": "mention"},
+        ],
+    )
+    plan = organize_episode(writer, ep, recall_candidates(ep, [previous]), [], {}, now=NOW)
+    assert plan["assignments"] == []
+
+
 def test_formation_checks_evidence_and_transfers_prior_episodes():
     ep = episode("new")
     old = episode("old", staged_at=NOW - timedelta(hours=3), staged_attempts=0)

@@ -111,7 +111,19 @@ def test_topic_projection_and_receipt_commit_together_and_replay_once(store):
     edit = changeset("one", draft, basis)
     with pytest.raises(VersionConflictError):
         commit_changeset(store, "one", 1, edit, work_token="expired")
+    with store.transaction() as cursor:
+        cursor.execute(
+            "UPDATE episodes SET organize_result = %s WHERE id = 'one'",
+            (json_value({"work": {"token": "active-token", "until": "2026-01-01T00:00:00Z"}}),),
+        )
+    with pytest.raises(VersionConflictError):
+        commit_changeset(store, "one", 1, edit, work_token="active-token")
     assert not store.read_topics("space")
+    with store.transaction() as cursor:
+        cursor.execute(
+            "UPDATE episodes SET organize_result = %s WHERE id = 'one'",
+            (json_value({"work": {"token": "active-token", "until": "2999-01-01T00:00:00Z"}}),),
+        )
     first = commit_changeset(store, "one", 1, edit, work_token="active-token")
     assert commit_changeset(store, "one", 1, edit, work_token="active-token") == first
     assert first["topic_ids"] == ["topic"]
