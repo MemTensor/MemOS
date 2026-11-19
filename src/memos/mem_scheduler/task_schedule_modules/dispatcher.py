@@ -21,6 +21,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem, ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
+    PROJECT_ADD_TASK_LABELS,
     SCHEDULER_DEFERRED_INFO_KEY,
     SCHEDULER_SKIP_ACK_INFO_KEY,
     RunningTaskItem,
@@ -319,6 +320,8 @@ class SchedulerDispatcher(BaseSchedulerModule):
         task_id_to_doc_id = {}
 
         for msg in messages:
+            if msg.label in PROJECT_ADD_TASK_LABELS:
+                continue
             tid = getattr(msg, "task_id", None)
             if tid:
                 task_ids.add(tid)

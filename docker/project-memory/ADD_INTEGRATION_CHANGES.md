@@ -27,3 +27,7 @@
 `tests/api/test_add_project_routing.py` 检查项目单写、混合写入和重放，旧项目记忆接口由 `tests/project_memory/` 回归。
 
 通用 \`plugins/hooks.py\` 拦截器现在只执行注册的回调。项目视图是否可用由 Add 和 Search 入口校验，避免通用拦截器在 AddHandler 分流之前拒绝有效请求。插件、项目 HTTP 和核心路由回归共 115 项通过。
+
+## 状态查询与投递诊断
+
+状态路由、Scheduler 状态读取和 TaskStatusTracker 增加项目阶段过滤。Redis 的阶段投递结果仍可用于调度诊断，公开项目状态以 Episode 为准，避免中间阶段覆盖混合任务或触发业务完成通知。API 回归覆盖项目阶段失败、个人写入完成以及运行中优先级。

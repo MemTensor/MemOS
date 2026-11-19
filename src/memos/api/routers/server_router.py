@@ -220,7 +220,10 @@ def scheduler_status(
             # merge the core status into it.
             try:
                 core = handlers.scheduler_handler.handle_scheduler_status(
-                    user_id=user_id, task_id=task_id, status_tracker=status_tracker
+                    user_id=user_id,
+                    task_id=task_id,
+                    status_tracker=status_tracker,
+                    prefer_running=True,
                 )
                 project_task = project_view.merge_task_status(project_task, core)
             except Exception:
