@@ -68,7 +68,10 @@ def test_thinking_mode_is_opt_in_and_can_differ_for_internal_judge(model_env):
     }
 
 
-@pytest.mark.parametrize(("backend", "mode"), [("openai", "fast"), ("ollama", "disabled")])
+@pytest.mark.parametrize(
+    ("backend", "mode"),
+    [("openai", "fast"), ("ollama", "disabled"), ("openai_new", "disabled")],
+)
 def test_thinking_mode_rejects_invalid_configuration(model_env, backend, mode):
     model_env.setenv("PROJECT_MEMORY_LLM_BACKEND", backend)
     model_env.setenv("PROJECT_MEMORY_LLM_THINKING_MODE", mode)

@@ -11,7 +11,7 @@
 | PROJECT_MEMORY_LLM_API_KEY | OPENAI_API_KEY | |
 | PROJECT_MEMORY_LLM_TEMPERATURE | 0 | |
 | PROJECT_MEMORY_LLM_MAX_TOKENS | 4096 | |
-| PROJECT_MEMORY_LLM_THINKING_MODE | 提供方默认 | OpenAI 兼容后端的 thinking.type，可设 enabled 或 disabled |
+| PROJECT_MEMORY_LLM_THINKING_MODE | 提供方默认 | OpenAI 兼容 Chat Completions 的 thinking.type，可设 enabled 或 disabled |
 | PROJECT_MEMORY_JUDGE_LLM_THINKING_MODE | 提供方默认 | 判别模型单独设置 thinking.type |
 | PROJECT_MEMORY_JUDGE_LLM_* | 同上一组 | 判别题（段关系）用的模型，可换小模型；同名后缀 |
 | PROJECT_MEMORY_EMBEDDER_* | 核心的 embedder（MOS_EMBEDDER_*） | BACKEND / PROVIDER / MODEL / API_BASE / API_KEY / DIMENSION |
@@ -71,8 +71,10 @@ def llm_config(prefix: str = "PROJECT_MEMORY_LLM") -> dict[str, Any] | None:
     }
     mode_key = f"{prefix}_THINKING_MODE"
     if mode := _env(mode_key):
-        if mode not in {"enabled", "disabled"} or backend not in {"openai", "openai_new"}:
-            raise ValueError(f"{mode_key} requires enabled or disabled with an OpenAI backend")
+        if mode not in {"enabled", "disabled"} or backend != "openai":
+            raise ValueError(
+                f"{mode_key} requires enabled or disabled with the openai Chat Completions backend"
+            )
         options["config"]["extra_body"] = {"thinking": {"type": mode}}
     return options
 
