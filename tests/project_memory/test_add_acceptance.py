@@ -105,6 +105,19 @@ def test_concurrent_full_replay_uses_original_task(add_store):
     assert sum(result.duplicate for result in results) == 1
 
 
+def test_replay_uses_original_task_after_a_domain_is_added(add_store):
+    _spaces(add_store, "space-a")
+    accept = AddAcceptance(add_store)
+    assert accept.accept(_request("original", "message-a")).task_id == "original"
+    with add_store.transaction() as cursor:
+        cursor.execute(
+            "INSERT INTO domains (id, space_id, domain) VALUES ('new-domain', 'space-a', 'new-work')"
+        )
+    replay = accept.accept(_request("different-id", "message-a"))
+    assert replay.task_id == "original"
+    assert replay.duplicate
+
+
 def test_closed_at_turn_count_and_mixed_task_replay_rejected(add_store):
     _spaces(add_store, "space-a")
     accept = AddAcceptance(add_store, AcceptanceSettings(max_turns=2))
