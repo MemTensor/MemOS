@@ -98,6 +98,7 @@ def concat_original_source(
             if source is None:
                 continue
             sources.append((memory, source))
-        concat_string = process_source(sources)
+        # Keep the candidate text when none of the selected source fields exists.
+        concat_string = process_source(sources) if sources else (memory or "")
         documents.append(concat_string)
     return documents
