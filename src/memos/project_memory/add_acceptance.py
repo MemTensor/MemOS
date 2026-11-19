@@ -13,7 +13,7 @@ from uuid import uuid4
 from memos.api.project_fields import PROJECT_MAX_SPACES, normalize_str_list
 
 from .add_ingestion import AddRequestError as AddRequestError
-from .add_ingestion import normalize_turns, task_boundary
+from .add_ingestion import normalize_turns, task_boundary, turn_source
 from .add_store import json_value
 
 
@@ -125,7 +125,9 @@ class AddAcceptance:
             closed = []
             for space in scopes:
                 new_turns = [
-                    turn for turn in turns if (space["id"], turn[0]["message_id"]) not in owners
+                    turn
+                    for turn in turns
+                    if (space["id"], turn_source(turn)["message_id"]) not in owners
                 ]
                 if new_turns:
                     closed.extend(self._append_space(cursor, ctx, space, new_turns))
@@ -176,7 +178,7 @@ class AddAcceptance:
                 self.store.project_id,
                 ctx.conversation_key,
                 spaces,
-                [turn[0]["message_id"] for turn in turns],
+                [turn_source(turn)["message_id"] for turn in turns],
             ),
         )
         return {(row["space_id"], row["turn_id"]): row for row in cursor.fetchall()}
@@ -245,7 +247,7 @@ class AddAcceptance:
         )
         turn_seq = cursor.fetchone()["last_seq"]
         for turn in turns:
-            turn_id = turn[0]["message_id"]
+            turn_id = turn_source(turn)["message_id"]
             already_stored = [message for message in turn if message["message_id"] in stored]
             if already_stored:
                 self._validate_existing_turn(cursor, ctx, turn_id, turn, already_stored, stored)
@@ -341,7 +343,7 @@ class AddAcceptance:
                 closed.append(self._close(cursor, episode["id"], "task_boundary", ctx.now))
                 episode = None
             if episode is None:
-                episode = self._open(cursor, ctx, space, turn[0]["chat_time"])
+                episode = self._open(cursor, ctx, space, turn_source(turn)["chat_time"])
                 count, size = 0, 0
             count += 1
             size += self._record_turn(cursor, ctx, space, episode, turn, count)
@@ -365,7 +367,7 @@ class AddAcceptance:
             """SELECT COUNT(DISTINCT et.turn_id) AS turns,
                       COALESCE(SUM(char_length(m.content) + COALESCE(char_length(m.tool_calls::text), 0)), 0) AS size
                FROM episode_turns et JOIN messages m USING (project_id, conversation_key, turn_id)
-               WHERE et.project_id = %s AND et.episode_id = %s""",
+               WHERE et.project_id = %s AND et.episode_id = %s AND m.role <> 'system'""",
             (self.store.project_id, episode_id),
         )
         row = cursor.fetchone()
@@ -416,7 +418,7 @@ class AddAcceptance:
         turn: list[dict[str, Any]],
         position: int,
     ) -> int:
-        first = turn[0]
+        first = turn_source(turn)
         cursor.execute(
             """INSERT INTO episode_turns (project_id, space_id, conversation_key, turn_id, episode_id,
                     turn_seq, message_count, task_id, user_id, agent_id, chat_time, accepted_at)
@@ -436,9 +438,10 @@ class AddAcceptance:
                 ctx.now,
             ),
         )
+        processing = [message for message in turn if message["role"] != "system"]
         anchor_input = [
             {**message, "conversation_key": ctx.conversation_key, "origin_task_id": ctx.task_id}
-            for message in turn
+            for message in processing
         ]
         anchors = (
             self.anchor_collector(anchor_input, space["resource_bindings"])
@@ -466,7 +469,7 @@ class AddAcceptance:
                WHERE project_id = %s AND id = %s""",
             (
                 episode["idle_due_at"],
-                max(message["chat_time"] for message in turn),
+                max(message["chat_time"] for message in processing),
                 json_value(episode["anchors"]),
                 episode["anchor_keys"],
                 ctx.now,
@@ -477,7 +480,7 @@ class AddAcceptance:
         )
         return sum(
             len(msg["content"]) + len(json.dumps(msg["tool_calls"], ensure_ascii=False))
-            for msg in turn
+            for msg in processing
         )
 
     @staticmethod
