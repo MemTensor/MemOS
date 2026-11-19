@@ -373,6 +373,22 @@ class APISearchRequest(BaseRequest):
     )
     user_id: str = Field(..., description="User ID")
 
+    include_memory_view: list[str] | None = Field(
+        None, description="Explicit project, trajectory or personal recall channels"
+    )
+    project_item_types: list[str] | None = Field(
+        None, description="Requested topic, decision, experience and timeline components"
+    )
+    project_result_format: str = Field("topic", description="Grouped topic or flat item results")
+    space_ids: str | list[str] | None = Field(
+        None, description="Authorized project spaces, up to 20"
+    )
+    domains: str | list[str] | None = Field(None, description="Registered project domains")
+    conversation_id: str | None = Field(None, description="Cloud name for the current session")
+    memory_limit_number: int | None = Field(
+        None, description="Total project results; zero uses 9, values above 25 use 25"
+    )
+
     # ==== Cube scoping ====
     readable_cube_ids: list[str] | None = Field(
         None,
@@ -940,6 +956,22 @@ class AddStatusRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID")
 
 
+class ProjectListRequest(BaseRequest):
+    space_id: str
+    mem_cube_id: str | None = None
+    page: int = Field(1, ge=1)
+    size: int | None = Field(None, ge=1)
+    page_size: int | None = Field(None, ge=1)
+    filter: dict[str, Any] | None = None
+
+
+class ProjectMessagesRequest(BaseRequest):
+    conversation_id: str = Field(min_length=1)
+    space_id: str | None = None
+    message_limit_number: int | None = Field(None, ge=1)
+    user_id: str | None = None
+
+
 class GetMemoryRequest(BaseRequest):
     """Request model for getting memories."""
 
@@ -1054,6 +1086,13 @@ class GetCreateKnowledgebaseData(BaseModel):
 class SearchMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
+    topic_detail_list: list[MemoryDetail] = Field(default_factory=list)
+    project_item_list: list[MemoryDetail] = Field(default_factory=list)
+    trajectory_detail_list: list[MemoryDetail] = Field(default_factory=list)
+    channels: list[str] = Field(default_factory=list)
+    degraded: list[str] = Field(default_factory=list)
+    truncated: bool = False
+
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )
@@ -1098,6 +1137,7 @@ class GetKnowledgebaseFileData(BaseModel):
 class GetMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
+    topic_detail_list: list[MemoryDetail] = Field(default_factory=list)
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )
