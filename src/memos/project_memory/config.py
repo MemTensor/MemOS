@@ -11,6 +11,8 @@
 | PROJECT_MEMORY_LLM_API_KEY | OPENAI_API_KEY | |
 | PROJECT_MEMORY_LLM_TEMPERATURE | 0 | |
 | PROJECT_MEMORY_LLM_MAX_TOKENS | 4096 | |
+| PROJECT_MEMORY_LLM_THINKING_MODE | 提供方默认 | OpenAI 兼容后端的 thinking.type，可设 enabled 或 disabled |
+| PROJECT_MEMORY_JUDGE_LLM_THINKING_MODE | 提供方默认 | 判别模型单独设置 thinking.type |
 | PROJECT_MEMORY_JUDGE_LLM_* | 同上一组 | 判别题（段关系）用的模型，可换小模型；同名后缀 |
 | PROJECT_MEMORY_EMBEDDER_* | 核心的 embedder（MOS_EMBEDDER_*） | BACKEND / PROVIDER / MODEL / API_BASE / API_KEY / DIMENSION |
 | PROJECT_MEMORY_GRAPH_DB | sqlite | sqlite：自己的 SQLite 文件（单进程、本机试用）；postgres：项目记忆自己的 Postgres 表（pg_backend.py，多副本共享，带 rev 条件写与中文全文）；shared：直接用核心的 graph_db（须支持 search_by_fulltext 与 rev 条件写，neo4j 两种后端都不支持） |
@@ -49,8 +51,9 @@ def llm_config(prefix: str = "PROJECT_MEMORY_LLM") -> dict[str, Any] | None:
     api_key = _env(f"{prefix}_API_KEY", f"{base}_API_KEY", "OPENAI_API_KEY")
     if not model or not api_key:
         return None
-    return {
-        "backend": _env(f"{prefix}_BACKEND", f"{base}_BACKEND", default="openai"),
+    backend = _env(f"{prefix}_BACKEND", f"{base}_BACKEND", default="openai")
+    options: dict[str, Any] = {
+        "backend": backend,
         "config": {
             "model_name_or_path": model,
             "api_key": api_key,
@@ -66,6 +69,12 @@ def llm_config(prefix: str = "PROJECT_MEMORY_LLM") -> dict[str, Any] | None:
             "remove_think_prefix": True,
         },
     }
+    mode_key = f"{prefix}_THINKING_MODE"
+    if mode := _env(mode_key):
+        if mode not in {"enabled", "disabled"} or backend not in {"openai", "openai_new"}:
+            raise ValueError(f"{mode_key} requires enabled or disabled with an OpenAI backend")
+        options["config"]["extra_body"] = {"thinking": {"type": mode}}
+    return options
 
 
 def build_llm(prefix: str = "PROJECT_MEMORY_LLM") -> Any | None:
