@@ -1,8 +1,11 @@
 import json
+import re
 import time
 
 from datetime import datetime
 from typing import Any, Literal
+
+from neo4j.exceptions import ClientError
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
 from memos.dependency import require_python_package
@@ -11,6 +14,13 @@ from memos.log import get_logger
 
 
 logger = get_logger(__name__)
+
+# Pattern for validating Cypher property names — alphanumeric + underscore,
+# must start with letter or underscore (same as base._VALID_FIELD_NAME_RE)
+_VALID_PROPERTY_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+# Lucene special characters that need escaping in fulltext queries
+_LUCENE_SPECIAL_CHARS = frozenset(r'+-&|!(){}[]^"~*?:\\/')
 
 
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -1011,10 +1021,145 @@ class Neo4jGraphDB(BaseGraphDB):
         **kwargs,
     ) -> list[dict]:
         """
-        TODO: Implement fulltext search for Neo4j to be compatible with TreeTextMemory's keyword/fulltext recall path.
-        Currently, return an empty list to avoid runtime errors due to missing methods when switching to Neo4j.
+        Fulltext keyword search using Neo4j's built-in Apache Lucene fulltext index.
+
+        Creates a FULLTEXT INDEX on the ``memory`` property if it doesn't already
+        exist, then executes a keyword-based search via
+        ``db.index.fulltext.queryNodes``.
+
+        Compatible with TreeTextMemory's keyword/fulltext recall path.
+
+        Args:
+            query_words: List of search terms (keywords). Each word is combined
+                with OR in the Lucene query string.
+            top_k: Maximum number of results.
+            scope: Filter by memory_type (e.g. 'WorkingMemory').
+            status: Filter by status (e.g. 'activated', 'archived').
+            threshold: Minimum score threshold.
+            search_filter: Additional property filters on nodes.
+            user_name: User isolation filter.
+            filter: Advanced filter conditions.
+            knowledgebase_ids: KB ids for multi-tenant filtering.
+            tsquery_config: Unused — kept for interface compatibility with
+                PolarDB.
+
+        Returns:
+            list[dict]: Results with ``id`` and ``score``, ordered by relevance
+            score descending.
         """
-        return []
+        if not query_words:
+            return []
+
+        user_name = user_name if user_name else self.config.user_name
+
+        # Build Lucene query: escape each word and join with OR
+        escaped_words = [
+            self._escape_lucene_query(word.strip())
+            for word in query_words
+            if word.strip()
+        ]
+        if not escaped_words:
+            return []
+
+        # Ensure fulltext index exists (lazy creation)
+        self._ensure_fulltext_index()
+
+        lucene_query = " OR ".join(escaped_words)
+        logger.info(
+            "[search_by_fulltext] lucene_query=%s top_k=%s scope=%s status=%s user_name=%s",
+            lucene_query,
+            top_k,
+            scope,
+            status,
+            user_name,
+        )
+
+        # ---- WHERE clauses for post-filtering on fulltext results ----
+        where_clauses: list[str] = []
+        params: dict[str, Any] = {
+            "lucene_query": lucene_query,
+            "top_k": top_k,
+        }
+
+        if scope:
+            where_clauses.append("node.memory_type = $scope")
+            params["scope"] = scope
+        if status:
+            where_clauses.append("node.status = $status")
+            params["status"] = status
+
+        # User isolation (shared-database multi-tenant)
+        user_name_conditions, user_name_params = (
+            self._build_user_name_and_kb_ids_conditions_cypher(
+                user_name=user_name,
+                knowledgebase_ids=knowledgebase_ids,
+                default_user_name=self.config.user_name,
+                node_alias="node",
+            )
+        )
+        if user_name_conditions:
+            if len(user_name_conditions) == 1:
+                where_clauses.append(user_name_conditions[0])
+            else:
+                where_clauses.append(f"({' OR '.join(user_name_conditions)})")
+        params.update(user_name_params)
+
+        # search_filter (property equality filters)
+        if search_filter:
+            for key in search_filter:
+                if not _VALID_PROPERTY_NAME_RE.match(key):
+                    logger.warning(
+                        "[search_by_fulltext] skipping invalid filter key: %s", key
+                    )
+                    continue
+                param_name = f"filter_{key}"
+                where_clauses.append(f"node.{key} = ${param_name}")
+                params[param_name] = search_filter[key]
+
+        # Advanced filter conditions
+        filter_conditions, filter_params = self._build_filter_conditions_cypher(
+            filter=filter,
+            param_counter_start=0,
+            node_alias="node",
+        )
+        where_clauses.extend(filter_conditions)
+        params.update(filter_params)
+
+        # ---- Assemble Cypher query ----
+        where_clause = ""
+        if where_clauses or threshold is not None:
+            if threshold is not None:
+                where_clauses.append("score >= $threshold")
+                params["threshold"] = threshold
+            where_clause = "WHERE " + " AND ".join(where_clauses)
+
+        query = f"""
+            CALL db.index.fulltext.queryNodes(
+                'memory_fulltext_index',
+                $lucene_query
+            ) YIELD node, score
+            WITH node, score
+            {where_clause}
+            RETURN node.id AS id, score
+            ORDER BY score DESC
+            LIMIT $top_k
+        """
+
+        logger.info("[search_by_fulltext] query=%s params_keys=%s", query, list(params.keys()))
+
+        with self.driver.session(database=self.db_name) as session:
+            result = session.run(query, params)
+            records = []
+            for record in result:
+                item: dict[str, Any] = {"id": record["id"], "score": record["score"]}
+                records.append(item)
+
+        logger.info(
+            "[search_by_fulltext] returned %d results (threshold=%s)",
+            len(records),
+            threshold,
+        )
+        return records
 
     def get_by_metadata(
         self,
@@ -1701,6 +1846,70 @@ class Neo4jGraphDB(BaseGraphDB):
                 if record["name"] == index_name:
                     return True
         return False
+
+    def _ensure_fulltext_index(self) -> None:
+        """Create the fulltext index on ``memory`` if it doesn't exist.
+
+        Uses ``CREATE FULLTEXT INDEX ... IF NOT EXISTS`` so this is safe
+        to call on every fulltext search invocation.
+        """
+        index_name = "memory_fulltext_index"
+        if self._fulltext_index_exists(index_name):
+            return
+        try:
+            self._create_fulltext_index(index_name)
+        except Exception as e:
+            logger.warning("Failed to create fulltext index '%s': %s", index_name, e)
+
+    def _fulltext_index_exists(self, index_name: str = "memory_fulltext_index") -> bool:
+        """Check whether a FULLTEXT index with *index_name* exists."""
+        query = (
+            "SHOW FULLTEXT INDEXES YIELD name WHERE name = $name RETURN name"
+        )
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                result = session.run(query, name=index_name)
+                return result.single() is not None
+        except ClientError:
+            # Fallback for older Neo4j versions that don't support
+            # SHOW FULLTEXT INDEXES — use SHOW INDEXES instead.
+            return self._index_exists(index_name)
+
+    def _create_fulltext_index(
+        self, index_name: str = "memory_fulltext_index"
+    ) -> None:
+        """Create a FULLTEXT INDEX on ``Memory.memory`` for keyword search."""
+        if not _VALID_PROPERTY_NAME_RE.match(index_name):
+            raise ValueError(f"Invalid fulltext index name: {index_name!r}")
+        if not _VALID_PROPERTY_NAME_RE.match(index_name):
+            raise ValueError(f"Invalid fulltext index name: {index_name!r}")
+        query = f"""
+            CREATE FULLTEXT INDEX {index_name} IF NOT EXISTS
+            FOR (n:Memory) ON EACH [n.memory]
+        """
+        with self.driver.session(database=self.db_name) as session:
+            session.run(query)
+        logger.info("Fulltext index '%s' created.", index_name)
+
+    @staticmethod
+    def _escape_lucene_query(term: str) -> str:
+        r"""Escape special characters in a single Lucene query term.
+
+        Characters escaped: ``+ - && || ! ( ) { } [ ] ^ " ~ * ? : \ /``
+
+        Returns the term unmodified if it is a wildcard-only string (e.g. ``*``).
+        """
+        if not term:
+            return term
+        _LUCENE_WILDCARDS = frozenset("*?")
+        if all(ch in _LUCENE_WILDCARDS for ch in term):
+            return term
+        escaped = []
+        for ch in term:
+            if ch in _LUCENE_SPECIAL_CHARS:
+                escaped.append("\\")
+            escaped.append(ch)
+        return "".join(escaped)
 
     def _build_user_name_and_kb_ids_conditions_cypher(
         self,
