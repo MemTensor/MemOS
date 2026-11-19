@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
+from memos.exceptions import VectorDBError
 
 
 # ---------------------------------------------------------------------------
@@ -58,32 +59,13 @@ class TestDeleteNodeByPramsVecCleanup:
     """delete_node_by_prams must remove vectors from vec_db after graph deletion."""
 
     def _make_session_mock(self, db: "Neo4jCommunityGraphDB", ids_to_delete: list[str]):  # noqa: F821
-        """Wire a session that returns `ids_to_delete` from the pre-delete ID query.
-
-        The fixed implementation makes exactly 2 session.run calls:
-          1) id_collect_query  — MATCH ... RETURN n.id AS id
-          2) delete_query      — MATCH ... DETACH DELETE n
-        """
+        """Wire deletion records returned from an explicit graph transaction."""
         session_ctx = MagicMock()
         session_ctx.__enter__ = MagicMock(return_value=session_ctx)
         session_ctx.__exit__ = MagicMock(return_value=False)
 
-        # First run: id_collect_query — yields records with record["id"] == the node id
-        id_records = []
-        for nid in ids_to_delete:
-            record = MagicMock()
-            # capture nid via default argument to avoid late-binding closure
-            record.__getitem__ = MagicMock(
-                side_effect=lambda k, _id=nid: _id if k == "id" else None
-            )
-            id_records.append(record)
-        id_result = MagicMock()
-        id_result.__iter__ = MagicMock(return_value=iter(id_records))
-
-        # Second run: delete_query — return value is not inspected
-        delete_result = MagicMock()
-
-        session_ctx.run.side_effect = [id_result, delete_result]
+        transaction = session_ctx.begin_transaction.return_value.__enter__.return_value
+        transaction.run.return_value = [{"id": nid} for nid in ids_to_delete]
         db.driver.session.return_value = session_ctx
         return session_ctx
 
@@ -129,13 +111,60 @@ class TestDeleteNodeByPramsVecCleanup:
         db.vec_db.delete.assert_not_called()
         assert result == 0
 
-    def test_vec_db_delete_failure_does_not_raise(self, community_config):
-        """A vec_db failure during cleanup must log a warning, not crash the request."""
+    def test_vec_db_delete_failure_propagates_without_graph_commit(self, community_config):
         db = _make_db(community_config)
-        ids = ["eee-555"]
-        self._make_session_mock(db, ids)
-        db.vec_db.delete.side_effect = RuntimeError("qdrant unavailable")
+        session = self._make_session_mock(db, ["eee-555"])
+        transaction = session.begin_transaction.return_value.__enter__.return_value
+        db.vec_db.delete.side_effect = OSError("Synthetic vector outage")
 
-        # Should not raise — graph deletion already succeeded
-        result = db.delete_node_by_prams(memory_ids=ids)
-        assert result >= 0
+        with pytest.raises(VectorDBError):
+            db.delete_node_by_prams(memory_ids=["eee-555"])
+
+        transaction.commit.assert_not_called()
+
+    def test_deletion_uses_one_graph_statement_and_purges_before_commit(self, community_config):
+        db = _make_db(community_config)
+        session = self._make_session_mock(db, ["aaa-111"])
+        transaction = session.begin_transaction.return_value.__enter__.return_value
+        order = []
+        db.vec_db.delete.side_effect = lambda ids: order.append(("vectors", ids))
+        transaction.commit.side_effect = lambda: order.append(("commit", None))
+
+        result = db.delete_node_by_prams(writable_cube_ids=["alice"], memory_ids=["aaa-111"])
+
+        assert result == 1
+        session.run.assert_not_called()
+        transaction.run.assert_called_once()
+        query = transaction.run.call_args.args[0]
+        assert "DETACH DELETE n" in query
+        assert "RETURN id" in query
+        assert transaction.run.call_args.kwargs["cube_id_0"] == "alice"
+        assert order == [("vectors", ["aaa-111"]), ("commit", None)]
+
+    def test_graph_statement_failure_does_not_remove_vectors(self, community_config):
+        db = _make_db(community_config)
+        session = self._make_session_mock(db, ["aaa-111"])
+        transaction = session.begin_transaction.return_value.__enter__.return_value
+        transaction.run.side_effect = OSError("Synthetic graph outage")
+
+        with pytest.raises(OSError):
+            db.delete_node_by_prams(memory_ids=["aaa-111"])
+
+        db.vec_db.delete.assert_not_called()
+        transaction.commit.assert_not_called()
+
+    def test_no_matching_nodes_does_not_remove_vectors(self, community_config):
+        db = _make_db(community_config)
+        self._make_session_mock(db, [])
+
+        assert db.delete_node_by_prams(memory_ids=["absent"]) == 0
+        db.vec_db.delete.assert_not_called()
+
+    def test_file_deletion_requires_cube_scope(self, community_config):
+        db = _make_db(community_config)
+
+        with pytest.raises(ValueError, match="writable_cube_ids"):
+            db.delete_node_by_prams(file_ids=["file-1"])
+
+        db.driver.session.assert_not_called()
+        db.vec_db.delete.assert_not_called()

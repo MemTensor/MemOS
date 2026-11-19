@@ -414,7 +414,8 @@ class TreeTextMemory(BaseTextMemory):
         try:
             self.graph_store.delete_node_by_prams(memory_ids=memory_ids)
         except Exception as e:
-            logger.error(f"An error occurred while deleting memories by memory_ids: {e}")
+            logger.error("Failed to delete memories by memory_ids: %s", e)
+            raise
 
     def delete_all(self, user_name: str | None = None) -> None:
         """Delete all memories and their relationships from the graph store."""

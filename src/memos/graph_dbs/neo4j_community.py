@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
+from memos.exceptions import VectorDBError
 from memos.graph_dbs.neo4j import (
     Neo4jGraphDB,
     _flatten_info_fields,
@@ -957,10 +958,11 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             int: Number of nodes deleted.
         """
         logger.info(
-            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
-        )
-        print(
-            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+            "[delete_node_by_prams] memory_count=%d, file_count=%d, cube_count=%d, has_filter=%s",
+            len(memory_ids or []),
+            len(file_ids or []),
+            len(writable_cube_ids or []),
+            bool(filter),
         )
 
         # file_ids deletion must be scoped by writable_cube_ids.
@@ -1031,53 +1033,27 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         else:
             ids_where = data_conditions
 
-        logger.info(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
+        # Return IDs from the deletion itself so concurrent matches cannot drift
+        # between a separate ID lookup and the graph mutation.
+        delete_query = (
+            f"MATCH (n:Memory) WHERE {ids_where} WITH n, n.id AS id DETACH DELETE n RETURN id"
         )
-        print(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
-        )
+        with (
+            self.driver.session(database=self.db_name) as session,
+            session.begin_transaction() as transaction,
+        ):
+            records = list(transaction.run(delete_query, **params))
+            deleted_ids = [record["id"] for record in records if record["id"] is not None]
+            if deleted_ids:
+                try:
+                    self.vec_db.delete(deleted_ids)
+                except Exception as exc:
+                    # Leave graph nodes available for a retry if vector cleanup fails.
+                    raise VectorDBError("Failed to delete memory vectors; retry deletion") from exc
+            transaction.commit()
 
-        # Collect IDs before deletion so we can purge vectors from vec_db afterwards.
-        id_collect_query = f"MATCH (n:Memory) WHERE {ids_where} RETURN n.id AS id"
-        logger.info("[delete_node_by_prams] id_collect_query: %s", id_collect_query)
-
-        # Delete nodes
-        delete_query = f"MATCH (n:Memory) WHERE {ids_where} DETACH DELETE n"
-        logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-
-        deleted_count = 0
-        collected_ids: list[str] = []
-        try:
-            with self.driver.session(database=self.db_name) as session:
-                # Collect IDs of nodes that are about to be deleted
-                id_result = session.run(id_collect_query, **params)
-                collected_ids = [record["id"] for record in id_result if record["id"] is not None]
-                deleted_count = len(collected_ids)
-
-                # Delete nodes from graph
-                session.run(delete_query, **params)
-
-        except Exception as e:
-            logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
-            raise
-
-        # Purge corresponding embedding vectors so they are no longer searchable.
-        # This is the fix for #2331: the graph node was removed but stale vectors
-        # in vec_db caused deleted memories to resurface in search results.
-        if collected_ids:
-            try:
-                self.vec_db.delete(collected_ids)
-                logger.info(
-                    "[delete_node_by_prams] Purged %d vectors from vec_db", len(collected_ids)
-                )
-            except Exception as e:
-                logger.warning(
-                    "[delete_node_by_prams] vec_db cleanup failed (graph deletion already succeeded): %s",
-                    e,
-                )
-
-        logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
+        deleted_count = len(records)
+        logger.info("[delete_node_by_prams] Successfully deleted %d nodes", deleted_count)
         return deleted_count
 
     def clear(self, user_name: str | None = None) -> None:
