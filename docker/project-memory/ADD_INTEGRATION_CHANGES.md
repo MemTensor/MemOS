@@ -1,0 +1,15 @@
+# Add 对接改动记录
+
+以 `promem_dev-rjf` 为底座，沿用现有 API Handler、调度器和项目记忆模块分工。
+
+## 调度器的延迟与确认
+
+| 入口 | 原行为 | 改动与必要性 |
+| --- | --- | --- |
+| `mem_scheduler/schemas/task_schemas.py`、`task_schedule_modules/dispatcher.py` | Handler 返回或抛错后，整批消息同步标记结果并在 Redis 中确认。 | 新增与 Enterprise 一致的逐消息延迟和跳过 ACK 标志。持久化接力暂时失败时，指定消息仍可被其他 worker 接管。普通消息继续沿用原有的完成、失败与 ACK 行为。 |
+
+`tests/mem_scheduler/test_deferred_delivery.py` 检查同一批成功、重投和待认领消息的状态，以及 handler 抛错时的确认行为。
+
+## 格式检查的基线修复
+
+`project_view.py` 的三处说明、`experience.py` 和 `service.py` 的仅类型导入，以及旧接口测试的类属性类型，均为通过当前分支的全仓 Ruff 检查所需。项目记忆旧接口回归和调度器回归共 37 项通过。

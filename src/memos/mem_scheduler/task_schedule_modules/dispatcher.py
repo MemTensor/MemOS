@@ -20,7 +20,12 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_STOP_WAIT,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem, ScheduleMessageItem
-from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem, TaskPriorityLevel
+from memos.mem_scheduler.schemas.task_schemas import (
+    SCHEDULER_DEFERRED_INFO_KEY,
+    SCHEDULER_SKIP_ACK_INFO_KEY,
+    RunningTaskItem,
+    TaskPriorityLevel,
+)
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
@@ -119,6 +124,10 @@ class SchedulerDispatcher(BaseSchedulerModule):
             return
         # This is handled in BaseScheduler now
 
+    @staticmethod
+    def _non_deferred_messages(messages: list[ScheduleMessageItem]) -> list[ScheduleMessageItem]:
+        return [msg for msg in messages if not (msg.info or {}).get(SCHEDULER_DEFERRED_INFO_KEY)]
+
     def _create_task_wrapper(self, handler: Callable, task_item: RunningTaskItem):
         """
         Create a wrapper around the handler to track task execution and capture results.
@@ -134,6 +143,10 @@ class SchedulerDispatcher(BaseSchedulerModule):
         def wrapped_handler(messages: list[ScheduleMessageItem]):
             start_time = time.time()
             start_iso = datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat()
+            for msg in messages:
+                if msg.info:
+                    msg.info.pop(SCHEDULER_DEFERRED_INFO_KEY, None)
+                    msg.info.pop(SCHEDULER_SKIP_ACK_INFO_KEY, None)
             if self.status_tracker:
                 for msg in messages:
                     self.status_tracker.task_started(task_id=msg.item_id, user_id=msg.user_id)
@@ -202,9 +215,10 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 duration = finish_time - start_time
                 self.metrics.observe_task_duration(duration, m.user_id, m.label)
                 if self.status_tracker:
-                    for msg in messages:
+                    completed = self._non_deferred_messages(messages)
+                    for msg in completed:
                         self.status_tracker.task_completed(task_id=msg.item_id, user_id=msg.user_id)
-                    self._maybe_emit_task_completion(messages)
+                    self._maybe_emit_task_completion(completed)
                 self.metrics.task_completed(user_id=m.user_id, task_type=m.label)
 
                 emit_monitor_event(
@@ -238,11 +252,12 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 finish_time = time.time()
                 self.metrics.task_failed(m.user_id, m.label, type(e).__name__)
                 if self.status_tracker:
-                    for msg in messages:
+                    failed = self._non_deferred_messages(messages)
+                    for msg in failed:
                         self.status_tracker.task_failed(
                             task_id=msg.item_id, user_id=msg.user_id, error_message=str(e)
                         )
-                    self._maybe_emit_task_completion(messages, error=e)
+                    self._maybe_emit_task_completion(failed, error=e)
                 emit_monitor_event(
                     "finish",
                     m,
@@ -270,13 +285,15 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
                 raise
             finally:
-                # Ensure Redis messages are acknowledged even if handler fails
+                # ACK delivered messages unless a handler left one pending for reclaim.
                 if (
                     isinstance(self.memos_message_queue, SchedulerRedisQueue)
                     and self.memos_message_queue is not None
                 ):
                     try:
                         for msg in messages:
+                            if (msg.info or {}).get(SCHEDULER_SKIP_ACK_INFO_KEY):
+                                continue
                             redis_message_id = msg.redis_message_id
                             self.memos_message_queue.ack_message(
                                 user_id=msg.user_id,

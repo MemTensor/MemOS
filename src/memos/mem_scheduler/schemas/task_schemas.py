@@ -40,6 +40,10 @@ API_MIX_SEARCH_TASK_LABEL = "api_mix_search"
 PREF_ADD_TASK_LABEL = "pref_add"
 MEM_FEEDBACK_TASK_LABEL = "mem_feedback"
 
+# Set by a handler after dispatch. These flags do not travel on a new delivery.
+SCHEDULER_DEFERRED_INFO_KEY = "_scheduler_deferred"
+SCHEDULER_SKIP_ACK_INFO_KEY = "_scheduler_skip_ack"
+
 # Additional constants moved from general_schemas
 DEFAULT_MAX_QUERY_KEY_WORDS = 1000
 LONG_TERM_MEMORY_TYPE = "LongTermMemory"
