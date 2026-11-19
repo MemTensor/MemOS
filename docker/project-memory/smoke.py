@@ -1,213 +1,271 @@
 #!/usr/bin/env python3
-"""对已启动的服务跑一遍项目记忆冒烟（走 HTTP，不 import 服务端代码）。
-
-    python3 docker/project-memory/smoke.py                       # 默认 http://127.0.0.1:8000
-    python3 docker/project-memory/smoke.py --base http://host:8000 --scenario decision
-
-依次：health → create_space → add/message ×N → flush（会话结束）→ get/status →
-search/memory → get/memory（space_id）→ get/memory/{topic} → get_message → delete_memory。
-
-样例数据用 examples/project_memory/mock_rounds.json（构造的：决策七轮 + 经验三段）。
-环境变了（模型、库）先跑这个，比单元测试更接近线上。
-"""
+"""Exercise project Add through its product HTTP routes using isolated synthetic Spaces."""
 
 from __future__ import annotations
 
 import argparse
-import json
+import os
 import sys
 import time
 
-from pathlib import Path
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
 
 
-ROOT = Path(__file__).resolve().parents[2]
+USER = "promem_smoke"
+DOMAIN = "本地验收"
+DECISION = (
+    "决定了：蓝莓构建的验证报告保留 14 天，索引写入 artifacts/blueberry/reports.json。",
+    "收到。蓝莓构建的验证报告保留 14 天，索引写入 artifacts/blueberry/reports.json。",
+)
+EXPERIENCE = (
+    "这次已经验证：蓝莓构建报告的索引写到临时文件，校验成功后再原子重命名。"
+    "直接覆盖索引时进程重启会留下半个 JSON。请把验证过的做法记入项目经验。",
+    "已用中断重启验证，临时文件校验后原子重命名可避免读到不完整的 JSON。",
+)
 
 
-def load_rounds(scenario: str) -> list[dict]:
-    data = json.loads(
-        (ROOT / "examples/project_memory/mock_rounds.json").read_text(encoding="utf-8")
-    )
-    if scenario == "decision":
-        return data["decision"]
-    if scenario == "experience":
-        return data["experience"]
-    return data["decision"] + data["experience"]
+class SmokeError(Exception):
+    """A product response violated a smoke assertion."""
 
 
-def check(name: str, cond: bool, detail: str = "") -> bool:
-    print(f"  {'✓' if cond else '✗'} {name}{('：' + detail) if detail and not cond else ''}")
-    return cond
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SmokeError(message)
 
 
-def wait_task(c: httpx.Client, user_id: str, task_id: str, timeout: float = 240.0) -> dict:
-    """整理是异步的（调度器里跑），轮询到 completed / failed，或超时。"""
-    deadline = time.time() + timeout
-    st: dict = {}
-    while time.time() < deadline:
-        st = c.get(
-            "/product/scheduler/status", params={"user_id": user_id, "task_id": task_id}
-        ).json()["data"][0]
-        if st["status"] in ("completed", "failed"):
-            return st
-        time.sleep(2)
-    return st
+def response_data(response: httpx.Response) -> dict | list:
+    response.raise_for_status()
+    body = response.json()
+    require(body.get("code") == 200, f"{response.request.url.path} did not succeed: {body}")
+    return body["data"]
 
 
-def post(c: httpx.Client, path: str, body: dict) -> dict:
-    r = c.post(path, json=body)
-    if r.status_code != 200:
-        raise SystemExit(f"{path} → {r.status_code}: {r.text[:600]}")
-    return r.json()
+def post(client: httpx.Client, path: str, payload: dict) -> dict | list:
+    return response_data(client.post(path, json=payload))
+
+
+def task_status(client: httpx.Client, task_id: str) -> dict:
+    response = client.get("/product/scheduler/status", params={"user_id": USER, "task_id": task_id})
+    return response_data(response)[0]
+
+
+def project_result(status: dict) -> dict:
+    return status["memory_views"]["project"]
+
+
+def wait_closed(client: httpx.Client, task_id: str, timeout: float) -> dict:
+    """Wait for a closed Episode even when an open one reports completed."""
+    deadline = time.monotonic() + timeout
+    while True:
+        state = task_status(client, task_id)
+        require(state["status"] != "failed", f"Project Add failed: {project_result(state)}")
+        if state["status"] == "completed" and project_result(state)["open_episode_messages"] == 0:
+            return state
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SmokeError(f"Task {task_id} did not finish a closed Episode: {state}")
+        time.sleep(min(0.5, remaining))
+
+
+def payload(
+    run_id: str,
+    step: str,
+    texts: tuple[str, str],
+    spaces: list[str],
+    chat_time: datetime,
+    *,
+    conversation_id: str | None = None,
+    sync: bool = False,
+) -> dict:
+    task_id = str(uuid5(NAMESPACE_URL, f"{run_id}/{step}"))
+    return {
+        "task_id": task_id,
+        "user_id": USER,
+        "allow_memory_view": ["project"],
+        "space_ids": spaces,
+        "domains": [DOMAIN],
+        "async_mode": "sync" if sync else "async",
+        **({"conversation_id": conversation_id} if conversation_id else {}),
+        "messages": [
+            {
+                "message_id": f"{task_id}:{role}",
+                "role": role,
+                "content": text,
+                "chat_time": (chat_time + timedelta(seconds=order)).isoformat(),
+            }
+            for order, (role, text) in enumerate(zip(("user", "assistant"), texts, strict=True))
+        ],
+    }
+
+
+def add(client: httpx.Client, body: dict) -> dict:
+    row = post(client, "/product/add", body)[0]
+    require(row["memory_view"] == "project", "Add response did not contain project memory")
+    require(row["status"] in {"running", "completed"}, f"Add failed: {row}")
+    return row
+
+
+def assert_open(client: httpx.Client, task_id: str) -> None:
+    state = task_status(client, task_id)
+    require(state["status"] == "completed", f"Open Episode should remain buffered: {state}")
+    count = project_result(state)["open_episode_messages"]
+    require(count == 2, f"One Turn in two Spaces should report two open messages, got {count}")
+
+
+def assert_source(
+    client: httpx.Client, conversation: str, spaces: list[str], turns: list[dict]
+) -> None:
+    original = [message for turn in turns for message in turn["messages"]]
+    expected = [(message["message_id"], message["content"]) for message in original]
+    for scope in [{}, *({"space_id": space} for space in spaces)]:
+        data = post(client, "/product/get_message", {"conversation_id": conversation, **scope})
+        replayed = [(item["message_id"], item["content"]) for item in data["message_detail_list"]]
+        require(replayed == expected, "Original messages were duplicated, omitted or changed")
+
+
+def run_smoke(
+    client: httpx.Client,
+    peer: httpx.Client,
+    *,
+    scenario: str,
+    wait_seconds: float,
+    keep: bool,
+    require_topic: bool,
+) -> None:
+    for endpoint in (client, peer):
+        endpoint.get("/health").raise_for_status()
+    run_id = f"promem-smoke-{uuid4().hex}"
+    conversation = f"{run_id}:conversation"
+    now = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=1)
+    spaces: list[str] = []
+    try:
+        for index, endpoint in enumerate((client, peer), 1):
+            space = post(
+                endpoint,
+                "/product/create_space",
+                {"space_name": f"{run_id}-{index}", "domains": [{"name": DOMAIN}]},
+            )
+            spaces.append(space["space_id"])
+
+        fixtures = {
+            "decision": [DECISION],
+            "experience": [EXPERIENCE],
+            "all": [DECISION, EXPERIENCE],
+        }
+        for index, texts in enumerate(fixtures[scenario], 1):
+            one_shot = payload(run_id, f"standalone-{index}", texts, spaces, now, sync=True)
+            receipt = add(client, one_shot)
+            require(receipt["task_id"] == one_shot["task_id"], "Standalone Task ID changed")
+            wait_closed(peer, receipt["task_id"], wait_seconds)
+        print("PASS standalone Add closed in both Spaces")
+
+        first = payload(run_id, "open", DECISION, spaces, now, conversation_id=conversation)
+        task = add(client, first)["task_id"]
+        assert_open(peer, task)
+        replay = {**first, "task_id": str(uuid4())}
+        require(add(peer, replay)["task_id"] == task, "Exact replay returned a new Task ID")
+        assert_source(client, conversation, spaces, [first])
+
+        conflicting = deepcopy(replay)
+        conflicting["messages"][0]["content"] += " 同一个 ID 的正文发生变化。"
+        rejected = peer.post("/product/add", json=conflicting)
+        require(rejected.status_code == 409, f"Conflicting replay returned {rejected.status_code}")
+        foreign = peer.get(
+            "/product/scheduler/status", params={"user_id": "promem_smoke_other", "task_id": task}
+        )
+        require(foreign.status_code == 404, f"Unowned Task returned {foreign.status_code}")
+        print("PASS shared open receipt, source deduplication, replay conflict and owner isolation")
+
+        end = payload(
+            run_id,
+            "end",
+            ("到此为止。", "收到。"),
+            spaces,
+            now + timedelta(seconds=4),
+            conversation_id=conversation,
+        )
+        ending = add(peer, end)["task_id"]
+        completed = wait_closed(client, task, wait_seconds)
+        wait_closed(client, ending, wait_seconds)
+        continued = payload(
+            run_id,
+            "continued",
+            (
+                "补充刚才的决定：蓝莓构建的验证报告改为保留 21 天。索引路径不变。",
+                "收到，验证报告保留 21 天，索引路径保持原样。",
+            ),
+            spaces,
+            now + timedelta(seconds=8),
+            conversation_id=conversation,
+        )
+        new_task = add(client, continued)["task_id"]
+        require(new_task != task, "Continuing the conversation reused the closed Task")
+        assert_open(peer, new_task)
+        require(
+            project_result(task_status(peer, task))["open_episode_messages"] == 0,
+            "Closed Task reopened",
+        )
+        assert_source(peer, conversation, spaces, [first, end, continued])
+        print("PASS explicit Episode closure and same-conversation continuation")
+
+        if require_topic:
+            topic_ids = set(project_result(completed)["memory_ids"])
+            for space in spaces:
+                memory = post(peer, "/product/get_memory", {"space_id": space})
+                require(
+                    any(topic["id"] in topic_ids for topic in memory["topic_detail_list"]),
+                    f"No committed Topic for Space {space}; check Formation configuration and model",
+                )
+            print("PASS committed Topics visible in both Spaces")
+    finally:
+        if keep:
+            print(f"Scratch Spaces: {', '.join(spaces)}")
+        else:
+            for space in spaces:
+                try:
+                    post(client, "/product/delete_space", {"space_id": space})
+                except (httpx.HTTPError, SmokeError, ValueError) as exc:
+                    print(f"Could not clean scratch Space {space}: {exc}", file=sys.stderr)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="http://127.0.0.1:8000")
-    ap.add_argument("--scenario", default="all", choices=["all", "decision", "experience"])
-    ap.add_argument("--timeout", type=float, default=180.0, help="单次请求超时（整段整理是同步的）")
-    ap.add_argument("--keep", action="store_true", help="跑完不清空主题")
-    args = ap.parse_args()
-
-    ok = True
-    with httpx.Client(base_url=args.base, timeout=args.timeout) as c:
-        h = c.get("/health")
-        ok &= check("health", h.status_code == 200, h.text[:200])
-        if h.status_code != 200:
-            return 1
-
-        sp = post(
-            c,
-            "/product/create_space",
-            {
-                "space_name": "MemOS 云服务（冒烟）",
-                "instructions": "术语以 PRD 为准",
-                "domains": [
-                    {"name": "代码开发", "description": "接口与存储实现"},
-                    {"name": "产品设计"},
-                ],
-            },
-        )["data"]
-        sid = sp["space_id"]
-        ok &= check("create_space 返回 space_id", bool(sid), str(sp))
-        ok &= check("领域已建", len(sp["domains"]) == 2)
-
-        rounds = load_rounds(args.scenario)
-        task_ids: list[tuple[str, str]] = []
-        for rnd in rounds:
-            t0 = time.time()
-            data = post(
-                c,
-                "/product/add",
-                {
-                    "user_id": rnd["user_id"],
-                    "conversation_id": rnd["conversation_id"],
-                    "space_ids": sid,
-                    "allow_memory_view": ["project"],
-                    "messages": rnd["messages"],
-                },
-            )["data"][0]
-            task = data["task_id"]
-            task_ids.append((rnd["user_id"], task))
-            # 先把这一轮的 add 整理完，再发会话结束（否则段还没建，flush 找不到它）
-            wait_task(c, rnd["user_id"], task)
-            fl = post(
-                c,
-                "/product/flush_project_memory",
-                {"space_id": sid, "conversation_id": rnd["conversation_id"], "task_id": task},
-            )["data"]
-            st = wait_task(c, rnd["user_id"], task)
-            print(
-                f"■ {rnd['label']}  add={data['status']}  flush={time.time() - t0:.1f}s  "
-                f"status={st['status']}  topics={len(st['memory_views']['project']['memory_ids'])}"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base", default="http://127.0.0.1:8000")
+    parser.add_argument("--peer", help="second API endpoint sharing PostgreSQL and Redis")
+    parser.add_argument("--scenario", default="all", choices=["all", "decision", "experience"])
+    parser.add_argument("--timeout", type=float, default=180, help="HTTP request timeout (seconds)")
+    parser.add_argument("--wait", type=float, default=240, help="closed Episode timeout (seconds)")
+    parser.add_argument("--keep", action="store_true", help="retain the scratch Spaces")
+    parser.add_argument(
+        "--require-topic", action="store_true", help="also require both Topics to commit"
+    )
+    args = parser.parse_args()
+    headers = (
+        {"Authorization": f"Bearer {token}"} if (token := os.getenv("MEMOS_SMOKE_TOKEN")) else {}
+    )
+    try:
+        with (
+            httpx.Client(base_url=args.base, timeout=args.timeout, headers=headers) as client,
+            httpx.Client(
+                base_url=args.peer or args.base, timeout=args.timeout, headers=headers
+            ) as peer,
+        ):
+            run_smoke(
+                client,
+                peer,
+                scenario=args.scenario,
+                wait_seconds=args.wait,
+                keep=args.keep,
+                require_topic=args.require_topic,
             )
-            for line in fl.get("trace") or []:
-                print("   " + line)
-            ok &= check(f"{rnd['label']} 整理完成", st["status"] == "completed", str(st))
-            ok &= check(
-                f"{rnd['label']} 归到主题",
-                bool(st["memory_views"]["project"]["memory_ids"]),
-                str(st),
-            )
-
-        got = post(
-            c,
-            "/product/search",
-            {
-                "user_id": "user_x",
-                "query": "本机整理结果怎么存？",
-                "space_ids": [sid],
-                "include_memory_view": ["project"],
-                "memory_limit_number": 3,
-            },
-        )["data"]
-        topics = got.get("topic_detail_list") or []
-        ok &= check(
-            "search/memory 返回主题", bool(topics), json.dumps(got, ensure_ascii=False)[:400]
-        )
-        if topics:
-            t = topics[0]
-            for key in (
-                "id",
-                "space_id",
-                "domain",
-                "topic_name",
-                "topic_summary",
-                "topic_description",
-                "decisions",
-                "experiences",
-                "timeline",
-                "relativity",
-            ):
-                ok &= check(f"主题字段 {key}", key in t)
-            ok &= check("search 不返回 sources", "sources" not in t)
-            for d in t.get("decisions") or []:
-                ok &= check(
-                    "决策带 content/time/user_ids", {"content", "time", "user_ids"} <= set(d)
-                )
-
-        full = post(c, "/product/get_memory", {"space_id": sid})["data"]
-        full_topics = full.get("topic_detail_list") or []
-        ok &= check(
-            "get/memory 按 space 返回",
-            full.get("total", 0) >= 1,
-            json.dumps(full, ensure_ascii=False)[:300],
-        )
-        if full_topics:
-            ft = full_topics[0]
-            ok &= check("get/memory 带来源会话", bool(ft.get("sources")))
-            ok &= check("get/memory 带 create_time", bool(ft.get("create_time")))
-            if ft.get("decisions"):
-                ok &= check("决策带来源", bool(ft["decisions"][0].get("source")))
-            one = c.get(f"/product/get_memory/{ft['id']}").json()["data"]["topic_detail_list"][0]
-            ok &= check("get/memory/{id} 与列表一致", one["id"] == ft["id"])
-
-        msgs = post(c, "/product/get_message", {"conversation_id": rounds[-1]["conversation_id"]})[
-            "data"
-        ]
-        ok &= check("get_message 有消息", bool(msgs.get("message_detail_list")))
-
-        if not args.keep:
-            deleted = post(c, "/product/delete_memory", {"space_id": sid})["data"]
-            ok &= check("delete_memory 清空主题", bool(deleted.get("deleted_topic_ids")))
-            after = post(c, "/product/get_memory", {"space_id": sid})["data"]
-            ok &= check("清空后主题为 0", after.get("total") == 0)
-            ok &= check(
-                "清空后领域还在",
-                bool(post(c, "/product/list_domains", {"space_id": sid})["data"]["domains"]),
-            )
-
-    print("\n冒烟：" + ("全部通过" if ok else "有不通过项"))
-    if args.keep:
-        body = json.dumps({"space_id": sid})
-        print(f"数据已保留，space_id = {sid}")
-        print(
-            f"查看主题、决策、经验：curl -s -X POST {args.base}/product/get_memory "
-            f"-H 'Content-Type: application/json' -d '{body}' | python3 -m json.tool"
-        )
-    return 0 if ok else 1
+    except (httpx.HTTPError, KeyError, SmokeError, ValueError) as exc:
+        print(f"FAIL project-memory smoke: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
