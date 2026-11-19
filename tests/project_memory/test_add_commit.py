@@ -1,9 +1,14 @@
 import os
 import uuid
 
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
 import pytest
 
+from memos.project_memory.add_acceptance import AcceptanceSettings, AddAcceptance
 from memos.project_memory.add_commit import DraftWitnessError, commit_changeset
+from memos.project_memory.add_extraction import extract_episode
 from memos.project_memory.add_index import index_changeset, ranked_topics
 from memos.project_memory.add_merge import VersionConflictError, prepare_merge
 from memos.project_memory.add_store import PostgresAddStore, json_value
@@ -253,3 +258,94 @@ def test_commit_checks_the_original_assistant_proposal(store, role, same_convers
     else:
         with pytest.raises(DraftWitnessError, match="earlier assistant proposal"):
             commit_changeset(store, "adopted", 1, prepared)
+
+
+@pytest.mark.parametrize("proposal_id", ["earlier-proposal", "later-proposal"])
+def test_commit_checks_adoption_in_conversation_order_across_episodes(store, proposal_id):
+    now = datetime(2026, 11, 19, tzinfo=timezone.utc)
+    acceptance = AddAcceptance(store, AcceptanceSettings(max_turns=1), clock=lambda: now)
+    proposal = "建议把池大小设为 16。"
+    authorization = "同意，按这个方案执行。"
+    (earlier_id,) = acceptance.accept(
+        SimpleNamespace(
+            task_id="proposal-task",
+            user_id="user",
+            space_ids=["space"],
+            conversation_id="adoption",
+            messages=[
+                {"message_id": "question", "role": "user", "content": "池大小用多少？"},
+                {"message_id": "earlier-proposal", "role": "assistant", "content": proposal},
+            ],
+        )
+    ).closed_episode_ids
+    now += timedelta(seconds=1)
+    (current_id,) = acceptance.accept(
+        SimpleNamespace(
+            task_id="authorization-task",
+            user_id="user",
+            space_ids=["space"],
+            conversation_id="adoption",
+            messages=[
+                {"message_id": "authorization", "role": "user", "content": authorization},
+                {"message_id": "later-proposal", "role": "assistant", "content": proposal},
+            ],
+        )
+    ).closed_episode_ids
+
+    current = store.load_episode(current_id)
+    previous = current["previous"]
+    assert previous["id"] == earlier_id
+    assert previous["turns"][0]["turn_seq"] == current["turns"][0]["turn_seq"] == 1
+    proposal_row = previous["messages"][1]
+    authorization_row = current["messages"][0]
+    assert (proposal_row["turn_seq"], proposal_row["msg_seq"]) == (1, 2)
+    assert (authorization_row["turn_seq"], authorization_row["msg_seq"]) == (2, 1)
+    writer = SimpleNamespace(
+        write=lambda *_args: {
+            "episode_summary": "选择池大小",
+            "drafts": [
+                {
+                    "kind": "decision",
+                    "content": "池大小设为 16",
+                    "message_id": "authorization",
+                    "quote": authorization,
+                    "origin": "adopted",
+                    "context": [{"message_id": "earlier-proposal", "quote": proposal}],
+                }
+            ],
+        }
+    )
+    (draft,) = extract_episode(writer, current, current["messages"], previous["messages"])["drafts"]
+    if proposal_id == "later-proposal":
+        # Simulate a forged reference to the same quote after authorization in the current Turn.
+        ref = {**draft["context_refs"][0], "message_id": proposal_id}
+        draft["context_refs"] = [ref]
+        for evidence in draft["evidence"]:
+            if evidence.get("kind") == "assistant_proposal":
+                evidence["ref"] = ref
+    with store.transaction() as cursor:
+        cursor.execute(
+            "UPDATE episodes SET state = 'extracted', stage = 'committing', attempt = 1, drafts = %s "
+            "WHERE id = %s",
+            (json_value([draft]), current_id),
+        )
+    prepared = changeset(
+        current_id,
+        draft,
+        {
+            "id": "topic",
+            "space_id": "space",
+            "domain": "project",
+            "version": None,
+            "topic_name": "Connection pool",
+            "topic_description": "",
+        },
+    )
+    if proposal_id == "earlier-proposal":
+        assert commit_changeset(store, current_id, 1, prepared)["topic_ids"] == ["topic"]
+        (topic,) = store.read_topics("space")
+        assert topic["decisions"][0]["content"] == "池大小设为 16"
+    else:
+        with pytest.raises(DraftWitnessError, match="earlier assistant proposal"):
+            commit_changeset(store, current_id, 1, prepared)
+        assert not store.read_topics("space")

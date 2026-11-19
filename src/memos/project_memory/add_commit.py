@@ -43,10 +43,11 @@ def _quote_matches(row: dict, ref: dict, quote: str) -> bool:
 
 
 def _assistant_precedes(proposal: dict, authorization: dict) -> bool:
+    # Message Turn positions continue across Episodes in the same conversation.
     return (
         proposal["role"] == "assistant"
-        and (proposal["witness_turn_seq"], proposal["msg_seq"])
-        < (authorization["witness_turn_seq"], authorization["msg_seq"])
+        and (proposal["turn_seq"], proposal["msg_seq"])
+        < (authorization["turn_seq"], authorization["msg_seq"])
         and proposal["chat_time"] <= authorization["chat_time"]
         and proposal["accepted_at"] <= authorization["accepted_at"]
         and proposal["witness_accepted_at"] <= authorization["witness_accepted_at"]
@@ -75,8 +76,7 @@ def _assert_witnesses(cursor: Any, episode: dict) -> None:
         allowed_episodes.append(previous)
     cursor.execute(
         """SELECT m.*, et.task_id AS origin_task_id, et.user_id AS origin_user_id,
-                  et.episode_id AS witness_episode_id, et.turn_seq AS witness_turn_seq,
-                  et.accepted_at AS witness_accepted_at
+                  et.episode_id AS witness_episode_id, et.accepted_at AS witness_accepted_at
            FROM episode_turns et JOIN messages m USING (project_id, conversation_key, turn_id)
            WHERE et.project_id = %s AND et.space_id = %s AND et.conversation_key = %s
              AND et.episode_id = ANY(%s::text[])""",
