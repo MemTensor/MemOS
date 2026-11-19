@@ -103,7 +103,7 @@ def _member_stance_times(row: dict, options: dict[str, ConflictItem]) -> dict[st
     if isinstance(recorded, dict):
         for member, value in recorded.items():
             if timestamp := _iso_utc(value):
-                times[member] = timestamp
+                times[member] = max(timestamp, times.get(member, ""), key=time_key)
     return times
 
 
@@ -157,6 +157,10 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
 
     if draft.time:
         times[draft.user_id] = draft.time
+        if applied.action == decision.OP_RESOLVE:
+            # The resolution supersedes the stances behind every considered option.
+            for option in options.values():
+                times.update(dict.fromkeys(option.user_ids, draft.time))
     if memory is None:
         # Reaffirming an item advances only the speaker's private stance time.
         if received_time > previous_time:
