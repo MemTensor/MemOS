@@ -6,6 +6,13 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(__dirname, "../../..");
 
 describe("production dependency staging", () => {
+  it("pins the packaged runtime transpiler to its validated lock version", () => {
+    const pkg = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    const lock = JSON.parse(readFileSync(path.join(repoRoot, "package-lock.json"), "utf8"));
+    // DSH resolves a published tarball with pnpm, which does not use its npm lock.
+    expect(pkg.dependencies.tsx).toBe(lock.packages["node_modules/tsx"].version);
+  });
+
   it("ignores development-only peer conflicts in the Unix installer", () => {
     const source = readFileSync(path.join(repoRoot, "install.sh"), "utf8");
     const installCommand = source

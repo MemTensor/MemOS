@@ -27,8 +27,8 @@ Verification output:
 ```text
 make format: All checks passed! / 642 files left unchanged
 npm test: Test Files 192 passed (192)
-          Tests 1668 passed | 3 skipped (1671)
-pytest apps/memos-local-plugin/tests/python -q: 143 passed in 4.83s
+          Tests 1669 passed | 3 skipped (1672)
+pytest apps/memos-local-plugin/tests/python -q: 143 passed in 5.64s
 npm run lint: passed
 npm run build:package: passed
 npm run lock:check: SQLite 13.0.3 lock metadata verified
@@ -74,11 +74,67 @@ version exemption. Actual startup created SQLite storage and returned HTTP
 stopped each Web process with exit code 130. The prior rc.5 smoke produced
 the same results.
 
+### Fresh installation and real local-model round trip
+
+A fresh official DSH 0.2.2-rc.5 CLI was installed using npm with normal
+dependency lifecycle scripts. The branch source was built and packed with
+npm pack, including its prepack build. The local tarball retained the
+branch's package version 2.0.16-beta.1 and was identified by its branch
+contents rather than an npm release tag.
+
+The first actual installer run failed with ERR_PNPM_IGNORED_BUILDS for
+esbuild@0.28.2. The tarball's tsx range ^4.21.0 resolved to 4.23.15 under
+pnpm, which ignores the tarball's npm lock. A failing regression reproduced
+the manifest/validated-version mismatch. Pinning tsx to the already locked
+4.21.0, with both lock importers synchronized, resolved the installation
+failure while retaining the existing reviewed script policy.
+
+The rebuilt source tarball was installed into a second fresh DSH home using
+the official Unix installer and an isolated pnpm 11.7.0. Actual installed
+versions were tsx 4.21.0, esbuild 0.27.7, better-sqlite3 13.0.3 and
+onnxruntime-node 1.24.3. The installer's SQLite write/read probe and bundled
+ONNX CPU backend probe both passed.
+
+A real Ollama-backed headless test used existing local qwen2.5:0.5b and
+nomic-embed-text models. The MemOS auxiliary LLM calls used DSH's host-model
+bridge, and the embedding endpoint produced 768-dimensional embeddings.
+For the small local model, the test profile retained the MemOS tools and
+disabled unrelated tool providers. The initial full-tool profile exceeded
+Ollama's 4096-token context and produced off-topic answers, so that run was
+not used as evidence of answer correctness.
+
+The successful test created a fresh memory directory and separate DSH
+sessions/processes for each prompt:
+
+1. Store the synthetic fact that Project Orchid-Z91 uses port 47381.
+   The model replied SAVED and the first trace was persisted.
+2. Restart DSH into a new session and ask for the project's port without
+   supplying the number. The model answered Project Orchid-Z91 port 47381.
+3. Ask the model to call memos_search. The real tool call completed, returned
+   the two earlier memories, and the final answer included port 47381.
+
+The compressed V4 session logs confirmed a producer-owned MemOS recall
+message containing memos_context and the correct port in the second and
+third sessions. SQLite had three persisted traces with embedding vectors,
+and PRAGMA integrity_check returned ok. Each successful headless turn
+exited 0 and its lightweight capture reported warnings=0. Ollama's server
+log also recorded HTTP 500 responses during auxiliary activity, while
+these turns and captures completed successfully.
+
+The headless --json stdout also includes MemOS core log lines. This test
+parsed the JSON event lines separately and preserved the complete output.
+Strict NDJSON-only stdout is an outstanding integration limitation.
+
+These tests used package-manager-installed dependency trees and synthetic
+local inputs. The temporary Ollama server was stopped after validation.
+
 ### Remaining verification and release scope
 
-Authenticated model conversations, packaged Desktop applications on macOS,
-Windows and Linux, fresh native-dependency installation, live embedding
-model downloads, and production-profile upgrades remain unverified.
+Cloud-provider authenticated conversations, packaged Desktop applications
+on macOS, Windows and Linux, live model downloads, and production-profile
+upgrades remain unverified. Fresh installation was exercised on macOS with
+DSH rc.5, Node.js 25.1.0 and pnpm 11.7.0. Other platform/runtime installation
+combinations and full-tool agent answer quality remain unverified.
 The Cloud plugin and other DSH previews are outside this validation.
 These source changes have not been published to npm.
 

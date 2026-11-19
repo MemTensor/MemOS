@@ -5,6 +5,11 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
+- Unreleased — Pin the packaged tsx runtime to the validated 4.21.0 so
+  fresh DSH profile installs retain the reviewed esbuild 0.27.7 build policy.
+  Verified a source-tarball installation and a real local-model memory
+  write/recall/tool-search round trip on DSH 0.2.2-rc.5.
+
 - Unreleased — Admit the five validated DSH `0.2.2-rc.1` through
   `0.2.2-rc.5` versions explicitly. Pin their fixtures to Cordis `4.1.0`
   with matching session codecs and validate plugin/host Cordis peers.
