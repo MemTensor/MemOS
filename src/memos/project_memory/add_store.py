@@ -167,9 +167,20 @@ class PostgresAddStore:
         with self.transaction(readonly=True) as cursor:
             cursor.execute(
                 """SELECT e.*, (SELECT COUNT(*) FROM episode_turns et
-                                  WHERE et.project_id = e.project_id AND et.episode_id = e.id) AS turn_count
-                   FROM episodes e WHERE e.project_id = %s AND e.space_id = %s AND e.staged_status = 'active'
-                   ORDER BY e.last_turn_at DESC, e.id LIMIT %s""",
+                                  WHERE et.project_id = e.project_id AND et.episode_id = e.id) AS turn_count,
+                          CASE WHEN p.id IS NOT NULL THEN jsonb_build_object(
+                              'result', p.result, 'staged_status', p.staged_status,
+                              'moved_to_topic_id', p.moved_to_topic_id
+                          ) END AS previous
+                   FROM (
+                       SELECT * FROM episodes
+                       WHERE project_id = %s AND space_id = %s AND staged_status = 'active'
+                       ORDER BY last_turn_at DESC, id LIMIT %s
+                   ) e
+                   LEFT JOIN episodes p ON p.id = e.previous_episode_id
+                       AND p.project_id = e.project_id AND p.space_id = e.space_id
+                       AND p.conversation_key = e.conversation_key
+                   ORDER BY e.last_turn_at DESC, e.id""",
                 (self.project_id, space_id, limit),
             )
             return cursor.fetchall()

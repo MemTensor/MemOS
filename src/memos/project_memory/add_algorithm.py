@@ -126,7 +126,13 @@ def recall_candidates(
     )
     ep_keys = set(episode.get("anchor_keys") or [])
     ep_strong_keys = strong_anchor_keys(episode.get("anchors") or [])
-    previous = set(((episode.get("previous") or {}).get("result") or {}).get("topic_ids") or [])
+    predecessor = episode.get("previous") or {}
+    previous = set((predecessor.get("result") or {}).get("topic_ids") or [])
+    destination = predecessor.get("moved_to_topic_id")
+    if predecessor.get("staged_status") == "moved" and isinstance(destination, str):
+        # Formation moves the prior Episode without rewriting its task receipt.
+        previous.add(destination)
+    previous.intersection_update(by_id)
     explicit_references = {tid for tid, topic in by_id.items() if _topic_ref(episode, topic)}
     conversation = episode.get("conversation_id")
     same_conversation = {
@@ -169,7 +175,7 @@ def recall_candidates(
         ),
         "conversation": (
             1.5,
-            sorted(previous & by_id.keys()) + sorted(same_conversation - previous),
+            sorted(previous) + sorted(same_conversation - previous),
         ),
         "explicit_reference": (2.0, sorted(explicit_references)),
     }

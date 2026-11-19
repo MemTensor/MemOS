@@ -55,14 +55,26 @@ def episode(eid, **extra):
     }
 
 
-def test_recall_preserves_predecessor_and_does_not_expose_other_domains_or_drafts():
-    ep = episode("new", previous={"result": {"topic_ids": ["prior"]}})
+@pytest.mark.parametrize(
+    "previous",
+    [
+        {"result": {"topic_ids": ["prior"]}},
+        {
+            "result": {"topic_ids": []},
+            "staged_status": "moved",
+            "moved_to_topic_id": "prior",
+        },
+    ],
+    ids=["committed", "moved"],
+)
+def test_recall_preserves_predecessor_and_does_not_expose_other_domains_or_drafts(previous):
+    ep = episode("new", previous=previous)
     ranked = recall_candidates(
         ep,
         [
             topic("excluded", "other"),
             topic("top", "project"),
-            topic("prior", "project", "Unrelated title"),
+            topic("prior", "project", "Unrelated title", topic_summary="Unrelated overview"),
         ],
         limit=1,
     )
@@ -94,6 +106,23 @@ def test_recall_preserves_predecessor_and_does_not_expose_other_domains_or_draft
     )
     assert plan["assignments"][0]["topic"]["id"] == "prior"
     assert "secret draft content" not in str(writer.calls[0][1])
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [topic("prior", "other"), topic("prior", "project", space_id="foreign")],
+    ids=["other-domain", "other-space"],
+)
+def test_moved_predecessor_target_must_still_be_in_scope(destination):
+    current = episode(
+        "new",
+        previous={
+            "result": {"topic_ids": []},
+            "staged_status": "moved",
+            "moved_to_topic_id": "prior",
+        },
+    )
+    assert recall_candidates(current, [destination]) == []
 
 
 def test_name_only_match_is_staged():
