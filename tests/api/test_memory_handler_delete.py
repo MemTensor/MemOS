@@ -140,3 +140,22 @@ def test_delete_memories_with_pref_mem_disabled():
         writable_cube_ids=None,
         filter={"and": [{"user_id": "u_1"}]},
     )
+
+
+def test_vector_delete_failure_reaches_api_response():
+    from types import SimpleNamespace
+
+    from memos.exceptions import VectorDBError
+    from memos.memories.textual.tree import TreeTextMemory
+
+    memory = TreeTextMemory.__new__(TreeTextMemory)
+    memory.graph_store = Mock()
+    memory.graph_store.get_nodes.return_value = []
+    memory.graph_store.delete_node_by_prams.side_effect = VectorDBError("Synthetic vector outage")
+    cube = SimpleNamespace(text_mem=memory)
+    request = DeleteMemoryRequest(memory_ids=["synthetic-id"])
+
+    response = handle_delete_memories(request, cube)
+
+    assert response.data["status"] == "failure"
+    memory.graph_store.delete_node_by_prams.assert_called_once_with(memory_ids=["synthetic-id"])
