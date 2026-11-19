@@ -48,8 +48,11 @@
 
 ## 本地验收记录
 
-- `make format` 通过。使用隔离 PostgreSQL 17.12、pgvector 0.8.7 和 Redis 7.4.5 跑完整 `make test`，1017 项通过，9 项跳过。测试设置了 Hugging Face 离线模式，使用已安装依赖。
+- `make format` 通过。使用隔离 PostgreSQL 17.12、pgvector 0.8.7 和 Redis 7.4.5 跑完整 `make test`，1019 项通过，9 项跳过。测试设置了 Hugging Face 离线模式，使用已安装依赖。
 - `make openapi` 导出成功。确认 `/product/add`、`/product/scheduler/status` 可用，PostgreSQL 路径已移除旧 flush。
 - Redis 停机期间，Add 返回 HTTP 200 并保留持久状态。结束受理该请求的 worker 后恢复 Redis，另一实例补投并只生成一个已提交 Topic。提交应答丢失和过期工作租约由 PostgreSQL 故障用例覆盖。
 - 旧 SQLite 快照完成预检和导入，迁移前后源库 SHA256 一致，目标的 Topic、Episode 和历史归档通过对账。PostgreSQL 源库读取和事务回滚也有专项用例。
 - 本机配置的 Haiku 网关返回 HTTP 503。改用同一网关的 Claude Sonnet 4.6，对合成决策完成真实模型抽取、Formation 和提交，产生一个已提交 Topic。
+
+- 两实例部署配置增加共享 Redis、可信项目 ID 和可选副本。新版冒烟由合成会话驱动，直接核对原文、开放 Task、重复 ID、跨实例续写和已提交主题。
+- Enterprise 临时试合入解决了五处文本冲突，重点核对 Add/Search 入口和已有调度能力。真实 PostgreSQL 与 Redis 上运行项目记忆和调度回归，207 项通过。
