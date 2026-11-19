@@ -146,6 +146,26 @@ def test_space_and_domain_crud(app):
     assert list(after) == ["代码开发", "产品设计", "运营物料", "测试"]
     assert after["代码开发"] == before["代码开发"]
 
+    # 同一批里重名的整批失败（PRD 共同规则），三个批量接口都一样
+    for path, doms in (
+        ("/product/create_domains", [{"name": "甲"}, {"name": "甲"}]),
+        ("/product/update_domains", [{"name": "测试"}, {"name": "测试", "new_name": "乙"}]),
+        ("/product/delete_domains", ["测试", "测试"]),
+    ):
+        r = client.post(path, json={"space_id": sid, "domains": doms})
+        assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_DUPLICATE", path
+    r = client.post(
+        "/product/create_space",
+        json={"space_name": "x", "domains": [{"name": "甲"}, {"name": "甲"}]},
+    )
+    assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_DUPLICATE"
+    assert [
+        d["name"]
+        for d in client.post("/product/list_domains", json={"space_id": sid}).json()["data"][
+            "domains"
+        ]
+    ] == ["代码开发", "产品设计", "运营物料", "测试"]
+
     # 已不存在的名称忽略（PRD）
     r = client.post(
         "/product/delete_domains",

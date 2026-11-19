@@ -16,7 +16,7 @@ REASONS: list[tuple[str, int, str]] = [
     ("主题不在这个 Space 里", 404, "TOPIC_NOT_FOUND"),
     ("未配置领域", 400, "SPACE_DOMAIN_NOT_CONFIGURED"),
     ("领域未登记", 400, "DOMAIN_NOT_REGISTERED"),
-    ("领域已存在", 400, "DOMAIN_ALREADY_EXISTS"),
+    ("同一批里领域重名", 400, "DOMAIN_DUPLICATE"),
     ("每个 Space 最多", 400, "DOMAIN_LIMIT_EXCEEDED"),
     ("领域改名冲突", 400, "DOMAIN_RENAME_CONFLICT"),
     ("领域仍被主题引用", 400, "DOMAIN_IN_USE"),
