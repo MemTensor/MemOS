@@ -32,8 +32,11 @@ logger.info(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    yield
-    shutdown_components(server_router_module.components)
+    try:
+        yield
+    finally:
+        shutdown_components(server_router_module.components)
+        plugin_manager.shutdown()
 
 
 app = FastAPI(

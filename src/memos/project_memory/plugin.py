@@ -1,31 +1,26 @@
-"""项目记忆插件（照 Dream 的形状）。
-
-- `enabled_by_default=False`，用 `MEMOS_ENABLED_PLUGINS=project_memory` 打开；
-- `on_load` 注册核心声明的 7 个单实现钩子（`H.PROJECT_MEMORY_*`），核心经这些钩子把
-  add / search / get_memory / delete_memory / scheduler/status 里 `project` 的部分交给本插件；
-- 调度：受理时经插件上下文的 `submit_scheduler_messages` 投 `project_memory` 标签的消息，
-  核心的 `ProjectMemoryMessageHandler` 按 Space 加锁后回调 `H.PROJECT_MEMORY_EXECUTE`；
-- `init_app` 注册新增接口：Space 4 个、领域 4 个、get_message（见 routes.py）。
-
-配置（见 config.py，全部可用环境变量覆盖，没配的退回核心的配置）：
-- 模型：`PROJECT_MEMORY_LLM_*`（抽取/更新/合并/归主题）、`PROJECT_MEMORY_JUDGE_LLM_*`（判别题）；
-  都没配时用插件上下文里的核心 `llm`。
-- 向量模型：`PROJECT_MEMORY_EMBEDDER_*`；没配时用核心的 `embedder`。
-- 存储：默认用项目记忆自己的 SQLite 库（`PROJECT_MEMORY_SQLITE_PATH`）；
-  `PROJECT_MEMORY_GRAPH_DB=postgres` 用自己的 Postgres，`shared` 用核心的 graph_db。
-"""
+"""Assemble the project-memory service, storage and scheduler stage providers."""
 
 from __future__ import annotations
 
-import logging
+import os
+import threading
 
+from pathlib import Path
 from typing import Any
 
+from memos.log import get_logger
+from memos.mem_scheduler.schemas.task_schemas import PROJECT_ADD_TASK_LABELS
+from memos.mem_scheduler.task_schedule_modules.handlers.project_memory_handler import (
+    PROJECT_ADD_STAGE_HOOKS,
+)
 from memos.plugins.base import MemOSPlugin
 from memos.plugins.hook_defs import H
 from memos.plugins.result_kinds import register_result_kind
 
 from . import config as pm_config
+from .add_acceptance import AddRequestError
+from .add_runtime import EpisodeAddRuntime
+from .add_store import PostgresAddStore
 from .errors import from_service, http_error, reason_of
 from .judge import ModelHub
 from .locks import InProcessLocks
@@ -33,7 +28,7 @@ from .service import ProjectMemoryService
 from .store import ProjectStore
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 PROJECT_RESULT_KIND = "project_mem"  # 项目记忆在核心检索结果里的类别名
 
@@ -49,6 +44,8 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
     def on_load(self) -> None:
         self.context: dict[str, Any] = {"shared": {}, "configs": {}}
         self._service: ProjectMemoryService | None = None
+        self._runtime: EpisodeAddRuntime | None = None
+        self._init_lock = threading.RLock()
         self._local_locks = InProcessLocks()
         self.register_hook(H.PROJECT_MEMORY_ACCEPT, _tagged(self._accept))
         self.register_hook(
@@ -69,8 +66,10 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         )
         self.register_hook(
             H.PROJECT_MEMORY_TASK_STATUS,
-            lambda task_id, user_id, **kw: self.service.task_status(task_id, user_id),
+            self._task_status,
         )
+        for hook in PROJECT_ADD_STAGE_HOOKS.values():
+            self.register_hook(hook, self._run_stage)
         self.register_hook("search.intercept", self._search_intercept)
         # 混合检索走核心链路：作为一类结果加进去、过同一道门槛，最后组成对外的列表
         register_result_kind(PROJECT_RESULT_KIND)
@@ -98,43 +97,123 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
 
         # 只接管项目记忆自己的报错类，核心的异常处理不动
         self._app.add_exception_handler(ProjectHTTPError, _project_error)
-        self.register_router(create_router(self))
+        self.register_router(create_router(self, legacy_flush=not self._uses_episode_store()))
+        if self._uses_episode_store():
+            _ = self.service
         logger.info("[ProjectMemory] routes registered")
+
+    def _uses_episode_store(self) -> bool:
+        shared = self.context.get("shared") or {}
+        return bool(shared.get("project_add_store")) or (
+            not shared.get("project_graph_db")
+            and os.getenv("PROJECT_MEMORY_GRAPH_DB", "postgres") == "postgres"
+        )
 
     @property
     def service(self) -> ProjectMemoryService:
         shared = self.context.get("shared") or {}
-        if self._service is None:
-            # 优先级：宿主显式注入的 project_*（测试、嵌入式使用）> PROJECT_MEMORY_* 配置
-            # > 核心的同名组件。存储不退回核心的 graph_db，除非 PROJECT_MEMORY_GRAPH_DB=shared。
-            embedder = (
-                shared.get("project_embedder")
-                or pm_config.build_embedder()
-                or shared.get("embedder")
-            )
+        with self._init_lock:
+            if self._service is None:
+                self._service = self._build_service(shared)
+            if self._service.submit is None and shared.get("submit_scheduler_messages"):
+                self._service.submit = self._submit
+            return self._service
+
+    def _build_service(self, shared: dict[str, Any]) -> ProjectMemoryService:
+        embedder = (
+            shared.get("project_embedder") or pm_config.build_embedder() or shared.get("embedder")
+        )
+        project_embed = embedder.embed if embedder is not None else None
+        llm = shared.get("project_llm") or pm_config.build_llm() or shared.get("llm")
+        judge_llm = shared.get("project_judge_llm") or pm_config.build_llm(
+            "PROJECT_MEMORY_JUDGE_LLM"
+        )
+        if not self._uses_episode_store():
             graph_db = shared.get("project_graph_db") or pm_config.build_graph_db(
                 shared.get("graph_db")
             )
-            store = ProjectStore(
-                graph_db, embedder=embedder.embed if embedder is not None else None
-            )
-            llm = shared.get("project_llm") or pm_config.build_llm() or shared.get("llm")
-            judge_llm = shared.get("project_judge_llm") or pm_config.build_llm(
-                "PROJECT_MEMORY_JUDGE_LLM"
-            )
-            self._service = ProjectMemoryService(
-                store,
+            return ProjectMemoryService(
+                ProjectStore(graph_db, embedder=project_embed),
                 ModelHub(llm=llm, judge_llm=judge_llm, graph_db=graph_db),
                 lock=self._lock,
             )
-        # 调度器的 submit 句柄在核心启动后期才写进上下文：每次取用时补上
-        if self._service.submit is None and shared.get("submit_scheduler_messages"):
-            self._service.submit = self._submit
-        return self._service
+        from .add_view import RelationalProjectView
+
+        redis = shared.get("redis_client")
+        scheduler = shared.get("mem_scheduler")
+        disabled = set(getattr(scheduler, "disabled_handlers", None) or ())
+        if redis is None or not getattr(scheduler, "use_redis_queue", False):
+            raise RuntimeError("Project memory Add requires MEMSCHEDULER_USE_REDIS_QUEUE=true")
+        if disabled & PROJECT_ADD_TASK_LABELS or not shared.get("submit_scheduler_messages"):
+            raise RuntimeError("Project memory Add requires all four configured scheduler stages")
+        postgres = shared.get("project_add_store")
+        if postgres is None:
+            project_id = os.getenv("PROJECT_MEMORY_PROJECT_ID", "")
+            config = pm_config.postgres_config()
+            postgres = PostgresAddStore(config, project_id=project_id)
+        try:
+            archive = None
+            if archive_path := os.getenv("PROJECT_MEMORY_LEGACY_ARCHIVE"):
+                from .add_legacy import LegacyArchive
+
+                archive = LegacyArchive.read(Path(archive_path), postgres.project_id)
+            view = RelationalProjectView(postgres, embedder=project_embed, legacy=archive)
+            hub = ModelHub(llm=llm, judge_llm=judge_llm, graph_db=None)
+            self._runtime = EpisodeAddRuntime(
+                postgres,
+                hub,
+                self._submit,
+                redis,
+                embedder=project_embed,
+                embedding_model_id=os.getenv("PROJECT_MEMORY_EMBEDDER_MODEL")
+                or os.getenv("MOS_EMBEDDER_MODEL"),
+                legacy_status=view.legacy_task_status if archive else None,
+            )
+            self._runtime.start()
+            return ProjectMemoryService(view, hub, lock=self._lock)
+        except Exception:
+            postgres.close()
+            raise
 
     def _accept(self, request: Any) -> dict[str, Any]:
+        from memos.api.handlers.project_view import ProjectHTTPError
+
         _require_scope(request)
-        return self.service.accept(request)
+        if not self._uses_episode_store():
+            return self.service.accept(request)
+        runtime = self._require_runtime()
+        try:
+            return runtime.accept(request)
+        except AddRequestError as exc:
+            raise ProjectHTTPError(exc.status_code, str(exc), exc.reason) from exc
+        except Exception as exc:
+            logger.warning("Project Add acceptance failed (%s)", type(exc).__name__)
+            raise ProjectHTTPError(
+                503, "Project memory temporarily unavailable", "STORE_UNAVAILABLE"
+            ) from exc
+
+    def _require_runtime(self) -> EpisodeAddRuntime:
+        from memos.api.handlers.project_view import ProjectHTTPError
+
+        try:
+            _ = self.service
+        except Exception as exc:
+            logger.warning("Project memory runtime is not ready (%s)", type(exc).__name__)
+            raise ProjectHTTPError(
+                503, "Project memory temporarily unavailable", "STORE_UNAVAILABLE"
+            ) from exc
+
+        if self._runtime is None:
+            raise ProjectHTTPError(503, "Project memory Add is not enabled", "STORE_UNAVAILABLE")
+        return self._runtime
+
+    def _task_status(self, task_id: str, user_id: str) -> dict[str, Any] | None:
+        if self._uses_episode_store():
+            return self._require_runtime().status(task_id, user_id)
+        return self.service.task_status(task_id, user_id)
+
+    def _run_stage(self, space_id: str, batch: list, **kwargs: Any) -> None:
+        self._require_runtime().handle(batch)
 
     def _search_intercept(self, request: Any) -> Any | None:
         """Called by hookable('search').intercept before handle_search_memories runs.
@@ -224,6 +303,10 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         self.context["shared"]["submit_scheduler_messages"](items)
 
     def on_shutdown(self) -> None:
+        if self._runtime is not None:
+            self._runtime.stop()
+            self._runtime.store.close()
+            self._runtime = None
         self._service = None
         logger.info("[ProjectMemory] plugin stopped")
 

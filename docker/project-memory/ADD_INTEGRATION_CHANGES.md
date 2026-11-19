@@ -26,7 +26,7 @@
 
 `tests/api/test_add_project_routing.py` 检查项目单写、混合写入和重放，旧项目记忆接口由 `tests/project_memory/` 回归。
 
-通用 \`plugins/hooks.py\` 拦截器现在只执行注册的回调。项目视图是否可用由 Add 和 Search 入口校验，避免通用拦截器在 AddHandler 分流之前拒绝有效请求。插件、项目 HTTP 和核心路由回归共 115 项通过。
+通用 `plugins/hooks.py` 拦截器现在只执行注册的回调。项目视图是否可用由 Add 和 Search 入口校验，避免通用拦截器在 AddHandler 分流之前拒绝有效请求。插件、项目 HTTP 和核心路由回归共 115 项通过。
 
 ## 状态查询与投递诊断
 
@@ -37,3 +37,11 @@
 旧分支在共享 SQLite 连接上并行执行查询与事务写入，复现 `sqlite3.InterfaceError`。单条查询现在使用图库既有的连接锁，覆盖执行和取结果，避免遗留 SQLite 路径因线程交错丢失整理结果。真实 PostgreSQL 与 Redis 配置下，项目记忆回归 118 项通过。
 
 项目请求重放只负责项目数据幂等。混合请求继续调用个人分支，以便个人处理在项目已受理后遇到失败时可重试。测试覆盖项目重放仍向个人分支传递同一 Task ID。
+
+## PostgreSQL 迁移后的装配
+
+- 项目插件的 PostgreSQL 配置装配关系存储、阶段处理器和定时恢复。现有服务仍负责 Space、领域、读取和删除。关系库的清空走同一事务，锁定 Space、记录清空围栏并结束未提交的 Episode。
+- 服务启动向插件提供已有调度器和 Redis。API 宿主关闭时按顺序释放调度器、Episode 定时线程和数据库连接。PostgreSQL 模式的关段由受理规则和定时线程驱动。旧存储模式保留旧队列与 flush，供切换前处理存量任务。
+- 项目提交服务实例使用可信的 PROJECT_MEMORY_PROJECT_ID。两个实例处理同一项目时共享 PostgreSQL 和 Redis Stream 前缀。独立项目部署使用各自的 Stream 前缀。
+
+真实 PostgreSQL 和 Redis 上，两个 ASGI 实例使用合成模型响应跑通写入、多 Space、单份原文、重复提交、用户隔离、显式关段和续写。项目、API、调度与插件专项回归 358 项通过，1 项跳过。随后导出 OpenAPI 并核对关段由新流程接管。

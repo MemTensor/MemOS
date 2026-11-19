@@ -90,7 +90,7 @@ def _ok(data: Any, message: str = "ok") -> dict[str, Any]:
     return {"code": 200, "message": message, "data": data}
 
 
-def create_router(plugin) -> APIRouter:
+def create_router(plugin, *, legacy_flush: bool = False) -> APIRouter:
     router = APIRouter(prefix="/product", tags=["Project Memory"])
 
     def svc():
@@ -163,22 +163,26 @@ def create_router(plugin) -> APIRouter:
         )
         return _ok({"message_detail_list": msgs})
 
-    @router.post("/flush_project_memory", summary="Session end: close open episodes and organize")
-    def flush(req: FlushRequest):
-        out = guarded(svc().flush, req.space_id, req.conversation_id, req.task_id)
-        return _ok(
-            {
-                "space_id": req.space_id,
-                "memory_ids": out.topic_ids,
-                "failed_episodes": out.failed_episodes,
-                "decision_ops": out.decision_ops,
-                "experience_ops": out.experience_ops,
-                **(
-                    {"trace": out.trace}
-                    if os.getenv("PROJECT_MEMORY_DEBUG_TRACE", "false").lower() == "true"
-                    else {}
-                ),
-            }
+    if legacy_flush:
+
+        @router.post(
+            "/flush_project_memory", summary="Session end: close open episodes and organize"
         )
+        def flush(req: FlushRequest):
+            out = guarded(svc().flush, req.space_id, req.conversation_id, req.task_id)
+            return _ok(
+                {
+                    "space_id": req.space_id,
+                    "memory_ids": out.topic_ids,
+                    "failed_episodes": out.failed_episodes,
+                    "decision_ops": out.decision_ops,
+                    "experience_ops": out.experience_ops,
+                    **(
+                        {"trace": out.trace}
+                        if os.getenv("PROJECT_MEMORY_DEBUG_TRACE", "false").lower() == "true"
+                        else {}
+                    ),
+                }
+            )
 
     return router
