@@ -1,7 +1,7 @@
 import os
 
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 from uuid import uuid4
 
 import pytest
@@ -141,3 +141,122 @@ def test_recover_merge_handoff_and_lost_commit_reply(store, monkeypatch):
     assert len(topics) == 1
     assert status["memory_views"]["project"]["memory_ids"] == [topics[0]["id"]]
     assert len(topics[0]["decisions"]) == 1
+
+
+def test_formation_reuses_committed_topic_for_another_staged_domain(store, monkeypatch):
+    from redis import Redis
+
+    redis_url = os.getenv("REDIS_TEST_URL")
+    if not redis_url:
+        pytest.skip("REDIS_TEST_URL is required")
+    client = Redis.from_url(redis_url)
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO domains (id, space_id, domain) VALUES ('reliability','test','reliability')"
+        )
+
+    hub = Mock()
+    work = []
+    original = "We set the connection pool size to 8."
+    conflict = "I recommend the connection pool size be 16."
+
+    def write(scope, _prompt, inputs):
+        if scope == "episode.extract":
+            (message,) = inputs["episode"]
+            return {
+                "episode_summary": message["content"],
+                "drafts": [
+                    {
+                        "kind": "decision",
+                        "message_id": message["id"],
+                        "quote": message["content"],
+                        "content": message["content"],
+                    }
+                ],
+            }
+        if scope == "episode.assign":
+            return {"action": "stage"}
+        if scope == "episode.assign.batch":
+            (row,) = inputs["episodes"]
+            (target,) = row["candidates"]
+            return {
+                "assignments": [
+                    {
+                        "episode_id": row["episode_id"],
+                        "action": "attach",
+                        "topic_id": target["id"],
+                        "relationship": "same_work",
+                        "positive_basis": "same_goal",
+                        "independently_deliverable": False,
+                        "affects_existing_decisions": True,
+                    }
+                ]
+            }
+        if scope == "episode.formation":
+            return {
+                "clusters": [
+                    {
+                        "episode_ids": [ep["id"]],
+                        "domain": "reliability",
+                        "name": "Connection pool",
+                        "independently_deliverable": True,
+                        "affects_existing_decisions": False,
+                    }
+                    for ep in inputs["episodes"]
+                    if ep["domains"] == ["reliability"]
+                ]
+            }
+        if scope == "dec.update":
+            (target,) = inputs["decisions"]
+            return {"results": [{"n": 1, "decision_id": target["id"], "action": "rewrite"}]}
+        if scope == "episode.metadata":
+            return {"summary": "Connection pool size", "description": "Connection pool size"}
+        raise AssertionError(f"Unexpected model operation {scope}")
+
+    hub.write.side_effect = write
+    seed = EpisodeAddRuntime(store, hub, work.extend, client, RuntimeSettings(formation_count=1))
+    runtime = EpisodeAddRuntime(store, hub, work.extend, client, RuntimeSettings(formation_count=2))
+    read_topics = Mock(wraps=store.read_topics)
+    monkeypatch.setattr(store, "read_topics", read_topics)
+
+    def add(worker, user, domain, content):
+        task = worker.accept(
+            SimpleNamespace(
+                user_id=user,
+                space_ids=["test"],
+                domains=[domain],
+                messages=[{"message_id": user, "role": "user", "content": content}],
+            )
+        )
+        while work:
+            worker.handle([work.pop(0)])
+        assert worker.status(task["task_id"], user)["status"] == "completed"
+
+    with client:
+        add(seed, "owner", "reliability", original)
+        (topic_before,) = store.read_topics("test")
+        read_topics.reset_mock()
+        add(runtime, "member", "reliability", conflict)
+        assert read_topics.call_args_list == [call("test", ["reliability"])]
+        (old,) = store.read_staged("test")
+        read_topics.reset_mock()
+        add(runtime, "organizer", "product", "The release announcement is approved.")
+        assert read_topics.call_args_list == [
+            call("test", ["product"]),
+            call("test", ["reliability"]),
+        ]
+
+    topics = store.read_topics("test")
+    assert len(topics) == 1
+    (topic_after,) = topics
+    assert topic_after["id"] == topic_before["id"]
+    assert topic_after["version"] == topic_before["version"] + 1
+    (decision,) = topic_after["decisions"]
+    assert decision["id"] == topic_before["decisions"][0]["id"]
+    assert decision["content"] == original
+    (alternative,) = decision["conflicts"]
+    assert alternative["content"] == conflict
+    assert alternative["user_ids"] == ["member"]
+    moved = store.load_episode(old["id"])
+    assert moved["staged_status"] == "moved"
+    assert moved["moved_to_topic_id"] == topic_before["id"]

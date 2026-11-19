@@ -79,7 +79,19 @@ def test_recall_preserves_predecessor_and_does_not_expose_other_domains_or_draft
             }
         ]
     )
-    plan = organize_episode(writer, ep, ranked, [], {}, now=NOW)
+
+    def unexpected_topic_read(_domains):
+        pytest.fail("Direct Topic attachment should not load additional Domains")
+
+    plan = organize_episode(
+        writer,
+        ep,
+        ranked,
+        [episode("staged", domains=["other"])],
+        {"staged_since_last_formation": 9},
+        now=NOW,
+        load_formation_topics=unexpected_topic_read,
+    )
     assert plan["assignments"][0]["topic"]["id"] == "prior"
     assert "secret draft content" not in str(writer.calls[0][1])
 
@@ -335,3 +347,52 @@ def test_batched_formation_reassignment_uses_the_same_evidence_guards():
     assert [ep["id"] for ep in writer.calls[-1][1]["episodes"]] == ["new", "old"]
     assert plan["assignments"] == plan["warnings"] == []
     assert plan["staged_updates"][0]["status"] == "active"
+
+
+def test_formation_keeps_bounded_context_from_unresolved_episode_domains():
+    current = episode("new")
+    unresolved = episode("unresolved", domains=["reliability"])
+    related = episode("related", domains=["reliability"])
+    resolved = episode("resolved", domains=["other"])
+    primary = [topic(f"primary-{i:02}", "project") for i in range(20)]
+    secondary = [topic(f"secondary-{i:02}", "reliability") for i in range(20)]
+    all_topics = [
+        *primary,
+        *secondary,
+        topic("attached", "other"),
+        topic("out-of-scope", "unrelated"),
+        topic("foreign", "reliability", space_id="foreign"),
+    ]
+    writer = Writer(
+        [
+            {"action": "stage"},
+            {
+                "assignments": [
+                    {"episode_id": "unresolved", "action": "stage"},
+                    {"episode_id": "related", "action": "stage"},
+                    staged_choice("resolved", "attached"),
+                ]
+            },
+            {"clusters": []},
+        ]
+    )
+    plan = organize_episode(
+        writer,
+        current,
+        recall_candidates(current, all_topics),
+        [unresolved, related, resolved],
+        {"staged_since_last_formation": 9},
+        now=NOW,
+        all_topics=all_topics,
+    )
+    direct = writer.calls[0][1]["candidates"]
+    assert {candidate["domain"] for candidate in direct} == {"project"}
+    existing = writer.calls[-1][1]["existing_topics"]
+    assert [candidate["domain"] for candidate in existing[:2]] == ["project", "reliability"]
+    assert len(existing) == len({candidate["id"] for candidate in existing}) == 24
+    for candidate in existing:
+        assert candidate["episode_ids"] == (
+            ["new"] if candidate["domain"] == "project" else ["unresolved", "related"]
+        )
+    assert {candidate["domain"] for candidate in existing} == {"project", "reliability"}
+    assert plan["assignments"][0]["topic"]["id"] == "attached"

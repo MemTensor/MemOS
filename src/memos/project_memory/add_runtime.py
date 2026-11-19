@@ -363,6 +363,7 @@ class EpisodeAddRuntime:
             formation_count=self.settings.formation_count,
             formation_interval=self.settings.formation_interval,
             all_topics=topics,
+            load_formation_topics=lambda domains: self.store.read_topics(space_id, domains),
         )
         if data.get("lock_token") and not self._renew(episode, data["lock_token"]):
             self._restart(lease, episode)
