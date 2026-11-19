@@ -5,6 +5,17 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
+- Unreleased — Pin the packaged tsx runtime to the validated 4.21.0 so
+  fresh DSH profile installs retain the reviewed esbuild 0.27.7 build policy.
+  Verified a source-tarball installation and a real local-model memory
+  write/recall/tool-search round trip on DSH 0.2.2-rc.5.
+
+- Unreleased — Admit the five validated DSH `0.2.2-rc.1` through
+  `0.2.2-rc.5` versions explicitly. Pin their fixtures to Cordis `4.1.0`
+  with matching session codecs and validate plugin/host Cordis peers.
+  Other unvalidated previews remain excluded from npm peer support. These
+  changes have not been published to npm. Related PRs: #2614 and #2632.
+
 - Unreleased — Admit DSH `0.1.7-rc.2`, `0.2.0-rc.2`, and `0.2.1-rc.2/rc.3`
   through explicit, bounded optional peer ranges; retain the `2.0.21` V4
   producer-owned message sources. Stop importing the moved `JsonValue` type

@@ -10,8 +10,9 @@ modifying the DSH repository.
 > DeepSeek Harness is currently a developer preview. The development API stack
 > is pinned to `0.2.1-rc.3`. The compatibility matrix compiles, builds, and tests
 > this adapter against the published `0.1.0-rc.6`, `0.1.7-rc.2`, `0.2.0-rc.2`,
-> `0.2.1-rc.2`, and `0.2.1-rc.3` packages. These are API/contract checks, not a
-> substitute for validating each packaged Desktop/Web/CLI release.
+> `0.2.1-rc.2`, `0.2.1-rc.3`, and the five `0.2.2-rc.1` through
+> `0.2.2-rc.5` releases.
+> Validate the packaged Desktop/Web/CLI release as well as these API checks.
 
 ## How it works
 
@@ -622,6 +623,7 @@ For the compatibility matrix, run:
 npm run test:dsh-compat
 # Or select a specific published API stack:
 npm run test:dsh-compat -- 0.2.1-rc.3
+npm run test:dsh-compat -- 0.2.2-rc.5
 ```
 
 The script needs npm registry access. It installs each real host peer graph in
@@ -638,14 +640,25 @@ The six optional DSH service peers intentionally declare separate prerelease
 lines:
 
 ```text
->=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2
+>=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5
 ```
 
 npm semver only admits a prerelease when a comparator explicitly names its
 `major.minor.patch` tuple. Simply changing `<0.2.0` to `<0.3.0` would still
-exclude `0.2.1-rc.3`. Unvalidated `0.2.2` and `0.3.x` remain excluded.
+exclude `0.2.1-rc.3`. The five tested `0.2.2-rc.1` through `0.2.2-rc.5`
+versions are admitted explicitly. Other unvalidated `0.2.2` releases and
+`0.3.x` remain excluded by npm's default evaluation. All five new fixtures
+pin Cordis `4.1.0` and their matching V3-to-V4 codec. The matrix
+checks that Cordis satisfies the plugin and each host service peer range.
+Earlier fixtures retain their original host dependencies.
 The former `0.1.0-rc.5` API baseline is no longer advertised: its core packages
 are unavailable from npm, so it cannot be revalidated by this matrix.
+
+DSH `0.2.2-rc.5` evaluates startup compatibility with
+`includePrerelease: true`. Its loader also accepts `0.2.2-rc.5` under the
+older `>=0.2.1-rc.2 <0.2.2` comparator. npm's default peer evaluation still
+excludes that prerelease, so the explicit declaration above is needed for
+package-manager compatibility. Check both installation and runtime startup.
 
 There are two independent checks to distinguish:
 
@@ -662,6 +675,12 @@ you patched `dist/` by hand, reinstall the released package: a profile install
 can overwrite those patches. A successful `allow-version` exemption alone
 does not verify runtime compatibility. Until this change is released,
 installing npm `2.0.21` still leaves the startup version restriction in place.
+
+When the host reaches Hugging Face through `HTTPS_PROXY`, launch Node with
+`NODE_USE_ENV_PROXY=1` so its `fetch` uses that proxy. On a slow first model
+download, set `embedding.local.loadTimeoutMs` in the MemOS `config.yaml` to a
+larger value; this setting affects model loading, not the bounded foreground
+recall timeout.
 
 ## Known limitations
 
