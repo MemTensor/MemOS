@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
-from memos.exceptions import EmbedderError
+from memos.exceptions import EmbedderError, LLMResponseParseError
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
 from memos.mem_reader.read_multi_modal.base import _derive_key
 from memos.mem_reader.read_pref_memory.process_preference_memory import process_preference_fine
@@ -539,6 +539,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         try:
             response_text = self.llm.generate(messages)
             response_json = parse_json_result(response_text)
+        except LLMResponseParseError:
+            raise
         except Exception as e:
             logger.error(f"[LLM] Exception during chat generation: {e}")
             response_json = {
@@ -732,6 +734,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # ========== Stage 1: Normal extraction (without reference) ==========
             try:
                 resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
+            except LLMResponseParseError:
+                raise
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
                 return fine_items
@@ -876,6 +880,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     result = future.result()
                     if result:
                         fine_memory_items.extend(result)
+                except LLMResponseParseError:
+                    raise
                 except Exception as e:
                     logger.error(f"[MultiModalFine] worker error: {e} {traceback.format_exc()}")
 
@@ -1352,7 +1358,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     res_memory = future.result()
                     if res_memory is not None:
                         memory_list.append(res_memory)
-                except EmbedderError:
+                except (EmbedderError, LLMResponseParseError):
                     raise
                 except Exception as e:
                     logger.error(f"Task failed with exception: {e}")

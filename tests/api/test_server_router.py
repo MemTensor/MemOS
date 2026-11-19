@@ -415,3 +415,59 @@ class TestServerRouterGetAll:
         data = response.json()
         assert data["message"] == "Memories retrieved successfully"
         assert isinstance(data["data"], list)
+
+
+@pytest.mark.parametrize(
+    ("llm_response", "expected_status"),
+    [("malformed extraction", 500), ("{}", 200), ('{"memory list": []}', 200)],
+)
+def test_sync_add_distinguishes_parse_failure_from_empty_result(
+    mock_init_server, monkeypatch, llm_response, expected_status
+):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from memos.api.handlers.add_handler import AddHandler
+    from memos.api.handlers.base_handler import HandlerDependencies
+    from memos.mem_reader.simple_struct import SimpleStructMemReader
+
+    reader = SimpleStructMemReader.__new__(SimpleStructMemReader)
+    reader.config = SimpleNamespace(remove_prompt_example=False)
+    reader.llm = MagicMock()
+    reader.llm.generate.return_value = llm_response
+    reader.chat_window_max_tokens = 1024
+    reader._count_tokens = len
+    reader.save_rawfile = False
+    reader.memory_version_switch = "off"
+    cube = MagicMock()
+    cube.text_mem.add.return_value = []
+    scheduler = MagicMock()
+    handler = AddHandler(
+        HandlerDependencies(
+            naive_mem_cube=cube,
+            mem_reader=reader,
+            mem_scheduler=scheduler,
+            feedback_server=MagicMock(),
+        )
+    )
+    monkeypatch.setattr("memos.api.routers.server_router.add_handler", handler)
+
+    response = TestClient(mock_init_server, raise_server_exceptions=False).post(
+        "/product/add",
+        json={
+            "user_id": "synthetic-user",
+            "writable_cube_ids": ["synthetic-cube"],
+            "messages": [{"role": "user", "content": "Synthetic input"}],
+            "async_mode": "sync",
+            "mode": "fine",
+        },
+    )
+
+    assert response.status_code == expected_status
+    assert response.json()["code"] == expected_status
+    if expected_status == 500:
+        cube.text_mem.add.assert_not_called()
+        scheduler.submit_messages.assert_not_called()
+    else:
+        assert response.json()["data"] == []
+        assert cube.text_mem.add.call_args.args[0] == []

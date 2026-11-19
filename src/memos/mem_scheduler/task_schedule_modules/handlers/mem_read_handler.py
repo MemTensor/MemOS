@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from memos.context.context import ContextThreadPoolExecutor
+from memos.exceptions import LLMResponseParseError
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
@@ -178,6 +179,8 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     user_context=user_context,
                     is_upload_skill=is_upload_skill,
                 )
+            except LLMResponseParseError:
+                raise
             except Exception as e:
                 logger.warning("%s: Fail to transfer mem: %s", e, memory_items, exc_info=True)
                 return

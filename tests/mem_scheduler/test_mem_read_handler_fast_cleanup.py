@@ -235,3 +235,34 @@ def test_playground_legacy_events_align_enhanced_ids_with_filtered_mem_group(mon
             "updated_at": None,
         }
     ]
+
+
+def test_parse_failure_preserves_fast_memory_and_reports_failed_task(monkeypatch):
+    from memos.exceptions import LLMResponseParseError
+
+    handler, text_mem = _build_handler(memory_version_switch="off")
+    reader = handler.scheduler_context.get_mem_reader()
+    reader.fine_transfer_simple_mem.side_effect = LLMResponseParseError("Synthetic parse failure")
+    handler.scheduler_context.services.submit_web_logs = MagicMock()
+    monkeypatch.setattr(
+        "memos.mem_scheduler.task_schedule_modules.handlers.mem_read_handler.is_playground_api",
+        lambda: False,
+    )
+
+    handler._process_memories_with_reader(
+        mem_ids=["raw_1"],
+        user_id="user_1",
+        mem_cube_id="cube_1",
+        text_mem=text_mem,
+        user_name="cube_1",
+        task_id="task_1",
+        info={"trigger_source": "Messages"},
+    )
+
+    assert text_mem.add_calls == []
+    assert text_mem.delete_calls == []
+    assert text_mem.soft_delete_calls == []
+    logs = handler.scheduler_context.services.submit_web_logs.call_args.args[0]
+    assert logs[0].status == "failed"
+    assert logs[0].task_id == "task_1"
+    assert "Synthetic parse failure" in logs[0].log_content
