@@ -28,7 +28,19 @@ case "\${1:-}" in
   view)
     if [ "\${3:-}" = "dist-tags" ]; then
       increment_counter dist_tag >/dev/null
-      printf '{"%s":"%s"}\n' "\${NPM_DIST_TAG}" "\${NPM_MOCK_DIST_TAG_VERSION:-\${RELEASE_VERSION}}"
+      if [ "\${NPM_MOCK_SCENARIO}" = "dist-tag-lookup-fails" ]; then
+        echo "npm error code E500" >&2
+        exit 1
+      fi
+      if [ "\${NPM_MOCK_DIST_TAGS_EMPTY:-false}" = "true" ]; then
+        printf '{}\n'
+        exit 0
+      elif [ "\${NPM_MOCK_SCENARIO}" = "already-visible" ]; then
+        dist_tag_version="\${NPM_MOCK_DIST_TAG_VERSION:-\${RELEASE_VERSION}}"
+      else
+        dist_tag_version="\${NPM_MOCK_PREFLIGHT_DIST_TAG_VERSION:-2.0.11}"
+      fi
+      printf '{"%s":"%s"}\n' "\${NPM_DIST_TAG}" "\${dist_tag_version}"
       exit 0
     fi
     view_count="$(increment_counter view)"
@@ -109,7 +121,7 @@ if [[ "\${1:-}" == *"wait-for-local-plugin-npm-release.mjs" ]]; then
   printf '%s' "\${count}" > "\${increment_file}"
   case "\${NPM_MOCK_SCENARIO}" in
     always-missing|publish-fails)
-      echo "::error::npm release was not fully visible within 150s"
+      echo "::error::npm release was not fully visible within \${NPM_VISIBILITY_TIMEOUT_SECONDS:-600}s"
       exit 1
       ;;
     integrity-mismatch)
@@ -118,7 +130,7 @@ if [[ "\${1:-}" == *"wait-for-local-plugin-npm-release.mjs" ]]; then
       ;;
     *)
       if [ "\${NPM_MOCK_DIST_TAG_VERSION:-\${RELEASE_VERSION}}" != "\${RELEASE_VERSION}" ]; then
-        echo "::error::npm release was not fully visible within 150s: dist-tag \${NPM_DIST_TAG} did not point to \${RELEASE_VERSION}"
+        echo "::error::npm release was not fully visible within \${NPM_VISIBILITY_TIMEOUT_SECONDS:-600}s: dist-tag \${NPM_DIST_TAG} did not point to \${RELEASE_VERSION}"
         exit 1
       fi
       echo '{"ok":true,"attempts":3}'
@@ -136,6 +148,10 @@ if [ "\${1:-}" = "ls-remote" ]; then
 fi
 echo "Unexpected git command: $*" >&2
 exit 2
+`;
+
+const mockSleep = `#!/usr/bin/env bash
+exit 0
 `;
 
 function readCounter(stateDirectory, name) {
@@ -156,6 +172,7 @@ function runScenario(scenario, overrides = {}) {
   const npmPath = join(binDirectory, "npm");
   const nodePath = join(binDirectory, "node");
   const gitPath = join(binDirectory, "git");
+  const sleepPath = join(binDirectory, "sleep");
   const releaseTarball = join(fixtureDirectory, "release.tgz");
   writeFileSync(npmPath, mockNpm, "utf8");
   chmodSync(npmPath, 0o755);
@@ -163,6 +180,8 @@ function runScenario(scenario, overrides = {}) {
   chmodSync(nodePath, 0o755);
   writeFileSync(gitPath, mockGit, "utf8");
   chmodSync(gitPath, 0o755);
+  writeFileSync(sleepPath, mockSleep, "utf8");
+  chmodSync(sleepPath, 0o755);
   const localPackRoot = join(fixtureDirectory, "local-pack-root");
   mkdirSync(join(localPackRoot, "package", "adapters", "hermes"), { recursive: true });
   writeFileSync(
@@ -211,6 +230,7 @@ function runScenario(scenario, overrides = {}) {
     whoamiCount: readCounter(stateDirectory, "whoami"),
     packCount: readCounter(stateDirectory, "pack"),
     metadataWaitCount: readCounter(stateDirectory, "metadata_wait"),
+    distTagCount: readCounter(stateDirectory, "dist_tag"),
     publishedArgument: (() => {
       try {
         return readFileSync(join(stateDirectory, "published-argument"), "utf8");
@@ -244,6 +264,64 @@ test("publishes once and continues only after bounded registry verification", ()
   assert.match(result.stdout, /bounded registry visibility check both succeeded/);
 });
 
+test("fails before authentication when a newer release already owns the npm channel", () => {
+  const result = runScenario("eventually-visible", {
+    NPM_MOCK_PREFLIGHT_DIST_TAG_VERSION: "2.0.13",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.distTagCount, 1);
+  assert.equal(result.whoamiCount, 0);
+  assert.equal(result.publishCount, 0);
+  assert.equal(result.metadataWaitCount, 0);
+  assert.match(result.stdout + result.stderr, /Refusing to move npm dist-tag latest backwards from 2\.0\.13 to 2\.0\.12/);
+});
+
+test("uses SemVer precedence instead of lexical order for prerelease channels", () => {
+  const result = runScenario("eventually-visible", {
+    RELEASE_VERSION: "2.0.12-beta.9",
+    RELEASE_TAG: "memos-local-plugin-v2.0.12-beta.9",
+    NPM_DIST_TAG: "beta",
+    NPM_MOCK_PREFLIGHT_DIST_TAG_VERSION: "2.0.12-beta.10",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.whoamiCount, 0);
+  assert.equal(result.publishCount, 0);
+  assert.match(result.stdout + result.stderr, /Refusing to move npm dist-tag beta backwards from 2\.0\.12-beta\.10 to 2\.0\.12-beta\.9/);
+});
+
+test("fails closed when npm version and dist-tag metadata contradict each other", () => {
+  const result = runScenario("eventually-visible", {
+    NPM_MOCK_PREFLIGHT_DIST_TAG_VERSION: "2.0.12",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.whoamiCount, 0);
+  assert.equal(result.publishCount, 0);
+  assert.match(result.stdout + result.stderr, /reports that version as absent/);
+});
+
+test("fails before authentication when npm channel state cannot be inspected", () => {
+  const result = runScenario("dist-tag-lookup-fails");
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.distTagCount, 3);
+  assert.equal(result.whoamiCount, 0);
+  assert.equal(result.publishCount, 0);
+  assert.match(result.stdout + result.stderr, /refusing to publish without a channel monotonicity check/);
+});
+
+test("allows initializing an npm channel that does not exist yet", () => {
+  const result = runScenario("eventually-visible", {
+    NPM_MOCK_DIST_TAGS_EMPTY: "true",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.publishCount, 1);
+  assert.match(result.stdout, /dist-tag latest is not set/);
+});
+
 test("stops before tag creation when publish succeeds but visibility remains delayed", () => {
   const result = runScenario("always-missing");
 
@@ -252,6 +330,28 @@ test("stops before tag creation when publish succeeds but visibility remains del
   assert.equal(result.metadataWaitCount, 1);
   assert.equal(result.packCount, 0);
   assert.match(result.stdout + result.stderr, /Refusing to issue a second publish request/);
+  assert.match(result.stdout + result.stderr, /within 600s/);
+});
+
+test("allows npm publish after a staged paired Draft Release only in npm-only phase", () => {
+  const blocked = runScenario("eventually-visible", {
+    RELEASE_METADATA_STATE: "complete",
+  });
+
+  assert.notEqual(blocked.status, 0);
+  assert.equal(blocked.publishCount, 0);
+  assert.match(blocked.stdout + blocked.stderr, /Refusing to publish after tag metadata already exists/);
+
+  const allowed = runScenario("eventually-visible", {
+    RELEASE_METADATA_STATE: "complete",
+    ALLOW_STAGED_TAG_BEFORE_NPM: "true",
+  });
+
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.equal(allowed.publishCount, 1);
+  assert.equal(allowed.metadataWaitCount, 1);
+  assert.equal(allowed.packCount, 1);
+  assert.match(allowed.stdout, /publishing npm after a staged paired local-plugin Draft Release/);
 });
 
 test("fails when publish fails and the requested version remains absent", () => {
@@ -362,4 +462,5 @@ test("rejects an already-used npm version outside explicit recovery", () => {
   assert.equal(result.publishCount, 0);
   assert.equal(result.packCount, 0);
   assert.match(result.stdout + result.stderr, /Normal releases require an unused version/);
+  assert.match(result.stdout + result.stderr, /inspect npm first/);
 });

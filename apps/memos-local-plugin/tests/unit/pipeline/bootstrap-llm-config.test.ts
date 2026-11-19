@@ -92,6 +92,9 @@ skillEvolver:
   openRouter: true
   model: skill-model
   apiKey: sk-test
+  maxTokens: 6144
+  headers:
+    X-Evolver: skill-header
   providerIgnore:
     - together
   providerOrder:
@@ -102,6 +105,9 @@ l3Llm:
   openRouter: true
   model: l3-model
   apiKey: sk-test
+  maxTokens: 8192
+  headers:
+    X-L3: l3-header
   providerIgnore:
     - novita
   providerOrder:
@@ -123,12 +129,16 @@ l3Llm:
       providerIgnore: ["together"],
       providerOrder: ["anthropic"],
       openRouter: true,
+      maxTokens: 6_144,
+      headers: { "X-Evolver": "skill-header" },
     });
     expect(capturedLlmConfigs.find((cfg) => cfg.model === "l3-model")).toMatchObject({
       providerIgnore: ["novita"],
       providerOrder: ["openai"],
       openRouter: true,
       reasoning: { enabled: true, maxTokens: 4_000 },
+      maxTokens: 8_192,
+      headers: { "X-L3": "l3-header" },
     });
   });
 

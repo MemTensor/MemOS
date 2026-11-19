@@ -18,22 +18,16 @@
  * therefore misses any invocation with a global flag (`--skills`,
  * `-m`, `--provider`, …) between them.
  *
- * The current pattern is `hermes(?:\s+\S+)*\s+chat\b`:
+ * The command grammar is `hermes (<token>)* chat (<space>|$)`:
  *
- *   • `hermes`           — the binary basename.
- *   • `(?:\s+\S+)*`      — any complete argv-style tokens between the
- *     binary and the subcommand.
- *   • `\s+chat\b`        — a standalone `chat` token, so it does *not*
- *     match `chatter`, `chat-server`, `--chat-log`, or a flag value
- *     like `--profile=chat`.
+ *   • `hermes`       — the binary basename.
+ *   • `(<token>)*`   — complete argv-style tokens before the subcommand.
+ *   • `chat`         — a complete token, not `chatter` or `chat-server`.
  *
- * `pgrep -f` on Linux uses glibc's ERE engine, which supports
- * `\s`/`\b` as GNU extensions. JavaScript's `RegExp` supports the same
- * tokens natively, so this module also exports
- * `matchesHermesChatCommandLine()` for unit tests — exercising the
- * pattern as a JS regex is a faithful proxy for the pgrep-side
- * behaviour without requiring a real Hermes binary or a fork of the
- * pgrep process in CI.
+ * `pgrep -f` on Linux uses glibc's POSIX ERE engine, so its pattern uses
+ * POSIX character classes and capturing groups only. JavaScript does not
+ * implement POSIX character classes, so the test helper declares the same
+ * grammar with `\s`, `\S`, and non-capturing groups instead.
  */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import * as childProcess from "node:child_process";
@@ -45,7 +39,12 @@ import * as childProcess from "node:child_process";
  * string we hand to `pgrep` and confirm we have not silently regressed
  * back to a literal substring match.
  */
-export const HERMES_CHAT_PROCESS_PATTERN = "hermes(?:\\s+\\S+)*\\s+chat\\b";
+export const HERMES_CHAT_PROCESS_PATTERN =
+  "hermes([[:space:]]+[^[:space:]]+)*[[:space:]]+chat([[:space:]]|$)";
+
+// Keep this semantically aligned with HERMES_CHAT_PROCESS_PATTERN. POSIX ERE
+// has no non-capturing groups, while JavaScript can avoid unused captures.
+const HERMES_CHAT_JS_PATTERN = /hermes(?:\s+\S+)*\s+chat(?:\s|$)/;
 
 /**
  * JS-side equivalent of `pgrep -f HERMES_CHAT_PROCESS_PATTERN`.
@@ -56,7 +55,7 @@ export const HERMES_CHAT_PROCESS_PATTERN = "hermes(?:\\s+\\S+)*\\s+chat\\b";
  * `/proc/<pid>/cmdline`-style command-line string.
  */
 export function matchesHermesChatCommandLine(commandLine: string): boolean {
-  return new RegExp(HERMES_CHAT_PROCESS_PATTERN).test(commandLine);
+  return HERMES_CHAT_JS_PATTERN.test(commandLine);
 }
 
 /**

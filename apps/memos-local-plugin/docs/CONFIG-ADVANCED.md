@@ -138,6 +138,8 @@ algorithm:
     minPolicyGain: 0.02            # eligible L2 gain floor (paired with shrinkage-anchored gain)
     minPolicySupport: 1            # eligible L2 support floor
     clusterMinSimilarity: 0.6      # cosine cutoff for cluster-and-merge decisions
+    maxPoliciesPerCluster: 20      # policies per abstraction batch; overflow is retained
+    maxPromptChars: 32000          # hard total prompt cap; oversized legacy batches are quarantined
     policyCharCap: 800             # chars per policy in the prompt
     traceCharCap: 500              # chars per evidence trace in the prompt
     traceEvidencePerPolicy: 1      # evidence traces per policy in the prompt
@@ -156,6 +158,7 @@ algorithm:
     etaDelta: 0.1                  # η step per user.positive/user.negative thumbs
     archiveEta: 0.25               # η floor; crossing archives
     minEtaForRetrieval: 0.5        # η gate for Tier-1 retrieval + auto-promotion
+    idleArchiveMs: 2592000000      # archive low-η skills after 30d without retrieval (minimum 1h)
   feedback:
     failureThreshold: 3            # failures in `failureWindow` that trigger a burst (V7 §6.3)
     failureWindow: 5               # rolling tool-call window per (toolId, context)

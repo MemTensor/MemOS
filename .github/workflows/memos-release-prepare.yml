@@ -362,5 +362,5 @@ jobs:
               echo "- The PR is intentionally opened by a maintainer so GitHub runs the required pull-request checks."
             fi
             echo
-            echo "After review, required checks, and merge, run **MemOS Release — Publish** from main."
+            echo "After review, required checks, and merge, **MemOS Release — Publish** starts automatically from the trusted main workflow. Its manual main-branch entry remains available for dry runs and recovery."
           } >> "${GITHUB_STEP_SUMMARY}"

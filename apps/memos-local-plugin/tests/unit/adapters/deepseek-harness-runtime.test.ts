@@ -1,17 +1,68 @@
 import { join } from "node:path";
+import { assertV4RowAdmission, releasedV4SessionFormatCodec } from "@deepseek-ai/dsh-session-format-v3-to-v4";
+import { adoptSessionEvent, snapshotSessionEvent } from "@deepseek-ai/dsh-session";
 
-import { describe, expect, it } from "vitest";
+import type { Context } from "@deepseek-ai/cordis";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   configureDeepSeekHarnessHostLlm,
+  createDeepSeekHarnessRecallMessage,
   deepSeekHarnessAutoRecoveryEnabled,
   deepSeekHarnessMemoryGuidance,
   defaultDeepSeekHarnessHome,
   inject,
+  registerDeepSeekHarnessHostLlmCapabilityInvalidation,
 } from "../../../adapters/deepseek-harness/index.js";
+import type {
+  DeepSeekHarnessHostLlmBridge,
+} from "../../../adapters/deepseek-harness/host-llm.js";
+import { dshV4Event } from "../../helpers/deepseek-harness-v4.js";
 import { DEFAULT_CONFIG } from "../../../core/config/index.js";
 
 describe("DeepSeek Harness adapter runtime defaults", () => {
+  it("preserves recall attribution across the installed host's session boundary", () => {
+    const message = createDeepSeekHarnessRecallMessage("synthetic recall");
+    const event = { ...dshV4Event("user/message", message), surfaceOp: "append" };
+    expect(adoptSessionEvent(event as never)).toEqual(event);
+    expect(snapshotSessionEvent(event as never)).toEqual(event);
+    expect(event.data).toMatchObject({ source: {
+      kind: "plugin:memos-local-memory", plugin: "memos-local-memory", form: "recall",
+    } });
+  });
+
+  it("creates producer-owned recall messages admitted by DSH V4", () => {
+    const message = createDeepSeekHarnessRecallMessage("synthetic recall");
+    const event = dshV4Event("user/message", message);
+    expect(() => assertV4RowAdmission(event)).not.toThrow();
+    expect(() => releasedV4SessionFormatCodec.encodeEvent(event)).not.toThrow();
+    expect(message).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "synthetic recall" }],
+      source: { kind: "plugin:memos-local-memory", plugin: "memos-local-memory", form: "recall" },
+    });
+  });
+
+  it.each([
+    { kind: "plugin", plugin: "memos-local-memory", form: "recall" },
+    { kind: "plugin", plugin: "memos-local-memory" },
+  ])("rejects retired plugin sources at both V4 gates: %j", (source) => {
+    const message = { ...createDeepSeekHarnessRecallMessage("synthetic recall"), source };
+    const user = { ...message, source: { kind: "user" } };
+    const events = [
+      dshV4Event("user/message", message),
+      dshV4Event("agent/inbox/spliced", { removedCount: 1, inserted: [user, message] }),
+    ];
+    for (const event of events) {
+      expect(() => assertV4RowAdmission(event)).toThrow(
+        "format v4 message requires a producer-owned source kind",
+      );
+      expect(() => releasedV4SessionFormatCodec.encodeEvent(event)).toThrow(
+        "format v4 message requires a producer-owned source kind",
+      );
+    }
+  });
+
   it("injects the DSH LLM service and uses it for an otherwise unconfigured MemOS LLM", () => {
     expect(inject).toContain("llm");
 
@@ -79,5 +130,30 @@ describe("DeepSeek Harness adapter runtime defaults", () => {
     expect(withoutTools).not.toContain("memos_search");
     expect(withoutTools).toContain("untrusted historical data");
     expect(deepSeekHarnessMemoryGuidance(true)).toContain("memos_search");
+  });
+
+  it("invalidates host LLM capabilities when DSH adapters are updated", () => {
+    let listener: (() => void) | undefined;
+    const unregister = vi.fn();
+    const ctx = {
+      on(event: string, callback: () => void): () => void {
+        expect(event).toBe("llm/adapters-updated");
+        listener = callback;
+        return unregister;
+      },
+    } as unknown as Context;
+    const invalidateModelCapabilities = vi.fn();
+    const bridge = {
+      invalidateModelCapabilities,
+    } as unknown as DeepSeekHarnessHostLlmBridge;
+
+    const registered = registerDeepSeekHarnessHostLlmCapabilityInvalidation(
+      ctx,
+      bridge,
+    );
+    listener?.();
+
+    expect(registered).toBe(unregister);
+    expect(invalidateModelCapabilities).toHaveBeenCalledOnce();
   });
 });

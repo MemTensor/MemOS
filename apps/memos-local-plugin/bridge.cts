@@ -29,12 +29,10 @@ const path = require("node:path") as typeof import("node:path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require("node:fs") as typeof import("node:fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const { homedir } = require("node:os") as typeof import("node:os");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const url = require("node:url") as typeof import("node:url");
 
-const BRIDGE_STATUS_HEARTBEAT_MS = 5_000;
-const BRIDGE_STATUS_STALE_MS = 20_000;
-const BRIDGE_STATUS_FILE = "bridge-status.json";
 // If core.shutdown() or waitForShutdown() blocks (e.g. L2/L3 LLM calls
 // hanging during flush), the bridge process would never exit after stdin
 // EOF or SIGTERM. Race against this deadline so the process always exits
@@ -42,7 +40,13 @@ const BRIDGE_STATUS_FILE = "bridge-status.json";
 const SHUTDOWN_TIMEOUT_MS = 20_000;
 
 function withShutdownTimeout(p: Promise<void>): Promise<void> {
-  return Promise.race([p, new Promise<void>((r) => setTimeout(r, SHUTDOWN_TIMEOUT_MS))]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 interface BridgeArgs {
@@ -52,15 +56,6 @@ interface BridgeArgs {
   agent: "openclaw" | "hermes";
   home?: string;
   runtimeScope?: string;
-}
-
-type BridgeStatus = "connected" | "reconnecting" | "disconnected" | "unknown";
-
-interface BridgeStatusSnapshot {
-  status: BridgeStatus;
-  lastOkAt: number | null;
-  lastErrorAt: number | null;
-  lastError: string | null;
 }
 
 function parseArgs(argv: readonly string[]): BridgeArgs {
@@ -104,7 +99,7 @@ function pidFilePath(
   if (configuredHome) return path.join(path.resolve(configuredHome), "daemon", filename);
   const agentHome = agent === "hermes" ? ".hermes" : ".openclaw";
   return path.join(
-    process.env.HOME ?? "/tmp",
+    homedir(),
     agentHome,
     "memos-plugin",
     "daemon",
@@ -211,6 +206,13 @@ async function main(): Promise<void> {
   const { isHermesChatRunning } = (await importEsm(
     runtimeModule("bridge/hermes-process.ts", "dist/bridge/hermes-process.js")
   )) as typeof import("./bridge/hermes-process.js");
+  const {
+    BRIDGE_STATUS_FILE,
+    createBridgeStatusReader,
+    createBridgeStatusWriter,
+  } = (await importEsm(
+    runtimeModule("bridge/status.ts", "dist/bridge/status.js")
+  )) as typeof import("./bridge/status.js");
 
   const rootDir = pluginRoot();
   const pkgVersion = JSON.parse(
@@ -332,13 +334,15 @@ async function main(): Promise<void> {
   (core as { bindTelemetry?: (t: InstanceType<typeof Telemetry>) => void }).bindTelemetry?.(telemetry);
   telemetry.trackPluginStarted(args.agent);
 
+  const bridgeStatusFile = path.join(home.root, BRIDGE_STATUS_FILE);
+  const bridgeStatusWriter =
+    args.agent === "hermes" && !args.daemon
+      ? createBridgeStatusWriter(bridgeStatusFile)
+      : null;
   const bridgeStatus =
     args.agent === "hermes"
-      ? createBridgeStatusTracker(
-          path.join(home.root, BRIDGE_STATUS_FILE),
-          args.daemon,
-          isHermesChatRunning,
-        )
+      ? bridgeStatusWriter ??
+        createBridgeStatusReader(bridgeStatusFile, { isHermesChatRunning })
       : null;
 
   // Process-level error reporting. Without these handlers a crash in
@@ -384,7 +388,7 @@ async function main(): Promise<void> {
   const viewerPort = AGENT_DEFAULT_PORTS[args.agent];
 
   let bridgeHeartbeat:
-    | ReturnType<NonNullable<typeof bridgeStatus>["startHeartbeat"]>
+    | ReturnType<NonNullable<typeof bridgeStatusWriter>["startHeartbeat"]>
     | undefined;
 
   // ─── Startup ordering invariant (issue #1747 + host LLM fallback) ───
@@ -419,11 +423,11 @@ async function main(): Promise<void> {
   // `tests/unit/bridge/bridge-startup-ordering.test.ts`.
   if (!args.daemon) {
     stdio = startStdioServer({ core });
-    bridgeStatus?.markConnected();
-    bridgeHeartbeat = bridgeStatus?.startHeartbeat();
+    bridgeStatusWriter?.markConnected();
+    bridgeHeartbeat = bridgeStatusWriter?.startHeartbeat();
     void stdio.done.then(() => {
       bridgeHeartbeat?.stop();
-      bridgeStatus?.markDisconnected("Hermes chat disconnected");
+      bridgeStatusWriter?.markDisconnected("Hermes chat disconnected");
     });
   }
 
@@ -663,124 +667,6 @@ function classifyErrorCode(err: unknown): string {
     return err.name;
   }
   return "unknown";
-}
-
-function createBridgeStatusTracker(
-  statusFile: string,
-  daemon: boolean,
-  isHermesChatRunning: () => boolean,
-): {
-  snapshot(): BridgeStatusSnapshot;
-  markConnected(): void;
-  markDisconnected(message: string): void;
-  startHeartbeat(): { stop(): void };
-} {
-  let snapshot: BridgeStatusSnapshot = daemon
-    ? {
-        status: "disconnected",
-        lastOkAt: null,
-        lastErrorAt: Date.now(),
-        lastError: "Hermes chat is not connected",
-      }
-    : {
-        status: "unknown",
-        lastOkAt: null,
-        lastErrorAt: null,
-        lastError: null,
-      };
-
-  function writeStatus(next: BridgeStatusSnapshot): void {
-    snapshot = next;
-    try {
-      fs.mkdirSync(path.dirname(statusFile), { recursive: true });
-      fs.writeFileSync(statusFile, JSON.stringify(next), "utf8");
-    } catch {
-      // Status display must never affect chat capture.
-    }
-  }
-
-  function readStatus(): BridgeStatusSnapshot | null {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(statusFile, "utf8")) as Partial<BridgeStatusSnapshot>;
-      if (
-        parsed.status === "connected" ||
-        parsed.status === "reconnecting" ||
-        parsed.status === "disconnected" ||
-        parsed.status === "unknown"
-      ) {
-        return {
-          status: parsed.status,
-          lastOkAt: typeof parsed.lastOkAt === "number" ? parsed.lastOkAt : null,
-          lastErrorAt: typeof parsed.lastErrorAt === "number" ? parsed.lastErrorAt : null,
-          lastError: typeof parsed.lastError === "string" ? parsed.lastError : null,
-        };
-      }
-    } catch {
-      // Missing or corrupt status files are treated as disconnected.
-    }
-    return null;
-  }
-
-  function applyStaleRule(raw: BridgeStatusSnapshot): BridgeStatusSnapshot {
-    if (raw.status === "disconnected" && daemon && isHermesChatRunning()) {
-      return {
-        status: "reconnecting",
-        lastOkAt: raw.lastOkAt,
-        lastErrorAt: raw.lastErrorAt,
-        lastError: "Hermes chat is running; waiting for memory bridge",
-      };
-    }
-    if (
-      raw.status === "connected" &&
-      raw.lastOkAt != null &&
-      Date.now() - raw.lastOkAt > BRIDGE_STATUS_STALE_MS
-    ) {
-      return {
-        status: "disconnected",
-        lastOkAt: raw.lastOkAt,
-        lastErrorAt: Date.now(),
-        lastError: "Hermes bridge heartbeat is stale",
-      };
-    }
-    return raw;
-  }
-
-  function markConnected(): void {
-    writeStatus({
-      status: "connected",
-      lastOkAt: Date.now(),
-      lastErrorAt: snapshot.lastErrorAt,
-      lastError: snapshot.lastError,
-    });
-  }
-
-  function markDisconnected(message: string): void {
-    writeStatus({
-      status: "disconnected",
-      lastOkAt: snapshot.lastOkAt,
-      lastErrorAt: Date.now(),
-      lastError: message,
-    });
-  }
-
-  return {
-    snapshot() {
-      return { ...applyStaleRule(readStatus() ?? snapshot) };
-    },
-    markConnected,
-    markDisconnected,
-    startHeartbeat() {
-      const timer = setInterval(() => {
-        markConnected();
-      }, BRIDGE_STATUS_HEARTBEAT_MS);
-      (timer as unknown as { unref?: () => void }).unref?.();
-      return {
-        stop() {
-          clearInterval(timer);
-        },
-      };
-    },
-  };
 }
 
 void main().catch((err) => {

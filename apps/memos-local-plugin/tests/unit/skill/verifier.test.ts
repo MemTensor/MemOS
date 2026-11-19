@@ -119,6 +119,22 @@ describe("skill/verifier", () => {
     expect(r.coverage).toBe(1);
   });
 
+  it("does not treat JSON string arguments as command names", () => {
+    const draft = makeDraft({
+      summary: "Execute code safely",
+      tools: ["execute_code"],
+      steps: [{ title: "execute", body: "execute the supplied code" }],
+    });
+    const evidence = [
+      trace("tr_json", "run code", "execution completed", [
+        { name: "execute_code", input: '{"code": "print(1)"}' },
+      ]),
+    ];
+    const r = verifyDraft({ draft, evidence }, { log });
+    expect(r.coverage).toBe(1);
+    expect(r.unmappedTokens).toEqual([]);
+  });
+
   it("partial coverage below threshold fails", () => {
     const draft = makeDraft({
       summary: "Use several tools",

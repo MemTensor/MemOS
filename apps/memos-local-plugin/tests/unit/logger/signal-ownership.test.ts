@@ -17,7 +17,10 @@ describe("process signal ownership", () => {
       const source = readFileSync(resolve(entry), "utf8");
       expect(source).toMatch(/process\.on\("SIGINT"/);
       expect(source).toMatch(/process\.on\("SIGTERM"/);
-      expect(source).toMatch(/await (?:withShutdownTimeout\()?core\.shutdown\(\)/);
+      expect(source).toContain("const SHUTDOWN_TIMEOUT_MS = 20_000");
+      expect(source).toContain("function withShutdownTimeout(p: Promise<void>): Promise<void>");
+      expect(source).not.toMatch(/(?<!withShutdownTimeout\()await core\.shutdown\(\)/);
+      expect(source).not.toMatch(/(?<!withShutdownTimeout\()void core\.shutdown\(\)/);
     }
   });
 });

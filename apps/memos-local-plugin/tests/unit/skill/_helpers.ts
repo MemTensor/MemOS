@@ -40,6 +40,7 @@ export function makeSkillConfig(partial: Partial<SkillConfig> = {}): SkillConfig
     etaDelta: 0.1,
     archiveEta: 0.1,
     minEtaForRetrieval: 0.1,
+    idleArchiveMs: 30 * 24 * 60 * 60 * 1000,
     ...partial,
   };
 }
@@ -145,7 +146,9 @@ export interface SeedSkillArgs {
   trialsPassed?: number;
   sourcePolicyIds?: readonly PolicyId[];
   invocationGuide?: string;
+  createdAt?: EpochMs;
   updatedAt?: EpochMs;
+  lastUsedAt?: EpochMs | null;
   vec?: EmbeddingVector | null;
 }
 
@@ -165,8 +168,9 @@ export function seedSkill(handle: TmpDbHandle, args: SeedSkillArgs = {}): SkillR
     sourceWorldModelIds: [],
     evidenceAnchors: [],
     vec: args.vec ?? vec([1, 0, 0]),
-    createdAt: (args.updatedAt ?? NOW) as SkillRow["createdAt"],
+    createdAt: (args.createdAt ?? args.updatedAt ?? NOW) as SkillRow["createdAt"],
     updatedAt: (args.updatedAt ?? NOW) as SkillRow["updatedAt"],
+    lastUsedAt: args.lastUsedAt ?? null,
     version: 1,
   };
   handle.repos.skills.upsert(row);

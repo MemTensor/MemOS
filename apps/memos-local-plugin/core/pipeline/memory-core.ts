@@ -23,6 +23,8 @@
  *     minimal `{ agent, home?, config? }` input. Used by adapters.
  */
 
+import type { MemoryImportBundle, MemoryImportOptions, MemoryImportResult } from "../../agent-contract/import.js";
+import { importMemoryBundle } from "./bundle-import.js";
 import { randomUUID } from "node:crypto";
 
 import { MemosError } from "../../agent-contract/errors.js";
@@ -129,7 +131,6 @@ import type { UserFeedback } from "../reward/types.js";
 
 const FINAL_HUB_LLM_FILTER_TIMEOUT_MS = 3_000;
 const DEADLINE_FILTER_SAFE_CUTOFF_MS = 2_000;
-const IMPORT_WRITE_BATCH_SIZE = 500;
 
 type DedicatedLlmConfig = {
   provider?: string;
@@ -142,6 +143,10 @@ type DedicatedLlmConfig = {
   providerOrder?: string[];
   openRouter?: boolean;
   reasoning?: ReasoningConfig;
+  /** Max output tokens per completion. */
+  maxTokens?: number;
+  /** Extra HTTP headers for the provider request. */
+  headers?: Record<string, string>;
 };
 
 export interface BootstrapOptions {
@@ -220,6 +225,10 @@ export async function bootstrapMemoryCore(
 export async function bootstrapMemoryCoreFull(
   options: BootstrapOptions,
 ): Promise<BootstrapResult> {
+  const nodeMajor = Number(process.versions.node.split(".")[0]);
+  if (!Number.isInteger(nodeMajor) || nodeMajor < 22) {
+    throw new MemosError("config_invalid", `MemOS requires Node.js >=22 in the actual host runtime (received ${process.versions.node}). Upgrade the host before installing this version.`);
+  }
   const home = options.home ?? resolveHome(options.agent);
   const configResult = options.config
     ? { config: options.config, fromDisk: true, warnings: [], source: home.configFile }
@@ -422,7 +431,7 @@ export async function bootstrapMemoryCoreFull(
     llm = null;
   }
 
-  // Build a dedicated LLM for the reflection phase from skillEvolver
+  // Build a dedicated LLM for L2 induction and skills from skillEvolver
   // config when the user has configured a stronger model there. Falls
   // back to the main `llm` when skillEvolver.model is blank.
   let reflectLlm: ReturnType<typeof createLlmClient> | null = null;
@@ -442,6 +451,8 @@ export async function bootstrapMemoryCoreFull(
         providerOrder: evolver?.providerOrder,
         openRouter: evolver?.openRouter ?? false,
         reasoning: evolver?.reasoning,
+        maxTokens: evolver?.maxTokens,
+        headers: evolver?.headers,
         maxRetries: 3,
         // V7 §0.x — when the user's dedicated skill-evolver model is
         // down (auth, model name typo, server outage), prefer falling
@@ -504,6 +515,8 @@ export async function bootstrapMemoryCoreFull(
         providerOrder: l3c?.providerOrder,
         openRouter: l3c?.openRouter ?? false,
         reasoning: l3c?.reasoning,
+        maxTokens: l3c?.maxTokens,
+        headers: l3c?.headers,
         maxRetries: 3,
         fallbackToHost: true,
         onError: (d: { provider: string; model: string; message: string; code?: string; at?: number }) =>
@@ -569,6 +582,8 @@ export interface CreateMemoryCoreOptions {
   onShutdown?: () => void | Promise<void>;
   /** Optional telemetry instance for ARMS RUM reporting. */
   telemetry?: import("../telemetry/index.js").Telemetry | null;
+  /** Startup-recovery grace used by shutdown. Defaults to 15 seconds. */
+  startupRecoveryShutdownGraceMs?: number;
 }
 
 /**
@@ -588,6 +603,10 @@ export function createMemoryCore(
   const bootAt = Date.now();
   const log = rootLogger.child({ channel: "core.pipeline.memory-core" });
   const autoRecoveryEnabled = options.autoRecovery ?? true;
+  const startupRecoveryShutdownGraceMs = Math.max(
+    0,
+    options.startupRecoveryShutdownGraceMs ?? 15_000,
+  );
   let telemetry = options.telemetry ?? null;
   let initialized = false;
   let shutDown = false;
@@ -710,6 +729,7 @@ export function createMemoryCore(
   // detach the slow recovery to this promise. `waitForStartupRecovery`
   // exposes it so tests can opt back into the deterministic semantics.
   let startupRecoveryPromise: Promise<void> = Promise.resolve();
+  let startupRecoveryCancelled = false;
   let lastStaleScan = 0;
   let lastDirtyClosedScan = 0;
   async function autoFinalizeStaleTasks(): Promise<void> {
@@ -1509,6 +1529,7 @@ export function createMemoryCore(
   async function recoverOpenEpisodesAsSessionEnd(
     orphans: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
+    if (startupRecoveryCancelled) return;
     const endedAt = Date.now();
     log.info("init.orphan_episodes.session_end_recover", { count: orphans.length });
     debugStartupRecovery("H1", "startup_recovery_scan", {
@@ -1539,6 +1560,7 @@ export function createMemoryCore(
     });
     try {
       for (const ep of orphans) {
+        if (startupRecoveryCancelled) break;
         if (isLightweightEpisode(ep)) continue;
         try {
           const episodeId = ep.id as EpisodeId;
@@ -1592,7 +1614,9 @@ export function createMemoryCore(
 
       try {
         await handle.flush();
+        if (startupRecoveryCancelled) return;
         for (const episodeId of needsRewardFallback) {
+          if (startupRecoveryCancelled) break;
           if (captureFailedInBatch.has(episodeId)) {
             log.warn("init.orphan_recovery.reward_fallback_skipped", {
               episodeId,
@@ -1609,6 +1633,7 @@ export function createMemoryCore(
             });
           }
         }
+        if (startupRecoveryCancelled) return;
         await handle.flush();
         debugStartupRecovery("H5", "startup_recovery_flush_done", {
           recoveredCount: orphans.length,
@@ -1641,11 +1666,13 @@ export function createMemoryCore(
   async function recoverDirtyClosedEpisodes(
     episodes: Array<EpisodeRow & { meta?: Record<string, unknown> }>,
   ): Promise<void> {
+    if (startupRecoveryCancelled) return;
     log.info("init.dirty_closed_episodes.rescore", { count: episodes.length });
     // Snapshot the prior failure counters so we can increment them later
     // (after the bus chain settles) without an extra DB read.
     const priorFailedAttempts = new Map<EpisodeId, number>();
     for (const ep of episodes) {
+      if (startupRecoveryCancelled) break;
       if (isLightweightEpisode(ep)) continue;
       const episodeId = ep.id as EpisodeId;
       const endedAt = ep.endedAt ?? Date.now();
@@ -1672,6 +1699,7 @@ export function createMemoryCore(
       });
     }
     await handle.flush();
+    if (startupRecoveryCancelled) return;
     // After the reward / reflect chain has finished, account for the
     // outcome: clear `meta.rewardDirty` on episodes that are no longer
     // dirty (success), bump `failedAttempts + lastFailureAt` on episodes
@@ -1958,10 +1986,32 @@ export function createMemoryCore(
       // wait, a fast `init → shutdown` race during tests or a quick
       // gateway reload would close SQLite while reflect / reward is
       // mid-flush, producing `SQLITE_MISUSE` noise on the way down.
+      let startupRecoveryTimedOut = false;
       try {
-        await startupRecoveryPromise;
-      } catch {
-        /* already logged inside the recovery promise */
+        // Bound the wait: a slow / flaky LLM during startup recovery of a
+        // large dirty episode must not hold shutdown hostage until the
+        // systemd kill timer (15 Aug 2026 stop-sigterm wedge: SIGTERM at
+        // 08:00:23, SIGKILL at 08:10:23). Recovery is resumable — dirty
+        // episodes carry rewardDirty.failedAttempts and the periodic
+        // rescore re-runs them — so nothing is lost by proceeding after a
+        // short grace. Fast init→shutdown races still get their grace.
+        await withTimeout(
+          startupRecoveryPromise,
+          startupRecoveryShutdownGraceMs,
+          "startup_recovery_shutdown_timeout",
+        );
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message === "startup_recovery_shutdown_timeout"
+        ) {
+          startupRecoveryTimedOut = true;
+          startupRecoveryCancelled = true;
+          log.warn("startup_recovery.shutdown_timeout", {
+            timeoutMs: startupRecoveryShutdownGraceMs,
+            action: "cancel_and_shutdown_pipeline",
+          });
+        }
       }
       try {
         await hubRuntime?.stop();
@@ -1970,7 +2020,10 @@ export function createMemoryCore(
           err: err instanceof Error ? err.message : String(err),
         });
       }
-      await handle.shutdown("memory-core.shutdown");
+      await handle.shutdown(
+        "memory-core.shutdown",
+        startupRecoveryTimedOut ? { flushGraceMs: 0 } : undefined,
+      );
     } finally {
       disposeTurnStartApiLogSessionListener();
       turnStartApiLogBySession.clear();
@@ -2003,8 +2056,9 @@ export function createMemoryCore(
     // actually been able to talk to the configured upstream. See #1596.
     const effectiveConfig = diskConfig ?? handle.config;
 
-    const llmInfo = llmHealth(handle.llm, latestTraceTs());
-    const embedderInfo = embedderHealth(handle.embedder, latestTraceTs());
+    const latestTraceTimestamp = latestTraceTs();
+    const llmInfo = llmHealth(handle.llm, latestTraceTimestamp);
+    const embedderInfo = embedderHealth(handle.embedder, latestTraceTimestamp);
     applyConfiguredModelDisplay(effectiveConfig, llmInfo, embedderInfo);
 
     const skillEvolverInfo = resolveSkillEvolver(
@@ -2017,7 +2071,7 @@ export function createMemoryCore(
       // in that case anyway.
       handle.reflectLlm ?? handle.llm,
       llmInfo,
-      latestTraceTs(),
+      latestTraceTimestamp,
     );
 
     // NOTE: we deliberately do NOT fall back to `api_logs`-stored
@@ -2058,9 +2112,7 @@ export function createMemoryCore(
 
   function latestTraceTs(): number | null {
     try {
-      const rows = handle.repos.traces.list({ limit: 1 });
-      if (rows.length === 0) return null;
-      return rows[0]?.ts ?? null;
+      return handle.repos.traces.latestTimestamp();
     } catch {
       return null;
     }
@@ -4311,276 +4363,9 @@ export function createMemoryCore(
     };
   }
 
-  async function importBundle(bundle: {
-    version?: number;
-    traces?: unknown[];
-    policies?: unknown[];
-    worldModels?: unknown[];
-    skills?: unknown[];
-  }): Promise<{ imported: number; skipped: number }> {
+  async function importBundle(bundle: MemoryImportBundle, options: MemoryImportOptions = {}): Promise<MemoryImportResult> {
     ensureLive();
-    if (bundle.version && bundle.version !== 1) {
-      throw new MemosError("unsupported", `unsupported bundle version: ${bundle.version}`);
-    }
-    let imported = 0;
-    let skipped = 0;
-
-    // Best-effort: only insert rows that don't collide with existing
-    // ids. We don't re-mint fresh ids on collision to keep the shape
-    // deterministic for the user — they opt in via a de-duplicating
-    // pre-pass if they want merging.
-    const traces = Array.isArray(bundle.traces) ? bundle.traces : [];
-    const defaultOwner = ownerFromNamespace(activeNamespace);
-    const seenSessions = new Set<string>();
-    const seenEpisodes = new Set<string>();
-
-    for (const batch of chunkArray(traces, IMPORT_WRITE_BATCH_SIZE)) {
-      const result = handle.db.tx(() => {
-        let batchImported = 0;
-        let batchSkipped = 0;
-        const valid = batch
-          .map((raw) => raw as TraceDTO)
-          .filter((dto) => dto?.id && dto.episodeId && dto.sessionId);
-        batchSkipped += batch.length - valid.length;
-
-        // Phase 0 — ensure every referenced (sessionId, episodeId) row
-        // exists before `traces.insert`, otherwise the FK constraint would
-        // bounce imported legacy/external rows.
-        for (const dto of valid) {
-          const owner = importOwnerFields(dto, defaultOwner);
-          const ts = Number.isFinite(dto.ts) ? dto.ts : Date.now();
-          if (!seenSessions.has(dto.sessionId)) {
-            try {
-              if (!handle.repos.sessions.getById(dto.sessionId)) {
-                handle.repos.sessions.upsert({
-                  id: dto.sessionId,
-                  agent: dto.ownerAgentKind ?? handle.agent,
-                  ...owner,
-                  startedAt: ts,
-                  lastSeenAt: ts,
-                  meta: { source: "import" },
-                } as never);
-              }
-            } catch {
-              // If the synthetic session row is rejected, the FK insert
-              // below will fail and be counted as `skipped`.
-            }
-            seenSessions.add(dto.sessionId);
-          }
-          if (!seenEpisodes.has(dto.episodeId)) {
-            try {
-              if (!handle.repos.episodes.getById(dto.episodeId)) {
-                handle.repos.episodes.upsert({
-                  id: dto.episodeId,
-                  sessionId: dto.sessionId,
-                  ...owner,
-                  share: dto.share ?? null,
-                  startedAt: ts,
-                  endedAt: ts,
-                  traceIds: [],
-                  rTask: null,
-                  status: "closed",
-                  meta: { source: "import" },
-                } as never);
-              }
-            } catch {
-              /* see comment above */
-            }
-            seenEpisodes.add(dto.episodeId);
-          }
-        }
-
-        const existingIds = new Set(
-          handle.repos.traces
-            .getManyByIds(valid.map((dto) => dto.id as TraceId))
-            .map((row) => row.id),
-        );
-        const addedByEpisode = new Map<EpisodeId, TraceId[]>();
-        for (const dto of valid) {
-          try {
-            if (existingIds.has(dto.id)) { batchSkipped++; continue; }
-            const owner = importOwnerFields(dto, defaultOwner);
-            const ts = Number.isFinite(dto.ts) ? dto.ts : Date.now();
-            const turnId = Number.isFinite(dto.turnId) ? dto.turnId : ts;
-            handle.repos.traces.insert({
-              ...owner,
-              id: dto.id,
-              episodeId: dto.episodeId,
-              sessionId: dto.sessionId,
-              ts,
-              userText: dto.userText ?? "",
-              agentText: dto.agentText ?? "",
-              summary: dto.summary ?? null,
-              share: dto.share ?? null,
-              toolCalls: dto.toolCalls ?? [],
-              agentThinking: dto.agentThinking ?? null,
-              reflection: dto.reflection ?? null,
-              value: dto.value ?? 0,
-              alpha: dto.alpha ?? 0,
-              rHuman: dto.rHuman ?? null,
-              priority: dto.priority ?? 0,
-              tags: dto.tags ?? [],
-              vecSummary: null,
-              vecAction: null,
-              turnId,
-              schemaVersion: 1,
-            } as TraceRow);
-            existingIds.add(dto.id);
-            if (!addedByEpisode.has(dto.episodeId)) addedByEpisode.set(dto.episodeId, []);
-            addedByEpisode.get(dto.episodeId)!.push(dto.id as TraceId);
-            batchImported++;
-          } catch {
-            batchSkipped++;
-          }
-        }
-        for (const [episodeId, ids] of addedByEpisode) {
-          const episode = handle.repos.episodes.getById(episodeId);
-          if (!episode) continue;
-          handle.repos.episodes.appendTrace(
-            episodeId,
-            dedupeTraceIds([...episode.traceIds, ...ids]) as string[],
-          );
-        }
-        return { imported: batchImported, skipped: batchSkipped };
-      });
-      imported += result.imported;
-      skipped += result.skipped;
-      await yieldToEventLoop();
-    }
-
-    // Policies / world models / skills use existing repo.insert shape.
-    for (const batch of chunkArray(bundle.policies ?? [], IMPORT_WRITE_BATCH_SIZE)) {
-      const result = handle.db.tx(() => {
-        let batchImported = 0;
-        let batchSkipped = 0;
-        for (const raw of batch) {
-          try {
-            const dto = raw as PolicyDTO;
-            if (!dto?.id || handle.repos.policies.getById(dto.id)) { batchSkipped++; continue; }
-            handle.repos.policies.insert({
-              ...importOwnerFields(dto, defaultOwner),
-              id: dto.id,
-              title: dto.title,
-              trigger: dto.trigger,
-              procedure: dto.procedure,
-              verification: dto.verification,
-              boundary: dto.boundary,
-              support: dto.support ?? 0,
-              gain: dto.gain ?? 0,
-              status: dto.status,
-              experienceType: dto.experienceType ?? "success_pattern",
-              evidencePolarity: dto.evidencePolarity ?? "positive",
-              salience: dto.salience ?? 0,
-              confidence: dto.confidence ?? 0.5,
-              skillEligible: dto.skillEligible !== false,
-              sourceEpisodeIds: dto.sourceEpisodeIds ?? [],
-              sourceFeedbackIds: dto.sourceFeedbackIds ?? [],
-              sourceTraceIds: dto.sourceTraceIds ?? [],
-              inducedBy: "import",
-              decisionGuidance: {
-                preference: [...(dto.preference ?? [])],
-                antiPattern: [...(dto.antiPattern ?? [])],
-              },
-              verifierMeta: dto.verifierMeta ?? null,
-              share: dto.share ?? null,
-              vec: null,
-              createdAt: dto.createdAt ?? Date.now(),
-              updatedAt: dto.updatedAt ?? Date.now(),
-            });
-            batchImported++;
-          } catch {
-            batchSkipped++;
-          }
-        }
-        return { imported: batchImported, skipped: batchSkipped };
-      });
-      imported += result.imported;
-      skipped += result.skipped;
-      await yieldToEventLoop();
-    }
-
-    for (const batch of chunkArray(bundle.skills ?? [], IMPORT_WRITE_BATCH_SIZE)) {
-      const result = handle.db.tx(() => {
-        let batchImported = 0;
-        let batchSkipped = 0;
-        for (const raw of batch) {
-          try {
-            const dto = raw as SkillDTO;
-            if (!dto?.id || handle.repos.skills.getById(dto.id)) { batchSkipped++; continue; }
-            handle.repos.skills.insert({
-              ...importOwnerFields(dto, defaultOwner),
-              id: dto.id,
-              name: dto.name,
-              status: dto.status,
-              invocationGuide: dto.invocationGuide,
-              eta: dto.eta ?? 0,
-              support: dto.support ?? 0,
-              gain: dto.gain ?? 0,
-              trialsAttempted: 0,
-              trialsPassed: 0,
-              sourcePolicyIds: dto.sourcePolicyIds ?? [],
-              sourceWorldModelIds: dto.sourceWorldModelIds ?? [],
-              evidenceAnchors: dto.evidenceAnchors ?? [],
-              procedureJson: {},
-              share: dto.share ?? null,
-              vec: null,
-              createdAt: dto.createdAt ?? Date.now(),
-              updatedAt: dto.updatedAt ?? Date.now(),
-              version: dto.version ?? 1,
-              usageCount: dto.usageCount ?? 0,
-              lastUsedAt: dto.lastUsedAt ?? null,
-            } as SkillRow);
-            batchImported++;
-          } catch {
-            batchSkipped++;
-          }
-        }
-        return { imported: batchImported, skipped: batchSkipped };
-      });
-      imported += result.imported;
-      skipped += result.skipped;
-      await yieldToEventLoop();
-    }
-
-    for (const batch of chunkArray(bundle.worldModels ?? [], IMPORT_WRITE_BATCH_SIZE)) {
-      const result = handle.db.tx(() => {
-        let batchImported = 0;
-        let batchSkipped = 0;
-        for (const raw of batch) {
-          try {
-            const dto = raw as WorldModelDTO;
-            if (!dto?.id || handle.repos.worldModel.getById(dto.id)) { batchSkipped++; continue; }
-            handle.repos.worldModel.insert({
-              ...importOwnerFields(dto, defaultOwner),
-              id: dto.id,
-              title: dto.title,
-              body: dto.body,
-              structure: { environment: [], inference: [], constraints: [] },
-              domainTags: [],
-              confidence: 0.5,
-              policyIds: dto.policyIds ?? [],
-              sourceEpisodeIds: [],
-              inducedBy: "import",
-              share: dto.share ?? null,
-              vec: null,
-              createdAt: dto.createdAt ?? Date.now(),
-              updatedAt: dto.updatedAt ?? Date.now(),
-              version: dto.version ?? 1,
-              status: dto.status ?? "active",
-            } as WorldModelRow);
-            batchImported++;
-          } catch {
-            batchSkipped++;
-          }
-        }
-        return { imported: batchImported, skipped: batchSkipped };
-      });
-      imported += result.imported;
-      skipped += result.skipped;
-      await yieldToEventLoop();
-    }
-
-    return { imported, skipped };
+    return importMemoryBundle(bundle, options, { db: handle.db, repos: handle.repos, namespace: activeNamespace });
   }
 
   async function embeddingMaintenanceStats(): Promise<EmbeddingMaintenanceStats> {
@@ -5026,7 +4811,10 @@ export function createMemoryCore(
     const existing = handle.repos.skills.getById(id);
     if (!existing || !ownedByCurrent(existing)) return null;
     const now = Date.now();
-    handle.repos.skills.setStatus(id, "active", now);
+    handle.db.tx(() => {
+      handle.repos.skills.setStatus(id, "active", now);
+      handle.repos.skills.recordUse(id, now);
+    });
     if (existing.status !== "active") {
       handle.buses.skill.emit({
         kind: "skill.status.changed",
@@ -5529,25 +5317,6 @@ function compareTraceRowsForEpisodeOrder(
   return a.ts - b.ts;
 }
 
-function importOwnerFields(
-  row: {
-    ownerAgentKind?: AgentKind;
-    ownerProfileId?: string;
-    ownerWorkspaceId?: string | null;
-  },
-  fallback: ReturnType<typeof ownerFromNamespace>,
-): {
-  ownerAgentKind: AgentKind;
-  ownerProfileId: string;
-  ownerWorkspaceId: string | null;
-} {
-  return {
-    ownerAgentKind: row.ownerAgentKind ?? fallback.ownerAgentKind,
-    ownerProfileId: row.ownerProfileId ?? fallback.ownerProfileId,
-    ownerWorkspaceId: row.ownerWorkspaceId ?? fallback.ownerWorkspaceId ?? null,
-  };
-}
-
 function dedupeTraceIds(ids: readonly TraceId[]): TraceId[] {
   const seen = new Set<TraceId>();
   const out: TraceId[] = [];
@@ -5557,18 +5326,6 @@ function dedupeTraceIds(ids: readonly TraceId[]): TraceId[] {
     out.push(id);
   }
   return out;
-}
-
-function chunkArray<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-  return out;
-}
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 // ─── Row → DTO mappers ───────────────────────────────────────────────────────

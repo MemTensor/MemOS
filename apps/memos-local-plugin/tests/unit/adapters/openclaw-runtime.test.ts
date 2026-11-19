@@ -128,7 +128,56 @@ function deferred<T>() {
 }
 
 describe("OpenClaw adapter runtime lifecycle", () => {
-  it("blocks a duplicate register before the second runtime bootstraps", async () => {
+  it("reuses the active core for tool discovery without bootstrapping or registering hooks twice", async () => {
+    const home = useTempMemosHome();
+    const core = { ...makeCore(), listSkills: vi.fn(async () => []) };
+    const boot = vi.fn(async () => ({ core, config: DEFAULT_CONFIG, home }));
+    const close = vi.fn(async () => {});
+    const server = vi.fn(async () => ({ url: "http://127.0.0.1:18799", port: 18799, closed: false, close }));
+    const plugin = await loadPluginWithMocks(boot, server);
+    const owner = makeApi();
+    plugin.register(owner);
+    await owner.services[0].start();
+    try {
+      const discovery = Object.assign(makeApi(), { registrationMode: "tool-discovery" as const });
+      expect(() => plugin.register(discovery)).not.toThrow();
+      expect(discovery.on).not.toHaveBeenCalled();
+      expect(discovery.services).toHaveLength(0);
+      const registrations = vi.mocked(discovery.registerTool).mock.calls;
+      const entry = registrations.find(([, options]) => options?.name === "memos_skill_list");
+      expect(entry).toBeDefined();
+      const factory = entry![0];
+      if (typeof factory !== "function") throw new Error("Expected a tool factory");
+      const tool = factory({ agentId: "main", sessionKey: "main" });
+      if (!tool || Array.isArray(tool)) throw new Error("Expected a single tool");
+      await tool.execute("compat-test", {});
+      expect(core.listSkills).toHaveBeenCalledOnce();
+      expect(boot).toHaveBeenCalledOnce();
+      expect(server).toHaveBeenCalledOnce();
+    } finally {
+      await owner.services[0].stop();
+    }
+  });
+
+  it("keeps tool discovery inert when there is no full runtime", async () => {
+    useTempMemosHome();
+    const boot = vi.fn();
+    const server = vi.fn();
+    const plugin = await loadPluginWithMocks(boot, server);
+    const discovery = Object.assign(makeApi(), { registrationMode: "tool-discovery" as const });
+    plugin.register(discovery);
+    expect(boot).not.toHaveBeenCalled();
+    expect(server).not.toHaveBeenCalled();
+    expect(discovery.services).toHaveLength(0);
+    expect(discovery.on).not.toHaveBeenCalled();
+    const factory = vi.mocked(discovery.registerTool).mock.calls[0][0];
+    if (typeof factory !== "function") throw new Error("Expected a tool factory");
+    const tool = factory({ agentId: "main" });
+    if (!tool || Array.isArray(tool)) throw new Error("Expected a single tool");
+    await expect(tool.execute("compat-test", { query: "test" })).rejects.toThrow("runtime is not ready");
+  });
+
+  it("reuses the runtime and registers conversation hooks in another host registry", async () => {
     const home = useTempMemosHome();
     const firstCore = makeCore();
     const boot = deferred<{ core: ReturnType<typeof makeCore>; config: typeof DEFAULT_CONFIG; home: ResolvedHome }>();
@@ -139,21 +188,37 @@ describe("OpenClaw adapter runtime lifecycle", () => {
       closed: false,
       close: vi.fn(async () => {}),
     }));
-    const plugin = await loadPluginWithMocks(bootstrapMemoryCoreFull, startHttpServer);
+    const bridge = {
+      handleBeforePrompt: vi.fn(async () => ({ prependContext: "recalled test memory" })),
+      handleAgentEnd: vi.fn(async () => {}),
+    };
+    const plugin = await loadPluginWithMocks(bootstrapMemoryCoreFull, startHttpServer, vi.fn(() => bridge));
 
     const api1 = makeApi();
     plugin.register(api1);
     expect(bootstrapMemoryCoreFull).toHaveBeenCalledTimes(1);
 
     const api2 = makeApi();
-    expect(() => plugin.register(api2)).toThrow(/already active/);
+    vi.resetModules();
+    const reloaded = (await import("../../../adapters/openclaw/index.js")).default;
+    expect(() => reloaded.register(api2)).not.toThrow();
     expect(bootstrapMemoryCoreFull).toHaveBeenCalledTimes(1);
-    expect(api2.registerTool).not.toHaveBeenCalled();
-    expect(api2.on).not.toHaveBeenCalled();
+    expect(api2.registerTool).toHaveBeenCalled();
+    expect(api2.hooks.has("before_prompt_build")).toBe(true);
+    expect(api2.hooks.has("agent_end")).toBe(true);
+    expect(api2.services).toHaveLength(0);
 
     boot.resolve({ core: firstCore, config: DEFAULT_CONFIG, home });
     await api1.services[0]!.start?.();
+    const beforePrompt = api2.hooks.get("before_prompt_build") as OpenClawHookHandlerMap["before_prompt_build"];
+    await expect(beforePrompt({ prompt: "synthetic test", messages: [] }, { agentId: "main" }))
+      .resolves.toEqual({ prependContext: "recalled test memory" });
+    const agentEnd = api2.hooks.get("agent_end") as OpenClawHookHandlerMap["agent_end"];
+    agentEnd({ messages: [], success: true }, { agentId: "main" });
+    await vi.waitFor(() => expect(bridge.handleAgentEnd).toHaveBeenCalledOnce());
+    expect(bridge.handleBeforePrompt).toHaveBeenCalledOnce();
     await api1.services[0]!.stop?.();
+    expect(firstCore.shutdown).toHaveBeenCalledOnce();
 
     expect(fs.existsSync(path.join(home.daemonDir, "openclaw-runtime.lock"))).toBe(false);
   });

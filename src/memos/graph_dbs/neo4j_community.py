@@ -5,10 +5,9 @@ from datetime import datetime
 from typing import Any
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
+from memos.exceptions import VectorDBError
 from memos.graph_dbs.neo4j import (
-    _DICT_METADATA_FIELDS,
     Neo4jGraphDB,
-    _deserialize_dict_field,
     _flatten_info_fields,
     _prepare_node_metadata,
     _sanitize_neo4j_metadata,
@@ -959,10 +958,11 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             int: Number of nodes deleted.
         """
         logger.info(
-            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
-        )
-        print(
-            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+            "[delete_node_by_prams] memory_count=%d, file_count=%d, cube_count=%d, has_filter=%s",
+            len(memory_ids or []),
+            len(file_ids or []),
+            len(writable_cube_ids or []),
+            bool(filter),
         )
 
         # file_ids deletion must be scoped by writable_cube_ids.
@@ -1033,44 +1033,27 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         else:
             ids_where = data_conditions
 
-        logger.info(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
+        # Return IDs from the deletion itself so concurrent matches cannot drift
+        # between a separate ID lookup and the graph mutation.
+        delete_query = (
+            f"MATCH (n:Memory) WHERE {ids_where} WITH n, n.id AS id DETACH DELETE n RETURN id"
         )
-        print(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
-        )
+        with (
+            self.driver.session(database=self.db_name) as session,
+            session.begin_transaction() as transaction,
+        ):
+            records = list(transaction.run(delete_query, **params))
+            deleted_ids = [record["id"] for record in records if record["id"] is not None]
+            if deleted_ids:
+                try:
+                    self.vec_db.delete(deleted_ids)
+                except Exception as exc:
+                    # Leave graph nodes available for a retry if vector cleanup fails.
+                    raise VectorDBError("Failed to delete memory vectors; retry deletion") from exc
+            transaction.commit()
 
-        # First count matching nodes to get accurate count
-        count_query = f"MATCH (n:Memory) WHERE {ids_where} RETURN count(n) AS node_count"
-        logger.info(f"[delete_node_by_prams] count_query: {count_query}")
-        print(f"[delete_node_by_prams] count_query: {count_query}")
-
-        # Then delete nodes
-        delete_query = f"MATCH (n:Memory) WHERE {ids_where} DETACH DELETE n"
-        logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] params: {params}")
-
-        deleted_count = 0
-        try:
-            with self.driver.session(database=self.db_name) as session:
-                # Count nodes before deletion
-                count_result = session.run(count_query, **params)
-                count_record = count_result.single()
-                expected_count = 0
-                if count_record:
-                    expected_count = count_record["node_count"] or 0
-
-                # Delete nodes
-                session.run(delete_query, **params)
-                # Use the count from before deletion as the actual deleted count
-                deleted_count = expected_count
-
-        except Exception as e:
-            logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
-            raise
-
-        logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
+        deleted_count = len(records)
+        logger.info("[delete_node_by_prams] Successfully deleted %d nodes", deleted_count)
         return deleted_count
 
     def clear(self, user_name: str | None = None) -> None:
@@ -1173,13 +1156,6 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
-
-        # Reverse the write-side ``dict → json.dumps`` transform for the
-        # known dict-typed metadata fields. See issue #2288.
-        for _field in _DICT_METADATA_FIELDS:
-            if _field in node:
-                node[_field] = _deserialize_dict_field(node[_field])
-
         new_node = {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
         try:
             vec_item = self.vec_db.get_by_id(new_node["id"])
@@ -1216,12 +1192,6 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                     ):
                         break
                     node["sources"][idx] = json.loads(node["sources"][idx])
-
-            # Reverse the write-side ``dict → json.dumps`` transform for
-            # the known dict-typed metadata fields. See issue #2288.
-            for _field in _DICT_METADATA_FIELDS:
-                if _field in node:
-                    node[_field] = _deserialize_dict_field(node[_field])
 
             node_id = node.pop("id")
             node_ids.append(node_id)

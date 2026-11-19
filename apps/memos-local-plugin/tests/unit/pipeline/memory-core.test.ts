@@ -7,6 +7,7 @@
  */
 
 import net from "node:net";
+import * as embeddingModule from "../../../core/embedding/index.js";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -169,6 +170,22 @@ describe("MemoryCore façade", () => {
     expect(h.embedder.available).toBe(true);
     expect(h.embedder.dim).toBe(TEST_EMBED_DIMENSIONS);
     expect(h.llm.available).toBe(false);
+  });
+
+  it("reads the latest trace timestamp only once per health snapshot", async () => {
+    const latestTimestamp = vi.spyOn(db!.repos.traces, "latestTimestamp");
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test-1.0.0",
+    );
+    await core.init();
+    latestTimestamp.mockClear();
+
+    await core.health();
+
+    expect(latestTimestamp).toHaveBeenCalledTimes(1);
   });
 
   it("reloads the hub runtime when hub config changes without a process restart", async () => {
@@ -1531,6 +1548,44 @@ describe("MemoryCore façade", () => {
       name: "local skill",
     });
   });
+
+  it("gives a manually reactivated skill a fresh idle-archive grace period", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    seedCoreSkill("skill-reactivate", "reactivated skill");
+    db!.repos.skills.setStatus("skill-reactivate" as SkillId, "archived", 1);
+    const before = Date.now();
+
+    await expect(core.reactivateSkill("skill-reactivate" as SkillId)).resolves.toMatchObject({
+      status: "active",
+    });
+    expect(db!.repos.skills.getById("skill-reactivate" as SkillId)?.lastUsedAt).toBeGreaterThanOrEqual(
+      before,
+    );
+  });
+
+  it("archives idle low-eta skills while the pipeline stays running", async () => {
+    seedCoreSkill("skill-idle-running", "idle running skill");
+    const stale = db!.repos.skills.getById("skill-idle-running" as SkillId)!;
+    db!.repos.skills.upsert({
+      ...stale,
+      eta: 0.05,
+      createdAt: 1 as SkillRow["createdAt"],
+      updatedAt: 1 as SkillRow["updatedAt"],
+      lastUsedAt: null,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(db!.repos.skills.getById("skill-idle-running" as SkillId)?.status).toBe("archived");
+  });
 });
 
 describe("bootstrapMemoryCore", () => {
@@ -1568,64 +1623,71 @@ describe("bootstrapMemoryCore", () => {
   });
 
   it("persists lightweight summarizer model status for Hermes overview", async () => {
-    home = await makeTmpHome({
-      agent: "hermes",
-      configYaml: `
-llm:
-  provider: host
-  model: hermes-summary-test
-algorithm:
-  lightweightMemory:
-    enabled: true
-`,
-    });
-    const bridge: HostLlmBridge = {
-      id: "test-host-llm",
-      async complete() {
-        return {
-          text: JSON.stringify({ summary: "Hermes remembered the overview status fact" }),
-          model: "hermes-summary-test",
-          durationMs: 1,
-        };
-      },
-    };
-    core = await bootstrapMemoryCore({
-      agent: "hermes",
-      home: home.home,
-      config: home.config,
-      pkgVersion: "bootstrap-test",
-      hostLlmBridge: bridge,
-      now: () => 1_700_000_000_000,
-    });
-    await core.init();
+    // This test verifies summarizer status, without downloading embedding models.
+    const embeddingFactory = vi.spyOn(embeddingModule, "createEmbedder")
+      .mockReturnValue(fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }));
+    try {
+      home = await makeTmpHome({
+        agent: "hermes",
+        configYaml: `
+  llm:
+    provider: host
+    model: hermes-summary-test
+  algorithm:
+    lightweightMemory:
+      enabled: true
+  `,
+      });
+      const bridge: HostLlmBridge = {
+        id: "test-host-llm",
+        async complete() {
+          return {
+            text: JSON.stringify({ summary: "Hermes remembered the overview status fact" }),
+            model: "hermes-summary-test",
+            durationMs: 1,
+          };
+        },
+      };
+      core = await bootstrapMemoryCore({
+        agent: "hermes",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "bootstrap-test",
+        hostLlmBridge: bridge,
+        now: () => 1_700_000_000_000,
+      });
+      await core.init();
 
-    const start = await core.onTurnStart({
-      agent: "hermes",
-      sessionId: "hermes-lightweight-status",
-      userText: "请记住 Hermes 摘要模型状态应该显示已调用",
-      ts: 1_700_000_000_000,
-    });
-    await core.onTurnEnd({
-      agent: "hermes",
-      sessionId: "hermes-lightweight-status",
-      episodeId: start.query.episodeId!,
-      agentText: "已记住。",
-      toolCalls: [],
-      ts: 1_700_000_000_100,
-    });
+      const start = await core.onTurnStart({
+        agent: "hermes",
+        sessionId: "hermes-lightweight-status",
+        userText: "请记住 Hermes 摘要模型状态应该显示已调用",
+        ts: 1_700_000_000_000,
+      });
+      await core.onTurnEnd({
+        agent: "hermes",
+        sessionId: "hermes-lightweight-status",
+        episodeId: start.query.episodeId!,
+        agentText: "已记住。",
+        toolCalls: [],
+        ts: 1_700_000_000_100,
+      });
 
-    const logs = await core.listApiLogs({ toolName: "system_model_status", limit: 10 });
-    const llmRows = logs.logs
-      .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
-      .filter((row) => row.role === "llm");
-    expect(llmRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          status: "ok",
-          op: "capture.summarize",
-        }),
-      ]),
-    );
+      const logs = await core.listApiLogs({ toolName: "system_model_status", limit: 10 });
+      const llmRows = logs.logs
+        .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
+        .filter((row) => row.role === "llm");
+      expect(llmRows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            status: "ok",
+            op: "capture.summarize",
+          }),
+        ]),
+      );
+    } finally {
+      embeddingFactory.mockRestore();
+    }
   });
 
   it("init() recovers orphaned open episodes left behind by a previous crash", async () => {
@@ -2640,6 +2702,59 @@ algorithm:
     // Deliberately skip `waitForStartupRecovery()`. `shutdown()` must
     // still complete the recovery before closing the DB handle.
     await expect(fastCore.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("cancels stalled startup recovery before shutting down the pipeline (#2252)", async () => {
+    db!.repos.sessions.upsert({
+      id: "se_stalled_recovery",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_stalled_recovery",
+      sessionId: "se_stalled_recovery",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      endedAt: null,
+      traceIds: [],
+      rTask: null,
+      status: "open",
+      meta: {},
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    const originalShutdown = pipeline.shutdown.bind(pipeline);
+    pipeline.flush = vi.fn(() => new Promise<void>(() => {}));
+    const shutdownSpy = vi.fn(
+      async (
+        reason?: string,
+        options?: Parameters<PipelineHandle["shutdown"]>[1],
+      ) => originalShutdown(reason, { ...options, abortWaitMs: 0 }),
+    );
+    pipeline.shutdown = shutdownSpy;
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "issue2252-stalled-recovery",
+      { startupRecoveryShutdownGraceMs: 10 },
+    );
+
+    await core.init();
+    await expect(core.shutdown()).resolves.toBeUndefined();
+    expect(shutdownSpy).toHaveBeenCalledWith(
+      "memory-core.shutdown",
+      { flushGraceMs: 0 },
+    );
+
+    core = null;
+    pipeline = null;
   });
 
   it("does not rescore a closed episode whose only mismatch is a ghost trace ID (#1966)", async () => {

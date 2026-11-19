@@ -43,6 +43,13 @@ const EmbeddingSchema = Type.Object({
   ], { default: "local" }),
   endpoint: StringWithDefault(""),
   model: StringWithDefault("Xenova/all-MiniLM-L6-v2"),
+  local: Type.Optional(Type.Object({
+    remoteHost: StringWithDefault(""),
+    modelPath: StringWithDefault(""),
+    cacheDir: StringWithDefault(""),
+    offline: Bool(false),
+    loadTimeoutMs: NumberInRange(120_000, 1, 3_600_000),
+  }, { default: {} })),
   apiKey: StringWithDefault(""),
   /** OpenRouter provider routing — providers to skip. */
   providerIgnore: Type.Optional(Type.Array(Type.String(), { default: [] })),
@@ -116,6 +123,10 @@ const LlmSchema = Type.Object({
   openRouter: Type.Optional(Bool(false)),
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
+  /** Max output tokens per completion (deepseek-v4-flash needs >= 100). */
+  maxTokens: NumberInRange(1024, 100, 131072),
+  /** Extra HTTP headers for the provider request. */
+  headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
 }, { default: {} });
 
 /**
@@ -148,6 +159,10 @@ const SkillEvolverSchema = Type.Object({
   openRouter: Type.Optional(Bool(false)),
   /** Optional reasoning control (see ReasoningSchema). Omit = model default. */
   reasoning: Type.Optional(ReasoningSchema),
+  /** Max output tokens per completion. */
+  maxTokens: NumberInRange(1024, 100, 131072),
+  /** Extra HTTP headers for the provider request. */
+  headers: Type.Optional(Type.Record(Type.String(), Type.String(), { default: {} })),
 }, { default: {} });
 
 const StorageSchema = Type.Object({
@@ -318,6 +333,10 @@ const AlgorithmSchema = Type.Object({
      * are ignored (policies too disparate to share a world model).
      */
     clusterMinSimilarity: NumberInRange(0.6, 0, 1),
+    /** Maximum policies included in one L3 abstraction prompt. */
+    maxPoliciesPerCluster: NumberInRange(20, 1, 100),
+    /** Hard total character cap for one L3 abstraction prompt. */
+    maxPromptChars: NumberInRange(32_000, 4_000, 128_000),
     /** Chars of L2 body handed to `l3.abstraction`. */
     policyCharCap: NumberInRange(800, 200, 4_000),
     /** Chars of trace body handed per evidence trace. */
@@ -363,6 +382,12 @@ const AlgorithmSchema = Type.Object({
     archiveEta: NumberInRange(0.1, 0, 1),
     /** Hide Tier-1 skills whose η is below this. Mirrors retrieval.minSkillEta. */
     minEtaForRetrieval: NumberInRange(0.1, 0, 1),
+    /** Archive low-η active skills after this much retrieval inactivity (minimum 1 hour). */
+    idleArchiveMs: NumberInRange(
+      30 * 24 * 60 * 60 * 1000,
+      60 * 60 * 1000,
+      365 * 24 * 60 * 60 * 1000,
+    ),
   }, { default: {} }),
   feedback: Type.Object({
     /** Raise a burst after this many failures of the same tool in-window. */

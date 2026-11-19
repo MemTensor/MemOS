@@ -9,6 +9,88 @@ from pydantic import BaseModel
 from pydantic.aliases import PydanticUndefined
 
 
+def make_dynamic_cache(seq_len: int = 3, num_layers: int = 1):
+    """
+    Build a ``DynamicCache`` with populated layers.
+
+    ``transformers`` stores the key/value tensors either in the legacy
+    ``key_cache``/``value_cache`` lists (< 4.55) or in per-layer objects
+    (``layers``, >= 4.55). Building the cache through the public ``update()``
+    API works for both layouts.
+
+    Args:
+        seq_len: Number of cached tokens per layer.
+        num_layers: Number of layers to populate.
+
+    Returns:
+        DynamicCache: A cache with ``num_layers`` populated layers.
+    """
+    import torch
+
+    from transformers import DynamicCache
+
+    cache = DynamicCache()
+    for layer_idx in range(num_layers):
+        cache.update(
+            torch.zeros(1, 2, seq_len, 4),
+            torch.ones(1, 2, seq_len, 4),
+            layer_idx,
+        )
+    return cache
+
+
+def dynamic_cache_key_tensors(cache: Any) -> list[Any]:
+    """
+    Return the key tensor of every layer of a cache, for either cache layout.
+
+    Args:
+        cache: The cache to inspect.
+
+    Returns:
+        list: One key tensor per layer.
+    """
+    layers = getattr(cache, "layers", None)
+    if layers is not None:
+        tensors = []
+        for layer in layers:
+            tensor = getattr(layer, "keys", None)
+            if tensor is None:
+                tensor = getattr(layer, "key_cache", None)
+            tensors.append(tensor)
+        return tensors
+    return list(cache.key_cache)
+
+
+def dynamic_cache_layer_count(cache: Any) -> int:
+    """
+    Return the number of layers of a cache, for either cache layout.
+
+    Args:
+        cache: The cache to inspect.
+
+    Returns:
+        int: Number of layers.
+    """
+    layers = getattr(cache, "layers", None)
+    if layers is not None:
+        return len(layers)
+    return len(cache.key_cache)
+
+
+def dynamic_cache_seq_len(cache: Any, layer_idx: int = 0) -> int:
+    """
+    Return the number of cached tokens held by one layer of a cache.
+
+    Args:
+        cache: The cache to inspect.
+        layer_idx: Index of the layer to look at.
+
+    Returns:
+        int: Number of cached tokens.
+    """
+    return dynamic_cache_key_tensors(cache)[layer_idx].shape[-2]
+
+
 def check_module_base_class(cls: Any) -> None:
     """
     General function to test the correctness of an abstract base class.

@@ -14,6 +14,11 @@ import {
   toJsonText,
 } from "./_helpers.js";
 
+export const IDLE_ARCHIVE_BATCH_LIMIT = 500;
+
+const IDLE_ARCHIVE_PREDICATE =
+  "status = 'active' AND eta < @min_eta AND COALESCE(last_used_at, created_at) <= @cutoff";
+
 const COLUMNS = [
   "id",
   "owner_agent_kind",
@@ -85,6 +90,42 @@ export function makeSkillsRepo(db: StorageDb) {
 
     setStatus(id: SkillId, status: SkillRow["status"], updatedAt: number): void {
       updateStatus.run({ id, status, updated_at: updatedAt });
+    },
+
+    /**
+     * Atomically select and archive one oldest-first batch. Keeping candidate
+     * selection and the conditional transition in one SQLite statement
+     * removes the read/update race and avoids hundreds of UPDATE round-trips.
+     */
+    archiveNextIdleBatch(input: {
+      minEtaForRetrieval: number;
+      cutoff: number;
+      updatedAt: number;
+      limit?: number;
+    }): SkillRow[] {
+      const requestedLimit = Number.isFinite(input.limit)
+        ? Math.floor(input.limit!)
+        : IDLE_ARCHIVE_BATCH_LIMIT;
+      const params = {
+        min_eta: input.minEtaForRetrieval,
+        cutoff: input.cutoff,
+        updated_at: input.updatedAt,
+        limit: Math.max(1, Math.min(IDLE_ARCHIVE_BATCH_LIMIT, requestedLimit)),
+      };
+      const sql = `
+        WITH candidates AS (
+          SELECT id
+            FROM skills
+           WHERE ${IDLE_ARCHIVE_PREDICATE}
+           ORDER BY COALESCE(last_used_at, created_at) ASC
+           LIMIT @limit
+        )
+        UPDATE skills
+           SET status = 'archived', updated_at = @updated_at
+         WHERE id IN (SELECT id FROM candidates)
+           AND ${IDLE_ARCHIVE_PREDICATE}
+        RETURNING ${COLUMNS.join(", ")}`;
+      return db.prepare<typeof params, RawSkillRow>(sql).all(params).map(mapRow);
     },
 
     bumpTrial(
