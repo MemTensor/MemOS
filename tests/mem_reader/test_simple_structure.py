@@ -112,16 +112,22 @@ class TestSimpleStructMemReader(unittest.TestCase):
         self.assertIn("summary", result)
 
     def test_parse_json_result_failure(self):
-        """Test failure in JSON parsing."""
-        raw_response = "Invalid JSON string"
-        result = parse_json_result(raw_response)
+        """Test failure in JSON parsing.
 
-        self.assertEqual(result, {})
+        As of issue #2456, ``parse_json_result`` no longer swallows malformed
+        JSON; it raises ``LLMResponseParseError`` so callers can distinguish
+        "no memories produced" from "couldn't parse the response".
+        """
+        from memos.exceptions import LLMResponseParseError
+
+        raw_response = "Invalid JSON string"
+        with self.assertRaises(LLMResponseParseError):
+            parse_json_result(raw_response)
 
     def test_get_llm_response_fallback_key_matches_consumer(self):
         """Regression test for issue #1355.
 
-        When the LLM response cannot be parsed as JSON, `_get_llm_response`
+        When LLM generation fails, `_get_llm_response`
         is expected to return a fallback dict whose ``"memory list"`` (with
         a single space) entry contains one salvaged ``UserMemory`` item built
         from the raw user input. Downstream consumers in
@@ -130,8 +136,8 @@ class TestSimpleStructMemReader(unittest.TestCase):
         underscore) the salvaged memory is silently dropped and the request
         produces zero memories despite returning HTTP 200.
         """
-        # Force `_safe_parse` to return None so the fallback branch is taken.
-        self.reader.llm.generate.return_value = "not-valid-json"
+        # A generation error still uses the established raw-input fallback.
+        self.reader.llm.generate.side_effect = OSError("Synthetic generation failure")
         self.reader.config.remove_prompt_example = False
 
         resp = self.reader._get_llm_response("test memory content", custom_tags=None)
@@ -147,10 +153,10 @@ class TestSimpleStructMemReader(unittest.TestCase):
         self.assertEqual(salvaged[0]["value"], "test memory content")
         self.assertEqual(salvaged[0]["memory_type"], "UserMemory")
 
-    def test_process_chat_data_fine_yields_node_when_llm_unparseable(self):
+    def test_process_chat_data_fine_yields_node_when_generation_fails(self):
         """Regression test for issue #1355 (end-to-end of the reader stage).
 
-        With Kimi-style outputs that fail strict JSON parsing,
+        When the LLM provider raises a generation error,
         ``_process_chat_data`` (fine mode) should still emit a fallback
         ``TextualMemoryItem`` so that the upstream `/product/add` request
         ultimately writes at least one node to Neo4j instead of returning
@@ -158,9 +164,8 @@ class TestSimpleStructMemReader(unittest.TestCase):
         """
         # Embedder produces a stable embedding for the salvaged item.
         self.reader.embedder.embed = MagicMock(return_value=[[0.1, 0.2, 0.3]])
-        # LLM returns garbage so `_safe_parse` returns None and the fallback
-        # in `_get_llm_response` is exercised.
-        self.reader.llm.generate.return_value = "I cannot produce JSON sorry"
+        # A provider failure exercises the raw-input fallback.
+        self.reader.llm.generate.side_effect = OSError("Synthetic generation failure")
         self.reader.config.remove_prompt_example = False
 
         scene_data_info = [{"role": "user", "content": "test memory content"}]
@@ -173,7 +178,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
             len(result),
             1,
             "fine-mode _process_chat_data must produce one salvaged memory "
-            "item when LLM output is unparseable (bug #1355)",
+            "item when LLM generation fails (bug #1355)",
         )
         self.assertIsInstance(result[0], TextualMemoryItem)
         self.assertIn("test memory content", result[0].memory)

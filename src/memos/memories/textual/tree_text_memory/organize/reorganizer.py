@@ -1,10 +1,12 @@
 import json
+import re
 import time
 import traceback
 
 from collections import defaultdict
 from concurrent.futures import as_completed
 from queue import PriorityQueue
+from threading import Event
 from typing import Literal
 
 import numpy as np
@@ -93,13 +95,14 @@ class GraphStructureReorganizer:
 
         self.is_reorganize = is_reorganize
         self._reorganize_needed = True
+        self._stop_scheduler = False
+        self._scheduler_stop_event = Event()
+        self._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
         if self.is_reorganize:
             # ____ 1. For queue message driven thread ___________
             self.thread = ContextThread(target=self._run_message_consumer_loop)
             self.thread.start()
             # ____ 2. For periodic structure optimization _______
-            self._stop_scheduler = False
-            self._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
             self.structure_optimizer_thread = ContextThread(
                 target=self._run_structure_organizer_loop
             )
@@ -155,54 +158,65 @@ class GraphStructureReorganizer:
         """
         import schedule
 
-        schedule.every(100).seconds.do(self._optimize_all_users, scope="LongTermMemory")
-        schedule.every(100).seconds.do(self._optimize_all_users, scope="UserMemory")
-
+        scheduler = schedule.Scheduler()
+        jobs = [
+            scheduler.every(100).seconds.do(self._optimize_all_users, scope=scope)
+            for scope in ("LongTermMemory", "UserMemory")
+        ]
         logger.info("Structure optimizer schedule started.")
-        while not getattr(self, "_stop_scheduler", False):
-            schedule.run_pending()
-            if any(self._is_optimizing.values()):
-                time.sleep(1)
-                continue
-            if self._reorganize_needed:
-                logger.info("[Reorganizer] Triggering optimize_structure due to new nodes.")
-                self._optimize_all_users(scope="LongTermMemory")
-                self._optimize_all_users(scope="UserMemory")
-                self._reorganize_needed = False
-            time.sleep(30)
+        try:
+            while not self._stop_scheduler:
+                if not any(self._is_optimizing.values()):
+                    if self._reorganize_needed:
+                        # Clear before work so arrivals during optimization remain pending.
+                        self._reorganize_needed = False
+                        for job in jobs:
+                            job.run()
+                    else:
+                        scheduler.run_pending()
+                self._scheduler_stop_event.wait(30)
+        finally:
+            scheduler.clear()
 
     def _optimize_all_users(self, scope: str, **kwargs) -> None:
-        """
-        Run structure optimization for every tenant present in the graph store.
-
-        Without tenant enumeration, only the configured default tenant (e.g.
-        ``memosdefault``) would ever be optimized, while data written through
-        the API lives under each request's ``user_name``. Backends that cannot
-        enumerate tenants (no ``get_all_user_names``) keep the previous
-        single-tenant behavior. A failure on one tenant is logged and does not
-        abort the remaining tenants.
-        """
+        """Optimize named tenants independently, with an explicit backend fallback."""
+        config = getattr(self.graph_store, "config", None)
         get_user_names = getattr(self.graph_store, "get_all_user_names", None)
         try:
-            user_names = get_user_names() if callable(get_user_names) else None
-        except Exception as e:
-            logger.warning(
-                f"[GraphStructureReorganize] Failed to enumerate tenants, "
-                f"falling back to the configured default: {e}"
+            names = get_user_names() if callable(get_user_names) else []
+            if isinstance(names, str):
+                names = []
+            user_names = list(
+                dict.fromkeys(
+                    name for name in names or [] if isinstance(name, str) and name.strip()
+                )
             )
-            user_names = None
+        except Exception as exc:
+            logger.warning("Failed to enumerate graph tenants: %s", exc)
+            user_names = []
 
         if not user_names:
-            self.optimize_structure(scope=scope, **kwargs)
-            return
+            default = getattr(config, "user_name", None)
+            if isinstance(default, str) and default.strip():
+                user_names = [default]
+            elif getattr(config, "use_multi_db", False) is True:
+                # This backend's configured database is already the isolation boundary.
+                user_names = [None]
+            else:
+                logger.warning("Skipping graph optimization without a tenant scope")
+                return
 
         for user_name in user_names:
+            if self._stop_scheduler:
+                return
             try:
                 self.optimize_structure(scope=scope, user_name=user_name, **kwargs)
-            except Exception as e:
+            except Exception:
                 logger.warning(
-                    f"[GraphStructureReorganize] optimize_structure failed for "
-                    f"user_name={user_name}: {e}, trace: {traceback.format_exc()}"
+                    "Graph optimization failed for tenant %s, scope %s",
+                    user_name,
+                    scope,
+                    exc_info=True,
                 )
 
     def stop(self):
@@ -212,10 +226,11 @@ class GraphStructureReorganizer:
         if not self.is_reorganize:
             return
 
+        self._stop_scheduler = True
+        self._scheduler_stop_event.set()
         self.add_message(QueueMessage(op="end"))
         self.thread.join()
         logger.info("Reorganize thread stopped.")
-        self._stop_scheduler = True
         self.structure_optimizer_thread.join()
         logger.info("Structure optimizer stopped.")
 
@@ -483,10 +498,16 @@ class GraphStructureReorganizer:
         assigned_ids = set()
         result_subclusters = []
 
-        for cluster in response_json.get("clusters", []):
+        clusters = response_json.get("clusters", [])
+        if not isinstance(clusters, list):
+            return []
+        known_ids = {node.id for node in cluster_nodes}
+        for cluster in clusters:
+            if not isinstance(cluster, dict) or not isinstance(cluster.get("ids"), list):
+                continue
             ids = []
-            for nid in cluster.get("ids", []):
-                if nid not in assigned_ids:
+            for nid in cluster["ids"]:
+                if isinstance(nid, str) and nid in known_ids and nid not in assigned_ids:
                     ids.append(nid)
                     assigned_ids.add(nid)
             sub_nodes = [node for node in cluster_nodes if node.id in ids]
@@ -623,11 +644,24 @@ class GraphStructureReorganizer:
             )
             return None
 
-        # Extract fields
-        parent_key = response_json.get("key", "").strip()
-        parent_value = response_json.get("value", "").strip()
+        parent_key = response_json.get("key")
+        parent_value = response_json.get("value")
         parent_tags = response_json.get("tags", [])
-        parent_background = response_json.get("summary", "").strip()
+        parent_background = response_json.get("summary", "")
+        if not (
+            isinstance(parent_key, str)
+            and parent_key.strip()
+            and isinstance(parent_value, str)
+            and parent_value.strip()
+            and isinstance(parent_tags, list)
+            and all(isinstance(tag, str) for tag in parent_tags)
+            and isinstance(parent_background, str)
+        ):
+            logger.warning("Skipping cluster summary with invalid or empty fields")
+            return None
+        parent_key = parent_key.strip()
+        parent_value = parent_value.strip()
+        parent_background = parent_background.strip()
 
         embedding = self.embedder.embed([parent_value])[0]
 
@@ -650,32 +684,25 @@ class GraphStructureReorganizer:
         )
         return parent_node
 
-    def _parse_json_result(self, response_text) -> dict | None:
-        """
-        Parse the first ``{...}`` JSON object found in an LLM response.
-
-        Returns ``None`` for anything that is not a valid JSON object (empty
-        text, no braces, malformed JSON, or a non-object JSON value such as a
-        list), so callers can skip gracefully instead of crashing the whole
-        optimization round or silently writing empty parent nodes.
-        """
+    def _parse_json_result(self, response_text: str | None) -> dict | None:
+        """Read an object from plain or fenced JSON, allowing surrounding prose."""
         if not isinstance(response_text, str) or not response_text.strip():
             return None
+        text = response_text.strip()
+        fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+        if fence:
+            text = fence.group(1)
         try:
-            response_text = response_text.replace("```", "").replace("json", "")
-            response_json = extract_first_to_last_brace(response_text)[1]
-        except json.JSONDecodeError as e:
-            logger.warning(
-                f"Failed to parse LLM response as JSON: {e}\nRaw response:\n{response_text}"
-            )
-            return None
-        if not isinstance(response_json, dict):
-            logger.warning(
-                f"LLM response is not a JSON object (got {type(response_json).__name__}); "
-                f"raw response:\n{response_text}"
-            )
-            return None
-        return response_json
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            if text.startswith("["):
+                return None
+            try:
+                result = extract_first_to_last_brace(text)[1]
+            except json.JSONDecodeError:
+                logger.warning("Skipping malformed JSON in graph reorganization")
+                return None
+        return result if isinstance(result, dict) else None
 
     def _create_parent_node(self, parent_node: GraphDBNode, user_name: str | None = None) -> None:
         """

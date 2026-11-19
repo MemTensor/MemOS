@@ -12,6 +12,8 @@ import os
 from contextlib import suppress
 from typing import Any
 
+import numpy as np
+
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
@@ -438,6 +440,25 @@ class SearchHandler(BaseHandler):
         pref_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(pref_buckets))}
         selected_texts: set[str] = set()  # Track exact text content to avoid duplicates
 
+        # Precompute stripped texts once: strip() is a pure function of each
+        # memory, so caching it is bit-identical to recomputing it every round.
+        stripped_texts = [mem.get("memory", "").strip() for _, _, mem, _ in flat]
+
+        # Normalize to ndarray once: the column slicing in _select below
+        # requires it, and the old row indexing (matrix[i][j]) accepted both
+        # lists and arrays, so callers may still pass either shape.
+        similarity_matrix = np.asarray(similarity_matrix)
+
+        # running_max[idx] tracks each candidate's maximum similarity to the
+        # selected set. It is maintained incrementally with np.maximum, which
+        # performs only elementwise comparisons, so every read is bit-identical
+        # to rescanning the whole selected set in the selection loops below.
+        running_max = np.full(len(flat), -np.inf)
+
+        def _select(idx: int) -> None:
+            selected_global.append(idx)
+            np.maximum(running_max, similarity_matrix[:, idx], out=running_max)
+
         # Phase 1: Prefill top N by relevance
         # Use the smaller of text_top_k and pref_top_k for prefill count
         prefill_top_n = min(2, text_top_k, pref_top_k) if pref_buckets else min(2, text_top_k)
@@ -445,10 +466,10 @@ class SearchHandler(BaseHandler):
         for idx in ordered_by_relevance[: len(flat)]:
             if len(selected_global) >= prefill_top_n:
                 break
-            mem_type, bucket_idx, mem, _ = flat[idx]
+            mem_type, bucket_idx, _, _ = flat[idx]
 
             # Skip if exact text already exists in selected set
-            mem_text = mem.get("memory", "").strip()
+            mem_text = stripped_texts[idx]
             if mem_text in selected_texts:
                 continue
 
@@ -460,11 +481,11 @@ class SearchHandler(BaseHandler):
 
             # Check bucket capacity with correct top_k for each type
             if mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) < text_top_k:
-                selected_global.append(idx)
+                _select(idx)
                 text_selected_by_bucket[bucket_idx].append(idx)
                 selected_texts.add(mem_text)
             elif mem_type == "preference" and len(pref_selected_by_bucket[bucket_idx]) < pref_top_k:
-                selected_global.append(idx)
+                _select(idx)
                 pref_selected_by_bucket[bucket_idx].append(idx)
                 selected_texts.add(mem_text)
 
@@ -479,7 +500,7 @@ class SearchHandler(BaseHandler):
             best_mmr: float | None = None
 
             for idx in remaining:
-                mem_type, bucket_idx, mem, _ = flat[idx]
+                mem_type, bucket_idx, _, _ = flat[idx]
 
                 # Check bucket capacity with correct top_k for each type
                 if (
@@ -491,22 +512,27 @@ class SearchHandler(BaseHandler):
                     continue
 
                 # Check if exact text already exists - if so, skip this candidate entirely
-                mem_text = mem.get("memory", "").strip()
+                mem_text = stripped_texts[idx]
                 if mem_text in selected_texts:
                     continue  # Skip duplicate text, don't participate in MMR competition
 
+                # Maximum similarity to the selected set, read in O(1) from
+                # running_max; bit-identical to the previous per-round rescan.
+                max_sim = float(running_max[idx]) if selected_global else 0.0
+
                 # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
                 if SearchHandler._is_text_highly_similar_optimized(
-                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.92
+                    idx,
+                    mem_text,
+                    selected_global,
+                    similarity_matrix,
+                    flat,
+                    threshold=0.92,
+                    max_sim=max_sim,
                 ):
                     continue  # Skip highly similar text, don't participate in MMR competition
 
                 relevance = flat[idx][3]
-                max_sim = (
-                    0.0
-                    if not selected_global
-                    else max(similarity_matrix[idx][j] for j in selected_global)
-                )
 
                 # Exponential penalty for similarity > 0.80
                 if max_sim > similarity_threshold:
@@ -526,11 +552,11 @@ class SearchHandler(BaseHandler):
             if best_idx is None:
                 break
 
-            mem_type, bucket_idx, mem, _ = flat[best_idx]
+            mem_type, bucket_idx, _, _ = flat[best_idx]
 
             # Add to selected set and track text
-            mem_text = mem.get("memory", "").strip()
-            selected_global.append(best_idx)
+            mem_text = stripped_texts[best_idx]
+            _select(best_idx)
             selected_texts.add(mem_text)
 
             if mem_type == "text":
@@ -967,6 +993,7 @@ class SearchHandler(BaseHandler):
         similarity_matrix,
         flat: list,
         threshold: float = 0.92,
+        max_sim: float | None = None,
     ) -> bool:
         """
         Multi-algorithm text similarity check with embedding pre-filtering.
@@ -992,6 +1019,11 @@ class SearchHandler(BaseHandler):
             similarity_matrix: Precomputed embedding similarity matrix
             flat: Flat list of all memories
             threshold: Combined similarity threshold (default 0.75)
+            max_sim: Optional precomputed maximum embedding similarity of
+                this candidate to the selected set; when provided, the value
+                rescan is skipped (the value is bit-identical by
+                construction). The tie-break index lookup still runs lazily
+                on the high-similarity path (> 0.9).
 
         Returns:
             True if candidate is highly similar to any selected memory
@@ -999,13 +1031,16 @@ class SearchHandler(BaseHandler):
         if not selected_global:
             return False
 
-        # Find the already-selected memory with highest embedding similarity
-        max_sim_idx = max(selected_global, key=lambda j: similarity_matrix[candidate_idx][j])
-        max_sim = similarity_matrix[candidate_idx][max_sim_idx]
+        if max_sim is None:
+            max_sim = SearchHandler._max_similarity(
+                candidate_idx, selected_global, similarity_matrix
+            )
 
-        # If highest embedding similarity < 0.60, skip text comparison entirely
         if max_sim <= 0.9:
             return False
+
+        # Single scan for the tie-break index, only on the high-similarity path
+        max_sim_idx = max(selected_global, key=lambda j: similarity_matrix[candidate_idx][j])
 
         # Get text of most similar memory
         most_similar_mem = flat[max_sim_idx][2]

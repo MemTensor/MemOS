@@ -260,8 +260,7 @@ class TestMultiModalProjectIdPropagation(unittest.TestCase):
         _assert_fields(self, result)
 
     def test_split_large_memory_item_assigns_shared_ingest_batch_id(self):
-        self.reader._count_tokens = MagicMock(return_value=999)
-        self.reader.chunker.chunk.return_value = ["chunk one", "chunk two"]
+        self.reader._count_tokens = len
 
         def fake_make_memory_item(
             *,

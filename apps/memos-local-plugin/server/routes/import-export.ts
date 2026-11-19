@@ -127,7 +127,17 @@ export function registerImportExportRoutes(
       writeError(ctx, 400, "invalid_argument", "bundle must be a JSON object");
       return;
     }
-    return await deps.core.importBundle(bundle);
+    const ownership = ctx.url.searchParams.get("ownership") ?? "preserve";
+    const dryRun = ctx.url.searchParams.get("dryRun") ?? "false";
+    const targetProfileId = ctx.url.searchParams.get("targetProfileId") ?? undefined;
+    if (!["preserve", "target"].includes(ownership) || !["true", "false"].includes(dryRun)
+      || (targetProfileId !== undefined && (ownership !== "target" || !targetProfileId.trim()))) {
+      writeError(ctx, 400, "invalid_argument", "invalid import ownership, targetProfileId or dryRun option");
+      return;
+    }
+    return await deps.core.importBundle(bundle, {
+      ownership: ownership as "preserve" | "target", dryRun: dryRun === "true", targetProfileId,
+    });
   });
 
   routes.set("GET /api/v1/import/hermes-native/scan", async () => {

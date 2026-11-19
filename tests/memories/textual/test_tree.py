@@ -166,3 +166,13 @@ def test_add_returns_ids(mock_tree_text_memory):
     mock_tree_text_memory.memory_manager.add.assert_called_once_with(
         mock_items, user_name=None, mode="sync"
     )
+
+
+def test_delete_by_memory_ids_propagates_storage_failure(mock_tree_text_memory):
+    from memos.exceptions import VectorDBError
+
+    mock_tree_text_memory.graph_store.delete_node_by_prams.side_effect = VectorDBError(
+        "Synthetic vector outage"
+    )
+    with pytest.raises(VectorDBError):
+        mock_tree_text_memory.delete_by_memory_ids(["synthetic-id"])

@@ -30,7 +30,7 @@ jobs:
         os:
           - "ubuntu-latest"
           - "windows-latest"
-          - "macos-14"
+          - "macos-26"
           - "macos-15"
           # Ref: https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-where-your-workflow-runs/choosing-the-runner-for-a-job
         python-version:

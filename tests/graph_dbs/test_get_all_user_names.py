@@ -20,6 +20,7 @@ def neo4j_db():
         password="test",
         db_name="test_memory_db",
         auto_create=False,
+        use_multi_db=False,
         embedding_dimension=3,
         user_name="memosdefault",
     )
@@ -65,3 +66,22 @@ class TestNeo4jGetAllUserNames:
         session_mock.run.side_effect = RuntimeError("driver closed")
 
         assert neo4j_db.get_all_user_names() == ["memosdefault"]
+
+
+def test_database_isolated_mode_does_not_enumerate_node_tenants(neo4j_db):
+    neo4j_db.config.use_multi_db = True
+    neo4j_db.driver.reset_mock()
+    assert neo4j_db.get_all_user_names() == ["memosdefault"]
+    neo4j_db.driver.session.assert_not_called()
+
+
+def test_invalid_user_names_are_excluded(neo4j_db):
+    session = neo4j_db.driver.session.return_value.__enter__.return_value
+    session.run.return_value = [
+        {"user_name": "alice"},
+        {"user_name": "alice"},
+        {"user_name": " "},
+        {"user_name": None},
+        {"user_name": 1},
+    ]
+    assert neo4j_db.get_all_user_names() == ["alice"]

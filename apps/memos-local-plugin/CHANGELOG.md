@@ -5,6 +5,15 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
+- Unreleased — Admit DSH `0.1.7-rc.2`, `0.2.0-rc.2`, and `0.2.1-rc.2/rc.3`
+  through explicit, bounded optional peer ranges; retain the `2.0.21` V4
+  producer-owned message sources. Stop importing the moved `JsonValue` type
+  from `dsh-tools`, align the development host stack to `0.2.1-rc.3`, and
+  synchronize both package-manager lockfiles. Add an isolated compile/build/
+  adapter-test matrix with an installable `0.1.0-rc.6` legacy baseline; the
+  unavailable `0.1.0-rc.5` core packages are no longer advertised. npm `2.0.21`
+  still has the old startup version restriction until a new release ships.
+  Reinstall released packages instead of carrying hand-edited `dist/` patches.
 - `2.0.16` (unreleased) — Add the out-of-tree DeepSeek Harness Cordis
   bundle with capture, six memory tools, DSH profile-aware storage, and one
   automatic recall for every accepted, non-empty direct-user turn. Same-turn

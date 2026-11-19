@@ -115,7 +115,7 @@ describe("Hermes version synchronization", () => {
     expect(syncPosition).toBeGreaterThan(bumpPosition);
     expect(validationPosition).toBeGreaterThan(syncPosition);
     expect(packageJson.scripts["release:validate"]).toBe(
-      "npm run check:hermes-version && npm run lint && npm test",
+      "npm run lock:check && npm run verify:script-policy && npm run check:hermes-version && npm run lint && npm test",
     );
     expect(workflow).toContain("npm pack --json --silent --pack-destination");
     expect(workflow).toContain("raw.match(/^\\[/m)");

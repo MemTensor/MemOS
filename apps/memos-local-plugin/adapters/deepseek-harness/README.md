@@ -7,11 +7,11 @@ background capture, and on-demand memory tools to a DSH profile without
 modifying the DSH repository.
 
 > [!IMPORTANT]
-> DeepSeek Harness is currently a developer preview. The initial compatibility
-> target for this adapter is DSH `0.1.0-rc.5`; record the exact DSH version in
-> every release's validation because later preview releases may require adapter
-> changes. Unit compilation and contract tests currently use the published DSH
-> `0.1.0-rc.6` packages; the end-to-end host below is the rc.5 source checkout.
+> DeepSeek Harness is currently a developer preview. The development API stack
+> is pinned to `0.2.1-rc.3`. The compatibility matrix compiles, builds, and tests
+> this adapter against the published `0.1.0-rc.6`, `0.1.7-rc.2`, `0.2.0-rc.2`,
+> `0.2.1-rc.2`, and `0.2.1-rc.3` packages. These are API/contract checks, not a
+> substitute for validating each packaged Desktop/Web/CLI release.
 
 ## How it works
 
@@ -115,9 +115,8 @@ the MemOS JSON-RPC bridge or a sidecar daemon.
 
 Prerequisites:
 
-- A Node.js version accepted by the DSH release. DSH `0.1.0-rc.5` requires
-  Node.js `^22.19.0 || >=24.0.0`; this stricter host requirement takes
-  precedence over the MemOS package's standalone `>=20` engine.
+- Node.js `>=22` in the actual host runtime, also satisfying the selected DSH
+  release's engine constraint. Desktop uses its bundled Node/Electron runtime.
 - A working DSH installation. The recommended one-command installer prepares
   an isolated `pnpm@11.7.0` for the install when pnpm is absent. Lower-level
   direct `dsh plugin` commands still require pnpm on `PATH`.
@@ -206,34 +205,35 @@ approve only the dependencies you trust. `dsh plugin` forwards this command to
 dsh plugin --profile web approve-builds
 ```
 
-For the tested `2.0.16-beta.1` package, pnpm reported `better-sqlite3`,
-`esbuild`, `onnxruntime-node`, `protobufjs`, `sharp`, and the MemOS package's
-own postinstall hint. Review found that the
-required set was `better-sqlite3`, `esbuild`, `onnxruntime-node`, and `sharp`;
-`protobufjs` and the package's own postinstall hint were not needed. The
-equivalent reviewed profile policy was:
+This candidate requires Node **22+** in the host, pins SQLite to **13.0.3**,
+and uses its packaged Node-API prebuild. Do not carry over the previous
+`better-sqlite3: true` rebuild policy. For the current locked dependencies the
+reviewed profile policy is:
 
 ```yaml
-# $DSH_HOME/profiles/web/pnpm-workspace.yaml
+# $DSH_HOME/profiles/<actual-profile>/pnpm-workspace.yaml
+strictDepBuilds: true
 allowBuilds:
   '@memtensor/memos-local-plugin': false
-  better-sqlite3: true
-  esbuild: true
-  onnxruntime-node: true
+  better-sqlite3: false
+  esbuild@0.27.7: true
+  esbuild@0.21.5: true
+  sharp@0.34.5: true
+  onnxruntime-node: false
   protobufjs: false
-  sharp: true
 ```
 
-Dependency sets can change by package version and platform, so use pnpm's
-current output as the source of truth; do not use `approve-builds --all` or
-copy this allowlist blindly. Install scripts execute with the current user's
-permissions, outside the agent tool sandbox. After approval, rerun the same
-`dsh plugin --profile web add ...` command so DSH can finish installation and
-reconcile the bundle layer.
+Prepare policy before the first installation. The ONNX CPU backend is bundled;
+the optional CUDA download is not needed for local CPU embeddings. A clean
+profile must still pass the CPU runtime smoke check. Preserve unrelated policy
+entries and stop for review when an existing denial conflicts with a required
+script or a new version requires approval. Do not approve all scripts.
 
-The one-command installer automates this exact reviewed policy only when the
-pending set contains no other package. Direct `dsh plugin add` users retain the
-manual review flow above.
+The one-command installer merges this reviewed policy before calling DSH.
+Unknown pending scripts stop installation. A SQLite smoke failure is reported
+without attempting source compilation. Profile package-manager policy is
+separate from npm's source-checkout `allowScripts`; see the package README for
+both lockfile maintenance and the fixed npm/pnpm validation versions.
 
 This branch pins Transformers.js to `4.2.0`; the tested lock and DSH profile
 resolve Transformers.js 4.2.0 with `onnxruntime-node` 1.24.3. The earlier
@@ -320,7 +320,7 @@ deep-merging keys, so keep every field when overriding one.
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Mount or disable the adapter. |
-| `profileId` | `default` | Fallback namespace; a non-empty session `agentPreset` overrides it consistently for recall, capture, and tools. |
+| `profileId` | `default` | Stable memory namespace for recall, capture, tools and Viewer; independent of session `agentPreset`. |
 | `home` | `''` | Empty means `$DSH_HOME/memos-plugin` (default `~/.dsh/memos-plugin`); otherwise an absolute or `~`-relative runtime root. |
 | `recallEnabled` | `true` | Run one automatic recall for every accepted, non-empty direct-user turn. Re-entry within the same logical turn is de-duplicated; there is no greeting or restored-session exception. |
 | `captureEnabled` | `true` | Capture completed DSH turns and tool outcomes. |
@@ -487,14 +487,46 @@ rephrased, or explicitly scoped follow-up lookup. Automatic recall and
 `memos_search` use the same absolute deadline (`min(recallTimeoutMs, 3000)` ms)
 and DSH-specific no-malformed-retry filter policy. When tools
 are disabled, the system-prompt guidance omits the tool suggestion. Automatic
-recall, capture, and all explicit tools use the same `agentPreset`-aware
-namespace resolver.
+recall, capture, and all explicit tools use the configured `profileId` through
+the same namespace resolver. Changing `agentPreset` changes agent behavior,
+not memory ownership, so Web UI and headless sessions can recall each other's
+memories when configured with the same memory profile.
 
-The default runtime home is shared across DSH profiles and the fallback
-`profileId` is `default`. If multiple profiles point at that same home and a
-session has no distinct `agentPreset`, they intentionally share a namespace.
-Set a unique `profileId` per profile (or a separate `home`) when that sharing is
-not desired.
+The default runtime home is shared across DSH profiles and the default memory
+`profileId` is `default`. Profiles using the same home and memory profile ID
+intentionally share memories. Set a unique `profileId` per profile (or a
+separate `home`) when that sharing is not desired.
+
+### Legacy preset ownership
+
+Earlier versions treated the session's `agentPreset` (e.g. `standard`) as the
+memory profile. Those records remain in their original namespace after this
+fix; they are not automatically shared or moved. If that namespace was meant
+to be separate, keep it separate by configuring its explicit `profileId`.
+
+To reunite accidental preset partitions, stop DSH and **all** other writers to
+the same database, then run the packaged repair tool from the plugin directory:
+
+```sh
+# Read-only counts for exactly one source profile; no changes or backup yet.
+node scripts/migrate-dsh-preset-profile.mjs --db /path/to/memos.db --from standard --to default
+# Apply only after checking the source/target. The backup path must not exist.
+node scripts/migrate-dsh-preset-profile.mjs --db /path/to/memos.db --from standard --to default --apply --backup /path/to/memos-before-preset-repair.db
+```
+
+Use the actual configured memory profile as `--to`; do not blindly merge every
+profile into `default`. The tool changes only DSH-owned records from the named
+source profile. It uses SQLite backup (including committed WAL data), then one
+transaction across ownership tables, preserving IDs, vectors, sharing scopes
+and references. Routing metadata in sessions/episodes is updated too. Any
+constraint conflict, such as an existing skill name, rolls back all changes
+and leaves the backup intact. Historical audit payload text is not rewritten.
+
+Use a runtime compatible with the installed `better-sqlite3` binary. For a
+DSH install compiled for Electron, run the script with DSH's executable and
+`ELECTRON_RUN_AS_NODE=1`, as shown in the package README's Windows validation
+example. Restart DSH after a successful repair. To revert, stop all writers
+and restore the backup as the database; do not mix it with newer WAL/SHM files.
 
 ## Failure behavior
 
@@ -567,13 +599,76 @@ errors and are not fail-open.
   as untrusted and potentially stale, especially when it contains copied tool
   output or repository text.
 
+## V4 message-source regression tests
+
+From `apps/memos-local-plugin`, run:
+
+```sh
+npm ci
+npx vitest run tests/unit/adapters/deepseek-harness-{bridge,host-llm,runtime}.test.ts
+```
+
+These tests use the published `@deepseek-ai/dsh-session-format-v3-to-v4`
+`0.2.1-rc.3` codec, without a DSH desktop installation, account, or network
+calls during testing. They check real recall and host-LLM messages through
+both `assertV4RowAdmission` and `encodeEvent`, including a pre-step inbox
+batch and rejection of retired `kind: "plugin"` sources. The codec is a dev
+dependency only. All DSH development packages, including brand/protocol peers,
+use the same `0.2.1-rc.3` stack and Cordis `~4.0.5`.
+
+For the compatibility matrix, run:
+
+```sh
+npm run test:dsh-compat
+# Or select a specific published API stack:
+npm run test:dsh-compat -- 0.2.1-rc.3
+```
+
+The script needs npm registry access. It installs each real host peer graph in
+its own temporary directory, then type-checks and builds the plugin and runs
+the adapter tests. Non-host test/build dependencies reuse the checkout's
+installation. It retains fixtures for inspection and does not touch DSH
+profiles, credentials, sessions, or the checkout's dependency installation.
+The native session boundary tests also check that the producer-owned source
+survives the old host's admission and snapshot paths.
+
+## Version compatibility and upgrades
+
+The six optional DSH service peers intentionally declare separate prerelease
+lines:
+
+```text
+>=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2
+```
+
+npm semver only admits a prerelease when a comparator explicitly names its
+`major.minor.patch` tuple. Simply changing `<0.2.0` to `<0.3.0` would still
+exclude `0.2.1-rc.3`. Unvalidated `0.2.2` and `0.3.x` remain excluded.
+The former `0.1.0-rc.5` API baseline is no longer advertised: its core packages
+are unavailable from npm, so it cannot be revalidated by this matrix.
+
+There are two independent checks to distinguish:
+
+- **Startup: bundle skipped as incompatible.** Plugin `2.0.20` and `2.0.21`
+  declare peers below `0.2.0`; neither version's manifest admits DSH 0.2.x.
+  This change updates that declaration together with the adapter's moved JSON
+  type and synchronized npm/pnpm locks. It does not change the Cloud plugin.
+- **Runtime: V4 rejects `source.kind: "plugin"`.** Fixed in `2.0.21`; this
+  adapter retains that producer-owned source implementation and codec tests.
+
+After a release containing these compatibility changes is published, update
+the plugin in each DSH profile that uses it and fully restart that host. If
+you patched `dist/` by hand, reinstall the released package: a profile install
+can overwrite those patches. A successful `allow-version` exemption alone
+does not verify runtime compatibility. Until this change is released,
+installing npm `2.0.21` still leaves the startup version restriction in place.
+
 ## Known limitations
 
-1. **Developer-preview compatibility.** The initial compatibility target is
-   DSH `0.1.0-rc.5`; verify the packaged artifact against that exact host
-   before publishing results. Its optional DSH peer range is
-   `>=0.1.0-rc.5 <0.2.0`, but that range is not a guarantee across preview
-   breaking changes.
+1. **Developer-preview compatibility.** The supported prerelease lines and
+   repeatable API matrix are listed above. New DSH lines need explicit
+   validation before the peer range is expanded. Automated adapter tests do
+   not validate every platform's native dependencies or Desktop packaging.
 2. **Eventual consistency and abrupt-crash replay gap.** Per-turn foreground
    recall never waits for prior capture, relation, or intent work. A completed
    background result is visible to later automatic recalls and explicit tool

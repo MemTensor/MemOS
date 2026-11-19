@@ -2,13 +2,75 @@ import unittest
 
 from unittest.mock import MagicMock, patch
 
-import torch
+import pytest
 
 from transformers import DynamicCache
 
 from memos.configs.llm import HFLLMConfig, LLMConfigFactory
 from memos.llms.factory import LLMFactory
 from memos.llms.hf import HFLLM
+from memos.memories.activation.kv import clone_dynamic_cache
+from tests.utils import (
+    dynamic_cache_key_tensors,
+    dynamic_cache_seq_len,
+    make_dynamic_cache,
+)
+
+
+# The KV cache is a torch structure; skip the whole module where torch is
+# not installed instead of failing the collection of the test suite.
+torch = pytest.importorskip("torch")
+
+
+def make_activation_memory(cache):
+    """Build a ``KVCacheMemory`` that stores a single KV cache.
+
+    Args:
+        cache: The cache to store in the memory.
+
+    Returns:
+        tuple: The memory and the stored ``KVCacheItem``.
+    """
+    from memos.configs.memory import KVCacheMemoryConfig
+    from memos.memories.activation.item import KVCacheItem
+    from memos.memories.activation.kv import KVCacheMemory
+
+    config = MagicMock(spec=KVCacheMemoryConfig)
+    config.extractor_llm = MagicMock()
+    config.memory_filename = "test_kv_cache.pkl"
+    with patch("memos.llms.factory.LLMFactory.from_config", return_value=MagicMock()):
+        memory = KVCacheMemory(config)
+
+    item = KVCacheItem(memory=cache)
+    memory.add([item])
+    return memory, item
+
+
+class CacheGrowingModel:
+    """A stand-in for a transformers model that grows the cache in place.
+
+    Real transformers models append the newly generated key/value tensors to
+    the ``past_key_values`` object they are given (``DynamicLayer.update``
+    rebinds ``keys``/``values`` on the very same layer object). Handing the
+    stored activation cache to the model therefore grows the stored cache with
+    every turn.
+    """
+
+    def __init__(self, device: str = "cpu") -> None:
+        self.device = device
+        self.received_caches = []
+
+    def __call__(
+        self, input_ids=None, use_cache=False, past_key_values=None, return_dict=True, **kwargs
+    ):
+        self.received_caches.append(past_key_values)
+        if past_key_values is not None:
+            past_key_values.update(torch.zeros(1, 2, 1, 4), torch.ones(1, 2, 1, 4), 0)
+        output = MagicMock()
+        output.logits = torch.full((1, 1, 100), -1e9)
+        output.logits[0, 0, 7] = 1.0
+        output.past_key_values = past_key_values
+        return output
 
 
 @patch("transformers.AutoModelForCausalLM", MagicMock())
@@ -182,3 +244,125 @@ class TestHFLLM(unittest.TestCase):
         kv_cache = DynamicCache()
         resp = llm.generate([{"role": "user", "content": "Sampling"}], past_key_values=kv_cache)
         self.assertEqual(resp, self.standard_response)
+
+    def test_generate_does_not_mutate_caller_cache(self):
+        # Regression for #2301: the cache stored in the activation memory must
+        # not grow with the tokens generated for the current turn.
+        config = HFLLMConfig(
+            model_name_or_path="qwen3:0.6b",
+            max_tokens=5,
+            do_sample=False,
+            add_generation_prompt=True,
+        )
+        llm = self._create_llm(config)
+        model = CacheGrowingModel()
+        llm.model = model
+
+        cache = make_dynamic_cache(seq_len=3)
+        resp = llm.generate([{"role": "user", "content": "Hello"}], past_key_values=cache)
+
+        self.assertEqual(resp, self.standard_response)
+        # The model received a copy, not the caller's cache.
+        self.assertIsNot(model.received_caches[0], cache)
+        # The copy did grow, i.e. the model really appends in place.
+        self.assertGreater(dynamic_cache_seq_len(model.received_caches[0]), 3)
+        # The caller's cache still holds only the original tokens.
+        self.assertEqual(dynamic_cache_seq_len(cache), 3)
+
+    def test_generate_stream_does_not_mutate_caller_cache(self):
+        # Same regression for the streaming path.
+        config = HFLLMConfig(
+            model_name_or_path="qwen3:0.6b",
+            max_tokens=5,
+            do_sample=False,
+            add_generation_prompt=True,
+        )
+        llm = self._create_llm(config)
+        model = CacheGrowingModel()
+        llm.model = model
+
+        cache = make_dynamic_cache(seq_len=3)
+        chunks = list(
+            llm.generate_stream([{"role": "user", "content": "Hello"}], past_key_values=cache)
+        )
+
+        self.assertTrue(chunks)
+        # The model received a copy, not the caller's cache.
+        self.assertIsNot(model.received_caches[0], cache)
+        # The copy did grow, i.e. the model really appends in place.
+        self.assertGreater(dynamic_cache_seq_len(model.received_caches[0]), 3)
+        # The caller's cache still holds only the original tokens.
+        self.assertEqual(dynamic_cache_seq_len(cache), 3)
+
+    def test_generation_from_get_cache_copies_the_kv_tensors_only_once(self):
+        # The public API path: the activation memory hands out a cache with
+        # get_cache(), the caller passes it to generate(). The stored cache
+        # must stay read-only, and the K/V tensors must not be copied twice
+        # along the way -- one copy would already keep three full sets of
+        # tensors alive (stored + copy 1 + copy 2).
+        config = HFLLMConfig(
+            model_name_or_path="qwen3:0.6b",
+            max_tokens=5,
+            do_sample=False,
+            add_generation_prompt=True,
+        )
+        llm = self._create_llm(config)
+        model = CacheGrowingModel()
+        llm.model = model
+
+        stored_cache = make_dynamic_cache(seq_len=3)
+        memory, item = make_activation_memory(stored_cache)
+
+        with patch(
+            "memos.memories.activation.kv.clone_dynamic_cache", wraps=clone_dynamic_cache
+        ) as clone_spy:
+            cached = memory.get_cache([item.id])
+            resp = llm.generate([{"role": "user", "content": "Hello"}], past_key_values=cached)
+
+        self.assertEqual(resp, self.standard_response)
+        # The whole path copies the K/V tensors exactly once.
+        self.assertEqual(clone_spy.call_count, 1)
+        # The model received the cache the memory handed out, not a second copy.
+        self.assertIs(model.received_caches[0], cached)
+        # The copy the model wrote into does not alias the stored tensors.
+        self.assertNotEqual(
+            dynamic_cache_key_tensors(model.received_caches[0])[0].data_ptr(),
+            dynamic_cache_key_tensors(item.memory)[0].data_ptr(),
+        )
+        # The copy did grow, i.e. the model really appends in place.
+        self.assertGreater(dynamic_cache_seq_len(model.received_caches[0]), 3)
+        # The stored cache was not rewritten: it still holds only the
+        # original tokens.
+        self.assertEqual(dynamic_cache_seq_len(item.memory), 3)
+        self.assertEqual(dynamic_cache_seq_len(stored_cache), 3)
+
+    def test_generation_from_get_cache_keeps_the_stored_cache_read_only(self):
+        # The stored cache stays read-only even when it is handed out a second
+        # time and when a caller stores an already owned copy back.
+        config = HFLLMConfig(
+            model_name_or_path="qwen3:0.6b",
+            max_tokens=5,
+            do_sample=False,
+            add_generation_prompt=True,
+        )
+        llm = self._create_llm(config)
+        model = CacheGrowingModel()
+        llm.model = model
+
+        stored_cache = make_dynamic_cache(seq_len=3)
+        memory, item = make_activation_memory(stored_cache)
+
+        cached = memory.get_cache([item.id])
+        llm.generate([{"role": "user", "content": "Hello"}], past_key_values=cached)
+
+        # The stored cache kept its original length.
+        self.assertEqual(dynamic_cache_seq_len(item.memory), 3)
+        self.assertEqual(dynamic_cache_seq_len(stored_cache), 3)
+
+        # A cache that is stored back into the memory is owned by the memory
+        # again: the model must copy it before it appends to it.
+        memory.add([item])
+        llm.generate([{"role": "user", "content": "Hello"}], past_key_values=item.memory)
+
+        self.assertIsNot(model.received_caches[-1], item.memory)
+        self.assertEqual(dynamic_cache_seq_len(item.memory), 3)

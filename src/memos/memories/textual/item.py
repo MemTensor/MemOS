@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 ALLOWED_ROLES = {"user", "assistant", "system"}
@@ -136,7 +136,7 @@ class TextualMemoryMetadata(BaseModel):
         default=None,
         description="A numeric score (float between 0 and 100) indicating how certain you are about the accuracy or reliability of the memory.",
     )
-    source: Literal["conversation", "retrieved", "web", "file", "system"] | None = Field(
+    source: Literal["conversation", "retrieved", "web", "file", "system", "dream"] | None = Field(
         default=None, description="The origin of the memory"
     )
     tags: list[str] | None = Field(
@@ -158,6 +158,16 @@ class TextualMemoryMetadata(BaseModel):
         default=None,
         description="Internal algorithm metadata reserved for system use.",
     )
+
+    @field_validator("internal_info", "info", mode="before")
+    @classmethod
+    def _decode_dict_metadata(cls, value: Any, validation_info: ValidationInfo) -> Any:
+        # Neo4j stores dictionaries as JSON strings; decode them before model validation.
+        if isinstance(value, str):
+            value = json.loads(value)
+            if not isinstance(value, dict):
+                raise ValueError(f"{validation_info.field_name} JSON must decode to an object")
+        return value
 
     model_config = ConfigDict(extra="allow")
 
@@ -211,6 +221,14 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     file_ids: list[str] | None = Field(
         default_factory=list,
         description="The ids of the files associated with the memory.",
+    )
+    knowledge_material_ids: list[str] = Field(
+        default_factory=list,
+        description="RawFileMemory ids that support this knowledge summary.",
+    )
+    knowledge_summary_ids: list[str] = Field(
+        default_factory=list,
+        description="Knowledge summary ids extracted from this raw file memory.",
     )
 
     @field_validator("sources", mode="before")
@@ -317,6 +335,13 @@ class TextualMemoryItem(BaseModel):
     @field_validator("id")
     @classmethod
     def _validate_id(cls, v: str) -> str:
+        # Native Dream writers namespace UUIDs to distinguish actions, diaries
+        # and Context nodes. Keep validating their UUID payload, rather than
+        # admitting arbitrary graph identifiers into the textual memory API.
+        for prefix in ("dream_mem_", "dream_merged_", "dream_diary_", "ctx_"):
+            if v.startswith(prefix):
+                uuid.UUID(v[len(prefix) :])
+                return v
         uuid.UUID(v)
         return v
 

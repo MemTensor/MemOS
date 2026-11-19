@@ -38,6 +38,7 @@ def make_node(node_id: str, memory: str, key: str = "k", background: str = ""):
 @pytest.fixture()
 def reorganizer():
     graph_store = MagicMock()
+    graph_store.config = SimpleNamespace(user_name="memosdefault", use_multi_db=False)
     llm = MagicMock()
     embedder = MagicMock()
     # Avoid background threads: is_reorganize=False.
@@ -203,7 +204,9 @@ def test_optimize_all_users_falls_back_without_tenant_enumeration(reorganizer):
 
     reorganizer._optimize_all_users(scope="LongTermMemory")
 
-    reorganizer.optimize_structure.assert_called_once_with(scope="LongTermMemory")
+    reorganizer.optimize_structure.assert_called_once_with(
+        scope="LongTermMemory", user_name="memosdefault"
+    )
 
 
 def test_optimize_all_users_falls_back_on_enumeration_error(reorganizer):
@@ -212,7 +215,9 @@ def test_optimize_all_users_falls_back_on_enumeration_error(reorganizer):
 
     reorganizer._optimize_all_users(scope="UserMemory")
 
-    reorganizer.optimize_structure.assert_called_once_with(scope="UserMemory")
+    reorganizer.optimize_structure.assert_called_once_with(
+        scope="UserMemory", user_name="memosdefault"
+    )
 
 
 def test_base_graph_db_default_returns_configured_user_name():
@@ -242,19 +247,21 @@ def _run_one_loop_iteration(monkeypatch, reorganizer):
     reorganizer._stop_scheduler = False
     reorganizer._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
 
-    monkeypatch.setattr(schedule, "every", MagicMock())
+    scheduler = schedule.Scheduler()
     run_pending = MagicMock()
-    monkeypatch.setattr(schedule, "run_pending", run_pending)
+    scheduler.run_pending = run_pending
+    monkeypatch.setattr(schedule, "Scheduler", lambda: scheduler)
 
     def fake_sleep(_seconds):
         reorganizer._stop_scheduler = True
 
-    monkeypatch.setattr(reorganizer_module.time, "sleep", fake_sleep)
+    reorganizer._scheduler_stop_event = SimpleNamespace(wait=fake_sleep)
     reorganizer._run_structure_organizer_loop()
     return run_pending
 
 
 def test_loop_calls_schedule_run_pending(monkeypatch, reorganizer):
+    reorganizer._reorganize_needed = False
     reorganizer.graph_store.get_all_user_names.return_value = ["alice"]
     reorganizer.optimize_structure = MagicMock()
 
@@ -280,3 +287,215 @@ def test_reorganize_trigger_covers_all_tenants(monkeypatch, reorganizer):
         ("UserMemory", "alice"),
         ("UserMemory", "bob"),
     }
+
+
+def test_parse_preserves_json_word_in_memory_text(reorganizer):
+    value = {"key": "json tools", "value": "Uses json.loads for work"}
+    import json
+
+    assert reorganizer._parse_json_result(json.dumps(value)) == value
+
+
+@pytest.mark.parametrize("response", ['[{"key": "x", "value": "y"}]', "null", "42", "true"])
+def test_parse_rejects_top_level_non_objects(reorganizer, response):
+    assert reorganizer._parse_json_result(response) is None
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "{}",
+        '{"key": "", "value": "x"}',
+        '{"key": "x", "value": ""}',
+        '{"key": null, "value": "x"}',
+        '{"key": "x", "value": []}',
+        '{"key": "x", "value": "y", "tags": "bad"}',
+    ],
+)
+def test_summary_rejects_empty_or_invalid_fields_before_embedding(reorganizer, response):
+    reorganizer.llm.generate.return_value = response
+    assert reorganizer._summarize_cluster([make_node("n1", "m1")], "LongTermMemory") is None
+    reorganizer.embedder.embed.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        '{"clusters": null}',
+        '{"clusters": "bad"}',
+        '{"clusters": [null, {"ids": null}, {"ids": ["a", "b"]}]}',
+    ],
+)
+def test_local_subcluster_tolerates_wrong_shapes(reorganizer, response):
+    reorganizer.llm.generate.return_value = response
+    nodes = [make_node("a", "ma"), make_node("b", "mb")]
+    result = reorganizer._local_subcluster(nodes)
+    assert result == ([nodes] if '"a"' in response else [])
+
+
+def test_fallback_failure_is_isolated(reorganizer):
+    reorganizer.graph_store.get_all_user_names.return_value = []
+    reorganizer.graph_store.config = SimpleNamespace(user_name="default")
+    reorganizer.optimize_structure = MagicMock(side_effect=OSError("Synthetic failure"))
+    reorganizer._optimize_all_users("LongTermMemory")
+    reorganizer.optimize_structure.assert_called_once_with(
+        scope="LongTermMemory", user_name="default"
+    )
+
+
+def test_missing_tenant_scope_cannot_run_unscoped(reorganizer):
+    reorganizer.graph_store.get_all_user_names.return_value = [None, "", " "]
+    reorganizer.graph_store.config = SimpleNamespace(user_name=None, use_multi_db=False)
+    reorganizer.optimize_structure = MagicMock()
+    reorganizer._optimize_all_users("LongTermMemory")
+    reorganizer.optimize_structure.assert_not_called()
+
+
+def test_tenant_names_are_validated_and_deduplicated(reorganizer):
+    reorganizer.graph_store.get_all_user_names.return_value = ["alice", "alice", None, "bob", ""]
+    reorganizer.optimize_structure = MagicMock()
+    reorganizer._optimize_all_users("LongTermMemory")
+    assert [call.kwargs["user_name"] for call in reorganizer.optimize_structure.call_args_list] == [
+        "alice",
+        "bob",
+    ]
+
+
+def test_disabled_reorganizer_supports_explicit_optimization(reorganizer):
+    reorganizer.graph_store.node_not_exist.return_value = True
+    reorganizer.optimize_structure(scope="LongTermMemory", user_name="alice")
+
+
+def test_scheduler_is_private_and_preserves_new_triggers(monkeypatch, reorganizer):
+    import schedule
+
+    sentinel = schedule.every(1000).seconds.do(lambda: None)
+    before = list(schedule.jobs)
+    reorganizer.graph_store.get_all_user_names.return_value = ["alice"]
+    calls = []
+
+    def optimize(**kwargs):
+        calls.append(kwargs)
+        reorganizer._reorganize_needed = True
+
+    reorganizer.optimize_structure = optimize
+
+    def stop_after_cycle(_seconds):
+        reorganizer._stop_scheduler = True
+
+    monkeypatch.setattr(reorganizer_module.time, "sleep", stop_after_cycle)
+    # The corrected implementation uses an interruptible event wait.
+    reorganizer._scheduler_stop_event = SimpleNamespace(wait=stop_after_cycle)
+    try:
+        reorganizer._run_structure_organizer_loop()
+        assert schedule.jobs == before
+        assert reorganizer._reorganize_needed
+        assert len(calls) == 2
+    finally:
+        schedule.cancel_job(sentinel)
+        for job in list(schedule.jobs):
+            if job not in before:
+                schedule.cancel_job(job)
+
+
+def test_real_scheduler_runs_due_jobs_for_every_tenant(monkeypatch, reorganizer):
+    from datetime import datetime, timedelta
+
+    import schedule
+
+    scheduler = schedule.Scheduler()
+    monkeypatch.setattr(schedule, "Scheduler", lambda: scheduler)
+    reorganizer._reorganize_needed = False
+    reorganizer.graph_store.get_all_user_names.return_value = ["alice", "bob"]
+    reorganizer.optimize_structure = MagicMock()
+    waits = []
+
+    def advance_then_stop(_seconds):
+        waits.append(None)
+        if len(waits) == 1:
+            for job in scheduler.jobs:
+                job.next_run = datetime.now() - timedelta(seconds=1)
+        else:
+            reorganizer._stop_scheduler = True
+
+    reorganizer._scheduler_stop_event = SimpleNamespace(wait=advance_then_stop)
+    reorganizer._run_structure_organizer_loop()
+
+    assert {
+        (call.kwargs["scope"], call.kwargs["user_name"])
+        for call in reorganizer.optimize_structure.call_args_list
+    } == {
+        ("LongTermMemory", "alice"),
+        ("LongTermMemory", "bob"),
+        ("UserMemory", "alice"),
+        ("UserMemory", "bob"),
+    }
+    assert scheduler.jobs == []
+
+
+def test_multi_tenant_optimization_scopes_candidate_reads_and_graph_writes(reorganizer):
+    from uuid import uuid4
+
+    graph = reorganizer.graph_store
+    graph.get_all_user_names.return_value = ["alice", "bob"]
+    graph.node_not_exist.return_value = False
+    graph.get_memory_count.return_value = 3
+    graph.edge_exists.return_value = False
+    tenants = {
+        name: [
+            {
+                "id": str(uuid4()),
+                "memory": f"{name} memory {index}",
+                "metadata": {"memory_type": "LongTermMemory", "key": "topic", "embedding": [0.1]},
+            }
+            for index in range(3)
+        ]
+        for name in ("alice", "bob")
+    }
+    graph.get_structure_optimization_candidates.side_effect = lambda scope, user_name: tenants[
+        user_name
+    ]
+    reorganizer._partition = lambda nodes: [nodes]
+    reorganizer._local_subcluster = lambda nodes: [nodes]
+    reorganizer.llm.generate.return_value = '{"key": "topic", "value": "Summary", "tags": []}'
+    reorganizer.embedder.embed.return_value = [[0.1]]
+    reorganizer.relation_detector.process_node = MagicMock(return_value=EMPTY_RELATION_RESULTS)
+
+    reorganizer._optimize_all_users("LongTermMemory", min_group_size=3, min_cluster_size=2)
+
+    assert [
+        call.kwargs["user_name"]
+        for call in graph.get_structure_optimization_candidates.call_args_list
+    ] == ["alice", "bob"]
+    assert [call.kwargs["user_name"] for call in graph.add_node.call_args_list] == ["alice", "bob"]
+    assert len(graph.add_edge.call_args_list) == 6
+    for call in graph.add_edge.call_args_list:
+        tenant = call.kwargs["user_name"]
+        assert call.args[1] in {node["id"] for node in tenants[tenant]}
+
+
+def test_stop_interrupts_scheduler_wait(reorganizer):
+    reorganizer.is_reorganize = True
+    reorganizer.thread = MagicMock()
+    reorganizer.structure_optimizer_thread = MagicMock()
+
+    reorganizer.stop()
+
+    assert reorganizer._stop_scheduler
+    assert reorganizer._scheduler_stop_event.is_set()
+    reorganizer.thread.join.assert_called_once()
+    reorganizer.structure_optimizer_thread.join.assert_called_once()
+
+
+def test_database_isolated_backend_can_optimize_its_configured_database(reorganizer):
+    reorganizer.graph_store.get_all_user_names.return_value = []
+    reorganizer.graph_store.config = SimpleNamespace(user_name=None, use_multi_db=True)
+    reorganizer.optimize_structure = MagicMock()
+
+    reorganizer._optimize_all_users("LongTermMemory")
+
+    reorganizer.optimize_structure.assert_called_once_with(scope="LongTermMemory", user_name=None)
+
+
+def test_malformed_array_is_not_reinterpreted_as_a_summary_object(reorganizer):
+    assert reorganizer._parse_json_result('[{"key": "x", "value": "y"},]') is None

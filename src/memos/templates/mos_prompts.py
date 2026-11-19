@@ -51,9 +51,7 @@ details: https://github.com/memos-ai/memos/blob/main/examples/core_memories/tree
 
 SYNTHESIS_PROMPT = """
 exclude memory information, synthesizing information from multiple sources to provide comprehensive answers.
-I will give you chain of thought for sub-questions and their answers.
-Sub-questions and their answers:
-{qa_text}
+Use the sub-questions and answers in the latest user message as evidence.
 
 Please synthesize these answers into a comprehensive response that:
 1. Addresses the original question completely
