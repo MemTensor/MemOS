@@ -50,12 +50,7 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         self.context: dict[str, Any] = {"shared": {}, "configs": {}}
         self._service: ProjectMemoryService | None = None
         self._local_locks = InProcessLocks()
-        # 混合视图请求：intercept 里算好的项目记忆结果，after 里按请求取回（并发请求互不干扰）
-        self._pending: dict[tuple[str, int], Any] = {}
-        # Core single-provider hooks (project-memory business logic)
-        self.register_hook(
-            H.PROJECT_MEMORY_ACCEPT, _tagged(lambda request, **kw: self.service.accept(request))
-        )
+        self.register_hook(H.PROJECT_MEMORY_ACCEPT, _tagged(self._accept))
         self.register_hook(
             H.PROJECT_MEMORY_EXECUTE,
             lambda space_id, batch, **kw: self.service.execute(space_id, batch),
@@ -76,11 +71,6 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             H.PROJECT_MEMORY_TASK_STATUS,
             lambda task_id, user_id, **kw: self.service.task_status(task_id, user_id),
         )
-        # Intercept / after hooks so the add and search handlers don't need edits.
-        # intercept: when only `project` is requested, bypass the personal-memory pipeline.
-        # after: when both are requested, append project results to the core result.
-        self.register_hook("add.intercept", self._add_intercept)
-        self.register_hook("add.after", self._add_after)
         self.register_hook("search.intercept", self._search_intercept)
         # 混合检索走核心链路：作为一类结果加进去、过同一道门槛，最后组成对外的列表
         register_result_kind(PROJECT_RESULT_KIND)
@@ -142,39 +132,9 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             self._service.submit = self._submit
         return self._service
 
-    def _add_intercept(self, request: Any) -> Any | None:
-        """Called by hookable('add').intercept before handle_add_memories runs."""
-
-        from memos.api.handlers.project_view import has_project_view, only_project
-
-        if not has_project_view(request):
-            return None
-
+    def _accept(self, request: Any) -> dict[str, Any]:
         _require_scope(request)
-
-        try:
-            result = self.service.accept(request)
-        except (LookupError, ValueError) as e:
-            raise from_service(e) from e
-
-        if only_project(request):
-            return {"code": 200, "message": "Project memory task accepted", "data": [result]}
-        self._pending[("add", id(request))] = result
-        return None
-
-    def _add_after(self, request: Any, result: Any) -> Any:
-        """Appends project-memory task info to a mixed-view add result."""
-        pending = self._pending.pop(("add", id(request)), None)
-        if pending is None:
-            return result
-        try:
-            if hasattr(result, "data") and isinstance(result.data, list):
-                result.data.append(pending)
-            elif isinstance(result, dict) and isinstance(result.get("data"), list):
-                result["data"].append(pending)
-        except Exception:
-            pass
-        return result
+        return self.service.accept(request)
 
     def _search_intercept(self, request: Any) -> Any | None:
         """Called by hookable('search').intercept before handle_search_memories runs.
@@ -205,7 +165,9 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         found = {k: [x for x in v if x.get("relativity", 1.0) >= rel] for k, v in found.items()}
         return {"code": 200, "message": "Search completed successfully", "data": found}
 
-    def _search_add_bucket(self, handler: Any = None, search_req: Any = None, results=None, **kw):
+    def _search_add_bucket(
+        self, handler: Any | None = None, search_req: Any | None = None, results=None, **kw
+    ):
         """search.memory_results：混合检索时把项目记忆的候选加进核心的结果（`project_mem`）。"""
         from memos.api.handlers.project_view import has_project_view, only_project
 
@@ -232,7 +194,9 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         ]
         return results
 
-    def _search_finish(self, handler: Any = None, search_req: Any = None, results=None, **kw):
+    def _search_finish(
+        self, handler: Any | None = None, search_req: Any | None = None, results=None, **kw
+    ):
         """search.results.after_rerank：把过完门槛的 `project_mem` 组成对外的列表。"""
         if not isinstance(results, dict):
             return results

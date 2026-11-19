@@ -134,19 +134,6 @@ def hookable(name: str):
 
     def _intercept(request):
         if not _hooks.get(f"{name}.intercept"):
-            # No intercept hook registered.  If the request asks for a view that
-            # is only served by a plugin (e.g. project memory), and the plugin is
-            # not loaded, raise 400 instead of falling through to the core pipeline.
-            if getattr(request, "project_view_only_flag", False):
-                from fastapi import HTTPException
-
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "memory view `project` is not enabled on this server; "
-                        "set MEMOS_ENABLED_PLUGINS=project_memory"
-                    ),
-                )
             return None
         callbacks = _hooks[f"{name}.intercept"]
         if len(callbacks) > 1:

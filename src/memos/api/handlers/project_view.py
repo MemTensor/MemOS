@@ -1,16 +1,9 @@
 """
 Routing for the `project` memory view (project memory).
 
-The core does three things for project memory:
-1. Routes requests that ask for the `project` view to single-provider hooks.
-2. The add / search handlers each gain an `intercept` hook so the plugin can
-   short-circuit the whole personal-memory pipeline when only `project` is
-   needed.  When both kinds are needed, the plugin's `add.after` / `search.after`
-   hook appends project results to the core result.
-3. Runs the scheduler entry (`PROJECT_MEMORY_TASK_LABEL`).
-
-All business logic lives in the project-memory plugin (`memos.project_memory`).
-The core never imports the plugin.
+AddHandler chooses the requested write views and shares the business task ID.
+Project view callbacks implement the storage and algorithms. Scheduler handlers
+delegate each durable Add stage to the active provider.
 """
 
 from __future__ import annotations

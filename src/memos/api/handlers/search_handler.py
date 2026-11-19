@@ -12,6 +12,7 @@ import os
 from contextlib import suppress
 from typing import Any
 
+from memos.api.handlers import project_view
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
@@ -79,6 +80,7 @@ class SearchHandler(BaseHandler):
         Returns:
             SearchResponse with formatted results
         """
+        project_view.require_plugin_or_400(search_req)
         self.logger.info(
             "[SearchHandler] Search request summary: %s",
             summarize_search_request(search_req),

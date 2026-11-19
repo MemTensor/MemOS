@@ -19,3 +19,11 @@
 `task_schemas.py`、`registry.py` 和 `project_memory_handler.py` 原来只登记单阶段整理。新增抽取、归类、合并准备和提交四个调度入口，由 `hook_defs.py` 声明与项目记忆实现的交接。每个阶段可独立接管，未装配回调时保留待确认消息。已有单阶段入口供迁移前的旧队列处理。
 
 `tests/mem_scheduler/test_project_add_registry.py` 检查四个阶段的路由、优先级、接管间隔和回调缺失行为。
+
+## AddHandler 分流
+
+`api/handlers/add_handler.py` 和 `project_memory/plugin.py` 原用拦截钩子及按请求对象编号暂存混合结果。现由 AddHandler 直接调用项目受理并组装响应，个人分支沿用原有 Cube 和反馈处理。混合写入共享受理返回的 Task ID，完整重放复用已有任务。既有的完整请求日志改为记录调用模式，避免将原文写进日志。
+
+`tests/api/test_add_project_routing.py` 检查项目单写、混合写入和重放，旧项目记忆接口由 `tests/project_memory/` 回归。
+
+通用 \`plugins/hooks.py\` 拦截器现在只执行注册的回调。项目视图是否可用由 Add 和 Search 入口校验，避免通用拦截器在 AddHandler 分流之前拒绝有效请求。插件、项目 HTTP 和核心路由回归共 115 项通过。
