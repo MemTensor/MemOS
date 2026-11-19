@@ -22,6 +22,7 @@ FROZEN_TOUCHPOINTS=(
   src/memos/api/product_models.py                      # 一行 import；三个类头加 mixin；DeleteMemoryRequest 末尾 space_id
   src/memos/api/routers/server_router.py               # get_memory / get_memory/{id} / delete_memory / scheduler_status 的 project 分支
   src/memos/plugins/hooks.py                           # hookable 的 {name}.intercept（插件框架通用能力）
+  src/memos/api/handlers/search_handler.py             # 相关度门槛之后一行：插件登记的结果类别过同一道门槛
   src/memos/plugins/hook_defs.py                       # PROJECT_MEMORY_* 钩子声明（含可选的 LOCK）
   src/memos/mem_scheduler/task_schedule_modules/registry.py  # 登记 project_memory handler
   src/memos/graph_dbs/base.py                          # ConcurrentUpdateError
@@ -35,6 +36,7 @@ OWN_PREFIXES=(
   src/memos/project_memory/
   src/memos/api/project_fields.py
   src/memos/api/handlers/project_view.py
+  src/memos/plugins/result_kinds.py
   src/memos/graph_dbs/sqlite.py
   src/memos/mem_scheduler/task_schedule_modules/handlers/project_memory_handler.py
   tests/project_memory/

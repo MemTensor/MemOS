@@ -106,6 +106,10 @@ class SearchHandler(BaseHandler):
             search_req_local.relativity = 0
         self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
         results = self._apply_relativity_threshold(results, search_req_local.relativity)
+        # Plugin-registered result kinds (e.g. project memory) follow the same threshold
+        from memos.plugins.result_kinds import apply_relativity_to_plugin_kinds
+
+        results = apply_relativity_to_plugin_kinds(results, search_req_local.relativity)
 
         if search_req_local.dedup == "sim":
             results = self._dedup_text_memories(results, search_req.top_k)

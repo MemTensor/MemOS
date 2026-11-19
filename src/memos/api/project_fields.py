@@ -89,6 +89,20 @@ class ProjectSearchFields(BaseModel):
             "Does not affect other memory view quotas."
         ),
     )
+    project_item_types: list[str] | None = Field(
+        None,
+        description=(
+            "Project memory components to return: topic / decision / experience / timeline. "
+            "Default all."
+        ),
+    )
+    project_result_format: str | None = Field(
+        None,
+        description=(
+            "'topic' (default): topic_detail_list; "
+            "'item': flat project_item_list, one entry per component."
+        ),
+    )
 
     # Internal flags computed from the view list by the before-validator (client input is
     # overwritten); hidden from the OpenAPI schema and excluded from serialization.
@@ -149,6 +163,13 @@ class ProjectAddFields(BaseModel):
     conversation_id: str | None = Field(
         None,
         description="Conversation / session identifier (alias of session_id for project memory).",
+    )
+    project_member_map: dict[str, str] | None = Field(
+        None,
+        description=(
+            "Internal id -> caller's external id for the members and agents in this request; "
+            "project memory stores the external ids."
+        ),
     )
 
     # Internal flags computed from the view list by the before-validator (client input is

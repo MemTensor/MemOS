@@ -216,6 +216,15 @@ def scheduler_status(
         # memory view `project`: tasks are tracked by the project-memory plugin
         project_task = project_view.task_status(task_id=task_id, user_id=user_id)
         if project_task is not None:
+            # The same task may also carry personal memory (one add with both views):
+            # merge the core status into it.
+            try:
+                core = handlers.scheduler_handler.handle_scheduler_status(
+                    user_id=user_id, task_id=task_id, status_tracker=status_tracker
+                )
+                project_task = project_view.merge_task_status(project_task, core)
+            except Exception:
+                pass
             # Project task status carries memory_views which StatusResponseItem
             # does not model; return as raw JSON to bypass response_model validation.
             from fastapi.responses import JSONResponse
@@ -400,13 +409,10 @@ def get_memories(memory_req: GetMemoryRequest):
 
 @router.get("/get_memory/{memory_id}", summary="Get memory by id", response_model=GetMemoryResponse)
 def get_memory_by_id(memory_id: str):
-    topic = project_view.get_topic(memory_id)
-    if topic is not None:
-        # memory view `project`: the id is a topic id
-        return GetMemoryResponse(
-            message="Memory retrieved successfully",
-            data={"topic_detail_list": [topic]},
-        )
+    found = project_view.get_by_id(memory_id)
+    if found is not None:
+        # memory view `project`: a topic id, or the id of a decision / experience / timeline entry
+        return GetMemoryResponse(message="Memory retrieved successfully", data=found)
     return handlers.memory_handler.handle_get_memory(
         memory_id=memory_id,
         naive_mem_cube=naive_mem_cube,

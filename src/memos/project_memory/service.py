@@ -39,16 +39,21 @@ from .segmenter import IDLE_MINUTES, idle_minutes_between, segment, split_turns
 from .store import ProjectStore, cosine, lexical_sim
 from .types import (
     OP_ADD,
+    PROJECT_DECISION,
+    PROJECT_EXPERIENCE,
     Decision,
     Domain,
     Episode,
+    Fenced,
     Msg,
     OrganizeResult,
     Space,
     TaskRecord,
     Topic,
+    as_list,
     new_uuid,
     now_iso,
+    time_key,
 )
 
 
@@ -60,8 +65,10 @@ DEFAULT_LIMIT = 9  # PRD search/memory 的默认条数
 MAX_LIMIT = 25  # PRD 的上限；超过按上限截断、不报错（校验在工程层）
 REL_MIN = 0.12  # 条目与 query 的最低相关度（二元组相似度；接真向量后在评测集上定）
 MAX_ENTRIES = 5
+EXP_CONTENT_MAX = 200  # PRD：经验条目内容不超过 200 字
 MAX_CAS_RETRIES = 3
 MAX_TRACE_LINES = 80
+MAX_ORGANIZE_RETRIES = 3  # 一段整理失败最多重试几次，之后标 failed
 
 Submit = Callable[[list[Any]], Any]
 _TZ_SUFFIX = re.compile(r"[+-]\d{2}:?\d{2}$|Z$")  # chat_time 末尾的时区偏移
@@ -152,16 +159,20 @@ class ProjectMemoryService:
     # ═════════════════════════════════ 领域 ══════════════════════════════════
 
     def _validate_new_domains(self, space: Space, domains: list[dict]) -> list[Domain]:
-        names = set(space.domain_names())
-        out: list[Domain] = []
+        """已登记的同名领域跳过、保留原名称与说明（PRD create/domains）；
+        同一批里重名的整批失败（PRD 领域管理共同规则）。"""
+        registered = set(space.domain_names())
+        names: list[str] = []
         for d in domains:
             name = (d.get("name") if isinstance(d, dict) else d) or ""
             if not str(name).strip():
                 raise ValueError("领域名称不能为空")
-            name = str(name).strip()
-            if name in names:
-                raise ValueError(f"领域已存在：{name}")
-            names.add(name)
+            names.append(str(name).strip())
+        _reject_batch_duplicates(names)
+        out: list[Domain] = []
+        for d, name in zip(domains, names, strict=True):
+            if name in registered:
+                continue
             out.append(
                 Domain(
                     name=name,
@@ -174,13 +185,15 @@ class ProjectMemoryService:
 
     def create_domains(self, space_id: str, domains: list[dict]) -> list[dict]:
         space = self.get_space(space_id)
-        space.domains += self._validate_new_domains(space, domains)  # 整批校验，失败不落任何一个
+        # 整批校验，失败不落任何一个；同名的跳过（PRD）
+        space.domains += self._validate_new_domains(space, domains)
         self.store.put_space(space)
         return [d.__dict__ for d in space.domains]
 
     def update_domains(self, space_id: str, domains: list[dict]) -> list[dict]:
         """每项 {name, new_name?, description?}。改名同步到已有主题。"""
         space = self.get_space(space_id)
+        _reject_batch_duplicates([d.get("name") for d in domains])
         by_name = {d.name: d for d in space.domains}
         final = set(by_name)
         renames: dict[str, str] = {}
@@ -207,15 +220,14 @@ class ProjectMemoryService:
             for t in self.store.list_topics(space_id):
                 if t.domain in renames:
                     t.domain = renames[t.domain]
-                    self.store.put_topic(t)
+                    self.store.put_topic(t, touch=False)  # 改名不算主题更新，不打乱按时间的排序
         return [d.__dict__ for d in space.domains]
 
     def delete_domains(self, space_id: str, names: list[str]) -> list[dict]:
         space = self.get_space(space_id)
+        _reject_batch_duplicates(names)
         registered = set(space.domain_names())
-        missing = [n for n in names if n not in registered]
-        if missing:
-            raise ValueError(f"领域未登记：{missing}")
+        names = [n for n in names if n in registered]  # 已不存在的名称忽略（PRD）
         used = {t.domain for t in self.store.list_topics(space_id)}
         busy = [n for n in names if n in used]
         if busy:
@@ -252,27 +264,49 @@ class ProjectMemoryService:
         if conv == "default_session":
             conv = None
         # user_id already resolved above (handles str or list); re-use it.
-        raw_agent = getattr(req, "agent_id", None)
-        agent_id = (raw_agent[0] if isinstance(raw_agent, list) and raw_agent else raw_agent) or ""
+        # agent_id：PRD 规定原样记录，群聊多 Agent 时是数组；只有一个元素的数组按字符串记
+        agents = as_list(getattr(req, "agent_id", None))
+        agent_id: Any = agents[0] if len(agents) == 1 else agents or ""
+        # 方案 A：工程层照个人记忆链路发内部 ID，另带 内部 ID → 外部 ID 的对照表；
+        # 项目记忆存外部 ID（表里没有的原样保留）
+        member_map = getattr(req, "project_member_map", None) or {}
+        if member_map:
+            uids = [member_map.get(u, u) for u in as_list(req.user_id)]
+            user_id = uids[0] if uids else user_id
+            agents = [member_map.get(a, a) for a in agents]
+            agent_id = agents[0] if len(agents) == 1 else agents or ""
         msgs = parse_messages(req.messages or [], user_id)
+        if member_map:
+            for m in msgs:
+                if m.user_id in member_map:
+                    m.user_id = member_map[m.user_id]
         task = TaskRecord(
             task_id=getattr(req, "task_id", None) or new_uuid(),
             user_id=user_id,
             space_ids=space_ids,
             pending_spaces=list(space_ids),
         )
-        self.store.put_task(task)
-
-        for space_id in space_ids:
+        payloads: list[tuple[str, dict[str, Any]]] = []
+        for sp in spaces:
+            space_id = sp.space_id
             node_ids = self._store_messages(space_id, conv, msgs, user_id, agent_id)
-            payload = {
-                "task_id": task.task_id,
-                "conversation_id": conv,
-                "message_node_ids": node_ids,
-                "domains": domains,
-                "user_id": user_id,
-                "agent_id": agent_id,
-            }
+            task.message_ids += node_ids
+            payloads.append(
+                (
+                    space_id,
+                    {
+                        "task_id": task.task_id,
+                        "conversation_id": conv,
+                        "message_node_ids": node_ids,
+                        "domains": domains,
+                        "user_id": user_id,
+                        "agent_id": agent_id,
+                        "epoch": sp.epoch,  # 整理前核对：清空后不再写回清空前的内容
+                    },
+                )
+            )
+        self.store.put_task(task)
+        for space_id, payload in payloads:
             if conv:
                 idx = self.store.get_index(f"conv:{conv}") or {"space_ids": []}
                 if space_id not in idx["space_ids"]:
@@ -281,15 +315,20 @@ class ProjectMemoryService:
             self._enqueue(space_id, payload, sync=getattr(req, "async_mode", "async") == "sync")
 
         task = self.store.get_task(task.task_id) or task
-        return {
-            "success": True,
+        # 同步模式下整理已经跑完：失败要让调用方看得出来
+        status = task.status if task.status in ("completed", "failed") else "running"
+        out = {
+            "success": status != "failed",
             "task_id": task.task_id,
-            "status": "completed" if task.status == "completed" else "running",
+            "status": status,
             "memory_view": "project",
         }
+        if status == "failed" and task.error:
+            out["error"] = task.error
+        return out
 
     def _store_messages(
-        self, space_id: str, conv: str | None, msgs: list[Msg], user_id: str, agent_id: str
+        self, space_id: str, conv: str | None, msgs: list[Msg], user_id: str, agent_id: Any
     ) -> list[str]:
         """按 PRD 去重：同一会话里 role + chat_time 相同的视为已有消息，不重复保存。"""
         existing = self.store.list_messages(space_id, conv) if conv else []
@@ -345,21 +384,42 @@ class ProjectMemoryService:
         result = OrganizeResult()
         task_id = payload["task_id"]
         try:
+            space = self.store.get_space(space_id)
+            if space is None or int(payload.get("epoch") or 0) < space.epoch:
+                # Space 已删除，或受理后被清空：清空前提交的内容不再整理（PRD 删除围栏）
+                result.log("Space 已删除或已清空，这批消息不整理")
+                self._finish_task(task_id, space_id, [], 0, error="", trace=result.trace)
+                return result
             conv = payload.get("conversation_id")
             new_msgs = self.store.get_messages(space_id, payload.get("message_node_ids") or [])
+            # 先重试之前整理失败的段（模型临时不可用等），最多 MAX_ORGANIZE_RETRIES 次
+            for pe in self.store.episodes(space_id, "pending"):
+                result.trace += self._retry_pending(pe).trace
             # 懒关段：先把这个 Space 里别的会话空闲超过阈值的段关掉（会话最后一段没有「下一轮」
             # 来触发，照 memmy 的做法在每次整理前扫一遍；会话结束时接入方也可调 flush）。
             # 「现在」取这批消息的时间而不是墙钟：导入历史会话时消息时间都很早，按墙钟会把
             # 每一段都判成空闲。每个别的会话单独拿它的锁、用完就放，不与本会话的锁嵌套。
+            # 关掉的段整理出的主题记到那些段自己的任务上，不记到本任务。
             ref = new_msgs[0].chat_time if new_msgs and new_msgs[0].chat_time else now_iso()
             for stale in self.store.open_episodes(space_id):
                 if conv and stale.conversation_id == conv:
                     continue  # 本会话的段由 segment() 按消息时间判
-                result.merge(self._close_if_idle(space_id, stale, ref))
+                result.trace += self._close_if_idle(space_id, stale, ref).trace
 
             with self.lock(conv_key(space_id, conv or f"task-{task_id}")):
                 open_ep = self.store.open_episode(space_id, conv) if conv else None
+                if open_ep is None and conv:
+                    # 上一段归属不清、暂缓了：和这次的新消息并成一段再判（PRD）
+                    deferred = self.store.episodes(space_id, "deferred", conv)
+                    if deferred:
+                        open_ep = deferred[-1]
+                        open_ep.state = "open"
+                        result.log("接上暂缓的那一段一起整理")
                 prev_tail = [] if open_ep else self._last_tail(space_id, conv)
+                prev_space = ""
+                if not open_ep and not prev_tail and conv:
+                    # 会话首次写入这个 Space：借用此前提交到别的 Space 的最后一轮作上下文（PRD）
+                    prev_space, prev_tail = self._borrow_tail(space_id, conv)
                 closed, still_open = segment(
                     self.hub,
                     space_id,
@@ -371,19 +431,22 @@ class ProjectMemoryService:
                     task_id=task_id,
                     log=result.log,
                     prev_tail=prev_tail,
+                    epoch=int(payload.get("epoch") or 0),
                 )
-                for ep in closed:
+                for ep in [*closed, *([still_open] if still_open else [])]:
+                    if prev_space and ep.prev_message_ids == prev_tail:
+                        ep.prev_space_id = prev_space
                     ep.agent_id = ep.agent_id or payload.get("agent_id", "")
-                    result.merge(self.organize(ep))
+                for ep in closed:
+                    result.merge(self._organize_or_park(ep))
                 if still_open is not None:
-                    still_open.agent_id = still_open.agent_id or payload.get("agent_id", "")
                     self.store.put_episode(still_open)
             self._finish_task(
                 task_id,
                 space_id,
                 result.topic_ids,
-                len(still_open.message_ids) if still_open else 0,
-                error="",
+                0,
+                error="；".join(result.errors),
                 trace=result.trace,
             )
         except Exception as e:
@@ -394,6 +457,17 @@ class ProjectMemoryService:
             )
         self.last_trace = result.trace
         return result
+
+    def _borrow_tail(self, space_id: str, conv: str) -> tuple[str, list[str]]:
+        """这个会话此前写到别的 Space 的最后一轮（消息节点在那个 Space 里）。"""
+        idx = self.store.get_index(f"conv:{conv}") or {}
+        for other in idx.get("space_ids") or []:
+            if other == space_id:
+                continue
+            turns = split_turns(self.store.list_messages(other, conv))
+            if turns:
+                return other, [m.node_id for m in turns[-1]]
+        return "", []
 
     def _close_if_idle(self, space_id: str, stale: Episode, ref: str) -> OrganizeResult:
         """别的会话的段空闲超时就关掉整理。拿那个会话的锁后重读一次：别的线程可能刚处理过它。"""
@@ -413,11 +487,60 @@ class ProjectMemoryService:
             return self._close_and_organize(cur, "idle_timeout")
 
     def _close_and_organize(self, ep: Episode, reason: str) -> OrganizeResult:
-        msgs = self.store.get_messages(ep.space_id, ep.message_ids)
         ep.state, ep.closed_reason = "closed", reason
-        ep.messages, ep.prev = msgs, self.store.get_messages(ep.space_id, ep.prev_message_ids)
         self.store.put_episode(ep)
-        return self.organize(ep)
+        return self._organize_or_park(ep)
+
+    def _retry_pending(self, ep: Episode) -> OrganizeResult:
+        conv = ep.conversation_id or f"episode-{ep.id}"
+        with self.lock(conv_key(ep.space_id, conv)):
+            cur = next(
+                (e for e in self.store.episodes(ep.space_id, "pending") if e.id == ep.id), None
+            )
+            if cur is None:
+                return OrganizeResult()  # 别的线程刚重试过
+            cur.state = "closed"
+            return self._organize_or_park(cur)
+
+    def _organize_or_park(self, ep: Episode) -> OrganizeResult:
+        """整理一段。失败时这段不丢：标成 pending 等下次写入或 flush 时重试，重试
+        MAX_ORGANIZE_RETRIES 次仍失败标 failed；Space 被删除或清空则丢弃。整理出的主题记到
+        这段消息来自的全部任务上。"""
+        try:
+            r = self.organize(ep)
+        except Fenced as e:
+            ep.state = "discarded"
+            self.store.put_episode(ep)
+            r = OrganizeResult()
+            r.log(f"关段（{ep.closed_reason}）：{e}，这一段的结果不写回")
+            return r
+        except Exception as e:
+            logger.exception("[ProjectMemory] 整理一段失败 space=%s episode=%s", ep.space_id, ep.id)
+            ep.retries += 1
+            ep.state = "failed" if ep.retries >= MAX_ORGANIZE_RETRIES else "pending"
+            self.store.put_episode(ep)
+            r = OrganizeResult(failed_episodes=1, errors=[f"整理失败（第 {ep.retries} 次）：{e}"])
+            r.log(
+                r.errors[0]
+                + ("，不再重试" if ep.state == "failed" else "，下次写入或 flush 时重试")
+            )
+            return r
+        self._attach(ep.task_ids, r.topic_ids)
+        return r
+
+    def _attach(self, task_ids: list[str], topic_ids: list[str]) -> None:
+        """把整理出的主题记到任务上；不改任务状态（状态只由任务自己那次整理来改）。"""
+        if not topic_ids:
+            return
+        for tid in dict.fromkeys(task_ids):
+            with self.lock(task_key(tid)):
+                task = self.store.get_task(tid)
+                if task is None:
+                    continue
+                new = [t for t in topic_ids if t not in task.memory_ids]
+                if new:
+                    task.memory_ids += new
+                    self.store.put_task(task)
 
     def flush(
         self,
@@ -430,10 +553,17 @@ class ProjectMemoryService:
         本地插件在会话结束时调；也可以由定时任务调。不调的话，这些段会在下一次同 Space 的
         整理时按空闲超时关掉，最慢等到下一次有人写。
 
-        传了 `task_id` 时把这次整理出的主题记到那个任务上（`get/status` 才看得到）。
+        传了 `task_id` 时把这次整理出的主题也记到那个任务上（`get/status` 看得到）；不改它的
+        状态。之前整理失败待重试的段一并重试；暂缓的段（归属不清）会话已结束，丢弃。
         """
         self.get_space(space_id)  # Space 不存在 → LookupError → 404
         out = OrganizeResult()
+        for ep in self.store.episodes(space_id, "pending", conversation_id):
+            out.merge(self._retry_pending(ep))
+        for ep in self.store.episodes(space_id, "deferred", conversation_id):
+            ep.state = "discarded"
+            self.store.put_episode(ep)
+            out.log("会话结束：暂缓的那一段仍看不出是哪项工作，丢弃")
         for ep in self.store.open_episodes(space_id):
             if conversation_id and ep.conversation_id != conversation_id:
                 continue
@@ -447,8 +577,8 @@ class ProjectMemoryService:
                 if cur is None or cur.id != ep.id:
                     continue  # 别的线程刚关过
                 out.merge(self._close_and_organize(cur, "session_end"))
-        if task_id and out.topic_ids:
-            self._finish_task(task_id, space_id, out.topic_ids, 0, error="", trace=out.trace)
+        if task_id:
+            self._attach([task_id], out.topic_ids)
         if out.trace:
             self.last_trace = out.trace
         return out
@@ -491,7 +621,6 @@ class ProjectMemoryService:
                 if t not in task.memory_ids:
                     task.memory_ids.append(t)
             task.pending_spaces = [s for s in task.pending_spaces if s != space_id]
-            task.open_episode_messages += open_n
             if error:
                 task.status, task.error = "failed", error
             elif not task.pending_spaces and task.status != "failed":
@@ -502,12 +631,19 @@ class ProjectMemoryService:
     def organize(self, ep: Episode) -> OrganizeResult:
         r = OrganizeResult()
         ep.messages = self.store.get_messages(ep.space_id, ep.message_ids)
-        ep.prev = self.store.get_messages(ep.space_id, ep.prev_message_ids)
+        ep.prev = self.store.get_messages(ep.prev_space_id or ep.space_id, ep.prev_message_ids)
+        ep.fence = lambda: self._fence_ok(ep)
         r.log(f"关段（{ep.closed_reason}）：{len(ep.messages)} 条消息")
         space = self.get_space(ep.space_id)
+        if space.epoch > ep.epoch:
+            raise Fenced("Space 已清空")
         domains = ep.domains or space.domain_names()
         topic = self._assign_topic(space, ep, domains, r)
         if topic is None:
+            if ep.skip_reason == "unclear" and ep.conversation_id and not ep.deferred:
+                # 看不出是哪项工作：先放着，等同一会话的下一段消息来了一起判（PRD）
+                ep.state, ep.deferred = "deferred", True
+                r.log("  归属不清，暂缓，等这个会话的下一段一起整理")
             self.store.put_episode(ep)
             return r
         ep.topic_id = topic.id
@@ -532,6 +668,13 @@ class ProjectMemoryService:
         self.store.put_episode(ep)
         return r
 
+    def _fence_ok(self, ep: Episode) -> bool:
+        """写库前核对：Space 还在、没被清空，并入的主题没被删。"""
+        space = self.store.get_space(ep.space_id)
+        if space is None or space.epoch > ep.epoch:
+            return False
+        return not ep.topic_id or self.store.get_topic(ep.topic_id, ep.space_id) is not None
+
     def _assign_topic(
         self, space: Space, ep: Episode, domains: list[str], r: OrganizeResult
     ) -> Topic | None:
@@ -540,6 +683,8 @@ class ProjectMemoryService:
         choice = topic_mod.choose(self.hub, self.store, space, ep, domains, r.log)
         if choice.skip:
             return None
+        if not self._fence_ok(ep):
+            raise Fenced("Space 已删除或已清空")
         if choice.topic_id is None:
             with self.lock(topics_key(sid)):
                 if topic_mod.changed_since(self.store, sid, choice):
@@ -605,6 +750,8 @@ class ProjectMemoryService:
     def _apply_plan(
         self, d, plan, cands, ep: Episode, topic: Topic, r: OrganizeResult, touched: set[str]
     ) -> None:
+        if not self._fence_ok(ep):
+            raise Fenced("Space 已删除或已清空，或主题已删除")
         for g in plan.guarded:
             r.log(f"  决策护栏：{g}")
         if plan.action == OP_ADD:
@@ -636,6 +783,8 @@ class ProjectMemoryService:
         )
 
     def _add(self, d, ep: Episode, topic: Topic, r: OrganizeResult, reason: str) -> None:
+        if not self._fence_ok(ep):
+            raise Fenced("Space 已删除或已清空，或主题已删除")
         new = dec.new_decision(d, ep, topic.id)
         self.store.put_decision(new)
         r.decision_ops.append(
@@ -646,32 +795,179 @@ class ProjectMemoryService:
     # ═════════════════════════════════ 读取 ══════════════════════════════════
 
     def search(self, req: Any) -> list[dict[str, Any]]:
+        """按主题返回（`topic_detail_list` 的内容）。"""
+        return self.search_result(req).get("topic_detail_list", [])
+
+    def search_result(self, req: Any) -> dict[str, Any]:
+        """search/memory：`project_result_format` 为 topic（默认）时返回 `topic_detail_list`，
+        为 item 时返回平铺的 `project_item_list`（一个组件一项）；`project_item_types` 限定组件类别。"""
         # 没显式传就用项目记忆自己的默认值：企业版请求模型里这个字段默认 10、上限 30，
         # 是给个人记忆用的，不能直接拿来当主题条数
         explicit = "memory_limit_number" in (getattr(req, "model_fields_set", None) or set())
         given = getattr(req, "memory_limit_number", None) if explicit else None
         limit = max(1, min(int(given or DEFAULT_LIMIT), MAX_LIMIT))
+        types = _item_types(req)
+        fmt = getattr(req, "project_result_format", None) or "topic"
+        if fmt not in ("topic", "item"):
+            raise ValueError("project_result_format 只支持 topic / item")
         query = req.query
         conv = getattr(req, "conversation_id", None) or getattr(req, "session_id", None)
-        user_id = req.user_id
-        scored: list[tuple[float, Topic]] = []
-        for space_id in req.space_ids:
+        scored = self._scored_topics(req, query, conv, limit)
+        if fmt == "topic":
+            return {
+                "topic_detail_list": [
+                    self.topic_detail(t, query=query, relativity=min(1.0, s), types=types)
+                    for s, t in scored[:limit]
+                ]
+            }
+        items: dict[str, dict[str, Any]] = {}
+        for s, t in scored:
+            for it in self._topic_items(t, query, min(1.0, s), types):
+                if it["id"] not in items or it["relativity"] > items[it["id"]]["relativity"]:
+                    items[it["id"]] = it
+        ranked = sorted(items.values(), key=lambda x: x["relativity"], reverse=True)
+        return {"project_item_list": ranked[:limit]}
+
+    def check_search(self, req: Any) -> None:
+        """只做校验（Space 存在、领域已登记、组件参数合法），混合检索在核心链路里真正检索前调。"""
+        _item_types(req)
+        if (getattr(req, "project_result_format", None) or "topic") not in ("topic", "item"):
+            raise ValueError("project_result_format 只支持 topic / item")
+        domains = as_list(getattr(req, "domains", None))
+        for space_id in as_list(req.space_ids):
             space = self.get_space(space_id)
-            bad = [d for d in (req.domains or []) if d not in space.domain_names()]
+            bad = [d for d in domains if d not in space.domain_names()]
             if bad:
                 raise ValueError(f"领域未登记：{bad}（Space {space_id}）")
-            for s, t in self.store.recall_topics(space_id, query, limit * 2, domains=req.domains):
+
+    def _scored_topics(self, req: Any, query: str, conv: str | None, limit: int):
+        scored: list[tuple[float, Topic]] = []
+        domains = as_list(getattr(req, "domains", None))  # 字符串按单元素数组处理
+        for space_id in as_list(req.space_ids):
+            space = self.get_space(space_id)
+            bad = [d for d in domains if d not in space.domain_names()]
+            if bad:
+                raise ValueError(f"领域未登记：{bad}（Space {space_id}）")
+            for s, t in self.store.recall_topics(space_id, query, limit * 2, domains=domains):
                 if conv and any(src.get("conversation_id") == conv for src in t.sources):
                     s += 0.1  # 来源会话包含当前会话的主题优先
                 scored.append((s, t))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [
-            self.topic_detail(t, query=query, user_id=user_id, relativity=min(1.0, s))
-            for s, t in scored[:limit]
-        ]
+        return scored
+
+    # —— 组件（主题、决策、经验、进展各自平铺成一项）——
+    def _item(self, kind: str, t: Topic, base: dict[str, Any], rel: float | None) -> dict[str, Any]:
+        out = {
+            "item_type": kind,
+            **base,
+            "topic_id": t.id,
+            "space_id": t.space_id,
+            "domain": t.domain,
+            "topic_name": t.name,
+        }
+        if rel is not None:
+            out["relativity"] = round(rel, 4)
+        return out
+
+    def _topic_base(self, t: Topic, full: bool) -> dict[str, Any]:
+        out = {
+            "id": t.id,
+            "content": t.summary,
+            "time": t.update_time,
+            "user_ids": sorted(t.related_user_ids()),
+            "topic_description": t.description,
+        }
+        if full:
+            out["sources"] = t.sources
+            out["create_time"] = t.create_time
+        return out
+
+    @staticmethod
+    def _timeline_base(x: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": x.get("id", ""),
+            "content": x.get("content", ""),
+            "time": x.get("time", ""),
+            "user_ids": x.get("user_ids", []),
+        }
+
+    def _topic_items(self, t: Topic, query: str, rel: float, types: list[str]) -> list[dict]:
+        out: list[dict[str, Any]] = []
+        if "topic" in types:
+            out.append(self._item("topic", t, self._topic_base(t, False), rel))
+        if "decision" in types:
+            ds = self.store.list_decisions(t.space_id, t.id)
+            for s, d in self._scored(query, ds, lambda d: d.index_text):
+                out.append(self._item("decision", t, self._decision_out(d, False), s))
+        if "experience" in types:
+            es = [
+                e
+                for e in self.store.list_experiences(t.space_id)
+                if t.id in e.topic_ids and exp.lifecycle(e) != "archived"
+            ]
+            for s, e in self._scored(
+                query, es, lambda e: e.memory_text, weight=lambda e: e.confidence
+            ):
+                out.append(self._item("experience", t, self._experience_out(e, False), s))
+        if "timeline" in types:
+            tl = [x for x in t.timeline if x.get("id")]
+            for s, x in self._scored(query, tl, lambda x: x.get("content", "")):
+                out.append(self._item("timeline", t, self._timeline_base(x), s))
+        return out
+
+    def get_by_id(self, memory_id: str) -> dict[str, Any] | None:
+        """主题 ID → `topic_detail_list`；决策、经验、进展条目的 ID → `project_item_list`（完整
+        字段）；都不是 → None（走核心原有逻辑）。"""
+        t = self.store.get_topic(memory_id)
+        if t is not None:
+            return {"topic_detail_list": [self.topic_detail(t)]}
+        idx = self.store.get_index(f"timeline:{memory_id}")
+        if idx:
+            t = self.store.get_topic(idx.get("topic_id", ""), idx.get("space_id"))
+            x = next((x for x in (t.timeline if t else []) if x.get("id") == memory_id), None)
+            if t is None or x is None:
+                return None
+            return {"project_item_list": [self._item("timeline", t, self._timeline_base(x), None)]}
+        node = self.store.find_node(memory_id)
+        if node is None:
+            return None
+        mt = node["metadata"].get("memory_type")
+        space_id = node["metadata"].get("user_name")
+        if mt == PROJECT_DECISION:
+            d = self.store.get_decision(memory_id, space_id)
+            t = self.store.get_topic(d.topic_id, space_id) if d else None
+            if d is None or t is None:
+                return None
+            return {
+                "project_item_list": [self._item("decision", t, self._decision_out(d, True), None)]
+            }
+        if mt == PROJECT_EXPERIENCE:
+            e = self.store.get_experience(memory_id, space_id)
+            if e is None or exp.lifecycle(e) == "archived":
+                return None
+            t = next(
+                (
+                    x
+                    for x in (self.store.get_topic(tid, space_id) for tid in reversed(e.topic_ids))
+                    if x is not None
+                ),
+                None,
+            )
+            base = self._experience_out(e, True)
+            if t is None:  # 关联的主题都删了：只返回经验本身
+                return {
+                    "project_item_list": [{"item_type": "experience", **base, "space_id": space_id}]
+                }
+            return {"project_item_list": [self._item("experience", t, base, None)]}
+        return None
 
     def topic_detail(
-        self, t: Topic, query: str | None = None, user_id: str = "", relativity: float | None = None
+        self,
+        t: Topic,
+        query: str | None = None,
+        user_id: str = "",
+        relativity: float | None = None,
+        types: list[str] | None = None,
     ) -> dict[str, Any]:
         """query 为 None：完整返回（get/memory）；否则只带与 query 相关的条目、不带来源（search/memory）。"""
         full = query is None
@@ -679,10 +975,8 @@ class ProjectMemoryService:
         experiences = [
             e
             for e in self.store.list_experiences(t.space_id)
-            if t.id in e.topic_ids
-            and exp.lifecycle(e) != "archived"
-            and (full or exp.visible(e, user_id))
-        ]
+            if t.id in e.topic_ids and exp.lifecycle(e) != "archived"
+        ]  # 11/18 定：待验证的经验也对 Space 所有成员可见，不按调用者过滤
         timeline = list(t.timeline)
         if not full:
             decisions = self._relevant(query, decisions, lambda d: d.index_text)
@@ -693,6 +987,10 @@ class ProjectMemoryService:
         else:
             decisions.sort(key=lambda d: d.time)
             experiences.sort(key=lambda e: e.confidence, reverse=True)
+        if types is not None:  # project_item_types：只带要的那几类条目
+            decisions = decisions if "decision" in types else []
+            experiences = experiences if "experience" in types else []
+            timeline = timeline if "timeline" in types else []
         out = {
             "id": t.id,
             "space_id": t.space_id,
@@ -704,6 +1002,7 @@ class ProjectMemoryService:
             "experiences": [self._experience_out(e, full) for e in experiences],
             "timeline": [
                 {
+                    **({"id": x["id"]} if x.get("id") else {}),
                     "content": x.get("content", ""),
                     "time": x.get("time", ""),
                     "user_ids": x.get("user_ids", []),
@@ -722,22 +1021,33 @@ class ProjectMemoryService:
     def _relevant(
         self, query: str, items: list, text: Callable, weight: Callable | None = None
     ) -> list:
+        return [it for _, it in self._scored(query, items, text, weight)[:MAX_ENTRIES]]
+
+    def _scored(
+        self, query: str, items: list, text: Callable, weight: Callable | None = None
+    ) -> list[tuple[float, Any]]:
+        """条目与 query 的相关度（字面二元组与向量余弦取大，≥REL_MIN），由高到低。"""
         scored = []
-        qv = None
+        if not items:
+            return []
+        texts = [text(it) for it in items]
+        qv, vecs = None, None
         if self.store.embedder is not None:
+            # 查询与条目一次批量算向量（逐条调向量模型，一次检索要调上百次）
             try:
-                qv = self.store.embedder([query])[0]
+                out = self.store.embedder([query, *texts])
+                qv, vecs = out[0], out[1:]
             except Exception:
-                qv = None
-        for it in items:
-            s = lexical_sim(query, text(it))
-            if qv is not None:
+                qv, vecs = None, None
+        for i, it in enumerate(items):
+            s = lexical_sim(query, texts[i])
+            if qv is not None and vecs is not None:
                 with contextlib.suppress(Exception):
-                    s = max(s, cosine(qv, self.store.embedder([text(it)])[0]))
+                    s = max(s, cosine(qv, vecs[i]))
             if s >= REL_MIN:
                 scored.append((s * (weight(it) if weight else 1.0), it))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [it for _, it in scored[:MAX_ENTRIES]]
+        return scored
 
     @staticmethod
     def _decision_out(d: Decision, full: bool) -> dict[str, Any]:
@@ -763,7 +1073,7 @@ class ProjectMemoryService:
                         else {}
                     ),
                 }
-                for h in d.history
+                for h in sorted(d.history, key=lambda h: time_key(h.time))
             ]
         if d.conflicts:
             out["conflicts"] = [
@@ -781,7 +1091,7 @@ class ProjectMemoryService:
     def _experience_out(e, full: bool) -> dict[str, Any]:
         out = {
             "id": e.id,
-            "content": e.memory_text,
+            "content": e.memory_text[:EXP_CONTENT_MAX],
             "time": e.time,
             "user_ids": e.author_ids,
             "task_intent": e.task_intent,
@@ -798,9 +1108,7 @@ class ProjectMemoryService:
     def list_topics(self, req: Any) -> dict[str, Any]:
         space = self.get_space(req.space_id)
         topics = self.store.list_topics(space.space_id)
-        related = (getattr(req, "filter", None) or {}).get("related_id")
-        if related:
-            topics = [t for t in topics if related in t.related_user_ids()]
+        topics = [t for t in topics if _match_filter(t, getattr(req, "filter", None) or {})]
         size = getattr(req, "size", None) or getattr(req, "page_size", None)
         page = getattr(req, "page", None) or 1
         total = len(topics)
@@ -824,13 +1132,31 @@ class ProjectMemoryService:
         missing = set(ids) - {t.id for t in targets}
         if missing:
             raise LookupError(f"主题不在这个 Space 里：{sorted(missing)}")
+        if not ids:
+            # 清空：epoch 加 1，清空前受理、还没整理或正在整理的内容都不再写回（PRD）
+            space.epoch += 1
+            self.store.put_space(space)
+            for state in ("open", "pending", "deferred"):
+                for e in self.store.episodes(space.space_id, state):
+                    e.state = "discarded"
+                    self.store.put_episode(e)
         for t in targets:
             self.store.delete_topic(t)
         return {"space_id": space.space_id, "deleted_topic_ids": [t.id for t in targets]}
 
     def task_status(self, task_id: str, user_id: str) -> dict[str, Any] | None:
         task = self.store.get_task(task_id)
-        return task.to_api() if task else None
+        if task is None:
+            return None
+        # 还留在没整理的段里的本任务消息数，查询时现算（flush 之后自然变 0）
+        mine = set(task.message_ids)
+        n = 0
+        for sid in task.space_ids:
+            for state in ("open", "pending", "deferred"):
+                for e in self.store.episodes(sid, state):
+                    n += len(mine.intersection(e.message_ids))
+        task.open_episode_messages = n
+        return task.to_api()
 
     def get_message(
         self, conversation_id: str, space_id: str | None = None, limit: int | None = None
@@ -869,6 +1195,19 @@ class ProjectMemoryService:
 # ═════════════════════════════════ 消息解析 ══════════════════════════════════
 
 
+def _reject_batch_duplicates(names: list[Any]) -> None:
+    """领域批量操作：同一批里出现两次的名称整批失败（PRD 领域管理共同规则）。"""
+    seen: set[str] = set()
+    dup: list[str] = []
+    for n in names:
+        key = str(n).strip() if n is not None else ""
+        if key in seen and key not in dup:
+            dup.append(key)
+        seen.add(key)
+    if dup:
+        raise ValueError(f"同一批里领域重名：{dup}")
+
+
 def _text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -881,6 +1220,57 @@ def _text(content: Any) -> str:
     if isinstance(content, dict):
         return str(content.get("text", ""))
     return "" if content is None else str(content)
+
+
+_TIME_OPS = {
+    "gte": lambda a, b: a >= b,
+    "gt": lambda a, b: a > b,
+    "lte": lambda a, b: a <= b,
+    "lt": lambda a, b: a < b,
+    "eq": lambda a, b: a == b,
+}
+
+
+ITEM_TYPES = ("topic", "decision", "experience", "timeline")
+
+
+def _item_types(req: Any) -> list[str]:
+    raw = as_list(getattr(req, "project_item_types", None))
+    bad = [x for x in raw if x not in ITEM_TYPES]
+    if bad:
+        raise ValueError(f"project_item_types 不支持：{bad}，可选 {list(ITEM_TYPES)}")
+    return raw or list(ITEM_TYPES)
+
+
+def _match_filter(t: Topic, flt: dict[str, Any]) -> bool:
+    """get/memory 的 filter：`related_id`（来源会话的成员或 Agent）、`create_time` / `update_time`
+    （`{"gte": "2026-11-01", "lt": ...}`；只给日期的按 `PROJECT_MEMORY_NAIVE_TZ` 当天 0 点）。"""
+    if not isinstance(flt, dict):
+        raise ValueError("filter 必须是对象")
+    related = flt.get("related_id")
+    if isinstance(related, dict):
+        related = related.get("contains") or related.get("eq")
+    if related is not None:
+        if not isinstance(related, str):
+            raise ValueError("filter.related_id 只接受单个字符串")
+        if related not in t.related_user_ids() and related not in t.related_agent_ids():
+            return False
+    for field_name in ("create_time", "update_time"):
+        cond = flt.get(field_name)
+        if cond is None:
+            continue
+        if not isinstance(cond, dict):
+            cond = {"eq": cond}
+        value = time_key(ensure_tz(getattr(t, field_name)))
+        for op, bound in cond.items():
+            if op not in _TIME_OPS:
+                raise ValueError(f"filter.{field_name} 不支持 {op}")
+            b = str(bound)
+            if len(b) == 10:  # 只给日期
+                b += "T00:00:00"
+            if not _TIME_OPS[op](value, time_key(ensure_tz(b))):
+                return False
+    return True
 
 
 def parse_messages(raw: list[Any], user_id: str) -> list[Msg]:

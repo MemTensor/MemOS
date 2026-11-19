@@ -26,16 +26,28 @@ from memos.plugins.hooks import _hooks
 
 __all__ = [
     "PROJECT_MEMORY_VIEW",
+    "ProjectHTTPError",
     "accept_add",
     "delete_topics",
+    "get_by_id",
     "get_topic",
     "list_topics",
+    "merge_task_status",
     "only_project",
     "project_enabled",
     "search_topics",
     "task_status",
     "wants_project_view",
 ]
+
+
+class ProjectHTTPError(HTTPException):
+    """项目记忆的报错：多一个稳定的原因标识 `reason`（插件注册了它的处理函数，报错体带
+    `reason`；插件没加载时按核心的 HTTPException 处理，只有 message）。"""
+
+    def __init__(self, status_code: int, detail: str, reason: str | None = None):
+        super().__init__(status_code=status_code, detail=detail)
+        self.reason = reason
 
 
 def wants_project_view(views: list[str] | None) -> bool:
@@ -121,9 +133,9 @@ def _call(hook: str, **kwargs: Any) -> Any:
     try:
         return _single(hook, **kwargs)
     except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise ProjectHTTPError(404, str(e), getattr(e, "reason", None)) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ProjectHTTPError(400, str(e), getattr(e, "reason", None)) from e
 
 
 def accept_add(request: Any) -> dict[str, Any]:
@@ -139,14 +151,53 @@ def list_topics(request: Any) -> dict[str, Any]:
     return _call(H.PROJECT_MEMORY_GET, request=request) or {}
 
 
-def get_topic(memory_id: str) -> dict[str, Any] | None:
+def get_by_id(memory_id: str) -> dict[str, Any] | None:
+    """按 ID 读项目记忆：主题 ID 返回 `{"topic_detail_list": [主题]}`，决策、经验、进展条目的
+    ID 返回 `{"project_item_list": [组件]}`；不是项目记忆的 ID 返回 None，走核心原有逻辑。"""
     if not project_enabled():
         return None
     return _single(H.PROJECT_MEMORY_GET_BY_ID, memory_id=memory_id)
 
 
+def get_topic(memory_id: str) -> dict[str, Any] | None:
+    found = get_by_id(memory_id) or {}
+    topics = found.get("topic_detail_list") or []
+    return topics[0] if topics else None
+
+
 def delete_topics(request: Any) -> dict[str, Any]:
     return _call(H.PROJECT_MEMORY_DELETE, request=request) or {}
+
+
+def merge_task_status(project_task: dict[str, Any], core: Any) -> dict[str, Any]:
+    """一个 add 同时写个人记忆与项目记忆时，同一个 task_id 的两类状态合并：任一进行中为
+    `in_progress`，否则任一失败为 `failed`，否则 `completed`；`memory_views` 两边合在一起。"""
+    items = getattr(core, "data", None) or []
+    if not items:
+        return project_task
+    item = items[0]
+    core_status = getattr(item, "status", None) or (
+        item.get("status") if isinstance(item, dict) else None
+    )
+    statuses = {project_task.get("status"), core_status}
+    if statuses & {"in_progress", "waiting"}:
+        merged = "in_progress"
+    elif statuses & {"failed", "cancelled"}:
+        merged = "failed"
+    else:
+        merged = "completed"
+    out = dict(project_task, status=merged)
+    core_views = getattr(item, "memory_views", None)
+    if isinstance(item, dict):
+        core_views = item.get("memory_views", core_views)
+    if isinstance(core_views, dict):
+        views = dict(core_views)
+        project_views = project_task.get("memory_views") or {}
+        for k in ("added", "updated", "deleted"):
+            views[k] = int(views.get(k) or 0) + int(project_views.get(k) or 0)
+        views["project"] = project_views.get("project")
+        out["memory_views"] = views
+    return out
 
 
 def task_status(task_id: str, user_id: str) -> dict[str, Any] | None:

@@ -16,7 +16,7 @@ import os
 import uuid
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -73,6 +73,35 @@ def stable_uuid(key: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"memos-project-memory:{key}"))
 
 
+def time_key(t: Any) -> float:
+    """ISO 时间转成可比较的数：带不带时区都行（不带的按 UTC 算），解析不了的排最前。"""
+    if not t:
+        return float("-inf")
+    try:
+        d = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+    except ValueError:
+        return float("-inf")
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.timestamp()
+
+
+def later(a: Any, b: Any) -> Any:
+    """两个时间取较晚的（空值让给另一个）。"""
+    if not a:
+        return b
+    if not b:
+        return a
+    return a if time_key(a) >= time_key(b) else b
+
+
+def as_list(v: Any) -> list[str]:
+    """字符串或字符串数组统一成数组（成员 ID、Agent ID 用）。"""
+    if isinstance(v, list | tuple):
+        return [str(x) for x in v if x]
+    return [str(v)] if v else []
+
+
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -92,6 +121,8 @@ class Space:
     space_name: str
     instructions: str = ""
     domains: list[Domain] = field(default_factory=list)
+    # 清空主题时加 1；受理时记下，整理写库前核对，清空前提交的任务不再写回（PRD）
+    epoch: int = 0
     create_time: str = field(default_factory=now_iso)
     update_time: str = field(default_factory=now_iso)
 
@@ -104,6 +135,7 @@ class Space:
             "space_name": self.space_name,
             "instructions": self.instructions,
             "domains": [asdict(d) for d in self.domains],
+            "epoch": self.epoch,
             "create_time": self.create_time,
             "update_time": self.update_time,
         }
@@ -115,6 +147,7 @@ class Space:
             space_name=p.get("space_name", ""),
             instructions=p.get("instructions", "") or "",
             domains=[Domain(**d) for d in p.get("domains") or []],
+            epoch=int(p.get("epoch") or 0),
             create_time=p.get("create_time") or now_iso(),
             update_time=p.get("update_time") or now_iso(),
         )
@@ -188,17 +221,25 @@ class Episode:
     space_id: str
     conversation_id: str
     message_ids: list[str] = field(default_factory=list)
-    state: str = "open"  # open | closed
+    # open 开着 | closed 已整理 | pending 整理失败待重试 | failed 重试也失败 | deferred 归属不清、
+    # 等同一会话的下一段一起判 | discarded 清空或删除后丢弃
+    state: str = "open"
     closed_reason: str = ""
     topic_id: str = ""
     prev_message_ids: list[str] = field(default_factory=list)  # 上一段最后一轮
+    prev_space_id: str = ""  # 上一轮借自别的 Space 时（会话首次写入这个 Space）
+    epoch: int = 0  # 受理时 Space 的 epoch
+    retries: int = 0  # 整理失败的次数
+    deferred: bool = False  # 已经因归属不清暂缓过一次
     domains: list[str] = field(default_factory=list)
     task_ids: list[str] = field(default_factory=list)
-    agent_id: str = ""
+    agent_id: Any = ""  # 字符串，或群聊多 Agent 时的数组（PRD：原样记录）
     create_time: str = field(default_factory=now_iso)
     # 运行时填充
     messages: list[Msg] = field(default_factory=list)
     prev: list[Msg] = field(default_factory=list)
+    skip_reason: str = ""  # 归主题跳过的原因：out_of_domain / unclear
+    fence: Any = None  # 写库前调用，返回 False 表示 Space 已删除或已清空、主题已删除
 
     @property
     def members(self) -> list[Msg]:
@@ -227,6 +268,10 @@ class Episode:
             "closed_reason": self.closed_reason,
             "topic_id": self.topic_id,
             "prev_message_ids": list(self.prev_message_ids),
+            "prev_space_id": self.prev_space_id,
+            "epoch": self.epoch,
+            "retries": self.retries,
+            "deferred": self.deferred,
             "domains": list(self.domains),
             "task_ids": list(self.task_ids),
             "agent_id": self.agent_id,
@@ -244,9 +289,13 @@ class Episode:
             closed_reason=p.get("closed_reason", ""),
             topic_id=p.get("topic_id", ""),
             prev_message_ids=list(p.get("prev_message_ids") or []),
+            prev_space_id=p.get("prev_space_id") or "",
+            epoch=int(p.get("epoch") or 0),
+            retries=int(p.get("retries") or 0),
+            deferred=bool(p.get("deferred")),
             domains=list(p.get("domains") or []),
             task_ids=list(p.get("task_ids") or []),
-            agent_id=p.get("agent_id", "") or "",
+            agent_id=p.get("agent_id") or "",
             create_time=p.get("create_time") or now_iso(),
         )
 
@@ -279,6 +328,12 @@ class Topic:
                 out.update(uid)
             elif uid:
                 out.add(uid)
+        return out
+
+    def related_agent_ids(self) -> set[str]:
+        out: set[str] = set()
+        for s in self.sources:
+            out.update(as_list(s.get("agent_id")))
         return out
 
     def to_props(self) -> dict[str, Any]:
@@ -392,6 +447,10 @@ class HistoryItem:
             reason=d.get("reason", "") or "",
             change_source=Source.from_json(d.get("change_source")),
         )
+
+
+class Fenced(Exception):  # noqa: N818
+    """整理期间 Space 被删除或清空、主题被删除：这一段的结果不再写回（PRD 删除围栏）。"""
 
 
 class InvariantError(AssertionError):
@@ -630,7 +689,8 @@ class TaskRecord:
     status: str = "in_progress"  # in_progress | completed | failed
     memory_ids: list[str] = field(default_factory=list)
     pending_spaces: list[str] = field(default_factory=list)
-    open_episode_messages: int = 0
+    message_ids: list[str] = field(default_factory=list)  # 这个任务存下的消息节点
+    open_episode_messages: int = 0  # 查询时现算（还留在没整理的段里的本任务消息数）
     error: str = ""
     trace: list[str] = field(default_factory=list)  # 这个任务的整理过程（调试用，默认不返回）
     create_time: str = field(default_factory=now_iso)
@@ -677,6 +737,8 @@ class OrganizeResult:
     experience_ops: list[dict[str, Any]] = field(default_factory=list)
     dropped: list[dict[str, Any]] = field(default_factory=list)
     trace: list[str] = field(default_factory=list)
+    failed_episodes: int = 0
+    errors: list[str] = field(default_factory=list)
 
     def log(self, line: str) -> None:
         self.trace.append(line)
@@ -689,3 +751,5 @@ class OrganizeResult:
         self.experience_ops += other.experience_ops
         self.dropped += other.dropped
         self.trace += other.trace
+        self.failed_episodes += other.failed_episodes
+        self.errors += other.errors

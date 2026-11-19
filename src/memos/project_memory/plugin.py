@@ -23,8 +23,10 @@ from typing import Any
 
 from memos.plugins.base import MemOSPlugin
 from memos.plugins.hook_defs import H
+from memos.plugins.result_kinds import register_result_kind
 
 from . import config as pm_config
+from .errors import from_service, http_error, reason_of
 from .judge import ModelHub
 from .locks import InProcessLocks
 from .service import ProjectMemoryService
@@ -32,6 +34,8 @@ from .store import ProjectStore
 
 
 logger = logging.getLogger(__name__)
+
+PROJECT_RESULT_KIND = "project_mem"  # 项目记忆在核心检索结果里的类别名
 
 
 class CommunityProjectMemoryPlugin(MemOSPlugin):
@@ -50,23 +54,23 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         self._pending: dict[tuple[str, int], Any] = {}
         # Core single-provider hooks (project-memory business logic)
         self.register_hook(
-            H.PROJECT_MEMORY_ACCEPT, lambda request, **kw: self.service.accept(request)
+            H.PROJECT_MEMORY_ACCEPT, _tagged(lambda request, **kw: self.service.accept(request))
         )
         self.register_hook(
             H.PROJECT_MEMORY_EXECUTE,
             lambda space_id, batch, **kw: self.service.execute(space_id, batch),
         )
         self.register_hook(
-            H.PROJECT_MEMORY_SEARCH, lambda request, **kw: self.service.search(request)
+            H.PROJECT_MEMORY_SEARCH, _tagged(lambda request, **kw: self.service.search(request))
         )
         self.register_hook(
-            H.PROJECT_MEMORY_GET, lambda request, **kw: self.service.list_topics(request)
+            H.PROJECT_MEMORY_GET, _tagged(lambda request, **kw: self.service.list_topics(request))
         )
         self.register_hook(
-            H.PROJECT_MEMORY_GET_BY_ID, lambda memory_id, **kw: self.service.get_topic(memory_id)
+            H.PROJECT_MEMORY_GET_BY_ID, lambda memory_id, **kw: self.service.get_by_id(memory_id)
         )
         self.register_hook(
-            H.PROJECT_MEMORY_DELETE, lambda request, **kw: self.service.delete(request)
+            H.PROJECT_MEMORY_DELETE, _tagged(lambda request, **kw: self.service.delete(request))
         )
         self.register_hook(
             H.PROJECT_MEMORY_TASK_STATUS,
@@ -78,7 +82,10 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         self.register_hook("add.intercept", self._add_intercept)
         self.register_hook("add.after", self._add_after)
         self.register_hook("search.intercept", self._search_intercept)
-        self.register_hook("search.after", self._search_after)
+        # 混合检索走核心链路：作为一类结果加进去、过同一道门槛，最后组成对外的列表
+        register_result_kind(PROJECT_RESULT_KIND)
+        self.register_hook(H.SEARCH_MEMORY_RESULTS, self._search_add_bucket)
+        self.register_hook(H.SEARCH_RESULTS_AFTER_RERANK, self._search_finish)
         logger.info("[ProjectMemory] plugin loaded")
 
     def init_components(self, context: dict) -> None:
@@ -87,8 +94,20 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         self._service = None
 
     def init_app(self) -> None:
+        from fastapi.responses import JSONResponse
+
+        from memos.api.handlers.project_view import ProjectHTTPError
+
         from .routes import create_router
 
+        async def _project_error(_request, exc: ProjectHTTPError):
+            body = {"code": exc.status_code, "message": str(exc.detail), "data": None}
+            if exc.reason:
+                body["reason"] = exc.reason
+            return JSONResponse(status_code=exc.status_code, content=body)
+
+        # 只接管项目记忆自己的报错类，核心的异常处理不动
+        self._app.add_exception_handler(ProjectHTTPError, _project_error)
         self.register_router(create_router(self))
         logger.info("[ProjectMemory] routes registered")
 
@@ -125,7 +144,6 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
 
     def _add_intercept(self, request: Any) -> Any | None:
         """Called by hookable('add').intercept before handle_add_memories runs."""
-        from fastapi import HTTPException
 
         from memos.api.handlers.project_view import has_project_view, only_project
 
@@ -136,10 +154,8 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
 
         try:
             result = self.service.accept(request)
-        except LookupError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+        except (LookupError, ValueError) as e:
+            raise from_service(e) from e
 
         if only_project(request):
             return {"code": 200, "message": "Project memory task accepted", "data": [result]}
@@ -161,7 +177,13 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         return result
 
     def _search_intercept(self, request: Any) -> Any | None:
-        """Called by hookable('search').intercept before handle_search_memories runs."""
+        """Called by hookable('search').intercept before handle_search_memories runs.
+
+        只要项目记忆：插件直接回答（同样按请求的 `relativity` 过门槛）。同时要个人记忆：这里只做
+        校验（报错要在这里抛，钩子里的异常会被吞掉），检索交给核心链路：`search.memory_results`
+        把项目记忆的候选作为 `project_mem` 一类加进结果，核心照常过门槛，`after_rerank` 再组成
+        `topic_detail_list` / `project_item_list`。
+        """
         from memos.api.handlers.project_view import (
             _fill_readable_cube_ids,
             has_project_view,
@@ -173,34 +195,55 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         _require_scope(request)
         _fill_readable_cube_ids(request)
         try:
-            topics = self.service.search(request)
+            if not only_project(request):
+                self.service.check_search(request)
+                return None
+            found = self.service.search_result(request)
         except (LookupError, ValueError) as e:
-            from fastapi import HTTPException
+            raise from_service(e) from e
+        rel = float(getattr(request, "relativity", 0) or 0)
+        found = {k: [x for x in v if x.get("relativity", 1.0) >= rel] for k, v in found.items()}
+        return {"code": 200, "message": "Search completed successfully", "data": found}
 
-            status = 404 if isinstance(e, LookupError) else 400
-            raise HTTPException(status_code=status, detail=str(e)) from e
-        if only_project(request):
-            return {
-                "code": 200,
-                "message": "Search completed successfully",
-                "data": {"topic_detail_list": topics},
+    def _search_add_bucket(self, handler: Any = None, search_req: Any = None, results=None, **kw):
+        """search.memory_results：混合检索时把项目记忆的候选加进核心的结果（`project_mem`）。"""
+        from memos.api.handlers.project_view import has_project_view, only_project
+
+        if not isinstance(results, dict) or not has_project_view(search_req):
+            return results
+        if only_project(search_req):
+            return results
+        found = self.service.search_result(search_req)
+        key, rows = next(iter(found.items()))
+        results[PROJECT_RESULT_KIND] = [
+            {
+                "cube_id": "project",
+                "list_key": key,
+                "memories": [
+                    {
+                        "id": r["id"],
+                        "memory": r.get("topic_summary") or r.get("content", ""),
+                        "metadata": {"relativity": r.get("relativity", 1.0)},
+                        "payload": r,
+                    }
+                    for r in rows
+                ],
             }
-        self._pending[("search", id(request))] = topics
-        return None
+        ]
+        return results
 
-    def _search_after(self, request: Any, result: Any) -> Any:
-        """Appends topic_detail_list to a mixed-view search result."""
-        topics = self._pending.pop(("search", id(request)), None)
-        if topics is None:
-            return result
-        try:
-            if hasattr(result, "data") and isinstance(result.data, dict):
-                result.data["topic_detail_list"] = topics
-            elif isinstance(result, dict) and isinstance(result.get("data"), dict):
-                result["data"]["topic_detail_list"] = topics
-        except Exception:
-            pass
-        return result
+    def _search_finish(self, handler: Any = None, search_req: Any = None, results=None, **kw):
+        """search.results.after_rerank：把过完门槛的 `project_mem` 组成对外的列表。"""
+        if not isinstance(results, dict):
+            return results
+        buckets = results.pop(PROJECT_RESULT_KIND, None)
+        if not buckets:
+            return results
+        key = buckets[0].get("list_key") or "topic_detail_list"
+        results[key] = [
+            m["payload"] for b in buckets for m in b.get("memories") or [] if m.get("payload")
+        ]
+        return results
 
     def _lock(self, key: str):
         """项目记忆的按键锁：工程注册了 `H.PROJECT_MEMORY_LOCK`（分布式锁）就用它，否则进程内锁。
@@ -221,12 +264,25 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         logger.info("[ProjectMemory] plugin stopped")
 
 
+def _tagged(fn):
+    """单实现钩子的回调：服务层的 LookupError / ValueError 带上 reason 再抛，核心的
+    project_view 转成 HTTP 报错时一并带出（报错体的 `reason` 字段）。"""
+
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (LookupError, ValueError) as e:
+            e.reason = reason_of(e)  # type: ignore[attr-defined]
+            raise
+
+    return wrapper
+
+
 def _require_scope(request: Any) -> None:
     """带 project 的写入与检索：user_id、space_ids 必填，space_ids 最多 20 个（PRD 规则）。
 
     在插件里校验而不是放进共享的请求模型：企业版的请求模型自己有一套校验，两边叠加会互相干扰。
     """
-    from fastapi import HTTPException
 
     from memos.api.project_fields import PROJECT_MAX_SPACES, normalize_str_list
 
@@ -236,12 +292,8 @@ def _require_scope(request: Any) -> None:
         spaces = normalize_str_list(getattr(request, "space_ids", None), "space_ids")
         normalize_str_list(getattr(request, "domains", None), "domains")
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise http_error(422, e) from e
     if not user_id or not spaces:
-        raise HTTPException(
-            status_code=422, detail="user_id and space_ids are required when using project memory"
-        )
+        raise http_error(422, "user_id and space_ids are required when using project memory")
     if len(spaces) > PROJECT_MAX_SPACES:
-        raise HTTPException(
-            status_code=422, detail=f"space_ids accepts at most {PROJECT_MAX_SPACES} spaces"
-        )
+        raise http_error(422, f"space_ids accepts at most {PROJECT_MAX_SPACES} spaces")

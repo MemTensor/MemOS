@@ -32,6 +32,8 @@ from .types import (
     EXP_VERIFIED,
     Episode,
     ExperienceCard,
+    Fenced,
+    later,
     new_uuid,
     now_iso,
 )
@@ -115,13 +117,30 @@ def should_extract(hub: ModelHub, ep: Episode) -> tuple[bool, str]:
 # ── ⑥ 抽卡片 ───────────────────────────────────────────────────────────────
 
 
-def extract_card(hub: ModelHub, ep: Episode) -> tuple[ExperienceCard | None, str]:
-    note = next((n for m in ep.agents for n in m.notes), None)
-    if note:
+NOTE_SIGNALS = ("test", "build", "review", "user", "none")
+MAX_NOTES = 3  # 一段最多用几条经验稿，超出的丢弃
+
+
+def note_cards(ep: Episode, log=None) -> list[ExperienceCard]:
+    """这一段 Agent 写的经验稿，每条一张卡；`status`、`signal` 取值不认识的按 candidate / none。"""
+    notes = [n for m in ep.agents for n in m.notes if isinstance(n, dict)]
+    if len(notes) > MAX_NOTES and log is not None:
+        log(f"  经验稿 {len(notes)} 条，只用前 {MAX_NOTES} 条")
+    cards = []
+    for note in notes[:MAX_NOTES]:
         card = _card_from(note)
-        card.signal = note.get("signal") or card.signal
-        card.exp_status = note.get("status") or card.exp_status
-        return card, "经验稿"
+        sig = note.get("signal")
+        card.signal = sig if sig in NOTE_SIGNALS else "none"
+        st = note.get("status")
+        card.exp_status = st if st in (EXP_VERIFIED, EXP_CANDIDATE, EXP_FAILED) else EXP_CANDIDATE
+        cards.append(card)
+    return cards
+
+
+def extract_card(hub: ModelHub, ep: Episode) -> tuple[ExperienceCard | None, str]:
+    cards = note_cards(ep)
+    if cards:
+        return cards[0], "经验稿"
     out = hub.write("exp.extract", EXP_EXTRACT, None, {"{{segment_text}}": segment_text(ep)})
     if out.get("has_exploration") != "是" and out.get("has_user_correction") != "是":
         return None, "两题都不是「是」，不出卡片"
@@ -389,6 +408,11 @@ def apply(
     seen_conv = {s.get("conversation_id") for s in k.sources}
     ev = _evidence(action, card, ep)
     before = k.confidence
+    # PRD：归入已有经验时 time 取最近一次，user_ids 补充新的成员（证实、更新、反驳都算）
+    k.time = later(k.time, card.time)
+    for a in card.author_ids:
+        if a and a not in k.author_ids:
+            k.author_ids.append(a)
 
     if action == EXP_CONFIRM:
         if not (ev["injected"] and not signaled) and ep.conversation_id not in seen_conv:
@@ -402,9 +426,6 @@ def apply(
         k.anchors = [a for a in k.anchors if a in allowed][:MAX_ANCHORS]
         k.version += 1
         k.confidence = _clip(k.confidence + (0.10 if action == EXP_UPDATE else -0.20))
-        for a in card.author_ids:
-            if a not in k.author_ids:
-                k.author_ids.append(a)
         if action == EXP_REFUTE and card.validation:
             k.validation = card.validation
 
@@ -458,8 +479,6 @@ def run(hub: ModelHub, store: ProjectStore, ep: Episode, log, lock=None) -> list
     拿这个 Space 的经验锁复核一次：判断之后如果别的段新建了相近的卡，重新判断，避免两段同时
     各建一张同样的卡。
     """
-    from .locks import exp_key
-
     ok, why = rule_gate(ep)
     if not ok:
         log(f"  经验：规则闸不过（{why}）")
@@ -470,10 +489,32 @@ def run(hub: ModelHub, store: ProjectStore, ep: Episode, log, lock=None) -> list
         log(f"  经验过滤：{'抽' if ok else '不抽'}（{why}）")
         if not ok:
             return []
-    card, why = extract_card(hub, ep)
-    if card is None:
-        log(f"  经验：不出卡片（{why}）")
-        return []
+    if from_note:
+        cards = note_cards(ep, log)
+    else:
+        card, why = extract_card(hub, ep)
+        if card is None:
+            log(f"  经验：不出卡片（{why}）")
+            return []
+        cards = [card]
+    out: list[dict[str, Any]] = []
+    for card in cards:
+        out += _merge_one(hub, store, ep, card, from_note, log, lock)
+    return out
+
+
+def _merge_one(
+    hub: ModelHub,
+    store: ProjectStore,
+    ep: Episode,
+    card: ExperienceCard,
+    from_note: bool,
+    log,
+    lock,
+) -> list[dict[str, Any]]:
+    """一张卡：代码校验 → 召回 → 合并判断 → 写回（撞了条件写就重读重判）。"""
+    from .locks import exp_key
+
     for n in code_check(card, ep, from_note):
         log(f"  经验校验：{n}")
     card.space_id = ep.space_id
@@ -498,6 +539,8 @@ def run(hub: ModelHub, store: ProjectStore, ep: Episode, log, lock=None) -> list
                 log(f"  经验护栏：模型给 {action}，改为 {final}（{guard_reason}）")
             reason = out.get("reason") or guard_reason
         last = attempt == MAX_CAS_RETRIES - 1
+        if ep.fence is not None and not ep.fence():
+            raise Fenced("Space 已删除或已清空")
         try:
             if final in (EXP_ADD, "add_opposed") and lock is not None:
                 with lock(exp_key(ep.space_id)):

@@ -308,7 +308,7 @@ TOPIC_ASSIGN = """[系统]
 【归类】以内容推进的工作为依据，和各主题的摘要与描述比对；名称或关键词相同不构成依据。
 - 内容所述事项同时满足「可以独立完成并交付」和「结论变化不影响该主题已有的决策」时，是另一项工作；任一不满足就归入该主题。
 - 多个主题都可归入时，归入工作范围最小的那个；没有可归入的就新建。
-- 内容所属领域不在 domains 里，或者看不出说的是哪项工作，skip 填 true。
+- 内容所属领域不在 domains 里，skip 填 true，skip_reason 填 "out_of_domain"；看不出说的是哪项工作（比如只有「继续」「这个改一下」，没说是什么），skip 填 true，skip_reason 填 "unclear"。
 - 一个主题只属于一个领域。
 
 【新建主题】name 用概括这项工作的名词短语，不超过 20 字，不含进展、版本与日期；summary 一句话说做什么、为什么做，不超过 80 字；description 说怎么做、进展到哪、后续计划，不超过 400 字；domain 从 domains 里选。
@@ -318,7 +318,7 @@ TOPIC_ASSIGN = """[系统]
 【演变轨迹】产出（文档、原型、代码、测试、评审、数据、线上环境）的状态发生变化（完成、提交、合并、通过、上线、暂停、恢复、作废）时，每个变化写一条，不超过 100 字；没有填 []。
 
 只输出 JSON，不输出别的文字：
-{"skip": false, "topic_id": "已有主题的 id 或 null", "new_topic": null 或 {"name": "", "summary": "", "description": "", "domain": ""}, "summary": null, "description": null, "timeline": []}
+{"skip": false, "skip_reason": null, "topic_id": "已有主题的 id 或 null", "new_topic": null 或 {"name": "", "summary": "", "description": "", "domain": ""}, "summary": null, "description": null, "timeline": []}
 
 [用户]
 {inputs}

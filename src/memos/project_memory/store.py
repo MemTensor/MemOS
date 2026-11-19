@@ -173,6 +173,15 @@ class ProjectStore:
             return []
         return list(self.db.get_nodes(ids, user_name=namespace) or [])
 
+    def find_node(self, node_id: str) -> dict[str, Any] | None:
+        """不知道 Space 时按 ID 找项目记忆的节点（决策、经验）。"""
+        try:
+            node = self.db.get_node(node_id)
+        except Exception:
+            return None
+        meta = (node or {}).get("metadata") or {}
+        return node if meta.get("memory_view") == MEMORY_VIEW_PROJECT else None
+
     def _delete(self, node_id: str, namespace: str) -> None:
         self.db.delete_node(node_id, user_name=namespace)
 
@@ -353,6 +362,16 @@ class ProjectStore:
     def put_episode(self, ep: Episode) -> None:
         self._put(ep.id, ep.conversation_id, PROJECT_EPISODE, ep.space_id, ep.to_props())
 
+    def episodes(
+        self, space_id: str, state: str, conversation_id: str | None = None
+    ) -> list[Episode]:
+        extra = [{"field": "episode_state", "op": "=", "value": state}]
+        if conversation_id is not None:
+            extra.append({"field": "conversation_id", "op": "=", "value": conversation_id})
+        nodes = self._nodes(PROJECT_EPISODE, space_id, extra)
+        nodes.sort(key=lambda n: (n.get("metadata") or {}).get("create_time", ""))
+        return [Episode.from_node(n["id"], space_id, n["metadata"]) for n in nodes]
+
     def open_episodes(self, space_id: str) -> list[Episode]:
         nodes = self._nodes(
             PROJECT_EPISODE, space_id, [{"field": "episode_state", "op": "=", "value": "open"}]
@@ -377,8 +396,11 @@ class ProjectStore:
 
     # ── 主题 ──────────────────────────────────────────────────────────────
 
-    def put_topic(self, t: Topic) -> None:
-        t.update_time = now_iso()
+    def put_topic(self, t: Topic, touch: bool = True) -> None:
+        """`touch=False`：调用方已经定好 `update_time`（整理时取消息时间），或这次改动不算主题更新
+        （领域改名），不刷新。"""
+        if touch:
+            t.update_time = now_iso()
         self._put(
             t.id,
             t.summary or t.name,
