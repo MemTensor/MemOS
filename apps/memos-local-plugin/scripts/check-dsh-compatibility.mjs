@@ -12,12 +12,16 @@ const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 // Keep newer host fixtures on their matching codec and an exact Cordis build.
 const hostOverrides = {
   "0.2.2-rc.1": { cordis: "4.1.0" },
+  "0.2.2-rc.2": { cordis: "4.1.0" },
+  "0.2.2-rc.3": { cordis: "4.1.0" },
+  "0.2.2-rc.4": { cordis: "4.1.0" },
   "0.2.2-rc.5": { cordis: "4.1.0" },
 };
 const versions = process.argv.slice(2);
 if (!versions.length) versions.push(
   "0.1.0-rc.6", "0.1.7-rc.2",
-  "0.2.0-rc.2", "0.2.1-rc.2", "0.2.1-rc.3", "0.2.2-rc.1", "0.2.2-rc.5",
+  "0.2.0-rc.2", "0.2.1-rc.2", "0.2.1-rc.3",
+  "0.2.2-rc.1", "0.2.2-rc.2", "0.2.2-rc.3", "0.2.2-rc.4", "0.2.2-rc.5",
 );
 if (versions.some((version) => !/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(version))) {
   throw new Error("Expected explicit DSH versions, e.g. 0.2.1-rc.3");

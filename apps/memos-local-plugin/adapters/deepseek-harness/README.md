@@ -10,7 +10,8 @@ modifying the DSH repository.
 > DeepSeek Harness is currently a developer preview. The development API stack
 > is pinned to `0.2.1-rc.3`. The compatibility matrix compiles, builds, and tests
 > this adapter against the published `0.1.0-rc.6`, `0.1.7-rc.2`, `0.2.0-rc.2`,
-> `0.2.1-rc.2`, `0.2.1-rc.3`, `0.2.2-rc.1`, and `0.2.2-rc.5` packages.
+> `0.2.1-rc.2`, `0.2.1-rc.3`, and the five `0.2.2-rc.1` through
+> `0.2.2-rc.5` releases.
 > Validate the packaged Desktop/Web/CLI release as well as these API checks.
 
 ## How it works
@@ -639,16 +640,17 @@ The six optional DSH service peers intentionally declare separate prerelease
 lines:
 
 ```text
->=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2 || 0.2.2-rc.1 || 0.2.2-rc.5
+>=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5
 ```
 
 npm semver only admits a prerelease when a comparator explicitly names its
 `major.minor.patch` tuple. Simply changing `<0.2.0` to `<0.3.0` would still
-exclude `0.2.1-rc.3`. The tested `0.2.2-rc.1` and `0.2.2-rc.5` versions are admitted exactly;
-other unvalidated `0.2.2` releases and `0.3.x` remain excluded. Both new
-fixtures pin Cordis `4.1.0` and their matching V3-to-V4 codec. The matrix
-checks that Cordis satisfies the plugin and each host service peer range;
-earlier fixtures retain their original host dependencies.
+exclude `0.2.1-rc.3`. The five tested `0.2.2-rc.1` through `0.2.2-rc.5`
+versions are admitted explicitly. Other unvalidated `0.2.2` releases and
+`0.3.x` remain excluded by npm's default evaluation. All five new fixtures
+pin Cordis `4.1.0` and their matching V3-to-V4 codec. The matrix
+checks that Cordis satisfies the plugin and each host service peer range.
+Earlier fixtures retain their original host dependencies.
 The former `0.1.0-rc.5` API baseline is no longer advertised: its core packages
 are unavailable from npm, so it cannot be revalidated by this matrix.
 

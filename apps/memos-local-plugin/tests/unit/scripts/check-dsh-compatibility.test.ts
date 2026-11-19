@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
     ok: true,
     json: async () => ({
-      name: decodeURIComponent(new URL(url).pathname.slice(1)).replace(/\/0\.2\.2-rc\.5$/, ""),
+      name: decodeURIComponent(new URL(url).pathname.slice(1)).replace(/\/0\.2\.2-rc\.\d+$/, ""),
       peerDependencies: hostCordis ? { "@deepseek-ai/cordis": hostCordis } : undefined,
     }),
   })));
@@ -52,14 +52,18 @@ afterEach(() => {
 });
 
 describe("DSH compatibility fixture dependency selection", () => {
-  it("pins rc.5 Cordis and the matching session codec", async () => {
-    await import("../../../scripts/check-dsh-compatibility.mjs");
-    expect(writtenManifest?.devDependencies).toMatchObject({
-      "@deepseek-ai/cordis": "4.1.0",
-      "@deepseek-ai/dsh-agent": "0.2.2-rc.5",
-      "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.2-rc.5",
-    });
-  });
+  it.each(["0.2.2-rc.1", "0.2.2-rc.2", "0.2.2-rc.3", "0.2.2-rc.4", "0.2.2-rc.5"])(
+    "pins %s Cordis and the matching session codec",
+    async (version) => {
+      process.argv[2] = version;
+      await import("../../../scripts/check-dsh-compatibility.mjs");
+      expect(writtenManifest?.devDependencies).toMatchObject({
+        "@deepseek-ai/cordis": "4.1.0",
+        "@deepseek-ai/dsh-agent": version,
+        "@deepseek-ai/dsh-session-format-v3-to-v4": version,
+      });
+    },
+  );
 
   it("handles metadata without optional peer dependencies", async () => {
     hostCordis = undefined;

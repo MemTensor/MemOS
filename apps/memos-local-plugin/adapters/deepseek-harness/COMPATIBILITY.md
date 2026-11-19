@@ -4,57 +4,83 @@ Validated on 2026-10-29, macOS arm64, Node.js 25.1.0, npm 11.6.2,
 pnpm 10.21.0. Scope: the local plugin; the Cloud plugin is separate.
 Related: MemOS issue #2520 and PR #2541.
 
-## DSH 0.2.2-rc.5 validation — 2026-11-19
+## DSH 0.2.2-rc.1 through rc.5 validation — 2026-11-19
 
-This update builds on PR #2614 and was tested on macOS arm64 with Node.js
-25.1.0 and npm 11.6.2. npm's `latest` and `next` DSH tags both pointed to
-`0.2.2-rc.5` when checked.
+This update incorporates PR #2614 in PR #2632 and was tested on macOS arm64,
+Node.js 25.1.0, and npm 11.6.2. All five published 0.2.2 release candidates
+are now explicitly admitted by the six optional host-service peers.
 
-The package regression first failed because all six optional DSH service
-peers omitted `0.2.2-rc.5`. Running the original PR's matrix with that
-version also failed with `ERESOLVE`: it selected Cordis `~4.0.5` while
-the published host requires `~4.1.0`.
+The intermediate-version regressions first failed in six places. npm's
+default peer checks rejected rc.2, rc.3 and rc.4, and their fixtures selected
+Cordis ~4.0.5 and the 0.2.1-rc.3 session codec. Each of these hosts requires
+Cordis ~4.1.0. The overrides table now pins all five 0.2.2 fixtures to Cordis
+4.1.0 with each host's matching codec. The fixture also checks plugin and
+host Cordis peer requirements. Runtime adapter changes were unnecessary
+after these dependency-selection fixes.
 
-The fix explicitly admits `0.2.2-rc.5`, preserves the tested `0.2.2-rc.1`,
-and uses one overrides table to select Cordis `4.1.0` and each new host's
-matching session codec. The fixture checks Cordis against the plugin and
-host service peer ranges, including metadata with no optional peers.
-
-The official rc.5 loader uses semver `includePrerelease: true`. A real
-`--dump-config` comparison showed that it already loads the original PR
-manifest through the older `>=0.2.1-rc.2 <0.2.2` comparator. npm's default
-peer evaluation excludes rc.5 under that comparator. The explicit rc.5
-peer declaration fixes the package-manager mismatch.
+The peer declarations list rc.1, rc.2, rc.3, rc.4 and rc.5 individually.
+The package regression continues to reject rc.6, stable 0.2.2 and 0.3.x
+under npm's default semver evaluation.
 
 Verification output:
 
 ```text
 make format: All checks passed! / 642 files left unchanged
 npm test: Test Files 192 passed (192)
-          Tests 1661 passed | 3 skipped (1664)
-pytest apps/memos-local-plugin/tests/python -q: 143 passed in 5.78s
+          Tests 1668 passed | 3 skipped (1671)
+pytest apps/memos-local-plugin/tests/python -q: 143 passed in 4.83s
 npm run lint: passed
 npm run build:package: passed
 npm run lock:check: SQLite 13.0.3 lock metadata verified
-npm run test:dsh-compat: PASS all 7 DSH versions
+npm run test:dsh-compat -- 0.2.2-rc.2 0.2.2-rc.3 0.2.2-rc.4:
+  PASS all 3 DSH versions
+npm run test:dsh-compat: PASS all 10 DSH versions
 ```
 
-Each of the seven real host stacks passed type checking, a production
-TypeScript build, and 71 adapter tests: `0.1.0-rc.6`, `0.1.7-rc.2`,
-`0.2.0-rc.2`, `0.2.1-rc.2`, `0.2.1-rc.3`, `0.2.2-rc.1`, and
-`0.2.2-rc.5`. The fixtures installed matching host packages from npm and
-reused the checkout's unchanged non-host build tools and native bindings.
+All ten real host stacks passed type checking, a production TypeScript
+build, and 71 adapter tests each. The matrix covers 0.1.0-rc.6, 0.1.7-rc.2,
+0.2.0-rc.2, 0.2.1-rc.2, 0.2.1-rc.3, and every release from 0.2.2-rc.1
+through 0.2.2-rc.5. The matching host packages were fetched from npm.
+Existing non-host build tools and unchanged native bindings were reused.
 
-A separately installed official DSH `0.2.2-rc.5` CLI loaded an npm-packed
-local bundle in a fresh Web profile with no version exemption. Actual Web
-startup with `failOnStartupError: true` created SQLite storage and returned
-HTTP 200 from the MemOS Viewer health endpoint with agent
-`deepseek-harness`. The process was stopped with SIGINT and exited 130.
+The first matrix attempts were interrupted by npm/Node registry connection
+timeouts. The successful runs used an explicit temporary Undici proxy
+dispatcher for the machine's system HTTPS proxy, with loopback traffic
+bypassing it. No proxy dependency was added to the plugin.
 
-The Web smoke used synthetic local configuration with telemetry disabled.
-Authenticated model conversations, packaged Desktop releases on macOS,
-Windows and Linux, fresh native-dependency installation, and live embedding
-model downloads remain unverified. This source change is unpublished.
+The official rc.5 loader uses semver includePrerelease enabled. A real
+dump-config comparison showed that the older >=0.2.1-rc.2 <0.2.2 comparator
+already admits rc.5 at startup. The explicit prerelease declarations address
+npm's default peer-evaluation mismatch.
+
+### Real Web startup checks
+
+Official DSH CLI packages were installed separately with lifecycle scripts
+disabled. An npm-packed local plugin runtime was loaded into fresh Web
+profiles with synthetic local settings, telemetry disabled, and
+failOnStartupError enabled.
+
+| DSH version | API/build/71 adapter tests | Actual macOS Web startup |
+| --- | --- | --- |
+| 0.2.2-rc.1 | Passed | Unverified |
+| 0.2.2-rc.2 | Passed | Passed |
+| 0.2.2-rc.3 | Passed | Passed |
+| 0.2.2-rc.4 | Passed | Passed |
+| 0.2.2-rc.5 | Passed | Passed in the initial rc.5 validation |
+
+For rc.2, rc.3 and rc.4, the composed profile contained the MemOS row with no
+version exemption. Actual startup created SQLite storage and returned HTTP
+200 from the Viewer health endpoint with agent deepseek-harness. SIGINT
+stopped each Web process with exit code 130. The prior rc.5 smoke produced
+the same results.
+
+### Remaining verification and release scope
+
+Authenticated model conversations, packaged Desktop applications on macOS,
+Windows and Linux, fresh native-dependency installation, live embedding
+model downloads, and production-profile upgrades remain unverified.
+The Cloud plugin and other DSH previews are outside this validation.
+These source changes have not been published to npm.
 
 ## Diagnosis
 
