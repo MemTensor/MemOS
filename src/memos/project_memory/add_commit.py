@@ -33,12 +33,54 @@ def _query_episode(cursor: Any, project: str, episode_id: str, space: str) -> di
     return cursor.fetchone()
 
 
+def _quote_matches(row: dict, ref: dict, quote: str) -> bool:
+    text = text_at(row, ref["source_path"])
+    return (
+        text is not None
+        and 0 <= ref["start"] < ref["end"] <= len(text)
+        and text[ref["start"] : ref["end"]] == quote
+    )
+
+
+def _assistant_precedes(proposal: dict, authorization: dict) -> bool:
+    return (
+        proposal["role"] == "assistant"
+        and (proposal["witness_turn_seq"], proposal["msg_seq"])
+        < (authorization["witness_turn_seq"], authorization["msg_seq"])
+        and proposal["chat_time"] <= authorization["chat_time"]
+        and proposal["accepted_at"] <= authorization["accepted_at"]
+        and proposal["witness_accepted_at"] <= authorization["witness_accepted_at"]
+    )
+
+
+def _has_adoption_witness(draft: dict, authorization: dict, rows: dict[str, dict]) -> bool:
+    for evidence in draft.get("evidence") or []:
+        ref = evidence.get("ref") or {}
+        if (
+            evidence.get("kind") == "assistant_proposal"
+            and ref in (draft.get("context_refs") or [])
+            and ref.get("source_path") == "/content"
+            and (proposal := rows.get(ref.get("message_id"))) is not None
+            and _assistant_precedes(proposal, authorization)
+            and _quote_matches(proposal, ref, evidence.get("quote"))
+        ):
+            return True
+    return False
+
+
 def _assert_witnesses(cursor: Any, episode: dict) -> None:
+    allowed_episodes = [episode["id"]]
+    previous = episode.get("previous_episode_id")
+    if previous and any(d.get("origin") == "adopted" for d in episode["drafts"]):
+        allowed_episodes.append(previous)
     cursor.execute(
-        """SELECT m.*, et.task_id AS origin_task_id, et.user_id AS origin_user_id
+        """SELECT m.*, et.task_id AS origin_task_id, et.user_id AS origin_user_id,
+                  et.episode_id AS witness_episode_id, et.turn_seq AS witness_turn_seq,
+                  et.accepted_at AS witness_accepted_at
            FROM episode_turns et JOIN messages m USING (project_id, conversation_key, turn_id)
-           WHERE et.project_id = %s AND et.space_id = %s AND et.episode_id = %s""",
-        (episode["project_id"], episode["space_id"], episode["id"]),
+           WHERE et.project_id = %s AND et.space_id = %s AND et.conversation_key = %s
+             AND et.episode_id = ANY(%s::text[])""",
+        (episode["project_id"], episode["space_id"], episode["conversation_key"], allowed_episodes),
     )
     rows = {row["message_id"]: row for row in cursor.fetchall()}
     for draft in episode["drafts"]:
@@ -48,10 +90,14 @@ def _assert_witnesses(cursor: Any, episode: dict) -> None:
             raise DraftWitnessError("Draft missing its Episode and source witnesses")
         for ref in refs:
             row = rows.get(ref["message_id"])
-            if row is None or row["origin_task_id"] != owner:
+            if (
+                row is None
+                or row["origin_task_id"] != owner
+                or row["witness_episode_id"] != episode["id"]
+                or row["role"] == "system"
+            ):
                 raise DraftWitnessError("Draft source is not owned by its original Task")
-            text = text_at(row, ref["source_path"])
-            if text is None or text[ref["start"] : ref["end"]] != draft["quote"]:
+            if not _quote_matches(row, ref, draft["quote"]):
                 raise DraftWitnessError("Draft quote differs from the committed trajectory")
             if draft["kind"] == "decision":
                 author = row.get("role_id") or row["origin_user_id"]
@@ -59,6 +105,14 @@ def _assert_witnesses(cursor: Any, episode: dict) -> None:
                     raise DraftWitnessError(
                         "Decision authorization must be a member's original statement"
                     )
+            if draft.get("origin") == "adopted" and (
+                row["role"] != "user"
+                or ref not in (draft.get("authorizing_evidence_refs") or [])
+                or not _has_adoption_witness(draft, row, rows)
+            ):
+                raise DraftWitnessError(
+                    "Adoption requires an earlier assistant proposal in the same Space and conversation"
+                )
 
 
 def refresh_topic_items(

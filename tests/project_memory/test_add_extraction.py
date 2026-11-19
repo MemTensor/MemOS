@@ -109,7 +109,31 @@ def test_draft_rejects_numeric_value_missing_from_the_witness():
             ],
         }
     )
-    result = extract_episode(
-        writer, {"id": "episode"}, [row("one", "user", "确认限制为 32 个连接")]
+    with pytest.raises(ModelError, match="no valid evidence"):
+        extract_episode(writer, {"id": "episode"}, [row("one", "user", "确认限制为 32 个连接")])
+
+
+@pytest.mark.parametrize("role", ["user", "tool"])
+def test_adoption_requires_a_prior_assistant_proposal(role):
+    writer = Writer(
+        {
+            "episode_summary": "选择版本",
+            "drafts": [
+                {
+                    "kind": "decision",
+                    "content": "使用 PG17",
+                    "message_id": "adopt",
+                    "quote": "同意",
+                    "origin": "adopted",
+                    "context": [{"message_id": "earlier", "quote": "建议使用 PG17"}],
+                },
+            ],
+        }
     )
-    assert result["drafts"] == []
+    with pytest.raises(ModelError, match="no valid evidence"):
+        extract_episode(
+            writer,
+            {"id": "episode"},
+            [row("adopt", "user", "同意")],
+            [row("earlier", role, "建议使用 PG17", "earlier-task")],
+        )

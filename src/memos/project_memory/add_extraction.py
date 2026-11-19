@@ -12,7 +12,7 @@ from memos.log import get_logger
 
 from .add_evidence import anchor_keys, collect_anchors, key_tokens, quote_ref, text_at
 from .judge import ModelError
-from .types import stable_uuid
+from .types import stable_uuid, time_key
 
 
 if TYPE_CHECKING:
@@ -170,12 +170,19 @@ def _draft(
     if kind == "decision" and (not member_statement or origin == "delegated"):
         return None
     contexts = _context_refs(raw.get("context"), previous)
-    if origin == "adopted" and not (member_statement and contexts):
-        return None
     contextual_text = []
+    proposals = []
     for context in contexts:
-        stored = text_at(previous[context["message_id"]], context["source_path"]) or ""
-        contextual_text.append(stored[context["start"] : context["end"]])
+        earlier = previous[context["message_id"]]
+        stored = text_at(earlier, context["source_path"]) or ""
+        quote = stored[context["start"] : context["end"]]
+        contextual_text.append(quote)
+        if earlier["role"] in _ROLE_AGENT and time_key(earlier["chat_time"]) <= time_key(
+            row["chat_time"]
+        ):
+            proposals.append({"ref": context, "quote": quote, "kind": "assistant_proposal"})
+    if origin == "adopted" and not (member_statement and proposals):
+        return None
     if not key_tokens(content).issubset(key_tokens("\n".join([raw["quote"], *contextual_text]))):
         return None
     origin = "adopted" if origin == "adopted" else "member" if member_statement else "delegated"
@@ -199,6 +206,8 @@ def _draft(
     ]
     content = content.strip()[: 200 if kind == "experience" else 100]
     evidence = [{"ref": ref, "quote": raw["quote"]}]
+    if origin == "adopted":
+        evidence.extend(proposals)
     if reason:
         evidence.append({"ref": reason, "quote": raw["reason_quote"], "kind": "reason"})
     approved = [
@@ -307,6 +316,8 @@ def extract_episode(
         draft = _draft(episode, item, row, member, prior_to[mid], anchors)
         if draft:
             valid[draft["draft_id"]] = draft
+    if raw_drafts and not valid:
+        raise ModelError("Episode extraction returned drafts with no valid evidence")
     if valid and not summary.strip():
         raise ModelError("An Episode with accepted drafts requires a summary")
     corpus = "\n".join(row.get("content") or "" for row in messages + previous_messages)

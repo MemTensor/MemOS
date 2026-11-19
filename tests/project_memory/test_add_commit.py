@@ -3,7 +3,7 @@ import uuid
 
 import pytest
 
-from memos.project_memory.add_commit import commit_changeset
+from memos.project_memory.add_commit import DraftWitnessError, commit_changeset
 from memos.project_memory.add_index import index_changeset, ranked_topics
 from memos.project_memory.add_merge import VersionConflictError, prepare_merge
 from memos.project_memory.add_store import PostgresAddStore, json_value
@@ -203,3 +203,53 @@ def test_vector_index_uses_same_commit_and_filters_domains(store):
             "embedding": "[0.1,0.2,0.3]",
             "embedding_model_id": "local-fixture",
         }
+
+
+@pytest.mark.parametrize(
+    ("role", "same_conversation", "seq", "fits"),
+    [
+        ("assistant", True, 0, True),
+        ("tool", True, 0, False),
+        ("assistant", False, 0, False),
+        ("assistant", True, 2, False),
+    ],
+)
+def test_commit_checks_the_original_assistant_proposal(store, role, same_conversation, seq, fits):
+    draft = draft_for("adopted")
+    ref = {"message_id": "proposal", "source_path": "/content", "start": 0, "end": 6}
+    draft.update(
+        kind="decision",
+        origin="adopted",
+        context_refs=[ref],
+        authorizing_evidence_refs=draft["source_refs"],
+        evidence=[{"kind": "assistant_proposal", "ref": ref, "quote": "Propose"}],
+    )
+    # The span should select the exact cited proposal, even when the message is longer.
+    ref["end"] = len("Propose")
+    episode(store, "adopted", draft)
+    with store.transaction() as cursor:
+        conversation = "adopted" if same_conversation else "other"
+        cursor.execute(
+            """INSERT INTO messages(project_id, conversation_key, message_id, turn_id,
+                          turn_seq,msg_seq,role,content,chat_time,accepted_at,task_id,user_id,content_sha256)
+                          VALUES ('project',%s,'proposal','adopted',1,%s,%s,'Propose 16',
+                                  now() - interval '5 minutes',now() - interval '5 minutes','earlier','user','fixture')""",
+            (conversation, seq, role),
+        )
+    prepared = prepare_merge(
+        None,
+        {
+            "episode_id": "adopted",
+            "space_id": "space",
+            "assignments": [],
+            "staging": {"reason": "NO_MATCH"},
+            "formation": None,
+            "staged_updates": [],
+            "warnings": [],
+        },
+    )
+    if fits:
+        assert commit_changeset(store, "adopted", 1, prepared)["outcome"] == "staged"
+    else:
+        with pytest.raises(DraftWitnessError, match="earlier assistant proposal"):
+            commit_changeset(store, "adopted", 1, prepared)
