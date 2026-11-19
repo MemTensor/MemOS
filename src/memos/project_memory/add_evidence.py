@@ -18,6 +18,14 @@ _TOOL_PATH = re.compile(
     r'"(?:path|file|file_path|filepath|target_file|notebook_path)"\s*:\s*"([^"\\]+)"'
 )
 _QUALIFIED_SYMBOL = re.compile(r"`([A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)+)\(\)`")
+_KEY_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:[A-Za-z_][\w.-]*/[\w./-]+|[A-Z][A-Z_]+\d+|\d+(?:\.\d+)?(?:\s*(?:%|ms|kB|MB|GB|MiB|GiB))?)"
+)
+
+
+def key_tokens(text: str) -> set[str]:
+    """Return exact values, error codes, and paths that can be checked against a witness."""
+    return set(_KEY_TOKEN.findall(text))
 
 
 def _tool_action(name: str) -> str:
@@ -79,6 +87,7 @@ def _observation(
         "source_refs": [ref],
         "quote": value,
         "change_kind": action,
+        "strength": "weak" if action == "mention" else "strong",
         "status": "unresolved",
         "trust": "inferred",
         "evidence": "tool_arguments" if pointer != "/content" else "message_text",
@@ -128,12 +137,29 @@ def collect_anchors(messages: list[dict], bindings: list[dict] | None = None) ->
 def anchor_keys(anchors: list[dict]) -> list[str]:
     keys = set()
     for anchor in anchors:
+        binding = f"{anchor['binding_id']}:" if anchor.get("binding_id") else ""
         if anchor.get("path"):
-            keys.add(f"path:{anchor['path']}")
+            keys.add(f"path:{binding}{anchor['path']}")
         if anchor.get("qualified_name"):
-            keys.add(f"symbol:{anchor['qualified_name']}")
+            keys.add(f"symbol:{binding}{anchor['qualified_name']}")
         if anchor.get("route"):
             keys.add(f"api:{anchor['http_method']}:{anchor['route']}")
         if anchor.get("status") == "resolved" and anchor.get("trust") == "verified":
             keys.add(f"anchor:{anchor['binding_id']}:{anchor['anchor_id']}")
     return sorted(keys)
+
+
+def strong_anchor_keys(anchors: list[dict]) -> set[str]:
+    """Keep operational evidence apart from simple textual mentions."""
+    return set(
+        anchor_keys(
+            [
+                anchor
+                for anchor in anchors
+                if anchor.get("strength") == "strong"
+                or anchor.get("change_kind")
+                in ("viewed", "created", "modified", "renamed", "deleted", "moved")
+                or (anchor.get("status") == "resolved" and anchor.get("trust") == "verified")
+            ]
+        )
+    )

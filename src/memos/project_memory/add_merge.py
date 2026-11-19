@@ -26,6 +26,7 @@ from .types import (
     Episode,
     ExperienceCard,
     Msg,
+    as_list,
     stable_uuid,
     time_key,
 )
@@ -269,23 +270,44 @@ def _prepare_experience(hub: ModelHub, snapshot: dict, episode: dict, draft: dic
     rows = {row["id"]: row for row in snapshot["experiences"]}
     for key, updated in scratch.cards.items():
         if key in scratch.modified:
-            rows[key] = scratch.export(updated)
+            result = scratch.export(updated)
+            legacy_ids = (rows.get(key) or {}).get("legacy_topic_ids")
+            if legacy_ids:
+                result["legacy_topic_ids"] = legacy_ids
+            rows[key] = result
     snapshot["experiences"] = list(rows.values())
 
 
 def _identity(row: dict, field: str) -> Any:
     if field == "sources":
+        if row.get("conversation_id"):
+            return row["conversation_id"]
         return (
-            row.get("conversation_id"),
-            tuple(row.get("user_id") or []),
-            tuple(row.get("agent_id") or []),
+            tuple(sorted(as_list(row.get("user_id")))),
+            tuple(sorted(as_list(row.get("agent_id")))),
         )
     if field == "anchors":
-        return row.get("observation_id")
+        return row.get("observation_id") or (row.get("anchor_id"), row.get("path"), row.get("kind"))
     return row.get("id")
 
 
 def _extend(items: list[dict], additions: list[dict], field: str) -> list[dict]:
+    if field == "sources":
+        sources: dict[Any, dict] = {}
+        for row in (*items, *additions):
+            key = _identity(row, field)
+            if key not in sources:
+                sources[key] = row
+                continue
+            prior = sources[key]
+            sources[key] = {
+                **prior,
+                **{
+                    name: list(dict.fromkeys([*as_list(prior.get(name)), *as_list(row.get(name))]))
+                    for name in ("user_id", "agent_id")
+                },
+            }
+        return list(sources.values())
     out = {_identity(row, field): row for row in items}
     for row in additions:
         out.setdefault(_identity(row, field), row)
@@ -332,13 +354,20 @@ def prepare_merge(hub: ModelHub, plan: dict) -> dict:
         episode_ids = [ep["id"] for ep in episodes]
         for episode in episodes:
             authors = sorted({user for draft in episode["drafts"] for user in draft["authors"]})
+            agents = sorted(
+                {
+                    agent
+                    for draft in episode["drafts"]
+                    for agent in as_list((draft.get("source") or {}).get("agent_id"))
+                }
+            )
             proposed["sources"] = _extend(
                 proposed["sources"],
                 [
                     {
                         "conversation_id": episode.get("conversation_id"),
                         "user_id": authors,
-                        "agent_id": [],
+                        "agent_id": agents,
                     }
                 ],
                 "sources",
@@ -359,6 +388,9 @@ def prepare_merge(hub: ModelHub, plan: dict) -> dict:
         for field in _TOPIC_LISTS:
             before = {_identity(row, field): row for row in basis.get(field) or []}
             after = {_identity(row, field): row for row in proposed[field]}
+            if field == "sources":
+                append[field] = [row for key, row in after.items() if row != before.get(key)]
+                continue
             modifies_entries |= any(after.get(key) != row for key, row in before.items())
             append[field] = [row for key, row in after.items() if key not in before]
         if basis.get("version") is None:

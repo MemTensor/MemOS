@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from typing import TYPE_CHECKING
 
+from .add_evidence import strong_anchor_keys
 from .add_extraction import jsonable
 from .judge import ModelError
 from .types import stable_uuid, time_key
@@ -104,6 +105,7 @@ def recall_candidates(
         key for topic in by_id.values() for key in topic.get("anchor_keys") or []
     )
     ep_keys = set(episode.get("anchor_keys") or [])
+    ep_strong_keys = strong_anchor_keys(episode.get("anchors") or [])
     previous = set(((episode.get("previous") or {}).get("result") or {}).get("topic_ids") or [])
     explicit_references = {tid for tid, topic in by_id.items() if _topic_ref(episode, topic)}
     conversation = episode.get("conversation_id")
@@ -165,6 +167,10 @@ def recall_candidates(
             "recall": {
                 "channels": matches[tid],
                 "shared_anchors": shared[tid],
+                "shared_strong_anchors": sorted(
+                    set(shared[tid])
+                    & (ep_strong_keys | strong_anchor_keys(by_id[tid].get("anchors") or []))
+                ),
                 "previous": tid in previous,
                 "must_consider": tid in certain,
                 "degraded": ranked is None if degraded is None else degraded,
@@ -219,7 +225,7 @@ def _choose_topic(hub: ModelHub, episode: dict, candidates: list[dict]) -> dict 
     basis = output.get("positive_basis")
     rationale = choice.get("recall") or {}
     supported = {
-        "shared_anchor": bool(rationale.get("shared_anchors")),
+        "shared_anchor": bool(rationale.get("shared_strong_anchors")),
         "previous_episode": bool(rationale.get("previous")),
         "explicit_reference": "explicit_reference" in rationale.get("channels", []),
         "same_goal": True,
@@ -289,6 +295,7 @@ def _has_evidence(episodes: list[dict]) -> bool:
         for d in drafts
         for turn in (d.get("source") or {}).get("turn_ids", [])
     }
+    turn_count = sum(int(ep.get("turn_count") or len(ep.get("turns") or [])) for ep in episodes)
     decision = any(
         d["kind"] == "decision" and d.get("origin") in ("member", "adopted") for d in drafts
     )
@@ -296,7 +303,7 @@ def _has_evidence(episodes: list[dict]) -> bool:
         any(d["kind"] in ("decision", "experience") for d in drafts)
         or sum(d["kind"] == "timeline" for d in drafts) >= 2
     )
-    return useful and (decision or len(turn_ids) >= 2)
+    return useful and (decision or max(turn_count, len(turn_ids)) >= 2)
 
 
 def _formation_topics(
@@ -362,7 +369,7 @@ def _formation_topics(
             continue
         key = (domain, name.strip().casefold())
         if key in topics:
-            topics[key][1].extend(batch)
+            # Naming collisions do not establish semantic equivalence between groups.
             continue
         topic = {
             "id": stable_uuid(
