@@ -6,7 +6,7 @@ import json
 import os
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -73,7 +73,7 @@ class AddAcceptance:
     ) -> None:
         self.store = store
         self.settings = settings or AcceptanceSettings.from_env()
-        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.clock = clock
         self.anchor_collector = anchor_collector
         self.anchor_keyer = anchor_keyer
 
@@ -109,15 +109,14 @@ class AddAcceptance:
             agent_id = [member_map.get(agent, agent) for agent in agent_id]
         elif isinstance(agent_id, str):
             agent_id = member_map.get(agent_id, agent_id)
-        now = self.clock()
-        ctx = _Request(
-            task_id, user_id, agent_id, conversation_id, conversation_id or f"task:{task_id}", now
-        )
-        turns = normalize_turns(request.messages, task_id, user_id, member_map, now)
+        conversation_key = conversation_id or f"task:{task_id}"
         with self.store.transaction() as cursor:
             self._lock(cursor, "task", task_id)
-            self._lock(cursor, "conversation", ctx.conversation_key)
+            self._lock(cursor, "conversation", conversation_key)
             scopes = self._scopes(cursor, spaces, domains)
+            now = self._now(cursor)
+            ctx = _Request(task_id, user_id, agent_id, conversation_id, conversation_key, now)
+            turns = normalize_turns(request.messages, task_id, user_id, member_map, now)
             owners = self._owners(cursor, ctx, spaces, turns)
             exact_replay = self._replayed_task(cursor, ctx, scopes, turns, owners)
             self._store_messages(cursor, ctx, turns)
@@ -135,6 +134,12 @@ class AddAcceptance:
     def _lock(self, cursor: Any, key_type: str, key: str) -> None:
         lock_id = json.dumps([self.store.schema_name, self.store.project_id, key_type, key])
         cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_id,))
+
+    def _now(self, cursor: Any) -> datetime:
+        if self.clock is not None:
+            return self.clock()
+        cursor.execute("SELECT clock_timestamp() AS current_time")
+        return cursor.fetchone()["current_time"]
 
     def _scopes(self, cursor: Any, spaces: list[str], domains: list[str]) -> list[dict[str, Any]]:
         cursor.execute(
@@ -501,8 +506,8 @@ class AddAcceptance:
         return episode_id
 
     def close_due(self, limit: int = 100) -> list[str]:
-        now = self.clock()
         with self.store.transaction() as cursor:
+            now = self._now(cursor)
             cursor.execute(
                 """SELECT id, idle_due_at, max_wait_due_at FROM episodes
                    WHERE project_id = %s AND state = 'open' AND LEAST(idle_due_at, max_wait_due_at) <= %s

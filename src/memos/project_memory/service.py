@@ -33,6 +33,7 @@ from memos.graph_dbs.base import ConcurrentUpdateError
 from . import decision as dec
 from . import experience as exp
 from . import topic as topic_mod
+from .add_view import RelationalProjectView
 from .locks import InProcessLocks, conv_key, task_key, topic_key, topics_key
 from .segmenter import IDLE_MINUTES, idle_minutes_between, segment, split_turns
 from .store import ProjectStore, cosine, lexical_sim
@@ -103,7 +104,7 @@ def ensure_tz(t: str) -> str:
 class ProjectMemoryService:
     def __init__(
         self,
-        store: ProjectStore,
+        store: ProjectStore | RelationalProjectView,
         hub: ModelHub,
         submit: Submit | None = None,
         lock: Callable[[str], Any] | None = None,
@@ -1128,8 +1129,13 @@ class ProjectMemoryService:
         return self.topic_detail(t) if t else None
 
     def delete(self, req: Any) -> dict[str, Any]:
-        space = self.get_space(req.space_id)
         ids = list(getattr(req, "memory_ids", None) or [])
+        if isinstance(self.store, RelationalProjectView):
+            return {
+                "space_id": req.space_id,
+                "deleted_topic_ids": self.store.delete_topics(req.space_id, ids),
+            }
+        space = self.get_space(req.space_id)
         topics = self.store.list_topics(space.space_id)
         targets = [t for t in topics if t.id in ids] if ids else topics
         missing = set(ids) - {t.id for t in targets}
@@ -1169,11 +1175,15 @@ class ProjectMemoryService:
             if space_id
             else (self.store.get_index(f"conv:{conversation_id}") or {}).get("space_ids", [])
         )
-        seen: set[tuple] = set()
+        seen: set[str | tuple] = set()
         out: list[dict[str, Any]] = []
         for sid in spaces:
             for m in self.store.list_messages(sid, conversation_id):
-                key = (m.role, m.chat_time, m.text, m.tool_args)
+                key = (
+                    m.id
+                    if isinstance(self.store, RelationalProjectView)
+                    else (m.role, m.chat_time, m.text, m.tool_args)
+                )
                 if key in seen:
                     continue
                 seen.add(key)
