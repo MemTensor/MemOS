@@ -26,22 +26,24 @@ from memos.memories.textual.item import (
         PreferenceTextualMemoryMetadata,
     ],
 )
-def test_internal_info_decodes_json_object(metadata_cls):
+@pytest.mark.parametrize("field", ["internal_info", "info"])
+def test_dict_metadata_decodes_json_object(metadata_cls, field):
     value = {"ingest_batch_id": "test-batch", "nested": {"chunk_index": 0, "values": [True, None]}}
 
-    metadata = metadata_cls(internal_info=json.dumps(value))
+    metadata = metadata_cls(**{field: "  " + json.dumps(value) + "\n"})
 
-    assert metadata.internal_info == value
-    assert metadata.model_dump()["internal_info"] == value
+    assert getattr(metadata, field) == value
+    assert metadata.model_dump()[field] == value
 
 
 @pytest.mark.parametrize("value", [None, {}, {"ingest_batch_id": "test-batch", "nested": [1, 2]}])
-def test_internal_info_preserves_existing_values(value):
+@pytest.mark.parametrize("field", ["internal_info", "info"])
+def test_dict_metadata_preserves_existing_values(value, field):
     original = copy.deepcopy(value)
 
-    metadata = TextualMemoryMetadata(internal_info=value)
+    metadata = TextualMemoryMetadata(**{field: value})
 
-    assert metadata.internal_info == original
+    assert getattr(metadata, field) == original
     assert value == original
 
 
@@ -49,15 +51,17 @@ def test_internal_info_preserves_existing_values(value):
     "value",
     ["{", "not-json", "[]", "null", "1", "true", '"text"', json.dumps('{"batch": "test"}')],
 )
-def test_internal_info_rejects_malformed_json_and_encoded_non_objects(value):
+@pytest.mark.parametrize("field", ["internal_info", "info"])
+def test_dict_metadata_rejects_malformed_json_and_encoded_non_objects(value, field):
     with pytest.raises(ValidationError):
-        TextualMemoryMetadata(internal_info=value)
+        TextualMemoryMetadata(**{field: value})
 
 
 @pytest.mark.parametrize("value", [[], [["batch", "test"]], 1, False])
-def test_internal_info_preserves_rejection_of_invalid_types(value):
+@pytest.mark.parametrize("field", ["internal_info", "info"])
+def test_dict_metadata_preserves_rejection_of_invalid_types(value, field):
     with pytest.raises(ValidationError):
-        TextualMemoryMetadata(internal_info=value)
+        TextualMemoryMetadata(**{field: value})
 
 
 def test_search_item_from_dict_decodes_internal_info_without_changing_other_fields():
@@ -68,6 +72,7 @@ def test_search_item_from_dict_decodes_internal_info_without_changing_other_fiel
         "metadata": {
             "memory_type": "LongTermMemory",
             "internal_info": json.dumps(value),
+            "info": json.dumps({"client_metadata": True}),
             "relativity": 0.75,
             "sources": [{"type": "chat", "role": "user", "content": "Synthetic source."}],
             "session_id": "test-session",
@@ -78,6 +83,7 @@ def test_search_item_from_dict_decodes_internal_info_without_changing_other_fiel
     item = TextualMemoryItem.from_dict(record)
 
     assert item.metadata.internal_info == value
+    assert item.metadata.info == {"client_metadata": True}
     assert item.id == record["id"]
     assert item.memory == record["memory"]
     assert item.metadata.sources[0].content == "Synthetic source."
@@ -88,4 +94,5 @@ def test_search_item_from_dict_decodes_internal_info_without_changing_other_fiel
     # Graph storage serializes dictionaries as JSON strings again on the next write.
     stored = item.to_dict()
     stored["metadata"]["internal_info"] = json.dumps(stored["metadata"]["internal_info"])
+    stored["metadata"]["info"] = json.dumps(stored["metadata"]["info"])
     assert TextualMemoryItem.from_dict(stored).to_dict() == item.to_dict()

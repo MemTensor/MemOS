@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 ALLOWED_ROLES = {"user", "assistant", "system"}
@@ -159,14 +159,14 @@ class TextualMemoryMetadata(BaseModel):
         description="Internal algorithm metadata reserved for system use.",
     )
 
-    @field_validator("internal_info", mode="before")
+    @field_validator("internal_info", "info", mode="before")
     @classmethod
-    def _decode_internal_info(cls, value: Any) -> Any:
+    def _decode_dict_metadata(cls, value: Any, validation_info: ValidationInfo) -> Any:
         # Neo4j stores dictionaries as JSON strings; decode them before model validation.
         if isinstance(value, str):
             value = json.loads(value)
             if not isinstance(value, dict):
-                raise ValueError("internal_info JSON must decode to an object")
+                raise ValueError(f"{validation_info.field_name} JSON must decode to an object")
         return value
 
     model_config = ConfigDict(extra="allow")
