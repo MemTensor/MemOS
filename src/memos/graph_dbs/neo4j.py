@@ -194,6 +194,38 @@ class Neo4jGraphDB(BaseGraphDB):
             )
             return result.single() is None
 
+    def get_all_user_names(self) -> list[str]:
+        """List every tenant (user_name) that currently has Memory nodes.
+
+        Used by the structure reorganizer to optimize all tenants instead of
+        only the configured default one. Falls back to the configured
+        ``user_name`` when the query fails or the graph has no named tenants,
+        so callers keep the previous single-tenant behavior.
+        """
+        user_name = self.config.user_name
+        fallback = [user_name] if isinstance(user_name, str) and user_name.strip() else []
+        if self.config.use_multi_db:
+            return fallback
+        try:
+            query = """
+            MATCH (n:Memory)
+            WHERE n.user_name IS NOT NULL
+            RETURN DISTINCT n.user_name AS user_name
+            """
+            with self.driver.session(database=self.db_name) as session:
+                result = session.run(query)
+                user_names = sorted(
+                    {
+                        record["user_name"]
+                        for record in result
+                        if isinstance(record["user_name"], str) and record["user_name"].strip()
+                    }
+                )
+            return user_names or fallback
+        except Exception as e:
+            logger.warning("[get_all_user_names] Failed to enumerate tenants: %s", e)
+            return fallback
+
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int, user_name: str | None = None
     ) -> None:
