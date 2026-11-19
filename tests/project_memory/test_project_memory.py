@@ -463,6 +463,13 @@ def test_resolve_needs_informed_on_every_item():
         "informed": {"current": "A 方案"},
     }
     assert dec.decide(draft, partial, {"d1": d}).action == "join", "没把各项都说给他听，不拍板"
+    repeated = {**partial, "informed": {"current": "A 方案", "c1": "A 方案"}}
+    assert dec.decide(draft, repeated, {"d1": d}).action == "join"
+    draft.listed = ["A 方案", "A  方案"]
+    repeated = {**partial, "informed": {"current": "A 方案", "c1": "A  方案"}}
+    assert dec.decide(draft, repeated, {"d1": d}).action == "join"
+    malformed = {**partial, "informed": ["current", "c1"]}
+    assert dec.decide(draft, malformed, {"d1": d}).action == "join"
     draft.listed = ["A 方案", "B 方案"]
     full = {**partial, "informed": {"current": "A 方案", "c1": "B 方案"}}
     plan = dec.decide(draft, full, {"d1": d})

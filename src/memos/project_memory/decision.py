@@ -250,10 +250,15 @@ def decide(draft: DecisionDraft, row: dict[str, Any], candidates: dict[str, Deci
         set(draft.approved_by) & {dec.user_labels.get(u, u) for u in dec.user_ids}
     )
     late = not (draft.time and dec.time and draft.time < dec.time)
-    informed = row.get("informed") or {}
-    inf = bool(items) and all(k in informed and informed[k] in draft.listed for k in items)
+    informed = row.get("informed")
+    evidence = {
+        key: quote
+        for key, quote in (informed.items() if isinstance(informed, dict) else ())
+        if key in items and isinstance(quote, str) and quote.strip() and quote in draft.listed
+    }
+    inf = bool(items) and len({"".join(quote.split()) for quote in evidence.values()}) == len(items)
     if inf:
-        plan.informed = dict(informed)
+        plan.informed = evidence
 
     if dec.conflicts and draft.final and same_as and inf and late:
         action = OP_RESOLVE

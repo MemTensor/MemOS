@@ -74,7 +74,7 @@ DECISION_UPDATE = """[系统]
 3. same_as：见上面第 2 点。
 4. reason：用一句话说明为什么是这个动作，不超过 60 个字。
 5. action：见上面第 3 点。
-6. informed：action 为 "resolve" 时才填，其余填 {}。键是那条决策的 item，值是 listed 里说到这一项的那一句，照抄。listed 里没有说到的项不写。
+6. informed：action 为 "resolve" 时才填，其余填 {}。键是那条决策的 item，值是 listed 里说到这一项的依据，照抄原句。不同项要分别引用，各项不能共用同一段原文。listed 里没有说到的项不写。
 7. result：处理之后那条决策的样子，两个字段。current 是处理之后的当前结论，文字从新决策的 content 或 items 的 text 里照抄，一个字都不改；history 是这一次要移进历史的项，填 item 的列表。
    - add：current 填新决策的 content，history 填 []。
    - join、conflict：current 填原来的当前结论，history 填 []。
