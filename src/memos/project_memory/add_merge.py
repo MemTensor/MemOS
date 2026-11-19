@@ -112,9 +112,15 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
         memory.id = stable_uuid(f"decision:{topic_id}:{item['draft_id']}")
         snapshot["decisions"].append({"id": memory.id, **memory.to_project()})
         return
-    # The existing transition implicitly merges when the sole owner changes sides.
-    # A late statement must not trigger that rewrite.
-    if time_key(draft.time) < time_key(target.time) and draft.user_id in target.user_ids:
+    # A late statement cannot replace or withdraw the member's newer position.
+    items = target.items()
+    previous = items.get(target.item_of(draft.user_id) or "")
+    received_time = time_key(draft.time)
+    if previous is not None and received_time < time_key(previous.time):
+        return
+    if plan.action == decision.OP_RESOLVE and any(
+        received_time < time_key(item.time) for item in items.values()
+    ):
         return
     memory, _ = decision.apply(target, plan, draft, conversation)
     if memory is not None:

@@ -161,3 +161,106 @@ def test_experience_update_preserves_migrated_topic_links():
     (row,) = change["topics"][0]["topic"]["experiences"]
     assert row["id"] == "old"
     assert row["legacy_topic_ids"] == ["secondary"]
+
+
+def plan_with_disagreement(draft):
+    plan = plan_for(draft)
+    plan["assignments"][0]["topic"]["decisions"] = [
+        {
+            "id": "export-cadence",
+            "content": "Export daily.",
+            "time": "2026-11-19T01:00:00Z",
+            "user_ids": ["owner"],
+            "source": {},
+            "history": [],
+            "conflicts": [
+                {
+                    "seq": 1,
+                    "content": "Export hourly.",
+                    "time": "2026-11-19T04:00:00Z",
+                    "user_ids": ["dissenter"],
+                    "source": {},
+                }
+            ],
+        }
+    ]
+    return plan
+
+
+@pytest.mark.parametrize("same_as", [None, "current"])
+@pytest.mark.parametrize("draft_time", ["2026-11-19T03:00:00Z", "2026-11-19T05:00:00Z"])
+def test_disagreement_changes_respect_the_members_existing_item_time(same_as, draft_time):
+    content = "Export daily." if same_as else "Export weekly."
+    plan = plan_with_disagreement(
+        {
+            "kind": "decision",
+            "content": content,
+            "quote": content,
+            "authors": ["dissenter"],
+            "chat_time": draft_time,
+        }
+    )
+    writer = Writer(
+        {"dec.update": {"results": [{"n": 1, "decision_id": "export-cadence", "same_as": same_as}]}}
+    )
+
+    change = prepare_merge(writer, plan)
+    (result,) = change["topics"][0]["topic"]["decisions"]
+
+    assert result["content"] == "Export daily."
+    if draft_time == "2026-11-19T03:00:00Z":
+        assert result["user_ids"] == ["owner"]
+        assert result["conflicts"][0]["content"] == "Export hourly."
+        assert result["history"] == []
+    elif same_as:
+        assert set(result["user_ids"]) == {"owner", "dissenter"}
+        assert result["conflicts"] == []
+        assert result["history"][0]["reason"] == ""
+    else:
+        assert result["conflicts"][0]["content"] == "Export weekly."
+
+
+@pytest.mark.parametrize(
+    ("draft_time", "should_resolve"),
+    [
+        ("2026-11-19T03:00:00Z", False),
+        ("2026-11-19T05:00:00Z", True),
+    ],
+)
+def test_resolution_does_not_archive_a_newer_choice(draft_time, should_resolve):
+    plan = plan_with_disagreement(
+        {
+            "kind": "decision",
+            "content": "Export daily.",
+            "authors": ["facilitator"],
+            "chat_time": draft_time,
+            "final": True,
+            "listed": ["Export daily.", "Export hourly."],
+        }
+    )
+    writer = Writer(
+        {
+            "dec.update": {
+                "results": [
+                    {
+                        "n": 1,
+                        "decision_id": "export-cadence",
+                        "same_as": "current",
+                        "action": "resolve",
+                        "informed": {"current": "Export daily.", "c1": "Export hourly."},
+                    }
+                ]
+            }
+        }
+    )
+
+    change = prepare_merge(writer, plan)
+    (result,) = change["topics"][0]["topic"]["decisions"]
+
+    assert result["content"] == "Export daily."
+    if should_resolve:
+        assert result["conflicts"] == []
+        assert result["history"][0]["reason"] == ""
+    else:
+        assert result["conflicts"][0]["content"] == "Export hourly."
+        assert result["history"] == []
