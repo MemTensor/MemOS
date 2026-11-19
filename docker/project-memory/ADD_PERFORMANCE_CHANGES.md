@@ -9,6 +9,7 @@
 - GPT‑6.2 Astra Ultra 对 `e37a4202` 的定案后迟到消息复审通过。独立回归检查三种时序，99 项通过，1 项需要本进程未配置的 PostgreSQL。
 - 同一提交的本机 `make format` 通过。使用真实 PostgreSQL、pgvector 和 Redis 跑 `make test`，1073 项通过，9 项跳过。
 - 优化对照 `01bd71c0` 在 Memmy v3 的 113 次 Add 和 36 次查询中，将含后台整理的 Add 与 Search 回放从 4085.5 秒降至 413.0 秒。四项接口检查通过。质量门槛仍有差距，各轮完整计分与逐阶段调用量记录在 memmy-agent 的 `docs/project-memory/metrics.md`。
+- 复审版本 `e37a4202` 的同口径回放记录 388.9 秒 Add 与 Search，整轮回放 446.7 秒（含阅读）。113 次 Add、36 道题均完成，四项接口检查通过，记录到 228 次 MemOS 聊天模型调用，空正文 0 次。基线的对应模型调用与空正文为 364 次和 47 次。
 - DeepSeek 结构化写入本机部署使用 `PROJECT_MEMORY_LLM_THINKING_MODE=disabled`，凭据沿用用户本机模型配置。该设置通过现有 OpenAI 兼容 Chat Completions 请求生效。
 
 ## 项目模型推理参数
