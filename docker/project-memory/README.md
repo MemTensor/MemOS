@@ -48,3 +48,17 @@ docker compose --profile replica -f docker/project-memory/docker-compose.yml ps
 docker compose --profile replica -f docker/project-memory/docker-compose.yml logs -f memos memos-peer
 docker compose --profile replica -f docker/project-memory/docker-compose.yml down
 ```
+
+### 导入历史项目记忆
+
+停止旧写入，排空已受理的旧任务并备份源库。为旧 Space 准备一份 JSON 对照表，键为旧 Space ID，值为可信项目 ID。先在隔离的目标 schema 验证报告。
+
+```bash
+python -m memos.project_memory.add_legacy_migrate \
+  --legacy-sqlite /path/to/backup.sqlite \
+  --mapping /path/to/spaces.json --project-id local-project
+```
+
+PostgreSQL 源库使用 `--legacy-postgres-env LEGACY_DATABASE_DSN --source-schema project_memory`。运行前通过环境变量配置目标库和隔离 schema。确认预检后，在同一命令追加 `--apply --archive /path/to/history.json`。服务通过 `PROJECT_MEMORY_LEGACY_ARCHIVE=/path/to/history.json` 加载对应项目的只读历史。归档包含会话内容和回执，仅保存在具备访问控制的本机路径。
+
+对账报告包含迁入对象、归档例外与源数据摘要。保留旧库备份用于回查。清空新 Space 后，它的历史例外也受清空围栏约束。

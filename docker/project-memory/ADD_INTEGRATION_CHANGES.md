@@ -45,3 +45,11 @@
 - 项目提交服务实例使用可信的 PROJECT_MEMORY_PROJECT_ID。两个实例处理同一项目时共享 PostgreSQL 和 Redis Stream 前缀。独立项目部署使用各自的 Stream 前缀。
 
 真实 PostgreSQL 和 Redis 上，两个 ASGI 实例使用合成模型响应跑通写入、多 Space、单份原文、重复提交、用户隔离、显式关段和续写。项目、API、调度与插件专项回归 358 项通过，1 项跳过。随后导出 OpenAPI 并核对关段由新流程接管。
+
+## 本地验收记录
+
+- `make format` 通过。使用隔离 PostgreSQL 17.12、pgvector 0.8.7 和 Redis 7.4.5 跑完整 `make test`，1017 项通过，9 项跳过。测试设置了 Hugging Face 离线模式，使用已安装依赖。
+- `make openapi` 导出成功。确认 `/product/add`、`/product/scheduler/status` 可用，PostgreSQL 路径已移除旧 flush。
+- Redis 停机期间，Add 返回 HTTP 200 并保留持久状态。结束受理该请求的 worker 后恢复 Redis，另一实例补投并只生成一个已提交 Topic。提交应答丢失和过期工作租约由 PostgreSQL 故障用例覆盖。
+- 旧 SQLite 快照完成预检和导入，迁移前后源库 SHA256 一致，目标的 Topic、Episode 和历史归档通过对账。PostgreSQL 源库读取和事务回滚也有专项用例。
+- 本机配置的 Haiku 网关返回 HTTP 503。改用同一网关的 Claude Sonnet 4.6，对合成决策完成真实模型抽取、Formation 和提交，产生一个已提交 Topic。
