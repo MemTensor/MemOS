@@ -255,7 +255,7 @@ class SearchHandler(BaseHandler):
         if relativity <= 0:
             return results
 
-        for key in ("text_mem", "pref_mem"):
+        for key in ("text_mem", "pref_mem", "project_mem"):
             buckets = results.get(key)
             if not isinstance(buckets, list):
                 continue

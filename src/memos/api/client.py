@@ -195,7 +195,7 @@ class MemOSClient:
         user_id: str | None = None,
         conversation_id: str | None = None,
         agent_id: str | None = None,
-        memory_limit_number: int = 6,
+        memory_limit_number: int | None = None,
         include_preference: bool = True,
         knowledgebase_ids: list[str] | None = None,
         filter: dict[str, Any] | None = None,
@@ -208,12 +208,20 @@ class MemOSClient:
         skill_limit_number: int = 6,
         include_memory_view: list[str] | None = None,
         context_format: str = "memory",
+        space_ids: str | list[str] | None = None,
+        domains: str | list[str] | None = None,
+        project_result_format: str | None = None,
+        project_item_types: list[str] | None = None,
     ) -> MemOSSearchResponse | None:
         """Search memories"""
         # Validate required parameters
         self._validate_required_params(query=query)
         self._validate_profile_subject(user_id, agent_id)
 
+        if memory_limit_number is None:
+            memory_limit_number = (
+                9 if {"project", "trajectory"}.intersection(include_memory_view or []) else 6
+            )
         url = f"{self.base_url}/search/memory"
         payload = {
             "query": query,
@@ -234,6 +242,15 @@ class MemOSClient:
             "source": source,
             "include_tool_memory": include_tool_memory,
         }
+
+        if project_result_format is not None:
+            payload["project_result_format"] = project_result_format
+        if project_item_types is not None:
+            payload["project_item_types"] = project_item_types
+        if space_ids is not None:
+            payload["space_ids"] = space_ids
+        if domains is not None:
+            payload["domains"] = domains
 
         for retry in range(MAX_RETRY_COUNT):
             try:
@@ -259,10 +276,14 @@ class MemOSClient:
         include_tool_memory: bool = True,
         include_memory_view: list[str] | None = None,
         filter: dict[str, Any] | None = None,
+        space_id: str | None = None,
     ) -> MemOSGetMemoryResponse | None:
         """get memories"""
         # Validate required parameters
-        self._validate_profile_subject(user_id, agent_id)
+        if space_id is None:
+            self._validate_profile_subject(user_id, agent_id)
+        elif not space_id.strip() or user_id or agent_id:
+            raise ValueError("Supply exactly one of space_id, user_id or agent_id")
         if size > 50:
             raise ValueError("size must be less than or equal to 50")
 
@@ -277,6 +298,11 @@ class MemOSClient:
             "page": page,
             "size": size,
         }
+
+        if space_id is not None:
+            payload = {"space_id": space_id, "page": page, "size": size}
+            if filter is not None:
+                payload["filter"] = filter
 
         for retry in range(MAX_RETRY_COUNT):
             try:
@@ -305,14 +331,19 @@ class MemOSClient:
         finally:
             response.close()
 
-    def get_memory_by_id(self, memid: str) -> dict[str, Any] | None:
+    def get_memory_by_id(
+        self, memid: str, *, space_id: str | None = None, view: str | None = None
+    ) -> dict[str, Any] | None:
         """Get one memory detail by its memory ID."""
         self._validate_required_params(memid=memid)
 
         url = f"{self.base_url}/get/memory/{quote(memid, safe='')}"
+        params = {k: v for k, v in (("space_id", space_id), ("view", view)) if v is not None}
         for retry in range(MAX_RETRY_COUNT):
             try:
-                response = requests.get(url, headers=self.headers, timeout=30)
+                response = requests.get(
+                    url, headers=self.headers, timeout=30, **({"params": params} if params else {})
+                )
                 response.raise_for_status()
                 return response.json()
             except Exception as e:
