@@ -3,15 +3,21 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { satisfies } from "semver";
 
 // Install each real host API in isolation; never rewrite the checkout's dependencies
 // or use a customer's DSH profile, credentials, or session data.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+// Keep newer host fixtures on their matching codec and an exact Cordis build.
+const hostOverrides = {
+  "0.2.2-rc.1": { cordis: "4.1.0" },
+  "0.2.2-rc.5": { cordis: "4.1.0" },
+};
 const versions = process.argv.slice(2);
 if (!versions.length) versions.push(
   "0.1.0-rc.6", "0.1.7-rc.2",
-  "0.2.0-rc.2", "0.2.1-rc.2", "0.2.1-rc.3",
+  "0.2.0-rc.2", "0.2.1-rc.2", "0.2.1-rc.3", "0.2.2-rc.1", "0.2.2-rc.5",
 );
 if (versions.some((version) => !/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(version))) {
   throw new Error("Expected explicit DSH versions, e.g. 0.2.1-rc.3");
@@ -26,15 +32,25 @@ function run(command, args, cwd) {
 }
 
 for (const version of versions) {
+  const override = hostOverrides[version];
   const fixture = join(matrix, version);
   await mkdir(fixture);
   const devDependencies = Object.fromEntries(
     Object.entries(manifest.devDependencies)
       .filter(([name]) => name.startsWith("@deepseek-ai/"))
       .map(([name, value]) => [name,
-        name.startsWith("@deepseek-ai/dsh-") && name !== "@deepseek-ai/dsh-session-format-v3-to-v4"
+        name.startsWith("@deepseek-ai/dsh-") &&
+          (name !== "@deepseek-ai/dsh-session-format-v3-to-v4" || override)
           ? version : value]),
   );
+  if (override) {
+    devDependencies["@deepseek-ai/cordis"] = override.cordis;
+  }
+  const cordisVersion = devDependencies["@deepseek-ai/cordis"];
+  const pluginCordis = manifest.peerDependencies["@deepseek-ai/cordis"];
+  if (override && !satisfies(cordisVersion, pluginCordis)) {
+    throw new Error(`Cordis ${cordisVersion} does not satisfy plugin peer ${pluginCordis}`);
+  }
   // Early DSH previews used caret peers. Letting npm choose their latest
   // prerelease mixes rc.6 and rc.8, so pin the entire host peer closure.
   const inspected = new Set();
@@ -49,6 +65,12 @@ for (const version of versions) {
     }));
     const next = new Set();
     for (const pkg of metadata) {
+      const hostCordis = pkg.peerDependencies?.["@deepseek-ai/cordis"];
+      if (override && hostCordis && !satisfies(cordisVersion, hostCordis)) {
+        throw new Error(
+          `Cordis ${cordisVersion} does not satisfy ${pkg.name}@${version} peer ${hostCordis}`,
+        );
+      }
       for (const name of Object.keys({ ...pkg.dependencies, ...pkg.peerDependencies })) {
         if (!name.startsWith("@deepseek-ai/dsh-") || name === "@deepseek-ai/dsh-session-format-v3-to-v4") continue;
         devDependencies[name] = version;

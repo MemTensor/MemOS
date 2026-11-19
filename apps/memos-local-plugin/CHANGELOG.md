@@ -5,6 +5,12 @@ for the full per-commit history use `git log` or the GitHub releases page.
 
 ## Index
 
+- Unreleased — Extend PR #2614 compatibility to exactly DSH `0.2.2-rc.5`,
+  retaining `0.2.2-rc.1`. Pin both fixtures to Cordis `4.1.0` with matching
+  session codecs, validate plugin/host Cordis peers, and keep earlier host
+  fixtures unchanged. Other unvalidated previews remain excluded. These
+  changes have not been published to npm.
+
 - Unreleased — Admit DSH `0.1.7-rc.2`, `0.2.0-rc.2`, and `0.2.1-rc.2/rc.3`
   through explicit, bounded optional peer ranges; retain the `2.0.21` V4
   producer-owned message sources. Stop importing the moved `JsonValue` type

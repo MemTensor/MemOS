@@ -4,6 +4,58 @@ Validated on 2026-10-29, macOS arm64, Node.js 25.1.0, npm 11.6.2,
 pnpm 10.21.0. Scope: the local plugin; the Cloud plugin is separate.
 Related: MemOS issue #2520 and PR #2541.
 
+## DSH 0.2.2-rc.5 validation — 2026-11-19
+
+This update builds on PR #2614 and was tested on macOS arm64 with Node.js
+25.1.0 and npm 11.6.2. npm's `latest` and `next` DSH tags both pointed to
+`0.2.2-rc.5` when checked.
+
+The package regression first failed because all six optional DSH service
+peers omitted `0.2.2-rc.5`. Running the original PR's matrix with that
+version also failed with `ERESOLVE`: it selected Cordis `~4.0.5` while
+the published host requires `~4.1.0`.
+
+The fix explicitly admits `0.2.2-rc.5`, preserves the tested `0.2.2-rc.1`,
+and uses one overrides table to select Cordis `4.1.0` and each new host's
+matching session codec. The fixture checks Cordis against the plugin and
+host service peer ranges, including metadata with no optional peers.
+
+The official rc.5 loader uses semver `includePrerelease: true`. A real
+`--dump-config` comparison showed that it already loads the original PR
+manifest through the older `>=0.2.1-rc.2 <0.2.2` comparator. npm's default
+peer evaluation excludes rc.5 under that comparator. The explicit rc.5
+peer declaration fixes the package-manager mismatch.
+
+Verification output:
+
+```text
+make format: All checks passed! / 642 files left unchanged
+npm test: Test Files 192 passed (192)
+          Tests 1661 passed | 3 skipped (1664)
+pytest apps/memos-local-plugin/tests/python -q: 143 passed in 5.78s
+npm run lint: passed
+npm run build:package: passed
+npm run lock:check: SQLite 13.0.3 lock metadata verified
+npm run test:dsh-compat: PASS all 7 DSH versions
+```
+
+Each of the seven real host stacks passed type checking, a production
+TypeScript build, and 71 adapter tests: `0.1.0-rc.6`, `0.1.7-rc.2`,
+`0.2.0-rc.2`, `0.2.1-rc.2`, `0.2.1-rc.3`, `0.2.2-rc.1`, and
+`0.2.2-rc.5`. The fixtures installed matching host packages from npm and
+reused the checkout's unchanged non-host build tools and native bindings.
+
+A separately installed official DSH `0.2.2-rc.5` CLI loaded an npm-packed
+local bundle in a fresh Web profile with no version exemption. Actual Web
+startup with `failOnStartupError: true` created SQLite storage and returned
+HTTP 200 from the MemOS Viewer health endpoint with agent
+`deepseek-harness`. The process was stopped with SIGINT and exited 130.
+
+The Web smoke used synthetic local configuration with telemetry disabled.
+Authenticated model conversations, packaged Desktop releases on macOS,
+Windows and Linux, fresh native-dependency installation, and live embedding
+model downloads remain unverified. This source change is unpublished.
+
 ## Diagnosis
 
 The local plugin's six optional host-service peers excluded DSH 0.2.x.
