@@ -17,6 +17,8 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_READ_TASK_LABEL,
     MEM_UPDATE_TASK_LABEL,
     PREF_ADD_TASK_LABEL,
+    PROJECT_ADD_PENDING_CLAIM_MIN_IDLE_MS,
+    PROJECT_ADD_TASK_LABELS,
     QUERY_TASK_LABEL,
     TaskPriorityLevel,
 )
@@ -29,7 +31,11 @@ from .handlers.mem_read_handler import MemReadMessageHandler
 from .handlers.mem_reorganize_handler import MemReorganizeMessageHandler
 from .handlers.memory_update_handler import MemoryUpdateHandler
 from .handlers.pref_add_handler import PrefAddMessageHandler
-from .handlers.project_memory_handler import PROJECT_MEMORY_TASK_LABEL, ProjectMemoryMessageHandler
+from .handlers.project_memory_handler import (
+    PROJECT_MEMORY_TASK_LABEL,
+    ProjectAddStageHandler,
+    ProjectMemoryMessageHandler,
+)
 from .handlers.query_handler import QueryMessageHandler
 
 
@@ -45,6 +51,10 @@ class SchedulerHandlerRegistry:
         self.mem_dream = MemDreamMessageHandler(scheduler_context)
         self.pref_add = PrefAddMessageHandler(scheduler_context)
         self.project_memory = ProjectMemoryMessageHandler(scheduler_context)
+        self.project_add_stages = {
+            label: ProjectAddStageHandler(scheduler_context, label)
+            for label in PROJECT_ADD_TASK_LABELS
+        }
 
     def build_dispatch_map(self) -> dict[str, Callable | tuple]:
         predefined_handlers = {
@@ -59,4 +69,10 @@ class SchedulerHandlerRegistry:
             MEM_FEEDBACK_TASK_LABEL: self.mem_feedback,
             PROJECT_MEMORY_TASK_LABEL: (self.project_memory, TaskPriorityLevel.LEVEL_2, None),
         }
+        predefined_handlers.update(
+            {
+                label: (handler, TaskPriorityLevel.LEVEL_2, PROJECT_ADD_PENDING_CLAIM_MIN_IDLE_MS)
+                for label, handler in self.project_add_stages.items()
+            }
+        )
         return predefined_handlers

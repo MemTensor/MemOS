@@ -13,3 +13,9 @@
 ## 格式检查的基线修复
 
 `project_view.py` 的三处说明、`experience.py` 和 `service.py` 的仅类型导入，以及旧接口测试的类属性类型，均为通过当前分支的全仓 Ruff 检查所需。项目记忆旧接口回归和调度器回归共 37 项通过。
+
+## 四个 Add 调度阶段
+
+`task_schemas.py`、`registry.py` 和 `project_memory_handler.py` 原来只登记单阶段整理。新增抽取、归类、合并准备和提交四个调度入口，由 `hook_defs.py` 声明与项目记忆实现的交接。每个阶段可独立接管，未装配回调时保留待确认消息。已有单阶段入口供迁移前的旧队列处理。
+
+`tests/mem_scheduler/test_project_add_registry.py` 检查四个阶段的路由、优先级、接管间隔和回调缺失行为。

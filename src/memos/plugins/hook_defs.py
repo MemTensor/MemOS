@@ -97,6 +97,10 @@ class H:
     # the active project-memory plugin implements all of them.
     PROJECT_MEMORY_ACCEPT = "project_memory.accept"
     PROJECT_MEMORY_EXECUTE = "project_memory.execute"
+    PROJECT_MEMORY_PROCESS = "project_memory.process"
+    PROJECT_MEMORY_SPACE = "project_memory.space"
+    PROJECT_MEMORY_MERGE = "project_memory.merge"
+    PROJECT_MEMORY_MERGE_RESULT = "project_memory.merge_result"
     PROJECT_MEMORY_SEARCH = "project_memory.search"
     PROJECT_MEMORY_GET = "project_memory.get"
     PROJECT_MEMORY_GET_BY_ID = "project_memory.get_by_id"
@@ -210,6 +214,14 @@ define_hook(
     description="Run project-memory organization for one space (scheduler entry)",
     params=["space_id", "batch", "scheduler_context"],
 )
+
+for hook, purpose in (
+    (H.PROJECT_MEMORY_PROCESS, "Extract one closed Episode"),
+    (H.PROJECT_MEMORY_SPACE, "Recall and organize an Episode in its Space"),
+    (H.PROJECT_MEMORY_MERGE, "Prepare entry changes for an Episode"),
+    (H.PROJECT_MEMORY_MERGE_RESULT, "Finalize and commit the prepared changes"),
+):
+    define_hook(hook, description=purpose, params=["space_id", "batch", "scheduler_context"])
 
 define_hook(
     H.PROJECT_MEMORY_SEARCH,

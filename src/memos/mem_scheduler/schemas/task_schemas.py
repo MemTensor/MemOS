@@ -39,6 +39,19 @@ MEM_ARCHIVE_TASK_LABEL = "mem_archive"
 API_MIX_SEARCH_TASK_LABEL = "api_mix_search"
 PREF_ADD_TASK_LABEL = "pref_add"
 MEM_FEEDBACK_TASK_LABEL = "mem_feedback"
+PROJECT_ADD_PROCESS_TASK_LABEL = "project_add_process"
+PROJECT_ADD_SPACE_TASK_LABEL = "project_add_space"
+PROJECT_ADD_MERGE_TASK_LABEL = "project_add_merge"
+PROJECT_ADD_MERGE_RESULT_TASK_LABEL = "project_add_merge_result"
+PROJECT_ADD_TASK_LABELS = frozenset(
+    (
+        PROJECT_ADD_PROCESS_TASK_LABEL,
+        PROJECT_ADD_SPACE_TASK_LABEL,
+        PROJECT_ADD_MERGE_TASK_LABEL,
+        PROJECT_ADD_MERGE_RESULT_TASK_LABEL,
+    )
+)
+PROJECT_ADD_PENDING_CLAIM_MIN_IDLE_MS = 600_000
 
 # Set by a handler after dispatch. These flags do not travel on a new delivery.
 SCHEDULER_DEFERRED_INFO_KEY = "_scheduler_deferred"
