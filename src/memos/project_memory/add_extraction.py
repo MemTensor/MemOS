@@ -28,6 +28,7 @@ kind 是 decision（成员确定的团队做法）、experience（有场景与�
 quote 是这次 Episode 的消息中逐字原话。成员授权优先引用本段用户确立或确认做法的原话。
 origin 取 member、adopted（成员明确采纳）、delegated（Agent 执行）；Agent 自述绝非成员决策。
 采纳或需要理解前文可附 context 数组，每项 message_id、quote，引用采纳前的消息。
+content 和 key_values 中原样保留数量和单位的写法，包括中文数字，不能换成另一种数字写法。
 若原话包含原因，可附逐字 reason_quote，绝不推测。附 key_values（逐字值字符串）与
 current_state_clues（逐字现状描述）数组。decision 可带 category、final、approved_by。
 成员明确拍板时，listed 写拍板前助手已列出的各项互斥结论，逐字引用能识别每项结论的连续原文。

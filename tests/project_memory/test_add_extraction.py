@@ -11,9 +11,11 @@ class Writer:
     def __init__(self, output):
         self.output = output
         self.calls = []
+        self.prompts = []
 
-    def write(self, scope, _prompt, inputs):
+    def write(self, scope, prompt, inputs):
         self.calls.append((scope, inputs))
+        self.prompts.append(prompt)
         return self.output
 
 
@@ -174,3 +176,27 @@ def test_listed_disclosures_use_actual_assistant_text_before_authorization():
     result = extract_episode(writer, {"id": "episode"}, [earlier, arrived_late, author])
 
     assert result["drafts"][0]["listed"] == [first, second]
+
+
+def test_extraction_prompt_preserves_the_source_numeral_and_unit():
+    quote = "重试次数限制为三次"
+    current = row("member", "user", quote)
+    later = row("assistant", "assistant", "限制为 3 次", chat_time="2026-11-19T09:01:00+08:00")
+    draft = {
+        "kind": "decision",
+        "content": quote,
+        "message_id": "member",
+        "quote": quote,
+        "key_values": ["三次", "3 次"],
+    }
+    writer = Writer({"episode_summary": quote, "drafts": [draft]})
+
+    result = extract_episode(writer, {"id": "episode"}, [current, later])
+
+    assert "原样保留数量和单位" in writer.prompts[0]
+    assert result["drafts"][0]["content"] == quote
+    assert result["drafts"][0]["key_values"] == ["三次"]
+    for unsupported in ("重试次数限制为 3 次", "重试次数限制为 4 次"):
+        draft["content"] = unsupported
+        with pytest.raises(ModelError, match="no valid evidence"):
+            extract_episode(writer, {"id": "episode"}, [current, later])
