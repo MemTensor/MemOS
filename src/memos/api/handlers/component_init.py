@@ -20,6 +20,7 @@ from memos.api.handlers.config_builders import (
     build_llm_config,
     build_mem_reader_config,
     build_nli_client_config,
+    build_project_db_config,
     build_reranker_config,
     build_scheduler_llm_config,
     build_suggestion_llm_config,
@@ -175,6 +176,16 @@ def init_server() -> dict[str, Any]:
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
+    project_db_config = build_project_db_config()
+    project_db = None
+    if project_db_config is not None:
+        from memos.project_dbs.factory import ProjectDBFactory
+
+        # Project memory is optional: keep the existing memory API up if its DB is down.
+        try:
+            project_db = ProjectDBFactory.from_config(project_db_config)
+        except Exception:
+            logger.exception("Failed to initialize project memory DB; project memory disabled")
     llm = LLMFactory.from_config(llm_config)
     feedback_llm = LLMFactory.from_config(feedback_llm_config)
     suggestion_llm = LLMFactory.from_config(suggestion_llm_config)
@@ -329,6 +340,7 @@ def init_server() -> dict[str, Any]:
     # Return all components as a dictionary for easy access and extension
     return {
         "graph_db": graph_db,
+        "project_db": project_db,
         "mem_reader": mem_reader,
         "llm": llm,
         "suggestion_llm": suggestion_llm,
