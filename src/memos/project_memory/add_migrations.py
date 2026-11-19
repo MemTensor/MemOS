@@ -101,12 +101,14 @@ CREATE TABLE IF NOT EXISTS messages (
   task_id          text NOT NULL,
   user_id          text NOT NULL,
   agent_id         jsonb,
+  raw_sha256       text,
   content_sha256   text NOT NULL,
   PRIMARY KEY (project_id, conversation_key, message_id)
 );
 CREATE INDEX IF NOT EXISTS messages_turn_order_idx
   ON messages (project_id, conversation_key, turn_seq, msg_seq);
 CREATE INDEX IF NOT EXISTS messages_turn_idx ON messages (project_id, conversation_key, turn_id);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS raw_sha256 text;
 
 
 CREATE TABLE IF NOT EXISTS episodes (
