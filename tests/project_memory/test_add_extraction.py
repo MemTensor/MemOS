@@ -137,3 +137,40 @@ def test_adoption_requires_a_prior_assistant_proposal(role):
             [row("adopt", "user", "同意")],
             [row("earlier", role, "建议使用 PG17", "earlier-task")],
         )
+
+
+def test_listed_disclosures_use_actual_assistant_text_before_authorization():
+    first = "Use a single large export."
+    second = "Use multiple small exports."
+    future = "Use a timed export."
+    decision = "Choose multiple small exports."
+    earlier = row(
+        "earlier",
+        "assistant",
+        f"Alternatives: {first} {second}",
+        chat_time="2026-11-19T09:00:00+08:00",
+        turn_id="turn-1",
+    )
+    arrived_late = row(
+        "future", "assistant", future, chat_time="2026-11-19T09:05:00+08:00", turn_id="turn-2"
+    )
+    author = row("member", "user", decision, role_id="owner", chat_time="2026-11-19T09:04:00+08:00")
+    writer = Writer(
+        {
+            "episode_summary": decision,
+            "drafts": [
+                {
+                    "kind": "decision",
+                    "message_id": "member",
+                    "content": decision,
+                    "quote": decision,
+                    "final": True,
+                    "listed": [first, second, future, "A nonexistent option."],
+                }
+            ],
+        }
+    )
+
+    result = extract_episode(writer, {"id": "episode"}, [earlier, arrived_late, author])
+
+    assert result["drafts"][0]["listed"] == [first, second]
