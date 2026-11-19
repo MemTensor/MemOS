@@ -118,6 +118,11 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
         return
     memory, _ = decision.apply(target, plan, draft, conversation)
     if memory is not None:
+        reason = draft.change_reason or ""
+        for history in memory.history[len(target.history) :]:
+            history.reason = reason
+        if memory.content != target.content:
+            memory.reason = reason
         index = next(i for i, row in enumerate(snapshot["decisions"]) if row["id"] == memory.id)
         snapshot["decisions"][index] = {"id": memory.id, **memory.to_project()}
 

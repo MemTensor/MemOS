@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from memos.project_memory.add_merge import prepare_merge, rebase_append_only, rewrite_metadata
 
 
@@ -53,17 +55,27 @@ def plan_for(draft, topic=None):
     }
 
 
-def test_existing_decision_rewrite_retains_history_and_does_not_mutate_snapshot():
+@pytest.mark.parametrize("reason", [None, "新版接口使用独立连接池"])
+def test_existing_decision_rewrite_retains_history_and_does_not_mutate_snapshot(reason):
     initial = {
         "id": "same-decision",
         "content": "池大小设为 8",
         "time": "2026-11-19T01:00:00Z",
         "user_ids": ["user"],
         "source": {},
-        "history": [],
+        "reason": "旧服务共用连接池",
+        "history": [
+            {
+                "content": "池大小设为 4",
+                "time": "2026-11-19T00:00:00Z",
+                "user_ids": ["user"],
+                "source": {},
+                "reason": "已有变更依据",
+            }
+        ],
         "conflicts": [],
     }
-    data = plan_for({"kind": "decision", "content": "池大小设为 16"})
+    data = plan_for({"kind": "decision", "content": "池大小设为 16", "reason_quote": reason})
     data["assignments"][0]["topic"]["decisions"] = [initial]
     frozen = deepcopy(data)
     writer = Writer(
@@ -72,7 +84,10 @@ def test_existing_decision_rewrite_retains_history_and_does_not_mutate_snapshot(
     change = prepare_merge(writer, data)
     proposed = change["topics"][0]["topic"]
     assert proposed["decisions"][0]["content"] == "池大小设为 16"
-    assert proposed["decisions"][0]["history"][0]["content"] == "池大小设为 8"
+    assert proposed["decisions"][0]["history"][0]["reason"] == "已有变更依据"
+    assert proposed["decisions"][0]["history"][1]["content"] == "池大小设为 8"
+    assert proposed["decisions"][0]["history"][1]["reason"] == (reason or "")
+    assert proposed["decisions"][0]["reason"] == (reason or "")
     assert proposed["decisions"][0]["source"]["message_id"] == "message"
     assert change["kind"] == "modify"
     assert data == frozen
