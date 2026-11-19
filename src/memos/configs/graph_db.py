@@ -1,4 +1,4 @@
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -195,8 +195,7 @@ class PostgresGraphDBConfig(BaseConfig):
     Does NOT require Apache AGE or other graph extensions.
 
     Schema:
-    - memos_memories: Main table for memory nodes (id, memory, properties JSONB, embedding vector)
-    - memos_edges: Edge table for relationships (source_id, target_id, type)
+    - {schema}_graph_{n}."Memory" and "Edges", one physical shard per tenant
 
     Example:
     ---
@@ -223,12 +222,32 @@ class PostgresGraphDBConfig(BaseConfig):
         default=False,
         description="If False: use single database with logical isolation by user_name",
     )
-    embedding_dimension: int = Field(
-        default=768, description="Dimension of vector embedding (768 for all-mpnet-base-v2)"
+    embedding_dimension: int = Field(default=1024, description="Dimension of vector embedding")
+    shard_count: int = Field(
+        default=400,
+        ge=1,
+        le=4096,
+        description="Number of MD5 tenant shards",
     )
     maxconn: int = Field(
         default=20,
         description="Maximum number of connections in the connection pool",
+    )
+    minconn: int = Field(
+        default=8,
+        ge=1,
+        description="Warm connections kept in the pool",
+    )
+    vector_index_type: Literal["hnsw", "ivfflat"] = Field(
+        default="hnsw",
+        description="pgvector approximate index type",
+    )
+    hnsw_m: int = Field(default=16, ge=2, le=100)
+    hnsw_ef_construction: int = Field(default=64, ge=4, le=1000)
+    ivfflat_lists: int = Field(default=100, ge=1)
+    fulltext_config: str = Field(
+        default="jiebacfg",
+        description="PostgreSQL text search configuration used to build search_vector",
     )
 
     @model_validator(mode="after")
@@ -238,6 +257,10 @@ class PostgresGraphDBConfig(BaseConfig):
             raise ValueError("`db_name` must be provided")
         if not self.use_multi_db and not self.user_name:
             raise ValueError("In single-database mode, `user_name` must be provided")
+        if self.minconn > self.maxconn:
+            raise ValueError(f"`minconn` ({self.minconn}) must be <= `maxconn` ({self.maxconn})")
+        if not self.fulltext_config.replace(".", "_").isidentifier():
+            raise ValueError("`fulltext_config` must be a valid PostgreSQL configuration name")
         return self
 
 
