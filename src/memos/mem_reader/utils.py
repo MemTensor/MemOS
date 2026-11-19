@@ -56,7 +56,7 @@ def parse_json_result(response_text: str) -> dict:
 
     i = s.find("{")
     if i == -1:
-        raise LLMResponseParseError(f"No JSON object found in LLM response: tail={raw[-200:]!r}")
+        raise LLMResponseParseError("No JSON object found in LLM response")
     s = s[i:].strip()
 
     last_err: json.JSONDecodeError | None = None
@@ -89,13 +89,8 @@ def parse_json_result(response_text: str) -> dict:
             except json.JSONDecodeError as e2:
                 last_err = e2
 
-    logger.warning(
-        f"[JSONParse] Failed to decode JSON: {last_err}\nTail: Raw {response_text} \
-        json: {s}"
-    )
-    raise LLMResponseParseError(
-        f"Failed to decode JSON from LLM response: {last_err}"
-    ) from last_err
+    logger.warning("[JSONParse] Failed to decode JSON at position %s", last_err.pos)
+    raise LLMResponseParseError("Failed to decode JSON from LLM response") from last_err
 
 
 def parse_rewritten_response(text: str) -> tuple[bool, dict[int, dict]]:

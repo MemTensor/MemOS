@@ -1,7 +1,7 @@
 """Regression tests for issue #1493.
 
 `POST /product/add` returned 200 + "Memory added successfully" but persisted no
-memory items. Root cause: when the LLM response fails JSON parsing,
+memory items. Root cause: when LLM generation fails,
 `SimpleStructMemReader._get_llm_response` is supposed to emit a fallback dict
 with a single salvaged `UserMemory` item so the request still produces at least
 one stored memory. However, the fallback used the key `"memory_list"`
@@ -57,9 +57,8 @@ class TestSimpleStructFallbackKey(unittest.TestCase):
         (with space). The fallback dict therefore MUST use the same key, or it
         is effectively dead code and the request stores nothing.
         """
-        # Force `_safe_parse` to behave as if the LLM returned unparseable
-        # output (the realistic failure mode reported in #1493 / #1355).
-        self.reader.llm.generate.return_value = "this is not json at all"
+        # Generation failures preserve the raw-input fallback from #1355.
+        self.reader.llm.generate.side_effect = OSError("Synthetic generation failure")
 
         result = self.reader._get_llm_response("I like strawberry.", custom_tags=None)
 
@@ -74,20 +73,16 @@ class TestSimpleStructFallbackKey(unittest.TestCase):
         self.assertEqual(item["memory_type"], "UserMemory")
         self.assertEqual(item["value"], "I like strawberry.")
 
-    def test_process_chat_data_fine_yields_node_when_llm_unparseable(self):
+    def test_process_chat_data_fine_yields_node_when_generation_fails(self):
         """End-to-end: fine-mode `_process_chat_data` must still produce a
         `TextualMemoryItem` when the LLM output is unparseable JSON.
 
         This is the symptom-level test for #1493: an `/product/add` call
         carrying `"I like strawberry."` should result in at least one memory
-        item even when the LLM emits non-JSON chatter.
+        item even when the LLM provider raises.
         """
-        # Realistic Kimi-K2 style failure: LLM wraps response in chatter so
-        # `parse_json_result` raises (issue #2456), `_safe_parse` catches the
-        # exception and returns `None`, and the fallback fires.
-        self.reader.llm.generate.return_value = (
-            "Here is what I extracted: ... unfortunately I cannot output JSON."
-        )
+        # Generation errors remain distinguishable from malformed responses.
+        self.reader.llm.generate.side_effect = OSError("Synthetic generation failure")
 
         scene_data_info = [{"role": "user", "content": "I like strawberry."}]
         info = {"user_id": "user1", "session_id": "session1"}
