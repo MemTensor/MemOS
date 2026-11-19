@@ -142,6 +142,7 @@ def run_smoke(
     conversation = f"{run_id}:conversation"
     now = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=1)
     spaces: list[str] = []
+    topic_ids: set[str] = set()
     try:
         for index, endpoint in enumerate((client, peer), 1):
             space = post(
@@ -160,7 +161,8 @@ def run_smoke(
             one_shot = payload(run_id, f"standalone-{index}", texts, spaces, now, sync=True)
             receipt = add(client, one_shot)
             require(receipt["task_id"] == one_shot["task_id"], "Standalone Task ID changed")
-            wait_closed(peer, receipt["task_id"], wait_seconds)
+            result = wait_closed(peer, receipt["task_id"], wait_seconds)
+            topic_ids.update(project_result(result)["memory_ids"])
         print("PASS standalone Add closed in both Spaces")
 
         first = payload(run_id, "open", DECISION, spaces, now, conversation_id=conversation)
@@ -190,6 +192,7 @@ def run_smoke(
         )
         ending = add(peer, end)["task_id"]
         completed = wait_closed(client, task, wait_seconds)
+        topic_ids.update(project_result(completed)["memory_ids"])
         wait_closed(client, ending, wait_seconds)
         continued = payload(
             run_id,
@@ -213,7 +216,6 @@ def run_smoke(
         print("PASS explicit Episode closure and same-conversation continuation")
 
         if require_topic:
-            topic_ids = set(project_result(completed)["memory_ids"])
             for space in spaces:
                 memory = post(peer, "/product/get_memory", {"space_id": space})
                 require(

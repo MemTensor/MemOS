@@ -1,104 +1,50 @@
-# 本地部署（项目记忆 · promem_dev）
+# 项目记忆 Add 本地部署
 
-在本地起一个真服务：MemOS 服务 + Neo4j 社区版 + Qdrant，项目记忆用自己的 PostgreSQL（pgvector 镜像，容器名 memos-promem-postgres，本机端口 5433）。
+部署包含 MemOS、项目记忆 PostgreSQL（pgvector）、Redis Streams、Neo4j 社区版和 Qdrant。PostgreSQL 保存原文、Turn 归属、Episode 状态与 Topic。Redis 负责 Add 阶段调度。Neo4j 和 Qdrant 服务于原有记忆视图。Compose 将本机访问端口绑定到 `127.0.0.1`。
 
-## 为什么是这个组合
+## 启动
 
-核心用 `neo4j-community`：开源版的默认后端。核心代码在 `graph_dbs/` 之外一共调用图库的 30 个方法，开源基线（`dev-v2.0.36`）上各后端实现了几个：
-
-| 后端 | 实现 | 缺的 |
-| --- | --- | --- |
-| polardb | 30 | 无，但依赖 `polar_age` + pg_jieba，是线上的云库，本地起不了 |
-| **neo4j-community** | **28** | `search_by_keywords_like/tfidf`（只在 feedback 的关键词替换里用）；`search_by_fulltext` 有但返回空 |
-| postgres | 19 | `get_edges`、两个整理用的计数、四个管理接口等 11 个 |
-
-社区版不带向量索引，向量放在 Qdrant，所以是两个容器。
-
-项目记忆不放进 Neo4j：neo4j 两种后端的 `search_by_fulltext` 都只有一行 `return []`，也没有 `rev` 条件写——放进去会少一路召回，并发整理同一条决策会丢更新。
-
-项目记忆用自己的 PostgreSQL（`src/memos/project_memory/pg_backend.py`，不经核心的 postgres 后端）：多个副本 / worker 共享同一份数据，带 `rev` 条件写（`add_node(..., expected_rev=n)`）与中文二元组全文检索，表建在 schema `project_memory` 下、结构照老库 `Memory` 表。单进程试用也可以改回 SQLite 文件库（`PROJECT_MEMORY_GRAPH_DB=sqlite`，数据在命名卷 `promem_data`）。<mark>从 SQLite 换到 Postgres 时旧数据不迁移</mark>。
-
-## 起服务
-
-**一键**：在 Finder 里双击 `docker/project-memory/启动项目记忆服务.command`，或在终端执行
-`bash docker/project-memory/start.sh`。它依次检查 Docker 与端口、建一个只装 python-dotenv / httpx 的 venv、
-生成 `.env`、构建镜像、起容器、等 `/health`、灌一遍样例数据（保留），最后打印访问地址。可以重复执行；
-`--no-smoke` 只起服务，`--rebuild` 重建底座镜像，`--stop` 停服务。
-
-手动分步：
+从仓库根目录运行。准备一份含模型设置的本地配置，`make_env.py` 会按模板生成 `.env`。项目记忆和调度使用 Compose 中的专用服务。
 
 ```bash
-cd MemOS_DEV/MemOS
-
-# 1) 生成 .env：只从 env_example 取模型 key，库指到 compose 里的 neo4j / qdrant
 python3 docker/project-memory/make_env.py --env-file ../env_example
 
-# 2) 构建底座镜像（仓库自带的 Dockerfile）+ 部署镜像
 docker build -f docker/Dockerfile -t memos-base:promem .
 docker build -f docker/project-memory/Dockerfile -t memos-promem:local .
-docker compose -f docker/project-memory/docker-compose.yml up -d   # 不加 --build：新版 compose 构建要 buildx 插件
-
-# 3) 冒烟（走 HTTP；整理是异步的，脚本会轮询 get/status）
-python3 docker/project-memory/smoke.py --base http://127.0.0.1:8000
-
-# 4) 看日志 / 停（数据在命名卷里，down 不删）
-docker compose -f docker/project-memory/docker-compose.yml logs -f memos
-docker compose -f docker/project-memory/docker-compose.yml down
+docker compose -f docker/project-memory/docker-compose.yml up -d --wait
 ```
 
-## 两个必须改的地方（直接用仓库自带的 compose 会踩）
+本地部署镜像使用 `pip install -e /app --no-deps` 注册 `project_memory` 入口，应用入口为 `memos.api.server_api:app`。单实例也可用 `bash docker/project-memory/start.sh`，它会构建镜像、等待 `/health` 并运行冒烟脚本。`--no-smoke` 只启动服务，`--rebuild` 重建底座镜像。
 
-1. <mark>镜像里没注册插件入口点</mark>。`docker/Dockerfile` 只设 `PYTHONPATH=/app/src`，而插件发现走
-   `importlib.metadata.entry_points(group="memos.plugins")`。照它构建，`project_memory` 与 Dream
-   都不会加载，`allow_memory_view=project` 直接 400。部署镜像补了 `pip install -e . --no-deps`。
-2. <mark>`env_example` 里核心库指向公司 PolarDB</mark>（`NEO4J_BACKEND=polardb`）。整份抄过去会把本地
-   服务接到共享库。`make_env.py` 只挑模型那几项，库与端口在 `env.template` 里写死成本地容器。
+双实例通过 `replica` profile 启动。两个 API 共享 PostgreSQL、Redis 连接和项目 ID。
 
-## `.env` 里放什么
+```bash
+docker compose --profile replica -f docker/project-memory/docker-compose.yml up -d --wait
+python3 docker/project-memory/smoke.py \
+  --base http://127.0.0.1:8000 --peer http://127.0.0.1:8001
+```
 
-| 组 | 关键项 |
+单实例冒烟可省略 `--peer`。脚本使用自带的合成轮次和请求内稳定的消息 ID，检查同一次 Add 写两个 Space、去重后的原文和开放消息计数、重复请求与冲突、归属校验、明确边界关段及同会话续写。每次运行创建独立的临时 Space，默认通过 API 删除，`--keep` 可保留供检查。`--scenario decision` 或 `--scenario experience` 可指定独立批次的样例类型。
+
+若要在少量样例中验证 Topic 正式提交，可在专用测试环境的 `.env` 设置 `PROJECT_MEMORY_FORMATION_COUNT=1` 并重新启动，随后冒烟时加 `--require-topic`。默认 Formation 在条件满足前允许返回暂存的成功回执。
+
+## 配置与数据
+
+| 用途 | 关键配置与默认值 |
 | --- | --- |
-| 核心模型 | `MOS_CHAT_MODEL`、`OPENAI_API_KEY/BASE`、`MEMRADER_*`、`EMBEDDING_DIMENSION=1024` |
-| 核心库 | `GRAPH_DB_BACKEND=neo4j-community`、`NEO4J_URI=bolt://neo4j:7687`、`NEO4J_PASSWORD=projectmemory`、`QDRANT_HOST=qdrant` |
-| 调度 | `MEMSCHEDULER_USE_REDIS_QUEUE=false`（单机进程内队列） |
-| 项目记忆 | `MEMOS_ENABLED_PLUGINS=project_memory`、`PROJECT_MEMORY_GRAPH_DB=postgres`、`PROJECT_MEMORY_POSTGRES_USER/PASSWORD/DB/SCHEMA`（主机与端口在 compose 的 `environment` 里） |
-| 项目记忆模型 | `PROJECT_MEMORY_LLM_*`（温度 0）、`PROJECT_MEMORY_JUDGE_LLM_*`、`PROJECT_MEMORY_EMBEDDER_*` |
-| 段管理 | `PROJECT_MEMORY_IDLE_MINUTES=30`、`PROJECT_MEMORY_DEBUG_TRACE=false` |
+| 本地项目身份 | `PROJECT_MEMORY_PROJECT_ID=local-project`。两个实例使用相同值。 |
+| 项目数据库 | `PROJECT_MEMORY_GRAPH_DB=postgres`，`PROJECT_MEMORY_POSTGRES_SCHEMA=project_memory`。数据库通过 `127.0.0.1:5433` 从本机访问。 |
+| Redis Streams | `MEMSCHEDULER_USE_REDIS_QUEUE=true`。`REDIS_*` 和 `MEMSCHEDULER_REDIS_*` 都指向 `redis:6379`。可通过 `docker compose -f docker/project-memory/docker-compose.yml exec redis redis-cli` 从容器内查看。 |
+| 模型 | `PROJECT_MEMORY_LLM_*`、`PROJECT_MEMORY_JUDGE_LLM_*` 和 `PROJECT_MEMORY_EMBEDDER_*`。 |
+| Episode | 空闲 900 秒，首轮最长等待 1800 秒，最多 8 轮，体量阈值按 12000 token 估算。 |
+| Formation | 默认新增暂存段达到 10 条或达到 7200 秒阈值时检查。 |
 
-`PROJECT_MEMORY_GRAPH_DB` 三个取值：`postgres`（本部署用；代码里不设时默认 `sqlite`）、`sqlite`（单文件，只适合单进程）、
-`shared`（核心那个 graph_db 实例；核心是 neo4j 时不建议，原因见上）。
+本机端口可通过 `MEMOS_LOCAL_HTTP_PORT`、`MEMOS_LOCAL_PEER_HTTP_PORT`、`MEMOS_LOCAL_POSTGRES_PORT`、`MEMOS_LOCAL_NEO4J_HTTP_PORT`、`MEMOS_LOCAL_NEO4J_BOLT_PORT`、`MEMOS_LOCAL_QDRANT_PORT` 配置。若要同时运行两套部署，为第二套指定独立的 Compose 项目名、`MEMOS_LOCAL_CONTAINER_PREFIX` 和本机端口。使用其他环境配置文件时，将 `MEMOS_LOCAL_ENV_FILE` 设为绝对路径，并把同一路径传给 `docker compose --env-file`。
 
-并发：同一 Space 的不同会话并行整理（一个会话一条调度流），锁默认是进程内的。多副本部署时由工程注册
-`H.PROJECT_MEMORY_LOCK`（比如 Redis 锁），见 `src/memos/project_memory/locks.py`。
+保留旧版项目记忆数据时，请按迁移流程指定旧库、项目映射与归档位置。直接启动新版会使用新的关系表。停止服务保留 PostgreSQL 和 Redis 等命名卷。
 
-## 已验证到哪一步（沙箱，不是 docker）
-
-沙箱没有 docker，所以按镜像里的同一套组件手动起：`make_env.py` 从 `env_example` 渲染出的 `.env`（compose 里
-`environment` 那几项改成本机地址）+ uvicorn + **Neo4j 5.26.6（社区版）+ Qdrant 1.15.3** + `pip install -e .`
-注册入口点 + 真实模型（gpt-4o-mini / bge-m3）。跑的就是本目录的 `smoke.py`：
-
-- `--scenario decision`：七轮（六段）全过，每轮 `get/status` 一个主题；决策走了 add → conflict（护栏把模型的
-  rewrite 改成 conflict）→ join → conflict → rewrite 定案；
-- `--scenario experience`：三段全过；B 新建（0.5）→ D 补充（0.6，旧版归档）→ E 被护栏降为新增待验证（上限 5 步时 8 步超限；放宽到 8 步后这次合并成 10 步，仍超限，见已知问题）；
-- 项目记忆落在 SQLite 文件库，Neo4j 里只有核心记忆。单测 37 条全过。
-
-docker 本身（镜像构建、compose 编排、命名卷、healthcheck）没在这里跑过，第一次在你机器上跑请留意
-`docker build` 输出。
-
-## 真服务跑出来的问题（已修）
-
-1. <mark>`flush` 不更新任务</mark>：会话结束调 `flush` 能整理出主题，但没记到 add 的任务上，
-   `get/status` 一直是空。现在 `flush` 接受 `task_id`，整理完把主题记上去。**接入方要带这个参数。**
-2. 冒烟脚本原来在调度器跑完前就查状态，改成轮询。
-3. 空闲关段的「现在」原来取墙钟，导入历史会话时每段都会被判成空闲。改成取这批消息的时间。
-
-## 已知问题
-
-- **合并后的 principle 仍可能超过上限**。上限已由 5 步放宽到 8 步（11/17），但合并模型倾向于把两张卡的步骤
-  直接拼接（会有「运行测试以验证功能」「运行测试以验证导入结果」这种同义重复），几轮合并后照样超限；超限时护栏
-  把 update 降成「新增待验证」。实跑：第 2 段合并为 8 步、通过；第 3 段合并为 10 步、被降级。
-- 单机进程内队列（`MEMSCHEDULER_USE_REDIS_QUEUE=false`）；多副本要换 Redis 队列。同一 Space 的串行锁
-  只在单进程内有效（`rev` 条件写只保护单条记录）。
-- 项目记忆的库与核心的 Neo4j 是两个库：清空、迁移要分开做。
-- 核心在 neo4j 上的关键词 / 全文召回是空的（上游未实现），只影响个人记忆检索，与项目记忆无关。
-- 会话结束时调 `flush` 是接入方的责任（本地插件、Memmy）。不调的话最后一段要等下一次写入或空闲超时。
+```bash
+docker compose --profile replica -f docker/project-memory/docker-compose.yml ps
+docker compose --profile replica -f docker/project-memory/docker-compose.yml logs -f memos memos-peer
+docker compose --profile replica -f docker/project-memory/docker-compose.yml down
+```
