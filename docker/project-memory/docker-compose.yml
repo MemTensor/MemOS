@@ -1,64 +1,68 @@
-# 本地部署：MemOS 服务 + Neo4j（社区版）+ Qdrant，项目记忆用自己的 PostgreSQL（pgvector）。
-#
-#   1) 生成 .env（从 MemOS_DEV/env_example 取模型 key，只取模型那几项）
-#        python3 docker/project-memory/make_env.py --env-file ../env_example
-#   2) 构建底座镜像（仓库自带的 Dockerfile）与部署镜像
-#        docker build -f docker/Dockerfile -t memos-base:promem .
-#        docker build -f docker/project-memory/Dockerfile -t memos-promem:local .
-#   3) 起服务（不加 --build：新版 compose 构建要 buildx 插件，Colima 往往没有）
-#        docker compose -f docker/project-memory/docker-compose.yml up -d
-#   一键：bash docker/project-memory/start.sh
-#   4) 冒烟（本机跑；整理是异步的，脚本会轮询 get/status）
-#        python3 docker/project-memory/smoke.py --base http://127.0.0.1:8000
-#   5) 看日志 / 停（数据在命名卷里，down 不删）
-#        docker compose -f docker/project-memory/docker-compose.yml logs -f memos
-#        docker compose -f docker/project-memory/docker-compose.yml down
-#
-# 核心用 neo4j-community：开源版默认后端，核心调用的 30 个图库方法实现了 28 个（Postgres 只有 19 个）；
-# 社区版不带向量索引，向量放在 Qdrant。
-# 项目记忆不放进 Neo4j：neo4j 两种后端的 search_by_fulltext 都是空实现、也没有 rev 条件写。
-# 项目记忆的 Postgres（pm-postgres）：多个副本 / worker 共享同一份数据，带 rev 条件写与中文全文；
-# 表建在 schema project_memory 下，结构照老库 Memory 表。改回单文件 SQLite：.env 里
-# PROJECT_MEMORY_GRAPH_DB=sqlite（数据在命名卷 promem_data）。
-
+# 本地项目记忆服务。启动和双实例验证见同目录 README.md。
 name: memos-project-memory
+
+x-memos: &memos
+  image: memos-promem:local
+  build:
+    context: ../..
+    dockerfile: docker/project-memory/Dockerfile
+  env_file:
+    - ${MEMOS_LOCAL_ENV_FILE:-../../.env}
+  depends_on:
+    neo4j:
+      condition: service_healthy
+    qdrant:
+      condition: service_started
+    pm-postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  environment:
+    QDRANT_HOST: qdrant
+    QDRANT_PORT: "6333"
+    NEO4J_URI: bolt://neo4j:7687
+    PROJECT_MEMORY_POSTGRES_HOST: pm-postgres
+    PROJECT_MEMORY_POSTGRES_PORT: "5432"
+    PROJECT_MEMORY_PROJECT_ID: ${PROJECT_MEMORY_PROJECT_ID:-local-project}
+    MEMSCHEDULER_USE_REDIS_QUEUE: "true"
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    REDIS_DB: "0"
+    MEMSCHEDULER_REDIS_HOST: redis
+    MEMSCHEDULER_REDIS_PORT: "6379"
+    MEMSCHEDULER_REDIS_DB: "0"
+  volumes:
+    - promem_data:/data/project_memory
+  networks:
+    - memos_network
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3).close()"]
+    interval: 5s
+    timeout: 5s
+    retries: 30
+    start_period: 20s
+  restart: unless-stopped
 
 services:
   memos:
-    container_name: memos-promem
-    image: memos-promem:local   # start.sh 先用 docker build 构建好，compose 直接用
-    build:
-      context: ../..
-      dockerfile: docker/project-memory/Dockerfile
+    <<: *memos
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}
     ports:
-      - "8000:8000"
-    env_file:
-      - ../../.env
-    depends_on:
-      neo4j:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
-      pm-postgres:
-        condition: service_healthy
-    environment:
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-      - NEO4J_URI=bolt://neo4j:7687
-      - PROJECT_MEMORY_POSTGRES_HOST=pm-postgres
-      - PROJECT_MEMORY_POSTGRES_PORT=5432
-    volumes:
-      - promem_data:/data/project_memory
-    networks:
-      - memos_network
-    restart: unless-stopped
+      - "127.0.0.1:${MEMOS_LOCAL_HTTP_PORT:-8000}:8000"
+
+  memos-peer:
+    <<: *memos
+    profiles: [replica]
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-peer
+    ports:
+      - "127.0.0.1:${MEMOS_LOCAL_PEER_HTTP_PORT:-8001}:8000"
 
   neo4j:
     image: neo4j:5.26.6
-    container_name: memos-promem-neo4j
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-neo4j
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "127.0.0.1:${MEMOS_LOCAL_NEO4J_HTTP_PORT:-7474}:7474"
+      - "127.0.0.1:${MEMOS_LOCAL_NEO4J_BOLT_PORT:-7687}:7687"
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1
       interval: 3s
@@ -76,9 +80,9 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.15.3
-    container_name: memos-promem-qdrant
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-qdrant
     ports:
-      - "6333:6333"
+      - "127.0.0.1:${MEMOS_LOCAL_QDRANT_PORT:-6333}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
@@ -89,9 +93,9 @@ services:
 
   pm-postgres:
     image: pgvector/pgvector:pg16
-    container_name: memos-promem-postgres
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-postgres
     ports:
-      - "5433:5432"   # 本机用 5433 连进来看数据，避开本机已有的 5432
+      - "127.0.0.1:${MEMOS_LOCAL_POSTGRES_PORT:-5433}:5432"
     environment:
       POSTGRES_USER: memos
       POSTGRES_PASSWORD: projectmemory
@@ -107,12 +111,27 @@ services:
     networks:
       - memos_network
 
+  redis:
+    image: redis:7.4-alpine
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - redis_data:/data
+    networks:
+      - memos_network
+
 volumes:
   pm_pg_data:
   promem_data:
   neo4j_data:
   neo4j_logs:
   qdrant_data:
+  redis_data:
 
 networks:
   memos_network:
