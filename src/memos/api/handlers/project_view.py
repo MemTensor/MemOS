@@ -42,8 +42,7 @@ __all__ = [
 
 
 class ProjectHTTPError(HTTPException):
-    """项目记忆的报错：多一个稳定的原因标识 `reason`（插件注册了它的处理函数，报错体带
-    `reason`；插件没加载时按核心的 HTTPException 处理，只有 message）。"""
+    """A project error with a stable reason used by the plugin response handler."""
 
     def __init__(self, status_code: int, detail: str, reason: str | None = None):
         super().__init__(status_code=status_code, detail=detail)
@@ -152,8 +151,7 @@ def list_topics(request: Any) -> dict[str, Any]:
 
 
 def get_by_id(memory_id: str) -> dict[str, Any] | None:
-    """按 ID 读项目记忆：主题 ID 返回 `{"topic_detail_list": [主题]}`，决策、经验、进展条目的
-    ID 返回 `{"project_item_list": [组件]}`；不是项目记忆的 ID 返回 None，走核心原有逻辑。"""
+    """Return a project topic or item by ID, or None for the core lookup."""
     if not project_enabled():
         return None
     return _single(H.PROJECT_MEMORY_GET_BY_ID, memory_id=memory_id)
@@ -170,8 +168,7 @@ def delete_topics(request: Any) -> dict[str, Any]:
 
 
 def merge_task_status(project_task: dict[str, Any], core: Any) -> dict[str, Any]:
-    """一个 add 同时写个人记忆与项目记忆时，同一个 task_id 的两类状态合并：任一进行中为
-    `in_progress`，否则任一失败为 `failed`，否则 `completed`；`memory_views` 两边合在一起。"""
+    """Combine both memory views, giving running work priority over a failure."""
     items = getattr(core, "data", None) or []
     if not items:
         return project_task

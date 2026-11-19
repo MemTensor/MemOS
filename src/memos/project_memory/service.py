@@ -26,14 +26,13 @@ import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos.graph_dbs.base import ConcurrentUpdateError
 
 from . import decision as dec
 from . import experience as exp
 from . import topic as topic_mod
-from .judge import ModelHub
 from .locks import InProcessLocks, conv_key, task_key, topic_key, topics_key
 from .segmenter import IDLE_MINUTES, idle_minutes_between, segment, split_turns
 from .store import ProjectStore, cosine, lexical_sim
@@ -55,6 +54,10 @@ from .types import (
     now_iso,
     time_key,
 )
+
+
+if TYPE_CHECKING:
+    from .judge import ModelHub
 
 
 logger = logging.getLogger(__name__)
