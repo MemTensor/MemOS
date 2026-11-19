@@ -4,6 +4,7 @@ import uuid
 import pytest
 
 from memos.project_memory.add_commit import commit_changeset
+from memos.project_memory.add_index import index_changeset, ranked_topics
 from memos.project_memory.add_merge import VersionConflictError, prepare_merge
 from memos.project_memory.add_store import PostgresAddStore, json_value
 
@@ -151,3 +152,42 @@ def test_version_conflict_rolls_back_entire_episode_change(store):
     assert after["version"] == 2
     assert len(after["timeline"]) == 2
     assert store.load_episode("three")["commit_key"] is None
+
+
+def test_vector_index_uses_same_commit_and_filters_domains(store):
+    basis = {
+        "id": "topic",
+        "space_id": "space",
+        "domain": "project",
+        "version": None,
+        "topic_name": "Connection pool",
+        "topic_summary": "",
+        "topic_description": "",
+    }
+    draft = draft_for("vector")
+    episode(store, "vector", draft)
+
+    def embed(texts):
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    edit = index_changeset(changeset("vector", draft, basis), embed, 3, model_id="local-fixture")
+    commit_changeset(store, "vector", 1, edit)
+    ranked, degraded = ranked_topics(
+        store,
+        {"space_id": "space", "domains": ["project"], "episode_summary": "unmatched-lexical"},
+        embed,
+    )
+    assert [topic["id"] for _, topic in ranked] == ["topic"]
+    assert degraded is False
+    excluded, _ = ranked_topics(
+        store,
+        {"space_id": "space", "domains": ["other"], "episode_summary": "unmatched-lexical"},
+        embed,
+    )
+    assert not excluded
+    with store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT embedding, embedding_model_id FROM topic_items")
+        assert cursor.fetchone() == {
+            "embedding": "[0.1,0.2,0.3]",
+            "embedding_model_id": "local-fixture",
+        }
