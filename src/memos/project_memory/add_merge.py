@@ -34,6 +34,7 @@ from .types import (
 
 if TYPE_CHECKING:
     from .judge import ModelHub
+    from .types import ConflictItem
 
 
 class VersionConflictError(MemOSError):
@@ -41,6 +42,7 @@ class VersionConflictError(MemOSError):
 
 
 _TOPIC_LISTS = ("decisions", "experiences", "timeline", "sources", "anchors")
+_MEMBER_STANCE_TIMES = "_member_stance_times"
 _METADATA = """[系统]
 从拟提交主题的当前快照输出 JSON {\"summary\": ..., \"description\": ...}。
 摘要至多 80 字，描述至多 400 字。只写当前有效的结论、经验和可核对的进展。
@@ -92,6 +94,25 @@ def _decision_draft(item: dict) -> DecisionDraft:
     )
 
 
+def _member_stance_times(row: dict, options: dict[str, ConflictItem]) -> dict[str, str]:
+    times = {}
+    for option in options.values():
+        if timestamp := _iso_utc(option.time):
+            times.update(dict.fromkeys(option.user_ids, timestamp))
+    recorded = row.get(_MEMBER_STANCE_TIMES)
+    if isinstance(recorded, dict):
+        for member, value in recorded.items():
+            if timestamp := _iso_utc(value):
+                times[member] = timestamp
+    return times
+
+
+def _has_newer_stance(option: ConflictItem, times: dict[str, str], received_time: float) -> bool:
+    return received_time < time_key(option.time) or any(
+        received_time < time_key(times.get(member)) for member in option.user_ids
+    )
+
+
 def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) -> None:
     topic_id = snapshot["id"]
     draft = _decision_draft(item)
@@ -116,25 +137,42 @@ def _prepare_decision(hub: ModelHub, snapshot: dict, episode: dict, item: dict) 
         memory.id = stable_uuid(f"decision:{topic_id}:{item['draft_id']}")
         snapshot["decisions"].append({"id": memory.id, **memory.to_project()})
         return
-    # A late statement cannot replace or withdraw the member's newer position.
-    items = target.items()
-    previous = items.get(target.item_of(draft.user_id) or "")
+    index = next(i for i, row in enumerate(snapshot["decisions"]) if row["id"] == target.id)
+    stored = snapshot["decisions"][index]
+    options = target.items()
+    times = _member_stance_times(stored, options)
+    previous_time = time_key(times.get(draft.user_id))
     received_time = time_key(draft.time)
-    if previous is not None and received_time < time_key(previous.time):
+    if received_time < previous_time:
         return
     if plan.action == decision.OP_RESOLVE and any(
-        received_time < time_key(item.time) for item in items.values()
+        _has_newer_stance(option, times, received_time) for option in options.values()
     ):
         return
-    memory, _ = decision.apply(target, plan, draft, conversation)
-    if memory is not None:
-        reason = draft.change_reason or ""
-        for history in memory.history[len(target.history) :]:
-            history.reason = reason
-        if memory.content != target.content:
-            memory.reason = reason
-        index = next(i for i, row in enumerate(snapshot["decisions"]) if row["id"] == memory.id)
-        snapshot["decisions"][index] = {"id": memory.id, **memory.to_project()}
+    memory, applied = decision.apply(target, plan, draft, conversation)
+    if applied.action == decision.OP_REWRITE and _has_newer_stance(
+        options["current"], times, received_time
+    ):
+        return
+
+    if draft.time:
+        times[draft.user_id] = draft.time
+    if memory is None:
+        # Reaffirming an item advances only the speaker's private stance time.
+        if received_time > previous_time:
+            stored[_MEMBER_STANCE_TIMES] = times
+        return
+
+    reason = draft.change_reason or ""
+    for history in memory.history[len(target.history) :]:
+        history.reason = reason
+    if memory.content != target.content:
+        memory.reason = reason
+    snapshot["decisions"][index] = {
+        "id": memory.id,
+        **memory.to_project(),
+        _MEMBER_STANCE_TIMES: times,
+    }
 
 
 def _card_from(item: dict, episode: dict, topic_id: str) -> ExperienceCard:
