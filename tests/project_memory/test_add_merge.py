@@ -397,6 +397,51 @@ def test_resolution_respects_newer_member_support_on_an_active_alternative():
     assert resolved["history"][0]["content"] == "Export hourly."
 
 
+def resolved_export_cadence():
+    topic = with_stance(None, "alice", "Export daily.", 1)
+    topic = with_stance(topic, "bob", "Export hourly.", 2)
+    disclosed = {"current": "Export daily.", "c1": "Export hourly."}
+    return with_stance(topic, "carol", "Export daily.", 6, same_as="current", confirms=disclosed)
+
+
+@pytest.mark.parametrize(
+    ("author", "content", "hour", "fresh"),
+    [
+        ("alice", "Export weekly.", 3, False),
+        ("bob", "Export hourly.", 3, False),
+        ("bob", "Export hourly.", 7, True),
+    ],
+    ids=["current-supporter", "archived-supporter", "new-disagreement"],
+)
+def test_resolution_fences_delayed_statements_from_all_affected_members(
+    author, content, hour, fresh
+):
+    topic = resolved_export_cadence()
+    (before,) = topic["decisions"]
+    assert before["content"] == "Export daily."
+    assert before["conflicts"] == []
+    assert before["time"] == "2026-11-19T06:00:00+00:00"
+
+    (after,) = with_stance(topic, author, content, hour)["decisions"]
+    if fresh:
+        (conflict,) = after["conflicts"]
+        assert conflict["content"] == content
+        assert conflict["user_ids"] == [author]
+        assert after["time"] == before["time"]
+        assert after["history"] == before["history"]
+    else:
+        assert after == before
+
+
+def test_active_option_time_bounds_older_stored_member_watermark():
+    topic = resolved_export_cadence()
+    (stored,) = topic["decisions"]
+    stored["_member_stance_times"]["alice"] = "2026-11-19T01:00:00+00:00"
+
+    late = with_stance(topic, "alice", "Export weekly.", 3)
+    assert late["decisions"] == [stored]
+
+
 def test_rewrite_uses_replaced_current_stances_not_unrelated_alternative_stances():
     topic = with_stance(None, "alice", "Export daily.", 1)
     alternative = with_stance(topic, "carol", "Export hourly.", 5)
