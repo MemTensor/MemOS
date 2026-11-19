@@ -166,9 +166,10 @@ class PostgresAddStore:
     def read_staged(self, space_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self.transaction(readonly=True) as cursor:
             cursor.execute(
-                """SELECT * FROM episodes
-                   WHERE project_id = %s AND space_id = %s AND staged_status = 'active'
-                   ORDER BY last_turn_at DESC, id LIMIT %s""",
+                """SELECT e.*, (SELECT COUNT(*) FROM episode_turns et
+                                  WHERE et.project_id = e.project_id AND et.episode_id = e.id) AS turn_count
+                   FROM episodes e WHERE e.project_id = %s AND e.space_id = %s AND e.staged_status = 'active'
+                   ORDER BY e.last_turn_at DESC, e.id LIMIT %s""",
                 (self.project_id, space_id, limit),
             )
             return cursor.fetchall()
