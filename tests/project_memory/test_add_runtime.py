@@ -208,7 +208,11 @@ def test_formation_reuses_committed_topic_for_another_staged_domain(store, monke
             }
         if scope == "dec.update":
             (target,) = inputs["decisions"]
-            return {"results": [{"n": 1, "decision_id": target["id"], "action": "rewrite"}]}
+            return {
+                "results": [
+                    {"n": 1, "decision_id": target["id"], "same_as": None, "action": "rewrite"}
+                ]
+            }
         if scope == "episode.metadata":
             return {"summary": "Connection pool size", "description": "Connection pool size"}
         raise AssertionError(f"Unexpected model operation {scope}")

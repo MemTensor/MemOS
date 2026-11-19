@@ -7,11 +7,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 
 from memos.project_memory import decision as dec
 from memos.project_memory import experience as exp
-from memos.project_memory.judge import ModelHub
+from memos.project_memory.judge import ModelError, ModelHub
 from memos.project_memory.service import ProjectMemoryService, parse_messages
 from memos.project_memory.store import ProjectStore
 from memos.project_memory.testing import (
@@ -441,6 +443,22 @@ def test_decide_owner_rewrites_non_owner_conflicts_old_message_cannot_rewrite():
     assert dec.decide(other, row, {"d1": d}).action == "conflict"
     p = dec.decide(old, row, {"d1": d})
     assert p.action == "conflict" and p.guarded, "早于当前结论的话不能改写"
+
+
+def test_complete_decision_update_requires_explicit_option_comparison():
+    target = _decision()
+    draft = DecisionDraft("m", "q", target.content, user_id="user_b")
+    row = {"n": 1, "decision_id": target.id, "action": "join"}
+    hub = Mock()
+    hub.write.return_value = {"results": [row]}
+
+    with pytest.raises(ModelError, match="same_as"):
+        dec.update(hub, [draft], [target], "Topic", require_complete=True)
+
+    row["same_as"] = None
+    assert dec.update(hub, [draft], [target], "Topic", require_complete=True) == [row]
+    row["same_as"] = "current"
+    assert dec.update(hub, [draft], [target], "Topic", require_complete=True) == [row]
 
 
 def test_resolve_needs_informed_on_every_item():

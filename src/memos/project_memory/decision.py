@@ -215,6 +215,8 @@ def _require_complete_updates(
                 raise ModelError("Decision update must explicitly select add for a new Decision")
         elif not isinstance(target, str) or target not in candidates:
             raise ModelError("Decision update references a Decision outside the snapshot")
+        elif "same_as" not in row:
+            raise ModelError("Decision update must include same_as for an existing Decision")
         elif same_as is not None and (
             not isinstance(same_as, str) or same_as not in candidates[target].items()
         ):
