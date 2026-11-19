@@ -281,16 +281,24 @@ class SQLiteGraphDB(BaseGraphDB):
 
     def delete_node(self, id: str, user_name: str | None = None) -> None:
         with self._lock:
-            row = self.conn.execute(
+            row = self._fetchone(
                 "SELECT seq FROM memory m WHERE id = ?"
                 + (" AND m.user_name = ?" if user_name else ""),
                 (id, user_name) if user_name else (id,),
-            ).fetchone()
+            )
             if not row:
                 return
             self._unindex(row[0])
             self.conn.execute("DELETE FROM memory WHERE seq = ?", (row[0],))
             self.conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (id, id))
+
+    def _fetchall(self, statement: str, parameters: list | tuple = ()) -> list[tuple]:
+        with self._lock:
+            return self.conn.execute(statement, parameters).fetchall()
+
+    def _fetchone(self, statement: str, parameters: list | tuple = ()) -> tuple | None:
+        with self._lock:
+            return self.conn.execute(statement, parameters).fetchone()
 
     def get_node(self, id: str, include_embedding: bool = False, **kwargs) -> dict[str, Any] | None:
         user_name = kwargs.get("user_name")
@@ -299,7 +307,7 @@ class SQLiteGraphDB(BaseGraphDB):
         if user_name:
             sql += " AND m.user_name = ?"
             params.append(user_name)
-        row = self.conn.execute(sql, params).fetchone()
+        row = self._fetchone(sql, params)
         return self._row_out(row, include_embedding) if row else None
 
     def get_nodes(
@@ -314,7 +322,7 @@ class SQLiteGraphDB(BaseGraphDB):
         if user_name:
             sql += " AND m.user_name = ?"
             params.append(user_name)
-        rows = {r[0]: r for r in self.conn.execute(sql, params).fetchall()}
+        rows = {r[0]: r for r in self._fetchall(sql, params)}
         return [self._row_out(rows[i], include_embedding) for i in ids if i in rows]
 
     def get_by_metadata(
@@ -355,7 +363,7 @@ class SQLiteGraphDB(BaseGraphDB):
             else:
                 raise ValueError(f"unsupported op: {op}")
         sql = "SELECT id FROM memory m" + (" WHERE " + " AND ".join(where) if where else "")
-        return [r[0] for r in self.conn.execute(sql, params).fetchall()]
+        return [r[0] for r in self._fetchall(sql, params)]
 
     def get_all_memory_items(
         self, scope: str, include_embedding: bool = False, status: str | None = None, **kwargs
@@ -366,26 +374,24 @@ class SQLiteGraphDB(BaseGraphDB):
         sql = f"SELECT {self._COLS} FROM memory m" + (
             " WHERE " + " AND ".join(where) if where else ""
         )
-        return [
-            self._row_out(r, include_embedding) for r in self.conn.execute(sql, params).fetchall()
-        ]
+        return [self._row_out(r, include_embedding) for r in self._fetchall(sql, params)]
 
     def get_memory_count(self, memory_type: str, user_name: str | None = None) -> int:
         user_name = user_name or self.user_name
-        return self.conn.execute(
+        return self._fetchone(
             "SELECT COUNT(*) FROM memory m WHERE m.memory_type = ? AND (? IS NULL OR m.user_name = ?)",
             (memory_type, user_name, user_name),
-        ).fetchone()[0]
+        )[0]
 
     def remove_oldest_memory(
         self, memory_type: str, keep_latest: int, user_name: str | None = None
     ) -> None:
         user_name = user_name or self.user_name
-        rows = self.conn.execute(
+        rows = self._fetchall(
             "SELECT id FROM memory m WHERE m.memory_type = ? AND (? IS NULL OR m.user_name = ?) "
             "ORDER BY updated_at DESC LIMIT -1 OFFSET ?",
             (memory_type, user_name, user_name, int(keep_latest)),
-        ).fetchall()
+        )
         for (node_id,) in rows:
             self.delete_node(node_id)
 
@@ -419,13 +425,13 @@ class SQLiteGraphDB(BaseGraphDB):
                 + (" WHERE " + " AND ".join(where) if where else "")
                 + " ORDER BY v.distance"
             )
-            for node_id, dist in self.conn.execute(sql, vec_params + params).fetchall():
+            for node_id, dist in self._fetchall(sql, vec_params + params):
                 hits.append({"id": node_id, "score": 1.0 - float(dist)})
         else:
             sql = "SELECT m.id, m.embedding FROM memory m WHERE m.embedding IS NOT NULL" + (
                 " AND " + " AND ".join(where) if where else ""
             )
-            for node_id, blob in self.conn.execute(sql, params).fetchall():
+            for node_id, blob in self._fetchall(sql, params):
                 emb = _unpack(blob)
                 if emb and len(emb) == len(vector):
                     hits.append({"id": node_id, "score": _cos(vector, emb)})
@@ -455,7 +461,7 @@ class SQLiteGraphDB(BaseGraphDB):
             + (" AND " + " AND ".join(where) if where else "")
             + " ORDER BY s LIMIT ?"
         )
-        rows = self.conn.execute(sql, [match, *params, top_k]).fetchall()
+        rows = self._fetchall(sql, [match, *params, top_k])
         if not rows:
             return []
         best = max(-s for _, s in rows) or 1.0
@@ -490,7 +496,7 @@ class SQLiteGraphDB(BaseGraphDB):
         if type and type != "ANY":
             sql += " AND type = ?"
             params.append(type)
-        return self.conn.execute(sql, params).fetchone() is not None
+        return self._fetchone(sql, params) is not None
 
     def get_neighbors(
         self, id: str, type: str, direction: Literal["in", "out", "both"] = "out", **kwargs
@@ -578,17 +584,15 @@ class SQLiteGraphDB(BaseGraphDB):
             "WHERE e.source_id = m.id OR e.target_id = m.id)"
             + (" AND " + " AND ".join(where) if where else "")
         )
-        return [
-            self._row_out(r, include_embedding) for r in self.conn.execute(sql, params).fetchall()
-        ]
+        return [self._row_out(r, include_embedding) for r in self._fetchall(sql, params)]
 
     def deduplicate_nodes(self, user_name: str | None = None) -> None:
         """Delete exact duplicates (same user_name, memory_type and text); the earliest row is kept."""
-        rows = self.conn.execute(
+        rows = self._fetchall(
             "SELECT id, m.user_name, m.memory_type, json_extract(properties, '$.memory') FROM memory m "
             "WHERE (? IS NULL OR m.user_name = ?) ORDER BY seq",
             (user_name, user_name),
-        ).fetchall()
+        )
         seen: set[tuple] = set()
         for node_id, un, mt, text in rows:
             key = (un, mt, text)
@@ -600,7 +604,7 @@ class SQLiteGraphDB(BaseGraphDB):
     def detect_conflicts(self) -> list[tuple[str, str]]:
         return [
             tuple(r)
-            for r in self.conn.execute(
+            for r in self._fetchall(
                 "SELECT source_id, target_id FROM edges WHERE type = 'CONFLICT'"
             )
         ]
@@ -620,7 +624,7 @@ class SQLiteGraphDB(BaseGraphDB):
         user_name = user_name or self.user_name
         ids = [
             r[0]
-            for r in self.conn.execute(
+            for r in self._fetchall(
                 "SELECT id FROM memory m WHERE (? IS NULL OR m.user_name = ?)",
                 (user_name, user_name),
             )
@@ -630,15 +634,15 @@ class SQLiteGraphDB(BaseGraphDB):
 
     def export_graph(self, include_embedding: bool = False, **kwargs) -> dict[str, Any]:
         user_name = kwargs.get("user_name") or self.user_name
-        rows = self.conn.execute(
+        rows = self._fetchall(
             f"SELECT {self._COLS} FROM memory m WHERE (? IS NULL OR m.user_name = ?)",
             (user_name, user_name),
-        ).fetchall()
+        )
         nodes = [self._row_out(r, include_embedding) for r in rows]
         ids = {n["id"] for n in nodes}
         edges = [
             {"source": s, "target": t, "type": ty}
-            for s, t, ty in self.conn.execute("SELECT source_id, target_id, type FROM edges")
+            for s, t, ty in self._fetchall("SELECT source_id, target_id, type FROM edges")
             if s in ids or t in ids
         ]
         return {"nodes": nodes, "edges": edges}
