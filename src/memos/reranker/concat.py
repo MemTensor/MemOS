@@ -72,12 +72,19 @@ def concat_original_source(
     rerank_source: str | None = None,
 ) -> list[str]:
     """
-    Merge memory items with original dialogue.
+    Merge memory items with their original source fields.
+
     Args:
-        graph_results (list[TextualMemoryItem]): List of memory items with embeddings.
-        merge_field (List[str]): List of fields to merge.
+        graph_results (list[TextualMemoryItem] | list[dict]): Memory items to
+            merge; may be either pydantic ``TextualMemoryItem`` instances or
+            pre-serialised dicts (e.g. from a cache or MCP payload).
+        rerank_source (str | None): Comma-separated metadata field names to
+            treat as the source. When ``None`` (the default) the ``sources``
+            field on each item is used.
+
     Returns:
-        list[str]: List of memory and concat orginal memory.
+        list[str]: One merged string per input item, with the referenced
+        source content appended to the memory text.
     """
     merge_field = []
     merge_field = ["sources"] if rerank_source is None else rerank_source.split(",")
