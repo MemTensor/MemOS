@@ -6,7 +6,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from memos.configs.project_db import PostgresProjectDBConfig
 from memos.dependency import require_python_package
@@ -29,7 +29,6 @@ from memos.project_dbs.item import (
     Page,
     SearchHit,
     Space,
-    SpaceContext,
     Topic,
     TopicChangeResult,
     TopicChangeSet,
@@ -72,7 +71,7 @@ class PostgresProjectDB(BaseProjectDB):
             keepalives_count=5,
         )
         try:
-            self._check_vector_extension()
+            self._check_extensions()
             if config.auto_init:
                 self._init_schema()
         except Exception:
@@ -91,21 +90,48 @@ class PostgresProjectDB(BaseProjectDB):
             # The pool discards connections that were lost, e.g. after a DB restart.
             self.pool.putconn(conn)
 
-    def _check_vector_extension(self) -> None:
+    def _check_extensions(self) -> None:
+        required = ["vector"]
+        if self.config.text_search_parser == "zhparser":
+            required.append("zhparser")
         with self._tx() as cur:
-            cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
-            if cur.fetchone() is None:
-                raise ProjectDBError(
-                    "pgvector extension is not installed in database "
-                    f"'{self.config.db_name}'; run CREATE EXTENSION vector with a privileged account"
-                )
+            cur.execute("SELECT extname FROM pg_extension WHERE extname = ANY(%s)", (required,))
+            installed = {row[0] for row in cur.fetchall()}
+        missing = [name for name in required if name not in installed]
+        if missing:
+            raise ProjectDBError(
+                f"PostgreSQL extensions not installed in database '{self.config.db_name}': "
+                f"{missing}; run CREATE EXTENSION with a privileged account"
+            )
+
+    def _render_ddl(self) -> str:
+        """Fill the placeholders of postgres_init.sql from the config."""
+        if self.config.text_search_parser == "zhparser":
+            create = (
+                f"CREATE TEXT SEARCH CONFIGURATION {SCHEMA}.zh (PARSER = zhparser); "
+                f"ALTER TEXT SEARCH CONFIGURATION {SCHEMA}.zh "
+                "ADD MAPPING FOR n, v, a, i, e, l WITH simple;"
+            )
+        else:
+            create = f"CREATE TEXT SEARCH CONFIGURATION {SCHEMA}.zh (COPY = simple);"
+        # Guarded so a pre-existing configuration does not break init.
+        text_search = (
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_ts_config c "
+            "JOIN pg_namespace n ON n.oid = c.cfgnamespace "
+            f"WHERE c.cfgname = 'zh' AND n.nspname = '{SCHEMA}') THEN {create} END IF; END $$;"
+        )
+        template = INIT_SQL.read_text(encoding="utf-8")
+        for placeholder in ("{embedding_dimension}", "{text_search_config}"):
+            if placeholder not in template:
+                raise ProjectDBError(f"Placeholder {placeholder} missing in {INIT_SQL.name}")
+        return template.replace(
+            "{embedding_dimension}", str(int(self.config.embedding_dimension))
+        ).replace("{text_search_config}", text_search)
 
     def _init_schema(self) -> None:
         """Create the schema once. Existing installs are left untouched, so a restart
         neither needs DDL privileges nor takes locks on live tables."""
-        ddl = INIT_SQL.read_text(encoding="utf-8").replace(
-            "{embedding_dimension}", str(int(self.config.embedding_dimension))
-        )
+        ddl = self._render_ddl()
         with self._tx() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(%s)", (_INIT_LOCK_KEY,))
             cur.execute("SELECT to_regclass(%s)", (f"{SCHEMA}.project_entries",))
@@ -118,7 +144,7 @@ class PostgresProjectDB(BaseProjectDB):
         self.pool.closeall()
 
     # ---------- 空间 ----------
-    _SPACE_COLS = "id, project_id, space_name, instructions, create_time, update_time"
+    _SPACE_COLS = "id, project_id, space_name, instructions, create_time, update_time, cleared_at"
     _DOMAIN_COLS = "id, space_id, domain, description"
 
     @staticmethod
@@ -130,6 +156,7 @@ class PostgresProjectDB(BaseProjectDB):
             instructions=row[3],
             create_time=row[4],
             update_time=row[5],
+            cleared_at=row[6],
         )
 
     @staticmethod
@@ -313,52 +340,56 @@ class PostgresProjectDB(BaseProjectDB):
             )
             return [self._domain(row) for row in cur.fetchall()]
 
-    # ---------- 主题与条目读取 ----------
+    # ---------- topic and entry reads ----------
     def list_topics(
         self,
         space_id: str,
-        filter: TopicFilter | None = None,
+        filters: list[TopicFilter] | None = None,
         page: int = 1,
         size: int = 10,
+        preview_size: int = 5,
     ) -> Page[Topic]:
         raise NotImplementedError
 
-    def get_topics(self, project_id: str, topic_ids: list[str]) -> list[Topic]:
+    def list_entries(
+        self,
+        topic_id: str,
+        entry_type: Literal["decision", "experience", "timeline"],
+        page: int = 1,
+        size: int = 10,
+    ) -> Page[AnyEntry]:
         raise NotImplementedError
 
-    def get_entries(self, project_id: str, entry_ids: list[str]) -> list[AnyEntry]:
+    def get_topics(self, topic_ids: list[str]) -> list[Topic]:
         raise NotImplementedError
 
-    def load_space_context(self, space_id: str, domains: list[str] | None = None) -> SpaceContext:
-        raise NotImplementedError
-
-    # ---------- 主题写入 ----------
+    # ---------- topic writes ----------
     def apply_changes(self, change_set: TopicChangeSet) -> list[TopicChangeResult]:
         raise NotImplementedError
 
-    def update_topic_decisions(
+    def update_decision(
         self,
-        project_id: str,
-        topic_id: str,
+        decision_id: str,
         expected_update_time: datetime,
-        decisions: list[Decision],
-    ) -> Topic:
+        content: str,
+        embedding: list[float] | None = None,
+    ) -> Decision:
         raise NotImplementedError
 
-    def delete_topics(self, project_id: str, topic_ids: list[str]) -> int:
+    def delete_topics(self, topic_ids: list[str]) -> int:
         raise NotImplementedError
 
     def clear_space(self, space_id: str) -> int:
         raise NotImplementedError
 
-    # ---------- 检索 ----------
+    # ---------- search ----------
     def search_topics(
         self,
         space_ids: list[str],
         query_vec: list[float],
         query_text: str | None = None,
         domains: list[str] | None = None,
-        filter: TopicFilter | None = None,
+        filters: list[TopicFilter] | None = None,
         top_k: int = 20,
     ) -> list[SearchHit]:
         raise NotImplementedError

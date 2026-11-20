@@ -36,3 +36,11 @@ class EntryNotFoundError(ProjectDBError):
 
 class UpdateConflictError(ProjectDBError):
     """update_time supplied by the caller differs from the stored value."""
+
+
+class SpaceClearedError(ProjectDBError):
+    """The space was cleared after the task was accepted; the change set is discarded."""
+
+
+class VersionConflictError(ProjectDBError):
+    """A topic version differs from expected_version; the change set is rolled back."""

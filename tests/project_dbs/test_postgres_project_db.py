@@ -73,7 +73,7 @@ def test_missing_pgvector_fails_and_closes_pool(pg_db):
         cur.execute("DROP DATABASE IF EXISTS project_db_novector")
         cur.execute("CREATE DATABASE project_db_novector")
     try:
-        with pytest.raises(ProjectDBError, match="pgvector"):
+        with pytest.raises(ProjectDBError, match="vector"):
             PostgresProjectDB(_config(pg_db, db_name="project_db_novector"))
         with admin.cursor() as cur:
             cur.execute(
@@ -172,3 +172,15 @@ def test_delete_space_waits_for_in_flight_topic_insert(pg_db):
     with pg_db._tx() as cur:
         cur.execute("SELECT count(*) FROM project_memory.topics WHERE space_id = %s", (space.id,))
         assert cur.fetchone()[0] == 0
+
+
+def test_init_tolerates_existing_text_search_config(pg_db):
+    with pg_db._tx() as cur:  # tables gone, configuration left behind
+        cur.execute(
+            "DROP TABLE project_memory.project_entries, project_memory.topics, "
+            "project_memory.domains, project_memory.spaces"
+        )
+    pg_db._init_schema()
+    with pg_db._tx() as cur:
+        cur.execute("SELECT to_regclass('project_memory.project_entries')")
+        assert cur.fetchone()[0] is not None

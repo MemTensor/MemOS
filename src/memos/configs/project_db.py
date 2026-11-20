@@ -1,4 +1,4 @@
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -20,6 +20,10 @@ class PostgresProjectDBConfig(BaseConfig):
     maxconn: int = Field(default=10, ge=1, description="Maximum pooled connections")
     embedding_dimension: int = Field(
         default=1024, ge=1, le=16000, description="Dimension of vector embedding"
+    )
+    text_search_parser: Literal["zhparser", "simple"] = Field(
+        default="zhparser",
+        description="Parser behind project_memory.zh; simple is for local tests without zhparser",
     )
     auto_init: bool = Field(
         default=True, description="Create schema and tables on startup if missing"

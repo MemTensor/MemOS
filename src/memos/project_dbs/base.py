@@ -1,13 +1,13 @@
 """Abstract storage interface for project memory.
 
-Ownership rule: a space never changes project. The handler calls ``assert_spaces``
-once at the entry point; methods located by ``space_id`` afterwards do not take
-``project_id``. Methods located by topic or entry ID take ``project_id`` and verify
-ownership through ``spaces``.
+Ownership is checked by the outer layer (Playground). Storage reads and writes by
+space_id, topic id or decision id directly; only the space-level methods
+create_space, list_spaces and assert_spaces take project_id.
 """
 
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Literal
 
 from memos.project_dbs.item import (
     AnyEntry,
@@ -18,7 +18,6 @@ from memos.project_dbs.item import (
     Page,
     SearchHit,
     Space,
-    SpaceContext,
     Topic,
     TopicChangeResult,
     TopicChangeSet,
@@ -90,46 +89,56 @@ class BaseProjectDB(ABC):
     def list_topics(
         self,
         space_id: str,
-        filter: TopicFilter | None = None,
+        filters: list[TopicFilter] | None = None,
         page: int = 1,
         size: int = 10,
+        preview_size: int = 5,
     ) -> Page[Topic]:
-        """Newest update_time first; entries assembled in batch by topic_id."""
+        """get/memory by space_id. Topics newest update_time first; each topic carries at
+        most preview_size entries per type (newest time first) without history/conflicts.
+        Filter groups are ORed, conditions inside a group ANDed; None or [] means no filter."""
 
     @abstractmethod
-    def get_topics(self, project_id: str, topic_ids: list[str]) -> list[Topic]:
-        """Locate by topic_id and verify ownership via spaces."""
+    def list_entries(
+        self,
+        topic_id: str,
+        entry_type: Literal["decision", "experience", "timeline"],
+        page: int = 1,
+        size: int = 10,
+    ) -> Page[AnyEntry]:
+        """get/memory by topic_id. Entries of one type, newest time first, with full
+        history/conflicts."""
 
     @abstractmethod
-    def get_entries(self, project_id: str, entry_ids: list[str]) -> list[AnyEntry]:
-        """Locate by entry id and verify ownership via spaces."""
-
-    @abstractmethod
-    def load_space_context(self, space_id: str, domains: list[str] | None = None) -> SpaceContext:
-        """Organizer input: space config, candidate domains and existing topics."""
+    def get_topics(self, topic_ids: list[str]) -> list[Topic]:
+        """Full topics with all entries, for organizing and retrieval. Unknown ids are skipped."""
 
     # ---------- topic writes ----------
     @abstractmethod
     def apply_changes(self, change_set: TopicChangeSet) -> list[TopicChangeResult]:
-        """Write topics and entries in one transaction. Relies on per-space serial execution."""
+        """Write creates and updates in one transaction; any failure rolls back the batch:
+        SpaceClearedError (accepted_at before cleared_at), VersionConflictError,
+        DomainNotFoundError (unregistered domain), TopicNotFoundError (unknown topic)."""
 
     @abstractmethod
-    def update_topic_decisions(
+    def update_decision(
         self,
-        project_id: str,
-        topic_id: str,
+        decision_id: str,
         expected_update_time: datetime,
-        decisions: list[Decision],
-    ) -> Topic:
-        """Manual edit; UpdateConflictError if update_time differs."""
+        content: str,
+        embedding: list[float] | None = None,
+    ) -> Decision:
+        """update/memory. Replace content and embedding, clear conflicts, bump the entry
+        version, all in one UPDATE. UpdateConflictError if update_time differs."""
 
     @abstractmethod
-    def delete_topics(self, project_id: str, topic_ids: list[str]) -> int:
+    def delete_topics(self, topic_ids: list[str]) -> int:
         """Entries cascade with topics. Returns the number of deleted topics."""
 
     @abstractmethod
     def clear_space(self, space_id: str) -> int:
-        """Delete topics and entries, keep space and domains. Returns the count."""
+        """Delete topics and entries and record cleared_at; keep space and domains.
+        Returns the number of deleted topics."""
 
     # ---------- search ----------
     @abstractmethod
@@ -139,7 +148,7 @@ class BaseProjectDB(ABC):
         query_vec: list[float],
         query_text: str | None = None,
         domains: list[str] | None = None,
-        filter: TopicFilter | None = None,
+        filters: list[TopicFilter] | None = None,
         top_k: int = 20,
     ) -> list[SearchHit]:
         """Space, domain and filter conditions run in the same SQL as recall."""

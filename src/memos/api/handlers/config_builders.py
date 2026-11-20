@@ -78,6 +78,9 @@ def build_project_db_config() -> ProjectDBConfigFactory | None:
                 "minconn": int(os.getenv("PROJECT_DB_MIN_CONN", "1")),
                 "maxconn": int(os.getenv("PROJECT_DB_MAX_CONN", "10")),
                 "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
+                "text_search_parser": (os.getenv("PROJECT_DB_TEXT_SEARCH_PARSER") or "zhparser")
+                .strip()
+                .lower(),
                 "auto_init": os.getenv("PROJECT_DB_AUTO_INIT", "true").lower() == "true",
             },
         }

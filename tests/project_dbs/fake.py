@@ -172,32 +172,29 @@ class FakeProjectDB(BaseProjectDB):
             return [d.model_copy() for d in self._domains.get(space_id, [])]
 
     # ---------- topics, entries, search: not implemented yet ----------
-    def list_topics(self, space_id, filter=None, page=1, size=10):
+    def list_topics(self, space_id, filters=None, page=1, size=10, preview_size=5):
         raise NotImplementedError
 
-    def get_topics(self, project_id, topic_ids):
+    def list_entries(self, topic_id, entry_type, page=1, size=10):
         raise NotImplementedError
 
-    def get_entries(self, project_id, entry_ids):
-        raise NotImplementedError
-
-    def load_space_context(self, space_id, domains=None):
+    def get_topics(self, topic_ids):
         raise NotImplementedError
 
     def apply_changes(self, change_set):
         raise NotImplementedError
 
-    def update_topic_decisions(self, project_id, topic_id, expected_update_time, decisions):
+    def update_decision(self, decision_id, expected_update_time, content, embedding=None):
         raise NotImplementedError
 
-    def delete_topics(self, project_id, topic_ids):
+    def delete_topics(self, topic_ids):
         raise NotImplementedError
 
     def clear_space(self, space_id):
         raise NotImplementedError
 
     def search_topics(
-        self, space_ids, query_vec, query_text=None, domains=None, filter=None, top_k=20
+        self, space_ids, query_vec, query_text=None, domains=None, filters=None, top_k=20
     ):
         raise NotImplementedError
 

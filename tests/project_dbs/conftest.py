@@ -41,7 +41,8 @@ def pg_db():
         cur.execute("DROP SCHEMA IF EXISTS project_memory CASCADE")
     conn.close()
     kwargs["db_name"] = kwargs.pop("dbname")
-    store = PostgresProjectDB(PostgresProjectDBConfig(**kwargs))
+    # zhparser is usually not installed locally; the schema is the same with simple
+    store = PostgresProjectDB(PostgresProjectDBConfig(**kwargs, text_search_parser="simple"))
     yield store
     store.close()
 

@@ -6,7 +6,14 @@ from pydantic import ValidationError
 
 from memos.configs.project_db import PostgresProjectDBConfig, ProjectDBConfigFactory
 from memos.project_dbs.base import BaseProjectDB
-from memos.project_dbs.item import Decision, HistoryItem, Topic, TopicChange, TopicFilter
+from memos.project_dbs.item import (
+    Decision,
+    HistoryItem,
+    Topic,
+    TopicChangeSet,
+    TopicFilter,
+    TopicUpdate,
+)
 
 
 NOW = datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc)
@@ -66,23 +73,45 @@ def test_topic_assembles_entries():
     assert topic.decisions[0].history[0].content == "采用方案A"
 
 
-def test_topic_change_parses_entry_union():
-    change = TopicChange.model_validate(
+def test_change_set_parses_creates_updates_and_entry_union():
+    change_set = TopicChangeSet.model_validate(
         {
-            "op": "create",
-            "domain": "开发",
-            "upsert_entries": [
-                {"entry_type": "timeline", "content": "完成评审", "time": NOW, "user_ids": []},
-                {"entry_type": "experience", "content": "先压测", "time": NOW, "user_ids": []},
+            "space_id": "s",
+            "accepted_at": NOW,
+            "creates": [
+                {
+                    "domain": "开发",
+                    "topic_name": "n",
+                    "topic_summary": "s",
+                    "topic_description": "d",
+                    "entries": [
+                        {
+                            "entry_type": "timeline",
+                            "content": "完成评审",
+                            "time": NOW,
+                            "user_ids": [],
+                        },
+                        {
+                            "entry_type": "experience",
+                            "content": "先压测",
+                            "time": NOW,
+                            "user_ids": [],
+                        },
+                    ],
+                }
             ],
+            "updates": [{"topic_id": "t", "expected_version": 2, "topic_summary": "新摘要"}],
         }
     )
-    assert [e.entry_type for e in change.upsert_entries] == ["timeline", "experience"]
+    assert [e.entry_type for e in change_set.creates[0].entries] == ["timeline", "experience"]
+    update = change_set.updates[0]
+    assert (update.domain, update.topic_description, update.upsert_entries) == (None, None, [])
 
 
-def test_topic_filter_nests():
-    f = TopicFilter(op="or", children=[TopicFilter(user_ids=["a"]), TopicFilter(agent_ids=["x"])])
-    assert len(f.children) == 2
+def test_topic_filter_groups():
+    f = TopicFilter.model_validate({"create_time": {"gte": NOW}, "update_time": {"lt": NOW}})
+    assert f.create_time.gte == NOW and f.update_time.lt == NOW
+    assert TopicFilter().create_time is None
 
 
 def test_base_is_abstract():
@@ -107,10 +136,43 @@ def test_config_rejects_minconn_above_maxconn():
 
 def test_entry_without_type_is_rejected():
     with pytest.raises(ValidationError):
-        TopicChange.model_validate(
+        TopicUpdate.model_validate(
             {
-                "op": "create",
-                "domain": "开发",
+                "topic_id": "t",
+                "expected_version": 1,
                 "upsert_entries": [{"content": "x", "time": NOW, "user_ids": []}],
             }
         )
+
+
+def test_topic_filter_rejects_unknown_keys():
+    with pytest.raises(ValidationError):
+        TopicFilter.model_validate({"user_ids": ["a"]})
+    with pytest.raises(ValidationError):
+        TopicFilter.model_validate({"update_time": {"after": NOW}})
+
+
+@pytest.mark.parametrize("parser", ["zhparser", "simple"])
+def test_rendered_ddl_keeps_text_search_config_executable(parser):
+    from memos.project_dbs.postgres import PostgresProjectDB
+
+    store = PostgresProjectDB.__new__(PostgresProjectDB)  # render only, no connection
+    store.config = PostgresProjectDBConfig(
+        host="h", user="u", password="p", db_name="d", text_search_parser=parser
+    )
+    ddl = store._render_ddl()
+    assert "{" + "text_search_config}" not in ddl and "{" + "embedding_dimension}" not in ddl
+    lines = [line for line in ddl.splitlines() if "TEXT SEARCH CONFIGURATION" in line]
+    assert lines and not any(line.lstrip().startswith("--") for line in lines)
+    assert ddl.index("CREATE SCHEMA") < ddl.index("TEXT SEARCH CONFIGURATION")
+    assert ("PARSER = zhparser" in ddl) == (parser == "zhparser")
+
+
+def test_build_project_db_config_normalizes_parser(monkeypatch):
+    from memos.api.handlers.config_builders import build_project_db_config
+
+    monkeypatch.setenv("PROJECT_DB_HOST", "pg")
+    monkeypatch.setenv("PROJECT_DB_TEXT_SEARCH_PARSER", " Simple ")
+    assert build_project_db_config().config.text_search_parser == "simple"
+    monkeypatch.setenv("PROJECT_DB_TEXT_SEARCH_PARSER", "")
+    assert build_project_db_config().config.text_search_parser == "zhparser"
