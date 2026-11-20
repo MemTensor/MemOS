@@ -11,7 +11,7 @@ from collections import defaultdict
 from contextlib import closing
 from typing import TYPE_CHECKING, Any
 
-from .store import ProjectStore
+from .graph_store import ProjectStore
 from .types import PROJECT_EXPERIENCE, PROJECT_MESSAGE, PROJECT_TASK, ExperienceCard, TaskRecord
 
 

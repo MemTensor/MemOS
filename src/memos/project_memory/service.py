@@ -34,9 +34,9 @@ from . import decision as dec
 from . import experience as exp
 from . import topic as topic_mod
 from .add_view import RelationalProjectView
+from .graph_store import ProjectStore, cosine, lexical_sim
 from .locks import InProcessLocks, conv_key, task_key, topic_key, topics_key
 from .segmenter import IDLE_MINUTES, idle_minutes_between, segment, split_turns
-from .store import ProjectStore, cosine, lexical_sim
 from .types import (
     OP_ADD,
     PROJECT_DECISION,

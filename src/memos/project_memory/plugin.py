@@ -22,10 +22,10 @@ from .add_acceptance import AddRequestError
 from .add_runtime import EpisodeAddRuntime
 from .add_store import PostgresAddStore
 from .errors import from_service, http_error, reason_of
+from .graph_store import ProjectStore
 from .judge import ModelHub
 from .locks import InProcessLocks
 from .service import ProjectMemoryService
-from .store import ProjectStore
 
 
 logger = get_logger(__name__)

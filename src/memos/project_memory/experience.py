@@ -39,8 +39,8 @@ from .types import (
 
 
 if TYPE_CHECKING:
+    from .graph_store import ProjectStore
     from .judge import ModelHub
-    from .store import ProjectStore
 
 
 MIN_TOOL_CALLS = 3

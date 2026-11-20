@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from .add_store import json_value
-from .store import cosine, lexical_sim
+from .graph_store import cosine, lexical_sim
 from .types import (
     PROJECT_DECISION,
     PROJECT_EXPERIENCE,

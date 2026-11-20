@@ -20,8 +20,8 @@ from .types import Episode, Fenced, Space, Topic, as_list, later, new_uuid, now_
 
 
 if TYPE_CHECKING:
+    from .graph_store import ProjectStore
     from .judge import ModelHub
-    from .store import ProjectStore
 
 
 MAX_TOPICS_IN_PROMPT = 30

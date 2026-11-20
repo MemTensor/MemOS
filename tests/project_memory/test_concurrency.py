@@ -221,9 +221,9 @@ def _second_handle(kind: str, db, tmp_path):
 def test_two_replicas_share_storage_and_lock(kind, tmp_path):
     """两个副本连同一个库、用同一把锁（工程注册的分布式锁的替身）：结果与顺序整理一致。"""
     from memos.api.product_models import APIADDRequest
+    from memos.project_memory.graph_store import ProjectStore
     from memos.project_memory.judge import ModelHub
     from memos.project_memory.service import ProjectMemoryService
-    from memos.project_memory.store import ProjectStore
     from memos.project_memory.testing import FakeEmbedder
 
     db1 = make_test_db(kind, tmp_path / "rep")

@@ -13,9 +13,9 @@ import pytest
 
 from memos.project_memory import decision as dec
 from memos.project_memory import experience as exp
+from memos.project_memory.graph_store import ProjectStore
 from memos.project_memory.judge import ModelError, ModelHub
 from memos.project_memory.service import ProjectMemoryService, parse_messages
-from memos.project_memory.store import ProjectStore
 from memos.project_memory.testing import (
     DECISION_ROUNDS,
     EXPERIENCE_ROUNDS,
