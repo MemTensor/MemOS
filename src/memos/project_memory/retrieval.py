@@ -12,7 +12,7 @@ from memos.log import get_logger
 from memos.project_memory.index import Vector, terms
 from memos.project_memory.messages import MessageStore
 from memos.project_memory.store import Hit, RetrievalStore, Scope
-from memos.project_memory.views import ITEM_TYPES
+from memos.project_memory.views import ITEM_TYPES, budget
 
 
 logger = get_logger(__name__)
@@ -113,9 +113,9 @@ class ProjectRetrieval:
         result_format: str = "topic",
         threshold: float = 0.45,
     ) -> dict:
-        deadline = asyncio.get_running_loop().time() + 0.46
+        deadline = asyncio.get_running_loop().time() + budget(0.46)
         # Scope errors fail the entire request, including mixed searches.
-        await asyncio.wait_for(asyncio.to_thread(self.store.validate, scope), 0.25)
+        await asyncio.wait_for(asyncio.to_thread(self.store.validate, scope), budget(0.25))
         degraded = set()
         lanes = {}
         project_ready = Future()
@@ -124,7 +124,9 @@ class ProjectRetrieval:
         async def embedding() -> Vector | None:
             if self.embed:
                 try:
-                    result = await asyncio.wait_for(self._provider_call(self.embed, query), 0.10)
+                    result = await asyncio.wait_for(
+                        self._provider_call(self.embed, query), budget(0.10)
+                    )
                     result.sql_value()
                     return result
                 except Exception as exc:
@@ -164,7 +166,7 @@ class ProjectRetrieval:
         async def run(channel: str, call: Callable) -> None:
             try:
                 await asyncio.wait_for(
-                    call(), min(0.30, deadline - asyncio.get_running_loop().time())
+                    call(), min(budget(0.30), deadline - asyncio.get_running_loop().time())
                 )
             except Exception as exc:
                 if channel == "project" and not project_ready.done():
@@ -210,7 +212,7 @@ class ProjectRetrieval:
             try:
                 await asyncio.wait_for(
                     asyncio.to_thread(self.store.log_recall, scope, session, recalled),
-                    min(0.05, deadline - asyncio.get_running_loop().time()),
+                    min(budget(0.05), deadline - asyncio.get_running_loop().time()),
                 )
             except Exception as exc:
                 logger.warning("Project recall log unavailable (%s)", type(exc).__name__)

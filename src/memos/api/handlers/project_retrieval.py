@@ -28,7 +28,7 @@ from memos.project_memory.store import (
     Scope,
     UnknownDomainError,
 )
-from memos.project_memory.views import ITEM_TYPES
+from memos.project_memory.views import ITEM_TYPES, budget
 
 
 logger = get_logger(__name__)
@@ -48,7 +48,7 @@ _project_candidates: ContextVar[Future | None] = ContextVar("project_candidates"
 def _add_project_bucket(results: dict, **kwargs) -> dict:
     ready = _project_candidates.get()
     if ready is not None:
-        hits = ready.result(timeout=0.30)
+        hits = ready.result(timeout=budget(0.30))
         results["project_mem"] = [
             {
                 "cube_id": "project",
@@ -254,7 +254,7 @@ async def get_project(
     service = _service(request)
     try:
         data = await asyncio.wait_for(
-            asyncio.to_thread(service.store.get, scope, memory_id, view == "metadata"), 0.45
+            asyncio.to_thread(service.store.get, scope, memory_id, view == "metadata"), budget(0.45)
         )
     except AmbiguousMemoryError as exc:
         raise HTTPException(

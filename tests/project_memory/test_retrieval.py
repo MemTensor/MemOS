@@ -33,3 +33,12 @@ def test_cacheable_turn_requires_explicit_confirmation():
     from memos.project_memory.index import Turn
 
     assert Turn.model_fields["cache_policy"].default == "live"
+
+
+def test_time_budgets_scale_from_the_environment(monkeypatch):
+    from memos.project_memory.views import budget
+
+    monkeypatch.delenv("MEMOS_PROJECT_RETRIEVAL_TIME_SCALE", raising=False)
+    assert budget(0.46) == 0.46
+    monkeypatch.setenv("MEMOS_PROJECT_RETRIEVAL_TIME_SCALE", "4")
+    assert budget(0.10) == 0.4
