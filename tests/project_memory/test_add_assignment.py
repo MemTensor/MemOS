@@ -437,3 +437,57 @@ def test_formation_keeps_bounded_context_from_unresolved_episode_domains():
         )
     assert {candidate["domain"] for candidate in existing} == {"project", "reliability"}
     assert plan["assignments"][0]["topic"]["id"] == "attached"
+
+
+def formation_reply(ids, name="Cache deployment"):
+    return {
+        "clusters": [
+            {
+                "episode_ids": ids,
+                "domain": "project",
+                "name": name,
+                "independently_deliverable": True,
+                "affects_existing_decisions": False,
+            }
+        ]
+    }
+
+
+def test_formation_prompt_demands_one_decision_object_per_topic():
+    from memos.project_memory.add_algorithm import _FORMATION
+
+    assert "不同对象的规则或做法必须分别建 cluster" in _FORMATION
+    assert "same_conversation 只说明发生在同一会话" in _FORMATION
+    assert "拿不准时拆开" in _FORMATION
+
+
+def test_formation_links_ignore_phrasing_shared_by_most_summaries():
+    from memos.project_memory.add_algorithm import _formation_links
+
+    template = " confirmed rule statement only"
+    episodes = [
+        episode("a", episode_summary="tire tread depth" + template),
+        episode("b", episode_summary="fuel card payment" + template),
+        episode("c", episode_summary="insurance renewal date" + template),
+        episode("d", episode_summary="tire tread depth replacement" + template),
+    ]
+    pairs = {tuple(link["episode_ids"]): link["signals"] for link in _formation_links(episodes)}
+    assert "similar_summary" in pairs[("a", "d")]
+    assert "similar_summary" not in pairs[("a", "b")]
+    assert pairs[("a", "b")] == ["same_conversation"]
+
+
+def test_formation_does_not_join_episodes_linked_only_by_conversation():
+    new = episode("new", episode_summary="tire tread depth")
+    old = episode("old", episode_summary="fuel card payment", staged_at=NOW - timedelta(hours=3))
+    writer = Writer([formation_reply(["new", "old"])])
+    plan = organize_episode(
+        writer,
+        new,
+        [],
+        [old],
+        {"staged_since_last_formation": 3, "last_formation_at": NOW - timedelta(hours=3)},
+        now=NOW,
+    )
+    assert plan["assignments"] == []
+    assert {u["episode_id"]: u["status"] for u in plan["staged_updates"]}["old"] == "active"
