@@ -21,10 +21,14 @@ if TYPE_CHECKING:
 
 _EXTRACT = """[系统]
 你为项目整理一段完整 Episode。仅输出一个 JSON 对象，包含 episode_summary 和 drafts 数组。
-episode_summary 依据这一段写具体工作、相关资源和当前状态，不写推测，200 字以内。
+episode_summary 依据这一段写具体处理的对象、成员的结论和相关资源，不写推测，200 字以内。
+不要补“仅为规则说明”“未见后续进展”这类对状态的套话，摘要只陈述这一段实际出现的内容。
 闲聊或没可保留的事实输出空数组。prior 只帮助理解，不能为新结论授权。
 drafts 每项给出 kind、content、message_id、quote、origin，可附 source_path（默认 /content）。
 kind 是 decision（成员确定的团队做法）、experience（有场景与证据的经验）、timeline（可验证的进展）。
+decision 只记范围内的规则、对外约定和共同约定。对 Agent 回复格式或表达方式的要求、一次性的局部实现、
+执行步骤、未采纳的方案和未决事项都不是 decision，不要输出。成员对某个具体对象（配置、数值、时点、阈值）
+给出明确结论时才是 decision。
 quote 是这次 Episode 的消息中逐字原话。成员授权优先引用本段用户确立或确认做法的原话。
 origin 取 member、adopted（成员明确采纳）、delegated（Agent 执行）；Agent 自述绝非成员决策。
 采纳或需要理解前文可附 context 数组，每项 message_id、quote，引用采纳前的消息。

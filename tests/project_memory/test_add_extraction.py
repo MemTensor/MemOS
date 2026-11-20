@@ -214,3 +214,10 @@ def test_quote_ref_tolerates_whitespace_layout_but_never_guesses():
     assert quote_ref(repeated, "好的 好的") is not None
     assert quote_ref({"message_id": "m3", "content": "ok  ok"}, "ok") is not None
     assert quote_ref({"message_id": "m4", "content": "a b\na b"}, "a  b") is None
+
+
+def test_extraction_prompt_excludes_reply_style_and_execution_steps():
+    from memos.project_memory.add_extraction import _EXTRACT
+
+    assert "Agent 回复格式或表达方式的要求" in _EXTRACT
+    assert "执行步骤" in _EXTRACT
