@@ -9,7 +9,6 @@ in the target database (PROJECT_DB_TEST_NAME, default ``postgres``).
 """
 
 import os
-import uuid
 
 import pytest
 
@@ -55,23 +54,25 @@ def db(request):
 
 
 def add_topic(db, space_id: str, domain: str) -> str:
-    """Insert a minimal topic (plus one entry on PostgreSQL) without the topic API."""
-    domain_id = next(d.id for d in db.list_domains(space_id) if d.domain == domain)
-    topic_id = f"topic_{uuid.uuid4().hex}"
-    if isinstance(db, FakeProjectDB):
-        db._topics[topic_id] = {"space_id": space_id, "domain_id": domain_id}
-        return topic_id
-    with db._tx() as cur:
-        cur.execute(
-            """INSERT INTO project_memory.topics
-                   (id, space_id, domain_id, topic_name, topic_summary, topic_description)
-               VALUES (%s, %s, %s, 'n', 's', 'd')""",
-            (topic_id, space_id, domain_id),
+    """Create a minimal topic with one decision through apply_changes."""
+    from datetime import datetime, timezone
+
+    from memos.project_dbs.item import Decision, TopicChangeSet, TopicCreate
+
+    now = datetime.now(timezone.utc)
+    (result,) = db.apply_changes(
+        TopicChangeSet(
+            space_id=space_id,
+            accepted_at=now,
+            creates=[
+                TopicCreate(
+                    domain=domain,
+                    topic_name="n",
+                    topic_summary="s",
+                    topic_description="d",
+                    entries=[Decision(content="c", time=now, user_ids=[])],
+                )
+            ],
         )
-        cur.execute(
-            """INSERT INTO project_memory.project_entries
-                   (id, topic_id, space_id, entry_type, content, time)
-               VALUES (%s, %s, %s, 'decision', 'c', now())""",
-            (f"decision_{uuid.uuid4().hex}", topic_id, space_id),
-        )
-    return topic_id
+    )
+    return result.topic_id

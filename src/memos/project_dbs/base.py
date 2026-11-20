@@ -117,8 +117,10 @@ class BaseProjectDB(ABC):
     @abstractmethod
     def apply_changes(self, change_set: TopicChangeSet) -> list[TopicChangeResult]:
         """Write creates and updates in one transaction; any failure rolls back the batch:
-        SpaceClearedError (accepted_at before cleared_at), VersionConflictError,
-        DomainNotFoundError (unregistered domain), TopicNotFoundError (unknown topic)."""
+        SpaceNotFoundError, SpaceClearedError (accepted_at <= cleared_at), VersionConflictError,
+        DomainNotFoundError (unregistered domain), TopicNotFoundError (unknown topic),
+        EntryNotFoundError (upserted entry id not in the topic).
+        Entry upserts by id replace the whole entry, including embedding (None clears it)."""
 
     @abstractmethod
     def update_decision(
@@ -128,8 +130,10 @@ class BaseProjectDB(ABC):
         content: str,
         embedding: list[float] | None = None,
     ) -> Decision:
-        """update/memory. Replace content and embedding, clear conflicts, bump the entry
-        version, all in one UPDATE. UpdateConflictError if update_time differs."""
+        """update/memory. Replace content and embedding (None clears it), clear conflicts,
+        bump the entry version, all in one UPDATE; the parent topic is left unchanged.
+        UpdateConflictError if update_time differs (exact, microsecond precision) or the id
+        is not a decision. expected_update_time must be timezone-aware."""
 
     @abstractmethod
     def delete_topics(self, topic_ids: list[str]) -> int:
