@@ -927,6 +927,27 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_project_postgres_config() -> dict[str, Any] | None:
+        """Read PostgreSQL settings for project memory when a host is configured."""
+        host = os.getenv("PROJECT_DB_HOST")
+        if not host:
+            return None
+        return {
+            "host": host,
+            "port": int(os.getenv("PROJECT_DB_PORT", "5432")),
+            "user": os.getenv("PROJECT_DB_USER", "postgres"),
+            "password": os.getenv("PROJECT_DB_PASSWORD", ""),
+            "db_name": os.getenv("PROJECT_DB_NAME", "memos_project"),
+            "minconn": int(os.getenv("PROJECT_DB_MIN_CONN", "1")),
+            "maxconn": int(os.getenv("PROJECT_DB_MAX_CONN", "10")),
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
+            "text_search_parser": (os.getenv("PROJECT_DB_TEXT_SEARCH_PARSER") or "zhparser")
+            .strip()
+            .lower(),
+            "auto_init": os.getenv("PROJECT_DB_AUTO_INIT", "true").lower() == "true",
+        }
+
+    @staticmethod
     def get_mysql_config() -> dict[str, Any]:
         """Get MySQL configuration."""
         return {

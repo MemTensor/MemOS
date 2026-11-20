@@ -176,16 +176,16 @@ def init_server() -> dict[str, Any]:
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
-    project_db_config = build_project_db_config()
     project_db = None
-    if project_db_config is not None:
-        from memos.project_dbs.factory import ProjectDBFactory
+    # Project memory is optional: keep the existing memory API up if its DB is unavailable.
+    try:
+        project_db_config = build_project_db_config()
+        if project_db_config is not None:
+            from memos.project_dbs.factory import ProjectDBFactory
 
-        # Project memory is optional: keep the existing memory API up if its DB is down.
-        try:
             project_db = ProjectDBFactory.from_config(project_db_config)
-        except Exception:
-            logger.exception("Failed to initialize project memory DB; project memory disabled")
+    except Exception:
+        logger.exception("Failed to initialize project memory DB; project memory disabled")
     llm = LLMFactory.from_config(llm_config)
     feedback_llm = LLMFactory.from_config(feedback_llm_config)
     suggestion_llm = LLMFactory.from_config(suggestion_llm_config)
