@@ -194,7 +194,8 @@ def _draft(
             proposals.append({"ref": context, "quote": quote, "kind": "assistant_proposal"})
     if origin == "adopted" and not (member_statement and proposals):
         return None
-    if not key_tokens(content).issubset(key_tokens("\n".join([raw["quote"], *contextual_text]))):
+    witness = [raw["quote"], *contextual_text, raw.get("_support_quote") or ""]
+    if not key_tokens(content).issubset(key_tokens("\n".join(witness))):
         return None
     origin = "adopted" if origin == "adopted" else "member" if member_statement else "delegated"
     author = member.get("role_id") or member.get("origin_user_id") or member.get("user_id")
@@ -262,6 +263,36 @@ def _draft(
     }
 
 
+def _member_anchored(item: dict, row: dict, member: dict) -> tuple[dict, dict]:
+    """Attribute a decision restated by the Agent to the member instruction it cites.
+
+    Models often quote the Agent's reply ("月报用不上 export，那份拷贝不再恢复") and cite the
+    member's message of the same Turn as context. The member's message is the authorization,
+    so it becomes the source; the verified Agent quote only supports the content's key values.
+    """
+    if item.get("kind") != "decision" or row["role"] not in _ROLE_AGENT or row is member:
+        return item, row
+    if str(row.get("turn_id") or "") != str(member.get("turn_id") or member["message_id"]):
+        return item, row
+    member_id = str(member["message_id"])
+    contexts = [c for c in item.get("context") or [] if isinstance(c, dict)]
+    cited = next((c for c in contexts if str(c.get("message_id")) == member_id), None)
+    if cited is None or not quote_ref(member, cited.get("quote")):
+        return item, row
+    support = item.get("quote") if quote_ref(row, item.get("quote")) else None
+    rest = [c for c in contexts if c is not cited]
+    anchored = {
+        **item,
+        "message_id": member_id,
+        "quote": cited["quote"],
+        "origin": "member",
+        "source_path": "/content",
+        "context": rest,
+        "_support_quote": support,
+    }
+    return anchored, member
+
+
 def extract_episode(
     hub: ModelHub,
     episode: dict,
@@ -326,7 +357,8 @@ def extract_episode(
         member = members.get(str(row.get("turn_id") or mid))
         if member is None:
             continue
-        draft = _draft(episode, item, row, member, prior_to[mid], anchors)
+        item, row = _member_anchored(item, row, member)
+        draft = _draft(episode, item, row, member, prior_to[str(row["message_id"])], anchors)
         if draft:
             valid[draft["draft_id"]] = draft
     dropped = len(raw_drafts) - len(valid)

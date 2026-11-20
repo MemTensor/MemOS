@@ -233,3 +233,41 @@ def test_extraction_prompt_keeps_stated_reasons_and_guides_timeline_and_experien
     assert "把原因随结论写进 content" in _EXTRACT
     assert "已撤回" in _EXTRACT
     assert "排查或试错后得到的、可复用的做法" in _EXTRACT
+
+
+def _restated_decision(context):
+    return {
+        "episode_summary": "dry-run 后不搬 export",
+        "drafts": [
+            {
+                "kind": "decision",
+                "content": "月报用不上 export，那份拷贝不再恢复，也不往 ledger 搬。",
+                "message_id": "reply",
+                "quote": "月报用不上 export，那份拷贝不再恢复，也不往 ledger 搬。",
+                "origin": "adopted",
+                "context": context,
+            }
+        ],
+    }
+
+
+def test_agent_restated_decision_is_anchored_to_the_member_instruction():
+    member = row("ask", "user", "dry-run 报告出来了，export 在月报里用不上。")
+    reply = row(
+        "reply", "assistant", "看了报告：月报用不上 export，那份拷贝不再恢复，也不往 ledger 搬。"
+    )
+    writer = Writer(_restated_decision([{"message_id": "ask", "quote": "export 在月报里用不上"}]))
+    (draft,) = extract_episode(writer, {"id": "episode"}, [member, reply])["drafts"]
+    assert draft["origin"] == "member"
+    assert draft["quote"] == "export 在月报里用不上"
+    assert draft["source_refs"][0]["message_id"] == "ask"
+    assert draft["authorizing_evidence_refs"] == draft["source_refs"]
+
+
+def test_agent_decision_without_the_member_instruction_is_still_dropped():
+    member = row("ask", "user", "看一下报告。")
+    reply = row("reply", "assistant", "月报用不上 export，那份拷贝不再恢复，也不往 ledger 搬。")
+    writer = Writer(_restated_decision([]))
+    result = extract_episode(writer, {"id": "episode"}, [member, reply])
+    assert result["drafts"] == []
+    assert result["dropped_drafts"] == 1
