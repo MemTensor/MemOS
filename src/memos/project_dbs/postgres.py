@@ -67,36 +67,6 @@ _TOPIC_FIELDS = {"decision": "decisions", "experience": "experiences", "timeline
 _RANGE_OPS = (("gt", ">"), ("gte", ">="), ("lt", "<"), ("lte", "<="))
 
 
-def _dedupe_sources(sources: list[Source]) -> list[dict]:
-    """Drop identical sources, keeping first-seen order."""
-    seen, result = set(), []
-    for source in sources:
-        item = source.model_dump(mode="json")
-        key = json.dumps(item, sort_keys=True)
-        if key not in seen:
-            seen.add(key)
-            result.append(item)
-    return result
-
-
-def _filters_sql(filters: list[TopicFilter] | None, params: list[Any]) -> str:
-    """OR of AND groups over topic create_time / update_time; '' when unfiltered."""
-    groups = []
-    for group in filters or []:
-        conditions = []
-        for column in ("create_time", "update_time"):
-            time_range = getattr(group, column)
-            if time_range is None:
-                continue
-            for op, sql_op in _RANGE_OPS:
-                value = getattr(time_range, op)
-                if value is not None:
-                    conditions.append(f"t.{column} {sql_op} %s")
-                    params.append(value)
-        groups.append("(" + " AND ".join(conditions) + ")" if conditions else "TRUE")
-    return " AND (" + " OR ".join(groups) + ")" if groups else ""
-
-
 class PostgresProjectDB(BaseProjectDB):
     @require_python_package(
         import_name="psycopg2",
@@ -131,7 +101,7 @@ class PostgresProjectDB(BaseProjectDB):
             self.pool.closeall()
             raise
 
-    # ---------- 连接与初始化 ----------
+    # ---------- connection and init ----------
     @contextmanager
     def _tx(self) -> Generator[Any, None, None]:
         """One transaction per block: commit on success, rollback on error."""
@@ -196,7 +166,7 @@ class PostgresProjectDB(BaseProjectDB):
     def close(self) -> None:
         self.pool.closeall()
 
-    # ---------- 空间 ----------
+    # ---------- spaces ----------
     _SPACE_COLS = "id, project_id, space_name, instructions, create_time, update_time, cleared_at"
     _DOMAIN_COLS = "id, space_id, domain, description"
 
@@ -335,7 +305,7 @@ class PostgresProjectDB(BaseProjectDB):
         with self._tx() as cur:
             cur.execute(f"DELETE FROM {SCHEMA}.spaces WHERE id = %s", (space_id,))
 
-    # ---------- 领域 ----------
+    # ---------- domains ----------
     def create_domains(self, space_id: str, domains: list[Domain]) -> list[Domain]:
         with self._tx() as cur:
             self._lock_space(cur, space_id)
@@ -395,6 +365,24 @@ class PostgresProjectDB(BaseProjectDB):
 
     # ---------- topic and entry reads ----------
     @staticmethod
+    def _filters_sql(filters: list[TopicFilter] | None, params: list[Any]) -> str:
+        """OR of AND groups over topic create_time / update_time; '' when unfiltered."""
+        groups = []
+        for group in filters or []:
+            conditions = []
+            for column in ("create_time", "update_time"):
+                time_range = getattr(group, column)
+                if time_range is None:
+                    continue
+                for op, sql_op in _RANGE_OPS:
+                    value = getattr(time_range, op)
+                    if value is not None:
+                        conditions.append(f"t.{column} {sql_op} %s")
+                        params.append(value)
+            groups.append("(" + " AND ".join(conditions) + ")" if conditions else "TRUE")
+        return " AND (" + " OR ".join(groups) + ")" if groups else ""
+
+    @staticmethod
     def _entry(row: tuple, full: bool = True) -> AnyEntry:
         names = ("id", "topic_id", "entry_type", "content", "time", "user_ids", "history",
                  "conflicts", "extra", "version", "create_time", "update_time")  # fmt: skip
@@ -441,7 +429,7 @@ class PostgresProjectDB(BaseProjectDB):
         preview_size: int = 5,
     ) -> Page[Topic]:
         params: list[Any] = [space_id]
-        where = "t.space_id = %s" + _filters_sql(filters, params)
+        where = "t.space_id = %s" + self._filters_sql(filters, params)
         with self._tx() as cur:
             cur.execute(f"SELECT count(*) FROM {SCHEMA}.topics t WHERE {where}", params)
             total = cur.fetchone()[0]
@@ -508,6 +496,18 @@ class PostgresProjectDB(BaseProjectDB):
 
     # ---------- topic writes ----------
     @staticmethod
+    def _dedupe_sources(sources: list[Source]) -> list[dict]:
+        """Drop identical sources, keeping first-seen order."""
+        seen, result = set(), []
+        for source in sources:
+            item = source.model_dump(mode="json")
+            key = json.dumps(item, sort_keys=True)
+            if key not in seen:
+                seen.add(key)
+                result.append(item)
+        return result
+
+    @staticmethod
     def _entry_row(entry: AnyEntry) -> tuple:
         is_decision = entry.entry_type == "decision"
         return (
@@ -547,7 +547,7 @@ class PostgresProjectDB(BaseProjectDB):
                 item.topic_name,
                 item.topic_summary,
                 item.topic_description,
-                json.dumps(_dedupe_sources(item.sources)),
+                json.dumps(self._dedupe_sources(item.sources)),
                 item.embedding,
                 json.dumps(item.anchors),
             ),
@@ -558,7 +558,7 @@ class PostgresProjectDB(BaseProjectDB):
     def _update_topic(
         self, cur: Any, space_id: str, domain_id: str | None, item: TopicUpdate
     ) -> None:
-        sources = json.dumps(_dedupe_sources(item.add_sources))
+        sources = json.dumps(self._dedupe_sources(item.add_sources))
         cur.execute(
             f"""UPDATE {SCHEMA}.topics SET
                     domain_id = COALESCE(%s, domain_id),
