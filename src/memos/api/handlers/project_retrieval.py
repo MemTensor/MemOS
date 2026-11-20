@@ -95,7 +95,8 @@ def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]
         yield
         return
     dsn = os.getenv("MEMOS_PROJECT_MEMORY_DSN")
-    if os.getenv("MEMOS_PROJECT_MEMORY_MOCK") == "1":
+    mock_setting = os.getenv("MEMOS_PROJECT_MEMORY_MOCK")
+    if mock_setting == "1" or (not mock_setting and not dsn):
         from memos.project_memory.mock_store import MockProjectStore
 
         store = MockProjectStore(os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID") or "mock-tenant")

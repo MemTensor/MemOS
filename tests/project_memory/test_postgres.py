@@ -464,6 +464,7 @@ def test_engineering_requests_need_only_the_retrieval_database(client, service, 
         monkeypatch.setenv("MEMOS_PROJECT_MEMORY_DSN", conn.dsn)
     finally:
         service.store.pool.putconn(conn)
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_MOCK", raising=False)
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_TENANT_ID", raising=False)
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_GATEWAY_KEY", raising=False)
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_INTERNAL", raising=False)

@@ -421,7 +421,7 @@ class TestServerRouterGetAll:
 def project_mock_client(mock_init_server, monkeypatch):
     import sys
 
-    monkeypatch.setenv("MEMOS_PROJECT_MEMORY_MOCK", "1")
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_MOCK", raising=False)
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_DSN", raising=False)
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_TENANT_ID", raising=False)
     monkeypatch.setitem(sys.modules, "psycopg2.pool", None)
@@ -492,12 +492,10 @@ def test_project_mock_scope_filter_and_page(project_mock_client):
     assert unmatched.json()["data"]["total"] == 0
 
 
-def test_project_mock_is_explicit_and_never_opens_the_project_database(
-    mock_init_server, monkeypatch
-):
+def test_project_mock_can_be_explicitly_disabled_or_forced(mock_init_server, monkeypatch):
     import sys
 
-    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_MOCK", raising=False)
+    monkeypatch.setenv("MEMOS_PROJECT_MEMORY_MOCK", "0")
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_DSN", raising=False)
     with TestClient(mock_init_server) as http:
         assert http.post("/product/get_memory", json={"space_id": "mock-space"}).status_code == 500

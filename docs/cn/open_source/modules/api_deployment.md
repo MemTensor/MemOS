@@ -14,14 +14,15 @@
 
 ## 项目记忆接口联调
 
-项目数据库还没就绪时，在 MemOS 测试服务的环境变量中设置 `MEMOS_PROJECT_MEMORY_MOCK=1` 并重启。此时项目记忆读取使用内置样例，联调空间是 `mock-space`，无需建空间或配置 PostgreSQL。普通记忆仍使用原服务。以下示例假设 MemOS 监听本机 9801 端口。
+未配置项目数据库连接 `MEMOS_PROJECT_MEMORY_DSN` 时，MemOS 启动后默认提供联调空间 `mock-space`。不同测试者可以用自己的 `user_id` 检索同一组内置样例，无需建空间、准备数据或设置环境变量。部署后，把下面的地址换成联调服务的 IP 和端口即可。
 
 ```bash
-curl -sS http://127.0.0.1:9801/product/search \
+MEMOS_URL=http://127.0.0.1:9801
+curl -sS "$MEMOS_URL/product/search" \
   -H 'Content-Type: application/json' \
   -d '{"user_id":"tester","space_ids":["mock-space"],"include_memory_view":["project"],"project_result_format":"item","project_item_types":["decision"],"query":"项目采用什么数据库？"}'
 
-curl -sS http://127.0.0.1:9801/product/get_memory/mock-decision
+curl -sS "$MEMOS_URL/product/get_memory/mock-decision"
 ```
 
 第一条响应的 `data.project_item_list` 里应有 `mock-decision`，第二条能用这个 ID 读到相同的决策内容。任意非空查询都使用同一组样例，适合核对请求参数和返回字段。其他读接口也可以直接测试。
@@ -32,4 +33,4 @@ curl -sS http://127.0.0.1:9801/product/get_memory/mock-decision
 | `GET /product/get_memory/mock-experience` | 按 ID 读经验 |
 | `POST /product/get_message` | `{"conversation_id":"mock-session","space_id":"mock-space"}` |
 
-需要验证实际召回结果或延迟时，关闭 `MEMOS_PROJECT_MEMORY_MOCK`，配置 `MEMOS_PROJECT_MEMORY_DSN` 后重启，使用已写入索引的真实空间和记忆 ID。两个配置同时存在时，显式开启的 mock 优先。
+接入项目数据库后，设置 `MEMOS_PROJECT_MEMORY_DSN` 并重启，默认使用真实数据。需要临时切回样例时可设置 `MEMOS_PROJECT_MEMORY_MOCK=1`。设置为 `0` 可关闭样例，此时项目检索需要数据库连接。
