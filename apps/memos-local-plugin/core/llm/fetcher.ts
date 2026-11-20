@@ -11,6 +11,15 @@
  */
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
+import {
+  getRetryCooldown,
+  parseRetryAfterMs,
+  planRetry,
+  recordRetryCooldown,
+  retryCooldownKey,
+  type RetryPlan,
+  waitForRetry,
+} from "../util/retry-after.js";
 import type { LlmProviderLogger, LlmProviderName } from "./types.js";
 
 export interface HttpPostOpts<TBody> {
@@ -20,6 +29,10 @@ export interface HttpPostOpts<TBody> {
   timeoutMs: number;
   maxRetries: number;
   signal?: AbortSignal;
+  /** Absolute end-to-end deadline. Unlike timeoutMs, this is not renewed per attempt. */
+  deadlineAt?: number;
+  /** Model/deployment scope; prevents one model cooldown from blocking another. */
+  cooldownScope?: string;
   provider: LlmProviderName;
   log: LlmProviderLogger;
   onRetry?: (attempt: number) => void;
@@ -35,11 +48,33 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
 }> {
   let attempt = 0;
   let lastErr: unknown = null;
+  const cooldownKey = retryCooldownKey("llm", opts.provider, opts.url, opts.cooldownScope);
 
   while (attempt <= opts.maxRetries) {
     attempt++;
     const start = Date.now();
     try {
+      const cooldown = getRetryCooldown(cooldownKey, start);
+      if (cooldown) {
+        const details = {
+          provider: opts.provider,
+          url: opts.url,
+          status: cooldown.status,
+          attempt,
+          maxRetries: opts.maxRetries,
+          retryAfterMs: cooldown.retryAfterMs,
+          retryAt: cooldown.retryAt,
+          retryDecision: "defer",
+          retryReason: "cooldown_active",
+          remainingDeadlineMs: remainingDeadlineMs(opts.deadlineAt, start),
+        };
+        opts.log.warn("http.retry_cooldown", details);
+        throw new MemosError(
+          errCodeForStatus(cooldown.status),
+          `${opts.provider} is cooling down until ${new Date(cooldown.retryAt).toISOString()}`,
+          details,
+        );
+      }
       const signal = mergeSignals(opts.signal, AbortSignal.timeout(opts.timeoutMs));
       const resp = await fetch(opts.url, {
         method: "POST",
@@ -56,21 +91,63 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
       if (!resp.ok) {
         const text = await safeText(resp);
         const transient = resp.status >= 500 || resp.status === 429;
+        const retryAfterMs = resp.status === 429 || resp.status === 503
+          ? parseRetryAfterMs(resp.headers.get("Retry-After"))
+          : null;
+        if (retryAfterMs !== null) {
+          recordRetryCooldown(cooldownKey, {
+            retryAfterMs,
+            retryAt: Date.now() + retryAfterMs,
+            status: resp.status,
+          });
+        }
         opts.log.warn("http.non_ok", {
           status: resp.status,
           attempt,
           transient,
           durationMs: ms,
+          retryAfterMs,
+          body: truncateLogBody(text),
         });
         if (transient && attempt <= opts.maxRetries) {
+          const plan = planRetry({
+            attempt,
+            baseMs: 250,
+            jitterMaxMs: 120,
+            retryAfterMs,
+            deadlineAt: opts.deadlineAt,
+          });
+          const retryDetails = retryPlanDetails(plan, opts, resp.status, attempt);
+          if (plan.action === "defer") {
+            opts.log.warn("http.retry_deferred", retryDetails);
+            throw new MemosError(
+              errCodeForStatus(resp.status),
+              `HTTP ${resp.status} from ${opts.provider}; retry deferred until ${new Date(plan.retryAt).toISOString()}`,
+              retryDetails,
+            );
+          }
+          opts.log.warn("http.retry_scheduled", retryDetails);
           opts.onRetry?.(attempt);
-          await backoff(attempt);
+          await waitForRetry(plan.delayMs, opts.signal);
           continue;
         }
         throw new MemosError(
           errCodeForStatus(resp.status),
           `HTTP ${resp.status} from ${opts.provider}`,
-          { provider: opts.provider, url: opts.url, status: resp.status, body: text },
+          {
+            provider: opts.provider,
+            url: opts.url,
+            status: resp.status,
+            body: text,
+            ...(retryAfterMs === null
+              ? {}
+              : {
+                  retryAfterMs,
+                  retryAt: Date.now() + retryAfterMs,
+                  retryDecision: "stop",
+                  retryReason: "retries_exhausted",
+                }),
+          },
         );
       }
 
@@ -84,8 +161,15 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
     } catch (err) {
       lastErr = err;
       if (err instanceof MemosError) throw err;
+      if (opts.signal?.aborted) {
+        throw new MemosError(
+          ERROR_CODES.LLM_TIMEOUT,
+          `${opts.provider} request was cancelled`,
+          { provider: opts.provider, url: opts.url, cancelled: true },
+        );
+      }
       const transient = isTransientError(err);
-      const timedOut = isTimeout(err);
+      const timedOut = isTimeout(err) || opts.signal?.aborted === true;
       opts.log.warn("http.exception", {
         attempt,
         transient,
@@ -93,8 +177,24 @@ export async function httpPostJson<TResp>(opts: HttpPostOpts<unknown>): Promise<
         err: toErrDetail(err),
       });
       if ((transient || timedOut) && attempt <= opts.maxRetries) {
+        const plan = planRetry({
+          attempt,
+          baseMs: 250,
+          jitterMaxMs: 120,
+          deadlineAt: opts.deadlineAt,
+        });
+        const retryDetails = retryPlanDetails(plan, opts, null, attempt);
+        if (plan.action === "defer") {
+          opts.log.warn("http.retry_deferred", retryDetails);
+          throw new MemosError(
+            timedOut ? ERROR_CODES.LLM_TIMEOUT : ERROR_CODES.LLM_UNAVAILABLE,
+            `${opts.provider} retry cannot fit the request deadline`,
+            retryDetails,
+          );
+        }
+        opts.log.warn("http.retry_scheduled", retryDetails);
         opts.onRetry?.(attempt);
-        await backoff(attempt);
+        await waitForRetry(plan.delayMs, opts.signal);
         continue;
       }
       if (timedOut) {
@@ -137,6 +237,7 @@ export async function httpPostStream(opts: {
   provider: LlmProviderName;
   log: LlmProviderLogger;
 }): Promise<Response> {
+  const start = Date.now();
   const signal = mergeSignals(opts.signal, AbortSignal.timeout(opts.timeoutMs));
   const resp = await fetch(opts.url, {
     method: "POST",
@@ -150,6 +251,12 @@ export async function httpPostStream(opts: {
   });
   if (!resp.ok) {
     const text = await safeText(resp);
+    opts.log.warn("http.non_ok", {
+      status: resp.status,
+      transient: resp.status >= 500 || resp.status === 429,
+      durationMs: Date.now() - start,
+      body: truncateLogBody(text),
+    });
     throw new MemosError(
       errCodeForStatus(resp.status),
       `HTTP ${resp.status} from ${opts.provider} (stream)`,
@@ -217,6 +324,10 @@ async function safeText(resp: Response): Promise<string | undefined> {
   }
 }
 
+function truncateLogBody(text: string | undefined): string | undefined {
+  return text?.slice(0, 512);
+}
+
 function isTransientError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message ?? "";
@@ -233,11 +344,31 @@ function isTimeout(err: unknown): boolean {
   return false;
 }
 
-async function backoff(attempt: number): Promise<void> {
-  const base = 250;
-  const jitter = Math.floor(Math.random() * 120);
-  const ms = base * 2 ** (attempt - 1) + jitter;
-  await new Promise((r) => setTimeout(r, ms));
+function retryPlanDetails(
+  plan: RetryPlan,
+  opts: HttpPostOpts<unknown>,
+  status: number | null,
+  attempt: number,
+): Record<string, unknown> {
+  return {
+    provider: opts.provider,
+    url: opts.url,
+    status,
+    attempt,
+    maxRetries: opts.maxRetries,
+    backoffMs: plan.backoffMs,
+    plannedDelayMs: plan.delayMs,
+    retryAfterMs: plan.retryAfterMs,
+    retryAt: plan.retryAt,
+    retrySource: plan.source,
+    retryDecision: plan.action,
+    ...(plan.action === "defer" ? { retryReason: plan.reason } : {}),
+    remainingDeadlineMs: remainingDeadlineMs(opts.deadlineAt),
+  };
+}
+
+function remainingDeadlineMs(deadlineAt?: number, nowMs: number = Date.now()): number | null {
+  return deadlineAt === undefined ? null : Math.max(0, deadlineAt - nowMs);
 }
 
 function mergeSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {

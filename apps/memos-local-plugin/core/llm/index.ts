@@ -28,6 +28,7 @@ export { LocalOnlyLlmProvider } from "./providers/local-only.js";
 export * from "./prompts/index.js";
 export type {
   LlmCallOptions,
+  LlmCircuitBreakerConfig,
   LlmCompleteJsonOptions,
   LlmCompletion,
   LlmClient,
@@ -40,6 +41,7 @@ export type {
   LlmProviderLogger,
   LlmProviderName,
   LlmRole,
+  LlmStatusDetail,
   LlmStreamChunk,
   LlmUsage,
   ProviderCallInput,

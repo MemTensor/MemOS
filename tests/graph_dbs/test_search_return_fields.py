@@ -227,6 +227,117 @@ class TestPolarDBExtractFieldsFromProperties:
         assert "n.memory_type = 'DreamDiary'" in query
         assert ids == ["node-1"]
 
+    def test_lightweight_embedding_search_projects_only_requested_fields(self, polardb_instance):
+        polardb_instance.db_name = "test_db"
+        polardb_instance.config = {"user_name": "default_user"}
+        polardb_instance._build_user_name_and_kb_ids_conditions_sql = MagicMock(return_value=[])
+        polardb_instance._build_filter_conditions_sql = MagicMock(return_value=[])
+
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            (1, None, None, '"node-1"', 0.2, '"hello"', '["tag-a"]', 0.8)
+        ]
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cursor
+
+        @contextmanager
+        def fake_connection():
+            yield conn
+
+        polardb_instance._get_connection = fake_connection
+
+        results = polardb_instance.search_by_embedding(
+            vector=[0.1] * 1024,
+            user_name="cube-a",
+            return_fields=["memory", "tags"],
+            light_weight_mode=True,
+        )
+
+        query = cursor.execute.call_args[0][0]
+        assert "NULL::agtype AS properties" in query
+        assert "AS return_memory" in query
+        assert "AS return_tags" in query
+        assert results == [
+            {"id": "node-1", "score": pytest.approx(0.6), "memory": "hello", "tags": ["tag-a"]}
+        ]
+
+    def test_polardb_declares_lightweight_vector_search_support(self, polardb_instance):
+        assert polardb_instance.supports_lightweight_vector_search is True
+
+    @pytest.mark.parametrize(
+        "stored_user_id,expected_user_id",
+        [
+            ("1234567890123456789", "1234567890123456789"),
+            (1234567890123456789, "1234567890123456789"),
+            ('"1234567890123456789"', "1234567890123456789"),
+            ("00123", "00123"),
+            (None, None),
+            ("null", None),
+        ],
+    )
+    def test_lightweight_numeric_user_id_can_be_recalled(
+        self, polardb_instance, stored_user_id, expected_user_id, monkeypatch
+    ):
+        from memos.memories.textual.tree_text_memory.retrieve.recall import GraphMemoryRetriever
+
+        polardb_instance.db_name = "test_db"
+        polardb_instance.config = {"user_name": "default_user"}
+        polardb_instance._build_user_name_and_kb_ids_conditions_sql = MagicMock(return_value=[])
+        polardb_instance._build_filter_conditions_sql = MagicMock(return_value=[])
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            (
+                1,
+                None,
+                None,
+                '"00000000-0000-4000-8000-000000000001"',
+                0.2,
+                '"synthetic knowledge"',
+                '"LongTermMemory"',
+                stored_user_id,
+                '["synthetic"]',
+                '{"test":true}',
+                "0.9",
+                "true",
+                0.8,
+            )
+        ]
+        connection = MagicMock()
+        connection.cursor.return_value.__enter__.return_value = cursor
+
+        @contextmanager
+        def fake_connection():
+            yield connection
+
+        polardb_instance._get_connection = fake_connection
+        hits = polardb_instance.search_by_embedding(
+            vector=[0.1] * 1024,
+            user_name="knowledge-cube",
+            light_weight_mode=True,
+            return_fields=[
+                "memory",
+                "memory_type",
+                "user_id",
+                "tags",
+                "info",
+                "confidence",
+                "is_fast",
+            ],
+        )
+        monkeypatch.setenv("MEMOS_POLARDB_LIGHTWEIGHT_SEARCH_ENABLED", "true")
+        graph_store = MagicMock(supports_lightweight_vector_search=True)
+        graph_store.search_by_embedding.return_value = hits
+        retriever = GraphMemoryRetriever(graph_store, MagicMock())
+        [memory] = retriever.retrieve_from_mixed(
+            top_k=1, query_embedding=[[0.1] * 1024], user_name="knowledge-cube"
+        )
+        graph_store.get_nodes.assert_not_called()
+        assert memory.metadata.user_id == expected_user_id
+        assert memory.metadata.tags == ["synthetic"]
+        assert memory.metadata.info == {"test": True}
+        assert memory.metadata.confidence == 0.9
+        assert memory.metadata.is_fast is True
+
 
 class TestFieldNameValidation:
     """Tests for _validate_return_fields injection prevention."""

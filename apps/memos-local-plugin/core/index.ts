@@ -94,6 +94,7 @@ export {
 export {
   createEmbedder,
   createEmbedderWithProvider,
+  estimateEmbeddingTokens,
   makeProviderFor,
   LruEmbedCache,
   NullEmbedCache,
@@ -110,6 +111,7 @@ export {
   MistralEmbeddingProvider,
   type EmbedCache,
   type EmbedCacheStats,
+  type EmbedCallOptions,
   type EmbedInput,
   type EmbedRole,
   type EmbedStats,
@@ -117,6 +119,7 @@ export {
   type EmbeddingConfig,
   type EmbeddingProvider,
   type EmbeddingProviderName,
+  type EmbeddingSettledResult,
   type ProviderCallCtx,
   type ProviderLogger,
 } from "./embedding/index.js";

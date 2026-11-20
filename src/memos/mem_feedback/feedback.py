@@ -4,7 +4,7 @@ import json
 import re
 import uuid
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 from tenacity import retry, stop_after_attempt, wait_random_exponential
@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 from memos.configs.memory import MemFeedbackConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
+from memos.dream.lifecycle.contracts import detach_lifecycle_identity
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
@@ -34,7 +35,7 @@ from memos.memories.textual.tree_text_memory.organize.manager import (
 )
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 from memos.plugins.hook_defs import H
-from memos.plugins.hooks import trigger_single_hook
+from memos.plugins.hooks import notify_hook, trigger_single_hook
 
 
 if TYPE_CHECKING:
@@ -240,12 +241,17 @@ class MemFeedback(BaseMemFeedback):
             to_add_memory = new_memory_item.model_copy(deep=True)
 
         to_add_memory.id = str(uuid.uuid4())
+        fresh_metadata = detach_lifecycle_identity(
+            to_add_memory.metadata.model_dump(),
+            source_memory_id=(old_memory_item or new_memory_item).id,
+        )
+        to_add_memory.metadata = type(to_add_memory.metadata).model_validate(fresh_metadata)
         if to_add_memory.metadata.memory_type == "PreferenceMemory":
             to_add_memory.metadata.preference = new_memory_item.memory
 
-        to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
-            datetime.now().isoformat()
-        )
+        to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = datetime.now(
+            timezone.utc
+        ).isoformat()
         to_add_memory.metadata.background = new_memory_item.metadata.background
         to_add_memory.metadata.sources = new_memory_item.metadata.sources
 
@@ -328,6 +334,14 @@ class MemFeedback(BaseMemFeedback):
                 f"[Memory Feedback UPDATE] Updated:{item_id} | history appended | memory_type: {old_memory_item.metadata.memory_type}"
             )
 
+        notify_hook(
+            H.MEMORY_FEEDBACK_COMMITTED,
+            cube_id=user_name,
+            memory_ids=[old_memory_item.id],
+            action="superseded" if item_id != old_memory_item.id else "corrected",
+            event_id="feedback:" + uuid.uuid4().hex,
+            at=datetime.now(timezone.utc),
+        )
         return {
             "id": item_id,
             "text": new_memory_item.memory,
@@ -386,6 +400,10 @@ class MemFeedback(BaseMemFeedback):
 
         if archived_item and archived_metadata:
             try:
+                if archived_item.id != old_memory_item.id:
+                    archived_metadata = detach_lifecycle_identity(
+                        archived_metadata, source_memory_id=old_memory_item.id
+                    )
                 self.graph_store.add_node(
                     id=archived_item.id,
                     memory=archived_item.memory,
@@ -657,11 +675,6 @@ class MemFeedback(BaseMemFeedback):
     def _retrieve(self, query: str, info=None, top_k=20, user_name=None):
         """Retrieve memory items"""
 
-        def check_has_edges(mem_item: TextualMemoryItem) -> tuple[TextualMemoryItem, bool]:
-            """Check if a memory item has edges."""
-            edges = self.searcher.graph_store.get_edges(mem_item.id, user_name=user_name)
-            return (mem_item, len(edges) == 0)
-
         logger.info(f"[feedback _retrieve] query: {query}, user_name: {user_name}")
         text_mems = self.searcher.search(
             query=query,
@@ -686,22 +699,16 @@ class MemFeedback(BaseMemFeedback):
             pref_mems = [item[0] for item in pref_mems if float(item[1]) > 0.01]
             text_mems.extend(pref_mems)
 
-        # Memory with edges is not modified by feedback
-        retrieved_mems = []
-        with ContextThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(check_has_edges, item): item for item in text_mems}
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    mem_item, has_no_edges = future.result()
-                    if has_no_edges:
-                        retrieved_mems.append(mem_item)
-                except Exception as e:
-                    logger.error(f"[0107 Feedback Core: _retrieve] Error checking edges: {e}")
+        retrieved_mems = [
+            item
+            for item in text_mems
+            if not (getattr(item.metadata, "knowledge_material_ids", None) or [])
+        ]
 
         if len(retrieved_mems) < len(text_mems):
             logger.info(
                 f"[0107 Feedback Core: _retrieve] {len(text_mems) - len(retrieved_mems)} "
-                f"text memories are not modified by feedback due to edges."
+                f"knowledge memories are not modified by feedback."
             )
 
         return retrieved_mems
@@ -859,9 +866,15 @@ class MemFeedback(BaseMemFeedback):
 
                 if not should_keep_update(data["text"], data["old_memory"]):
                     logger.warning(
-                        f"[0107 Feedback Core: correct_item] Due to the excessive proportion of changes, skip update: {data}"
+                        "[0107 Feedback Core: correct_item] Due to the excessive proportion "
+                        "of changes, downgrade update to add: %s",
+                        data,
                     )
-                    return None
+                    return {
+                        "operation": "ADD",
+                        "text": data["text"],
+                        "_downgraded_from_update": True,
+                    }
 
                 # id dehallucination
                 original_id = data["id"]
@@ -892,11 +905,14 @@ class MemFeedback(BaseMemFeedback):
         add_texts = []
         llm_operations = []
         for item in dehalluded_operations:
-            if item["operation"].lower() == "add" and "text" in item and item["text"]:
-                if item["text"] in add_texts:
+            if item["operation"].lower() == "add":
+                add_text = item.get("text")
+                if not add_text:
+                    continue
+                if add_text in add_texts:
                     continue
                 llm_operations.append(item)
-                add_texts.append(item["text"])
+                add_texts.append(add_text)
             elif item["operation"].lower() == "update":
                 llm_operations.append(item)
         logger.info(
@@ -907,10 +923,15 @@ class MemFeedback(BaseMemFeedback):
         has_update = any(item.get("operation").lower() == "update" for item in llm_operations)
         if has_update:
             filtered_items = [
-                item for item in llm_operations if item.get("operation").lower() == "add"
+                item
+                for item in llm_operations
+                if item.get("operation").lower() == "add"
+                and not item.get("_downgraded_from_update")
             ]
             update_items = [
-                item for item in llm_operations if item.get("operation").lower() != "add"
+                item
+                for item in llm_operations
+                if item.get("operation").lower() != "add" or item.get("_downgraded_from_update")
             ]
             if filtered_items:
                 logger.info(

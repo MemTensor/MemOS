@@ -29,8 +29,10 @@
     "server/**/*.ts",
     "bridge/**/*.ts",
     "adapters/openclaw/**/*.ts",
+    "adapters/deepseek-harness/**/*.ts",
     "scripts/**/*.ts",
-    "bridge.cts"
+    "bridge.cts",
+    "bridge.mts"
   ],
   "exclude": [
     "node_modules",

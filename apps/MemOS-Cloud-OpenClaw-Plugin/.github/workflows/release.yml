@@ -1,0 +1,1235 @@
+name: OpenClaw Cloud Plugin — Publish & Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.1.20 or 0.1.20-beta.1)"
+        required: true
+      tag:
+        description: "npm dist-tag (latest for production, beta/next/alpha for testing)"
+        required: true
+        type: choice
+        default: "latest"
+        options:
+          - latest
+          - beta
+          - next
+          - alpha
+      git_ref:
+        description: "Dry-run: leave blank for main. Real publish: exact 40-character source_commit approved in the dry-run."
+        required: false
+        default: ""
+      release_notes:
+        description: "Optional evidence-backed Markdown. Leave blank to draft it from git evidence."
+        required: false
+        default: ""
+      dry_run:
+        description: "Build, validate, and generate inspection artifacts without publishing or changing GitHub."
+        required: true
+        type: boolean
+        default: true
+      publish_confirmation:
+        description: "Required only when dry_run=false. Must exactly equal: PUBLISH v<version>"
+        required: false
+        default: ""
+      recover_existing_npm_release:
+        description: "Backfill missing tag/Release from npm gitHead without republishing. Keep false for normal releases."
+        required: true
+        type: boolean
+        default: false
+      fault_case:
+        description: "Dry-run-only release-note fault injection."
+        required: true
+        type: choice
+        default: "none"
+        options:
+          - none
+          - mixed_language
+          - missing_source_refs
+          - missing_important_commit
+          - invalid_source_ref
+          - thirteen_items
+          - too_long
+          - manual_notes_missing_payload
+
+concurrency:
+  group: openclaw-cloud-plugin-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  classify_auto_release:
+    name: Classify automatic release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      eligible: ${{ steps.classify.outputs.eligible }}
+      reason: ${{ steps.classify.outputs.reason }}
+      previous_version: ${{ steps.classify.outputs.previous_version }}
+      version: ${{ steps.classify.outputs.version }}
+      npm_dist_tag: ${{ steps.classify.outputs.npm_dist_tag }}
+      target_sha: ${{ steps.classify.outputs.target_sha }}
+      release_notes_file: ${{ steps.classify.outputs.release_notes_file }}
+      release_notes_source: ${{ steps.classify.outputs.release_notes_source }}
+    steps:
+      - name: Check merged pull request boundary
+        id: gate
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_MERGED: ${{ github.event.pull_request.merged || false }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          inspect=false
+          reason="manual workflow dispatch"
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            reason="closed pull request is not an eligible same-repository main merge"
+            if [ "${PR_MERGED}" = "true" ] && \
+               [ "${PR_BASE_REF}" = "main" ] && \
+               [ "${PR_HEAD_REPO}" = "${REPOSITORY}" ]; then
+              inspect=true
+              reason="same-repository pull request merged into main; inspect committed versions"
+            fi
+          fi
+          {
+            echo "inspect=${inspect}"
+            echo "reason=${reason}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "### OpenClaw cloud plugin release trigger"
+            echo
+            echo "- Inspect committed version transition: \`${inspect}\`"
+            echo "- Reason: ${reason}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/checkout@v7
+        if: ${{ steps.gate.outputs.inspect == 'true' }}
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        if: ${{ steps.gate.outputs.inspect == 'true' }}
+        with:
+          node-version: 22
+
+      - name: Resolve immutable automatic release
+        if: ${{ steps.gate.outputs.inspect == 'true' }}
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node .github/scripts/resolve-auto-release.mjs
+
+      - name: Load optional reviewed Release Notes
+        if: ${{ steps.release.outputs.eligible == 'true' }}
+        id: notes
+        shell: bash
+        env:
+          RELEASE_NOTES_PATH: ${{ steps.release.outputs.release_notes_path }}
+        run: |
+          set -euo pipefail
+          if [ -f "${RELEASE_NOTES_PATH}" ]; then
+            {
+              echo "release_notes_source=checked_in"
+              echo "release_notes_file=${RELEASE_NOTES_PATH}"
+            } >> "${GITHUB_OUTPUT}"
+            echo "Using reviewed Release Notes from ${RELEASE_NOTES_PATH}."
+          else
+            echo "release_notes_source=doc_agent" >> "${GITHUB_OUTPUT}"
+            echo "release_notes_file=" >> "${GITHUB_OUTPUT}"
+            echo "${RELEASE_NOTES_PATH} is absent; 106 Doc Agent will draft from immutable git evidence."
+          fi
+
+      - name: Export automatic release inputs
+        if: ${{ steps.gate.outputs.inspect == 'true' }}
+        id: classify
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          PREVIOUS_VERSION: ${{ steps.release.outputs.previous_version }}
+          NPM_DIST_TAG: ${{ steps.release.outputs.npm_dist_tag }}
+          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
+          ELIGIBLE: ${{ steps.release.outputs.eligible }}
+          RELEASE_REASON: ${{ steps.release.outputs.reason }}
+          RELEASE_NOTES_FILE: ${{ steps.notes.outputs.release_notes_file }}
+          RELEASE_NOTES_SOURCE: ${{ steps.notes.outputs.release_notes_source }}
+        run: |
+          set -euo pipefail
+          {
+            echo "eligible=${ELIGIBLE}"
+            echo "reason=${RELEASE_REASON}"
+            echo "previous_version=${PREVIOUS_VERSION}"
+            echo "version=${VERSION}"
+            echo "npm_dist_tag=${NPM_DIST_TAG}"
+            echo "target_sha=${TARGET_SHA}"
+            echo "release_notes_source=${RELEASE_NOTES_SOURCE}"
+            echo "release_notes_file=${RELEASE_NOTES_FILE}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo
+            echo "- Automatic release: \`${ELIGIBLE}\`"
+            echo "- Version transition: \`${PREVIOUS_VERSION:-unchanged} -> ${VERSION:-unchanged}\`"
+            echo "- Result: ${RELEASE_REASON}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  publish:
+    needs: classify_auto_release
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        needs.classify_auto_release.outputs.eligible == 'true'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Validate immutable publish ref
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != true }}
+        shell: bash
+        env:
+          RELEASE_GIT_REF: ${{ inputs.git_ref }}
+          RECOVER_EXISTING_NPM_RELEASE: ${{ inputs.recover_existing_npm_release }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::Real releases must be dispatched with Use workflow from=${DEFAULT_BRANCH}; got ${GITHUB_REF}."
+            exit 1
+          fi
+          if [ "${RECOVER_EXISTING_NPM_RELEASE}" != "true" ] && ! [[ "${RELEASE_GIT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Normal real releases require git_ref to be the exact 40-character source_commit approved in the dry-run."
+            exit 1
+          fi
+          if [ "${RECOVER_EXISTING_NPM_RELEASE}" = "true" ] && [ -n "${RELEASE_GIT_REF//[[:space:]]/}" ] && [ "${RELEASE_GIT_REF}" != "${DEFAULT_BRANCH}" ] && [ "${RELEASE_GIT_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::Recovery runs use npm gitHead as the immutable source; leave git_ref blank or set it to ${DEFAULT_BRANCH}."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: >-
+            ${{
+              github.event_name == 'pull_request' && needs.classify_auto_release.outputs.target_sha ||
+              inputs.git_ref || github.ref
+            }}
+          fetch-depth: 0
+          persist-credentials: ${{ github.event_name == 'pull_request' || inputs.dry_run != true }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate release inputs
+        id: release_policy
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          NPM_DIST_TAG: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.npm_dist_tag || inputs.tag }}
+          DRY_RUN: ${{ github.event_name == 'pull_request' && 'false' || inputs.dry_run }}
+          PUBLISH_CONFIRMATION: ${{ github.event_name == 'pull_request' && '' || inputs.publish_confirmation }}
+          RELEASE_FAULT_CASE: ${{ github.event_name == 'pull_request' && 'none' || inputs.fault_case }}
+          RELEASE_GIT_REF: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.target_sha || inputs.git_ref }}
+          RECOVER_EXISTING_NPM_RELEASE: ${{ github.event_name == 'pull_request' && 'false' || inputs.recover_existing_npm_release }}
+          AUTOMATIC_RELEASE: ${{ github.event_name == 'pull_request' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "${RELEASE_VERSION}" == [vV]* ]]; then
+            echo "::error::version must not include a leading v."
+            exit 1
+          fi
+          if ! [[ "${RELEASE_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::version must be a SemVer value like 0.1.20, 0.1.20-beta.1, or 0.1.20+build.1."
+            exit 1
+          fi
+          if [ -z "${NPM_DIST_TAG//[[:space:]]/}" ]; then
+            echo "::error::tag is required."
+            exit 1
+          fi
+          if ! [[ "${NPM_DIST_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::tag must be a valid npm dist-tag."
+            exit 1
+          fi
+          if [ "${DRY_RUN}" != "true" ] && [ "${RELEASE_FAULT_CASE}" != "none" ]; then
+            echo "::error::fault_case is only allowed when dry_run=true."
+            exit 1
+          fi
+          if [ "${DRY_RUN}" != "true" ] && [ "${AUTOMATIC_RELEASE}" != "true" ] && [ "${GITHUB_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::Real releases must be dispatched from the protected default branch ${DEFAULT_BRANCH}; got ${GITHUB_REF}."
+            exit 1
+          fi
+          if [ "${DRY_RUN}" != "true" ] && [ "${AUTOMATIC_RELEASE}" != "true" ]; then
+            if [ "${RECOVER_EXISTING_NPM_RELEASE}" != "true" ] && ! [[ "${RELEASE_GIT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::Normal real releases require git_ref to be the exact 40-character source_commit approved in the dry-run."
+              exit 1
+            fi
+            if [ "${RECOVER_EXISTING_NPM_RELEASE}" = "true" ] && [ -n "${RELEASE_GIT_REF//[[:space:]]/}" ] && [ "${RELEASE_GIT_REF}" != "${DEFAULT_BRANCH}" ] && [ "${RELEASE_GIT_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+              echo "::error::Recovery runs use npm gitHead as the immutable source and cannot override git_ref away from ${DEFAULT_BRANCH}."
+              exit 1
+            fi
+          fi
+          if [ "${DRY_RUN}" != "true" ] && [ "${RECOVER_EXISTING_NPM_RELEASE}" != "true" ]; then
+            approved_commit="$(git rev-parse "${RELEASE_GIT_REF}^{commit}")"
+            checked_out_commit="$(git rev-parse HEAD)"
+            if [ "${checked_out_commit}" != "${approved_commit}" ]; then
+              echo "::error::Checked-out commit ${checked_out_commit} does not match approved dry-run commit ${approved_commit}."
+              exit 1
+            fi
+          fi
+          node .github/scripts/validate-release-confirmation.mjs
+
+      - name: Resolve immutable release source
+        id: release_source
+        shell: bash
+        env:
+          PACKAGE_NAME: "@memtensor/memos-cloud-openclaw-plugin"
+          RELEASE_VERSION: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          AUTOMATIC_RELEASE: ${{ github.event_name == 'pull_request' }}
+          AUTOMATIC_RELEASE_TARGET: ${{ needs.classify_auto_release.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          release_tag="v${RELEASE_VERSION#v}"
+          npm_view_log="${RUNNER_TEMP}/openclaw-cloud-plugin-source-version.log"
+          npm_version_exists() {
+            for attempt in 1 2 3; do
+              set +e
+              npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version >"${npm_view_log}" 2>&1
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                return 0
+              fi
+              if grep -Eiq "E404|404 Not Found|No match found|is not in this registry" "${npm_view_log}"; then
+                return 1
+              fi
+              sed -n '1,120p' "${npm_view_log}" >&2
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::Failed to determine whether ${PACKAGE_NAME}@${RELEASE_VERSION} exists."
+                exit "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          npm_release_git_head() {
+            local out="${RUNNER_TEMP}/openclaw-cloud-plugin-source-git-head.log"
+            local git_head
+            for attempt in 1 2 3; do
+              set +e
+              npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" gitHead >"${out}" 2>&1
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                git_head="$(tr -d '[:space:]"' <"${out}")"
+                if [[ "${git_head}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                  printf '%s\n' "${git_head}"
+                  return 0
+                fi
+                sed -n '1,80p' "${out}" >&2
+                if [ "${attempt}" = 3 ]; then
+                  echo "::error::${PACKAGE_NAME}@${RELEASE_VERSION} has no trustworthy 40-character npm gitHead after three attempts." >&2
+                  return 1
+                fi
+                sleep "$((attempt * 5))"
+                continue
+              fi
+              sed -n '1,80p' "${out}" >&2
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::Failed to read npm gitHead for ${PACKAGE_NAME}@${RELEASE_VERSION}." >&2
+                return "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          validate_release_commit_versions() {
+            local commit_sha="$1"
+            local file
+            local actual
+            for file in package.json openclaw.plugin.json moltbot.plugin.json clawdbot.plugin.json; do
+              actual="$(
+                git show "${commit_sha}:${file}" |
+                  node -e 'let value=""; process.stdin.on("data", chunk => value += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(value).version || ""));'
+              )"
+              if [ "${actual}" != "${RELEASE_VERSION}" ]; then
+                echo "::error::npm gitHead ${commit_sha} has ${file} version ${actual:-missing}, expected ${RELEASE_VERSION}."
+                exit 1
+              fi
+            done
+          }
+
+          evidence_ref=""
+          npm_git_head=""
+          if npm_version_exists; then
+            npm_git_head="$(npm_release_git_head)"
+            if [ "${AUTOMATIC_RELEASE}" = "true" ] && [ "${npm_git_head}" != "${AUTOMATIC_RELEASE_TARGET}" ]; then
+              echo "::error::npm records gitHead ${npm_git_head} for ${PACKAGE_NAME}@${RELEASE_VERSION}, but this automatic release is locked to merged commit ${AUTOMATIC_RELEASE_TARGET}."
+              exit 1
+            fi
+            if ! git cat-file -e "${npm_git_head}^{commit}" 2>/dev/null; then
+              bash .github/scripts/retry.sh --label "fetch npm gitHead ${npm_git_head}" -- \
+                git fetch --no-tags origin "${npm_git_head}"
+            fi
+            if ! git cat-file -e "${npm_git_head}^{commit}" 2>/dev/null; then
+              echo "::error::npm gitHead ${npm_git_head} is not a commit in ${GITHUB_REPOSITORY}."
+              exit 1
+            fi
+            validate_release_commit_versions "${npm_git_head}"
+
+            if git rev-parse --verify --quiet "${release_tag}^{commit}" >/dev/null; then
+              tag_commit="$(git rev-parse "${release_tag}^{commit}")"
+              if [ "${tag_commit}" != "${npm_git_head}" ]; then
+                echo "::error::Tag ${release_tag} points to ${tag_commit}, but npm records gitHead ${npm_git_head}."
+                exit 1
+              fi
+              evidence_ref="${release_tag}"
+            else
+              evidence_ref="${npm_git_head}"
+              echo "::notice::Tag ${release_tag} is missing; release evidence is pinned to npm gitHead ${npm_git_head}."
+            fi
+          elif git rev-parse --verify --quiet "${release_tag}^{commit}" >/dev/null; then
+            echo "::error::Tag ${release_tag} exists while ${PACKAGE_NAME}@${RELEASE_VERSION} is absent; refusing inconsistent release metadata."
+            exit 1
+          else
+            evidence_ref="HEAD"
+          fi
+
+          {
+            echo "evidence_ref=${evidence_ref}"
+            echo "npm_git_head=${npm_git_head}"
+            echo "source_commit=$(git rev-parse "${evidence_ref}^{commit}")"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Install dependencies
+        shell: bash
+        run: bash .github/scripts/retry.sh --label "npm install" -- npm install
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/retry.sh --attempts 2 --label "release workflow script tests" -- node --test .github/scripts/*.test.mjs
+          if compgen -G "test/*.test.mjs" >/dev/null; then
+            bash .github/scripts/retry.sh --attempts 2 --label "plugin tests" -- node --test test/*.test.mjs
+          else
+            echo "No plugin tests found; skipping."
+          fi
+
+      - name: Validate committed release source version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          RELEASE_SOURCE_REF: ${{ steps.release_source.outputs.evidence_ref }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/validate-release-source-version.mjs
+
+      - name: Generate telemetry credentials
+        shell: bash
+        env:
+          MEMOS_ARMS_ENDPOINT: ${{ secrets.MEMOS_ARMS_ENDPOINT }}
+          MEMOS_ARMS_PID: ${{ secrets.MEMOS_ARMS_PID }}
+          MEMOS_ARMS_ENV: ${{ secrets.MEMOS_ARMS_ENV }}
+        run: bash .github/scripts/retry.sh --label "generate telemetry credentials" -- node scripts/generate-telemetry-credentials.cjs
+
+      - name: Verify package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/retry.sh --label "npm pack dry-run" -- bash -euo pipefail -c 'npm pack --dry-run --json > "${RUNNER_TEMP}/openclaw-cloud-plugin-pack.json"'
+
+      - name: Draft GitHub Release notes
+        id: release_notes
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          RELEASE_TAG: v${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          RELEASE_EVIDENCE_REF: ${{ steps.release_source.outputs.evidence_ref }}
+          MANUAL_RELEASE_NOTES: ${{ github.event_name == 'pull_request' && '' || inputs.release_notes }}
+          MANUAL_RELEASE_NOTES_FILE: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.release_notes_file || '' }}
+          RELEASE_FAULT_CASE: ${{ github.event_name == 'pull_request' && 'none' || inputs.fault_case }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_URL: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_URL }}
+          DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
+        run: node .github/scripts/draft-cloud-plugin-release-notes.mjs
+
+      - name: Prepare release inspection artifact
+        if: ${{ always() }}
+        shell: bash
+        env:
+          DRAFT_STEP_OUTCOME: ${{ steps.release_notes.outcome }}
+          DRY_RUN: ${{ github.event_name == 'pull_request' && 'false' || inputs.dry_run }}
+          RELEASE_VERSION: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          FAULT_CASE: ${{ github.event_name == 'pull_request' && 'none' || inputs.fault_case }}
+          RELEASE_NOTES_SOURCE: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.release_notes_source || (inputs.release_notes != '' && 'manual_input' || 'doc_agent') }}
+          RELEASE_NOTES_FILE: ${{ steps.release_notes.outputs.release_notes_file }}
+          EVIDENCE_FILE: ${{ steps.release_notes.outputs.evidence_file }}
+          DRAFT_FILE: ${{ steps.release_notes.outputs.draft_file }}
+          DOCS_PREVIEW_FILE: ${{ steps.release_notes.outputs.docs_preview_file }}
+          DOCS_PREVIEW_MARKDOWN_FILE: ${{ steps.release_notes.outputs.docs_preview_markdown_file }}
+          QUALITY_REPORT_FILE: ${{ steps.release_notes.outputs.quality_report_file }}
+          DRAFT_USED: ${{ steps.release_notes.outputs.draft_used }}
+          PREVIOUS_TAG: ${{ steps.release_notes.outputs.previous_tag }}
+          CURRENT_TAG: ${{ steps.release_notes.outputs.current_tag }}
+          CURRENT_REF: ${{ steps.release_notes.outputs.current_ref }}
+          SOURCE_COMMIT: ${{ steps.release_source.outputs.source_commit }}
+          RELEASE_CHANNEL: ${{ steps.release_policy.outputs.release_channel }}
+          NPM_DIST_TAG: ${{ steps.release_policy.outputs.npm_dist_tag }}
+          GITHUB_RELEASE_PRERELEASE: ${{ steps.release_policy.outputs.github_release_prerelease }}
+          DOCS_SYNC_EXPECTED: ${{ steps.release_policy.outputs.docs_sync_expected }}
+          DRAFT_CONFIDENCE: ${{ steps.release_notes.outputs.draft_confidence }}
+          MISSING_REQUIRED_COUNT: ${{ steps.release_notes.outputs.missing_required_count }}
+          VALIDATION_ATTEMPT_COUNT: ${{ steps.release_notes.outputs.validation_attempt_count }}
+          REPAIR_ATTEMPT_COUNT: ${{ steps.release_notes.outputs.repair_attempt_count }}
+          EXPECTED_PREVIOUS_TAG: ""
+          EXPECTED_CURRENT_REF: ""
+        run: |
+          set -euo pipefail
+          inspection_dir="${RUNNER_TEMP}/openclaw-cloud-plugin-release-inspection"
+          mkdir -p "${inspection_dir}"
+
+          if [ "${DRAFT_STEP_OUTCOME}" = "success" ] && { [ -z "${RELEASE_NOTES_FILE}" ] || [ ! -s "${RELEASE_NOTES_FILE}" ]; }; then
+            echo "::error::Release notes file was not generated."
+            exit 1
+          fi
+
+          if [ "${DRAFT_STEP_OUTCOME}" = "success" ] && [ -n "${EXPECTED_PREVIOUS_TAG:-}" ] && [ "${PREVIOUS_TAG:-}" != "${EXPECTED_PREVIOUS_TAG}" ]; then
+            echo "::error::Expected previous_tag=${EXPECTED_PREVIOUS_TAG}, got ${PREVIOUS_TAG:-n/a}."
+            exit 1
+          fi
+          if [ "${DRAFT_STEP_OUTCOME}" = "success" ] && [ -n "${EXPECTED_CURRENT_REF:-}" ] && [ "${CURRENT_REF:-}" != "${EXPECTED_CURRENT_REF}" ]; then
+            echo "::error::Expected current_ref=${EXPECTED_CURRENT_REF}, got ${CURRENT_REF:-n/a}."
+            exit 1
+          fi
+
+          if [ -n "${RELEASE_NOTES_FILE}" ] && [ -s "${RELEASE_NOTES_FILE}" ]; then
+            cp "${RELEASE_NOTES_FILE}" "${inspection_dir}/release-notes.md"
+          fi
+          if [ -s "${RUNNER_TEMP}/openclaw-cloud-plugin-pack.json" ]; then
+            cp "${RUNNER_TEMP}/openclaw-cloud-plugin-pack.json" "${inspection_dir}/npm-pack.json"
+          fi
+          if [ -n "${EVIDENCE_FILE}" ] && [ -s "${EVIDENCE_FILE}" ]; then
+            cp "${EVIDENCE_FILE}" "${inspection_dir}/evidence.json"
+          fi
+          if [ -n "${DRAFT_FILE}" ] && [ -s "${DRAFT_FILE}" ]; then
+            cp "${DRAFT_FILE}" "${inspection_dir}/release-notes-draft.json"
+          fi
+          if [ -n "${DOCS_PREVIEW_FILE}" ] && [ -s "${DOCS_PREVIEW_FILE}" ]; then
+            cp "${DOCS_PREVIEW_FILE}" "${inspection_dir}/docs-preview.json"
+          fi
+          if [ -n "${DOCS_PREVIEW_MARKDOWN_FILE}" ] && [ -s "${DOCS_PREVIEW_MARKDOWN_FILE}" ]; then
+            cp "${DOCS_PREVIEW_MARKDOWN_FILE}" "${inspection_dir}/docs-preview.md"
+          fi
+          if [ -n "${QUALITY_REPORT_FILE}" ] && [ -s "${QUALITY_REPORT_FILE}" ]; then
+            cp "${QUALITY_REPORT_FILE}" "${inspection_dir}/quality-report.json"
+          fi
+          if [ "${DRAFT_STEP_OUTCOME}" = "success" ] && [ ! -s "${inspection_dir}/quality-report.json" ]; then
+            echo "::error::quality-report.json was not generated."
+            exit 1
+          fi
+          github_release_prerelease_json="${GITHUB_RELEASE_PRERELEASE:-null}"
+          docs_sync_expected_json="${DOCS_SYNC_EXPECTED:-null}"
+          if [[ "${github_release_prerelease_json}" != "true" && "${github_release_prerelease_json}" != "false" ]]; then
+            github_release_prerelease_json=null
+          fi
+          if [[ "${docs_sync_expected_json}" != "true" && "${docs_sync_expected_json}" != "false" ]]; then
+            docs_sync_expected_json=null
+          fi
+          jq -n \
+            --arg version "${RELEASE_VERSION}" \
+            --arg source_commit "${SOURCE_COMMIT}" \
+            --arg evidence_ref "${CURRENT_REF:-}" \
+            --arg release_channel "${RELEASE_CHANNEL}" \
+            --arg npm_dist_tag "${NPM_DIST_TAG}" \
+            --argjson github_release_prerelease "${github_release_prerelease_json}" \
+            --argjson docs_sync_expected "${docs_sync_expected_json}" \
+            '{
+              version: $version,
+              source_commit: $source_commit,
+              evidence_ref: $evidence_ref,
+              release_channel: $release_channel,
+              npm_dist_tag: $npm_dist_tag,
+              github_release_prerelease: $github_release_prerelease,
+              docs_sync_expected: $docs_sync_expected
+            }' \
+            > "${inspection_dir}/release-source.json"
+
+          {
+            echo "# OpenClaw cloud plugin release inspection"
+            echo
+            echo "- draft_step_outcome: ${DRAFT_STEP_OUTCOME}"
+            echo "- dry_run: ${DRY_RUN}"
+            echo "- version: ${RELEASE_VERSION}"
+            echo "- release_channel: ${RELEASE_CHANNEL}"
+            echo "- npm_dist_tag: ${NPM_DIST_TAG}"
+            echo "- github_release_prerelease: ${GITHUB_RELEASE_PRERELEASE}"
+            echo "- docs_sync_expected: ${DOCS_SYNC_EXPECTED}"
+            echo "- fault_case: ${FAULT_CASE}"
+            echo "- release_notes_source: ${RELEASE_NOTES_SOURCE}"
+            echo "- draft_used: ${DRAFT_USED:-unknown}"
+            echo "- previous_tag: ${PREVIOUS_TAG:-n/a}"
+            echo "- current_tag: ${CURRENT_TAG:-n/a}"
+            echo "- current_ref: ${CURRENT_REF:-n/a}"
+            echo "- source_commit: ${SOURCE_COMMIT:-n/a}"
+            echo "- draft_confidence: ${DRAFT_CONFIDENCE:-n/a}"
+            echo "- missing_required_count: ${MISSING_REQUIRED_COUNT:-n/a}"
+            echo "- validation_attempt_count: ${VALIDATION_ATTEMPT_COUNT:-n/a}"
+            echo "- repair_attempt_count: ${REPAIR_ATTEMPT_COUNT:-n/a}"
+            echo
+            echo "Files:"
+            echo
+            if [ -f "${inspection_dir}/release-notes.md" ]; then
+              echo "- release-notes.md"
+            fi
+            if [ -f "${inspection_dir}/npm-pack.json" ]; then
+              echo "- npm-pack.json"
+            fi
+            if [ -f "${inspection_dir}/evidence.json" ]; then
+              echo "- evidence.json (redacted; no full diff or prompt guidance)"
+            fi
+            if [ -f "${inspection_dir}/release-notes-draft.json" ]; then
+              echo "- release-notes-draft.json"
+            fi
+            if [ -f "${inspection_dir}/docs-preview.md" ]; then
+              echo "- docs-preview.md"
+              echo "- docs-preview.json"
+            fi
+            if [ -f "${inspection_dir}/quality-report.json" ]; then
+              echo "- quality-report.json"
+            fi
+            echo "- release-source.json"
+          } > "${inspection_dir}/README.md"
+
+          {
+            echo "### OpenClaw cloud plugin release notes"
+            echo
+            echo "- draft_step_outcome: \`${DRAFT_STEP_OUTCOME}\`"
+            echo "- dry_run: \`${DRY_RUN}\`"
+            echo "- release_channel: \`${RELEASE_CHANNEL}\`"
+            echo "- npm_dist_tag: \`${NPM_DIST_TAG}\`"
+            echo "- github_release_prerelease: \`${GITHUB_RELEASE_PRERELEASE}\`"
+            echo "- docs_sync_expected: \`${DOCS_SYNC_EXPECTED}\`"
+            echo "- fault_case: \`${FAULT_CASE}\`"
+            echo "- release_notes_source: \`${RELEASE_NOTES_SOURCE}\`"
+            echo "- draft_used: \`${DRAFT_USED:-unknown}\`"
+            echo "- previous_tag: \`${PREVIOUS_TAG:-n/a}\`"
+            echo "- current_tag: \`${CURRENT_TAG:-n/a}\`"
+            echo "- current_ref: \`${CURRENT_REF:-n/a}\`"
+            echo "- source_commit: \`${SOURCE_COMMIT:-n/a}\`"
+            echo "- draft_confidence: \`${DRAFT_CONFIDENCE:-n/a}\`"
+            echo "- missing_required_count: \`${MISSING_REQUIRED_COUNT:-n/a}\`"
+            echo "- validation_attempt_count: \`${VALIDATION_ATTEMPT_COUNT:-n/a}\`"
+            echo "- repair_attempt_count: \`${REPAIR_ATTEMPT_COUNT:-n/a}\`"
+            echo
+            echo "Download the workflow artifact \`openclaw-cloud-plugin-release-inspection\` to review release-notes.md, quality-report.json, release-notes-draft.json, and redacted evidence.json."
+            if [ -f "${inspection_dir}/docs-preview.md" ]; then
+              echo
+              echo "### MemOS-Docs preview"
+              echo
+              sed -n '1,120p' "${inspection_dir}/docs-preview.md"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload release inspection artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-cloud-plugin-release-inspection
+          path: ${{ runner.temp }}/openclaw-cloud-plugin-release-inspection
+          if-no-files-found: error
+
+      - name: Stop before publish in dry run
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+        run: |
+          echo "::notice::dry_run=true; skipped npm publish, tag, and GitHub Release."
+
+      - name: Publish to npm
+        id: publish_npm
+        if: ${{ github.event_name == 'pull_request' || inputs.dry_run != true }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: "@memtensor/memos-cloud-openclaw-plugin"
+          RELEASE_VERSION: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          RELEASE_TAG: v${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          NPM_DIST_TAG: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.npm_dist_tag || inputs.tag }}
+          CREATE_DRAFT_RELEASE: ${{ github.event_name == 'pull_request' || inputs.recover_existing_npm_release == true }}
+          EXPECTED_RELEASE_PRERELEASE: ${{ steps.release_policy.outputs.github_release_prerelease }}
+          RECOVER_EXISTING_NPM_RELEASE: ${{ github.event_name == 'pull_request' && 'false' || inputs.recover_existing_npm_release }}
+          AUTOMATIC_RELEASE: ${{ github.event_name == 'pull_request' }}
+          AUTOMATIC_RELEASE_TARGET: ${{ needs.classify_auto_release.outputs.target_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
+          NPM_VISIBILITY_TIMEOUT_SECONDS: "150"
+          NPM_VISIBILITY_INTERVAL_SECONDS: "10"
+          NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS: "8"
+        run: |
+          set -euo pipefail
+
+          release_tag="v${RELEASE_VERSION#v}"
+          expected_release_prerelease="${EXPECTED_RELEASE_PRERELEASE}"
+          report_exhausted_failure() {
+            local phase="$1"
+            local attempt_dir="$2"
+            RELEASE_FAILURE_PHASE="${phase}" \
+              RELEASE_FAILURE_ATTEMPT_DIR="${attempt_dir}" \
+              node .github/scripts/draft-cloud-plugin-release-notes.mjs \
+              || echo "::warning::Failed to report exhausted ${phase} attempts."
+          }
+
+          npm_view_log="${RUNNER_TEMP}/openclaw-cloud-plugin-npm-view.log"
+          npm_version_exists() {
+            for attempt in 1 2 3; do
+              set +e
+              npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" version >"${npm_view_log}" 2>&1
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                sed -n '1,40p' "${npm_view_log}"
+                return 0
+              fi
+              if grep -Eiq "E404|404 Not Found|No match found|is not in this registry" "${npm_view_log}"; then
+                return 1
+              fi
+              sed -n '1,120p' "${npm_view_log}"
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::npm view failed after three attempts; refusing to guess whether ${PACKAGE_NAME}@${RELEASE_VERSION} exists."
+                exit "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          npm_release_git_head() {
+            local out="${RUNNER_TEMP}/openclaw-cloud-plugin-npm-git-head.log"
+            local git_head
+            for attempt in 1 2 3; do
+              set +e
+              npm view "${PACKAGE_NAME}@${RELEASE_VERSION}" gitHead >"${out}" 2>&1
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                git_head="$(tr -d '[:space:]"' <"${out}")"
+                if [[ "${git_head}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                  printf '%s\n' "${git_head}"
+                  return 0
+                fi
+                sed -n '1,80p' "${out}" >&2
+                if [ "${attempt}" = 3 ]; then
+                  echo "::error::${PACKAGE_NAME}@${RELEASE_VERSION} has no trustworthy 40-character npm gitHead after three attempts." >&2
+                  return 1
+                fi
+                sleep "$((attempt * 5))"
+                continue
+              fi
+              sed -n '1,80p' "${out}" >&2
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::Failed to read npm gitHead for ${PACKAGE_NAME}@${RELEASE_VERSION} after three attempts." >&2
+                return "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          wait_for_npm_release_visibility() {
+            local expected_git_head="$1"
+            NPM_PACKAGE_NAME="${PACKAGE_NAME}" \
+              NPM_RELEASE_VERSION="${RELEASE_VERSION}" \
+              NPM_DIST_TAG="${NPM_DIST_TAG}" \
+              NPM_EXPECTED_GIT_HEAD="${expected_git_head}" \
+              NPM_VISIBILITY_TIMEOUT_SECONDS="${NPM_VISIBILITY_TIMEOUT_SECONDS}" \
+              NPM_VISIBILITY_INTERVAL_SECONDS="${NPM_VISIBILITY_INTERVAL_SECONDS}" \
+              NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS="${NPM_VISIBILITY_REQUEST_TIMEOUT_SECONDS}" \
+              node .github/scripts/wait-for-npm-release.mjs
+          }
+          ensure_commit_available() {
+            local commit_sha="$1"
+            if git cat-file -e "${commit_sha}^{commit}" 2>/dev/null; then
+              return 0
+            fi
+            bash .github/scripts/retry.sh --label "fetch npm gitHead ${commit_sha}" -- \
+              git fetch --no-tags origin "${commit_sha}"
+            if ! git cat-file -e "${commit_sha}^{commit}" 2>/dev/null; then
+              echo "::error::npm gitHead ${commit_sha} is not a commit in ${GITHUB_REPOSITORY}."
+              exit 1
+            fi
+          }
+          validate_release_commit_versions() {
+            local commit_sha="$1"
+            local file
+            local actual
+            for file in package.json openclaw.plugin.json moltbot.plugin.json clawdbot.plugin.json; do
+              actual="$(
+                git show "${commit_sha}:${file}" |
+                  node -e 'let value=""; process.stdin.on("data", chunk => value += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(value).version || ""));'
+              )"
+              if [ "${actual}" != "${RELEASE_VERSION}" ]; then
+                echo "::error::npm gitHead ${commit_sha} has ${file} version ${actual:-missing}, expected ${RELEASE_VERSION}."
+                exit 1
+              fi
+            done
+          }
+          remote_tag_exists() {
+            local release_tag="$1"
+            for attempt in 1 2 3; do
+              set +e
+              git ls-remote --exit-code --tags origin "refs/tags/${release_tag}" >/dev/null 2>&1
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                return 0
+              fi
+              if [ "${status}" = 2 ]; then
+                return 1
+              fi
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::Failed to check remote tag ${release_tag} after three attempts."
+                exit "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          remote_branch_sha() {
+            local branch="$1"
+            local out="${RUNNER_TEMP}/openclaw-cloud-plugin-remote-branch.txt"
+            for attempt in 1 2 3; do
+              set +e
+              git ls-remote --heads origin "${branch}" >"${out}" 2>&1
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                awk '{print $1}' "${out}"
+                return 0
+              fi
+              sed -n '1,120p' "${out}" >&2
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::Failed to check remote branch ${branch} after three attempts."
+                exit "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          release_inventory_file="${RUNNER_TEMP}/openclaw-cloud-plugin-release-inventory.json"
+          refresh_release_inventory() {
+            local out="${release_inventory_file}.tmp"
+            local err="${release_inventory_file}.err"
+            for attempt in 1 2 3; do
+              set +e
+              gh api --paginate --slurp \
+                "repos/${GITHUB_REPOSITORY}/releases?per_page=100" >"${out}" 2>"${err}"
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                mv "${out}" "${release_inventory_file}"
+                return 0
+              fi
+              sed -n '1,120p' "${err}" >&2
+              if [ "${attempt}" = 3 ]; then
+                echo "::error::Failed to enumerate GitHub Releases after three attempts."
+                exit "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          inspect_release_inventory() {
+            local expected_target="${1:-}"
+            RELEASE_INVENTORY_FILE="${release_inventory_file}" \
+              RELEASE_TAG="${release_tag}" \
+              EXPECTED_RELEASE_DRAFT="${CREATE_DRAFT_RELEASE}" \
+              EXPECTED_RELEASE_PRERELEASE="${expected_release_prerelease}" \
+              EXPECTED_RELEASE_TARGET="${expected_target}" \
+              REQUIRED_DOC_AGENT_SOURCE_ID=openclaw-cloud-plugin \
+              REQUIRE_EXISTING_RELEASE=false \
+              ALLOW_PUBLISHED_FOR_DRAFT_RERUN="${CREATE_DRAFT_RELEASE}" \
+              node .github/scripts/validate-github-release-inventory.mjs
+          }
+
+          tag_exists=false
+          tag_commit=""
+          if remote_tag_exists "${release_tag}"; then
+            tag_exists=true
+            git fetch --force origin "refs/tags/${release_tag}:refs/tags/${release_tag}"
+            tag_commit="$(git rev-parse "${release_tag}^{commit}")"
+          fi
+
+          refresh_release_inventory
+          set +e
+          release_inventory_report="$(inspect_release_inventory "")"
+          release_inventory_status=$?
+          set -e
+          if [ "${release_inventory_status}" -ne 0 ]; then
+            echo "::error::${release_inventory_report}"
+            exit 1
+          fi
+          release_state="$(printf '%s' "${release_inventory_report}" | jq -r '.state')"
+          release_exists=false
+          if [ "${release_state}" = "existing" ]; then
+            release_exists=true
+          fi
+
+          if npm_version_exists; then
+            release_commit_sha="$(npm_release_git_head)"
+            if [ "${AUTOMATIC_RELEASE}" = "true" ] && [ "${release_commit_sha}" != "${AUTOMATIC_RELEASE_TARGET}" ]; then
+              echo "::error::npm records gitHead ${release_commit_sha} for ${PACKAGE_NAME}@${RELEASE_VERSION}, but this automatic release is locked to merged commit ${AUTOMATIC_RELEASE_TARGET}."
+              exit 1
+            fi
+            ensure_commit_available "${release_commit_sha}"
+            validate_release_commit_versions "${release_commit_sha}"
+
+            if [ "${tag_exists}" = "true" ] && [ "${tag_commit}" != "${release_commit_sha}" ]; then
+              echo "::error::Tag ${release_tag} points to ${tag_commit}, but npm ${PACKAGE_NAME}@${RELEASE_VERSION} records gitHead ${release_commit_sha}."
+              exit 1
+            fi
+            if [ "${tag_exists}" = "true" ] && [ "${release_exists}" = "true" ]; then
+              echo "${PACKAGE_NAME}@${RELEASE_VERSION}, ${release_tag}, and its validated GitHub Release already exist; treating this as an idempotent rerun."
+            elif [ "${RECOVER_EXISTING_NPM_RELEASE}" = "true" ] || [ "${AUTOMATIC_RELEASE}" = "true" ]; then
+              echo "Verified resume mode enabled; npm version exists, so publish is skipped and missing GitHub metadata will target npm gitHead ${release_commit_sha}."
+            else
+              missing=()
+              if [ "${tag_exists}" != "true" ]; then
+                missing+=("${release_tag}")
+              fi
+              if [ "${release_exists}" != "true" ]; then
+                missing+=("GitHub Release ${release_tag}")
+              fi
+              printf -v missing_text "%s, " "${missing[@]}"
+              missing_text="${missing_text%, }"
+              echo "::error::${PACKAGE_NAME}@${RELEASE_VERSION} already exists on npm, but ${missing_text} is missing. Set recover_existing_npm_release=true only for an intentional metadata backfill pinned to npm gitHead."
+              exit 1
+            fi
+          else
+            if [ "${RECOVER_EXISTING_NPM_RELEASE}" = "true" ]; then
+              echo "::error::Recovery requires ${PACKAGE_NAME}@${RELEASE_VERSION} to already exist on npm. Refusing to turn metadata recovery into a first publish."
+              exit 1
+            fi
+            if [ "${tag_exists}" = "true" ] || [ "${release_exists}" = "true" ]; then
+              echo "::error::Refusing to publish ${PACKAGE_NAME}@${RELEASE_VERSION}: GitHub tag/Release metadata already exists while npm does not."
+              exit 1
+            fi
+
+            source_commit_sha="$(git rev-parse HEAD)"
+            remote_default_sha="$(remote_branch_sha "${DEFAULT_BRANCH}")"
+            if [ -z "${remote_default_sha}" ]; then
+              echo "::error::Could not resolve the protected default branch ${DEFAULT_BRANCH}."
+              exit 1
+            fi
+            if [ "${AUTOMATIC_RELEASE}" = "true" ]; then
+              if [ "${source_commit_sha}" != "${AUTOMATIC_RELEASE_TARGET}" ]; then
+                echo "::error::Checked-out source ${source_commit_sha} does not match the merged version PR target ${AUTOMATIC_RELEASE_TARGET}."
+                exit 1
+              fi
+              git fetch --no-tags origin "${DEFAULT_BRANCH}"
+              if ! git merge-base --is-ancestor "${source_commit_sha}" "origin/${DEFAULT_BRANCH}"; then
+                echo "::error::Merged release target ${source_commit_sha} is no longer an ancestor of ${DEFAULT_BRANCH}."
+                exit 1
+              fi
+            elif [ "${remote_default_sha}" != "${source_commit_sha}" ]; then
+              echo "::error::The checked-out release source ${source_commit_sha} is no longer the head of ${DEFAULT_BRANCH} (${remote_default_sha}). Rerun the workflow from the latest main commit."
+              exit 1
+            fi
+            release_commit_sha="${source_commit_sha}"
+            validate_release_commit_versions "${release_commit_sha}"
+            echo "Publishing the already-reviewed ${DEFAULT_BRANCH} commit ${release_commit_sha}; no source files or version PR will be created by Actions."
+
+            attempt_dir="${RUNNER_TEMP}/openclaw-cloud-plugin-npm-publish-attempts"
+            mkdir -p "${attempt_dir}"
+            publish_confirmed=false
+            for attempt in 1 2 3; do
+              set +e
+              npm publish --access public --tag "${NPM_DIST_TAG}" >"${attempt_dir}/${attempt}.log" 2>&1
+              publish_status=$?
+              set -e
+              sed -n '1,160p' "${attempt_dir}/${attempt}.log"
+              set +e
+              wait_for_npm_release_visibility "${release_commit_sha}" 2>&1 |
+                tee -a "${attempt_dir}/${attempt}.log"
+              visibility_status="${PIPESTATUS[0]}"
+              set -e
+              if [ "${visibility_status}" = 0 ]; then
+                publish_confirmed=true
+              elif [ "${visibility_status}" = 2 ]; then
+                report_exhausted_failure "npm-publish-verification" "${attempt_dir}"
+                echo "::error::npm exposed immutable metadata that does not match the reviewed release source; refusing any publish retry."
+                exit 1
+              fi
+              if [ "${publish_confirmed}" = "true" ]; then
+                if [ "${publish_status}" = 0 ]; then
+                  echo "npm publish and the bounded registry visibility check both succeeded."
+                else
+                  echo "Publish returned an error, but npm now contains the fully verified release; refusing a duplicate publish."
+                fi
+                break
+              fi
+              if [ "${publish_status}" = 0 ]; then
+                report_exhausted_failure "npm-publish-verification" "${attempt_dir}"
+                echo "::error::npm publish returned success, but version, gitHead, and dist-tag were not all visible within ${NPM_VISIBILITY_TIMEOUT_SECONDS}s. Refusing to issue a second publish request."
+                exit 1
+              fi
+              if [ "${attempt}" = 3 ]; then
+                report_exhausted_failure "npm-publish" "${attempt_dir}"
+                echo "::error::npm publish failed after three attempts, and no fully verified release became visible."
+                exit 1
+              fi
+              sleep "$((attempt * 5))"
+            done
+            if [ "${publish_confirmed}" != "true" ]; then
+              echo "::error::npm publish appeared to finish, but ${PACKAGE_NAME}@${RELEASE_VERSION} is still not visible."
+              exit 1
+            fi
+          fi
+
+          echo "release_commit_sha=${release_commit_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create release tag and GitHub Release
+        if: ${{ github.event_name == 'pull_request' || inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.version || inputs.version }}
+          NPM_DIST_TAG: ${{ github.event_name == 'pull_request' && needs.classify_auto_release.outputs.npm_dist_tag || inputs.tag }}
+          CREATE_DRAFT_RELEASE: ${{ github.event_name == 'pull_request' || inputs.recover_existing_npm_release == true }}
+          EXPECTED_RELEASE_PRERELEASE: ${{ steps.release_policy.outputs.github_release_prerelease }}
+          RELEASE_NOTES_FILE: ${{ steps.release_notes.outputs.release_notes_file }}
+          RELEASE_COMMIT_SHA: ${{ steps.publish_npm.outputs.release_commit_sha }}
+          DOC_AGENT_RELEASE_FAILURE_URL: ${{ secrets.DOC_AGENT_RELEASE_FAILURE_URL }}
+          DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN: ${{ secrets.DOC_AGENT_RELEASE_NOTES_DRAFT_TOKEN }}
+          GITHUB_RELEASE_VISIBILITY_ATTEMPTS: "12"
+          GITHUB_RELEASE_VISIBILITY_INTERVAL_SECONDS: "10"
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_NOTES_FILE}" ] || [ ! -s "${RELEASE_NOTES_FILE}" ]; then
+            echo "::error::Release notes file was not generated."
+            exit 1
+          fi
+          if ! [[ "${RELEASE_COMMIT_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Publish step did not provide a trustworthy release commit SHA."
+            exit 1
+          fi
+          if ! git cat-file -e "${RELEASE_COMMIT_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Release commit ${RELEASE_COMMIT_SHA} is not available locally."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          release_tag="v${RELEASE_VERSION#v}"
+          expected_release_prerelease="${EXPECTED_RELEASE_PRERELEASE}"
+          report_exhausted_failure() {
+            local phase="$1"
+            local attempt_dir="$2"
+            RELEASE_FAILURE_PHASE="${phase}" \
+              RELEASE_FAILURE_ATTEMPT_DIR="${attempt_dir}" \
+              RELEASE_TAG="${release_tag}" \
+              node .github/scripts/draft-cloud-plugin-release-notes.mjs \
+              || echo "::warning::Failed to report exhausted ${phase} attempts."
+          }
+          remote_tag_exists() {
+            local tag="$1"
+            local attempt_dir="${RUNNER_TEMP}/openclaw-cloud-plugin-remote-tag-attempts"
+            mkdir -p "${attempt_dir}"
+            for attempt in 1 2 3; do
+              set +e
+              git ls-remote --exit-code --tags origin "refs/tags/${tag}" >"${attempt_dir}/${attempt}.log" 2>&1
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                return 0
+              fi
+              if [ "${status}" = 2 ]; then
+                return 1
+              fi
+              if [ "${attempt}" = 3 ]; then
+                report_exhausted_failure "github-release-tag-lookup" "${attempt_dir}"
+                echo "::error::Failed to check remote tag ${tag} after three attempts."
+                exit "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          release_inventory_file="${RUNNER_TEMP}/openclaw-cloud-plugin-release-inventory.json"
+          refresh_release_inventory() {
+            local out="${release_inventory_file}.tmp"
+            local attempt_dir="${RUNNER_TEMP}/openclaw-cloud-plugin-release-inventory-attempts"
+            mkdir -p "${attempt_dir}"
+            for attempt in 1 2 3; do
+              set +e
+              gh api --paginate --slurp \
+                "repos/${GITHUB_REPOSITORY}/releases?per_page=100" >"${out}" 2>"${attempt_dir}/${attempt}.log"
+              status=$?
+              set -e
+              if [ "${status}" = 0 ]; then
+                mv "${out}" "${release_inventory_file}"
+                return 0
+              fi
+              sed -n '1,120p' "${attempt_dir}/${attempt}.log" >&2
+              if [ "${attempt}" = 3 ]; then
+                report_exhausted_failure "github-release-inventory" "${attempt_dir}"
+                echo "::error::Failed to enumerate GitHub Releases after three attempts."
+                exit "${status}"
+              fi
+              sleep "$((attempt * 5))"
+            done
+          }
+          inspect_release_inventory() {
+            local require_existing="$1"
+            RELEASE_INVENTORY_FILE="${release_inventory_file}" \
+              RELEASE_TAG="${release_tag}" \
+              EXPECTED_RELEASE_DRAFT="${CREATE_DRAFT_RELEASE}" \
+              EXPECTED_RELEASE_PRERELEASE="${expected_release_prerelease}" \
+              EXPECTED_RELEASE_TARGET="${RELEASE_COMMIT_SHA}" \
+              REQUIRED_DOC_AGENT_SOURCE_ID=openclaw-cloud-plugin \
+              REQUIRE_EXISTING_RELEASE="${require_existing}" \
+              ALLOW_PUBLISHED_FOR_DRAFT_RERUN="${CREATE_DRAFT_RELEASE}" \
+              node .github/scripts/validate-github-release-inventory.mjs
+          }
+          create_release_if_missing() {
+            local release_flags=()
+            local create_attempt_dir="${RUNNER_TEMP}/openclaw-cloud-plugin-release-create-attempts"
+            local verification_attempt_dir="${RUNNER_TEMP}/openclaw-cloud-plugin-release-verification-attempts"
+            mkdir -p "${create_attempt_dir}" "${verification_attempt_dir}"
+            if [ "${expected_release_prerelease}" = "true" ]; then
+              release_flags+=(--prerelease)
+              echo "Marking GitHub Release ${release_tag} as prerelease because version=${RELEASE_VERSION}, npm_dist_tag=${NPM_DIST_TAG}."
+            fi
+            if [ "${CREATE_DRAFT_RELEASE}" = "true" ]; then
+              release_flags+=(--draft)
+              echo "Creating GitHub Release ${release_tag} as a Draft for human review. Publishing the Draft is the only Docs webhook boundary."
+            fi
+
+            for attempt in 1 2 3; do
+              refresh_release_inventory
+              set +e
+              release_inventory_report="$(inspect_release_inventory false)"
+              release_inventory_status=$?
+              set -e
+              release_inventory_state="$(
+                printf '%s' "${release_inventory_report}" |
+                  jq -r '.state // "invalid"'
+              )"
+              if [ "${release_inventory_status}" -eq 0 ] && [ "${release_inventory_state}" = "existing" ]; then
+                echo "GitHub Release ${release_tag} already exists with matching source metadata; leaving it unchanged."
+                return 0
+              fi
+              if [ "${release_inventory_status}" -ne 0 ] || [ "${release_inventory_state}" != "absent" ]; then
+                echo "::error::${release_inventory_report}"
+                exit 1
+              fi
+
+              echo "::group::create GitHub Release attempt ${attempt}/3"
+              set +e
+              gh release create "${release_tag}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --target "${RELEASE_COMMIT_SHA}" \
+                --title "OpenClaw Cloud Plugin ${release_tag}" \
+                --notes-file "${RELEASE_NOTES_FILE}" \
+                "${release_flags[@]}" >"${create_attempt_dir}/${attempt}.log" 2>&1
+              create_status=$?
+              set -e
+              sed -n '1,160p' "${create_attempt_dir}/${attempt}.log"
+              echo "::endgroup::"
+
+              release_verified=false
+              for poll_attempt in $(seq 1 "${GITHUB_RELEASE_VISIBILITY_ATTEMPTS}"); do
+                refresh_release_inventory
+                set +e
+                release_inventory_report="$(inspect_release_inventory true)"
+                release_inventory_status=$?
+                set -e
+                printf '%s\n' "${release_inventory_report}" >"${verification_attempt_dir}/${poll_attempt}.log"
+                release_inventory_state="$(
+                  printf '%s' "${release_inventory_report}" |
+                    jq -r '.state // "invalid"'
+                )"
+                if [ "${release_inventory_status}" -eq 0 ]; then
+                  if [ "${create_status}" -ne 0 ]; then
+                    echo "::notice::GitHub Release ${release_tag} exists with correct metadata after an unsuccessful create response."
+                  fi
+                  release_verified=true
+                  break
+                fi
+                if [ "${release_inventory_state}" != "absent" ]; then
+                  echo "::error::${release_inventory_report}"
+                  exit 1
+                fi
+                if [ "${poll_attempt}" -lt "${GITHUB_RELEASE_VISIBILITY_ATTEMPTS}" ]; then
+                  sleep "${GITHUB_RELEASE_VISIBILITY_INTERVAL_SECONDS}"
+                fi
+              done
+
+              if [ "${release_verified}" = "true" ]; then
+                return 0
+              fi
+              if [ "${create_status}" -eq 0 ]; then
+                report_exhausted_failure "github-release-verification" "${verification_attempt_dir}"
+                echo "::error::GitHub reported a successful Release create, but ${release_tag} could not be verified. Refusing to issue a second create request."
+                exit 1
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                sleep "$((attempt * 5))"
+              fi
+            done
+
+            report_exhausted_failure "github-release-create" "${create_attempt_dir}"
+            echo "::error::Failed to create and verify GitHub Release ${release_tag} after three attempts."
+            exit 1
+          }
+          refresh_release_inventory
+          set +e
+          release_inventory_report="$(inspect_release_inventory false)"
+          release_inventory_status=$?
+          set -e
+          if [ "${release_inventory_status}" -ne 0 ]; then
+            echo "::error::${release_inventory_report}"
+            exit 1
+          fi
+
+          if remote_tag_exists "${release_tag}"; then
+            git fetch --force origin "refs/tags/${release_tag}:refs/tags/${release_tag}"
+            actual_tag_commit="$(git rev-parse "${release_tag}^{commit}")"
+            if [ "${actual_tag_commit}" != "${RELEASE_COMMIT_SHA}" ]; then
+              echo "::error::Tag ${release_tag} points to ${actual_tag_commit}, expected npm gitHead ${RELEASE_COMMIT_SHA}."
+              exit 1
+            fi
+            echo "Tag ${release_tag} already points to npm gitHead ${RELEASE_COMMIT_SHA}; leaving it unchanged."
+          else
+            if git rev-parse --verify "refs/tags/${release_tag}" >/dev/null 2>&1; then
+              echo "::error::A local-only tag ${release_tag} exists while the remote tag is absent; refusing to overwrite or guess."
+              exit 1
+            fi
+            git tag -a "${release_tag}" "${RELEASE_COMMIT_SHA}" -m "OpenClaw Cloud Plugin ${release_tag}"
+            tag_attempt_dir="${RUNNER_TEMP}/openclaw-cloud-plugin-release-tag-push-attempts"
+            if ! RETRY_ATTEMPT_DIR="${tag_attempt_dir}" \
+              bash .github/scripts/retry.sh --label "push release tag" -- \
+                git push origin "refs/tags/${release_tag}"; then
+              report_exhausted_failure "github-release-tag-push" "${tag_attempt_dir}"
+              exit 1
+            fi
+          fi
+
+          create_release_if_missing
+
+          if [ "${CREATE_DRAFT_RELEASE}" = "true" ]; then
+            {
+              echo "### Draft Release ready for review"
+              echo
+              echo "- npm ${RELEASE_VERSION} and tag ${release_tag} were verified before the Draft was created."
+              echo "- Review the Draft Release body and Docs preview."
+              echo "- Stable release: click Publish only after review; that release.published event triggers 106."
+              echo "- Prerelease: publishing remains a GitHub Prerelease and 106 must skip formal Docs sync."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi

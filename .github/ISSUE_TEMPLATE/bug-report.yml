@@ -1,7 +1,7 @@
 name: "\U0001F41B Bug Report"
 description: Report a bug to help us improve MemOS | 报告错误以帮助我们改进 MemOS
 title: "fix: "
-labels: ["bug", "pending"]
+labels: ["bug"]
 body:
 
   - type: checkboxes

@@ -199,7 +199,13 @@ export function Header() {
             style="margin-left:var(--sp-2);display:inline-flex;align-items:center"
           >
             <img
-              src={h.agent === "hermes" ? "hermes-logo.svg" : "openclaw-logo.svg"}
+              src={
+                h.agent === "hermes"
+                  ? "hermes-logo.svg"
+                  : h.agent === "openclaw"
+                    ? "openclaw-logo.svg"
+                    : "memos-logo.svg"
+              }
               alt={h.agent}
               width={28}
               height={28}

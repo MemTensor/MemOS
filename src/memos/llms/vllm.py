@@ -1,5 +1,6 @@
 import json
 
+from collections.abc import Generator
 from typing import Any, cast
 
 import openai
@@ -152,7 +153,7 @@ class VLLMLLM(BaseLLM):
             prompt_parts.append(f"{role.capitalize()}: {content}")
         return "\n".join(prompt_parts)
 
-    def generate_stream(self, messages: list[MessageDict], **kwargs):
+    def generate_stream(self, messages: list[MessageDict], **kwargs) -> Generator[str, None, None]:
         """
         Generate a response from the model using streaming.
         Yields content chunks as they are received.
@@ -185,11 +186,14 @@ class VLLMLLM(BaseLLM):
                         reasoning_started = True
                     yield delta.reasoning
 
-            if hasattr(delta, "content") and delta.content:
-                if reasoning_started and not self.config.remove_think_prefix:
-                    yield "</think>"
-                    reasoning_started = False
-                yield delta.content
+                if hasattr(delta, "content") and delta.content:
+                    if reasoning_started and not self.config.remove_think_prefix:
+                        yield "</think>"
+                        reasoning_started = False
+                    yield delta.content
+
+            if reasoning_started and not self.config.remove_think_prefix:
+                yield "</think>"
 
         else:
             raise RuntimeError("API client is not available")

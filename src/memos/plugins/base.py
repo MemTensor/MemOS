@@ -28,6 +28,7 @@ class MemOSPlugin:
     version: str = "0.0.0"
     description: str = ""
     priority: int = 0
+    enabled_by_default: bool = True
 
     _app: FastAPI | None = None
 

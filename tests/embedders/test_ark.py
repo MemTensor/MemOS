@@ -7,8 +7,9 @@ from memos.embedders.factory import ArkEmbedder, EmbedderFactory
 
 
 class TestEmbedderFactory(unittest.TestCase):
+    @patch.object(ArkEmbedder, "__init__", return_value=None)
     @patch.object(ArkEmbedder, "embed")
-    def test_embed_single_text(self, mock_embed):
+    def test_embed_single_text(self, mock_embed, _mock_init):
         """Test embedding a single text."""
         mock_embed.return_value = [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]]
 
@@ -30,8 +31,9 @@ class TestEmbedderFactory(unittest.TestCase):
         mock_embed.assert_called_once_with([text])
         self.assertEqual(len(result[0]), 6)
 
+    @patch.object(ArkEmbedder, "__init__", return_value=None)
     @patch.object(ArkEmbedder, "embed")
-    def test_embed_batch_text(self, mock_embed):
+    def test_embed_batch_text(self, mock_embed, _mock_init):
         """Test embedding multiple texts at once."""
         mock_embed.return_value = [
             [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],

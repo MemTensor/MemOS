@@ -20,8 +20,8 @@ jobs:
           close-pr-message: 'This PR has been automatically closed due to inactivity.'
           days-before-stale: 30  # Days of inactivity before marking as stale
           days-before-close: 7  # Days of inactivity before closing stale issues/PRs
-          stale-issue-label: 'stale'
-          stale-pr-label: 'stale'
-          exempt-issue-labels: 'do not close'
-          exempt-pr-labels: 'do not close'
+          stale-issue-label: 'status:stale'
+          stale-pr-label: 'status:stale'
+          exempt-issue-labels: 'status:do not close'
+          exempt-pr-labels: 'status:do not close'
           remove-stale-when-updated: true

@@ -102,13 +102,23 @@ the wire. Production hosts therefore can't distinguish "bug in server"
 from "mis-phrased request" from the response alone — that's a
 feature for security; debugging happens via the log SSE.
 
-## S10 — Server close drains but doesn't kill
+## S10 — Opted-in SSE shutdown cannot make server close unbounded
 
-`server.close()` stops accepting new connections and waits for
-existing ones to complete. Long-lived SSE connections will stall
-shutdown; the bridge sets a 5s deadline above which it force-closes
-the socket. We do NOT call `server.closeAllConnections()` from inside
-the module — that's the caller's choice.
+`ServerHandle.close()` first calls `server.close()` so no new requests are
+accepted. When the host opts into `closeActiveSseOnShutdown`, it then destroys
+only successful GET responses from the canonical and legacy-prefixed
+events/logs routes; redirects and failed authentication are not treated as
+streams. Socket closure runs each SSE route's cleanup and unsubscribes its core
+listener. The option defaults to false; the DSH adapter enables it because
+Cordis gives the whole plugin tree a short disposal window, while existing
+OpenClaw/Hermes behavior is unchanged.
+
+Ordinary HTTP handlers are not force-closed. They drain naturally before
+`close()` resolves, avoiding a race where memory-core or SQLite shutdown starts
+while an accepted mutation is still running. For an opted-in host, close time
+can therefore be extended by normal request completion, but never by an
+indefinitely open Viewer SSE connection. Without the option, the existing
+all-stream drain behavior remains intact.
 
 ## S11 — Concurrency is single-threaded
 

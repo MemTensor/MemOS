@@ -4,6 +4,7 @@ export async function embedOpenAI(
   texts: string[],
   cfg: EmbeddingConfig,
   log: Logger,
+  inputType?: string,
 ): Promise<number[][]> {
   const endpoint = normalizeEmbeddingEndpoint(cfg.endpoint ?? "https://api.openai.com/v1/embeddings");
   const model = cfg.model ?? "text-embedding-3-small";
@@ -16,7 +17,11 @@ export async function embedOpenAI(
   const resp = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({ input: texts, model }),
+    body: JSON.stringify({
+      input: texts,
+      model,
+      ...(inputType ? { input_type: inputType } : {}),
+    }),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 30_000),
   });
 

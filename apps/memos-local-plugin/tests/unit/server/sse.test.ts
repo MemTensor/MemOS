@@ -23,9 +23,13 @@ type Emit<T> = (value: T) => void;
 function stubCore(ref: { emitEvent: Emit<CoreEvent>; emitLog: Emit<LogRecord> }): MemoryCore {
   let eventSubscriber: ((e: CoreEvent) => void) | null = null;
   let logSubscriber: ((r: LogRecord) => void) | null = null;
+  const unsubscribeEvents = vi.fn(() => { eventSubscriber = null; });
+  const unsubscribeLogs = vi.fn(() => { logSubscriber = null; });
 
   ref.emitEvent = (evt) => eventSubscriber?.(evt);
   ref.emitLog = (log) => logSubscriber?.(log);
+  (ref as any).unsubscribeEvents = unsubscribeEvents;
+  (ref as any).unsubscribeLogs = unsubscribeLogs;
 
   return {
     init: vi.fn(async () => {}),
@@ -50,11 +54,11 @@ function stubCore(ref: { emitEvent: Emit<CoreEvent>; emitLog: Emit<LogRecord> })
     archiveSkill: vi.fn(),
     subscribeEvents: vi.fn((handler) => {
       eventSubscriber = handler;
-      return () => { eventSubscriber = null; };
+      return unsubscribeEvents;
     }),
     subscribeLogs: vi.fn((handler) => {
       logSubscriber = handler;
-      return () => { logSubscriber = null; };
+      return unsubscribeLogs;
     }),
     forwardLog: vi.fn(),
   } as unknown as MemoryCore;
@@ -104,7 +108,10 @@ describe("SSE /api/v1/events", () => {
 
   beforeEach(async () => {
     const core = stubCore(ref);
-    handle = await startHttpServer({ core }, { port: 0 });
+    handle = await startHttpServer(
+      { core },
+      { port: 0, agent: "openclaw", closeActiveSseOnShutdown: true },
+    );
   });
 
   afterEach(async () => {
@@ -126,6 +133,38 @@ describe("SSE /api/v1/events", () => {
     expect(events).toContain("retrieval.started");
     expect(lines.some((l) => l.startsWith("data: "))).toBe(true);
   });
+
+  it("closes an active stream without waiting and unsubscribes", async () => {
+    const response = await fetch(`${handle.url}/openclaw/api/v1/events`);
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+
+    // Consume the initial :ok frame so the next read waits on the live stream.
+    const initial = await reader.read();
+    expect(initial.done).toBe(false);
+
+    const closeResult = await Promise.race([
+      handle.close().then(() => "closed" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+    ]);
+    expect(closeResult).toBe("closed");
+
+    const streamResult = await Promise.race([
+      (async () => {
+        try {
+          while (!(await reader.read()).done) {
+            // Drain tail frames that were buffered before shutdown.
+          }
+          return "ended" as const;
+        } catch {
+          return "ended" as const;
+        }
+      })(),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+    ]);
+    expect(streamResult).toBe("ended");
+    expect(ref.unsubscribeEvents).toHaveBeenCalled();
+  });
 });
 
 describe("SSE /api/v1/logs", () => {
@@ -138,7 +177,10 @@ describe("SSE /api/v1/logs", () => {
       { ts: 1, level: "info", channel: "test", message: "first", context: {} } as any,
       { ts: 2, level: "warn", channel: "test", message: "second", context: {} } as any,
     ];
-    handle = await startHttpServer({ core, logTail: () => tail }, { port: 0 });
+    handle = await startHttpServer(
+      { core, logTail: () => tail },
+      { port: 0, agent: "hermes", closeActiveSseOnShutdown: true },
+    );
   });
 
   afterEach(async () => {
@@ -167,5 +209,54 @@ describe("SSE /api/v1/logs", () => {
     const { events, lines } = await readFrames(`${handle.url}/api/v1/logs`, 1200);
     expect(events.filter((e) => e === "log").length).toBeGreaterThanOrEqual(1);
     expect(lines.some((l) => l.includes("live-marker-xyz"))).toBe(true);
+  });
+
+  it("closes a legacy-prefixed active stream without waiting and unsubscribes", async () => {
+    const response = await fetch(`${handle.url}/hermes/api/v1/logs`);
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+
+    const initial = await reader.read();
+    expect(initial.done).toBe(false);
+
+    const closeResult = await Promise.race([
+      handle.close().then(() => "closed" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+    ]);
+    expect(closeResult).toBe("closed");
+
+    const streamResult = await Promise.race([
+      (async () => {
+        try {
+          while (!(await reader.read()).done) {
+            // Drain the initial log-tail frames buffered before shutdown.
+          }
+          return "ended" as const;
+        } catch {
+          return "ended" as const;
+        }
+      })(),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+    ]);
+    expect(streamResult).toBe("ended");
+    expect(ref.unsubscribeLogs).toHaveBeenCalled();
+  });
+});
+
+describe("SSE shutdown policy", () => {
+  it("keeps the legacy drain behavior unless the host opts in", async () => {
+    const localRef = {} as { emitEvent: Emit<CoreEvent>; emitLog: Emit<LogRecord> };
+    const handle = await startHttpServer({ core: stubCore(localRef) }, { port: 0 });
+    const response = await fetch(`${handle.url}/api/v1/events`);
+    const reader = response.body!.getReader();
+    await reader.read();
+
+    let closeSettled = false;
+    const closing = handle.close().then(() => { closeSettled = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(closeSettled).toBe(false);
+
+    await reader.cancel();
+    await closing;
   });
 });

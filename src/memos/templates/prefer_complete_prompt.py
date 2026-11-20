@@ -1,20 +1,28 @@
 NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT = """
 You are a preference extraction assistant.
-Please extract the user's explicitly mentioned preferences from the following conversation.
+Extract the preferences explicitly stated by the user from the input below.
 
-Notes:
-- A preference means the user's explicit attitude or choice toward something. It is not limited to words like "like/dislike/want/don't want/prefer".
-- This includes, but is not limited to, any user's explicitly expressed inclination, desire, rejection, or priority that counts as an explicit preference.
-- Focus on extracting the user's preferences in query. Do not extract preferences from the assistant's responses unless the user explicitly agrees with or endorses the assistant's suggestions.
-- When the user modifies or updates their preferences for the same topic or event, extract the complete evolution process of their preference changes, including both the original and updated preferences.
+Preference criteria:
+- A preference is a relatively stable and reusable attitude, choice, constraint, or habit explicitly expressed by the user. It should be useful in future interactions, recommendations, or personalization.
+- One clear user statement is sufficient for an explicit preference. Repeated behavior is not required when the user directly states a personal preference or a rule for future interactions.
+- Words such as "like", "dislike", "want", "do not want", and "prefer" are useful signals, but a current task request, information-seeking question, temporary state, or safety or factual concern is not a preference by itself.
+- Extract only preferences that can reasonably be reused in future interactions. Temporary requirements, execution parameters, and one-off needs that apply only to the current request, task, or material are not preferences. Reusability depends on the scope expressed by the user, rather than how many times it appears in the conversation.
+- When the user modifies or updates a preference about the same topic or event, capture the complete evolution, including both the original and updated preferences.
+- When the user explicitly expresses a reusable endorsement, rejection, or choice in response to Agent or Assistant content, use only the user's own statement as preference evidence.
+
+Source attribution:
+- The input may be a conversation or a record of interactions between a user and an Agent.
+- Extract preferences only from content that can be clearly attributed to the user personally.
+- Ignore Agent or Assistant output and any context injected, retrieved, or generated during Agent execution, such as historical memories, tool calls, and tool results. Such content is not a user statement, even if it is wrapped in a user message.
+- If the source of content cannot be determined reliably, do not use it to extract preferences.
 
 Requirements:
-1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume. If the user mentions reasons for their preferences, include those reasons as well.
-2. Output should be a list of entries concise natural language summaries and the corresponding context summary, context summary must contain complete information of the conversation fragment that the preference is mentioned.
-3. If multiple preferences are mentioned within the same topic or domain, you MUST combine them into a single entry, keep each entry information complete. Different topics of preferences should be divided into multiple entries.
-4. If no explicit preference can be reasonably extracted, return [].
+1. Do not infer or assume preferences that the user did not explicitly state. If the user explains the reason for a preference, include that reason.
+2. Return a list of concise preference summaries with their corresponding context summaries. Each context summary must preserve the user-side evidence and must not rewrite non-user content as a user preference.
+3. Combine multiple preferences from the same topic or domain into one complete entry. Use separate entries for different topics.
+4. If no explicit preference can be reasonably extracted, return `[]`.
 
-Conversation:
+Input:
 {qa_pair}
 
 Find ALL explicit preferences. If no explicit preferences found, return []. Output JSON only:
@@ -33,21 +41,29 @@ Find ALL explicit preferences. If no explicit preferences found, return []. Outp
 
 NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 你是一个偏好提取助手。
-请从以下对话中提取用户明确提及的偏好。
+请从下方输入中提取用户明确表达的偏好。
 
-注意事项：
-- 偏好是指用户对某事物的明确态度或选择，不仅限于"喜欢/不喜欢/想要/不想要/偏好"等词汇。
-- 包括但不限于用户明确表达的任何倾向、渴望、拒绝或优先级，这些都算作显式偏好。
-- 重点提取用户在查询中的偏好。不要从助手的回复中提取偏好，除非用户明确同意或认可助手的建议。
-- 当用户针对同一主题或事件修改或更新其偏好时，提取其偏好变化的完整演变过程，包括原始偏好和更新后的偏好。
+偏好判断：
+- 偏好是用户本人明确表达的、相对稳定且可复用的态度、选择、约束或习惯，通常能用于后续交互、推荐或个性化服务。
+- 对于显式偏好，只要用户清楚表达了个人偏好或后续处理规则，单次表达即可作为证据，不要求出现重复行为。
+- “喜欢、不喜欢、想要、不想要、偏好”等词语是重要信号，但当前任务请求、信息查询、临时状态、安全或事实性疑问本身并不等同于偏好。
+- 仅提取能够合理复用于后续交互的偏好。仅适用于当前请求、当前任务或当前材料的临时要求、执行参数和一次性需求不属于偏好。偏好是否可复用取决于用户表达的适用范围，而不是其在对话中出现的次数。
+- 当用户针对同一主题或事件修改或更新其偏好时，提取偏好变化的完整演变过程，包括原始偏好和更新后的偏好。
+- 当用户对 Agent 或 Assistant 的内容明确表达可复用的认可、拒绝或选择时，仅将用户自己的表态作为偏好证据。
+
+来源判断：
+- 输入可能是对话记录，或用户与 Agent 的交互记录。
+- 仅从能够明确归因于用户本人表达的内容中提取偏好。
+- 忽略 Agent 或 Assistant 的输出，以及 Agent 执行过程中注入、召回或生成的上下文，例如历史记忆、工具调用及其返回结果。即使这些内容被包装在 user 消息中，也不得视为用户本人发言。
+- 无法可靠确认内容来源时，不要据此提取偏好。
 
 要求：
-1. 只保留用户明确提到的偏好，不要推断或假设。如果用户提到了偏好的原因，也要包含这些原因。
-2. 输出应该是一个条目列表，包含简洁的自然语言摘要和相应的上下文摘要，上下文摘要必须包含提到偏好的对话片段的完整信息。
-3. 如果在同一主题或领域内提到了多个偏好，你必须将它们合并为一个条目，保持每个条目信息完整。不同话题的偏好要分为多个条目。
-4. 如果没有可以合理提取的显式偏好，返回[]。
+1. 不要推断或假设用户未明确表达的偏好。如果用户说明了偏好的原因，也要包含该原因。
+2. 输出一个由简洁偏好摘要及相应上下文摘要组成的列表。上下文摘要必须保留来自用户的完整证据，不得把非用户内容改写成用户偏好。
+3. 同一主题或领域内的多个偏好必须合并为一个完整条目；不同主题的偏好应分别输出。
+4. 如果没有可以合理提取的显式偏好，返回 `[]`。
 
-对话：
+输入：
 {qa_pair}
 
 找出所有显式偏好。如果没有找到显式偏好，返回[]。仅输出JSON：
@@ -66,10 +82,14 @@ NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 
 NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT = """
 You are a preference inference assistant. Please extract **implicit preferences** from the following conversation
-(preferences that the user did not explicitly state but can be reasonably inferred from their underlying motivations, behavioral patterns, decision-making logic, and latent needs).
+(stable user preferences that were not directly stated, but are strongly supported by the user's own repeated behavior, decisions, or explicit acceptance across the conversation).
 
 Notes:
-- For Assistant's responses or suggestions, they can only be extracted as the user's implicit preferences if there is evidence in subsequent conversation that the user implicitly accepted them (e.g., adoption, agreement, acting on the suggestion, etc.). Assistant suggestions alone do not constitute user preferences.
+- Implicit preferences are rare. They should describe the user's reusable personal tendency, constraint, or choice, not the assistant's recommendation or a temporary task need.
+- Extract only preferences that can reasonably be reused in future interactions. Temporary requirements, execution parameters, and one-off needs that apply only to the current request, task, or material are not preferences. For implicit preferences, reusable scope alone is not sufficient; there must also be user-side evidence of a recurring and stable pattern, decision, or explicit acceptance.
+- The input may be a conversation or a record of interactions between a user and an Agent. Use only evidence that can be clearly attributed to the user personally. Ignore Agent or Assistant output and any context injected, retrieved, or generated during Agent execution, such as historical memories, tool calls, and tool results. Such content is not user evidence, even if it is wrapped in a user message. If its source cannot be determined reliably, do not use it.
+- For Assistant's responses or suggestions, use only the user's subsequent response as preference evidence when the user provides clear positive evidence, such as adoption, agreement, or action based on the suggestion. Do not use the Assistant content itself as evidence. Silence, no objection, no follow-up challenge, or simply continuing the conversation is not acceptance.
+- Do not infer implicit preferences from assistant-only safety warnings, factual explanations, tool/search suggestions, or general advice. These may be useful facts, but they are not user preferences without user-side evidence.
 - For conversations with only one question-answer turn (single Q&A), implicit preferences cannot be extracted due to insufficient context and behavioral patterns. Implicit preferences require observation of recurring patterns or subsequent behaviors across multiple conversation turns.
 
 Counter-examples:
@@ -92,18 +112,17 @@ Analysis: This is just a single simple Q&A exchange. The user provided no furthe
 Result: Cannot extract implicit preference
 
 - Implicit preferences refer to user inclinations or choices that are not directly expressed, but can be deeply inferred by analyzing:
-  * **Hidden motivations**: What underlying needs or goals might drive the user's behavior?
-  * **Behavioral patterns**: What recurring patterns or tendencies can be observed?
-  * **Decision-making logic**: What reasoning or trade-offs might the user be considering?
-  * **Latent preferences**: What preferences might the user have but haven't yet articulated?
-  * **Contextual signals**: What do the user's choices, comparisons, exclusions, or scenario selections reveal about their deeper preferences?
+  * **User-side behavior**: What did the user repeatedly choose, accept, reject, or act on?
+  * **Behavioral patterns**: What recurring patterns or tendencies are observable across turns?
+  * **Decision-making logic**: What stable trade-offs did the user demonstrate through their own choices?
+  * **Contextual signals**: What do the user's comparisons, exclusions, or scenario selections reveal about their reusable preferences?
 - Do not treat explicitly stated preferences as implicit preferences; this prompt is only for inferring preferences that are not directly mentioned.
-- Go beyond surface-level facts to understand the user's hidden possibilities and underlying logic.
+- Stay conservative. If the evidence could also be explained as a one-time request, temporary condition, factual question, safety concern, or assistant suggestion, return [].
 
 Requirements:
-1. Only make inferences when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.
+1. Only make inferences when there is sufficient user-side evidence in the conversation; avoid unsupported or far-fetched guesses.
 2. Inferred implicit preferences must not conflict with explicit preferences.
-3. For implicit_preference: only output the preference statement itself; do not include any extra explanation, reasoning, or confidence information. Put all reasoning and explanation in the reasoning field.
+3. For implicit_preference: only output the preference statement itself; do not include assistant advice, facts, or one-off task instructions. Put all reasoning and evidence in the reasoning field.
 4. In the reasoning field, explicitly explain the underlying logic and hidden motivations you identified.
 5. Different topics of preferences should be divided into multiple entries.
 6. If no implicit preference can be reasonably inferred, return [].
@@ -128,10 +147,14 @@ Don't output anything except the JSON.
 
 NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 你是一个偏好推理助手。请从以下对话中提取**隐式偏好**
-（用户没有明确表述，但可以通过分析其潜在动机、行为模式、决策逻辑和隐藏需求深度推断出的偏好）。
+（用户没有直接表述，但能由用户自己的重复行为、选择、决策或明确接受强力支持的稳定偏好）。
 
 注意事项：
-- 对于Assistant的回答内容或建议，只有在后续对话中用户表现出隐含接受（如采纳、认同、按建议行动等）的情况下，才能将相关内容提取为用户的隐式偏好。单纯的Assistant建议本身不构成用户偏好。
+- 隐式偏好应谨慎提取。它应描述用户可复用的个人倾向、约束或选择，而不是助手的建议或一次性的任务需求。
+- 仅提取能够合理复用于后续交互的偏好。仅适用于当前请求、当前任务或当前材料的临时要求、执行参数和一次性需求不属于偏好。对于隐式偏好，仅具备可复用的适用范围仍不足以构成偏好，还必须有用户侧证据表明存在重复且稳定的模式、决策或明确接受。
+- 输入可能是对话记录，或用户与 Agent 的交互记录。仅使用能够明确归因于用户本人表达的内容作为证据。忽略 Agent 或 Assistant 的输出，以及 Agent 执行过程中注入、召回或生成的上下文，例如历史记忆、工具调用及其返回结果。即使这些内容被包装在 user 消息中，也不得视为用户证据。无法可靠确认内容来源时，不要据此推断偏好。
+- 对于 Assistant 的回答或建议，只有用户在后续对话中提供明确的正向证据，例如采纳、认同或按建议行动时，才能将用户自己的后续表态作为偏好证据；不得将 Assistant 的内容本身作为证据。沉默、未反驳、未追问或仅仅继续对话，都不代表接受。
+- 不要从仅由助手给出的安全提醒、事实解释、工具/检索建议或一般建议中推断隐式偏好。这些内容可以是有用事实，但没有用户侧证据时不是用户偏好。
 - 对于只有一轮问答（一问一答）的对话，由于缺乏足够的上下文和行为模式，不能提取隐式偏好。隐式偏好需要从多轮对话中观察到的重复模式或后续行为来推断。
 
 反例示例：
@@ -154,18 +177,17 @@ Assistant: 《沙丘2》口碑不错，是科幻史诗类型的。
 结果：无法提取隐式偏好
 
 - 隐式偏好是指用户未直接表达，但可以通过深入分析以下方面推断出的倾向或选择：
-  * **隐藏动机**：什么样的潜在需求或目标可能驱动用户的行为？
-  * **行为模式**：可以观察到什么样的重复模式或倾向？
-  * **决策逻辑**：用户可能在考虑什么样的推理或权衡？
-  * **潜在偏好**：用户可能有但尚未明确表达的偏好是什么？
-  * **情境信号**：用户的选择、比较、排除或场景选择揭示了什么样的深层偏好？
+  * **用户侧行为**：用户反复选择、接受、拒绝或实际采纳了什么？
+  * **行为模式**：多轮对话中可以观察到什么样的重复模式或倾向？
+  * **决策逻辑**：用户通过自己的选择体现了什么稳定的权衡？
+  * **情境信号**：用户自己的比较、排除或场景选择揭示了什么可复用偏好？
 - 不要将明确陈述的偏好视为隐式偏好；此提示仅用于推断未直接提及的偏好。
-- 超越表面事实，理解用户的隐藏可能性和背后的逻辑。
+- 保持保守。如果证据也可以解释为一次性请求、临时状态、事实问题、安全疑问或助手建议，返回[]。
 
 要求：
-1. 仅在对话中有充分证据时进行推断；避免无根据或牵强的猜测。
+1. 仅在对话中有充分的用户侧证据时进行推断；避免无根据或牵强的猜测。
 2. 推断的隐式偏好不得与显式偏好冲突。
-3. 对于 implicit_preference：仅输出偏好陈述本身；不要包含任何额外的解释、推理或置信度信息。将所有推理和解释放在 reasoning 字段中。
+3. 对于 implicit_preference：仅输出偏好陈述本身；不要包含助手建议、事实信息或一次性任务指令。将所有推理和证据放在 reasoning 字段中。
 4. 在 reasoning 字段中，明确解释你识别出的底层逻辑和隐藏动机。
 5. 如果在同一主题或领域内提到了多个偏好，你必须将它们合并为一个条目，保持每个条目信息完整。不同话题的偏好要分为多个条目。
 6. 如果没有可以合理推断的隐式偏好，返回[]。

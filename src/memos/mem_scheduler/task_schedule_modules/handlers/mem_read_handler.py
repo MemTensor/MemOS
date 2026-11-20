@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from memos.context.context import ContextThreadPoolExecutor
+from memos.exceptions import LLMResponseParseError
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
@@ -178,9 +179,11 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     user_context=user_context,
                     is_upload_skill=is_upload_skill,
                 )
+            except LLMResponseParseError:
+                raise
             except Exception as e:
-                logger.warning("%s: Fail to transfer mem: %s", e, memory_items)
-                processed_memories = []
+                logger.warning("%s: Fail to transfer mem: %s", e, memory_items, exc_info=True)
+                return
 
             if processed_memories and len(processed_memories) > 0:
                 flattened_memories = []
@@ -209,7 +212,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                             for memory in flattened_memories
                             if memory.metadata.memory_type == "RawFileMemory"
                         ]
-                        text_mem.add_rawfile_nodes_n_edges(
+                        text_mem.add_rawfile_nodes(
                             raw_file_mem_group,
                             enhanced_mem_ids,
                             user_id=user_id,
@@ -328,9 +331,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                         add_meta_legacy: list[dict] = []
                         update_content_legacy: list[dict] = []
                         update_meta_legacy: list[dict] = []
-                        for item_id, item in zip(
-                            enhanced_mem_ids, flattened_memories, strict=False
-                        ):
+                        for item_id, item in zip(enhanced_mem_ids, mem_group, strict=False):
                             key = getattr(item.metadata, "key", None) or transform_name_to_key(
                                 name=item.memory
                             )

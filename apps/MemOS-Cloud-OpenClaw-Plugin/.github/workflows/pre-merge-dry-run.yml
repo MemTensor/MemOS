@@ -1,0 +1,132 @@
+name: OpenClaw Cloud Plugin — Pre-Merge Dry Run
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - main
+  push:
+    branches:
+      - "docs-sync/**"
+      - "fix/**"
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-dry-run.yml"
+      - ".github/workflows/historical-dry-run.yml"
+      - ".github/workflows/pre-merge-dry-run.yml"
+      - ".github/workflows/post-merge-dry-run.yml"
+      - ".github/workflows/workflow-contract-lint.yml"
+      - ".github/scripts/draft-cloud-plugin-release-notes.mjs"
+      - ".github/scripts/draft-cloud-plugin-release-notes.test.mjs"
+      - ".github/scripts/resolve-auto-release.mjs"
+      - ".github/scripts/resolve-auto-release.test.mjs"
+      - ".github/scripts/validate-github-release-inventory.mjs"
+      - ".github/scripts/validate-github-release-inventory.test.mjs"
+      - ".github/scripts/validate-release-confirmation.mjs"
+      - ".github/scripts/validate-release-confirmation.test.mjs"
+      - ".github/scripts/validate-release-source-version.mjs"
+      - ".github/scripts/validate-release-source-version.test.mjs"
+      - ".github/scripts/wait-for-npm-release.mjs"
+      - ".github/scripts/wait-for-npm-release.test.mjs"
+      - ".github/scripts/retry.sh"
+      - "package.json"
+      - "openclaw.plugin.json"
+      - "moltbot.plugin.json"
+      - "clawdbot.plugin.json"
+      - ".github/release-notes/**"
+      - "scripts/generate-telemetry-credentials.cjs"
+      - "lib/**"
+      - "test/*.test.mjs"
+      - ".gitignore"
+
+permissions:
+  # Branch code is validated without repository secrets. The reusable
+  # inspection workflow is read-only and cannot publish or modify GitHub.
+  contents: read
+
+jobs:
+  release-candidate:
+    if: ${{ github.repository == 'MemTensor/MemOS-Cloud-OpenClaw-Plugin' && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Validate proposed four-file version transition
+        shell: bash
+        env:
+          EVENT_NAME: pull_request
+          PR_MERGED: "true"
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_MERGE_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node .github/scripts/resolve-auto-release.mjs
+
+  secrets-preflight:
+    if: ${{ github.repository == 'MemTensor/MemOS-Cloud-OpenClaw-Plugin' && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm secretless branch inspection
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Pre-merge inspection uses a checked-in evidence-backed fixture."
+          echo "No repository secret is passed to branch-controlled workflow code."
+
+  dry-run:
+    needs: secrets-preflight
+    if: ${{ github.repository == 'MemTensor/MemOS-Cloud-OpenClaw-Plugin' && github.event_name == 'push' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-dry-run.yml
+    with:
+      version: "0.1.19"
+      tag: "latest"
+      git_ref: ""
+      release_notes: |
+        ## Changelog
+
+        ### Improved
+        - **系统事件过滤增强**：自动跳过定时任务、计划提醒和后台命令结果，减少记忆污染。
+        - **系统提示识别优化**：兼容单行压缩内容并降低普通消息误判概率。
+
+        <!-- doc-agent-release-notes-json
+        {
+          "schema": "memos.plugin.release_notes.v1",
+          "items": [
+            {
+              "category": "Improved",
+              "text_cn": "**系统事件过滤增强**：自动跳过定时任务、计划提醒和后台命令结果，减少记忆污染。",
+              "text_en": "**System-event filtering**: Skips scheduled tasks, reminders, and background command results to keep memory cleaner.",
+              "source_refs": ["d053b0a"]
+            },
+            {
+              "category": "Improved",
+              "text_cn": "**系统提示识别优化**：兼容单行压缩内容并降低普通消息误判概率。",
+              "text_en": "**System prompt detection**: Supports flattened single-line prompts and reduces false positives on regular messages.",
+              "source_refs": ["d053b0a"]
+            }
+          ],
+          "coverage": {
+            "needs_review": false,
+            "required_count": 1,
+            "covered_required_count": 1,
+            "missing_required_count": 0
+          }
+        }
+        -->
+
+        <!-- doc-agent: source-id=openclaw-cloud-plugin -->
+      dry_run: true
+      recover_existing_npm_release: false
+      enforce_source_version: false

@@ -71,9 +71,13 @@ class H:
     # @hookable("search") — SearchHandler.handle_search_memories
     SEARCH_BEFORE = "search.before"
     SEARCH_AFTER = "search.after"
+    SEARCH_COMPLETED = "search.completed"
+    MEMORY_FEEDBACK_COMMITTED = "memory.feedback.committed"
 
     # Search extension point before core threshold/dedup/rerank processing.
     SEARCH_MEMORY_RESULTS = "search.memory_results"
+    SEARCH_RESULTS_AFTER_RERANK = "search.results.after_rerank"
+    SEARCH_CONTEXT_RENDER = "search.context.render"
 
     # Custom Hook (manually triggered via trigger_hook)
     ADD_MEMORIES_POST_PROCESS = "add.memories.post_process"
@@ -115,6 +119,20 @@ define_hook(
         "Allow plugins to merge additional search result buckets before core "
         "threshold, deduplication, and reranking."
     ),
+    params=["handler", "search_req", "results"],
+    pipe_key="results",
+)
+
+define_hook(
+    H.SEARCH_RESULTS_AFTER_RERANK,
+    description="Allow plugins to update search results after core rerank and before rendering.",
+    params=["handler", "search_req", "results"],
+    pipe_key="results",
+)
+
+define_hook(
+    H.SEARCH_CONTEXT_RENDER,
+    description="Render final search context after retrieval, rerank, and result-level plugins.",
     params=["handler", "search_req", "results"],
     pipe_key="results",
 )
@@ -166,4 +184,11 @@ define_hook(
         "text_mem",
         "scheduler_context",
     ],
+)
+
+
+define_hook(
+    H.MEMORY_FEEDBACK_COMMITTED,
+    description="Observe explicitly affected IDs after a successful feedback update",
+    params=["cube_id", "memory_ids", "action", "event_id", "at"],
 )

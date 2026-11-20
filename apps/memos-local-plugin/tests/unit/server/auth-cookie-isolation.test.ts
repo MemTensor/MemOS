@@ -92,7 +92,7 @@ describe("auth cookie isolation across agents", () => {
     }
   });
 
-  async function startWith(agent: "openclaw" | "hermes"): Promise<{
+  async function startWith(agent: "openclaw" | "hermes" | "deepseek-harness"): Promise<{
     handle: ServerHandle;
     home: string;
   }> {
@@ -135,6 +135,38 @@ describe("auth cookie isolation across agents", () => {
     // both cookies coexist in a real browser jar.
     expect(ocCookie!.name).not.toBe(hmCookie!.name);
     expect(ocCookie!.value).not.toBe(hmCookie!.value);
+  });
+
+  it("deepseek harness uses its own named cookie and rejects another agent's cookie", async () => {
+    const dsh = await startWith("deepseek-harness");
+    const oc = await startWith("openclaw");
+
+    const dshSetup = await setupPassword(dsh.handle, "secret-dsh");
+    expect(dshSetup.status).toBe(200);
+    const dshCookie = pickCookie(dshSetup, "memos_sess_deepseek-harness");
+    expect(dshCookie, "deepseek harness must set memos_sess_deepseek-harness").not.toBeNull();
+    expect(pickCookie(dshSetup, "memos_sess")).toBeNull();
+    expect(pickCookie(dshSetup, "memos_sess_openclaw")).toBeNull();
+
+    const ocSetup = await setupPassword(oc.handle, "secret-oc");
+    const ocCookie = pickCookie(ocSetup, "memos_sess_openclaw")!;
+    expect(dshCookie!.name).not.toBe(ocCookie.name);
+
+    const authenticated = await fetch(`${dsh.handle.url}/api/v1/auth/status`, {
+      headers: { cookie: `memos_sess_deepseek-harness=${dshCookie!.value}` },
+    });
+    expect(authenticated.status).toBe(200);
+    expect((await authenticated.json()) as { enabled: boolean; authenticated: boolean }).toMatchObject({
+      enabled: true,
+      authenticated: true,
+    });
+
+    const dshStatus = await fetch(`${dsh.handle.url}/api/v1/auth/status`, {
+      headers: { cookie: `memos_sess_openclaw=${ocCookie.value}` },
+    });
+    expect(dshStatus.status).toBe(200);
+    const dshBody = (await dshStatus.json()) as { authenticated: boolean };
+    expect(dshBody.authenticated).toBe(false);
   });
 
   it("refreshing one viewer no longer logs out the other (regression)", async () => {

@@ -1,7 +1,7 @@
 from ollama import Client
 
 from memos.configs.embedder import OllamaEmbedderConfig
-from memos.embedders.base import BaseEmbedder
+from memos.embedders.base import BaseEmbedder, log_embedding_call
 from memos.log import get_logger
 
 
@@ -57,6 +57,7 @@ class OllamaEmbedder(BaseEmbedder):
         except Exception as e:
             logger.warning(f"Could not verify model existence: {e}")
 
+    @log_embedding_call
     def embed(self, texts: list[str]) -> list[list[float]]:
         """
         Generate embeddings for the given texts.

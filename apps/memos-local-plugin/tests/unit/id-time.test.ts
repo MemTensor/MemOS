@@ -56,4 +56,22 @@ describe("core/time", () => {
     const t = 1_700_000_000_000;
     expect(isoFromEpochMs(t)).toBe(new Date(t).toISOString());
   });
+
+  it("isoFromEpochMs stays byte-identical to Date.toISOString by default and for UTC", () => {
+    const t = Date.UTC(2026, 5, 21, 21, 30, 45, 123);
+    expect(isoFromEpochMs(t)).toBe(new Date(t).toISOString());
+    expect(isoFromEpochMs(t, "UTC")).toBe(new Date(t).toISOString());
+  });
+
+  it("isoFromEpochMs formats local wall time for a configured timezone", () => {
+    const t = Date.UTC(2026, 5, 21, 21, 30, 45, 123);
+    expect(isoFromEpochMs(t, "America/Los_Angeles")).toBe("2026-06-21T14:30:45.123");
+  });
+
+  it("isoFromEpochMs can include numeric UTC offset for compact logs", () => {
+    const summer = Date.UTC(2026, 5, 21, 21, 30, 45, 123);
+    const winter = Date.UTC(2026, 11, 21, 21, 30, 45, 123);
+    expect(isoFromEpochMs(summer, "America/Los_Angeles", { offset: true })).toBe("2026-06-21T14:30:45.123-07:00");
+    expect(isoFromEpochMs(winter, "America/Los_Angeles", { offset: true })).toBe("2026-12-21T13:30:45.123-08:00");
+  });
 });

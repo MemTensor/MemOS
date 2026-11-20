@@ -13,19 +13,28 @@ const DEFAULT_HEADERS: Record<string, string> = {
 };
 
 /**
- * Historical no-op: the viewer used to be served under
- * `/openclaw/...` / `/hermes/...` prefixes when both agents shared a
- * single port. Each agent now owns its own well-known port and the
- * SPA is mounted at root, so the prefix is always empty. Kept as an
- * exported constant so older code paths and tests don't break.
+ * Optional path prefix for legacy single-port installs and reverse
+ * proxies. New installs mount the SPA at root, but old bookmarks and
+ * deployments such as `/memos/` still need API calls to retain the
+ * leading prefix.
  */
-export const AGENT_PREFIX: string = "";
+export const AGENT_PREFIX: string = detectAgentPrefix();
+
+function detectAgentPrefix(): string {
+  if (typeof location === "undefined") return "";
+  const seg = location.pathname.split("/").filter(Boolean)[0];
+  return seg === "openclaw" || seg === "hermes" || seg === "memos" ? `/${seg}` : "";
+}
 
 /**
- * No-op pass-through. See `AGENT_PREFIX` above for context.
+ * Prefix viewer API paths when the SPA itself is served from an agent
+ * prefix. Absolute external URLs are left untouched.
  */
 export function withAgentPrefix(path: string): string {
-  return path;
+  if (!AGENT_PREFIX) return path;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) return path;
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  return `${AGENT_PREFIX}${normalized}`;
 }
 
 function apiKeyHeader(): Record<string, string> {

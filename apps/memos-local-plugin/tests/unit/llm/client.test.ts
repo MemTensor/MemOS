@@ -14,6 +14,7 @@ import type {
   LlmProvider,
   LlmProviderCtx,
   LlmProviderName,
+  LlmStatusDetail,
   LlmStreamChunk,
   ProviderCallInput,
   ProviderCompletion,
@@ -57,11 +58,17 @@ class FakeProvider implements LlmProvider {
 
 class StreamingProvider implements LlmProvider {
   readonly name: LlmProviderName = "openai_compatible";
+  public lastInput: ProviderCallInput | null = null;
+
   async complete(): Promise<ProviderCompletion> {
     return { text: "full", durationMs: 1 };
   }
   // eslint-disable-next-line require-yield
-  async *stream(): AsyncGenerator<LlmStreamChunk> {
+  async *stream(
+    _messages: LlmMessage[],
+    opts: ProviderCallInput,
+  ): AsyncGenerator<LlmStreamChunk> {
+    this.lastInput = opts;
     yield { delta: "he", done: false };
     yield { delta: "llo", done: false };
     yield {
@@ -95,12 +102,14 @@ describe("llm/client", () => {
     expect(fake.lastMessages).toEqual([{ role: "user", content: "hi there" }]);
   });
 
-  it("injects a json system hint when jsonMode=true", async () => {
+  it("injects json hints into system and user messages when jsonMode=true", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: '{"ok":1}', durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
     await client.complete("do it", { jsonMode: true });
     expect(fake.lastMessages?.[0]?.role).toBe("system");
     expect(fake.lastMessages?.[0]?.content).toMatch(/single valid JSON value/i);
+    expect(fake.lastMessages?.at(-1)?.role).toBe("user");
+    expect(fake.lastMessages?.at(-1)?.content).toMatch(/valid json only/i);
     expect(fake.lastInput?.jsonMode).toBe(true);
   });
 
@@ -134,6 +143,19 @@ describe("llm/client", () => {
     expect(r.value.x).toBe(1);
     expect(client.stats().retries).toBe(1);
     expect(fake.invocations).toBe(2);
+  });
+
+  it("completeJson makes only one request when malformedRetries is zero", async () => {
+    const fake = new FakeProvider(
+      "openai_compatible",
+      () => ({ text: "still bad", durationMs: 1 }),
+    );
+    const client = createLlmClientWithProvider(cfg(), fake);
+
+    await expect(client.completeJson("ask", { malformedRetries: 0 }))
+      .rejects.toMatchObject({ code: ERROR_CODES.LLM_OUTPUT_MALFORMED });
+    expect(fake.invocations).toBe(1);
+    expect(client.stats().retries).toBe(0);
   });
 
   it("completeJson throws LLM_OUTPUT_MALFORMED when retries exhausted", async () => {
@@ -269,12 +291,344 @@ describe("llm/client", () => {
     expect(fake.lastMessages?.[0]?.role).toBe("system");
     expect(fake.lastMessages?.[0]?.content).toMatch(/You are strict\./);
     expect(fake.lastMessages?.[0]?.content).toMatch(/single valid JSON value/);
-    expect(fake.lastMessages?.[1]).toEqual({ role: "user", content: "go" });
+    expect(fake.lastMessages?.[1]?.role).toBe("user");
+    expect(fake.lastMessages?.[1]?.content).toMatch(/^go/);
+    expect(fake.lastMessages?.[1]?.content).toMatch(/valid json only/i);
   });
 
   it("rejects empty messages array", async () => {
     const fake = new FakeProvider("openai_compatible", () => ({ text: "", durationMs: 1 }));
     const client = createLlmClientWithProvider(cfg(), fake);
     await expect(client.complete([] as LlmMessage[])).rejects.toBeInstanceOf(MemosError);
+  });
+
+  it("preserves deferred retry diagnostics in error and status sinks", async () => {
+    const errors: Array<Record<string, unknown>> = [];
+    const statuses: LlmStatusDetail[] = [];
+    const retryAt = Date.now() + 120_000;
+    const provider = new ThrowingProvider(
+      new MemosError(ERROR_CODES.LLM_RATE_LIMITED, "provider cooldown", {
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    const client = createLlmClientWithProvider(
+      cfg({
+        onError: (detail) => errors.push(detail as unknown as Record<string, unknown>),
+        onStatus: (detail) => statuses.push(detail),
+      }),
+      provider,
+    );
+
+    await expect(client.complete("x")).rejects.toBeInstanceOf(MemosError);
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        retryAfterMs: 120_000,
+        retryAt,
+        retryDecision: "defer",
+        retryReason: "retry_after_too_long",
+      }),
+    );
+    expect(statuses).toContainEqual(
+      expect.objectContaining({
+        status: "error",
+        retryAt,
+        retryDecision: "defer",
+      }),
+    );
+  });
+
+  // ─── op propagation to providers (issue #2308) ────────────────────────
+  //
+  // The facade must forward `opts.op` onto the `ProviderCallInput` handed to
+  // `provider.complete()` / `provider.stream()` so per-op provider behavior
+  // (e.g. request-body tweaks, routing overrides, reasoning kill-switches
+  // keyed on `capture.summarize`) can fire. Dropping it silently makes
+  // those switches unreachable.
+  describe("op propagation (issue #2308)", () => {
+    it("complete forwards opts.op onto the provider input", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.complete("hi", { op: "capture.summarize" });
+      expect(fake.lastInput?.op).toBe("capture.summarize");
+    });
+
+    it("completeJson forwards opts.op onto the provider input", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({
+        text: '{"a":1}',
+        durationMs: 1,
+      }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.completeJson<{ a: number }>("score", { op: "retrieval.filter" });
+      expect(fake.lastInput?.op).toBe("retrieval.filter");
+    });
+
+    it("stream forwards opts.op onto the provider input (non-streaming provider)", async () => {
+      // FakeProvider has no stream(); the facade wraps complete() in a
+      // single-chunk iterable, which still exercises buildCallInput.
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "one", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      const parts: string[] = [];
+      for await (const c of client.stream("x", { op: "skill.evolve" })) {
+        if (!c.done) parts.push(c.delta);
+      }
+      expect(fake.lastInput?.op).toBe("skill.evolve");
+    });
+
+    it("stream forwards opts.op onto a native streaming provider", async () => {
+      const provider = new StreamingProvider();
+      const client = createLlmClientWithProvider(cfg(), provider);
+      for await (const _chunk of client.stream("x", { op: "capture.summarize" })) {
+        // Consume the stream so the provider receives the cooked input.
+      }
+      expect(provider.lastInput?.op).toBe("capture.summarize");
+    });
+
+    it("leaves op undefined when the caller supplies no op", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.complete("hi");
+      expect(fake.lastInput?.op).toBeUndefined();
+    });
+  });
+
+  // ─── Circuit breaker (issue #1897) ──────────────────────────────────────
+  describe("circuit breaker", () => {
+    function statusSink(): { rows: LlmStatusDetail[]; push: (d: LlmStatusDetail) => void } {
+      const rows: LlmStatusDetail[] = [];
+      return { rows, push: (d) => rows.push(d) };
+    }
+
+    it("trips on terminal 402 and short-circuits subsequent calls", async () => {
+      const sink = statusSink();
+      let now = 1_000_000;
+      const tick = () => now;
+      const provider = new ThrowingProvider(
+        new MemosError(ERROR_CODES.LLM_UNAVAILABLE, "HTTP 402 from openai_compatible", {
+          provider: "openai_compatible",
+          status: 402,
+        }),
+      );
+      const client = createLlmClientWithProvider(
+        cfg({
+          onStatus: sink.push,
+          circuitBreaker: { enabled: true, cooldownMs: 300_000, now: tick },
+        }),
+        provider,
+      );
+      // First call: real provider hit, fails terminally → breaker trips.
+      await expect(client.complete("first")).rejects.toBeInstanceOf(MemosError);
+      expect(provider.calls).toBe(1);
+      // Second call: should be short-circuited; provider must NOT be invoked.
+      now += 100;
+      await expect(client.complete("second")).rejects.toMatchObject({
+        code: ERROR_CODES.LLM_UNAVAILABLE,
+        details: { circuitOpen: true },
+      });
+      expect(provider.calls).toBe(1);
+      // Stats expose circuit state.
+      const stats = client.stats();
+      expect(stats.circuitOpen).toBe(true);
+      expect(stats.circuitOpenUntil).toBe(1_000_000 + 300_000);
+      expect(stats.circuitOpenedReason).toMatch(/402/);
+      // Audit rows: at least one `error` and one `circuit_open`.
+      const statuses = sink.rows.map((r) => r.status);
+      expect(statuses).toContain("error");
+      expect(statuses).toContain("circuit_open");
+    });
+
+    it("trips on 'insufficient balance' message regardless of HTTP status", async () => {
+      const sink = statusSink();
+      const provider = new ThrowingProvider(
+        new MemosError(
+          ERROR_CODES.LLM_UNAVAILABLE,
+          "HTTP 400 from openai_compatible: Insufficient Balance",
+          { provider: "openai_compatible", status: 400 },
+        ),
+      );
+      const client = createLlmClientWithProvider(
+        cfg({ onStatus: sink.push, circuitBreaker: { enabled: true } }),
+        provider,
+      );
+      await expect(client.complete("x")).rejects.toBeInstanceOf(MemosError);
+      await expect(client.complete("y")).rejects.toMatchObject({
+        details: { circuitOpen: true },
+      });
+      expect(provider.calls).toBe(1);
+    });
+
+    it("does NOT trip on generic LLM_UNAVAILABLE without terminal markers", async () => {
+      const sink = statusSink();
+      const provider = new ThrowingProvider(
+        new MemosError(ERROR_CODES.LLM_UNAVAILABLE, "transient network blip"),
+      );
+      const client = createLlmClientWithProvider(
+        cfg({ onStatus: sink.push, circuitBreaker: { enabled: true } }),
+        provider,
+      );
+      // Two consecutive failures with non-terminal classification → both
+      // calls reach the provider, breaker stays closed.
+      await expect(client.complete("x")).rejects.toBeInstanceOf(MemosError);
+      await expect(client.complete("y")).rejects.toBeInstanceOf(MemosError);
+      expect(provider.calls).toBe(2);
+      expect(client.stats().circuitOpen).toBe(false);
+    });
+
+    it("coalesces circuit_open status rows within cooldown", async () => {
+      const sink = statusSink();
+      let now = 1_000_000;
+      const tick = () => now;
+      const provider = new ThrowingProvider(
+        new MemosError(ERROR_CODES.LLM_UNAVAILABLE, "401", { status: 401 }),
+      );
+      const client = createLlmClientWithProvider(
+        cfg({
+          onStatus: sink.push,
+          circuitBreaker: { enabled: true, cooldownMs: 300_000, now: tick },
+        }),
+        provider,
+      );
+      await expect(client.complete("trip")).rejects.toBeTruthy();
+      // 20 suppressed calls within 1 second → at most a small number of
+      // `circuit_open` rows (we expect 1, but tolerate up to 2 in case the
+      // coalescer counts the very first short-circuit as a separate row).
+      for (let i = 0; i < 20; i++) {
+        now += 50;
+        await expect(client.complete(`spam-${i}`)).rejects.toBeTruthy();
+      }
+      const openRows = sink.rows.filter((r) => r.status === "circuit_open");
+      expect(openRows.length).toBeGreaterThanOrEqual(1);
+      expect(openRows.length).toBeLessThanOrEqual(2);
+      // Provider was only touched once (the very first call that tripped).
+      expect(provider.calls).toBe(1);
+    });
+
+    it("half-open probes the provider after cooldown and closes on success", async () => {
+      const sink = statusSink();
+      let now = 1_000_000;
+      const tick = () => now;
+      let attempt = 0;
+      const provider: LlmProvider = {
+        name: "openai_compatible",
+        async complete() {
+          attempt++;
+          if (attempt === 1) {
+            throw new MemosError(ERROR_CODES.LLM_UNAVAILABLE, "401", { status: 401 });
+          }
+          return { text: "ok", durationMs: 1 };
+        },
+      };
+      const client = createLlmClientWithProvider(
+        cfg({
+          onStatus: sink.push,
+          circuitBreaker: { enabled: true, cooldownMs: 60_000, now: tick },
+        }),
+        provider,
+      );
+      await expect(client.complete("trip")).rejects.toBeTruthy();
+      expect(client.stats().circuitOpen).toBe(true);
+      // Suppressed call before cooldown elapses.
+      now += 30_000;
+      await expect(client.complete("suppressed")).rejects.toMatchObject({
+        details: { circuitOpen: true },
+      });
+      expect(attempt).toBe(1);
+      // After cooldown, the next call probes the provider.
+      now += 31_000; // total 61_000 since trip
+      const r = await client.complete("probe");
+      expect(r.text).toBe("ok");
+      expect(attempt).toBe(2);
+      // Breaker closes on success.
+      expect(client.stats().circuitOpen).toBe(false);
+    });
+
+    it("trips on terminal primary error even when host fallback rescues the call", async () => {
+      const sink = statusSink();
+      const provider = new ThrowingProvider(
+        new MemosError(ERROR_CODES.LLM_UNAVAILABLE, "402", { status: 402 }),
+      );
+      let hostCalls = 0;
+      registerHostLlmBridge({
+        id: "test.host",
+        async complete() {
+          hostCalls++;
+          return { text: "rescued", model: "host-m", durationMs: 1 };
+        },
+      });
+      const client = createLlmClientWithProvider(
+        cfg({
+          fallbackToHost: true,
+          onStatus: sink.push,
+          circuitBreaker: { enabled: true },
+        }),
+        provider,
+      );
+      const r = await client.complete("call-1");
+      expect(r.servedBy).toBe("host_fallback");
+      // The terminal primary error still opens the breaker even though
+      // host fallback rescued the user-visible call.
+      expect(client.stats().circuitOpen).toBe(true);
+      const r2 = await client.complete("call-2");
+      expect(r2.servedBy).toBe("host_fallback");
+      // The second call goes directly to host fallback and never touches
+      // the broken paid provider again.
+      expect(provider.calls).toBe(1);
+      expect(hostCalls).toBe(2);
+      expect(sink.rows.map((row) => row.status)).toContain("circuit_open");
+    });
+
+    it("disabled when circuitBreaker.enabled=false (legacy behavior)", async () => {
+      const provider = new ThrowingProvider(
+        new MemosError(ERROR_CODES.LLM_UNAVAILABLE, "402", { status: 402 }),
+      );
+      const client = createLlmClientWithProvider(
+        cfg({ circuitBreaker: { enabled: false } }),
+        provider,
+      );
+      await expect(client.complete("a")).rejects.toBeTruthy();
+      await expect(client.complete("b")).rejects.toBeTruthy();
+      await expect(client.complete("c")).rejects.toBeTruthy();
+      // All three calls reached the provider.
+      expect(provider.calls).toBe(3);
+      expect(client.stats().circuitOpen).toBe(false);
+    });
+
+    it("LlmClientStats exposes circuit fields when closed", async () => {
+      const fake = new FakeProvider("openai_compatible", () => ({ text: "ok", durationMs: 1 }));
+      const client = createLlmClientWithProvider(cfg(), fake);
+      await client.complete("x");
+      const s = client.stats();
+      expect(s.circuitOpen).toBe(false);
+      expect(s.circuitOpenUntil).toBeNull();
+      expect(s.circuitOpenedReason).toBeNull();
+    });
+
+    it("re-opens the breaker if the half-open probe fails terminally again", async () => {
+      const sink = statusSink();
+      let now = 1_000_000;
+      const tick = () => now;
+      const provider = new ThrowingProvider(
+        new MemosError(ERROR_CODES.LLM_UNAVAILABLE, "402", { status: 402 }),
+      );
+      const client = createLlmClientWithProvider(
+        cfg({
+          onStatus: sink.push,
+          circuitBreaker: { enabled: true, cooldownMs: 60_000, now: tick },
+        }),
+        provider,
+      );
+      await expect(client.complete("trip")).rejects.toBeTruthy();
+      expect(client.stats().circuitOpen).toBe(true);
+      now += 61_000;
+      // Half-open probe still fails terminally → breaker re-opens.
+      await expect(client.complete("probe")).rejects.toBeTruthy();
+      expect(client.stats().circuitOpen).toBe(true);
+      expect(client.stats().circuitOpenUntil).toBe(now + 60_000);
+      // Provider was touched twice total (initial trip + probe).
+      expect(provider.calls).toBe(2);
+    });
   });
 });

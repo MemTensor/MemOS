@@ -212,6 +212,26 @@ class OpenAIConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
     base_url: str = Field(default="", description="Base URL for API endpoint")
     default_model: str = Field(default="", description="Default model to use")
 
+    @classmethod
+    def from_env(cls) -> "OpenAIConfig":
+        default_model = (
+            os.getenv("MEMSCHEDULER_MODEL") or os.getenv("MEMREADER_GENERAL_MODEL") or ""
+        )
+        normalized = default_model.strip().lower()
+        is_qwen = normalized.startswith("qwen") or "/qwen" in normalized
+        api_key_env = "QWEN_API_KEY" if is_qwen else "OPENAI_API_KEY"
+        api_base_env = "QWEN_API_BASE" if is_qwen else "OPENAI_API_BASE"
+        default_base_url = (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            if is_qwen
+            else "https://api.openai.com/v1"
+        )
+        return cls(
+            api_key=os.getenv(api_key_env, ""),
+            base_url=os.getenv(api_base_env, default_base_url),
+            default_model=default_model,
+        )
+
 
 class AuthConfig(BaseConfig, DictConversionMixin):
     rabbitmq: RabbitMQConfig | None = None
@@ -339,10 +359,18 @@ class AuthConfig(BaseConfig, DictConversionMixin):
         except (ValueError, Exception) as e:
             logger.warning(f"Failed to initialize RabbitMQ config from environment: {e}")
 
-        # Try to initialize OpenAI config - check if any OpenAI env vars exist
+        # Try to initialize OpenAI config - shared credentials plus scheduler model override.
         try:
-            openai_prefix = OpenAIConfig.get_env_prefix()
-            has_openai_env = any(key.startswith(openai_prefix) for key in os.environ)
+            has_openai_env = any(
+                key in os.environ
+                for key in [
+                    "OPENAI_API_KEY",
+                    "OPENAI_API_BASE",
+                    "QWEN_API_KEY",
+                    "QWEN_API_BASE",
+                    "MEMSCHEDULER_MODEL",
+                ]
+            )
             if has_openai_env:
                 openai_config = OpenAIConfig.from_env()
                 logger.info("Successfully initialized OpenAI configuration")
@@ -375,8 +403,9 @@ class AuthConfig(BaseConfig, DictConversionMixin):
         # Set environment variables only if openai config is available
         if self.openai is not None:
             os.environ["OPENAI_API_KEY"] = self.openai.api_key
-            os.environ["OPENAI_BASE_URL"] = self.openai.base_url
+            os.environ["OPENAI_API_BASE"] = self.openai.base_url
             os.environ["MODEL"] = self.openai.default_model
+            os.environ["MEMSCHEDULER_MODEL"] = self.openai.default_model
         else:
             logger = logging.getLogger(__name__)
             logger.warning("OpenAI config is not available, skipping environment variable setup")

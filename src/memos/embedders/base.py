@@ -1,8 +1,63 @@
+import functools
 import re
+import time
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 from memos.configs.embedder import BaseEmbedderConfig
+from memos.log import get_logger, text_hash
+
+
+logger = get_logger(__name__)
+EmbeddingCallable = TypeVar("EmbeddingCallable", bound=Callable[..., Any])
+
+
+def log_embedding_call(func: EmbeddingCallable) -> EmbeddingCallable:
+    """Log embedding request dimensions and timing without text or vectors."""
+
+    @functools.wraps(func)
+    def wrapper(self, texts, *args, **kwargs):
+        normalized_texts = [texts] if isinstance(texts, str) else list(texts or [])
+        text_lengths = [len(str(text or "")) for text in normalized_texts]
+        config = getattr(self, "config", None)
+        model = getattr(config, "model_name_or_path", None) or "unknown"
+        backup_model = getattr(config, "backup_model_name_or_path", None) or "none"
+        backup_enabled = bool(getattr(self, "use_backup_client", False))
+        started_at = time.perf_counter()
+        status = "success"
+        error_type = None
+        try:
+            return func(self, texts, *args, **kwargs)
+        except Exception as exc:
+            status = "failed"
+            error_type = type(exc).__name__
+            raise
+        finally:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            log_message = (
+                "Embedding request model=%s backup_model=%s backup_enabled=%s "
+                "batch_size=%d total_chars=%d max_chars=%d text_hash=%s "
+                "elapsed_ms=%.2f status=%s"
+            )
+            log_values = (
+                model,
+                backup_model,
+                backup_enabled,
+                len(normalized_texts),
+                sum(text_lengths),
+                max(text_lengths, default=0),
+                text_hash(normalized_texts),
+                elapsed_ms,
+                status,
+            )
+            if error_type is None:
+                logger.info(log_message, *log_values)
+            else:
+                logger.info(log_message + " error_type=%s", *log_values, error_type)
+
+    return cast("EmbeddingCallable", wrapper)
 
 
 def _count_tokens_for_embedding(text: str) -> int:

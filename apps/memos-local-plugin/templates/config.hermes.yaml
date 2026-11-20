@@ -20,12 +20,17 @@ viewer:
 embedding:
   provider: local         # local | openai_compatible | gemini | cohere | voyage | mistral
   apiKey: ""
+  maxInputTokens: 1024    # conservative per-input limit; 0 disables client-side chunking
+  batchSize: 32           # maximum texts sent in one embedding-provider request
 
 llm:
   # Hermes has no "host LLM", so pick a real provider.
   provider: openai_compatible
   apiKey: ""              # REQUIRED — fill in before running
   model: ""               # blank = provider default (e.g. gpt-4o-mini for openai_compatible)
+
+storage:
+  ftsTokenizer: trigram    # trigram | cjk; cjk improves short Chinese keyword recall
 
 algorithm:
   lightweightMemory:

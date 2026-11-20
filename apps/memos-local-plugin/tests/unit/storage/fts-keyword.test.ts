@@ -26,6 +26,7 @@ describe("storage/keyword channels — traces", () => {
       agentText?: string;
       summary?: string;
       tags?: string[];
+      ts?: number;
     },
   ): void {
     // Use the trace id to disambiguate session+episode so multiple
@@ -52,7 +53,7 @@ describe("storage/keyword channels — traces", () => {
       id: opts.id as never,
       episodeId: eid as never,
       sessionId: sid as never,
-      ts: Date.now() as never,
+      ts: (opts.ts ?? Date.now()) as never,
       userText: opts.userText,
       agentText: opts.agentText ?? "",
       toolCalls: [],
@@ -125,6 +126,30 @@ describe("storage/keyword channels — traces", () => {
       const hits = handle.repos.traces.searchByPattern(["唐波"], 10);
       expect(hits.map((h) => h.id)).toContain("t_short");
       expect(hits.map((h) => h.id)).not.toContain("t_other");
+    } finally {
+      handle.cleanup();
+    }
+  });
+
+  it("ranks pattern hits by term coverage instead of update time", () => {
+    const handle = makeTmpDb();
+    try {
+      seedTrace(handle.repos, {
+        id: "t_full_old",
+        userText: "我喜欢的歌手是陈奕迅",
+        ts: 100,
+      });
+      seedTrace(handle.repos, {
+        id: "t_partial_new",
+        userText: "我喜欢散步",
+        ts: 200,
+      });
+
+      const hits = handle.repos.traces.searchByPattern(["喜欢", "歌手"], 10);
+
+      expect(hits.map((hit) => hit.id)).toEqual(["t_full_old", "t_partial_new"]);
+      expect(hits[0]!.score).toBe(1);
+      expect(hits[1]!.score).toBe(0.5);
     } finally {
       handle.cleanup();
     }

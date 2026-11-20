@@ -44,6 +44,7 @@ function makePluginApi(stateDir: string, pluginConfig: Record<string, unknown> =
       }
       tools.set(def.name, def);
     },
+    registerMemoryPromptSection() {},
     registerMemoryCapability() {},
     registerService(def: any) {
       service = def;

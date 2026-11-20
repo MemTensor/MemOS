@@ -51,8 +51,42 @@ describe("storage/repos — happy paths", () => {
 
       expect(repos.episodes.getOpenForSession("s")!.id).toBe("e1");
 
+      // appendTrace persists only IDs that have a backing row in `traces`
+      // (#1966 — ghost IDs in trace_ids_json would otherwise loop the reward
+      // dirty-check forever). Insert the rows first, then append.
+      for (const id of ["t1", "t2"] as const) {
+        repos.traces.insert({
+          id,
+          episodeId: "e1",
+          sessionId: "s",
+          ts: 5,
+          userText: id,
+          agentText: "",
+          toolCalls: [],
+          reflection: null,
+          value: 0,
+          alpha: 0,
+          rHuman: null,
+          priority: 0,
+          tags: [],
+          vecSummary: null,
+          vecAction: null,
+          turnId: 0 as never,
+          schemaVersion: 1,
+        });
+      }
       repos.episodes.appendTrace("e1", ["t1", "t2"]);
       expect(repos.episodes.getById("e1")!.traceIds).toEqual(["t1", "t2"]);
+
+      // Ghost IDs (no backing trace row) are silently stripped: this is the
+      // regression guard for the infinite rescore loop reported in #1966.
+      repos.episodes.appendTrace("e1", ["t1", "t2", "tr_ghost"]);
+      expect(repos.episodes.getById("e1")!.traceIds).toEqual(["t1", "t2"]);
+      // ...and a list made entirely of ghosts collapses to []:
+      repos.episodes.appendTrace("e1", ["tr_ghost_only"]);
+      expect(repos.episodes.getById("e1")!.traceIds).toEqual([]);
+      // Restore for the close assertion below.
+      repos.episodes.appendTrace("e1", ["t1", "t2"]);
 
       repos.episodes.close("e1", 99, 0.8);
       const closed = repos.episodes.getById("e1")!;
@@ -110,6 +144,7 @@ describe("storage/repos — happy paths", () => {
       const all = repos.traces.list({ sessionId: "s" });
       expect(all.length).toBe(3);
       expect(all[0]!.ts).toBeGreaterThan(all[1]!.ts); // newest first by default
+      expect(repos.traces.latestTimestamp()).toBe(30);
 
       const highAbs = repos.traces.list({ minAbsValue: 0.8 });
       expect(highAbs.map((t) => t.id)).toEqual(["t0"]);
@@ -132,6 +167,27 @@ describe("storage/repos — happy paths", () => {
       expect(repos.traces.hasAnyNewerThan(["t2"], 29)).toBe(true);
       expect(repos.traces.hasAnyNewerThan([], 0)).toBe(false);
       expect(repos.traces.hasAnyNewerThan(["missing-id"], 0)).toBe(false);
+
+      // countExisting / filterExistingIds — the cheap existence helpers
+      // introduced for the #1966 ghost-trace dirty-check fix. Mixed batches
+      // should return the count / list of just the IDs that exist; duplicate
+      // inputs are de-duplicated to match `getManyByIds(...).length`
+      // semantics.
+      expect(repos.traces.countExisting(["t0", "t1", "t2"])).toBe(3);
+      expect(repos.traces.countExisting(["t0", "ghost", "t2"])).toBe(2);
+      expect(repos.traces.countExisting(["ghost-a", "ghost-b"])).toBe(0);
+      expect(repos.traces.countExisting(["t0", "t0", "t1"])).toBe(2);
+      expect(repos.traces.countExisting([])).toBe(0);
+
+      expect(repos.traces.filterExistingIds(["t0", "ghost", "t2"])).toEqual([
+        "t0",
+        "t2",
+      ]);
+      expect(repos.traces.filterExistingIds(["t0", "t0", "t1"])).toEqual([
+        "t0",
+        "t1",
+      ]);
+      expect(repos.traces.filterExistingIds([])).toEqual([]);
     } finally {
       cleanup();
     }
@@ -254,6 +310,88 @@ describe("storage/repos — happy paths", () => {
       expect(after).toEqual({ trialsAttempted: 1, trialsPassed: 1, eta: 0.5 });
       const after2 = repos.skills.bumpTrial("sk1", false, 3);
       expect(after2.eta).toBeCloseTo(1 / 3, 5);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("skills: selects idle archive candidates and excludes a skill after recorded use", () => {
+    const { db, repos, cleanup } = makeTmpDb();
+    try {
+      const insertSkill = (
+        id: string,
+        status: "active" | "archived",
+        eta: number,
+        createdAt: number,
+        lastUsedAt: number | null,
+      ) => {
+        repos.skills.insert({
+          id,
+          name: id,
+          status,
+          invocationGuide: "fixture",
+          procedureJson: null,
+          eta,
+          support: 1,
+          gain: 0,
+          trialsAttempted: 0,
+          trialsPassed: 0,
+          sourcePolicyIds: [],
+          sourceWorldModelIds: [],
+          evidenceAnchors: [],
+          vec: null,
+          createdAt,
+          updatedAt: 10_000,
+          lastUsedAt,
+          version: 1,
+        });
+      };
+      insertSkill("never_used", "active", 0.05, 50, null);
+      insertSkill("old_used", "active", 0.05, 1, 100);
+      insertSkill("recent", "active", 0.05, 1, 9_500);
+      insertSkill("retrievable", "active", 0.1, 1, 100);
+      insertSkill("already_archived", "archived", 0.05, 1, 100);
+
+      const archived = repos.skills.archiveNextIdleBatch({
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        updatedAt: 10_000,
+        limit: 500,
+      });
+      expect(archived.map((skill) => skill.id).sort()).toEqual(["never_used", "old_used"]);
+      expect(repos.skills.getById("never_used")?.status).toBe("archived");
+      expect(repos.skills.getById("old_used")?.status).toBe("archived");
+
+      repos.skills.setStatus("old_used" as never, "active", 10_100);
+      expect(repos.skills.recordUse("old_used", 9_500)).toBe(true);
+      expect(repos.skills.getById("old_used")?.lastUsedAt).toBe(9_500);
+      expect(repos.skills.archiveNextIdleBatch({
+        minEtaForRetrieval: 0.1,
+        cutoff: 9_000,
+        updatedAt: 10_200,
+        limit: 500,
+      })).toEqual([]);
+      expect(repos.skills.getById("old_used")?.status).toBe("active");
+
+      insertSkill("rollback_first", "active", 0.05, 1, 100);
+      insertSkill("rollback_fail", "active", 0.05, 1, 100);
+      db.exec(`
+        CREATE TRIGGER reject_idle_archive
+        BEFORE UPDATE OF status ON skills
+        WHEN OLD.id = 'rollback_fail' AND NEW.status = 'archived'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced archive failure');
+        END`);
+      expect(() =>
+        repos.skills.archiveNextIdleBatch({
+          minEtaForRetrieval: 0.1,
+          cutoff: 9_000,
+          updatedAt: 10_300,
+          limit: 500,
+        }),
+      ).toThrow(/forced archive failure/);
+      expect(repos.skills.getById("rollback_first")?.status).toBe("active");
+      expect(repos.skills.getById("rollback_fail")?.status).toBe("active");
     } finally {
       cleanup();
     }

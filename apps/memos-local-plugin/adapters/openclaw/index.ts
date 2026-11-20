@@ -28,7 +28,12 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createOpenClawBridge, type BridgeHandle } from "./bridge.js";
+import {
+  createOpenClawBridge,
+  createOpenClawInboundTextStore,
+  type BridgeHandle,
+  type OpenClawInboundTextStore,
+} from "./bridge.js";
 import {
   acquireOpenClawRuntimeLock,
   DuplicateOpenClawRuntimeError,
@@ -135,6 +140,7 @@ const OPENCLAW_VIEWER_PORT = 18799;
 async function createRuntime(
   api: OpenClawPluginApi,
   runtimeLock: OpenClawRuntimeLockHandle,
+  inboundUserText: OpenClawInboundTextStore,
 ): Promise<PluginRuntime> {
   const log = rootLogger.child({ channel: "adapters.openclaw" });
   log.info("plugin.bootstrap", { version: PLUGIN_VERSION });
@@ -187,6 +193,7 @@ async function createRuntime(
       agent: "openclaw",
       core,
       log: api.logger,
+      inboundUserText,
     });
 
     // OpenClaw's viewer port is fixed at :18799 (hermes uses :18800).
@@ -303,31 +310,12 @@ function isDiagnosticMode(): boolean {
   return false;
 }
 
-function register(api: OpenClawPluginApi): void {
-  const diagnosticMode = isDiagnosticMode();
-
-  let runtimeLock: OpenClawRuntimeLockHandle;
-  try {
-    runtimeLock = acquireOpenClawRuntimeLock({
-      home: resolveHome("openclaw"),
-      pluginId: PLUGIN_ID,
-      version: PLUGIN_VERSION,
-      viewerPort: OPENCLAW_VIEWER_PORT,
-      skipLock: diagnosticMode,
-    });
-
-    if (diagnosticMode) {
-      api.logger.info("memos-local: running in diagnostic mode (lock acquisition skipped)");
-    }
-  } catch (err) {
-    const duplicate = err instanceof DuplicateOpenClawRuntimeError;
-    api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
-      err: err instanceof Error ? err.message : String(err),
-      code: duplicate ? err.code : (err as { code?: unknown }).code,
-    });
-    throw err;
-  }
-
+function registerRuntimeBindings(
+  api: OpenClawPluginApi,
+  ensureRuntime: () => Promise<PluginRuntime | null>,
+  inboundUserText: ReturnType<typeof createOpenClawInboundTextStore>,
+  currentRuntime: () => PluginRuntime | null,
+): void {
   // 1. Memory capability (prompt prelude) — register synchronously so the
   //    host immediately knows who owns the memory slot, even if bootstrap
   //    fails later.
@@ -380,17 +368,205 @@ function register(api: OpenClawPluginApi): void {
     },
   });
 
+  /**
+   * Helper for **void / fire-and-forget** hooks: dispatch `fn` against the
+   * runtime as soon as bootstrap finishes (already finished → next tick).
+   * Errors are logged at WARN and swallowed — they must not surface to
+   * OpenClaw's hook runner because the listener itself has already
+   * returned synchronously.
+   *
+   * `label` is used solely for log context so a misbehaving hook is
+   * findable in the gateway log.
+   */
+  const runWhenReady = async (
+    fn: (r: PluginRuntime) => void | Promise<void>,
+    label: string,
+  ): Promise<void> => {
+    try {
+      const r = await ensureRuntime();
+      if (!r) return;
+      await fn(r);
+    } catch (err) {
+      api.logger.warn(`memos-local: hook ${label} failed`, {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  registerOpenClawTools(api, {
+    agent: "openclaw",
+    getCore: async () => (await ensureRuntime())?.core ?? null,
+    log: api.logger,
+  });
+
+  // 3. Hooks — every handler matches the upstream `PluginHookHandlerMap`
+  //    signature so OpenClaw's type-check passes in a monorepo install.
+  //
+  // Two upstream constraints govern the registration style here:
+  //   (a) `tool_result_persist` is a **value-returning sync hook**.
+  //       OpenClaw's hook runner inspects the return value with
+  //       `isPromiseLike(ret)` and ignores it when the handler returns a
+  //       Promise — so declaring this listener `async` silently disables
+  //       the "append memos_search hint after repeated tool failures"
+  //       feature. We register a **synchronous** wrapper that calls the
+  //       (already sync) `bridge.handleToolResultPersist` directly. If
+  //       bootstrap hasn't completed yet, the hook is a no-op (matches
+  //       the legacy adapter — runtime not ready means no hint to
+  //       inject).
+  //   (b) `agent_end` (and the other void hooks below) are run by
+  //       OpenClaw with a **hard-coded 30 s timeout**
+  //       (`DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK.agent_end = 30_000`).
+  //       memos's onTurnEnd chain writes SQLite traces + runs L2
+  //       induction + reflection + reward (LLM-bound), which under I/O
+  //       pressure can exceed 30 s. Awaiting that chain inside the hook
+  //       handler shows up in the gateway log as
+  //       `agent_end handler … timed out after 30000ms`. We schedule
+  //       the heavy work as a **fire-and-forget** background task and
+  //       return immediately. `core.shutdown()` (called from the
+  //       service's `stop`) already drains in-flight pipeline work, so
+  //       fire-and-forget does not lose data on a clean shutdown.
+  //
+  // `before_prompt_build` stays async-await because it MUST return the
+  // `prependContext` for OpenClaw to inject — it is a value-returning
+  // hook, not a void hook, and OpenClaw is willing to await its result
+  // (the timeout is laxer than `agent_end`'s 30 s budget).
+  api.on("message_received", (event, ctx) => {
+    // Synchronous and intentionally independent of runtime readiness.
+    // `event.content` is OpenClaw's BodyForCommands/RawBody value, while
+    // before_prompt_build.prompt and agent_end.messages are model-facing
+    // and may contain IM-specific sender/message-id decoration.
+    inboundUserText.remember(event, ctx);
+  });
+
+  api.on("before_prompt_build", async (event, ctx) => {
+    const r = await ensureRuntime();
+    if (!r) return;
+    return r.bridge.handleBeforePrompt(event, ctx);
+  });
+
+  api.on("agent_end", (event, ctx) => {
+    // Fire-and-forget. Returning synchronously lets OpenClaw's 30s
+    // void-hook budget tick down only on its own bookkeeping; memos
+    // continues writing the trace + running the reflect/reward chain
+    // in the background.
+    void runWhenReady((r) => r.bridge.handleAgentEnd(event, ctx), "agent_end");
+  });
+
+  api.on("before_tool_call", (event, ctx) => {
+    // `handleBeforeToolCall` is sync and cheap (Map.set + timestamp);
+    // we still gate on runtime presence by deferring to ensureRuntime
+    // when bootstrap is in flight. The fire-and-forget wrapper keeps
+    // the listener void-shaped for OpenClaw.
+    void runWhenReady((r) => {
+      r.bridge.handleBeforeToolCall(event, ctx);
+    }, "before_tool_call");
+  });
+
+  api.on("after_tool_call", (event, ctx) => {
+    void runWhenReady((r) => r.bridge.handleAfterToolCall(event, ctx), "after_tool_call");
+  });
+
+  // tool_result_persist is value-returning AND synchronous on
+  // OpenClaw's side — do NOT make this async. Bridge handler is
+  // already sync, so we can invoke it directly when the runtime is
+  // ready and return undefined otherwise.
+  api.on("tool_result_persist", (event, ctx) => {
+    const runtime = currentRuntime();
+    if (!runtime) return; // bootstrap not finished — nothing to inject
+    return runtime.bridge.handleToolResultPersist(event, ctx);
+  });
+
+  api.on("session_start", (event, ctx) => {
+    void runWhenReady((r) => r.bridge.handleSessionStart(event, ctx), "session_start");
+  });
+
+  api.on("session_end", (event, ctx) => {
+    void runWhenReady((r) => r.bridge.handleSessionEnd(event, ctx), "session_end");
+  });
+
+  api.on("subagent_spawned", (event, ctx) => {
+    void runWhenReady((r) => {
+      r.bridge.handleSubagentSpawned(event, ctx);
+    }, "subagent_spawned");
+  });
+
+  api.on("subagent_ended", (event, ctx) => {
+    void runWhenReady((r) => r.bridge.handleSubagentEnded(event, ctx), "subagent_ended");
+  });
+
+}
+
+// OpenClaw may build a separate tool registry in the same process. That
+// registry borrows the full registration's core and never owns its lifecycle.
+interface SharedRuntime {
+  ensureRuntime: () => Promise<PluginRuntime | null>;
+  registerBindings: (api: OpenClawPluginApi) => void;
+}
+// Host registries can reload the module. Keep ownership process-wide while
+// retaining the filesystem lock against genuinely separate gateway processes.
+const runtimeKey = Symbol.for("memos.openclaw.activeRuntimes.v1");
+const processState = globalThis as typeof globalThis & {
+  [runtimeKey]?: Map<string, SharedRuntime>;
+};
+const activeRuntimes = processState[runtimeKey] ??= new Map<string, SharedRuntime>();
+
+function register(api: OpenClawPluginApi): void {
+  const home = resolveHome("openclaw");
+  if (api.registrationMode === "tool-discovery") {
+    registerOpenClawTools(api, {
+      agent: "openclaw",
+      getCore: async () => (await activeRuntimes.get(home.root)?.ensureRuntime())?.core ?? null,
+      log: api.logger,
+    });
+    return;
+  }
+  const existing = activeRuntimes.get(home.root);
+  if (existing) {
+    existing.registerBindings(api);
+    api.logger.info("memos-local: reused active runtime for host registry");
+    return;
+  }
+  const diagnosticMode = isDiagnosticMode();
+
+  let runtimeLock: OpenClawRuntimeLockHandle;
+  try {
+    runtimeLock = acquireOpenClawRuntimeLock({
+      home,
+      pluginId: PLUGIN_ID,
+      version: PLUGIN_VERSION,
+      viewerPort: OPENCLAW_VIEWER_PORT,
+      skipLock: diagnosticMode,
+    });
+
+    if (diagnosticMode) {
+      api.logger.info("memos-local: running in diagnostic mode (lock acquisition skipped)");
+    }
+  } catch (err) {
+    const duplicate = err instanceof DuplicateOpenClawRuntimeError;
+    api.logger.error("memos-local: duplicate OpenClaw runtime blocked", {
+      err: err instanceof Error ? err.message : String(err),
+      code: duplicate ? err.code : (err as { code?: unknown }).code,
+    });
+    throw err;
+  }
+
+  // OpenClaw publishes its clean, command-facing inbound body before
+  // prompt construction. Keep this store independent of core bootstrap
+  // so early messages are not lost while SQLite/providers initialize.
+  const inboundUserText = createOpenClawInboundTextStore();
+
   // 2. Kick off core bootstrap. OpenClaw only accepts tool / hook
   //    registration during the synchronous `register(api)` window, so
   //    tools register a shell now and wait for runtime inside execute().
   let runtime: PluginRuntime | null = null;
   let bootstrapError: Error | null = null;
-  const bootstrapPromise = createRuntime(api, runtimeLock)
+  const bootstrapPromise = createRuntime(api, runtimeLock, inboundUserText)
     .then((r) => {
       runtime = r;
       api.logger.info("memos-local: plugin ready");
     })
     .catch((err) => {
+      if (activeRuntimes.get(home.root) === sharedRuntime) activeRuntimes.delete(home.root);
       bootstrapError = err instanceof Error ? err : new Error(String(err));
       const duplicate = err instanceof DuplicateOpenClawRuntimeError;
       api.logger.error("memos-local: bootstrap failed", {
@@ -405,67 +581,13 @@ function register(api: OpenClawPluginApi): void {
     return runtime;
   };
 
-  registerOpenClawTools(api, {
-    agent: "openclaw",
-    getCore: async () => (await ensureRuntime())?.core ?? null,
-    log: api.logger,
-  });
+  const sharedRuntime: SharedRuntime = {
+    ensureRuntime,
+    registerBindings: (target) => registerRuntimeBindings(target, ensureRuntime, inboundUserText, () => runtime),
+  };
+  activeRuntimes.set(home.root, sharedRuntime);
 
-  // 3. Hooks — every handler matches the upstream `PluginHookHandlerMap`
-  //    signature so OpenClaw's type-check passes in a monorepo install.
-  api.on("before_prompt_build", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    return r.bridge.handleBeforePrompt(event, ctx);
-  });
-
-  api.on("agent_end", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    await r.bridge.handleAgentEnd(event, ctx);
-  });
-
-  api.on("before_tool_call", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    r.bridge.handleBeforeToolCall(event, ctx);
-  });
-
-  api.on("after_tool_call", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    await r.bridge.handleAfterToolCall(event, ctx);
-  });
-
-  api.on("tool_result_persist", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    return r.bridge.handleToolResultPersist(event, ctx);
-  });
-
-  api.on("session_start", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    await r.bridge.handleSessionStart(event, ctx);
-  });
-
-  api.on("session_end", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    await r.bridge.handleSessionEnd(event, ctx);
-  });
-
-  api.on("subagent_spawned", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    r.bridge.handleSubagentSpawned(event, ctx);
-  });
-
-  api.on("subagent_ended", async (event, ctx) => {
-    const r = await ensureRuntime();
-    if (!r) return;
-    await r.bridge.handleSubagentEnded(event, ctx);
-  });
+  sharedRuntime.registerBindings(api);
 
   // 4. Service — lets the host flush + wait for ready and shut us down.
   //
@@ -484,6 +606,8 @@ function register(api: OpenClawPluginApi): void {
       if (bootstrapError) throw bootstrapError;
     },
     async stop() {
+      await bootstrapPromise;
+      if (activeRuntimes.get(home.root) === sharedRuntime) activeRuntimes.delete(home.root);
       if (runtime) await runtime.shutdown();
     },
   });

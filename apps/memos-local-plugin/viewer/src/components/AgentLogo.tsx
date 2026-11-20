@@ -13,7 +13,7 @@
 import type { JSX } from "preact";
 
 export interface AgentLogoProps {
-  agent?: "openclaw" | "hermes" | null;
+  agent?: "openclaw" | "hermes" | "deepseek-harness" | null;
   size?: number;
   class?: string;
 }
@@ -24,6 +24,18 @@ export function AgentLogo({ agent, size = 72, class: className }: AgentLogoProps
       <img
         src="/hermes-logo.svg"
         alt="Hermes"
+        width={size}
+        height={size}
+        style={`display:block;border-radius:${Math.round(size / 6)}px`}
+        class={className}
+      />
+    );
+  }
+  if (agent === "deepseek-harness") {
+    return (
+      <img
+        src="/memos-logo.svg"
+        alt="DeepSeek Harness"
         width={size}
         height={size}
         style={`display:block;border-radius:${Math.round(size / 6)}px`}

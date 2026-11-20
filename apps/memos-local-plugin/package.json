@@ -1,7 +1,7 @@
 {
   "name": "@memtensor/memos-local-plugin",
-  "version": "2.0.5",
-  "description": "Reflect2Evolve memory plugin: layered L1/L2/L3 memory, reflection-weighted value backprop, cross-task policy induction, skill crystallization, three-tier retrieval. Adapters for OpenClaw and Hermes Agent via a shared algorithm core.",
+  "version": "2.0.16-beta.1",
+  "description": "Reflect2Evolve memory plugin: layered L1/L2/L3 memory, reflection-weighted value backprop, cross-task policy induction, skill crystallization, and three-tier retrieval for OpenClaw, Hermes Agent, and DeepSeek Harness.",
   "type": "module",
   "main": "dist/core/index.js",
   "types": "dist/core/index.d.ts",
@@ -13,11 +13,17 @@
     ],
     "installDependencies": true
   },
+  "dsh": {
+    "bundle": {
+      "patch": "./adapters/deepseek-harness/cordis.patch.yml"
+    }
+  },
   "files": [
     "dist",
     "telemetry.credentials.json",
     "openclaw.plugin.json",
     "bridge.cts",
+    "bridge.mts",
     "bridge/**/*.ts",
     "core/**/*.ts",
     "core/storage/migrations/*.sql",
@@ -25,6 +31,7 @@
     "server/**/*.ts",
     "adapters/openclaw/**/*.ts",
     "adapters/openclaw/*.sh",
+    "adapters/deepseek-harness/cordis.patch.yml",
     "adapters/hermes/*.sh",
     "adapters/hermes/plugin.yaml",
     "adapters/hermes/memos_provider/*.py",
@@ -32,23 +39,31 @@
     "templates/README.user.md",
     "viewer/dist",
     "scripts/postinstall.cjs",
+    "scripts/migrate-dsh-preset-profile.mjs",
+    "scripts/sync-hermes-version.cjs",
     "install.sh",
     "install.ps1",
     "tsconfig.json",
     "!**/ALGORITHMS.md",
     "!**/README.md",
+    "adapters/deepseek-harness/README.md",
     "!**/__pycache__",
     "!**/*.pyc",
     "!**/.gitkeep",
     "!**/*.map",
     "!dist/tests",
-    "!dist/tests/**"
+    "!dist/tests/**",
+    "scripts/normalize-sqlite-lock.cjs",
+    "scripts/verify-native-runtime.cjs"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-runtime-assets.cjs",
     "build:viewer": "vite build --config vite.config.ts",
     "build:package": "npm run build && npm run build:viewer",
-    "prepack": "npm run build:package",
+    "prepack": "npm run check:hermes-version && npm run build:package",
+    "sync:hermes-version": "node scripts/sync-hermes-version.cjs",
+    "check:hermes-version": "node scripts/sync-hermes-version.cjs --check",
+    "release:validate": "npm run lock:check && npm run verify:script-policy && npm run check:hermes-version && npm run lint && npm test",
     "dev": "tsc -p tsconfig.json --watch",
     "viewer:dev": "vite --config vite.config.ts",
     "bridge": "tsx bridge.cts",
@@ -59,7 +74,12 @@
     "test:integration": "vitest run tests/integration",
     "test:e2e": "vitest run tests/e2e",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "postinstall": "node scripts/postinstall.cjs"
+    "postinstall": "node scripts/postinstall.cjs",
+    "lock:normalize": "node scripts/normalize-sqlite-lock.cjs",
+    "lock:check": "node scripts/normalize-sqlite-lock.cjs --check",
+    "verify:native": "node scripts/verify-native-runtime.cjs",
+    "verify:script-policy": "node scripts/verify-script-policy.cjs",
+    "test:dsh-compat": "node scripts/check-dsh-compatibility.mjs"
   },
   "keywords": [
     "memory",
@@ -68,29 +88,88 @@
     "self-evolution",
     "skill-crystallization",
     "openclaw",
-    "hermes"
+    "hermes",
+    "deepseek-harness",
+    "dsh-plugin"
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.0",
+    "@huggingface/transformers": "4.2.0",
     "@preact/signals": "^2.9.0",
     "@sinclair/typebox": "^0.34.48",
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "13.0.3",
     "preact": "^10.29.1",
     "tsx": "^4.21.0",
     "uuid": "^10.0.0",
     "yaml": "^2.6.0"
   },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-timeout": ">=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6 <0.2.0 || >=0.1.7-rc.2 <0.1.8 || >=0.2.0-rc.2 <0.2.1 || >=0.2.1-rc.2 <0.2.2",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-timeout": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-brand": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-timeout": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.3",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@preact/preset-vite": "^2.10.5",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
     "@types/uuid": "^10.0.0",
     "typescript": "^5.7.0",
     "vite": "^5.4.10",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "semver": "7.7.4"
+  },
+  "allowScripts": {
+    "better-sqlite3": false,
+    "esbuild@0.27.7": true,
+    "esbuild@0.21.5": true,
+    "sharp@0.34.5": true,
+    "onnxruntime-node": false,
+    "protobufjs": false,
+    "fsevents": false
   }
 }

@@ -4,11 +4,11 @@ import { OpenClawAPIClient, type HostModelsConfig } from "./openclaw-api";
 
 const ENV_RE = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
 
-function resolveEnvVars(value: string): string {
+export function resolveEnvVars(value: string): string {
   return value.replace(ENV_RE, (_, name) => process.env[name] ?? "");
 }
 
-function deepResolveEnv<T>(obj: T): T {
+export function deepResolveEnv<T>(obj: T): T {
   if (typeof obj === "string") return resolveEnvVars(obj) as unknown as T;
   if (Array.isArray(obj)) return obj.map(deepResolveEnv) as unknown as T;
   if (obj && typeof obj === "object") {
@@ -57,15 +57,24 @@ export function resolveConfig(raw: Partial<MemosLocalConfig> | undefined, stateD
     storage: {
       dbPath: cfg.storage?.dbPath ?? path.join(stateDir, "memos-local", "memos.db"),
     },
+    autoRecall: {
+      excludeCron: cfg.autoRecall?.excludeCron ?? true,
+      excludeSessionKeyPatterns: cfg.autoRecall?.excludeSessionKeyPatterns ?? [],
+    },
     recall: {
       maxResultsDefault: cfg.recall?.maxResultsDefault ?? DEFAULTS.maxResultsDefault,
       maxResultsMax: cfg.recall?.maxResultsMax ?? DEFAULTS.maxResultsMax,
+      // Optional override for the `before_prompt_build` auto-recall hook.
+      // Left undefined when the user does not configure it so the hook can
+      // fall through to `maxResultsDefault` at call time (issue #1514).
+      autoRecallMaxResults: cfg.recall?.autoRecallMaxResults,
       minScoreDefault: cfg.recall?.minScoreDefault ?? DEFAULTS.minScoreDefault,
       minScoreFloor: cfg.recall?.minScoreFloor ?? DEFAULTS.minScoreFloor,
       rrfK: cfg.recall?.rrfK ?? DEFAULTS.rrfK,
       mmrLambda: cfg.recall?.mmrLambda ?? DEFAULTS.mmrLambda,
       recencyHalfLifeDays: cfg.recall?.recencyHalfLifeDays ?? DEFAULTS.recencyHalfLifeDays,
       vectorSearchMaxChunks: cfg.recall?.vectorSearchMaxChunks ?? DEFAULTS.vectorSearchMaxChunks,
+      autoRecallMinQueryLength: cfg.recall?.autoRecallMinQueryLength ?? DEFAULTS.autoRecallMinQueryLength,
     },
     dedup: {
       similarityThreshold: cfg.dedup?.similarityThreshold ?? DEFAULTS.dedupSimilarityThreshold,

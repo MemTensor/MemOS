@@ -2,6 +2,9 @@ import unittest
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from memos.chunkers.base import Chunk
 from memos.chunkers.factory import ChunkerFactory
 from memos.configs.chunker import ChunkerConfigFactory
 
@@ -48,16 +51,35 @@ class TestSentenceChunker(unittest.TestCase):
             # Validate the properties of the first chunk
             mock_chunker.chunk.assert_called_once_with(text)
 
-            # Handle both return types: list[str] | list[Chunk]
-            if isinstance(chunks[0], str):
-                # If returns list[str], check the string value
-                self.assertEqual(chunks[0], "This is the first sentence.")
-                self.assertEqual(chunks[1], "This is the second sentence.")
-            else:
-                # If returns list[Chunk], check the Chunk properties
-                from memos.chunkers.base import Chunk
+            self.assertIsInstance(chunks[0], Chunk)
+            self.assertEqual(chunks[0].text, "This is the first sentence.")
+            self.assertEqual(chunks[0].token_count, 6)
+            self.assertEqual(chunks[0].sentences, ["This is the first sentence."])
 
-                self.assertIsInstance(chunks[0], Chunk)
-                self.assertEqual(chunks[0].text, "This is the first sentence.")
-                self.assertEqual(chunks[0].token_count, 6)
-                self.assertEqual(chunks[0].sentences, ["This is the first sentence."])
+
+def test_sentence_chunker_preserves_urls_with_real_chonkie():
+    pytest.importorskip("chonkie")
+    config = ChunkerConfigFactory.model_validate(
+        {
+            "backend": "sentence",
+            "config": {
+                "tokenizer_or_token_counter": "character",
+                "chunk_size": 128,
+                "chunk_overlap": 0,
+            },
+        }
+    )
+    chunker = ChunkerFactory.from_config(config)
+    text = "See https://example.com/install for installation details."
+    protected_text, _ = chunker.protect_urls(text)
+    [raw_chunk] = chunker.chunker.chunk(protected_text)
+
+    [chunk] = chunker.chunk(text)
+
+    assert isinstance(chunk, Chunk)
+    assert chunk.text == text
+    assert chunk.token_count == raw_chunk.token_count
+    if hasattr(raw_chunk, "sentences"):
+        assert chunk.sentences == [text]
+    else:
+        assert chunk.sentences == []

@@ -6,8 +6,12 @@ import asyncio
 import logging
 
 from collections import defaultdict
+from copy import deepcopy
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import wraps
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 
 if TYPE_CHECKING:
@@ -35,6 +39,48 @@ def register_hook(name: str, callback: Callable) -> None:
         name,
         getattr(callback, "__qualname__", repr(callback)),
     )
+
+
+def unregister_hook(name: str, callback: Callable) -> None:
+    """Remove one owned registration, retaining other plugins' callbacks."""
+    callbacks = _hooks.get(name, [])
+    for index, registered in enumerate(callbacks):
+        if registered is callback:
+            del callbacks[index]
+            break
+    if not callbacks:
+        _hooks.pop(name, None)
+
+
+@dataclass(frozen=True)
+class HookDelivery:
+    """Synchronous notification delivery outcomes, separate from business success."""
+
+    attempted: int = 0
+    failed: int = 0
+
+
+def notify_hook(name: str, **kwargs: Any) -> HookDelivery:
+    """Notify observers with separate detached snapshots and ignore return values.
+
+    Unlike pipes, notifications cannot mutate the returned payload or another
+    observer's view. Delivery failures are logged/counted, not transactionally
+    coupled to a preceding successful operation. No snapshot is made when idle.
+    """
+    from memos.plugins.hook_defs import get_hook_spec
+
+    spec = get_hook_spec(name)
+    if spec is None or spec.pipe_key is not None:
+        raise ValueError("Notifications require a declared non-pipe hook")
+    callbacks = tuple(_hooks.get(name, ()))
+    failed = 0
+    for callback in callbacks:
+        try:
+            callback(**deepcopy(kwargs))
+        except Exception:
+            failed += 1
+            logger.exception("Notification %s callback failed", name)
+    return HookDelivery(len(callbacks), failed)
 
 
 def register_hooks(names: list[str], callback: Callable) -> None:
@@ -122,6 +168,12 @@ def hookable(name: str):
         pipe_key="result",
     )
 
+    define_hook(
+        f"{name}.completed",
+        description=f"Observe the final {name} result after every result pipe",
+        params=["request", "result", "event_id", "at"],
+    )
+
     def decorator(func):
         if asyncio.iscoroutinefunction(func):
 
@@ -132,6 +184,14 @@ def hookable(name: str):
                 result = await func(self, request, *args, **kwargs)
                 rv = trigger_hook(f"{name}.after", request=request, result=result)
                 result = rv if rv is not None else result
+                if _hooks.get(f"{name}.completed"):
+                    notify_hook(
+                        f"{name}.completed",
+                        request=request,
+                        result=result,
+                        event_id=f"{name}:" + uuid4().hex,
+                        at=datetime.now(timezone.utc),
+                    )
                 return result
 
             return async_wrapper
@@ -143,6 +203,14 @@ def hookable(name: str):
             result = func(self, request, *args, **kwargs)
             rv = trigger_hook(f"{name}.after", request=request, result=result)
             result = rv if rv is not None else result
+            if _hooks.get(f"{name}.completed"):
+                notify_hook(
+                    f"{name}.completed",
+                    request=request,
+                    result=result,
+                    event_id=f"{name}:" + uuid4().hex,
+                    at=datetime.now(timezone.utc),
+                )
             return result
 
         return sync_wrapper

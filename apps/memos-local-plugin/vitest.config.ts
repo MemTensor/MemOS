@@ -7,15 +7,22 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     testTimeout: 30000,
     hookTimeout: 30000,
+    pool: "forks",
     poolOptions: {
-      threads: {
-        singleThread: true,
+      forks: {
+        singleFork: true,
       },
     },
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "json"],
-      include: ["core/**/*.ts", "server/**/*.ts", "bridge/**/*.ts", "adapters/openclaw/**/*.ts"],
+      include: [
+        "core/**/*.ts",
+        "server/**/*.ts",
+        "bridge/**/*.ts",
+        "adapters/openclaw/**/*.ts",
+        "adapters/deepseek-harness/**/*.ts",
+      ],
       exclude: ["**/*.test.ts", "**/*.d.ts", "**/index.ts"],
     },
   },

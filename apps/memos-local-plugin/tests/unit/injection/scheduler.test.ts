@@ -11,9 +11,13 @@ const baseIntent: IntentDecision = {
   signals: ["test"],
 };
 
-function planFor(intent: IntentDecision, relation?: Parameters<typeof scheduleInjection>[0]["relation"]) {
+function planFor(
+  intent: IntentDecision,
+  relation?: Parameters<typeof scheduleInjection>[0]["relation"],
+  userText = "test",
+) {
   return scheduleInjection({
-    userText: "test",
+    userText,
     sessionId: "s1",
     episodeId: "ep1",
     intent,
@@ -77,6 +81,46 @@ describe("injection/scheduler", () => {
     expect(plan).toMatchObject({
       scenarioId: "MEMORY_PROBE",
       entry: "turn_start",
+      profile: "default",
+      wantTier1: true,
+      wantTier2: true,
+      wantTier3: false,
+    });
+  });
+
+  it("routes high-confidence personal-fact probes to Tier 2 only", () => {
+    const plan = planFor(
+      {
+        ...baseIntent,
+        kind: "memory_probe",
+        retrieval: { tier1: true, tier2: true, tier3: false },
+      },
+      undefined,
+      "你还记得我喜欢什么吗？",
+    );
+
+    expect(plan).toMatchObject({
+      scenarioId: "MEMORY_PROBE",
+      profile: "personal_fact",
+      wantTier1: false,
+      wantTier2: true,
+      wantTier3: false,
+    });
+  });
+
+  it("does not misroute remembered troubleshooting as a personal fact", () => {
+    const plan = planFor(
+      {
+        ...baseIntent,
+        kind: "memory_probe",
+        retrieval: { tier1: true, tier2: true, tier3: false },
+      },
+      undefined,
+      "你还记得上次 OpenClaw Gateway 是怎么修复的吗？",
+    );
+
+    expect(plan).toMatchObject({
+      profile: "default",
       wantTier1: true,
       wantTier2: true,
       wantTier3: false,

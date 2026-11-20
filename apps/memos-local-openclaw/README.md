@@ -514,12 +514,14 @@ All optional — shown with defaults:
     "recall": {
       "maxResultsDefault": 6,     // Default search results
       "maxResultsMax": 20,        // Max search results
+      "autoRecallMaxResults": 6,  // Optional: override max results for the auto-recall hook only. Defaults to `maxResultsDefault`. Set lower (e.g. 3 or 5) to reduce auto-injected tokens while keeping `memory_search` results richer.
       "minScoreDefault": 0.45,    // Default min score threshold
       "minScoreFloor": 0.35,      // Lowest allowed min score
       "rrfK": 60,                 // RRF fusion constant
       "mmrLambda": 0.7,           // MMR relevance vs diversity (0-1)
       "recencyHalfLifeDays": 14,  // Time decay half-life
-      "vectorSearchMaxChunks": 0  // 0 = search all (default). Set 200000–300000 only if search is slow on huge DBs
+      "vectorSearchMaxChunks": 0, // 0 = search all (default). Set 200000–300000 only if search is slow on huge DBs
+      "autoRecallMinQueryLength": 4  // Skip auto-recall when the normalised user prompt is shorter than this many chars (filters "好的"/"可以"/"?"). 0 disables the guard. Has no effect on explicit memory_search tool calls.
     },
     "dedup": {
       "similarityThreshold": 0.75,  // Cosine similarity for smart-dedup candidates (Top-5)

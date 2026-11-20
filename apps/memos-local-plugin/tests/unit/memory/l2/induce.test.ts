@@ -182,6 +182,7 @@ describe("memory/l2/induce", () => {
       episodeIds: ["ep_1", "ep_2"] as EpisodeId[],
       evidenceTraces: [mkTrace("tr_a", "ep_1", vec([1, 0])), mkTrace("tr_b", "ep_2", vec([0, 1]))],
       inducedBy: "l2.l2.induction.v1",
+      sourceSignature: "docker|pip|pip.install|MODULE_NOT_FOUND",
       now: 42,
     });
     expect(row.status).toBe("candidate");
@@ -191,5 +192,13 @@ describe("memory/l2/induce", () => {
     expect(row.vec).not.toBeNull();
     expect(row.createdAt).toBe(42);
     expect(row.title).toBe("t");
+    expect(row.metadata).toEqual(expect.objectContaining({
+      version: 1,
+      language: "en",
+      domainTags: ["docker", "pip"],
+      toolNames: ["pip.install"],
+      errorCodes: ["module_not_found"],
+      sourceSignature: "docker|pip|pip.install|MODULE_NOT_FOUND",
+    }));
   });
 });

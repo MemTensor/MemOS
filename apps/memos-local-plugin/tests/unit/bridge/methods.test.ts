@@ -57,6 +57,10 @@ function stubCore(overrides: Partial<MemoryCore> = {}): MemoryCore {
       injectedContext: "",
       tierLatencyMs: { tier1: 0, tier2: 0, tier3: 0 },
     })),
+    prepareTurn: vi.fn(async (turn) => ({
+      sessionId: turn.sessionId,
+      episodeId: turn.episodeId ?? "e-prepared",
+    })),
     onTurnEnd: vi.fn(async () => ({ traceId: "tr-1", episodeId: "e-1" })),
     submitFeedback: vi.fn(async (fb) => ({
       id: "fb-1",
@@ -329,6 +333,28 @@ describe("makeDispatcher", () => {
         sessionId: "s-1",
         userText: "hi",
         // missing ts
+      }),
+    ).rejects.toSatisfy(
+      (err) => err instanceof MemosError && err.code === "invalid_argument",
+    );
+    await expect(
+      dispatch("turn.start", {
+        agent: "openclaw",
+        sessionId: "s-1",
+        turnKey: 42,
+        userText: "hi",
+        ts: 123,
+      }),
+    ).rejects.toSatisfy(
+      (err) => err instanceof MemosError && err.code === "invalid_argument",
+    );
+    await expect(
+      dispatch("turn.start", {
+        agent: "openclaw",
+        sessionId: "s-1",
+        userText: "hi",
+        ts: 123,
+        deadlineAt: "soon",
       }),
     ).rejects.toSatisfy(
       (err) => err instanceof MemosError && err.code === "invalid_argument",

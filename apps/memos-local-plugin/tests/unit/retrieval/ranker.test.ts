@@ -62,8 +62,8 @@ function trace(id: string, cos: number, value: number, vec?: number[]): TraceCan
     episodeId: `ep-${id}` as never,
     sessionId: "s1" as never,
     vecKind: "summary",
-    userText: "u",
-    agentText: "a",
+    userText: `user ${id}`,
+    agentText: `agent ${id}`,
     summary: null,
     reflection: null,
     tags: [],
@@ -162,6 +162,410 @@ describe("retrieval/ranker", () => {
     });
     const picked = out.ranked.map((r) => String(r.candidate.refId));
     expect(picked).toContain("diff");
+  });
+
+  it("hard-dedupes repeated-question chatter before MMR so Top-K is refilled", () => {
+    const question = "我最喜欢的水果是什么？";
+    const ackHigh = trace("ack_high", 0.99, 0, [1, 0]);
+    const ackSecond = trace("ack_second", 0.98, 0, [1, 0]);
+    const answer = trace("answer", 0.95, 0, [1, 0]);
+    const other = trace("other", 0.7, 0, [0, 1]);
+    Object.assign(ackHigh, { userText: question, agentText: "好的" });
+    Object.assign(ackSecond, { userText: ` ${question}！`, agentText: "收到" });
+    Object.assign(answer, {
+      userText: question,
+      agentText: "你之前明确说过，自己最喜欢的水果一直都是芒果。",
+    });
+    Object.assign(other, {
+      userText: "我最喜欢的歌手是谁？",
+      agentText: "你之前提到过，自己最喜欢的歌手一直都是陈奕迅。",
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [ackHigh, ackSecond, answer, other],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      profile: "personal_fact",
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "answer",
+      "other",
+    ]);
+    expect(out.dedupedBeforeMmr).toBe(2);
+  });
+
+  it("dedupes before recomputing the relative threshold so chatter cannot raise the floor", () => {
+    const question = "我最喜欢的水果是什么？";
+    const highChatter = trace("high_chatter", 0.99, 0);
+    const answer = trace("answer", 0.75, 0);
+    const other = trace("other", 0.74, 0);
+    Object.assign(highChatter, {
+      userText: question,
+      agentText: "好的",
+    });
+    Object.assign(answer, {
+      userText: question,
+      agentText: "你之前明确说过，自己最喜欢的水果一直都是芒果。",
+    });
+    Object.assign(other, {
+      userText: "我最喜欢的歌手是谁？",
+      agentText: "你之前提到过，自己最喜欢的歌手一直都是陈奕迅。",
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [highChatter, answer, other],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0.8,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "answer",
+      "other",
+    ]);
+    expect(out.dedupedBeforeMmr).toBe(1);
+    expect(out.topRelevance).toBeCloseTo(0.75, 5);
+    expect(out.thresholdFloor).toBeCloseTo(0.6, 5);
+  });
+
+  it("uses post-score relevance to choose an exact-summary duplicate before MMR", () => {
+    const question = "我最喜欢的水果是什么？";
+    const lower = trace("lower", 0.89, 0);
+    const higher = trace("higher", 0.9, 0);
+    const other = trace("other", 0.7, 0);
+    Object.assign(lower, {
+      userText: question,
+      agentText: "好的",
+      summary: "用户最喜欢的水果是芒果",
+    });
+    Object.assign(higher, {
+      userText: `${question}！`,
+      agentText: "收到",
+      summary: "用户最喜欢的水果是芒果",
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [lower, higher, other],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "higher",
+      "other",
+    ]);
+    expect(out.dedupedBeforeMmr).toBe(1);
+  });
+
+  it("rejects a generic pattern impostor and keeps the candidate containing the exact identifier", () => {
+    const identifier = "project_id_2026_alpha_001";
+    const patternImpostor = trace("pattern_impostor", 0.9, 0);
+    const exactMatch = trace("exact_match", 0.8, 0);
+    Object.assign(patternImpostor, {
+      userText: "请查询之前的普通项目记录",
+      agentText: "好的",
+      summary: "项目状态为已完成",
+      channels: [
+        { channel: "vec_summary", rank: 0, score: 0.9 },
+        { channel: "pattern", rank: 0, score: 1 },
+      ],
+    });
+    Object.assign(exactMatch, {
+      userText: `项目 ${identifier} 的状态`,
+      agentText: "收到",
+      summary: "项目状态为已完成",
+      channels: [{ channel: "exact_identifier", rank: 0, score: 1 }],
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [patternImpostor, exactMatch],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 1,
+      exactIdentifiers: [identifier],
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "exact_match",
+    ]);
+    expect(out.droppedByKeywordConfirmation).toBe(1);
+  });
+
+  it("does not let a higher single-channel duplicate erase a lower multi-channel bypass candidate", () => {
+    const question = "我最喜欢的水果是什么？";
+    const top = trace("top", 1, 0);
+    const ordinary = trace("ordinary", 0.58, 0);
+    const bypass = trace("bypass", 0.55, 0);
+    Object.assign(top, {
+      channels: [{ channel: "vec_summary", rank: 0, score: 1 }],
+    });
+    Object.assign(ordinary, {
+      userText: question,
+      agentText: "好的",
+      summary: "用户最喜欢的水果是芒果",
+      channels: [{ channel: "vec_summary", rank: 1, score: 0.58 }],
+    });
+    Object.assign(bypass, {
+      userText: question,
+      agentText: "收到",
+      summary: "用户最喜欢的水果是芒果",
+      channels: [
+        { channel: "vec_summary", rank: 5, score: 0.55 },
+        { channel: "pattern", rank: 4, score: 0.2 },
+      ],
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [top, ordinary, bypass],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 3,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0.6,
+        multiChannelBypass: true,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    const ids = out.ranked.map((item) => String(item.candidate.refId));
+    expect(ids).toContain("top");
+    expect(ids).toContain("bypass");
+    expect(ids).not.toContain("ordinary");
+    expect(out.ranked.find((item) => item.candidate.refId === bypass.refId))
+      .toMatchObject({ bypassedThreshold: true });
+  });
+
+  it("collapses capability variants again after both duplicates survive the threshold", () => {
+    const question = "我最喜欢的水果是什么？";
+    const ordinary = trace("ordinary", 0.8, 0);
+    const bypassCapable = trace("bypass_capable", 0.75, 0);
+    Object.assign(ordinary, {
+      userText: question,
+      agentText: "好的",
+      summary: "用户最喜欢的水果是芒果",
+      channels: [{ channel: "vec_summary", rank: 0, score: 0.8 }],
+    });
+    Object.assign(bypassCapable, {
+      userText: question,
+      agentText: "收到",
+      summary: "用户最喜欢的水果是芒果",
+      channels: [
+        { channel: "vec_summary", rank: 1, score: 0.75 },
+        { channel: "pattern", rank: 0, score: 0.2 },
+      ],
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [ordinary, bypassCapable],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0.4,
+        multiChannelBypass: true,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "ordinary",
+    ]);
+    expect(out.dedupedBeforeMmr).toBe(1);
+    expect(out.dedupedAfterThreshold).toBe(1);
+  });
+
+  it("keeps different concise fact answers to the same question", () => {
+    const question = "我最喜欢的水果是什么？";
+    const oldAnswer = trace("old_short", 0.9, 0);
+    const newAnswer = trace("new_short", 0.85, 0);
+    Object.assign(oldAnswer, {
+      userText: question,
+      agentText: "苹果",
+    });
+    Object.assign(newAnswer, {
+      userText: question,
+      agentText: "芒果",
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [oldAnswer, newAnswer],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "old_short",
+      "new_short",
+    ]);
+    expect(out.dedupedBeforeMmr).toBe(0);
+  });
+
+  it("preserves semantic symbols when grouping repeated questions", () => {
+    const cpp = trace("cpp", 0.9, 0);
+    const c = trace("c", 0.85, 0);
+    Object.assign(cpp, {
+      userText: "C++ 怎么学？",
+      agentText: "好的",
+    });
+    Object.assign(c, {
+      userText: "C 怎么学？",
+      agentText: "收到",
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [cpp, c],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "cpp",
+      "c",
+    ]);
+    expect(out.dedupedBeforeMmr).toBe(0);
+  });
+
+  it("keeps a summary-only fact alongside a different substantive answer", () => {
+    const question = "我最喜欢的水果是什么？";
+    const summaryOnly = trace("summary_only", 0.9, 0);
+    const answer = trace("answer", 0.85, 0);
+    Object.assign(summaryOnly, {
+      userText: question,
+      agentText: "好的",
+      summary: "用户曾经最喜欢的水果是苹果",
+    });
+    Object.assign(answer, {
+      userText: question,
+      agentText: "你后来更新了偏好，现在自己最喜欢的水果已经变成芒果。",
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [summaryOnly, answer],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "summary_only",
+      "answer",
+    ]);
+    expect(out.dedupedBeforeMmr).toBe(0);
+  });
+
+  it("keeps distinct substantive answers to the same question before MMR", () => {
+    const question = "我最喜欢的水果是什么？";
+    const oldAnswer = trace("old", 0.9, 0);
+    const newAnswer = trace("new", 0.85, 0);
+    Object.assign(oldAnswer, {
+      userText: question,
+      agentText: "你以前明确说过，当时自己最喜欢的水果一直都是苹果。",
+    });
+    Object.assign(newAnswer, {
+      userText: question,
+      agentText: "你后来更新了偏好，现在自己最喜欢的水果已经变成芒果。",
+    });
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [oldAnswer, newAnswer],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: {
+        ...cfg,
+        relativeThresholdFloor: 0,
+        smartSeed: false,
+      },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "old",
+      "new",
+    ]);
+    expect(out.dedupedBeforeMmr).toBe(0);
+  });
+
+  it("keeps mixed-dimension candidates without crashing MMR", () => {
+    const out = rank({
+      tier1: [],
+      tier2Traces: [
+        trace("current_dim", 0.9, 0.5, [1, 0, 0]),
+        trace("legacy_dim", 0.8, 0.5, [1, 0]),
+      ],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      config: { ...cfg, relativeThresholdFloor: 0 },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((r) => String(r.candidate.refId))).toEqual([
+      "current_dim",
+      "legacy_dim",
+    ]);
+    expect(out.ranked[1]!.scoreDetails?.redundancy).toBe(0);
   });
 
   it("respects `limit`", () => {
@@ -374,7 +778,7 @@ describe("retrieval/ranker", () => {
     expect(String(out.ranked[0]!.candidate.refId)).toBe("multi_ch");
   });
 
-  it("multi-channel bypass lets low-relevance keyword hits survive threshold", () => {
+  it("does not let two weak keyword channels bypass the threshold", () => {
     // Strong candidate pulls topRelevance up; keyword-only single-channel
     // hit would be guillotined by the relative floor, BUT a multi-channel
     // hit with the same base should survive via the bypass.
@@ -398,9 +802,53 @@ describe("retrieval/ranker", () => {
     });
     const ids = out.ranked.map((r) => String(r.candidate.refId));
     expect(ids).toContain("strong");
-    expect(ids).toContain("confirmed");
+    expect(ids).not.toContain("confirmed");
     // The single-channel weak FTS hit should still get cut.
     expect(ids).not.toContain("fts_only");
+  });
+
+  it("lets a multi-channel hit with strong semantic evidence bypass the threshold", () => {
+    const strong = trace("strong", 1, 0);
+    strong.channels = [{ channel: "vec_summary", rank: 0, score: 1 }];
+    const confirmed = trace("confirmed", 0.5, 0);
+    confirmed.channels = [
+      { channel: "vec_summary", rank: 5, score: 0.5 },
+      { channel: "pattern", rank: 4, score: 0.2 },
+    ];
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [strong, confirmed],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 5,
+      config: { ...cfg, relativeThresholdFloor: 0.6, multiChannelBypass: true },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toContain("confirmed");
+  });
+
+  it("uses relevance-focused MMR and ignores V for personal facts", () => {
+    const first = trace("first", 1, 0, [1, 0]);
+    const duplicate = trace("duplicate", 0.89, 0, [1, 0]);
+    const diverseHighV = trace("diverse", 0.6, 1, [0, 1]);
+
+    const out = rank({
+      tier1: [],
+      tier2Traces: [first, duplicate, diverseHighV],
+      tier2Episodes: [],
+      tier3: [],
+      limit: 2,
+      profile: "personal_fact",
+      config: { ...cfg, mmrLambda: 0, relativeThresholdFloor: 0 },
+      now: NOW,
+    });
+
+    expect(out.ranked.map((item) => String(item.candidate.refId))).toEqual([
+      "first",
+      "duplicate",
+    ]);
   });
 
   it("multiChannelBypass=false restores strict threshold for multi-channel hits", () => {

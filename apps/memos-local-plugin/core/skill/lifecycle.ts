@@ -196,9 +196,41 @@ export function shouldArchiveIdle(
   now: number,
 ): boolean {
   if (skill.status !== "active") return false;
-  const age = now - skill.updatedAt;
+  const idleSince = skill.lastUsedAt ?? skill.createdAt;
+  const age = now - idleSince;
   if (age < idleMs) return false;
   return skill.eta < cfg.minEtaForRetrieval;
+}
+
+/**
+ * Decide whether a non-repair candidate skill should skip trial
+ * and become active immediately.  `eta` already encodes the
+ * gain / support of the source policies (initialised at
+ * crystallisation and kept current by reward drift), so we
+ * don't need a separate gain / support gate.
+ */
+export function shouldPromoteCandidate(
+  skill: SkillRow,
+  cfg: SkillConfig,
+): boolean {
+  if (skill.status !== "candidate") return false;
+  if (hasDecisionGuidance(skill)) return false;
+  return skill.eta >= cfg.minEtaForRetrieval;
+}
+
+function hasDecisionGuidance(skill: SkillRow): boolean {
+  const procedure = skill.procedureJson;
+  if (!procedure || typeof procedure !== "object") return false;
+  const guidance = (procedure as {
+    decisionGuidance?: {
+      preference?: unknown[];
+      antiPattern?: unknown[];
+    };
+  }).decisionGuidance;
+  return Boolean(
+    (Array.isArray(guidance?.preference) && guidance.preference.length > 0) ||
+      (Array.isArray(guidance?.antiPattern) && guidance.antiPattern.length > 0),
+  );
 }
 
 function clamp01(n: number): number {

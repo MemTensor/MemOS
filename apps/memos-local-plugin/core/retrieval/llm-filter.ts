@@ -24,7 +24,10 @@ import type { LlmClient } from "../llm/index.js";
 import type { Logger } from "../logger/types.js";
 import { RETRIEVAL_FILTER_PROMPT } from "../llm/prompts/index.js";
 import type { RankedCandidate } from "./ranker.js";
-import type { RetrievalConfig } from "./types.js";
+import type {
+  RetrievalConfig,
+  RetrievalProfile,
+} from "./types.js";
 
 const DEFAULT_CANDIDATE_BODY_CHARS = 500;
 const MIN_FILTER_OUTPUT_TOKENS = 160;
@@ -33,6 +36,7 @@ const MAX_FILTER_OUTPUT_TOKENS = 2048;
 export interface FilterInput {
   query: string;
   ranked: readonly RankedCandidate[];
+  profile?: RetrievalProfile;
   /**
    * Episode this retrieval is happening for (typically the active or
    * just-opening episode). Forwarded to the LLM call so the resulting
@@ -46,6 +50,10 @@ export interface FilterDeps {
   llm: LlmClient | null;
   log: Logger;
   timeoutMs?: number;
+  deadlineAt?: number;
+  signal?: AbortSignal;
+  /** Override the LLM client's default malformed-JSON retry count. */
+  malformedRetries?: number;
   config: Pick<
     RetrievalConfig,
     | "llmFilterEnabled"
@@ -70,6 +78,10 @@ export interface FilterResult {
     | "deferred_to_final"
     | "llm_kept_all"
     | "llm_filtered"
+    | "llm_filtered_empty"
+    // Legacy outcome retained for historical api_logs compatibility.
+    // New calls no longer mechanically refill a valid empty LLM result.
+    | "llm_filtered_refilled"
     // The LLM was supposed to run but the call failed / parsed badly.
     // We applied a mechanical relevance cutoff (top-K above
     // `relativeThresholdFloor · topRelevance`) instead of dumping the
@@ -109,6 +121,10 @@ export async function llmFilterCandidates(
   if (!deps.llm) {
     return passthrough(ranked, "no_llm");
   }
+  if (deps.signal?.aborted) {
+    deps.log.debug("llm_filter.deadline_exceeded", { candidateCount: ranked.length });
+    return safeCutoff(ranked, deps);
+  }
 
   const bodyChars =
     deps.config.llmFilterCandidateBodyChars ?? DEFAULT_CANDIDATE_BODY_CHARS;
@@ -119,7 +135,7 @@ export async function llmFilterCandidates(
   const list = items.map((x) => `${x.index + 1}. ${x.label}`).join("\n");
 
   try {
-    const rsp = await deps.llm.completeJson<{
+    const completion = deps.llm.completeJson<{
       ranked?: unknown;
       selected?: unknown;
       sufficient?: unknown;
@@ -140,12 +156,17 @@ ${list}`,
         episodeId: input.episodeId,
         temperature: 0,
         timeoutMs: deps.timeoutMs,
+        deadlineAt: deps.deadlineAt,
+        signal: deps.signal,
         // Output is only ordered indices + one bool, but the list can
         // legitimately be as long as the ranked candidates.
         maxTokens: filterOutputTokenBudget(ranked.length),
-        malformedRetries: 1,
+        malformedRetries: deps.malformedRetries ?? 1,
       },
     );
+    const rsp = deps.deadlineAt === undefined
+      ? await completion
+      : await waitForFilterDeadline(completion, deps);
     const raw = (rsp.value?.ranked ?? rsp.value?.selected ?? []) as unknown;
     const sufficient = coerceBool(rsp.value?.sufficient);
     if (!Array.isArray(raw)) {
@@ -169,21 +190,16 @@ ${list}`,
     );
     const keepIndices = new Set(cappedIndices);
     if (keepIndices.size === 0) {
-      // Model asked us to drop everything — honoured. Surface this
-      // explicitly so the Logs page can show "LLM found nothing
-      // relevant" instead of silently injecting a partial packet.
       return {
         kept: [],
         dropped: [...ranked],
-        outcome: "llm_filtered",
+        outcome: "llm_filtered_empty",
         sufficient: sufficient ?? false,
       };
     }
     const kept = cappedIndices.map((i) => ranked[i]!);
-    const dropped: RankedCandidate[] = [];
-    ranked.forEach((r, i) => {
-      if (!keepIndices.has(i)) dropped.push(r);
-    });
+    const keptSet = new Set(kept);
+    const dropped = ranked.filter((candidate) => !keptSet.has(candidate));
     return {
       kept,
       dropped,
@@ -197,6 +213,45 @@ ${list}`,
       candidateCount: ranked.length,
     });
     return safeCutoff(ranked, deps);
+  }
+}
+
+async function waitForFilterDeadline<T>(
+  operation: Promise<T>,
+  deps: Pick<FilterDeps, "deadlineAt" | "timeoutMs" | "signal">,
+): Promise<T> {
+  const remainingMs = Math.max(0, (deps.deadlineAt ?? Date.now()) - Date.now());
+  const timeoutMs = Math.max(
+    0,
+    Math.min(remainingMs, deps.timeoutMs ?? remainingMs),
+  );
+  if (deps.signal?.aborted) {
+    throw deps.signal.reason ?? new DOMException("retrieval deadline exceeded", "TimeoutError");
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const cutoff = new Promise<never>((_resolve, reject) => {
+    const finish = (error: unknown): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      deps.signal?.removeEventListener("abort", onAbort!);
+      reject(error);
+    };
+    onAbort = () => finish(
+      deps.signal?.reason ?? new DOMException("retrieval deadline exceeded", "TimeoutError"),
+    );
+    deps.signal?.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(
+      () => finish(new DOMException("retrieval filter deadline exceeded", "TimeoutError")),
+      timeoutMs,
+    );
+  });
+
+  try {
+    return await Promise.race([operation, cutoff]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort) deps.signal?.removeEventListener("abort", onAbort);
   }
 }
 

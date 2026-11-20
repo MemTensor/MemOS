@@ -44,6 +44,10 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
     const groupByTurn = params.get("groupByTurn") === "true";
     const includeTotal = params.get("includeTotal") !== "false";
     const listLimit = includeTotal ? limit : limit + 1;
+    // Viewer list: show every namespace's rows by default (explicit
+    // ownerAgentKind / ownerProfileId query filters still narrow) —
+    // see overview.ts for why viewer reads must not follow the
+    // turn-scoped active namespace.
     const rawTraces = await deps.core.listTraces({
       limit: listLimit,
       offset,
@@ -52,6 +56,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
       ownerProfileId,
       q,
       groupByTurn,
+      includeAllNamespaces: true,
     });
     const { traces, hasMore } = trimTracePage(rawTraces, limit, groupByTurn);
     const total = includeTotal
@@ -61,6 +66,7 @@ export function registerTraceRoutes(routes: Routes, deps: ServerDeps): void {
           ownerProfileId,
           q,
           groupByTurn,
+          includeAllNamespaces: true,
         })
       : undefined;
     // When grouping, `traces.length === limit` is no longer a reliable

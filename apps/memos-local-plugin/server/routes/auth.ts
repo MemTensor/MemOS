@@ -410,10 +410,27 @@ export function requireSession(
   agent?: string | null,
 ): boolean {
   // Public: auth endpoints + health (so the viewer can tell whether
-  // the backend is up BEFORE unlocking). Other API routes, including
-  // ping, fall through and are only open when no password is configured.
+  // the backend is up BEFORE unlocking). RPC endpoint is exempt for
+  // loopback callers only (local Python adapter, same machine, no
+  // browser session). Remote callers on the hub's 0.0.0.0 binding
+  // must still hold a valid session cookie.
+  //
+  // ASSUMPTION: the server binds directly (no reverse proxy). If a
+  // reverse proxy is ever added, socket.remoteAddress will be the
+  // proxy address and X-Forwarded-For must be consulted instead, or
+  // this loopback exemption will bypass auth for all proxy traffic.
   if (pathname.startsWith("/api/v1/auth/")) return true;
   if (pathname === "/api/v1/health") return true;
+  if (pathname === "/api/v1/rpc") {
+    const remote =
+      (req as unknown as { socket?: { remoteAddress?: string } }).socket
+        ?.remoteAddress ?? "";
+    const isLoopback =
+      remote === "127.0.0.1" ||
+      remote === "::1" ||
+      remote === "::ffff:127.0.0.1";
+    if (isLoopback) return true;
+  }
 
   const state = readAuthState(homeDir);
   if (!state) return true; // password protection off → open

@@ -201,11 +201,12 @@ export class HubServer {
   private embedChunksAsync(chunkIds: string[], chunks: Array<{ id: string; summary?: string; content?: string }>): void {
     const embedder = this.opts.embedder;
     if (!embedder) return;
+    const producer = { provider: embedder.provider, model: embedder.model };
     const texts = chunks.map(c => c.summary || (c.content ? c.content.slice(0, 500) : ""));
     embedder.embed(texts).then((vectors) => {
       for (let i = 0; i < vectors.length; i++) {
         if (vectors[i]) {
-          this.opts.store.upsertHubEmbedding(chunkIds[i], new Float32Array(vectors[i]));
+          this.opts.store.upsertHubEmbedding(chunkIds[i], new Float32Array(vectors[i]), producer);
         }
       }
       this.opts.log.info(`hub: embedded ${vectors.filter(Boolean).length}/${chunkIds.length} shared chunks`);
@@ -217,10 +218,11 @@ export class HubServer {
   private embedSkillAsync(skillId: string, name: string, description: string, sourceUserId: string, sourceSkillId: string): void {
     const embedder = this.opts.embedder;
     if (!embedder) return;
+    const producer = { provider: embedder.provider, model: embedder.model };
     const text = `${name}: ${description}`;
     embedder.embed([text]).then((vectors) => {
       if (vectors[0]) {
-        this.opts.store.upsertHubSkillEmbedding(skillId, Array.from(vectors[0]), sourceUserId, sourceSkillId);
+        this.opts.store.upsertHubSkillEmbedding(skillId, Array.from(vectors[0]), sourceUserId, sourceSkillId, producer);
         this.opts.log.info(`hub: embedded shared skill ${skillId}`);
       }
     }).catch((err) => {
@@ -230,6 +232,8 @@ export class HubServer {
 
   private backfillMemoryEmbeddings(): void {
     if (!this.opts.embedder) return;
+    const embedder = this.opts.embedder;
+    const producer = { provider: embedder.provider, model: embedder.model };
     try {
       const all = this.opts.store.listHubMemories({ limit: 500 });
       const missing = all.filter(m => {
@@ -238,11 +242,11 @@ export class HubServer {
       if (missing.length === 0) return;
       this.opts.log.info(`hub: backfilling embeddings for ${missing.length} hub memories`);
       const texts = missing.map(m => (m.summary || m.content || "").slice(0, 500));
-      this.opts.embedder.embed(texts).then((vectors) => {
+      embedder.embed(texts).then((vectors) => {
         let count = 0;
         for (let i = 0; i < vectors.length; i++) {
           if (vectors[i]) {
-            this.opts.store.upsertHubMemoryEmbedding(missing[i].id, new Float32Array(vectors[i]));
+            this.opts.store.upsertHubMemoryEmbedding(missing[i].id, new Float32Array(vectors[i]), producer);
             count++;
           }
         }
@@ -258,11 +262,12 @@ export class HubServer {
   private embedMemoryAsync(memoryId: string, summary: string, content: string): void {
     const embedder = this.opts.embedder;
     if (!embedder) return;
+    const producer = { provider: embedder.provider, model: embedder.model };
     const text = (summary || content || "").slice(0, 500);
     if (!text) return;
     embedder.embed([text]).then((vectors) => {
       if (vectors[0]) {
-        this.opts.store.upsertHubMemoryEmbedding(memoryId, new Float32Array(vectors[0]));
+        this.opts.store.upsertHubMemoryEmbedding(memoryId, new Float32Array(vectors[0]), producer);
         this.opts.log.info(`hub: embedded shared memory ${memoryId}`);
       }
     }).catch((err) => {

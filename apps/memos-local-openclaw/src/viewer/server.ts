@@ -14,13 +14,14 @@ import { vectorSearch } from "../storage/vector";
 import { TaskProcessor } from "../ingest/task-processor";
 import { RecallEngine } from "../recall/engine";
 import { SkillEvolver } from "../skill/evolver";
-import { resolveConfig } from "../config";
+import { resolveConfig, deepResolveEnv } from "../config";
 import { getHubStatus } from "../client/connector";
 import { type ResolvedHubClient, hubGetMemoryDetail, hubListMemories, hubListTasks, hubListSkills, hubRequestJson, hubSearchMemories, hubSearchSkills, hubUpdateUsername, normalizeHubUrl, resolveHubClient } from "../client/hub";
 import { buildSkillBundleForHub, fetchHubSkillBundle, restoreSkillBundleFromHub } from "../client/skill-sync";
 import type { Logger, Chunk, PluginContext, MemosLocalConfig } from "../types";
 import { viewerHTML } from "./html";
 import { v4 as uuid } from "uuid";
+import { parseJsonOrJson5 } from "../shared/json5";
 
 export interface MigrationStepFailureCounts {
   summarization: number;
@@ -395,6 +396,7 @@ export class ViewerServer {
       else if (p === "/api/migrate/postprocess/stream" && req.method === "GET") this.handlePostprocessStream(res);
       else if (p === "/api/migrate/postprocess/stop" && req.method === "POST") this.handlePostprocessStop(res);
       else if (p === "/api/migrate/postprocess/status" && req.method === "GET") this.handlePostprocessStatus(res);
+      else if (p === "/api/export" && req.method === "GET") this.handleExport(res, url);
       else {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "not found" }));
@@ -649,7 +651,7 @@ export class ViewerServer {
     try {
       const cfgPath = this.getOpenClawConfigPath();
       if (fs.existsSync(cfgPath)) {
-        const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
         const entries = raw?.plugins?.entries ?? {};
         const pluginCfg = entries["memos-local-openclaw-plugin"]?.config
           ?? entries["memos-local"]?.config ?? {};
@@ -928,6 +930,20 @@ export class ViewerServer {
     const dateFrom = url.searchParams.get("dateFrom") ?? undefined;
     const dateTo = url.searchParams.get("dateTo") ?? undefined;
 
+    // Issue #1372: honor `limit` and `minScore` query params.
+    // - `limit` is clamped to [1, 100]; default 20 to match the historical
+    //   FTS-fallback slice so behavior is unchanged when the client omits it.
+    // - `minScore` is clamped to [0.35, 1]; default 0.64 preserves the
+    //   previous semantic-similarity gate.
+    const rawLimit = Number(url.searchParams.get("limit"));
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(100, Math.max(1, Math.floor(rawLimit)))
+      : 20;
+    const rawMinScore = Number(url.searchParams.get("minScore"));
+    const minScore = Number.isFinite(rawMinScore) && rawMinScore > 0
+      ? Math.max(0.35, Math.min(1, rawMinScore))
+      : 0.64;
+
     const passesFilter = (r: any): boolean => {
       if (role && r.role !== role) return false;
       if (session && r.session_key !== session) return false;
@@ -962,7 +978,7 @@ export class ViewerServer {
       }
     }
 
-    const SEMANTIC_THRESHOLD = 0.64;
+    const SEMANTIC_THRESHOLD = minScore;
     const VECTOR_TIMEOUT_MS = 8000;
     let vectorResults: any[] = [];
     let scoreMap = new Map<string, number>();
@@ -1001,7 +1017,7 @@ export class ViewerServer {
       if (!seenIds.has(r.id)) { seenIds.add(r.id); merged.push(r); }
     }
 
-    const results = merged.length > 0 ? merged : ftsResults.slice(0, 20);
+    const results = (merged.length > 0 ? merged : ftsResults).slice(0, limit);
 
     this.store.recordViewerEvent("search");
     this.jsonResponse(res, {
@@ -1010,6 +1026,8 @@ export class ViewerServer {
       vectorCount: vectorResults.length,
       ftsCount: ftsResults.length,
       total: results.length,
+      limit,
+      minScore,
     });
   }
 
@@ -1261,8 +1279,9 @@ export class ViewerServer {
 
   private embedTaskInBackground(taskId: string, text: string): void {
     if (!this.embedder || !text.trim()) return;
-    this.embedder.embed([text]).then((vecs: number[][]) => {
-      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0]);
+    const embedder = this.embedder;
+    embedder.embed([text]).then((vecs: number[][]) => {
+      if (vecs.length > 0) this.store.upsertTaskEmbedding(taskId, vecs[0], { provider: embedder.provider, model: embedder.model });
     }).catch(() => {});
   }
 
@@ -1402,8 +1421,9 @@ export class ViewerServer {
       const sv = this.store.getLatestSkillVersion(skillId);
       if (sv) {
         const text = `${skill.name}: ${skill.description}`;
-        this.embedder.embed([text]).then((vecs: number[][]) => {
-          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0]);
+        const embedder = this.embedder;
+        embedder.embed([text]).then((vecs: number[][]) => {
+          if (vecs.length > 0) this.store.upsertSkillEmbedding(skillId, vecs[0], { provider: embedder.provider, model: embedder.model });
         }).catch(() => {});
       }
     }
@@ -1932,6 +1952,42 @@ export class ViewerServer {
     const home = process.env.HOME || process.env.USERPROFILE || "";
     const ocHome = process.env.OPENCLAW_STATE_DIR || path.join(home, ".openclaw");
     return path.join(ocHome, "openclaw.json");
+  }
+
+  /**
+   * Read openclaw.json without env-var resolution. Used by serveConfig (UI editor needs to
+   * see raw `${VAR}` literals so saves don't accidentally leak resolved secrets back into
+   * the config file). Returns `null` when the file is missing or unreadable.
+   */
+  private readOpenClawRawConfig(): Record<string, any> | null {
+    try {
+      const cfgPath = this.getOpenClawConfigPath();
+      if (!fs.existsSync(cfgPath)) return null;
+      return parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, any>;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read openclaw.json and apply `${VAR}` env-var resolution. Use this whenever the
+   * resulting value is consumed by something that actually contacts the network
+   * (apiKey/endpoint/baseUrl). Returns `null` when the file is missing or unreadable.
+   */
+  private readOpenClawResolvedConfig(): Record<string, any> | null {
+    const raw = this.readOpenClawRawConfig();
+    if (!raw) return null;
+    return deepResolveEnv(raw);
+  }
+
+  /**
+   * Read this plugin's section from openclaw.json with `${VAR}` env vars resolved.
+   * Used by migration / model tests that need real apiKey strings.
+   */
+  private readPluginConfigResolved(): Record<string, any> {
+    const raw = this.readOpenClawResolvedConfig();
+    if (!raw) return {};
+    return this.getPluginEntryConfig(raw);
   }
 
   private getPluginEntryConfig(raw: any): Record<string, unknown> {
@@ -3014,6 +3070,42 @@ export class ViewerServer {
     res.end(JSON.stringify({ ips }));
   }
 
+  // ─── Export ───
+
+  private handleExport(res: http.ServerResponse, url: URL): void {
+    const format = url.searchParams.get("format") ?? "json";
+    const now = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+
+    try {
+      if (format === "csv") {
+        const csv = this.store.exportMemoriesAsCsv();
+        const filename = `memos-memories-${now}.csv`;
+        res.writeHead(200, {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        });
+        res.end(csv);
+      } else {
+        const data = this.store.exportAll();
+        const payload = JSON.stringify(
+          { exportedAt: new Date().toISOString(), version: 1, ...data },
+          null,
+          2,
+        );
+        const filename = `memos-export-${now}.json`;
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        });
+        res.end(payload);
+      }
+    } catch (err) {
+      this.log.error(`Export failed: ${err}`);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  }
+
   private serveConfig(res: http.ServerResponse): void {
     try {
       const cfgPath = this.getOpenClawConfigPath();
@@ -3021,7 +3113,7 @@ export class ViewerServer {
         this.jsonResponse(res, {});
         return;
       }
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+      const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
       const entries = raw?.plugins?.entries ?? {};
       const pluginEntry = entries["memos-local-openclaw-plugin"]?.config
         ?? entries["memos-local"]?.config
@@ -3053,7 +3145,7 @@ export class ViewerServer {
         const cfgPath = this.getOpenClawConfigPath();
         let raw: Record<string, unknown> = {};
         if (fs.existsSync(cfgPath)) {
-          raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as Record<string, unknown>;
         }
 
         if (!raw.plugins) raw.plugins = {};
@@ -3514,12 +3606,14 @@ export class ViewerServer {
 
   private serveFallbackModel(res: http.ServerResponse): void {
     try {
-      const cfgPath = this.getOpenClawConfigPath();
-      if (!fs.existsSync(cfgPath)) {
+      // Resolve ${VAR} env-vars so providers.<id>.{baseUrl,apiKey} that reference
+      // process env (e.g. apiKey="${OPENAI_API_KEY}") evaluate before we report
+      // the fallback model as available.
+      const raw = this.readOpenClawResolvedConfig();
+      if (!raw) {
         this.jsonResponse(res, { available: false });
         return;
       }
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
       const agentModel: string | undefined = raw?.agents?.defaults?.model?.primary;
       if (!agentModel) {
         this.jsonResponse(res, { available: false });
@@ -3769,7 +3863,7 @@ export class ViewerServer {
 
                   discardBackup();
                   this.log.info(`update-install: success! Updated to ${newVersion}`);
-                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install");
+                  this.jsonResponseAndRestart(res, { ok: true, version: newVersion }, "update-install", 250);
                 });
               });
             });
@@ -3786,6 +3880,11 @@ export class ViewerServer {
     if (provider === "local") {
       return 384;
     }
+    // Resolve ${VAR} env-var literals: the UI forwards the raw value pulled from
+    // openclaw.json verbatim (see serveConfig), so we must expand here before hitting
+    // the network — otherwise Bearer headers contain the literal "${MY_KEY}" string.
+    endpoint = deepResolveEnv(endpoint || "");
+    apiKey = deepResolveEnv(apiKey || "");
     const baseUrl = (endpoint || "https://api.openai.com/v1").replace(/\/+$/, "");
     const embUrl = baseUrl.endsWith("/embeddings") ? baseUrl : `${baseUrl}/embeddings`;
     const headers: Record<string, string> = {
@@ -3812,11 +3911,31 @@ export class ViewerServer {
       return vecs[0].length;
     }
     if (provider === "gemini") {
-      const url = `https://generativelanguage.googleapis.com/v1/models/${model || "text-embedding-004"}:embedContent?key=${apiKey}`;
+      const geminiModel = model || "gemini-embedding-001";
+      const geminiEndpoint = (
+        endpoint ||
+        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:batchEmbedContents`
+      ).replace(/\/+$/, "");
+      const separator = geminiEndpoint.includes("?") ? "&" : "?";
+      // Only append the API key for the default Gemini endpoint; for custom
+      // endpoints the caller is responsible for authentication and we must
+      // never leak the Gemini API key to a user-controlled server.
+      const url = endpoint
+        ? geminiEndpoint
+        : `${geminiEndpoint}${separator}key=${apiKey}`;
+      // When the caller supplies a custom endpoint, don't hardcode the
+      // default model name in the request body either — the proxy may
+      // route based on this field.
+      const bodyModel = endpoint ? undefined : `models/${geminiModel}`;
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: { parts: [{ text: "test embedding vector" }] } }),
+        body: JSON.stringify({
+          requests: [{
+            ...(bodyModel ? { model: bodyModel } : {}),
+            content: { parts: [{ text: "test embedding vector" }] },
+          }],
+        }),
         signal: AbortSignal.timeout(15_000),
       });
       if (!resp.ok) {
@@ -3824,20 +3943,40 @@ export class ViewerServer {
         throw new Error(`Gemini embed ${resp.status}: ${txt}`);
       }
       const json = await resp.json() as any;
-      const vec = json?.embedding?.values;
+      const vec = json?.embeddings?.[0]?.values;
       if (!Array.isArray(vec) || vec.length === 0) {
         throw new Error("Gemini returned empty embedding vector");
       }
       return vec.length;
     }
-    const resp = await fetch(embUrl, {
+    const requestBody = { input: ["test embedding vector"], model: model || "text-embedding-3-small" };
+    let resp = await fetch(embUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify({ input: ["test embedding vector"], model: model || "text-embedding-3-small" }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(15_000),
     });
     if (!resp.ok) {
       const txt = await resp.text();
+      if (/input[_ -]?type/i.test(txt) && /required/i.test(txt)) {
+        resp = await fetch(embUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...requestBody, input_type: "query" }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (resp.ok) {
+          const json = await resp.json() as any;
+          const data = json?.data;
+          const vec = Array.isArray(data) && data.length > 0 ? data[0]?.embedding : undefined;
+          if (!Array.isArray(vec) || vec.length === 0) {
+            throw new Error(
+              `API returned empty embedding vector (got ${JSON.stringify(vec)?.slice(0, 100)})`,
+            );
+          }
+          return vec.length;
+        }
+      }
       throw new Error(`${resp.status}: ${txt}`);
     }
     const json = await resp.json() as any;
@@ -3853,6 +3992,10 @@ export class ViewerServer {
   }
 
   private async testChatModel(provider: string, model: string, endpoint: string, apiKey: string): Promise<void> {
+    // Same env-var expansion as testEmbeddingModel: openclaw.json values such as
+    // "${OPENAI_API_KEY}" must be resolved before hitting the network.
+    endpoint = deepResolveEnv(endpoint || "");
+    apiKey = deepResolveEnv(apiKey || "");
     const baseUrl = (endpoint || "https://api.openai.com/v1").replace(/\/+$/, "");
     if (provider === "anthropic") {
       const url = endpoint || "https://api.anthropic.com/v1/messages";
@@ -4007,7 +4150,7 @@ export class ViewerServer {
       let hasSummarizer = false;
       if (fs.existsSync(cfgPath)) {
         try {
-          const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          const raw = parseJsonOrJson5(fs.readFileSync(cfgPath, "utf-8")) as any;
           const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
                             raw?.plugins?.entries?.["memos-local"]?.config ??
                             raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
@@ -4199,16 +4342,12 @@ export class ViewerServer {
     let totalSkipped = 0;
     let totalErrors = 0;
 
-    const cfgPath = this.getOpenClawConfigPath();
-    let summarizerCfg: any;
-    try {
-      const raw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-      const pluginCfg = raw?.plugins?.entries?.["memos-local-openclaw-plugin"]?.config ??
-                        raw?.plugins?.entries?.["memos-local"]?.config ??
-                        raw?.plugins?.entries?.["memos-lite-openclaw-plugin"]?.config ??
-                        raw?.plugins?.entries?.["memos-lite"]?.config ?? {};
-      summarizerCfg = pluginCfg.summarizer;
-    } catch { /* no config */ }
+    // Build the migration Summarizer from the env-resolved plugin config so any
+    // apiKey/endpoint of the form "${OPENAI_API_KEY}" is expanded against process.env
+    // before the LLM call. Without this the migration's summarizer hits remote APIs
+    // with literal "${VAR}" Bearer tokens and 401s out.
+    const pluginCfg = this.readPluginConfigResolved();
+    const summarizerCfg = (pluginCfg as any)?.summarizer;
 
     const summarizer = new Summarizer(summarizerCfg, this.log);
 
@@ -4319,7 +4458,7 @@ export class ViewerServer {
                             this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, row.text);
                             try {
                               const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]);
-                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb);
+                              if (newEmb) this.store.upsertEmbedding(targetId, newEmb, { provider: this.embedder.provider, model: this.embedder.model });
                             } catch { /* best-effort */ }
                             dedupStatus = "merged";
                             dedupTarget = targetId;
@@ -4360,7 +4499,7 @@ export class ViewerServer {
 
                 this.store.insertChunk(chunk);
                 if (embedding && dedupStatus === "active") {
-                  this.store.upsertEmbedding(chunkId, embedding);
+                  this.store.upsertEmbedding(chunkId, embedding, { provider: this.embedder.provider, model: this.embedder.model });
                 }
 
                 totalStored++;
@@ -4552,7 +4691,7 @@ export class ViewerServer {
                           const targetId = candidates[dedupResult.targetIndex - 1]?.chunkId;
                           if (targetId) {
                             this.store.updateChunkSummaryAndContent(targetId, dedupResult.mergedSummary, content);
-                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb); } catch { /* best-effort */ }
+                            try { const [newEmb] = await this.embedder.embed([dedupResult.mergedSummary]); if (newEmb) this.store.upsertEmbedding(targetId, newEmb, { provider: this.embedder.provider, model: this.embedder.model }); } catch { /* best-effort */ }
                             dedupStatus = "merged"; dedupTarget = targetId; dedupReason = dedupResult.reason;
                           }
                         }
@@ -4575,7 +4714,7 @@ export class ViewerServer {
                 };
 
                 this.store.insertChunk(chunk);
-                if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding);
+                if (embedding && dedupStatus === "active") this.store.upsertEmbedding(chunkId, embedding, { provider: this.embedder.provider, model: this.embedder.model });
 
                 totalStored++;
                 send("item", { index: idx, total: totalMsgs, status: dedupStatus === "active" ? "stored" : dedupStatus, preview: content.slice(0, 120), summary: summary.slice(0, 80), source: file, agent: agentId, role: msgRole, stepFailures });
@@ -4910,12 +5049,11 @@ export class ViewerServer {
     statusCode = 200,
   ): void {
     res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(data), () => {
-      setTimeout(() => {
-        this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
-        try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
-      }, delayMs);
-    });
+    res.end(JSON.stringify(data));
+    setTimeout(() => {
+      this.log.info(`${source}: triggering gateway restart via SIGUSR1...`);
+      try { process.kill(process.pid, "SIGUSR1"); } catch (sig) { this.log.warn(`SIGUSR1 failed: ${sig}`); }
+    }, delayMs);
   }
 
   private jsonResponse(res: http.ServerResponse, data: unknown, statusCode = 200): void {

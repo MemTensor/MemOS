@@ -32,7 +32,6 @@ class RedisPersistentUserManager:
         """Initialize the Redis persistent user manager.
 
         Args:
-            user_id (str, optional): User ID. Defaults to "root".
             host (str): Redis server host. Defaults to "localhost".
             port (int): Redis server port. Defaults to 6379.
             password (str): Redis password. Defaults to "".

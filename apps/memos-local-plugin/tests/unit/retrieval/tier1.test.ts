@@ -36,6 +36,7 @@ function makeRepo(
     eta: number;
     score: number;
     procedureJson?: unknown;
+    storedVec?: EmbeddingVector | null;
   }>,
 ) {
   const repo: RetrievalRepos["skills"] = {
@@ -61,6 +62,7 @@ function makeRepo(
         invocationGuide: `run ${r.id}`,
         procedureJson: r.procedureJson,
         eta: r.eta,
+        vec: r.storedVec ?? null,
       };
     },
   };
@@ -90,6 +92,23 @@ describe("retrieval/tier1", () => {
       { kind: "embedded", queryVec: qv, rawText: "x" },
     );
     expect(kept.length).toBe(0);
+  });
+
+  it("hydrates the stored skill vector instead of copying the query vector", async () => {
+    const storedVec = Float32Array.from([0.8, 0.2, 0]) as EmbeddingVector;
+    const repo = makeRepo([
+      { id: "a", status: "active", eta: 0.9, score: 0.95, storedVec },
+    ]);
+
+    const kept = await runTier1(
+      { repos: { skills: repo }, config: cfg },
+      { kind: "embedded", queryVec: qv, rawText: "x" },
+    );
+
+    expect(kept[0]!.vec?.[0]).toBeCloseTo(0.8);
+    expect(kept[0]!.vec?.[1]).toBeCloseTo(0.2);
+    expect(kept[0]!.vec?.[2]).toBe(0);
+    expect(kept[0]!.vec).not.toBe(qv);
   });
 
   it("normalises snake_case skill decision guidance from procedure JSON", async () => {

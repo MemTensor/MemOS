@@ -7,8 +7,9 @@
  */
 
 import net from "node:net";
+import * as embeddingModule from "../../../core/embedding/index.js";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMemoryCore,
@@ -26,10 +27,13 @@ import {
   __resetHostLlmBridgeForTests,
   type HostLlmBridge,
 } from "../../../core/llm/index.js";
+import { RECOVERY_REASONS } from "../../../core/pipeline/recovery-constants.js";
 import { makeTmpDb, type TmpDbHandle } from "../../helpers/tmp-db.js";
 import { makeTmpHome, type TmpHomeContext } from "../../helpers/tmp-home.js";
 import { fakeEmbedder } from "../../helpers/fake-embedder.js";
 import type { MemosError } from "../../../agent-contract/errors.js";
+import { MemosError as EmbeddingFailure } from "../../../agent-contract/errors.js";
+import type { Embedder } from "../../../core/embedding/types.js";
 import type { SkillId, SkillRow, TraceRow } from "../../../core/types.js";
 
 let db: TmpDbHandle | null = null;
@@ -59,6 +63,7 @@ function configWithLightweightMemory(enabled: boolean): typeof DEFAULT_CONFIG {
 function buildDeps(
   h: TmpDbHandle,
   config: typeof DEFAULT_CONFIG = configWithLightweightMemory(false),
+  embedder: Embedder = fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }),
 ): PipelineDeps {
   return {
     agent: "openclaw",
@@ -68,7 +73,7 @@ function buildDeps(
     repos: h.repos,
     llm: null,
     reflectLlm: null,
-    embedder: fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }),
+    embedder,
     log: rootLogger.child({ channel: "test.memory-core" }),
     namespace: { agentKind: "openclaw", profileId: "main" },
     now: () => 1_700_000_000_000,
@@ -165,6 +170,22 @@ describe("MemoryCore façade", () => {
     expect(h.embedder.available).toBe(true);
     expect(h.embedder.dim).toBe(TEST_EMBED_DIMENSIONS);
     expect(h.llm.available).toBe(false);
+  });
+
+  it("reads the latest trace timestamp only once per health snapshot", async () => {
+    const latestTimestamp = vi.spyOn(db!.repos.traces, "latestTimestamp");
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test-1.0.0",
+    );
+    await core.init();
+    latestTimestamp.mockClear();
+
+    await core.health();
+
+    expect(latestTimestamp).toHaveBeenCalledTimes(1);
   });
 
   it("reloads the hub runtime when hub config changes without a process restart", async () => {
@@ -279,6 +300,61 @@ describe("MemoryCore façade", () => {
     expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
   });
 
+  it("repairs valid embedding slots while isolating a rejected neighbor", async () => {
+    const base = fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS });
+    const settledEmbedder: Embedder = {
+      ...base,
+      async embedManySettled(inputs) {
+        return inputs.map((input) => {
+          const text = typeof input === "string" ? input : input.text;
+          return text.includes("rejected action")
+            ? { ok: false, error: new EmbeddingFailure("embedding_unavailable", "bad action") }
+            : { ok: true, vector: new Float32Array(TEST_EMBED_DIMENSIONS).fill(1) };
+        });
+      },
+    };
+    pipeline = createPipeline(buildDeps(db!, configWithLightweightMemory(false), settledEmbedder));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+    await core.importBundle({
+      version: 1,
+      traces: [{
+        id: "tr_partial_embedding",
+        episodeId: "ep_partial_embedding",
+        sessionId: "se_partial_embedding",
+        ts: 1_700_000_000_000,
+        userText: "valid summary source",
+        agentText: "rejected action source",
+        summary: "valid summary",
+        toolCalls: [],
+        value: 0,
+        alpha: 0,
+        priority: 0,
+        turnId: 1_700_000_000_000,
+      }],
+    });
+
+    const repaired = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+
+    expect(repaired.updated).toBe(1);
+    expect(repaired.failed).toBe(1);
+    expect(repaired.done).toBe(false);
+    expect(repaired.error).toBeUndefined();
+    const row = db!.repos.traces.getById("tr_partial_embedding" as never);
+    expect(row?.vecSummary?.length).toBe(TEST_EMBED_DIMENSIONS);
+    expect(row?.vecAction).toBeNull();
+
+    const terminal = await core.rebuildEmbeddings({ mode: "repair", limit: 10 });
+    expect(terminal.updated).toBe(0);
+    expect(terminal.failed).toBe(1);
+    expect(terminal.done).toBe(true);
+    expect(terminal.error).toBe("bad action");
+  });
+
   it("does not require action vectors for lightweight memory traces", async () => {
     pipeline = createPipeline(buildDeps(db!, configWithLightweightMemory(true)));
     core = createMemoryCore(
@@ -390,6 +466,230 @@ describe("MemoryCore façade", () => {
     expect(res.query.query).toBe("how do I build this project?");
   });
 
+  it("uses pure turn-start retrieval for eventually consistent adapters", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    const recallTurn = vi.spyOn(pipeline, "recallTurn");
+    const prepareTurn = vi.spyOn(pipeline, "prepareTurn");
+    const onTurnStart = vi.spyOn(pipeline, "onTurnStart");
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const recalled = await core.searchMemory({
+      agent: "deepseek-harness",
+      namespace: {
+        agentKind: "deepseek-harness",
+        profileId: "web",
+      },
+      sessionId: "s-eventual-recall",
+      query: "find the previous repository build decision",
+      reason: "turn_start",
+      contextHints: { dshTurn: 7 },
+      deadlineAt: Date.now() + 5_000,
+    });
+
+    expect(recalled.query.reason).toBe("turn_start");
+    expect(recallTurn).toHaveBeenCalledTimes(1);
+    expect(recallTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s-eventual-recall",
+        userText: "find the previous repository build decision",
+        contextHints: expect.objectContaining({ dshTurn: 7 }),
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(prepareTurn).not.toHaveBeenCalled();
+    expect(onTurnStart).not.toHaveBeenCalled();
+    expect(pipeline.sessionManager.getSession("s-eventual-recall")).toBeNull();
+
+    const prepared = await core.prepareTurn({
+      agent: "deepseek-harness",
+      namespace: {
+        agentKind: "deepseek-harness",
+        profileId: "web",
+      },
+      sessionId: "s-eventual-recall",
+      userText: "find the previous repository build decision",
+      ts: 1_700_000_000_000,
+    });
+    expect(prepared.sessionId).toBe("s-eventual-recall");
+    expect(prepareTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a DSH tool-driven deadline and returns mechanical safeCutoff hits", async () => {
+    const baseConfig = configWithLightweightMemory(true);
+    const config = {
+      ...baseConfig,
+      algorithm: {
+        ...baseConfig.algorithm,
+        retrieval: {
+          ...baseConfig.algorithm.retrieval,
+          llmFilterEnabled: true,
+          llmFilterMinCandidates: 1,
+        },
+      },
+    };
+    let filterCalls = 0;
+    let seenMalformedRetries: number | undefined;
+    let resolveLateFilter!: (value: unknown) => void;
+    const lateFilter = new Promise((resolve) => {
+      resolveLateFilter = resolve;
+    });
+    const hangingFilterLlm = {
+      completeJson: vi.fn(async (_messages: unknown, options: {
+        signal?: AbortSignal;
+        malformedRetries?: number;
+      }) => {
+        filterCalls += 1;
+        seenMalformedRetries = options.malformedRetries;
+        return await lateFilter;
+      }),
+    };
+    pipeline = createPipeline({
+      ...buildDeps(db!, config),
+      llm: hangingFilterLlm as never,
+    });
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    db!.repos.sessions.upsert({
+      id: "se_dsh_deadline",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_dsh_deadline",
+      sessionId: "se_dsh_deadline",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      endedAt: 1_700_000_000_001,
+      traceIds: ["tr_dsh_deadline"] as never,
+      rTask: null,
+      status: "closed",
+      meta: { lightweightMemory: true },
+    });
+    db!.repos.traces.insert({
+      id: "tr_dsh_deadline",
+      episodeId: "ep_dsh_deadline",
+      sessionId: "se_dsh_deadline",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: 1_700_000_000_000,
+      userText: "Where is the DSH retrieval deadline decision?",
+      agentText: "The DSH retrieval deadline decision is stored in the adapter.",
+      summary: "DSH retrieval deadline decision",
+      share: null,
+      toolCalls: [],
+      agentThinking: null,
+      reflection: null,
+      value: 0.8,
+      alpha: 0.5,
+      rHuman: null,
+      priority: 0.8,
+      tags: ["dsh_deadline"],
+      errorSignatures: [],
+      vecSummary: new Float32Array(TEST_EMBED_DIMENSIONS),
+      vecAction: null,
+      turnId: 1_700_000_000_000,
+      schemaVersion: 1,
+    } as TraceRow);
+
+    const startedAt = Date.now();
+    const result = await core.searchMemory({
+      agent: "deepseek-harness",
+      namespace: { agentKind: "openclaw", profileId: "main" },
+      query: "DSH retrieval deadline decision",
+      reason: "tool_driven",
+      deadlineAt: Date.now() + 25,
+      llmFilterMalformedRetries: 0,
+      topK: { tier1: 0, tier2: 5, tier3: 0 },
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(filterCalls).toBe(1);
+    expect(seenMalformedRetries).toBe(0);
+    expect(result.hits.map((hit) => hit.refId)).toContain("tr_dsh_deadline");
+    resolveLateFilter({ value: { ranked: [1], sufficient: true }, servedBy: "late" });
+  });
+
+  it("writes one memos_search api log when turn.start reuses the same turn key", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const turn = {
+      agent: "openclaw" as const,
+      sessionId: "s-turn-start-log-idempotency",
+      userText: "你知道快乐星球吗",
+      ts: 1_700_000_000_000,
+      turnKey: "s-turn-start-log-idempotency:1",
+    };
+    const first = await core.onTurnStart(turn);
+    const replay = await core.onTurnStart({ ...turn, ts: turn.ts + 1 });
+
+    expect(replay.query.episodeId).toBe(first.query.episodeId);
+    const { logs } = await core.listApiLogs({
+      toolName: "memos_search",
+      limit: 10,
+    });
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!.inputJson)).toMatchObject({
+      type: "turn_start",
+      sessionId: first.query.sessionId,
+      episodeId: first.query.episodeId,
+    });
+  });
+
+  it("allows a failed turn.start with a turn key to be retried and logged", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    const originalOnTurnStart = pipeline.onTurnStart.bind(pipeline);
+    vi.spyOn(pipeline, "onTurnStart")
+      .mockRejectedValueOnce(new Error("simulated retrieval failure"))
+      .mockImplementation(originalOnTurnStart);
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const turn = {
+      agent: "openclaw" as const,
+      sessionId: "s-turn-start-log-retry",
+      userText: "retry this retrieval",
+      ts: 1_700_000_000_000,
+      turnKey: "s-turn-start-log-retry:1",
+    };
+    await expect(core.onTurnStart(turn)).rejects.toThrow("simulated retrieval failure");
+    await expect(core.onTurnStart({ ...turn, ts: turn.ts + 1 })).resolves.toBeDefined();
+
+    const { logs } = await core.listApiLogs({
+      toolName: "memos_search",
+      limit: 10,
+    });
+    expect(logs).toHaveLength(2);
+    expect(logs.map((log) => log.success).sort()).toEqual([false, true]);
+  });
+
   it("scopes shared traces to creator, same framework, or hub team", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
@@ -448,6 +748,131 @@ describe("MemoryCore façade", () => {
     expect(hubRows).toHaveLength(1);
     expect(hubRows[0]?.share?.scope).toBe("hub");
     expect(await core.listTraces({ limit: 10, groupByTurn: true })).toHaveLength(1);
+  });
+
+  // Regression for #2131: viewer dashboard counts must not "drift to
+  // zero" when a turn/session from a different sub-agent profile flips
+  // the core's active namespace. The viewer is a local single-user
+  // admin surface, so its aggregate reads pass `includeAllNamespaces`
+  // (same convention as diag.ts / session.ts routes) and must stay
+  // stable regardless of which namespace processed the last turn.
+  it("keeps metrics + listEpisodes stable across a namespace flip (includeAllNamespaces)", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const mainNs = { agentKind: "openclaw", profileId: "main" };
+    const subagentNs = { agentKind: "openclaw", profileId: "subagent-x" };
+
+    // 1. A turn under the boot namespace writes one memory.
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      namespace: mainNs,
+      sessionId: "s-main",
+      userText: "remember the deploy checklist",
+      ts: 1_700_000_000_001,
+    });
+    await core.onTurnEnd({
+      agent: "openclaw",
+      namespace: mainNs,
+      sessionId: "s-main",
+      episodeId: start.query.episodeId!,
+      agentText: "stored the deploy checklist",
+      toolCalls: [],
+      ts: 1_700_000_000_002,
+    });
+
+    const before = await core.metrics({ days: 1, includeAllNamespaces: true });
+    expect(before.total).toBe(1);
+    const episodesBefore = await core.listEpisodes({
+      limit: 10,
+      includeAllNamespaces: true,
+    });
+    expect(episodesBefore).toHaveLength(1);
+
+    // 2. A session under a DIFFERENT profile flips activeNamespace
+    // (this is what the gateway/sub-agents do in production).
+    await core.openSession({
+      agent: "openclaw",
+      sessionId: "s-sub",
+      namespace: subagentNs,
+    });
+
+    // Namespace-scoped reads hide the other profile's row (intended
+    // multi-profile isolation)…
+    const scoped = await core.metrics({ days: 1 });
+    expect(scoped.total).toBe(0);
+    await expect(core.listEpisodes({ limit: 10 })).resolves.toHaveLength(0);
+
+    // …but the viewer's all-namespace reads must NOT drift.
+    const after = await core.metrics({ days: 1, includeAllNamespaces: true });
+    expect(after.total).toBe(1);
+    const episodesAfter = await core.listEpisodes({
+      limit: 10,
+      includeAllNamespaces: true,
+    });
+    expect(episodesAfter).toHaveLength(1);
+  });
+
+  // Namespace-scoped listEpisodes must apply `limit` AFTER the
+  // visibility filter. Paging at the repo level under-fills pages when
+  // rows from other namespaces occupy the fetched window, which reads
+  // as a false end-of-data to paginating callers.
+  it("fills scoped listEpisodes pages past other namespaces' rows", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const mainNs = { agentKind: "openclaw", profileId: "main" };
+    const subNs = { agentKind: "openclaw", profileId: "subagent-x" };
+
+    const runTurn = async (
+      ns: typeof mainNs,
+      sessionId: string,
+      ts: number,
+    ): Promise<void> => {
+      const start = await core!.onTurnStart({
+        agent: "openclaw",
+        namespace: ns,
+        sessionId,
+        userText: `note for ${sessionId}`,
+        ts,
+      });
+      await core!.onTurnEnd({
+        agent: "openclaw",
+        namespace: ns,
+        sessionId,
+        episodeId: start.query.episodeId!,
+        agentText: `stored for ${sessionId}`,
+        toolCalls: [],
+        ts: ts + 1,
+      });
+    };
+
+    // Three episodes, newest-first order: main-2, sub-1, main-1 — the
+    // sub-profile row sits inside the first page window of size 2.
+    await runTurn(mainNs, "s-main-1", 1_700_000_000_010);
+    await runTurn(subNs, "s-sub-1", 1_700_000_000_020);
+    await runTurn(mainNs, "s-main-2", 1_700_000_000_030);
+
+    // Active namespace is `main` after the last turn. A scoped page of
+    // 2 must contain BOTH main episodes, skipping the interleaved
+    // sub-profile row instead of consuming a page slot on it.
+    const page = await core.listEpisodes({ limit: 2 });
+    expect(page).toHaveLength(2);
+
+    // And the all-namespace read still sees everything.
+    await expect(
+      core.listEpisodes({ limit: 10, includeAllNamespaces: true }),
+    ).resolves.toHaveLength(3);
   });
 
   it("records visible subagent task and result in the parent episode", async () => {
@@ -772,6 +1197,53 @@ describe("MemoryCore façade", () => {
     expect(scored.priority).toBe(1);
   });
 
+  it("logs both user and assistant content with the matching role", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    const userText = "今晚吃什么，推荐一下";
+    const agentText = "可以考虑清淡的汤面、盖饭或者附近评价不错的家常菜。";
+    const start = await core.onTurnStart({
+      agent: "openclaw",
+      sessionId: "s-memory-add-roles",
+      userText,
+      ts: 1_700_000_000_000,
+    });
+    await core.onTurnEnd({
+      agent: "openclaw",
+      sessionId: start.query.sessionId!,
+      episodeId: start.query.episodeId!,
+      agentText,
+      toolCalls: [],
+      ts: 1_700_000_000_500,
+    });
+
+    const { logs } = await core.listApiLogs({
+      toolName: "memory_add",
+      limit: 10,
+    });
+    const liteLog = logs.find((log) => {
+      const input = JSON.parse(log.inputJson) as { phase?: string };
+      return input.phase === "lite";
+    });
+    expect(liteLog).toBeDefined();
+
+    const output = JSON.parse(liteLog!.outputJson) as {
+      details?: Array<{ role?: string; content?: string }>;
+    };
+    expect(
+      output.details?.map(({ role, content }) => ({ role, content })),
+    ).toEqual([
+      { role: "user", content: userText },
+      { role: "assistant", content: agentText },
+    ]);
+  });
+
   it("onTurnEnd preserves adapter-provided historical timestamps", async () => {
     pipeline = createPipeline(buildDeps(db!));
     core = createMemoryCore(
@@ -1076,6 +1548,44 @@ describe("MemoryCore façade", () => {
       name: "local skill",
     });
   });
+
+  it("gives a manually reactivated skill a fresh idle-archive grace period", async () => {
+    pipeline = createPipeline(buildDeps(db!));
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "test",
+    );
+    await core.init();
+
+    seedCoreSkill("skill-reactivate", "reactivated skill");
+    db!.repos.skills.setStatus("skill-reactivate" as SkillId, "archived", 1);
+    const before = Date.now();
+
+    await expect(core.reactivateSkill("skill-reactivate" as SkillId)).resolves.toMatchObject({
+      status: "active",
+    });
+    expect(db!.repos.skills.getById("skill-reactivate" as SkillId)?.lastUsedAt).toBeGreaterThanOrEqual(
+      before,
+    );
+  });
+
+  it("archives idle low-eta skills while the pipeline stays running", async () => {
+    seedCoreSkill("skill-idle-running", "idle running skill");
+    const stale = db!.repos.skills.getById("skill-idle-running" as SkillId)!;
+    db!.repos.skills.upsert({
+      ...stale,
+      eta: 0.05,
+      createdAt: 1 as SkillRow["createdAt"],
+      updatedAt: 1 as SkillRow["updatedAt"],
+      lastUsedAt: null,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(db!.repos.skills.getById("skill-idle-running" as SkillId)?.status).toBe("archived");
+  });
 });
 
 describe("bootstrapMemoryCore", () => {
@@ -1113,64 +1623,71 @@ describe("bootstrapMemoryCore", () => {
   });
 
   it("persists lightweight summarizer model status for Hermes overview", async () => {
-    home = await makeTmpHome({
-      agent: "hermes",
-      configYaml: `
-llm:
-  provider: host
-  model: hermes-summary-test
-algorithm:
-  lightweightMemory:
-    enabled: true
-`,
-    });
-    const bridge: HostLlmBridge = {
-      id: "test-host-llm",
-      async complete() {
-        return {
-          text: JSON.stringify({ summary: "Hermes remembered the overview status fact" }),
-          model: "hermes-summary-test",
-          durationMs: 1,
-        };
-      },
-    };
-    core = await bootstrapMemoryCore({
-      agent: "hermes",
-      home: home.home,
-      config: home.config,
-      pkgVersion: "bootstrap-test",
-      hostLlmBridge: bridge,
-      now: () => 1_700_000_000_000,
-    });
-    await core.init();
+    // This test verifies summarizer status, without downloading embedding models.
+    const embeddingFactory = vi.spyOn(embeddingModule, "createEmbedder")
+      .mockReturnValue(fakeEmbedder({ dimensions: TEST_EMBED_DIMENSIONS }));
+    try {
+      home = await makeTmpHome({
+        agent: "hermes",
+        configYaml: `
+  llm:
+    provider: host
+    model: hermes-summary-test
+  algorithm:
+    lightweightMemory:
+      enabled: true
+  `,
+      });
+      const bridge: HostLlmBridge = {
+        id: "test-host-llm",
+        async complete() {
+          return {
+            text: JSON.stringify({ summary: "Hermes remembered the overview status fact" }),
+            model: "hermes-summary-test",
+            durationMs: 1,
+          };
+        },
+      };
+      core = await bootstrapMemoryCore({
+        agent: "hermes",
+        home: home.home,
+        config: home.config,
+        pkgVersion: "bootstrap-test",
+        hostLlmBridge: bridge,
+        now: () => 1_700_000_000_000,
+      });
+      await core.init();
 
-    const start = await core.onTurnStart({
-      agent: "hermes",
-      sessionId: "hermes-lightweight-status",
-      userText: "请记住 Hermes 摘要模型状态应该显示已调用",
-      ts: 1_700_000_000_000,
-    });
-    await core.onTurnEnd({
-      agent: "hermes",
-      sessionId: "hermes-lightweight-status",
-      episodeId: start.query.episodeId!,
-      agentText: "已记住。",
-      toolCalls: [],
-      ts: 1_700_000_000_100,
-    });
+      const start = await core.onTurnStart({
+        agent: "hermes",
+        sessionId: "hermes-lightweight-status",
+        userText: "请记住 Hermes 摘要模型状态应该显示已调用",
+        ts: 1_700_000_000_000,
+      });
+      await core.onTurnEnd({
+        agent: "hermes",
+        sessionId: "hermes-lightweight-status",
+        episodeId: start.query.episodeId!,
+        agentText: "已记住。",
+        toolCalls: [],
+        ts: 1_700_000_000_100,
+      });
 
-    const logs = await core.listApiLogs({ toolName: "system_model_status", limit: 10 });
-    const llmRows = logs.logs
-      .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
-      .filter((row) => row.role === "llm");
-    expect(llmRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          status: "ok",
-          op: "capture.summarize",
-        }),
-      ]),
-    );
+      const logs = await core.listApiLogs({ toolName: "system_model_status", limit: 10 });
+      const llmRows = logs.logs
+        .map((row) => JSON.parse(row.outputJson) as { role?: string; status?: string; op?: string })
+        .filter((row) => row.role === "llm");
+      expect(llmRows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            status: "ok",
+            op: "capture.summarize",
+          }),
+        ]),
+      );
+    } finally {
+      embeddingFactory.mockRestore();
+    }
   });
 
   it("init() recovers orphaned open episodes left behind by a previous crash", async () => {
@@ -1233,6 +1750,10 @@ algorithm:
       pkgVersion: "orphan-test-recover",
     });
     await core.init();
+    // Issue #1808: orphan recovery runs on a background promise; await
+    // it so the test reads SQLite after every meta / reward write
+    // settles, not just the synchronous ones.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const unscored = readDb
@@ -1394,6 +1915,11 @@ algorithm:
       pkgVersion: "dirty-rescore-recover",
     });
     await core.init();
+    // Issue #1808: orphan/dirty recovery now runs on a background
+    // promise so `init()` returns to the host instantly. Tests that
+    // assert side effects from the recovery chain must await the
+    // promise explicitly.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const episode = readDb
@@ -1409,12 +1935,12 @@ algorithm:
       reward?: { traceCount?: number; traceIds?: string[] };
     };
     expect(meta.rewardDirty).toBeUndefined();
-    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.recoveryReason).toBe(RECOVERY_REASONS.DIRTY_REWARD_RESCORE);
     expect(meta.reward?.traceCount).toBe(1);
     expect(meta.reward?.traceIds).toEqual(["tr_dirty"]);
   });
 
-  it("rescoring finalized closed episodes that have traces but no reward metadata", async () => {
+  it("recovers a real SQLite dirty episode when trace ts differs from turnId", async () => {
     home = await makeTmpHome({
       agent: "openclaw",
       configYaml: FULL_MEMORY_CONFIG_YAML,
@@ -1432,6 +1958,7 @@ algorithm:
     const Sqlite = (await import("better-sqlite3")).default;
     const writeDb = new Sqlite(home.home.dbFile);
     const ts = Date.now() - 1_000;
+    const turnId = ts - 250;
     writeDb
       .prepare(
         `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
@@ -1476,7 +2003,7 @@ algorithm:
         0.5,
         "[]",
         "[]",
-        ts,
+        turnId,
         1,
       );
     writeDb.close();
@@ -1488,6 +2015,9 @@ algorithm:
       pkgVersion: "missing-reward-recover",
     });
     await core.init();
+    // Issue #1808: orphan/dirty recovery now runs on a background
+    // promise; tests asserting recovery side effects must await it.
+    await core.waitForStartupRecovery?.();
 
     const readDb = new Sqlite(home.home.dbFile, { readonly: true });
     const episode = readDb
@@ -1501,8 +2031,836 @@ algorithm:
       recoveryReason?: string;
       reward?: { traceCount?: number; traceIds?: string[] };
     };
-    expect(meta.recoveryReason).toBe("dirty_reward_rescore");
+    expect(meta.recoveryReason).toBe(RECOVERY_REASONS.DIRTY_REWARD_RESCORE);
     expect(meta.reward?.traceCount).toBe(1);
     expect(meta.reward?.traceIds).toEqual(["tr_missing_reward"]);
+  });
+
+  it("continues a bounded dirty-closed scan past 500 rows across restart", async () => {
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 10_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_dirty_page_cursor", "openclaw", ts, ts, "{}");
+    const insertEpisode = writeDb.prepare(
+      `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+    );
+    for (let i = 0; i < 500; i++) {
+      insertEpisode.run(
+        `ep_clean_${i}`,
+        "se_dirty_page_cursor",
+        ts + i,
+        ts + i + 1,
+        "[]",
+        0,
+        JSON.stringify({ closeReason: "finalized" }),
+      );
+    }
+    insertEpisode.run(
+      "ep_dirty_past_first_page",
+      "se_dirty_page_cursor",
+      ts - 1,
+      ts,
+      JSON.stringify(["tr_dirty_past_first_page"]),
+      null,
+      JSON.stringify({ closeReason: "finalized" }),
+    );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_dirty_past_first_page",
+        "ep_dirty_past_first_page",
+        "se_dirty_page_cursor",
+        ts,
+        "Please recover the closed episode beyond the initial page.",
+        "The recovery should eventually score this episode.",
+        "Recovery pagination regression",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    const first = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-first-scan",
+    });
+    await first.init();
+    await first.waitForStartupRecovery?.();
+    await first.shutdown();
+
+    const betweenScansDb = new Sqlite(home.home.dbFile);
+    betweenScansDb.prepare(
+      `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+    ).run(
+      "ep_inserted_between_scans",
+      "se_dirty_page_cursor",
+      ts + 10_000,
+      ts + 10_001,
+      "[]",
+      0,
+      JSON.stringify({ closeReason: "finalized" }),
+    );
+    betweenScansDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "dirty-page-cursor-second-scan",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_dirty_past_first_page") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBe(0);
+    expect(JSON.parse(episode!.meta_json)).toMatchObject({
+      recoveryReason: RECOVERY_REASONS.DIRTY_REWARD_RESCORE,
+    });
+  });
+
+  it("init() returns immediately even when a stale orphan's recovery chain stalls (issue #1808)", async () => {
+    // Issue #1808: on databases with 30k+ traces, the dreaming chain
+    // synchronous-await inside `init()` blocked the OpenClaw Gateway's
+    // event loop for 3-5s+, timing out the 3s WebSocket read probe.
+    // We now run the recovery chain on a background promise so
+    // `init()` resolves in milliseconds regardless of the chain's
+    // worst-case latency.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-init-latency-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const orphanOldTs = Date.now() - 5 * 60 * 60 * 1000; // 5h ago > STALE_EPISODE_TIMEOUT_MS
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_issue1808", "openclaw", orphanOldTs, orphanOldTs, "{}");
+    for (let i = 0; i < 3; i++) {
+      writeDb
+        .prepare(
+          `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, NULL, '[]', NULL, 'open', '{}')`,
+        )
+        .run(`ep_issue1808_${i}`, "se_issue1808", orphanOldTs);
+    }
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-init-latency-recover",
+    });
+
+    // Measure how long `init()` itself takes. Even with three stale
+    // orphans queued for the background reflect/reward chain it must
+    // resolve well under the OpenClaw Gateway's 3s WebSocket read
+    // probe budget.
+    const startedAt = Date.now();
+    await core.init();
+    const initMs = Date.now() - startedAt;
+    expect(initMs).toBeLessThan(500);
+
+    // The background promise is still in flight (or just finished);
+    // either way `waitForStartupRecovery()` must resolve.
+    await core.waitForStartupRecovery?.();
+  });
+
+  it("does not run the stale-open manual reward fallback after capture.failed", async () => {
+    const startedAt = 1_000;
+    db!.repos.sessions.upsert({
+      id: "se_capture_failed",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      lastSeenAt: startedAt,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_capture_failed",
+      sessionId: "se_capture_failed",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      endedAt: null,
+      traceIds: ["tr_capture_failed"] as never,
+      rTask: null,
+      status: "open",
+      meta: {},
+    });
+    db!.repos.traces.insert({
+      id: "tr_capture_failed",
+      episodeId: "ep_capture_failed",
+      sessionId: "se_capture_failed",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: startedAt + 100,
+      userText: "recover this stale episode",
+      agentText: "the capture stage will fail in this test",
+      summary: "stale capture failure",
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      share: null,
+      turnId: startedAt,
+      schemaVersion: 1,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    let captureCalls = 0;
+    let rewardCalls = 0;
+    pipeline.captureRunner.runReflect = async (input) => {
+      captureCalls++;
+      pipeline!.buses.capture.emit({
+        kind: "capture.failed",
+        episodeId: input.episode.id,
+        sessionId: input.episode.sessionId,
+        stage: "match",
+        error: { code: "conflict", message: "injected full replay mismatch" },
+      });
+      throw new Error("injected full replay mismatch");
+    };
+    const originalRewardRun = pipeline.rewardRunner.run.bind(pipeline.rewardRunner);
+    pipeline.rewardRunner.run = async (input) => {
+      rewardCalls++;
+      return originalRewardRun(input);
+    };
+
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "capture-failure-recovery",
+    );
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    expect(captureCalls).toBe(1);
+    expect(rewardCalls).toBe(0);
+    expect(db!.repos.episodes.getById("ep_capture_failed" as never)?.rTask).toBeNull();
+  });
+
+  it("cleans a legacy dirty marker when reward was intentionally skipped", async () => {
+    const startedAt = 1_000;
+    db!.repos.sessions.upsert({
+      id: "se_skipped_dirty",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      lastSeenAt: startedAt,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_skipped_dirty",
+      sessionId: "se_skipped_dirty",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt,
+      endedAt: startedAt + 100,
+      traceIds: ["tr_skipped_dirty"] as never,
+      rTask: null,
+      status: "closed",
+      meta: {
+        closeReason: "finalized",
+        reward: {
+          source: "heuristic",
+          reason: "对话内容过短",
+          scoredAt: startedAt + 100,
+          trigger: "implicit_fallback",
+          skipped: true,
+        },
+        rewardDirty: {
+          failedAttempts: 7,
+          lastFailureAt: startedAt + 100,
+        },
+      },
+    });
+    db!.repos.traces.insert({
+      id: "tr_skipped_dirty",
+      episodeId: "ep_skipped_dirty",
+      sessionId: "se_skipped_dirty",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      ts: startedAt + 100,
+      userText: "我喜欢玩的游戏呢",
+      agentText: "你喜欢马里奥。",
+      summary: null,
+      toolCalls: [],
+      reflection: null,
+      agentThinking: null,
+      value: 0,
+      alpha: 0,
+      rHuman: null,
+      priority: 0.5,
+      tags: [],
+      errorSignatures: [],
+      vecSummary: null,
+      vecAction: null,
+      share: null,
+      turnId: startedAt,
+      schemaVersion: 1,
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    let captureCalls = 0;
+    pipeline.captureRunner.runReflect = async (input) => {
+      captureCalls++;
+      throw new Error(`unexpected recovery for ${input.episode.id}`);
+    };
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "skipped-dirty-cleanup",
+    );
+
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    expect(captureCalls).toBe(0);
+    const episode = db!.repos.episodes.getById("ep_skipped_dirty" as never);
+    expect(episode?.meta?.reward).toMatchObject({ skipped: true });
+    expect(episode?.meta?.rewardDirty).toBeUndefined();
+  });
+
+  it("dirty closed episodes hit a failure-count backoff so init() does not retry them every restart (issue #1808)", async () => {
+    // The OpenClaw report noted "orphan episodes with failed LLM calls
+    // are retried indefinitely with no backoff". After the third
+    // consecutive failure we suspend automatic retries until the
+    // exponential backoff window elapses; manual feedback is the only
+    // way to force another rescore inside the window.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-backoff-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 2_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_backoff", "openclaw", ts, ts, "{}");
+    // Seed a closed episode that is "dirty" by predicate (r_task=null
+    // + finalized + traceIds.length>0) but whose meta.rewardDirty
+    // already records 3 prior failures with `lastFailureAt = now` —
+    // i.e. inside the 1h backoff window.
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_backoff",
+        "se_backoff",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_backoff"]),
+        null,
+        JSON.stringify({
+          closeReason: "finalized",
+          recoveryReason: "missed_session_end",
+          rewardDirty: { failedAttempts: 3, lastFailureAt: Date.now() },
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_backoff",
+        "ep_backoff",
+        "se_backoff",
+        ts,
+        "需求澄清问题",
+        "好的，分阶段回答。",
+        "需求澄清问题",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-backoff-recover",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_backoff") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    // The episode is still inside the backoff window, so the rescan
+    // skipped it — r_task should stay null (the original failing
+    // value), and the recovery-reason stamp from `recoverDirtyClosedEpisodes`
+    // should NOT be present.
+    expect(episode!.r_task).toBeNull();
+    const meta = JSON.parse(episode!.meta_json) as {
+      recoveryReason?: string;
+      rewardDirty?: { failedAttempts?: number; lastFailureAt?: number };
+    };
+    expect(meta.recoveryReason).toBe("missed_session_end");
+    expect(meta.rewardDirty?.failedAttempts).toBe(3);
+  });
+
+  it("recoverDirtyClosedEpisodes bumps failedAttempts when the rescore did not lift the dirty flag (issue #1808)", async () => {
+    // After `recoverDirtyClosedEpisodes` finishes its flush, any
+    // episode still marked dirty has its `meta.rewardDirty` failure
+    // counter bumped + `lastFailureAt` stamped. Once `failedAttempts`
+    // crosses MAX_DIRTY_REWARD_ATTEMPTS the backoff filter kicks in
+    // on subsequent scans.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-counter-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 2_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_counter", "openclaw", ts, ts, "{}");
+    // A dirty episode with NO prior failure counter. Without a working
+    // LLM the reward listener cannot lift r_task above null → the
+    // episode stays dirty after recovery → failedAttempts should jump
+    // from 0 → 1.
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_counter",
+        "se_counter",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_counter"]),
+        null,
+        JSON.stringify({
+          closeReason: "finalized",
+          recoveryReason: "missed_session_end",
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_counter",
+        "ep_counter",
+        "se_counter",
+        ts,
+        "请帮我详细分析 1808 issue 的根因：为什么 memos-local-plugin 的梦境处理会饿死 OpenClaw 网关的事件循环？说明同步 LLM 调用与 await 之间的关系。",
+        "OpenClaw Gateway 进程是单线程 Node.js 事件循环。memos-local-plugin 在 init 同步等待 reflect/reward 链 → 阻塞事件循环 3-5s → WebSocket 升级超时。",
+        "OpenClaw Gateway 与 memos-local-plugin 事件循环阻塞根因分析",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    // The fakeEmbedder default is used, no LLM is configured (provider="")
+    // → reward listener resolves with r_task still null (LLM_UNAVAILABLE
+    // → heuristic fallback writes r_task=0 if it runs; if it cannot run
+    // we still expect the dirty flag to survive).
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-counter-recover",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_counter") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    const meta = JSON.parse(episode!.meta_json) as {
+      rewardDirty?: { failedAttempts?: number; lastFailureAt?: number };
+      reward?: { traceCount?: number; skipped?: boolean };
+    };
+    // Three possible end-states from the reward listener depending on
+    // the heuristic fallback's behaviour:
+    //   1. r_task=0, reward.traceCount matches  → no longer dirty → backoff cleared
+    //   2. r_task=null, reward.skipped=true     → no longer dirty (skipped path) → backoff cleared
+    //   3. r_task=null, no reward written       → still dirty → failedAttempts bumped to 1
+    // In all three cases the *invariant* is "no backoff metadata
+    // remains if the rescore stopped being dirty, AND failedAttempts
+    // increases by exactly 1 if it stayed dirty".
+    if (episode!.r_task !== null || meta.reward?.skipped === true) {
+      expect(meta.rewardDirty).toBeUndefined();
+    } else {
+      expect(meta.rewardDirty?.failedAttempts).toBe(1);
+      expect(typeof meta.rewardDirty?.lastFailureAt).toBe("number");
+    }
+  });
+
+  it("shutdown() awaits background recovery before tearing down storage (issue #1808)", async () => {
+    // If `shutdown()` did not await the background recovery promise we
+    // would close SQLite while the reflect / reward listeners were
+    // still mid-`handle.flush()`, producing `SQLITE_MISUSE` noise.
+    // Sequential init → shutdown back-to-back must complete cleanly
+    // without throwing.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-shutdown-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 2_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_shutdown", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_shutdown",
+        "se_shutdown",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_shutdown"]),
+        null,
+        JSON.stringify({
+          closeReason: "finalized",
+          recoveryReason: "missed_session_end",
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_shutdown",
+        "ep_shutdown",
+        "se_shutdown",
+        ts,
+        "shutdown 测试",
+        "好的。",
+        "shutdown 测试",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    const fastCore = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "issue1808-shutdown-recover",
+    });
+    await fastCore.init();
+    // Deliberately skip `waitForStartupRecovery()`. `shutdown()` must
+    // still complete the recovery before closing the DB handle.
+    await expect(fastCore.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("cancels stalled startup recovery before shutting down the pipeline (#2252)", async () => {
+    db!.repos.sessions.upsert({
+      id: "se_stalled_recovery",
+      agent: "openclaw",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      meta: {},
+    });
+    db!.repos.episodes.insert({
+      id: "ep_stalled_recovery",
+      sessionId: "se_stalled_recovery",
+      ownerAgentKind: "openclaw",
+      ownerProfileId: "main",
+      ownerWorkspaceId: null,
+      startedAt: 1_700_000_000_000,
+      endedAt: null,
+      traceIds: [],
+      rTask: null,
+      status: "open",
+      meta: {},
+    });
+
+    pipeline = createPipeline(buildDeps(db!));
+    const originalShutdown = pipeline.shutdown.bind(pipeline);
+    pipeline.flush = vi.fn(() => new Promise<void>(() => {}));
+    const shutdownSpy = vi.fn(
+      async (
+        reason?: string,
+        options?: Parameters<PipelineHandle["shutdown"]>[1],
+      ) => originalShutdown(reason, { ...options, abortWaitMs: 0 }),
+    );
+    pipeline.shutdown = shutdownSpy;
+    core = createMemoryCore(
+      pipeline,
+      resolveHome("openclaw", "/tmp/memos-mc-test"),
+      "issue2252-stalled-recovery",
+      { startupRecoveryShutdownGraceMs: 10 },
+    );
+
+    await core.init();
+    await expect(core.shutdown()).resolves.toBeUndefined();
+    expect(shutdownSpy).toHaveBeenCalledWith(
+      "memory-core.shutdown",
+      { flushGraceMs: 0 },
+    );
+
+    core = null;
+    pipeline = null;
+  });
+
+  it("does not rescore a closed episode whose only mismatch is a ghost trace ID (#1966)", async () => {
+    // Regression guard for https://github.com/MemTensor/MemOS/issues/1966.
+    // A dangling ID in trace_ids_json must not make reward coverage look dirty
+    // forever; only trace rows that still exist should count.
+    home = await makeTmpHome({
+      agent: "openclaw",
+      configYaml: FULL_MEMORY_CONFIG_YAML,
+    });
+
+    const seeder = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "ghost-trace-seed",
+    });
+    await seeder.init();
+    await seeder.shutdown();
+
+    const Sqlite = (await import("better-sqlite3")).default;
+    const writeDb = new Sqlite(home.home.dbFile);
+    const ts = Date.now() - 1_000;
+    writeDb
+      .prepare(
+        `INSERT INTO sessions (id, agent, started_at, last_seen_at, meta_json) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("se_ghost", "openclaw", ts, ts, "{}");
+    writeDb
+      .prepare(
+        `INSERT INTO episodes (id, session_id, started_at, ended_at, trace_ids_json, r_task, status, meta_json) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?)`,
+      )
+      .run(
+        "ep_ghost",
+        "se_ghost",
+        ts,
+        ts + 1,
+        JSON.stringify(["tr_real", "tr_ghost"]),
+        0.6,
+        JSON.stringify({
+          closeReason: "finalized",
+          reward: {
+            rHuman: 0.6,
+            scoredAt: ts + 2,
+            traceCount: 1,
+            traceIds: ["tr_real"],
+            source: "heuristic",
+          },
+        }),
+      );
+    writeDb
+      .prepare(
+        `INSERT INTO traces (
+          id, episode_id, session_id, ts, user_text, agent_text, summary,
+          tool_calls_json, reflection, agent_thinking, value, alpha, r_human,
+          priority, tags_json, error_signatures_json, vec_summary, vec_action,
+          share_scope, share_target, shared_at, turn_id, schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        "tr_real",
+        "ep_ghost",
+        "se_ghost",
+        ts,
+        "请讲一下回归任务的损失函数选择。",
+        "对连续目标变量常用 MSE 或 MAE；存在重尾噪声时用 Huber。",
+        "回归任务损失函数",
+        "[]",
+        null,
+        null,
+        0,
+        0,
+        null,
+        0.5,
+        "[]",
+        "[]",
+        ts,
+        1,
+      );
+    writeDb.close();
+
+    core = await bootstrapMemoryCore({
+      agent: "openclaw",
+      home: home.home,
+      config: home.config,
+      pkgVersion: "ghost-trace-recover",
+    });
+    await core.init();
+    await core.waitForStartupRecovery?.();
+
+    const readDb = new Sqlite(home.home.dbFile, { readonly: true });
+    const episode = readDb
+      .prepare("SELECT r_task, meta_json FROM episodes WHERE id = ?")
+      .get("ep_ghost") as { r_task: number | null; meta_json: string } | undefined;
+    readDb.close();
+
+    expect(episode).toBeDefined();
+    expect(episode!.r_task).toBeCloseTo(0.6);
+    const meta = JSON.parse(episode!.meta_json) as {
+      rewardDirty?: unknown;
+      recoveryReason?: string;
+      reward?: { rHuman?: number; traceCount?: number; traceIds?: string[] };
+    };
+    expect(meta.recoveryReason).toBeUndefined();
+    expect(meta.reward?.rHuman).toBeCloseTo(0.6);
+    expect(meta.reward?.traceCount).toBe(1);
+    expect(meta.reward?.traceIds).toEqual(["tr_real"]);
   });
 });

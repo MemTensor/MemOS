@@ -4,9 +4,9 @@ import type { SummarizerConfig, SummaryProvider, Logger, OpenClawAPI } from "../
 import { summarizeOpenAI, summarizeTaskOpenAI, generateTaskTitleOpenAI, judgeNewTopicOpenAI, classifyTopicOpenAI, arbitrateTopicSplitOpenAI, filterRelevantOpenAI, judgeDedupOpenAI, parseFilterResult, parseDedupResult, parseTopicClassifyResult } from "./openai";
 import type { FilterResult, DedupResult, TopicClassifyResult } from "./openai";
 export type { FilterResult, DedupResult, TopicClassifyResult } from "./openai";
-import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic } from "./anthropic";
-import { summarizeGemini, summarizeTaskGemini, generateTaskTitleGemini, judgeNewTopicGemini, filterRelevantGemini, judgeDedupGemini } from "./gemini";
-import { summarizeBedrock, summarizeTaskBedrock, generateTaskTitleBedrock, judgeNewTopicBedrock, filterRelevantBedrock, judgeDedupBedrock } from "./bedrock";
+import { summarizeAnthropic, summarizeTaskAnthropic, generateTaskTitleAnthropic, judgeNewTopicAnthropic, filterRelevantAnthropic, judgeDedupAnthropic, classifyTopicAnthropic, arbitrateTopicSplitAnthropic } from "./anthropic";
+import { summarizeGemini, summarizeTaskGemini, generateTaskTitleGemini, judgeNewTopicGemini, filterRelevantGemini, judgeDedupGemini, classifyTopicGemini, arbitrateTopicSplitGemini } from "./gemini";
+import { summarizeBedrock, summarizeTaskBedrock, generateTaskTitleBedrock, judgeNewTopicBedrock, filterRelevantBedrock, judgeDedupBedrock, classifyTopicBedrock, arbitrateTopicSplitBedrock } from "./bedrock";
 
 /**
  * Resolve a SecretInput (string | SecretRef) to a plain string.
@@ -713,9 +713,11 @@ function callTopicClassifier(cfg: SummarizerConfig, taskState: string, newMessag
     case "voyage":
       return classifyTopicOpenAI(taskState, newMessage, cfg, log);
     case "anthropic":
+      return classifyTopicAnthropic(taskState, newMessage, cfg, log);
     case "gemini":
+      return classifyTopicGemini(taskState, newMessage, cfg, log);
     case "bedrock":
-      return classifyTopicOpenAI(taskState, newMessage, cfg, log);
+      return classifyTopicBedrock(taskState, newMessage, cfg, log);
     default:
       throw new Error(`Unknown summarizer provider: ${cfg.provider}`);
   }
@@ -736,9 +738,11 @@ function callTopicArbitration(cfg: SummarizerConfig, taskState: string, newMessa
     case "voyage":
       return arbitrateTopicSplitOpenAI(taskState, newMessage, cfg, log);
     case "anthropic":
+      return arbitrateTopicSplitAnthropic(taskState, newMessage, cfg, log);
     case "gemini":
+      return arbitrateTopicSplitGemini(taskState, newMessage, cfg, log);
     case "bedrock":
-      return arbitrateTopicSplitOpenAI(taskState, newMessage, cfg, log);
+      return arbitrateTopicSplitBedrock(taskState, newMessage, cfg, log);
     default:
       throw new Error(`Unknown summarizer provider: ${cfg.provider}`);
   }

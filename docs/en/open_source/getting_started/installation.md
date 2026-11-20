@@ -66,6 +66,9 @@ Here is a quick .env configuration example:
 OPENAI_API_KEY=sk-xxx
 # OpenAI API Base URL
 OPENAI_API_BASE=http://xxx:3000/v1
+# Qwen shared credentials for task-specific LLMs whose model name starts with "qwen"
+QWEN_API_KEY=sk-xxx
+QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 # Default model name
 MOS_CHAT_MODEL=qwen3-max
 
@@ -75,6 +78,14 @@ MEMRADER_MODEL=qwen3-max
 MEMRADER_API_KEY=sk-xxx
 # Memory Reader API Base URL
 MEMRADER_API_BASE=http://xxx:3000/v1
+
+# Task-specific LLM models. Only set model names here; credentials are selected from
+# QWEN_API_KEY/QWEN_API_BASE or OPENAI_API_KEY/OPENAI_API_BASE based on the model name.
+MEMREADER_GENERAL_MODEL=qwen3-max
+PREFERENCE_EXTRACTOR_MODEL=qwen3-max
+FEEDBACK_MODEL=qwen3-max
+SUGGESTION_MODEL=qwen3-max
+MEMSCHEDULER_MODEL=qwen3-max
 
 # Embedder Model Name
 MOS_EMBEDDER_MODEL=text-embedding-v4
@@ -100,7 +111,7 @@ NEO4J_DB_NAME=neo4j
 MOS_NEO4J_SHARED_DB=false
 
 # Whether to use redis scheduler
-DEFAULT_USE_REDIS_QUEUE=false
+MEMSCHEDULER_USE_REDIS_QUEUE=false
 
 # Enable Chat API
 ENABLE_CHAT_API=true
@@ -117,6 +128,9 @@ CHAT_MODEL_LIST=[{"backend": "qwen", "api_base": "https://xxx/v1", "api_key": "s
 OPENAI_API_KEY=you_bailian_api_key
 # OpenAI API Base URL
 OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+# Qwen shared credentials for task-specific LLMs whose model name starts with "qwen"
+QWEN_API_KEY=you_bailian_api_key
+QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 # Default model name
 MOS_CHAT_MODEL=qwen3-max
 
@@ -126,6 +140,14 @@ MEMRADER_MODEL=qwen3-max
 MEMRADER_API_KEY=you_bailian_api_key
 # Memory Reader API Base URL
 MEMRADER_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+
+# Task-specific LLM models. Only set model names here; credentials are selected from
+# QWEN_API_KEY/QWEN_API_BASE or OPENAI_API_KEY/OPENAI_API_BASE based on the model name.
+MEMREADER_GENERAL_MODEL=qwen3-max
+PREFERENCE_EXTRACTOR_MODEL=qwen3-max
+FEEDBACK_MODEL=qwen3-max
+SUGGESTION_MODEL=qwen3-max
+MEMSCHEDULER_MODEL=qwen3-max
 
 # Embedder model name can refer to the link below
 # https://bailian.console.aliyun.com/?spm=a2c4g.11186623.0.0.2f2165b08fRk4l&tab=api#/api/?type=model&url=2846066
@@ -152,7 +174,7 @@ NEO4J_DB_NAME=neo4j
 MOS_NEO4J_SHARED_DB=false
 
 # Whether to use redis scheduler
-DEFAULT_USE_REDIS_QUEUE=false
+MEMSCHEDULER_USE_REDIS_QUEUE=false
 
 # Enable Chat API
 ENABLE_CHAT_API=true

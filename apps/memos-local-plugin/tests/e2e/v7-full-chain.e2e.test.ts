@@ -344,6 +344,13 @@ function buildPipeline(
     ...baseCfg,
     algorithm: {
       ...baseCfg.algorithm,
+      // This suite verifies the complete V7 evolution chain. Lightweight
+      // memory is enabled by default in production and intentionally skips
+      // reward / L2 / L3 / skill, so disable it explicitly for this test.
+      lightweightMemory: {
+        ...baseCfg.algorithm.lightweightMemory,
+        enabled: false,
+      },
       reward: {
         ...baseCfg.algorithm.reward,
         feedbackWindowSec: 0,
@@ -774,8 +781,8 @@ describe("V7 full-chain E2E (Python programming task)", () => {
       algorithm: {
         ...DEFAULT_CONFIG.algorithm,
         session: {
+          ...DEFAULT_CONFIG.algorithm.session,
           followUpMode: "episode_per_turn",
-          mergeMaxGapMs: DEFAULT_CONFIG.algorithm.session.mergeMaxGapMs,
         },
       },
     };

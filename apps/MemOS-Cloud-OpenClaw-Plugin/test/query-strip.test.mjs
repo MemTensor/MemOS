@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   USER_QUERY_MARKER,
   formatPromptBlockFromData,
+  isOpenClawSystemPrompt,
   sanitizeAddMessagePayload,
   sanitizeSearchPayload,
   stripOpenClawInjectedPrefix,
@@ -209,6 +210,62 @@ test("strips leading Feishu sender prefix after message_id hints", () => {
   assert.equal(stripOpenClawInjectedPrefix(input), "我叫什么名字");
 });
 
+test("detects OpenClaw cron agent turn prompts", () => {
+  const input = [
+    '[cron:1710b7c4-18fa-4097-8338-5d89beac91f9 Create empty JSON on desktop] Create an empty JSON file at the user\'s desktop. Run this exact shell command: New-Item -Path "$env:USERPROFILE\\Desktop\\empty.json" -ItemType File -Force. Confirm the file was created.',
+    "Current time: Monday, July 6th, 2026 - 15:00 (Asia/Shanghai)",
+    "Reference UTC: 2026-07-06 07:00 UTC",
+    "",
+    "Use the message tool if you need to notify the user directly with an explicit target. If you do not send directly, your final plain-text reply will be delivered automatically.",
+  ].join("\n");
+
+  assert.equal(isOpenClawSystemPrompt(input), true);
+  assert.equal(stripOpenClawInjectedPrefix(input), "");
+});
+
+test("detects OpenClaw cron prompts when whitespace is flattened", () => {
+  const input =
+    '[cron:4b2eed75-d129-4846-a54d-0ab4f4333088 polymarket-monitor] 查询上海（Shanghai）当前天气。运行命令：curl -s "wttr.in/Shanghai?format=3"，然后用简洁的一句话报告当前上海天气（温度和天气状况）。 Current time: Monday, July 6th, 2026 - 15:05 (Asia/Shanghai) Reference UTC: 2026-07-06 07:05 UTC Use the message tool if you need to notify the user directly with an explicit target. If you do not send directly, your final plain-text reply will be delivered automatically.';
+
+  assert.equal(isOpenClawSystemPrompt(input), true);
+  assert.equal(stripOpenClawInjectedPrefix(input), "");
+});
+
+test("detects OpenClaw scheduled reminder system prompts", () => {
+  const input = [
+    'System: [2026-07-06 15:13:04 GMT+8] Scheduled task firing: run the Windows batch script now. Use the exec tool to run "C:\\Users\\lee\\Desktop\\test.bat" and report the exit code and any output back to the user.',
+    "",
+    "A scheduled reminder has been triggered. The reminder content is:",
+    "",
+    'Scheduled task firing: run the Windows batch script now. Use the exec tool to run "C:\\Users\\lee\\Desktop\\test.bat" and report the exit code and any output back to the user.',
+    "",
+    "Handle this reminder internally. Do not relay it to the user unless explicitly requested.",
+    "Current time: Monday, July 6th, 2026 - 15:13 (Asia/Shanghai)",
+    "Reference UTC: 2026-07-06 07:13 UTC",
+  ].join("\n");
+
+  assert.equal(isOpenClawSystemPrompt(input), true);
+  assert.equal(stripOpenClawInjectedPrefix(input), "");
+});
+
+test("detects OpenClaw exec completion system prompts", () => {
+  const samples = [
+    "Exec completed (abc12345, code 0) :: /path/to/result.json",
+    "System (untrusted): Exec completed (code 0) :: /path/to/result.json",
+  ];
+
+  for (const input of samples) {
+    assert.equal(isOpenClawSystemPrompt(input), true);
+    assert.equal(stripOpenClawInjectedPrefix(input), "");
+  }
+});
+
+test("does not treat ordinary cron mentions as system prompts", () => {
+  const input = "请解释这段文本：[cron:abc job] but no OpenClaw time marker";
+  assert.equal(isOpenClawSystemPrompt(input), false);
+  assert.equal(stripOpenClawInjectedPrefix(input), input);
+});
+
 test("strips message id hints and standard OpenClaw channel envelope", () => {
   const input = [
     "[message_id: 123456]",
@@ -305,6 +362,22 @@ test("sanitizes search payload query before API call", () => {
   assert.deepEqual(sanitizeSearchPayload(payload), {
     ...payload,
     query: "继续",
+  });
+});
+
+test("empties search payload for OpenClaw cron prompts", () => {
+  const payload = {
+    query: [
+      "[cron:abc123 daily-check] Run the scheduled check.",
+      "Current time: Monday, July 6th, 2026 - 15:05 (Asia/Shanghai)",
+      "Reference UTC: 2026-07-06 07:05 UTC",
+    ].join("\n"),
+    source: "openclaw",
+  };
+
+  assert.deepEqual(sanitizeSearchPayload(payload), {
+    ...payload,
+    query: "",
   });
 });
 

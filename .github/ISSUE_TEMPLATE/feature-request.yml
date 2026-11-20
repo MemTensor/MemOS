@@ -1,7 +1,7 @@
 name: "\U0001F680 Feature request"
 description: Submit a request for a new feature | 申请添加新功能
 title: "feat: "
-labels: ["enhancement", "pending"]
+labels: ["enhancement"]
 body:
 
   - type: checkboxes

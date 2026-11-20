@@ -46,24 +46,15 @@ from memos.api.client import MemOSClient
 
 client = MemOSClient(api_key="...", base_url="...")
 
-# 场景：修正 AI 关于用户职业的错误记忆
+# 场景：修正 AI 关于用户饮食偏好的错误记忆
 res = client.add_feedback(
     user_id="dev_user_01",
-    feedback_content="我不再减肥了，现在不需要控制饮食。",
-    history=[
-        {"role": "assistant", "content": "您正在减肥中，近期是否控制了摄入食物的热量？"},
-        {"role": "user", "content": "我不再减肥了..."}
-    ],
-    writable_cube_ids=["private_cube_01"],
-    # 指定具体的错误记忆 ID，以实现精准打击
-    retrieved_memory_ids=["mem_id_old_job_123"],
-    corrected_answer=True # 要求 AI 重新根据新事实回复我
+    conversation_id="conv_diet_001",
+    feedback_content="我不再减肥了，现在不需要控制饮食。"
 )
 
 if res and res.code == 200:
-    print(f"修正进度: {res.message}")
-    if res.data:
-        print(f"更正后的回复: {res.data}")
+    print(f"反馈已提交: {res.message}")
 ```
 
 

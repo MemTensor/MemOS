@@ -155,4 +155,52 @@ logging:
     await rootLogger.flush();
     expect(memoryBuffer().tail({ limit: 1 }).at(0)?.msg).toBe("py.heartbeat");
   });
+
+  it("attaches configured timezone to locally-created records", async () => {
+    const yaml = `
+logging:
+  timezone: America/Los_Angeles
+`;
+    const ctx = await makeTmpHome({ agent: "openclaw", configYaml: yaml });
+    cleanup = ctx.cleanup;
+    initLogger(ctx.config, ctx.home);
+
+    rootLogger.child({ channel: "core.session" }).info("timezone.local");
+    await rootLogger.flush();
+
+    expect(memoryBuffer().tail({ limit: 1 }).at(0)?.tz).toBe("America/Los_Angeles");
+  });
+
+  it("forward preserves explicit timezone and defaults missing timezone", async () => {
+    const yaml = `
+logging:
+  timezone: America/Los_Angeles
+`;
+    const ctx = await makeTmpHome({ agent: "openclaw", configYaml: yaml });
+    cleanup = ctx.cleanup;
+    initLogger(ctx.config, ctx.home);
+
+    const log = rootLogger.child({ channel: "adapter.hermes" });
+    log.forward({
+      ts: Date.UTC(2026, 5, 21, 21, 30, 45, 123),
+      level: "info",
+      kind: "app",
+      channel: "adapter.hermes",
+      msg: "py.explicit",
+      src: "py",
+      tz: "Europe/London",
+    });
+    log.forward({
+      ts: Date.UTC(2026, 5, 21, 21, 30, 45, 123),
+      level: "info",
+      kind: "app",
+      channel: "adapter.hermes",
+      msg: "py.defaulted",
+      src: "py",
+    });
+
+    const tail = memoryBuffer().tail({ limit: 2 });
+    expect(tail.find((r) => r.msg === "py.explicit")?.tz).toBe("Europe/London");
+    expect(tail.find((r) => r.msg === "py.defaulted")?.tz).toBe("America/Los_Angeles");
+  });
 });

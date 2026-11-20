@@ -5,7 +5,7 @@
  * error shape, and the three verb helpers.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 
 (globalThis as any).localStorage = {
   _s: new Map<string, string>(),
@@ -40,6 +40,30 @@ describe("api (viewer REST client)", () => {
     expect(out.hello).toBe("world");
     expect(received?.method).toBe("GET");
     expect((received?.headers as any)["content-type"]).toBe("application/json");
+  });
+
+  it("prefixes API paths when the viewer is mounted under /memos", async () => {
+    const originalLocation = globalThis.location;
+    vi.resetModules();
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: { pathname: "/memos/" },
+    });
+    try {
+      const client = await import("../../../viewer/src/api/client");
+      expect(client.AGENT_PREFIX).toBe("/memos");
+      expect(client.withAgentPrefix("/api/v1/health")).toBe("/memos/api/v1/health");
+      expect(client.withAgentPrefix("api/v1/health")).toBe("/memos/api/v1/health");
+      expect(client.withAgentPrefix("https://example.test/api")).toBe(
+        "https://example.test/api",
+      );
+    } finally {
+      Object.defineProperty(globalThis, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+      vi.resetModules();
+    }
   });
 
   it("api.post includes JSON body and api-key header when set", async () => {

@@ -35,13 +35,13 @@ export interface Tier3Input {
   queryVec: EmbeddingVector | null;
   ftsMatch?: string | null;
   patternTerms?: readonly string[];
+  exactIdentifiers?: readonly string[];
 }
 
 interface CandidateState {
   cosine: number;
   channels: ChannelRank[];
   meta?: { title: string };
-  vec: EmbeddingVector | null;
 }
 
 export async function runTier3(
@@ -55,7 +55,11 @@ export async function runTier3(
     const haveFts = !!input.ftsMatch && !!repos.worldModel.searchByText;
     const havePattern =
       !!input.patternTerms && input.patternTerms.length > 0 && !!repos.worldModel.searchByPattern;
-    if (!haveVec && !haveFts && !havePattern) return [];
+    const haveExact =
+      !!input.exactIdentifiers &&
+      input.exactIdentifiers.length > 0 &&
+      !!repos.worldModel.searchByPattern;
+    if (!haveVec && !haveFts && !havePattern && !haveExact) return [];
 
     const vecPoolSize = Math.max(
       config.tier3TopK,
@@ -78,7 +82,6 @@ export async function runTier3(
           rank: idx,
           score: h.score,
           meta: h.meta,
-          vec: input.queryVec!,
         });
       });
     }
@@ -91,7 +94,6 @@ export async function runTier3(
           rank: idx,
           score: h.score,
           meta: h.meta,
-          vec: input.queryVec ?? null,
         });
       });
     }
@@ -104,7 +106,21 @@ export async function runTier3(
           rank: idx,
           score: h.score,
           meta: h.meta,
-          vec: input.queryVec ?? null,
+        });
+      });
+    }
+    if (haveExact) {
+      const hits = repos.worldModel.searchByPattern!(
+        input.exactIdentifiers!,
+        keywordPoolSize,
+      );
+      hits.forEach((h, idx) => {
+        upsert(merged, h.id as WorldModelId, {
+          cosine: 0,
+          channel: "exact_identifier",
+          rank: idx,
+          score: 1,
+          meta: h.meta,
         });
       });
     }
@@ -128,7 +144,7 @@ export async function runTier3(
         refId: wm.id,
         cosine: state.cosine,
         ts: Date.now(),
-        vec: state.vec,
+        vec: wm.vec ?? null,
         title: wm.title,
         body: wm.body,
         policyIds: wm.policyIds ?? [],
@@ -142,7 +158,12 @@ export async function runTier3(
     log.info("done", {
       candidates: merged.size,
       kept: trimmed.length,
-      channels: { vec: haveVec, fts: haveFts, pattern: havePattern },
+      channels: {
+        vec: haveVec,
+        fts: haveFts,
+        pattern: havePattern,
+        exactIdentifier: haveExact,
+      },
       latencyMs: Date.now() - startedAt,
     });
     return trimmed;
@@ -164,7 +185,6 @@ function upsert(
     rank: number;
     score: number;
     meta?: { title: string };
-    vec: EmbeddingVector | null;
   },
 ): void {
   const entry = into.get(id);
@@ -173,13 +193,11 @@ function upsert(
       cosine: patch.cosine,
       channels: [{ channel: patch.channel, rank: patch.rank, score: patch.score }],
       meta: patch.meta,
-      vec: patch.vec,
     });
     return;
   }
   entry.channels.push({ channel: patch.channel, rank: patch.rank, score: patch.score });
   if (patch.cosine > entry.cosine) entry.cosine = patch.cosine;
-  if (!entry.vec && patch.vec) entry.vec = patch.vec;
 }
 
 function bestChannelScore(c: WorldModelCandidate): number {

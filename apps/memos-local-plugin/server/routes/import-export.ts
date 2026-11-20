@@ -7,8 +7,10 @@
  *   POST /api/v1/import          → accept a JSON bundle and insert
  *                                    non-colliding rows.
  *   GET  /api/v1/import/hermes-native/scan
- *                                → count ~/.hermes/memories/MEMORY.md
- *                                    entries when running as Hermes.
+ *                                → count $HERMES_HOME/memories/MEMORY.md
+ *                                    entries when running as Hermes (on
+ *                                    Windows the default home is under
+ *                                    %LOCALAPPDATA%\hermes).
  *   POST /api/v1/import/hermes-native/run
  *                                → import a batch from that file.
  *   GET  /api/v1/import/openclaw-native/scan
@@ -125,11 +127,21 @@ export function registerImportExportRoutes(
       writeError(ctx, 400, "invalid_argument", "bundle must be a JSON object");
       return;
     }
-    return await deps.core.importBundle(bundle);
+    const ownership = ctx.url.searchParams.get("ownership") ?? "preserve";
+    const dryRun = ctx.url.searchParams.get("dryRun") ?? "false";
+    const targetProfileId = ctx.url.searchParams.get("targetProfileId") ?? undefined;
+    if (!["preserve", "target"].includes(ownership) || !["true", "false"].includes(dryRun)
+      || (targetProfileId !== undefined && (ownership !== "target" || !targetProfileId.trim()))) {
+      writeError(ctx, 400, "invalid_argument", "invalid import ownership, targetProfileId or dryRun option");
+      return;
+    }
+    return await deps.core.importBundle(bundle, {
+      ownership: ownership as "preserve" | "target", dryRun: dryRun === "true", targetProfileId,
+    });
   });
 
   routes.set("GET /api/v1/import/hermes-native/scan", async () => {
-    const path = hermesNativeMemoryPath();
+    const path = resolveHermesNativeMemoryPath();
     if (!isHermes) {
       return {
         found: false,
@@ -143,7 +155,7 @@ export function registerImportExportRoutes(
   });
 
   routes.set("POST /api/v1/import/hermes-native/run", async (ctx) => {
-    const path = hermesNativeMemoryPath();
+    const path = resolveHermesNativeMemoryPath();
     if (!isHermes) {
       writeError(
         ctx,
@@ -333,8 +345,28 @@ function parseMultipartBundle(contentType: string, body: Buffer): string | null 
   return null;
 }
 
-function hermesNativeMemoryPath(): string {
-  return join(homedir(), ".hermes", "memories", "MEMORY.md");
+interface HermesNativeMemoryPathOptions {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  userHome?: string;
+}
+
+/** Resolve the host Hermes memory file, not the separate MemOS runtime home. */
+export function resolveHermesNativeMemoryPath(
+  options: HermesNativeMemoryPathOptions = {},
+): string {
+  const env = options.env ?? process.env;
+  const configuredHome = env.HERMES_HOME?.trim();
+  const platform = options.platform ?? process.platform;
+  const userHome = options.userHome ?? homedir();
+
+  const hermesHome = configuredHome
+    ? configuredHome
+    : platform === "win32" && env.LOCALAPPDATA?.trim()
+      ? join(env.LOCALAPPDATA.trim(), "hermes")
+      : join(userHome, ".hermes");
+
+  return join(hermesHome, "memories", "MEMORY.md");
 }
 
 function openClawHome(): string {

@@ -61,6 +61,7 @@ export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
 
   const store = new SqliteStore(ctx.config.storage!.dbPath!, ctx.log);
   const embedder = new Embedder(ctx.config.embedding, ctx.log, ctx.openclawAPI);
+  warnOnEmbeddingMismatch(store, embedder, ctx.log);
   const worker = new IngestWorker(store, embedder, ctx);
   const engine = new RecallEngine(store, embedder, ctx);
 
@@ -113,6 +114,32 @@ export function initPlugin(opts: PluginInitOptions = {}): MemosLocalPlugin {
 function defaultStateDir(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
   return `${home}/.openclaw`;
+}
+
+/**
+ * One-shot init check (issue #1333): if the `embeddings` table has rows
+ * tagged with a different producer than the live Embedder, or untagged
+ * legacy rows from a previous version, emit a single warn line so the
+ * user knows to run `scripts/re-embed.ts`. Best-effort: never throws.
+ */
+function warnOnEmbeddingMismatch(store: SqliteStore, embedder: Embedder, log: Logger): void {
+  try {
+    const stats = store.getEmbeddingStats({
+      provider: embedder.provider,
+      model: embedder.model,
+      dimensions: embedder.dimensions,
+    });
+    if (stats.total === 0) return;
+    const stale = stats.legacy + stats.mismatched;
+    if (stale === 0) return;
+    log.warn(
+      `embedding model mismatch detected: ${stats.legacy} legacy + ${stats.mismatched} from prior models, ` +
+        `${stats.matched} match current (${embedder.signature}). Vector recall is degraded for non-matching rows — ` +
+        `run \`pnpm exec tsx scripts/re-embed.ts\` to re-embed.`,
+    );
+  } catch (err) {
+    log.debug(`warnOnEmbeddingMismatch skipped: ${err}`);
+  }
 }
 
 // Re-export types for consumers

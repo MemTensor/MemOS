@@ -3,13 +3,11 @@ import importlib
 import re
 import traceback
 
-from concurrent.futures import as_completed
-
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
-from memos.log import get_logger
+from memos.log import get_logger, summarize_textual_memories
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -77,6 +75,30 @@ class Searcher:
         self.tokenizer = tokenizer
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
+    def _maybe_rerank(
+        self,
+        enabled: bool,
+        *,
+        query: str,
+        graph_results: list[TextualMemoryItem],
+        top_k: int,
+        **kwargs,
+    ) -> list[tuple[TextualMemoryItem, float]]:
+        if not enabled or self.reranker is None:
+            return [(item, 0.0) for item in graph_results[:top_k]]
+        return self.reranker.rerank(
+            query=query,
+            graph_results=graph_results,
+            top_k=top_k,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _query_embedding_for_rerank(enabled: bool, query_embedding):
+        if not enabled:
+            return None
+        return query_embedding[0]
+
     @timed
     def retrieve(
         self,
@@ -99,6 +121,7 @@ class Searcher:
         logger.info(
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}, user_name={user_name}"
         )
+        rerank = bool(kwargs.get("rerank", True))
         parsed_goal, query_embedding, _context, query = self._parse_task(
             query,
             info,
@@ -125,6 +148,7 @@ class Searcher:
             skill_mem_top_k,
             include_preference_memory,
             pref_mem_top_k,
+            rerank,
         )
         return results
 
@@ -251,13 +275,7 @@ class Searcher:
             dedup=dedup,
         )
 
-        logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
-        res_results = ""
-        for _num_i, result in enumerate(final_results):
-            res_results += "\n" + (
-                result.id + "|" + result.metadata.memory_type + "|" + result.memory
-            )
-        logger.info(f"[SEARCH] Results. {res_results}")
+        logger.info("[SEARCH] Result summary: %s", summarize_textual_memories(final_results))
         return final_results
 
     @timed
@@ -350,6 +368,7 @@ class Searcher:
         skill_mem_top_k: int = 3,
         include_preference_memory: bool = False,
         pref_mem_top_k: int = 6,
+        rerank: bool = True,
     ):
         """Run A/B/C/D/E/F retrieval paths in parallel"""
         tasks = []
@@ -372,6 +391,7 @@ class Searcher:
                     search_priority,
                     user_name,
                     id_filter,
+                    rerank=rerank,
                 )
             )
             tasks.append(
@@ -387,6 +407,7 @@ class Searcher:
                     user_name,
                     id_filter,
                     mode=mode,
+                    rerank=rerank,
                 )
             )
             tasks.append(
@@ -400,6 +421,7 @@ class Searcher:
                     mode,
                     memory_type,
                     user_name,
+                    rerank=rerank,
                 )
             )
             if self.use_fulltext:
@@ -415,6 +437,7 @@ class Searcher:
                         search_priority,
                         user_name,
                         id_filter,
+                        rerank=rerank,
                     )
                 )
             if search_tool_memory:
@@ -431,6 +454,7 @@ class Searcher:
                         user_name,
                         id_filter,
                         mode=mode,
+                        rerank=rerank,
                     )
                 )
             if include_skill_memory:
@@ -447,6 +471,7 @@ class Searcher:
                         user_name,
                         id_filter,
                         mode=mode,
+                        rerank=rerank,
                     )
                 )
             if include_preference_memory:
@@ -463,6 +488,7 @@ class Searcher:
                         user_name,
                         id_filter,
                         mode=mode,
+                        rerank=rerank,
                     )
                 )
             results = []
@@ -485,6 +511,7 @@ class Searcher:
         search_priority: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
+        rerank: bool = True,
     ):
         """Retrieve and rerank from WorkingMemory"""
         if memory_type not in ["All", "WorkingMemory"]:
@@ -501,9 +528,10 @@ class Searcher:
             id_filter=id_filter,
             use_fast_graph=self.use_fast_graph,
         )
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -613,6 +641,7 @@ class Searcher:
         search_priority: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
+        rerank: bool = True,
     ) -> list[tuple[TextualMemoryItem, float]]:
         """Keyword/fulltext path that directly calls graph DB fulltext search."""
 
@@ -687,9 +716,10 @@ class Searcher:
                 ordered_nodes.append(node)
 
         results = [TextualMemoryItem.from_dict(n) for n in ordered_nodes]
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -710,6 +740,7 @@ class Searcher:
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = []
@@ -781,9 +812,10 @@ class Searcher:
             results = self._deduplicate_rawfile_results(results, user_name=user_name)
             results = self._filter_intermediate_content(results)
 
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -792,7 +824,13 @@ class Searcher:
 
     @timed
     def _retrieve_from_memcubes(
-        self, query, parsed_goal, query_embedding, top_k, cube_name="memos_cube01"
+        self,
+        query,
+        parsed_goal,
+        query_embedding,
+        top_k,
+        cube_name="memos_cube01",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = self.graph_retriever.retrieve_from_cube(
@@ -802,9 +840,10 @@ class Searcher:
             cube_name=cube_name,
             user_name=cube_name,
         )
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -822,6 +861,7 @@ class Searcher:
         mode,
         memory_type,
         user_id: str | None = None,
+        rerank: bool = True,
     ):
         """Retrieve and rerank from Internet source"""
         if not self.internet_retriever:
@@ -838,9 +878,10 @@ class Searcher:
             query=query, top_k=2 * top_k, parsed_goal=parsed_goal, info=info, mode=mode
         )
         logger.info(f"[PATH-C] '{query}' Retrieved from internet {len(items)} items: {items}")
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -860,6 +901,7 @@ class Searcher:
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from ToolMemory"""
         results = {
@@ -920,17 +962,19 @@ class Searcher:
                 elif rsp and rsp[0].metadata.memory_type == "ToolTrajectoryMemory":
                     results["ToolTrajectoryMemory"].extend(rsp)
 
-        schema_reranked = self.reranker.rerank(
+        schema_reranked = self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results["ToolSchemaMemory"],
             top_k=top_k,
             parsed_goal=parsed_goal,
             search_filter=search_filter,
         )
-        trajectory_reranked = self.reranker.rerank(
+        trajectory_reranked = self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=results["ToolTrajectoryMemory"],
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -952,6 +996,7 @@ class Searcher:
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from SkillMemory"""
 
@@ -982,9 +1027,10 @@ class Searcher:
             use_fast_graph=self.use_fast_graph,
         )
 
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -1004,6 +1050,7 @@ class Searcher:
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
+        rerank: bool = True,
     ):
         """Retrieve and rerank from PreferenceMemory"""
         if memory_type not in ["All", "PreferenceMemory"]:
@@ -1033,9 +1080,10 @@ class Searcher:
             use_fast_graph=self.use_fast_graph,
         )
 
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embedding[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embedding),
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
@@ -1065,15 +1113,15 @@ class Searcher:
         logger.info(f"[SIMPLESEARCH] Query words: {query_words}")
         query_embeddings = self.embedder.embed(query_words)
 
-        items = self.graph_retriever.retrieve_from_mixed(
+        candidate_nodes = self.graph_retriever._vector_recall_nodes(
             top_k=top_k * 2,
             memory_scope=None,
             query_embedding=query_embeddings,
             search_filter=search_filter,
             user_name=user_name,
         )
-        logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
-        documents = [getattr(item, "memory", "") for item in items]
+        logger.info(f"[SIMPLESEARCH] Items count: {len(candidate_nodes)}")
+        documents = [node["memory"] for node in candidate_nodes]
         if not documents:
             return []
         documents_embeddings = self.embedder.embed(documents)
@@ -1082,13 +1130,17 @@ class Searcher:
             return []
         similarity_matrix = cosine_similarity_matrix(documents_embeddings)
         selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)
-        selected_items = [items[i] for i in selected_indices]
+        rerank = bool(kwargs.get("rerank", True))
+        if not rerank or self.reranker is None:
+            selected_indices = selected_indices[:top_k]
+        selected_items = [TextualMemoryItem.from_dict(candidate_nodes[i]) for i in selected_indices]
         logger.info(
             f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}"
         )
-        return self.reranker.rerank(
+        return self._maybe_rerank(
+            rerank,
             query=query,
-            query_embedding=query_embeddings[0],
+            query_embedding=self._query_embedding_for_rerank(rerank, query_embeddings),
             graph_results=selected_items,
             top_k=top_k,
         )
@@ -1115,7 +1167,14 @@ class Searcher:
         include_preference_memory=False,
         pref_mem_top_k=6,
     ):
-        """Sort results by score and trim to top_k"""
+        """Sort results by score and trim to top_k.
+
+        Note:
+            Never mutates the input items: selected textual items are returned
+            as independent copies (``model_copy``, no revalidation) carrying the
+            final ``relativity``; other metadata types are rebuilt into
+            ``SearchedTreeNodeTextualMemoryMetadata`` as before.
+        """
         final_items = []
         if search_tool_memory:
             tool_schema_results = [
@@ -1216,21 +1275,31 @@ class Searcher:
         for item, score in sorted_results:
             if plugin and round(score, 2) == 0.00:
                 continue
-            meta_data = item.metadata.model_dump()
-            meta_data["relativity"] = score
-            final_items.append(
-                TextualMemoryItem(
-                    id=item.id,
-                    memory=item.memory,
-                    metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+            metadata = item.metadata
+            if isinstance(metadata, SearchedTreeNodeTextualMemoryMetadata):
+                # Decouple from caller-owned items: deep-copy metadata without
+                # revalidation (cheap), writing the final score on the copy
+                # with the same float() coercion the rebuild path applies.
+                metadata = metadata.model_copy(deep=True, update={"relativity": float(score)})
+                final_items.append(item.model_copy(update={"metadata": metadata}))
+            else:
+                # Type upgrade (e.g. graph/bm25 results without relativity):
+                # rebuild into the searched metadata type as before.
+                meta_data = metadata.model_dump()
+                meta_data["relativity"] = score
+                final_items.append(
+                    TextualMemoryItem(
+                        id=item.id,
+                        memory=item.memory,
+                        metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+                    )
                 )
-            )
         return final_items
 
     @timed
     def _deduplicate_rawfile_results(self, results, user_name: str | None = None):
         """
-        Deduplicate rawfile related memories by edge
+        Deduplicate raw-file results using their persisted summary ids.
         """
         if not results:
             return results
@@ -1240,29 +1309,10 @@ class Searcher:
         if not rawfile_items:
             return results
 
-        with ContextThreadPoolExecutor(max_workers=min(len(rawfile_items), 10)) as executor:
-            futures = [
-                executor.submit(
-                    self.graph_store.get_edges,
-                    rawfile_item.id,
-                    type="SUMMARY",
-                    direction="OUTGOING",
-                    user_name=user_name,
-                )
-                for rawfile_item in rawfile_items
-            ]
-            for future in as_completed(futures):
-                try:
-                    edges = future.result()
-                    for edge in edges:
-                        summary_target_id = edge.get("to")
-                        if summary_target_id:
-                            summary_ids_to_remove.add(summary_target_id)
-                            logger.debug(
-                                f"[DEDUP] Marking summary node {summary_target_id} for removal (pointed by RawFileMemory)"
-                            )
-                except Exception as e:
-                    logger.warning(f"[DEDUP] Failed to get summary target ids: {e}")
+        for rawfile_item in rawfile_items:
+            summary_ids_to_remove.update(
+                getattr(rawfile_item.metadata, "knowledge_summary_ids", None) or []
+            )
 
         filtered_results = []
         for item in results:

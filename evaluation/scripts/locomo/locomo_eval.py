@@ -305,7 +305,7 @@ async def main(frame, version="default", options=None, num_runs=1, max_workers=4
 
     load_dotenv()
     oai_client = AsyncOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL")
+        api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE")
     )
 
     with open(response_path) as file:

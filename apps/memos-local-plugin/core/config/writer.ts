@@ -17,7 +17,8 @@ import { isMap, YAMLMap } from "yaml";
 import { MemosError } from "../../agent-contract/errors.js";
 import type { ResolvedHome } from "./paths.js";
 import { resolveConfig, type ResolvedConfig } from "./index.js";
-import { DEFAULT_CONFIG } from "./defaults.js";
+import { DEFAULT_CONFIG, effectiveViewerPort } from "./defaults.js";
+import { migrateHermesViewerPort } from "./migrations.js";
 import { parseDoc, stringifyYaml } from "./yaml.js";
 
 export interface PatchConfigResult {
@@ -38,7 +39,9 @@ export interface PatchConfigResult {
 export async function patchConfig(
   home: ResolvedHome,
   patch: Record<string, unknown>,
+  agent?: string,
 ): Promise<PatchConfigResult> {
+  if (agent === "hermes") await migrateHermesViewerPort(home);
   let existingText = "";
   let created = false;
   try {
@@ -55,12 +58,31 @@ export async function patchConfig(
 
   // Parse (or seed) the YAML document.
   const doc = existingText ? parseDoc(existingText, home.configFile) : parseDoc(stringifyYaml(DEFAULT_CONFIG), "<defaults>");
+  if (!existingText) {
+    const initialPort = effectiveViewerPort(agent);
+    if (initialPort !== undefined) doc.setIn(["viewer", "port"], initialPort);
+  } else if (
+    doc.getIn(["embedding", "maxInputTokens"]) === undefined &&
+    !patchSetsEmbeddingInputLimit(patch)
+  ) {
+    // Editing an older config must not silently opt it into the new-install
+    // 1024 default. Persist its prior disabled behaviour before applying the
+    // unrelated patch so subsequent loads remain stable.
+    applyPatch(doc, { embedding: { maxInputTokens: 0 } });
+  }
   applyPatch(doc, patch);
+  if (
+    agent === "hermes" &&
+    isPlainObject(patch.viewer) &&
+    Object.hasOwn(patch.viewer, "port")
+  ) {
+    doc.setIn(["viewer", "port"], effectiveViewerPort("hermes"));
+  }
   removeUnsupportedUserConfig(doc);
 
   // Validate against schema using the merged JS view.
   const merged = doc.toJS({ maxAliasCount: -1 }) as Record<string, unknown>;
-  const config = resolveConfig(merged);
+  const config = resolveConfig(merged, undefined, agent);
 
   // Atomic write.
   await fs.mkdir(dirname(home.configFile), { recursive: true });
@@ -81,6 +103,11 @@ export async function patchConfig(
 
   const bytes = Buffer.byteLength(text, "utf8");
   return { config, bytes, source: home.configFile, created };
+}
+
+function patchSetsEmbeddingInputLimit(patch: Record<string, unknown>): boolean {
+  const embedding = patch.embedding;
+  return isPlainObject(embedding) && Object.hasOwn(embedding, "maxInputTokens");
 }
 
 /**

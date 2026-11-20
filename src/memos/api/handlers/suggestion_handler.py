@@ -49,7 +49,13 @@ def _get_further_suggestion(
                 ]
             )
         further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
-        message_list = [{"role": "system", "content": further_suggestion_prompt}]
+        message_list = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant that generates suggestion queries based on dialogue context.",
+            },
+            {"role": "user", "content": further_suggestion_prompt},
+        ]
         response = llm.generate(message_list)
         clean_response = clean_json_response(response)
         response_json = json.loads(clean_response)
@@ -111,7 +117,13 @@ def handle_get_suggestion_queries(
             memories = "\n".join([m.memory[:200] for m in text_mem_results])
 
         # Generate suggestions using LLM
-        message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
+        message_list = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant that generates suggestion queries based on the user's recent memories.",
+            },
+            {"role": "user", "content": suggestion_prompt.format(memories=memories)},
+        ]
         response = llm.generate(message_list)
         clean_response = clean_json_response(response)
         response_json = json.loads(clean_response)

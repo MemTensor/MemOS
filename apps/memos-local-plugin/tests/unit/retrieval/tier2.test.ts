@@ -101,6 +101,182 @@ describe("retrieval/tier2 (with real sqlite)", () => {
     expect(ids).not.toContain("zeroV");
   });
 
+  it("returns the expanded candidate pool instead of truncating before global ranking", async () => {
+    const out = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      { queryVec: vec([1, 0, 0]), tags: [], includeLowValue: true },
+    );
+
+    expect(out.traces.length).toBeGreaterThan(cfg.tier2TopK);
+  });
+
+  it("does not add value priority during Tier-2 pre-ordering", async () => {
+    handle.repos.traces.insert({
+      id: "semanticFirst" as TraceId,
+      episodeId: "ep1" as EpisodeId,
+      sessionId: "s1" as SessionId,
+      ts: NOW as never,
+      userText: "semantic match",
+      agentText: "reply",
+      toolCalls: [],
+      reflection: null,
+      value: 0.05 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.05 as never,
+      tags: [],
+      vecSummary: vec([1, 0, 0]),
+      vecAction: null,
+      turnId: 0 as never,
+      schemaVersion: 1,
+    });
+    handle.repos.traces.insert({
+      id: "valuableButWeaker" as TraceId,
+      episodeId: "ep1" as EpisodeId,
+      sessionId: "s1" as SessionId,
+      ts: NOW as never,
+      userText: "weaker match",
+      agentText: "reply",
+      toolCalls: [],
+      reflection: null,
+      value: 1 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 1 as never,
+      tags: [],
+      vecSummary: vec([0.8, 0.6, 0]),
+      vecAction: null,
+      turnId: 0 as never,
+      schemaVersion: 1,
+    });
+
+    const out = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      { queryVec: vec([1, 0, 0]), tags: [] },
+    );
+
+    const ids = out.traces.map((trace) => String(trace.refId));
+    expect(ids.indexOf("semanticFirst")).toBeLessThan(ids.indexOf("valuableButWeaker"));
+  });
+
+  it("uses summary vectors only for the personal-fact first pass", async () => {
+    handle.repos.traces.insert({
+      id: "actionOnly" as TraceId,
+      episodeId: "ep1" as EpisodeId,
+      sessionId: "s1" as SessionId,
+      ts: NOW as never,
+      userText: "action-only match",
+      agentText: "reply",
+      toolCalls: [],
+      reflection: null,
+      value: 0.8 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.8 as never,
+      tags: [],
+      vecSummary: vec([0, 1, 0]),
+      vecAction: vec([1, 0, 0]),
+      turnId: 0 as never,
+      schemaVersion: 1,
+    });
+
+    const out = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      { queryVec: vec([1, 0, 0]), tags: [], profile: "personal_fact" },
+    );
+    const actionOnly = out.traces.find((trace) => trace.refId === "actionOnly");
+
+    expect(
+      actionOnly?.channels?.some((channel) => channel.channel === "vec_action") ?? false,
+    ).toBe(false);
+  });
+
+  it("drops vector hits below the adaptive semantic floor", async () => {
+    const out = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      { queryVec: vec([1, 0, 0]), tags: [] },
+    );
+
+    expect(out.traces.map((trace) => String(trace.refId))).not.toContain("offTopic");
+  });
+
+  it("hydrates each candidate with its stored vector instead of the query vector", async () => {
+    const queryVec = vec([1, 0, 0]);
+    const out = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      { queryVec, tags: ["docker"] },
+    );
+    const candidate = out.traces.find((trace) => String(trace.refId) === "medV");
+
+    expect(Array.from(candidate!.vec!)).toEqual(
+      expect.arrayContaining([expect.closeTo(0.9), expect.closeTo(0.1), 0]),
+    );
+    expect(candidate!.vec).not.toBe(queryVec);
+  });
+
+  it("recalls a full identifier through a dedicated channel instead of generic pattern terms", async () => {
+    const identifier = "project_id_2026_alpha_001";
+    handle.repos.traces.insert({
+      id: "exactIdentifier" as TraceId,
+      episodeId: "ep1" as EpisodeId,
+      sessionId: "s1" as SessionId,
+      ts: NOW as never,
+      userText: `项目 ${identifier} 已经完成`,
+      agentText: "状态已确认",
+      toolCalls: [],
+      reflection: null,
+      value: 0.8 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.8 as never,
+      tags: [],
+      vecSummary: vec([0, 1, 0]),
+      vecAction: null,
+      turnId: 0 as never,
+      schemaVersion: 1,
+    });
+    handle.repos.traces.insert({
+      id: "genericPattern" as TraceId,
+      episodeId: "ep1" as EpisodeId,
+      sessionId: "s1" as SessionId,
+      ts: NOW as never,
+      userText: "请查询之前的普通项目记录",
+      agentText: "状态已确认",
+      toolCalls: [],
+      reflection: null,
+      value: 0.8 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.8 as never,
+      tags: [],
+      vecSummary: vec([0, 1, 0]),
+      vecAction: null,
+      turnId: 0 as never,
+      schemaVersion: 1,
+    });
+
+    const out = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      {
+        queryVec: null,
+        tags: [],
+        patternTerms: ["查询"],
+        exactIdentifiers: [identifier],
+      },
+    );
+
+    const exact = out.traces.find((candidate) =>
+      String(candidate.refId) === "exactIdentifier"
+    );
+    expect(exact?.channels).toContainEqual(
+      expect.objectContaining({ channel: "exact_identifier" }),
+    );
+    expect(
+      out.traces.find((candidate) => String(candidate.refId) === "genericPattern")
+        ?.channels,
+    ).toContainEqual(expect.objectContaining({ channel: "pattern" }));
+  });
+
   it("tag filter narrows candidate set", async () => {
     const out = await runTier2(
       { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
@@ -127,7 +303,7 @@ describe("retrieval/tier2 (with real sqlite)", () => {
     expect(ids).toContain("zeroV");
   });
 
-  it("excludeSessionId omits traces from that session", async () => {
+  it("excludes only the visible window of the current session", async () => {
     handle.repos.sessions.upsert({
       id: "s2" as SessionId,
       agent: "openclaw",
@@ -145,11 +321,11 @@ describe("retrieval/tier2 (with real sqlite)", () => {
       status: "open",
     });
     handle.repos.traces.insert({
-      id: "otherSess" as TraceId,
+      id: "compactedSameSession" as TraceId,
       episodeId: "ep2" as EpisodeId,
       sessionId: "s2" as SessionId,
-      ts: NOW as never,
-      userText: "other session docker query",
+      ts: (NOW - 10_000) as never,
+      userText: "compacted same session docker query",
       agentText: "reply",
       toolCalls: [],
       reflection: "ref",
@@ -163,22 +339,64 @@ describe("retrieval/tier2 (with real sqlite)", () => {
       turnId: 0 as never,
       schemaVersion: 1,
     });
+    handle.repos.traces.insert({
+      id: "visibleSameSession" as TraceId,
+      episodeId: "ep2" as EpisodeId,
+      sessionId: "s2" as SessionId,
+      ts: NOW as never,
+      userText: "visible same session docker query",
+      agentText: "reply",
+      toolCalls: [],
+      reflection: "ref",
+      value: 0.95 as never,
+      alpha: 0.5 as never,
+      rHuman: null,
+      priority: 0.95 as never,
+      tags: ["docker"],
+      vecSummary: vec([1, 0, 0]),
+      vecAction: null,
+      turnId: 1 as never,
+      schemaVersion: 1,
+    });
 
-    const withoutExclude = await runTier2(
+    const withoutWindow = await runTier2(
       { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
       { queryVec: vec([1, 0, 0]), tags: ["docker"] },
     );
-    expect(withoutExclude.traces.map((t) => String(t.refId))).toContain("otherSess");
+    expect(withoutWindow.traces.map((t) => String(t.refId))).toEqual(
+      expect.arrayContaining(["compactedSameSession", "visibleSameSession"]),
+    );
 
-    const withExclude = await runTier2(
+    const withWindow = await runTier2(
       { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
       {
         queryVec: vec([1, 0, 0]),
         tags: ["docker"],
-        excludeSessionId: "s2" as SessionId,
+        visibleContext: {
+          sessionId: "s2" as SessionId,
+          startTs: NOW - 5_000,
+          userTexts: ["visible same session docker query"],
+        },
       },
     );
-    expect(withExclude.traces.map((t) => String(t.refId))).not.toContain("otherSess");
+    const ids = withWindow.traces.map((t) => String(t.refId));
+    expect(ids).toContain("compactedSameSession");
+    expect(ids).not.toContain("visibleSameSession");
+  });
+
+  it("falls back to exact visible-user-text filtering when timestamps are unavailable", async () => {
+    const out = await runTier2(
+      { repos: { traces: handle.repos.traces }, config: cfg, now: () => NOW },
+      {
+        queryVec: vec([1, 0, 0]),
+        tags: ["docker"],
+        visibleContext: {
+          sessionId: "s1" as SessionId,
+          userTexts: ["hiV query about docker"],
+        },
+      },
+    );
+    expect(out.traces.map((t) => String(t.refId))).not.toContain("hiV");
   });
 
   it("rolls up episodes when ≥2 traces share episode_id", async () => {

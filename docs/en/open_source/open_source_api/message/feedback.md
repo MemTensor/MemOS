@@ -44,24 +44,15 @@ from memos.api.client import MemOSClient
 
 client = MemOSClient(api_key="...", base_url="...")
 
-# Scenario: Correct the AI's mistaken memory about the user's occupation
+# Scenario: Correct the AI's mistaken memory about the user's diet preference
 res = client.add_feedback(
     user_id="dev_user_01",
-    feedback_content="I am no longer on a diet and don't need to control my food intake anymore.",
-    history=[
-        {"role": "assistant", "content": "You're on a diet — have you been controlling your calorie intake recently?"},
-        {"role": "user", "content": "I'm not on a diet anymore..."}
-    ],
-    writable_cube_ids=["private_cube_01"],
-    # Specify the exact mistaken memory ID for precise correction
-    retrieved_memory_ids=["mem_id_old_job_123"],
-    corrected_answer=True # Ask the AI to respond again based on the updated facts
+    conversation_id="conv_diet_001",
+    feedback_content="I am no longer on a diet and don't need to control my food intake anymore."
 )
 
 if res and res.code == 200:
-    print(f"Correction progress: {res.message}")
-    if res.data:
-        print(f"Corrected response: {res.data}")
+    print(f"Feedback submitted: {res.message}")
 ```
 
 

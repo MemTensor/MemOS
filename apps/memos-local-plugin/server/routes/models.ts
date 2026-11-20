@@ -19,6 +19,8 @@
  * unsaved, and we don't want to accidentally persist a bad API key.
  * The test runs with values from the request body only.
  */
+import { createEmbedder, type Embedder } from "../../core/embedding/index.js";
+import type { EmbeddingConfig } from "../../core/embedding/types.js";
 import type { ServerDeps } from "../types.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
@@ -28,6 +30,7 @@ interface TestRequest {
   endpoint?: string;
   model?: string;
   apiKey?: string;
+  local?: EmbeddingConfig["local"];
 }
 
 export function registerModelsRoutes(routes: Routes, deps: ServerDeps): void {
@@ -153,6 +156,45 @@ async function resolveSecrets(
 
 // ─── Embedding probe ─────────────────────────────────────────────────────
 
+const DEFAULT_LOCAL_EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
+
+type LocalProbeEmbedder = Pick<Embedder, "embedOne">;
+type LocalProbeEmbedderFactory = (model: string, local?: EmbeddingConfig["local"]) => LocalProbeEmbedder;
+
+function createLocalProbeEmbedder(model: string, local?: EmbeddingConfig["local"]): LocalProbeEmbedder {
+  return createEmbedder({
+    provider: "local",
+    model,
+    local,
+    dimensions: 384,
+    openRouter: false,
+    cache: { enabled: false, maxItems: 0 },
+  });
+}
+
+/**
+ * Load the local model and execute a real embedding. The transformer pipeline
+ * is process-global, so intentionally keep it warm after a successful probe.
+ */
+export async function probeLocalEmbedding(
+  model: string,
+  create: LocalProbeEmbedderFactory = createLocalProbeEmbedder,
+  local?: EmbeddingConfig["local"],
+): Promise<number> {
+  const resolvedModel = model.trim() || DEFAULT_LOCAL_EMBEDDING_MODEL;
+  try {
+    const embedder = local === undefined ? create(resolvedModel) : create(resolvedModel, local);
+    const vector = await embedder.embedOne("ping");
+    if (vector.length === 0) throw new Error("no embedding vector returned");
+    return vector.length;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Local embedding model download/load failed; check access to Hugging Face: ${message}`,
+    );
+  }
+}
+
 async function probeEmbedding(req: TestRequest): Promise<number> {
   const provider = req.provider ?? "";
   const endpoint = normUrl(req.endpoint ?? "");
@@ -163,9 +205,11 @@ async function probeEmbedding(req: TestRequest): Promise<number> {
     case "openai_compatible": {
       if (!endpoint) throw new Error("endpoint is required for openai_compatible");
       const base = endpoint.replace(/\/+$/, "");
-      const url = base.endsWith("/v1")
-        ? `${base}/embeddings`
-        : `${base}/v1/embeddings`;
+      const url = base.endsWith("/embeddings")
+        ? base
+        : base.endsWith("/v1")
+          ? `${base}/embeddings`
+          : `${base}/v1/embeddings`;
       const r = await fetchJson(url, {
         method: "POST",
         headers: { ...authHeader(apiKey), "Content-Type": "application/json" },
@@ -242,10 +286,7 @@ async function probeEmbedding(req: TestRequest): Promise<number> {
       return first.length;
     }
     case "local":
-      // Local embedder requires the model file in-process; skip the
-      // HTTP probe and just acknowledge — the lifecycle check at
-      // `core.init` already validated the local provider.
-      return 0;
+      return probeLocalEmbedding(model, undefined, req.local);
     default:
       throw new Error(`unsupported embedding provider: ${provider}`);
   }
@@ -263,9 +304,11 @@ async function probeChat(req: TestRequest): Promise<number> {
     case "openai_compatible": {
       if (!endpoint) throw new Error("endpoint is required for openai_compatible");
       const base = endpoint.replace(/\/+$/, "");
-      const url = base.endsWith("/v1")
-        ? `${base}/chat/completions`
-        : `${base}/v1/chat/completions`;
+      const url = base.endsWith("/chat/completions")
+        ? base
+        : base.endsWith("/v1")
+          ? `${base}/chat/completions`
+          : `${base}/v1/chat/completions`;
       const r = await fetchJson(url, {
         method: "POST",
         headers: { ...authHeader(apiKey), "Content-Type": "application/json" },
