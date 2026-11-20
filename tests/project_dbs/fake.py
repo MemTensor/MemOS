@@ -33,11 +33,6 @@ from memos.project_dbs.item import (
 _last = datetime.min.replace(tzinfo=timezone.utc)
 
 
-def _check_page(page: int, size: int) -> None:
-    if page < 1 or size < 1:
-        raise ValueError("page and size must be positive")
-
-
 _FIELDS = {"decision": "decisions", "experience": "experiences", "timeline": "timeline"}
 
 
@@ -251,7 +246,6 @@ class FakeProjectDB(BaseProjectDB):
         return False
 
     def list_topics(self, space_id, filters=None, page=1, size=10, preview_size=5):
-        _check_page(page, size)
         with self._lock:
             ids = [
                 k
@@ -265,7 +259,6 @@ class FakeProjectDB(BaseProjectDB):
             return Page[Topic](items=items, total=len(ids), page=page, size=size)
 
     def list_entries(self, topic_id, entry_type, page=1, size=10):
-        _check_page(page, size)
         with self._lock:
             entries = sorted(
                 (

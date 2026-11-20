@@ -67,16 +67,6 @@ _TOPIC_FIELDS = {"decision": "decisions", "experience": "experiences", "timeline
 _RANGE_OPS = (("gt", ">"), ("gte", ">="), ("lt", "<"), ("lte", "<="))
 
 
-def _check_page(page: int, size: int) -> None:
-    if page < 1 or size < 1:
-        raise ValueError("page and size must be positive")
-
-
-def _vector(values: list[float] | None) -> str | None:
-    """pgvector text literal; None stays NULL."""
-    return None if values is None else "[" + ",".join(str(float(v)) for v in values) + "]"
-
-
 def _dedupe_sources(sources: list[Source]) -> list[dict]:
     """Drop identical sources, keeping first-seen order."""
     seen, result = set(), []
@@ -450,7 +440,6 @@ class PostgresProjectDB(BaseProjectDB):
         size: int = 10,
         preview_size: int = 5,
     ) -> Page[Topic]:
-        _check_page(page, size)
         params: list[Any] = [space_id]
         where = "t.space_id = %s" + _filters_sql(filters, params)
         with self._tx() as cur:
@@ -482,7 +471,6 @@ class PostgresProjectDB(BaseProjectDB):
         page: int = 1,
         size: int = 10,
     ) -> Page[AnyEntry]:
-        _check_page(page, size)
         with self._tx() as cur:
             cur.execute(
                 f"""SELECT count(*) FROM {SCHEMA}.project_entries
@@ -530,7 +518,7 @@ class PostgresProjectDB(BaseProjectDB):
             json.dumps([h.model_dump(mode="json") for h in entry.history] if is_decision else []),
             json.dumps([c.model_dump(mode="json") for c in entry.conflicts] if is_decision else []),
             json.dumps(entry.extra.model_dump(mode="json")),
-            _vector(entry.embedding),
+            entry.embedding,
         )
 
     def _insert_entries(self, cur: Any, space_id: str, topic_id: str, entries: list) -> None:
@@ -560,7 +548,7 @@ class PostgresProjectDB(BaseProjectDB):
                 item.topic_summary,
                 item.topic_description,
                 json.dumps(_dedupe_sources(item.sources)),
-                _vector(item.embedding),
+                item.embedding,
                 json.dumps(item.anchors),
             ),
         )
@@ -591,7 +579,7 @@ class PostgresProjectDB(BaseProjectDB):
                 item.topic_summary,
                 item.topic_description,
                 item.embedding is not None,
-                _vector(item.embedding),
+                item.embedding,
                 None if item.anchors is None else json.dumps(item.anchors),
                 sources,
                 item.topic_id,
@@ -686,7 +674,7 @@ class PostgresProjectDB(BaseProjectDB):
                         conflicts = '[]'::jsonb, version = version + 1, update_time = now()
                     WHERE e.id = %s AND e.entry_type = 'decision' AND e.update_time = %s
                     RETURNING {_ENTRY_COLS}""",
-                (content, _vector(embedding), decision_id, expected_update_time),
+                (content, embedding, decision_id, expected_update_time),
             )
             row = cur.fetchone()
         if row is None:
@@ -708,12 +696,10 @@ class PostgresProjectDB(BaseProjectDB):
             cur.execute(f"SELECT 1 FROM {SCHEMA}.spaces WHERE id = %s FOR UPDATE", (space_id,))
             if cur.fetchone() is None:
                 raise SpaceNotFoundError(f"Space not found: {space_id}")
-            # clock_timestamp(): the moment the clear takes effect (after waiting for the lock),
-            # so tasks accepted while it waited are still rejected; never move backwards.
+            # clock_timestamp(), not now(): stamp the moment the clear takes effect, after
+            # waiting for in-flight write-backs, so tasks accepted meanwhile are rejected.
             cur.execute(
-                f"""UPDATE {SCHEMA}.spaces
-                    SET cleared_at = GREATEST(COALESCE(cleared_at, '-infinity'), clock_timestamp())
-                    WHERE id = %s""",
+                f"UPDATE {SCHEMA}.spaces SET cleared_at = clock_timestamp() WHERE id = %s",
                 (space_id,),
             )
             cur.execute(f"DELETE FROM {SCHEMA}.topics WHERE space_id = %s", (space_id,))

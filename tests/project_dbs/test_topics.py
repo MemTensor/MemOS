@@ -426,14 +426,10 @@ def test_upsert_bumps_entry_version_and_update_decision_keeps_topic_version(db, 
     assert topic.version == 2 and topic.decisions[0].content == "v3"
 
 
-def test_preview_size_zero_and_invalid_paging(db, space):
+def test_preview_size_zero(db, space):
     create(db, space, entries=[decision()])
     (topic,) = db.list_topics(space.id, preview_size=0).items
     assert topic.decisions == []
-    with pytest.raises(ValueError):
-        db.list_topics(space.id, page=0)
-    with pytest.raises(ValueError):
-        db.list_entries("topic_x", "decision", size=0)
 
 
 def test_naive_datetimes_are_rejected(db, space):
