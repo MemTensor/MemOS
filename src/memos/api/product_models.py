@@ -374,6 +374,9 @@ class APISearchRequest(BaseRequest, ProjectSearchFields):
     )
     user_id: str = Field(..., description="User ID")
 
+    # Project fields (include_memory_view, space_ids, domains, conversation_id,
+    # memory_limit_number, project_item_types, project_result_format) come from ProjectSearchFields.
+
     # ==== Cube scoping ====
     readable_cube_ids: list[str] | None = Field(
         None,
@@ -941,6 +944,22 @@ class AddStatusRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID")
 
 
+class ProjectListRequest(BaseRequest):
+    space_id: str
+    mem_cube_id: str | None = None
+    page: int = Field(1, ge=1)
+    size: int | None = Field(None, ge=1)
+    page_size: int | None = Field(None, ge=1)
+    filter: dict[str, Any] | None = None
+
+
+class ProjectMessagesRequest(BaseRequest):
+    conversation_id: str = Field(min_length=1)
+    space_id: str | None = None
+    message_limit_number: int | None = Field(None, ge=1)
+    user_id: str | None = None
+
+
 class GetMemoryRequest(BaseRequest, ProjectScopeFields):
     """Request model for getting memories."""
 
@@ -1059,6 +1078,13 @@ class GetCreateKnowledgebaseData(BaseModel):
 class SearchMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
+    topic_detail_list: list[MemoryDetail] = Field(default_factory=list)
+    project_item_list: list[MemoryDetail] = Field(default_factory=list)
+    trajectory_detail_list: list[MemoryDetail] = Field(default_factory=list)
+    channels: list[str] = Field(default_factory=list)
+    degraded: list[str] = Field(default_factory=list)
+    truncated: bool = False
+
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )
@@ -1103,6 +1129,7 @@ class GetKnowledgebaseFileData(BaseModel):
 class GetMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
+    topic_detail_list: list[MemoryDetail] = Field(default_factory=list)
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )

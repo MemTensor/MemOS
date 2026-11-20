@@ -69,13 +69,6 @@ class DeleteDomainsRequest(BaseModel):
     domains: list[str]
 
 
-class GetMessageRequest(BaseModel):
-    user_id: str | None = None
-    conversation_id: str
-    space_id: str | None = None
-    message_limit_number: int | None = None
-
-
 class FlushRequest(BaseModel):
     space_id: str
     conversation_id: str | None = Field(None, description="只关这个会话的段；不传关整个 Space 的")
@@ -155,13 +148,6 @@ def create_router(plugin, *, legacy_flush: bool = False) -> APIRouter:
     @router.post("/list_domains", summary="Full domain list of a space")
     def list_domains(req: SpaceIdRequest):
         return _ok({"domains": guarded(svc().list_domains, req.space_id)})
-
-    @router.post("/get_message", summary="Conversation messages stored for project memory")
-    def get_message(req: GetMessageRequest):
-        msgs = guarded(
-            svc().get_message, req.conversation_id, req.space_id, req.message_limit_number
-        )
-        return _ok({"message_detail_list": msgs})
 
     if legacy_flush:
 

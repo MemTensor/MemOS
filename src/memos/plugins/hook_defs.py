@@ -106,6 +106,7 @@ class H:
     PROJECT_MEMORY_GET_BY_ID = "project_memory.get_by_id"
     PROJECT_MEMORY_DELETE = "project_memory.delete"
     PROJECT_MEMORY_TASK_STATUS = "project_memory.task_status"
+    PROJECT_MEMORY_MESSAGES = "project_memory.messages"
     # optional: distributed lock for multi-replica deployments (see project_memory/locks.py)
     PROJECT_MEMORY_LOCK = "project_memory.lock"
 
@@ -233,6 +234,12 @@ define_hook(
     H.PROJECT_MEMORY_GET,
     description="List topics of a project space (get_memory with space_id)",
     params=["request"],
+)
+
+define_hook(
+    H.PROJECT_MEMORY_MESSAGES,
+    description="Read the conversation messages stored for project memory",
+    params=["conversation_id", "space_id", "limit"],
 )
 
 define_hook(

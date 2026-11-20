@@ -29,6 +29,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 # Import Krolik extensions
+from memos.api.handlers.project_retrieval import project_retrieval_lifespan
 from memos.api.lifecycle import shutdown_components
 from memos.api.middleware.rate_limit import RateLimitMiddleware
 
@@ -64,7 +65,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    yield
+    with project_retrieval_lifespan(_app, server_router_module.components):
+        yield
     shutdown_components(server_router_module.components)
 
 

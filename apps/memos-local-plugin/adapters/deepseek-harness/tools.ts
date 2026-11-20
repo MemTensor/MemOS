@@ -1,7 +1,7 @@
 /** Read-oriented MemOS tools exposed through DeepSeek Harness. */
 
 import type { Context } from "@deepseek-ai/cordis";
-import { defineTool, type JsonValue } from "@deepseek-ai/dsh-tools";
+import { defineTool } from "@deepseek-ai/dsh-tools";
 
 import type {
   RetrievalQueryDTO,
@@ -19,11 +19,18 @@ import {
   type DshAgentLike,
   type DshSessionLike,
 } from "./bridge.js";
+import { deepSeekHarnessNamespace } from "./namespace.js";
 import type { DeepSeekHarnessLlmRoute } from "./host-llm.js";
 import {
   isDeepSeekHarnessTimeout,
   waitForDeepSeekHarnessDeadline,
 } from "./deadline.js";
+
+// DSH 0.2 moved JsonValue out of dsh-tools. Keep this structural output
+// boundary local so the adapter compiles with both the 0.1 and 0.2 APIs.
+type JsonValue = null | boolean | number | string | JsonValue[] | {
+  [key: string]: JsonValue;
+};
 
 export interface DeepSeekHarnessToolsOptions {
   core: MemoryCore;
@@ -451,17 +458,7 @@ function namespaceFor(
   session: DshSessionLike | undefined,
   profileId: string,
 ): RuntimeNamespace {
-  const preset = session?.header?.["agentPreset"];
-  const resolvedProfileId = typeof preset === "string" && preset.trim()
-    ? preset.trim()
-    : profileId;
-  return {
-    agentKind: DEEPSEEK_HARNESS_AGENT,
-    profileId: resolvedProfileId,
-    profileLabel: resolvedProfileId,
-    workspacePath: session?.header?.cwd,
-    sessionKey: session?.id,
-  };
+  return deepSeekHarnessNamespace(session, profileId);
 }
 
 function requireText(value: unknown, field: string): string {

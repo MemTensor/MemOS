@@ -65,6 +65,12 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             H.PROJECT_MEMORY_DELETE, _tagged(lambda request, **kw: self.service.delete(request))
         )
         self.register_hook(
+            H.PROJECT_MEMORY_MESSAGES,
+            lambda conversation_id, space_id=None, limit=None, **kw: self.service.get_message(
+                conversation_id, space_id, limit
+            ),
+        )
+        self.register_hook(
             H.PROJECT_MEMORY_TASK_STATUS,
             self._task_status,
         )

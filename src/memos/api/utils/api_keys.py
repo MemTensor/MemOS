@@ -5,6 +5,7 @@ Provides functions for generating, validating, and managing API keys.
 """
 
 import hashlib
+import re
 import secrets
 
 from dataclasses import dataclass
@@ -45,11 +46,19 @@ def hash_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+# Match the only form ``generate_api_key()`` produces: ``krlk_`` followed by
+# exactly 64 lowercase hex characters. Using ``int(hex_part, 16)`` would also
+# accept leading signs, ``0x`` prefixes, ``_`` separators, and surrounding
+# whitespace, none of which a real key ever carries (issue #2427).
+_KEY_FORMAT_HEX_RE = re.compile(r"[0-9a-f]{64}")
+
+
 def validate_key_format(key: str) -> bool:
     """
     Validate API key format.
 
-    Valid format: krlk_<64-hex-chars>
+    Valid format: ``krlk_<64-hex-chars>`` where the hex part is exactly 64
+    characters from ``[0-9a-f]`` — the only form ``generate_api_key()`` produces.
     """
     if not key or not isinstance(key, str):
         return False
@@ -58,14 +67,7 @@ def validate_key_format(key: str) -> bool:
         return False
 
     hex_part = key[5:]
-    if len(hex_part) != 64:
-        return False
-
-    try:
-        int(hex_part, 16)
-        return True
-    except ValueError:
-        return False
+    return _KEY_FORMAT_HEX_RE.fullmatch(hex_part) is not None
 
 
 def generate_master_key() -> tuple[str, str]:

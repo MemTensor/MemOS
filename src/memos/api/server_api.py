@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.staticfiles import StaticFiles
 
 from memos.api.exceptions import APIExceptionHandler
+from memos.api.handlers.project_retrieval import project_retrieval_lifespan
 from memos.api.lifecycle import shutdown_components
 from memos.api.middleware.request_context import RequestContextMiddleware
 from memos.api.routers import server_router as server_router_module
@@ -33,7 +34,8 @@ logger.info(
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
-        yield
+        with project_retrieval_lifespan(_app, server_router_module.components):
+            yield
     finally:
         shutdown_components(server_router_module.components)
         plugin_manager.shutdown()

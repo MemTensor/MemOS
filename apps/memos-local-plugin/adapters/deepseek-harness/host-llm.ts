@@ -16,6 +16,7 @@ import {
 } from "@deepseek-ai/dsh-llm";
 import { deadline, timeoutOf } from "@deepseek-ai/dsh-timeout";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { memosMessageSource } from "./message-source.js";
 
 import { ERROR_CODES, MemosError } from "../../agent-contract/errors.js";
 import type {
@@ -27,7 +28,6 @@ import type { LlmMessage, LlmUsage } from "../../core/llm/types.js";
 
 const HOST_LLM_BRIDGE_ID = "deepseek-harness.host.v1";
 const HOST_LLM_TIMEOUT_CODE = "MEMOS_DSH_HOST_LLM_TIMEOUT";
-const HOST_LLM_MESSAGE_SOURCE = "memos-local-memory";
 const NO_REASONING_EFFORT = ReasoningEffortId("off");
 const UNSUPPORTED_REASONING_EFFORT = "UNSUPPORTED_REASONING_EFFORT";
 const MODEL_CAPABILITY_TTL_MS = 10 * 60 * 1_000;
@@ -366,7 +366,7 @@ function toDshMessage(
   if (message.role === "user") {
     return createUserMessage({
       content,
-      source: { kind: "plugin", plugin: HOST_LLM_MESSAGE_SOURCE },
+      source: memosMessageSource(),
     });
   }
   return createAssistantMessage({

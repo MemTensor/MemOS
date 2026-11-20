@@ -8,13 +8,19 @@ delegate each durable Add stage to the active provider.
 
 from __future__ import annotations
 
-from typing import Any
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 
 from memos.api.project_fields import PROJECT_MEMORY_VIEW
 from memos.plugins.hook_defs import H
 from memos.plugins.hooks import _hooks
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 __all__ = [
@@ -42,6 +48,20 @@ class ProjectHTTPError(HTTPException):
         self.reason = reason
 
 
+# Set while the retrieval service answers a request's project views, so the plugin's own
+# search hooks treat the request as personal-only. Copied into provider threads with the context.
+_retrieval_serves = ContextVar("project_retrieval_serves", default=False)
+
+
+@contextmanager
+def retrieval_serves_project() -> Iterator[None]:
+    token = _retrieval_serves.set(True)
+    try:
+        yield
+    finally:
+        _retrieval_serves.reset(token)
+
+
 def wants_project_view(views: list[str] | None) -> bool:
     """True when the request includes the project memory view."""
     if not views:
@@ -56,11 +76,15 @@ def project_enabled() -> bool:
 
 def only_project(request: Any) -> bool:
     """`project` is the only requested view: personal memory should be skipped."""
+    if _retrieval_serves.get():
+        return False
     return bool(getattr(request, "project_view_only_flag", False))
 
 
 def has_project_view(request: Any) -> bool:
     """True when the request includes project memory (may also include personal views)."""
+    if _retrieval_serves.get():
+        return False
     if getattr(request, "project_view_flag", False):
         return True
     return wants_project_view(
@@ -154,6 +178,16 @@ def get_topic(memory_id: str) -> dict[str, Any] | None:
     found = get_by_id(memory_id) or {}
     topics = found.get("topic_detail_list") or []
     return topics[0] if topics else None
+
+
+def get_messages(request: Any) -> dict[str, Any]:
+    messages = _call(
+        H.PROJECT_MEMORY_MESSAGES,
+        conversation_id=request.conversation_id,
+        space_id=request.space_id,
+        limit=request.message_limit_number,
+    )
+    return {"message_detail_list": messages or []}
 
 
 def delete_topics(request: Any) -> dict[str, Any]:

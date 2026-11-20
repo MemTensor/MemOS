@@ -88,7 +88,7 @@ OPENCLAW_PORT="18799"
 HERMES_PORT="18800"
 DSH_PORT="18801"
 DSH_PNPM_VERSION="11.7.0"
-REQUIRED_NODE_MAJOR=20
+REQUIRED_NODE_MAJOR=22
 OPENCLAW_RUNTIME_ENTRY="./dist/adapters/openclaw/index.js"
 # Older plugin IDs disabled on install so they don't fight for the
 # memory slot. We never touch the old plugin's data.
@@ -211,22 +211,9 @@ install_node_linux() {
 ensure_node() {
   local current; current="$(node_major)"
   if ! [[ "${current}" =~ ^[0-9]+$ ]] || (( current < REQUIRED_NODE_MAJOR )); then
-    warn "Node.js >= ${REQUIRED_NODE_MAJOR} required (have ${current}). Auto-installing..."
-    case "${OS_NAME}" in
-      Darwin) install_node_mac ;;
-      Linux)  install_node_linux ;;
-    esac
-    current="$(node_major)"
-    [[ "${current}" =~ ^[0-9]+$ ]] && (( current >= REQUIRED_NODE_MAJOR )) \
-      || die "Node.js install failed. Install ≥ ${REQUIRED_NODE_MAJOR} and re-run."
+    die "Node.js >= ${REQUIRED_NODE_MAJOR} is required. Upgrade the actual host runtime before installing; the existing plugin has not been replaced."
   fi
 
-  # Node 25+ has no better-sqlite3 prebuilts → must compile. Warn the
-  # user (but don't block; the rebuild step below tries regardless).
-  if (( current >= 25 )); then
-    warn "Node $(node -v) — no better-sqlite3 prebuild available, will compile from source."
-    printf "       ${DIM}Tip: switch to Node LTS for prebuilt binaries:  nvm install 22${NC}\n" >&2
-  fi
   success "Node.js $(node -v)"
 }
 
@@ -382,13 +369,37 @@ resolve_tarball() {
 # the user's memory DB on every re-install.
 #
 # We mitigate that by preserving a well-known allowlist of user-data
-# artefacts across the rm/extract cycle. node_modules is preserved too
-# so npm install stays fast on re-install.
+# artefacts across replacement. Dependencies are staged afresh and verified
+# before any existing deployment is changed.
 deploy_tarball_to_prefix() {
   local prefix="$1"
+  local staged_prefix
+  staged_prefix="$(mktemp -d)"
+  tar xzf "${BUILT_TARBALL}" -C "${staged_prefix}" --strip-components=1 \
+    || { rm -rf "${staged_prefix}"; die "Package extraction failed; existing installation is unchanged."; }
+  [[ -f "${staged_prefix}/package.json" ]] \
+    || { rm -rf "${staged_prefix}"; die "Staged package.json missing; existing installation is unchanged."; }
+  step "Installing npm dependencies"
+  local node_bin node_dir node_version
+  node_bin="$(command -v node || true)"
+  [[ -n "${node_bin}" && -x "${node_bin}" ]] || die "Node.js not found after bootstrap."
+  node_dir="$(dirname "${node_bin}")"
+  node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
+  printf "%s\n" "${node_bin}" > "${staged_prefix}/.memos-node-bin"
+  # npm 11 still resolves omitted devDependency peer trees unless legacy peer
+  # resolution is requested. DSH peers are intentionally absent from the
+  # standalone OpenClaw/Hermes runtime.
+  ( cd "${staged_prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --legacy-peer-deps --strict-allow-scripts --engine-strict --no-fund --no-audit --loglevel=error ) || { rm -rf "${staged_prefix}"; die "Dependency staging failed; existing installation is unchanged."; }
+  [[ -d "${staged_prefix}/node_modules" ]] || die "npm install failed in ${staged_prefix}"
+
+  step "Verifying SQLite prebuilt runtime"
+  ( cd "${staged_prefix}" && "${node_bin}" -e 'const Database = require("better-sqlite3"); const db = new Database(":memory:"); try { db.exec("CREATE TABLE probe (value TEXT)"); db.prepare("INSERT INTO probe VALUES (?)").run("ok"); if (db.prepare("SELECT value FROM probe").get().value !== "ok") throw new Error("SQLite probe failed"); } finally { db.close(); }' ) \
+    || { rm -rf "${staged_prefix}"; die "SQLite prebuilt cannot load in ${node_bin}. Existing installation is unchanged; no source rebuild was attempted."; }
+  success "better-sqlite3 native module OK"
+  success "Dependencies ready"
   step "Deploying to ${prefix}"
   local saved_dir=""
-  local preserve=(node_modules data logs skills daemon .migrations config.yaml .auth.json .memos-node-bin)
+  local preserve=(data logs skills daemon .migrations config.yaml .auth.json)
   if [[ -d "${prefix}" ]]; then
     saved_dir="$(mktemp -d)"
     local item
@@ -400,7 +411,7 @@ deploy_tarball_to_prefix() {
     done
     rm -rf "${prefix}"
     mkdir -p "${prefix}"
-    tar xzf "${BUILT_TARBALL}" -C "${prefix}" --strip-components=1
+    cp -R "${staged_prefix}/." "${prefix}/"
     for item in "${preserve[@]}"; do
       if [[ -e "${saved_dir}/${item}" ]]; then
         rm -rf "${prefix}/${item}"
@@ -410,37 +421,12 @@ deploy_tarball_to_prefix() {
     rm -rf "${saved_dir}"
   else
     mkdir -p "${prefix}"
-    tar xzf "${BUILT_TARBALL}" -C "${prefix}" --strip-components=1
+    cp -R "${staged_prefix}/." "${prefix}/"
   fi
   [[ -f "${prefix}/package.json" ]] || die "Extraction failed: ${prefix}/package.json missing"
-  success "Package extracted"
+  rm -rf "${staged_prefix}"
+  success "Verified package deployed"
 
-  step "Installing npm dependencies"
-  local node_bin node_dir node_version
-  node_bin="$(command -v node || true)"
-  [[ -n "${node_bin}" && -x "${node_bin}" ]] || die "Node.js not found after bootstrap."
-  node_dir="$(dirname "${node_bin}")"
-  node_version="$("${node_bin}" -v 2>/dev/null || echo "unknown")"
-  printf "%s\n" "${node_bin}" > "${prefix}/.memos-node-bin"
-  # npm 11 still resolves omitted devDependency peer trees unless legacy peer
-  # resolution is requested. DSH peers are intentionally absent from the
-  # standalone OpenClaw/Hermes runtime.
-  ( cd "${prefix}" && PATH="${node_dir}:${PATH}" MEMOS_SKIP_SETUP=1 npm install --omit=dev --legacy-peer-deps --no-fund --no-audit --loglevel=error >/dev/null 2>&1 )
-  [[ -d "${prefix}/node_modules" ]] || die "npm install failed in ${prefix}"
-
-  if [[ -d "${prefix}/node_modules/better-sqlite3" ]]; then
-    step "Rebuilding better-sqlite3 for Node ${node_version}"
-    ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --loglevel=error >/dev/null 2>&1 ) \
-      || ( cd "${prefix}" && PATH="${node_dir}:${PATH}" npm rebuild better-sqlite3 --build-from-source --loglevel=error >/dev/null 2>&1 ) \
-      || warn "better-sqlite3 rebuild did not complete cleanly."
-    if ( cd "${prefix}" && "${node_bin}" -e "require('better-sqlite3')" >/dev/null 2>&1 ); then
-      success "better-sqlite3 native module OK"
-    else
-      warn "better-sqlite3 not loadable — plugin will fail at startup."
-      printf "       ${DIM}Fix: cd ${prefix} && PATH=${node_dir}:\$PATH npm rebuild better-sqlite3${NC}\n" >&2
-    fi
-  fi
-  success "Dependencies ready"
   warn "Local MiniLM model weights are not bundled."
   printf "       ${DIM}If embedding.provider is local, the first Viewer test or use downloads about 23 MB from Hugging Face.${NC}\n"
 }
@@ -1407,11 +1393,9 @@ CFGEOF
 # ─── DeepSeek Harness install ─────────────────────────────────────────────
 # DSH owns its profile dependency graph and bundle reconciliation. We never
 # unpack into the profile or edit package.json/cordis.patch.yml ourselves.
-# pnpm 11 deliberately blocks unreviewed lifecycle scripts. On that one
-# expected failure we approve only the exact dependency names reviewed for
-# this package, deny unnecessary scripts (including ONNX Runtime's optional
-# Linux CUDA download), and repeat the same add so DSH can reconcile the
-# bundle after pnpm exits successfully.
+# Preseed the reviewed pnpm 11 build policy before the first add. Unknown
+# scripts and conflicting explicit denials stop installation for review;
+# no pending package is approved automatically after a failed install.
 read_pending_dsh_builds() {
   local workspace="$1"
   [[ -f "${workspace}" ]] || return 0
@@ -1470,10 +1454,45 @@ resolve_dsh_home_for_installer() {
   node -e 'const path = require("node:path"); const os = require("node:os"); const MEMOS_DSH_HOME = true; const configured = process.env.DSH_HOME; const selected = configured !== undefined && configured.trim().length > 0 ? configured : path.join(os.homedir(), ".dsh"); const expanded = selected === "~" ? os.homedir() : selected.startsWith("~/") || selected.startsWith("~\\") ? path.join(os.homedir(), selected.slice(2)) : selected; process.stdout.write(path.resolve(expanded));'
 }
 
-deny_existing_dsh_onnx_build() {
+prepare_dsh_build_policy() {
   local workspace="$1"
-  [[ -f "${workspace}" ]] || return 0
-  node -e 'const fs = require("node:fs"); const MEMOS_DSH_POLICY = true; const file = process.argv[1]; const raw = fs.readFileSync(file, "utf8"); const eol = raw.includes("\r\n") ? "\r\n" : "\n"; const hadFinalEol = raw.endsWith(eol); const lines = raw.split(/\r?\n/); if (hadFinalEol) lines.pop(); let inAllowBuilds = false; let changed = false; const key = /^(\s+)(["\x27]?)onnxruntime-node\2:\s*(?:true|false|set this to true or false)(\s*(?:#.*)?)$/; for (let i = 0; i < lines.length; i += 1) { if (/^allowBuilds:\s*(?:#.*)?$/.test(lines[i])) { inAllowBuilds = true; continue; } if (inAllowBuilds && /^[^\s#]/.test(lines[i])) break; if (!inAllowBuilds) continue; const match = key.exec(lines[i]); if (!match) continue; const replacement = `${match[1]}${match[2]}onnxruntime-node${match[2]}: false${match[3]}`; if (replacement !== lines[i]) { lines[i] = replacement; changed = true; } break; } if (changed) fs.writeFileSync(file, `${lines.join(eol)}${hadFinalEol ? eol : ""}`, "utf8");' "${workspace}"
+  node -e 'const fs = require("node:fs");
+const path = require("node:path");
+const MEMOS_DSH_POLICY = true;
+const file = process.argv[1];
+let raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+const lines = raw.split(/\r?\n/);
+const policy = {"better-sqlite3": false, "esbuild@0.27.7": true, "esbuild@0.21.5": true, "sharp@0.34.5": true, "onnxruntime-node": false, "protobufjs": false, "@memtensor/memos-local-plugin": false};
+let block = -1, end = -1;
+const seen = new Set();
+for (let i = 0; i < lines.length; i++) {
+  if (/^strictDepBuilds:/.test(lines[i]) && !/^strictDepBuilds:\s*true\s*(#.*)?$/.test(lines[i])) throw new Error("Preserve existing strictDepBuilds policy; review it before installing");
+  if (/^allowBuilds:/.test(lines[i])) {
+    if (block >= 0 || !/^allowBuilds:\s*(#.*)?$/.test(lines[i])) throw new Error("Unsupported allowBuilds YAML; review before installing");
+    block = i; end = i + 1;
+    while (end < lines.length && (!/^[^\s#]/.test(lines[end]) || !lines[end].trim())) end++;
+    for (let j = i + 1; j < end; j++) {
+      if (!lines[j].trim() || /^\s*#/.test(lines[j])) continue;
+      const match = lines[j].match(/^\s+(["\x27]?)(.+?)\1:\s*(true|false|set this to true or false)\s*(#.*)?$/);
+      if (!match || seen.has(match[2])) throw new Error("Unsupported/duplicate allowBuilds entry");
+      const key = match[2]; seen.add(key);
+      if (match[3] === "false" && key.includes("*")) throw new Error("Existing wildcard script denial requires explicit review");
+      if ((key === "esbuild" || key.startsWith("esbuild@") || key === "sharp" || key.startsWith("sharp@")) && match[3] === "false") throw new Error("Existing script denial for " + key + "; explicit review required");
+      if (key in policy) {
+        if (policy[key] === true && match[3] === "false") throw new Error("Existing script denial for " + key);
+        lines[j] = "  " + JSON.stringify(key) + ": " + policy[key];
+        delete policy[key];
+      }
+    }
+  }
+}
+const additions = Object.entries(policy).map(([k,v]) => "  " + JSON.stringify(k) + ": " + v);
+if (block < 0) lines.push("allowBuilds:", ...additions);
+else lines.splice(end, 0, ...additions);
+if (!/^strictDepBuilds:/m.test(raw)) lines.push("strictDepBuilds: true");
+fs.mkdirSync(path.dirname(file), {recursive: true});
+fs.writeFileSync(file, lines.join(eol).replace(/(?:\r?\n)*$/, eol));' "${workspace}"
 }
 
 run_dsh_plugin_without_onnx_cuda() {
@@ -1484,7 +1503,7 @@ verify_dsh_better_sqlite3() {
   local profile_dir="$1"
   (
     cd "${profile_dir}"
-    node -e 'const Database = require("better-sqlite3"); const db = new Database(":memory:"); try { db.prepare("SELECT 1").get(); } finally { db.close(); }'
+    node -e 'const { createRequire } = require("node:module"); const fromPlugin = createRequire(require.resolve("@memtensor/memos-local-plugin/dist/adapters/deepseek-harness/index.js")); const Database = fromPlugin("better-sqlite3"); const db = new Database(":memory:"); try { db.exec("CREATE TABLE probe (v TEXT)"); db.prepare("INSERT INTO probe VALUES (?)").run("ok"); if (db.prepare("SELECT v FROM probe").get().v !== "ok") throw new Error("SQLite probe failed"); } finally { db.close(); }'
   )
 }
 
@@ -1492,7 +1511,7 @@ verify_dsh_onnx_cpu() {
   local profile_dir="$1"
   (
     cd "${profile_dir}"
-    node -e 'const ort = require("onnxruntime-node"); const cpu = ort.listSupportedBackends().find((backend) => backend.name === "cpu"); if (!cpu || cpu.bundled !== true) throw new Error("onnxruntime-node CPU backend is unavailable");'
+    node -e 'const { createRequire } = require("node:module"); const fromPlugin = createRequire(require.resolve("@memtensor/memos-local-plugin/dist/adapters/deepseek-harness/index.js")); const fromTransformers = createRequire(fromPlugin.resolve("@huggingface/transformers")); const ort = fromTransformers("onnxruntime-node"); const cpu = ort.listSupportedBackends().find((backend) => backend.name === "cpu"); if (!cpu || cpu.bundled !== true) throw new Error("onnxruntime-node CPU backend is unavailable");'
   )
 }
 
@@ -1525,8 +1544,8 @@ install_dsh() {
   profile_dir="${dsh_home}/profiles/${DSH_PROFILE}"
   profile_workspace="${profile_dir}/pnpm-workspace.yaml"
 
-  if ! deny_existing_dsh_onnx_build "${profile_workspace}"; then
-    error "Unable to disable the unnecessary onnxruntime-node CUDA installer in ${profile_workspace}."
+  if ! prepare_dsh_build_policy "${profile_workspace}"; then
+    error "Unable to prepare the reviewed dependency script policy in ${profile_workspace}."
     return 1
   fi
 
@@ -1566,34 +1585,14 @@ install_dsh() {
       return 1
     fi
 
-    local -a approval_args=()
-    for package in better-sqlite3 esbuild sharp; do
-      if grep -Fxq "${package}" <<< "${pending}"; then approval_args+=("${package}"); fi
-    done
-    for package in onnxruntime-node protobufjs "${NPM_PACKAGE}"; do
-      if grep -Fxq "${package}" <<< "${pending}"; then approval_args+=("!${package}"); fi
-    done
-
-    info "pnpm requested build-script review for this fresh DSH profile."
-    info "Allowing reviewed native installers: better-sqlite3, esbuild, sharp"
-    info "Denying unnecessary scripts: onnxruntime-node CUDA download, protobufjs, ${NPM_PACKAGE}"
-    if ! run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" approve-builds "${approval_args[@]}"; then
-      rm -f "${add_log}"
-      error "DSH dependency build approval failed."
-      return 1
-    fi
-
-    step "Completing DSH bundle activation"
-    if ! run_dsh_plugin_without_onnx_cuda "${dsh_bin}" plugin --profile "${DSH_PROFILE}" add "${spec}"; then
-      rm -f "${add_log}"
-      error "DSH plugin installation still failed after reviewed build approval."
-      return 1
-    fi
+    rm -f "${add_log}"
+    error "DSH reported pending scripts after policy preparation. Review the package versions before changing the allowlist."
+    return 1
   fi
   rm -f "${add_log}"
 
-  if ! deny_existing_dsh_onnx_build "${profile_workspace}"; then
-    error "Unable to persist the onnxruntime-node CUDA build denial in ${profile_workspace}."
+  if ! prepare_dsh_build_policy "${profile_workspace}"; then
+    error "Unable to persist the reviewed dependency script policy in ${profile_workspace}."
     return 1
   fi
 
@@ -1616,20 +1615,11 @@ install_dsh() {
     return 1
   fi
 
-  if verify_dsh_better_sqlite3 "${profile_dir}"; then
-    success "better-sqlite3 native binding OK"
-  else
-    warn "better-sqlite3 native binding is not loadable; rebuilding it in the DSH profile."
-    if ! (cd "${profile_dir}" && pnpm rebuild better-sqlite3); then
-      error "better-sqlite3 rebuild failed in ${profile_dir}."
-      return 1
-    fi
-    if ! verify_dsh_better_sqlite3 "${profile_dir}"; then
-      error "better-sqlite3 native binding is not loadable after rebuild."
-      return 1
-    fi
-    success "better-sqlite3 native binding repaired"
+  if ! verify_dsh_better_sqlite3 "${profile_dir}"; then
+    error "better-sqlite3 native binding is not loadable in the selected runtime; no source rebuild was attempted."
+    return 1
   fi
+  success "better-sqlite3 native binding OK"
 
   if ! verify_dsh_onnx_cpu "${profile_dir}"; then
     error "onnxruntime-node CPU binding is not loadable."

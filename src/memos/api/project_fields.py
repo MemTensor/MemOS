@@ -96,8 +96,8 @@ class ProjectSearchFields(BaseModel):
             "Default all."
         ),
     )
-    project_result_format: str | None = Field(
-        None,
+    project_result_format: str = Field(
+        "topic",
         description=(
             "'topic' (default): topic_detail_list; "
             "'item': flat project_item_list, one entry per component."
