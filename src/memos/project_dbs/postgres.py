@@ -136,13 +136,10 @@ class PostgresProjectDB(BaseProjectDB):
     def _domain(row: tuple) -> Domain:
         return Domain(id=row[0], space_id=row[1], domain=row[2], description=row[3])
 
-    def _lock_space(self, cur: Any, space_id: str, for_delete: bool = False) -> None:
-        """Lock the space row for this transaction so domain writers of one space run
-        one at a time (keeps the domain cap exact and avoids deadlocks). FOR NO KEY UPDATE
-        still lets topics be inserted; delete_space takes FOR UPDATE to block them, since
-        their foreign key takes a key-share lock on the same row."""
-        mode = "UPDATE" if for_delete else "NO KEY UPDATE"
-        cur.execute(f"SELECT 1 FROM {SCHEMA}.spaces WHERE id = %s FOR {mode}", (space_id,))
+    def _lock_space(self, cur: Any, space_id: str) -> None:
+        """Lock the space row so concurrent create_domains batches run one at a time and
+        cannot overshoot the domain cap. FOR NO KEY UPDATE does not block topic inserts."""
+        cur.execute(f"SELECT 1 FROM {SCHEMA}.spaces WHERE id = %s FOR NO KEY UPDATE", (space_id,))
         if cur.fetchone() is None:
             raise SpaceNotFoundError(f"Space not found: {space_id}")
 
@@ -254,13 +251,8 @@ class PostgresProjectDB(BaseProjectDB):
         return self._space(row)
 
     def delete_space(self, space_id: str) -> None:
+        # Domains, topics and entries go with it through ON DELETE CASCADE.
         with self._tx() as cur:
-            try:
-                self._lock_space(cur, space_id, for_delete=True)
-            except SpaceNotFoundError:
-                return
-            cur.execute(f"DELETE FROM {SCHEMA}.topics WHERE space_id = %s", (space_id,))
-            cur.execute(f"DELETE FROM {SCHEMA}.domains WHERE space_id = %s", (space_id,))
             cur.execute(f"DELETE FROM {SCHEMA}.spaces WHERE id = %s", (space_id,))
 
     # ---------- 领域 ----------
@@ -274,10 +266,6 @@ class PostgresProjectDB(BaseProjectDB):
 
         updated: dict[str, Domain] = {}
         with self._tx() as cur:
-            try:
-                self._lock_space(cur, space_id)
-            except SpaceNotFoundError as e:
-                raise DomainNotFoundError(f"Space not found: {space_id}") from e
             for item in updates:
                 try:
                     cur.execute(

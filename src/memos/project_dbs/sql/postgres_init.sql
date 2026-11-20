@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS project_memory.domains (
     description     TEXT NOT NULL DEFAULT '',               -- 领域说明
     create_time     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- 创建时间
     update_time     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- 最近修改时间
-    FOREIGN KEY (space_id) REFERENCES project_memory.spaces (id),
+    FOREIGN KEY (space_id) REFERENCES project_memory.spaces (id) ON DELETE CASCADE,  -- 删除空间时级联删除领域
     UNIQUE (space_id, domain),
     UNIQUE (space_id, id)                                   -- 供主题表做同空间外键
 );
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS project_memory.topics (
     create_time         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- 创建时间
     update_time         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- 最近更新时间，包含条目变化
     UNIQUE (space_id, id),                                      -- 供条目表做同空间外键
-    FOREIGN KEY (space_id) REFERENCES project_memory.spaces (id),
+    FOREIGN KEY (space_id) REFERENCES project_memory.spaces (id) ON DELETE CASCADE,  -- 删除空间时级联删除主题
     FOREIGN KEY (space_id, domain_id) REFERENCES project_memory.domains (space_id, id)  -- 领域被引用时禁止删除
 );
 -- 空间内按更新时间分页

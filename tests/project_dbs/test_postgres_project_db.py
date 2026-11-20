@@ -139,10 +139,36 @@ def test_domain_writers_do_not_block_topic_inserts(pg_db):
 
     space = pg_db.create_space("p", "s", domains=[Domain(domain="开发")])
     with pg_db._tx() as cur:
-        pg_db._lock_space(cur, space.id)  # what create/update_domains hold
+        pg_db._lock_space(cur, space.id)  # what create_domains holds
         inserted = threading.Event()
         t = threading.Thread(target=lambda: (add_topic(pg_db, space.id, "开发"), inserted.set()))
         t.start()
         assert inserted.wait(5), "topic insert blocked by the domain-writer lock"
     t.join()
     pg_db.delete_space(space.id)
+
+
+def test_delete_space_waits_for_in_flight_topic_insert(pg_db):
+    import threading
+    import uuid
+
+    from memos.project_dbs.item import Domain
+
+    space = pg_db.create_space("p", "s", domains=[Domain(domain="开发")])
+    (domain,) = pg_db.list_domains(space.id)
+    done = threading.Event()
+    with pg_db._tx() as cur:  # an organizer transaction that has inserted a topic
+        cur.execute(
+            """INSERT INTO project_memory.topics
+                   (id, space_id, domain_id, topic_name, topic_summary, topic_description)
+               VALUES (%s, %s, %s, 'n', 's', 'd')""",
+            (str(uuid.uuid4()), space.id, domain.id),
+        )
+        t = threading.Thread(target=lambda: (pg_db.delete_space(space.id), done.set()))
+        t.start()
+        assert not done.wait(0.5), "delete_space should wait for the topic insert"
+    t.join(5)
+    assert done.is_set()
+    with pg_db._tx() as cur:
+        cur.execute("SELECT count(*) FROM project_memory.topics WHERE space_id = %s", (space.id,))
+        assert cur.fetchone()[0] == 0

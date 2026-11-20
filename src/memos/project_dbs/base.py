@@ -61,7 +61,7 @@ class BaseProjectDB(ABC):
 
     @abstractmethod
     def delete_space(self, space_id: str) -> None:
-        """Delete entries, topics, domains and the space in one transaction. Idempotent."""
+        """Delete the space; domains, topics and entries cascade. Idempotent."""
 
     # ---------- domains ----------
     @abstractmethod
