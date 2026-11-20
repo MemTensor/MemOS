@@ -5,6 +5,8 @@ Focus: clean_json_response function defensive behavior
 Related issue: #1525
 """
 
+import json
+
 import pytest
 
 from memos.mem_os.utils.format_utils import clean_json_response
@@ -118,3 +120,34 @@ class TestCleanJsonResponse:
         input_str = '{"key": "value"}\n```'
         result = clean_json_response(input_str)
         assert result == '{"key": "value"}'
+
+
+@pytest.mark.parametrize(
+    "payload", ["0", "123", "-12", "1.25", "6e3", "-2E-2", "true", "false", "null"]
+)
+def test_single_line_unlabelled_fence_preserves_json_scalars(payload):
+    """A JSON number or literal is payload, never a fence language label."""
+    cleaned = clean_json_response("```" + payload + "```")
+
+    assert cleaned == payload
+    assert json.loads(cleaned) == json.loads(payload)
+
+
+@pytest.mark.parametrize(
+    "opening", ["```\n", "```json\n", "```JSON\r\n", "```json ", "``` ", "```python\n"]
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"query": ["keep ```json and ``` inside values", "中文与转义\n内容"]},
+        ["```python\nprint(1)\n```", {"nested": "```"}],
+        "a JSON string ending in ```",
+    ],
+)
+def test_fence_cleaning_preserves_decoded_json_values(opening, value):
+    payload = json.dumps(value, ensure_ascii=False)
+
+    cleaned = clean_json_response(opening + payload + "\n```")
+
+    assert cleaned == payload
+    assert json.loads(cleaned) == value

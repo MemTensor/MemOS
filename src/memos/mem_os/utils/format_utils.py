@@ -17,10 +17,11 @@ logger = get_logger(__name__)
 # anchored so interior triple-backtick sequences inside a JSON string value
 # are preserved verbatim (issue #2420 — suggestions/responses that
 # contained code snippets were being silently corrupted before
-# ``json.loads``). The info string is restricted to a real identifier so a
-# single-line fenced payload (````` ```{"a": 1}``` `````, no newline after
-# the fence) is not swallowed by a greedy character class.
-_JSON_FENCE_OPEN_RE = re.compile(r"^```[ \t]*[A-Za-z0-9_+-]*[ \t]*\n?")
+# ``json.loads``). Language labels must start with a letter or underscore;
+# JSON numbers and the literals true/false/null are payload, not labels.
+_JSON_FENCE_OPEN_RE = re.compile(
+    r"^```[ \t]*(?:(?!(?:true|false|null)\b)[A-Za-z_][A-Za-z0-9_+-]*[ \t]*)?(?:\r?\n)?"
+)
 _JSON_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
 
 
