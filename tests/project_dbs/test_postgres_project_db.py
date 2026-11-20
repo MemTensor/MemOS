@@ -3,6 +3,66 @@
 import pytest
 
 
+def test_search_topics_recalls_and_filters_candidates(pg_db):
+    from datetime import datetime, timedelta, timezone
+
+    from memos.project_dbs.item import Domain, TimeRange, TopicChangeSet, TopicCreate, TopicFilter
+
+    now = datetime.now(timezone.utc)
+    vector = [1.0, 0.0] + [0.0] * (pg_db.config.embedding_dimension - 2)
+    other_vector = [0.0, 1.0, *vector[2:]]
+    domains = [Domain(domain="dev"), Domain(domain="ops")]
+    space = pg_db.create_space("search-project", "search", domains=domains)
+    other_space = pg_db.create_space("other-project", "other", domains=domains)
+
+    def create(space_id, name, embedding, domain="dev"):
+        (result,) = pg_db.apply_changes(
+            TopicChangeSet(
+                space_id=space_id,
+                accepted_at=now,
+                creates=[
+                    TopicCreate(
+                        domain=domain,
+                        topic_name=name,
+                        topic_summary="summary",
+                        topic_description="description",
+                        embedding=embedding,
+                    )
+                ],
+            )
+        )
+        return result.topic_id
+
+    both = create(space.id, "rollback", vector)
+    vector_only = create(space.id, "migration", other_vector)
+    text_only = create(space.id, "rollback notes", None)
+    too_old = create(space.id, "rollback older", vector)
+    create(space.id, "rollback operations", vector, domain="ops")
+    create(other_space.id, "rollback unscoped", vector)
+    with pg_db._tx() as cur:
+        cur.execute(
+            "UPDATE project_memory.topics SET update_time = %s WHERE id = %s",
+            (now - timedelta(days=1), too_old),
+        )
+
+    filters = [TopicFilter(update_time=TimeRange(gte=now - timedelta(hours=1)))]
+    kwargs = {"domains": ["dev"], "filters": filters}
+    hits = pg_db.search_topics_by_embedding([space.id], vector, **kwargs)
+    assert [hit.topic.id for hit in hits] == [both, vector_only]
+    assert [hit.score for hit in hits] == pytest.approx([1.0, 0.0])
+
+    hits = pg_db.search_topics_by_fulltext([space.id], "rollback", **kwargs)
+    assert {hit.topic.id for hit in hits} == {both, text_only}
+    assert hits[0].score >= hits[1].score > 0
+    one_hit = pg_db.search_topics_by_embedding([space.id], vector, top_k=1, **kwargs)
+    assert [hit.topic.id for hit in one_hit] == [both]
+    assert pg_db.search_topics_by_embedding([space.id], vector, top_k=0) == []
+    assert pg_db.search_topics_by_embedding([], vector) == []
+    assert pg_db.search_topics_by_fulltext([], "rollback") == []
+    assert pg_db.search_topics_by_fulltext([space.id], "  ") == []
+    assert pg_db.search_topics_by_fulltext([space.id], "rollback", top_k=1, **kwargs) == hits[:1]
+
+
 def test_init_creates_tables_and_is_idempotent(pg_db):
     pg_db._init_schema()  # second run must not fail
     with pg_db._tx() as cur:
@@ -180,7 +240,8 @@ def test_delete_space_waits_for_in_flight_topic_insert(pg_db):
 def test_init_tolerates_existing_text_search_config(pg_db):
     with pg_db._tx() as cur:  # tables gone, configuration left behind
         cur.execute(
-            "DROP TABLE project_memory.project_entries, project_memory.topics, "
+            "DROP TABLE project_memory.episode_turns, project_memory.episodes, "
+            "project_memory.messages, project_memory.project_entries, project_memory.topics, "
             "project_memory.domains, project_memory.spaces"
         )
     pg_db._init_schema()
@@ -259,7 +320,7 @@ def test_embeddings_are_written_kept_and_replaced(pg_db):
         )
     )  # fmt: skip
     topic_id = created.topic_id
-    (d,) = pg_db.get_topics([topic_id])[0].decisions
+    (d,) = pg_db.get_topics_detail([topic_id])[0].decisions
     assert _embedding(pg_db, "topics", topic_id) and _embedding(pg_db, "project_entries", d.id)
 
     def apply_update(**kw):
@@ -277,7 +338,7 @@ def test_embeddings_are_written_kept_and_replaced(pg_db):
         expected_version=2, upsert_entries=[Decision(id=d.id, content="c2", time=now, user_ids=[])]
     )
     assert not _embedding(pg_db, "project_entries", d.id)  # whole-entry replace clears it
-    (d,) = pg_db.get_topics([topic_id])[0].decisions
+    (d,) = pg_db.get_topics_detail([topic_id])[0].decisions
     pg_db.update_decision(d.id, d.update_time, "c3", embedding=vec)
     assert _embedding(pg_db, "project_entries", d.id)
     pg_db.delete_space(space.id)

@@ -14,7 +14,6 @@ from memos.project_dbs.item import (
     Decision,
     Domain,
     DomainUpdate,
-    EntryHit,
     Page,
     SearchHit,
     Space,
@@ -110,7 +109,7 @@ class BaseProjectDB(ABC):
         history/conflicts."""
 
     @abstractmethod
-    def get_topics(self, topic_ids: list[str]) -> list[Topic]:
+    def get_topics_detail(self, topic_ids: list[str]) -> list[Topic]:
         """Full topics with all entries, for organizing and retrieval. Unknown ids are skipped."""
 
     # ---------- topic writes ----------
@@ -146,26 +145,26 @@ class BaseProjectDB(ABC):
 
     # ---------- search ----------
     @abstractmethod
-    def search_topics(
+    def search_topics_by_embedding(
         self,
         space_ids: list[str],
         query_vec: list[float],
-        query_text: str | None = None,
         domains: list[str] | None = None,
         filters: list[TopicFilter] | None = None,
         top_k: int = 20,
     ) -> list[SearchHit]:
-        """Space, domain and filter conditions run in the same SQL as recall."""
+        """Recall topic headers by cosine similarity within the supplied filters."""
 
     @abstractmethod
-    def search_entries(
+    def search_topics_by_fulltext(
         self,
         space_ids: list[str],
-        topic_ids: list[str],
-        query_vec: list[float],
-        top_k: int = 50,
-    ) -> list[EntryHit]:
-        """Recall entries within candidate topics; fusion is done by retrieval."""
+        query_text: str,
+        domains: list[str] | None = None,
+        filters: list[TopicFilter] | None = None,
+        top_k: int = 20,
+    ) -> list[SearchHit]:
+        """Recall topic headers by database full-text rank within the supplied filters."""
 
     # ---------- lifecycle ----------
     def close(self) -> None:  # noqa: B027 - optional hook

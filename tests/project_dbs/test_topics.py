@@ -114,7 +114,7 @@ def test_create_then_get_full_topic(db, space):
         ],
     )
     assert topic_id.startswith("topic_")
-    (topic,) = db.get_topics([topic_id])
+    (topic,) = db.get_topics_detail([topic_id])
     assert (topic.space_id, topic.domain, topic.topic_name, topic.version) == (
         space.id,
         "开发",
@@ -130,10 +130,10 @@ def test_create_then_get_full_topic(db, space):
     assert topic.timeline[0].content == "完成评审"
 
 
-def test_get_topics_keeps_order_and_skips_unknown(db, space):
+def test_get_topics_detail_keeps_order_and_skips_unknown(db, space):
     a, b = create(db, space, name="a"), create(db, space, name="b")
-    assert [t.id for t in db.get_topics([b, "topic_missing", a, b])] == [b, a]
-    assert db.get_topics([]) == []
+    assert [t.id for t in db.get_topics_detail([b, "topic_missing", a, b])] == [b, a]
+    assert db.get_topics_detail([]) == []
 
 
 def test_create_with_unknown_domain_rolls_back(db, space):
@@ -159,7 +159,7 @@ def test_create_with_unknown_domain_rolls_back(db, space):
 def test_update_fields_entries_and_sources(db, space):
     keep, replace, drop = decision("保留", 1), decision("旧结论", 2), decision("删除", 3)
     topic_id = create(db, space, entries=[keep, replace, drop], sources=[Source(user_id="u1")])
-    (topic,) = db.get_topics([topic_id])
+    (topic,) = db.get_topics_detail([topic_id])
     by_content = {d.content: d for d in topic.decisions}
 
     results = update(
@@ -177,7 +177,7 @@ def test_update_fields_entries_and_sources(db, space):
         add_sources=[Source(user_id="u1"), Source(user_id="u2", agent_id="codex")],
     )
     assert [(r.topic_id, r.operation) for r in results] == [(topic_id, "UPDATE")]
-    (topic,) = db.get_topics([topic_id])
+    (topic,) = db.get_topics_detail([topic_id])
     assert (topic.domain, topic.topic_summary, topic.topic_description, topic.version) == (
         "运维",
         "新摘要",
@@ -206,7 +206,7 @@ def test_version_conflict_rolls_back_whole_batch(db, space):
             )
         )
     assert db.list_topics(space.id).total == 1
-    assert db.get_topics([topic_id])[0].topic_summary == "v2"
+    assert db.get_topics_detail([topic_id])[0].topic_summary == "v2"
 
 
 @pytest.mark.parametrize(
@@ -221,7 +221,7 @@ def test_update_errors(db, space, kwargs, error):
     topic_id = create(db, space)
     with pytest.raises(error):
         update(db, space, **{"topic_id": topic_id, **kwargs})
-    assert db.get_topics([topic_id])[0].version == 1
+    assert db.get_topics_detail([topic_id])[0].version == 1
 
 
 def test_update_cannot_touch_topic_of_another_space(db, space):
@@ -286,7 +286,7 @@ def test_update_decision_replaces_content_and_clears_conflicts(db, space):
             )
         ],
     )
-    (old,) = db.get_topics([topic_id])[0].decisions
+    (old,) = db.get_topics_detail([topic_id])[0].decisions
     new = db.update_decision(old.id, old.update_time, "采用方案D", embedding=[0.2] * 1024)
     assert (new.id, new.content, new.conflicts, new.version) == (old.id, "采用方案D", [], 2)
     assert new.history == old.history and new.update_time > old.update_time
@@ -296,7 +296,7 @@ def test_update_decision_replaces_content_and_clears_conflicts(db, space):
 
 def test_update_decision_rejects_non_decision(db, space):
     topic_id = create(db, space, entries=[Timeline(content="t", time=at(1), user_ids=[])])
-    (entry,) = db.get_topics([topic_id])[0].timeline
+    (entry,) = db.get_topics_detail([topic_id])[0].timeline
     with pytest.raises(UpdateConflictError):
         db.update_decision(entry.id, entry.update_time, "x")
 
@@ -324,7 +324,7 @@ def test_list_topics_orders_pages_and_previews(db, space):
 def test_list_topics_filters_are_or_of_and_groups(db, space):
     a = create(db, space, name="a")
     b = create(db, space, name="b")
-    topics = {t.id: t for t in db.get_topics([a, b])}
+    topics = {t.id: t for t in db.get_topics_detail([a, b])}
     ta, tb = topics[a].update_time, topics[b].update_time
     assert ta < tb
 
@@ -371,7 +371,7 @@ def test_missing_space_and_unknown_ids(db):
         db.apply_changes(TopicChangeSet(space_id="missing", accepted_at=now()))
     with pytest.raises(SpaceNotFoundError):
         db.clear_space("missing")
-    assert db.get_topics(["topic_missing"]) == []
+    assert db.get_topics_detail(["topic_missing"]) == []
     assert db.list_topics("missing").total == 0
 
 
@@ -380,15 +380,15 @@ def test_anchors_replaced_only_when_given(db, space):
     topic_id = create(db, space)
     update(db, space, topic_id=topic_id, expected_version=1, anchors=[{"path": "a.py"}])
     update(db, space, topic_id=topic_id, expected_version=2, topic_summary="x")
-    assert db.get_topics([topic_id])[0].anchors == [{"path": "a.py"}]
+    assert db.get_topics_detail([topic_id])[0].anchors == [{"path": "a.py"}]
     update(db, space, topic_id=topic_id, expected_version=3, anchors=[])
-    assert db.get_topics([topic_id])[0].anchors == []
+    assert db.get_topics_detail([topic_id])[0].anchors == []
 
 
 def test_entries_of_another_topic_are_untouchable(db, space):
     a = create(db, space, entries=[decision("a")])
     b = create(db, space, entries=[decision("b")])
-    (b_decision,) = db.get_topics([b])[0].decisions
+    (b_decision,) = db.get_topics_detail([b])[0].decisions
     update(db, space, topic_id=a, expected_version=1, delete_entry_ids=[b_decision.id])
     assert db.list_entries(b, "decision").total == 1  # foreign id ignored
     with pytest.raises(EntryNotFoundError):
@@ -415,14 +415,14 @@ def test_accepted_at_equal_to_cleared_at_is_rejected(db, space):
 
 def test_upsert_bumps_entry_version_and_update_decision_keeps_topic_version(db, space):
     topic_id = create(db, space, entries=[decision("v1")])
-    (d,) = db.get_topics([topic_id])[0].decisions
+    (d,) = db.get_topics_detail([topic_id])[0].decisions
     update(
         db, space, topic_id=topic_id, expected_version=1, upsert_entries=[decision("v2", id=d.id)]
     )
-    (d2,) = db.get_topics([topic_id])[0].decisions
+    (d2,) = db.get_topics_detail([topic_id])[0].decisions
     assert (d2.version, d2.create_time) == (2, d.create_time) and d2.update_time > d.update_time
     db.update_decision(d2.id, d2.update_time, "v3")
-    topic = db.get_topics([topic_id])[0]
+    topic = db.get_topics_detail([topic_id])[0]
     assert topic.version == 2 and topic.decisions[0].content == "v3"
 
 

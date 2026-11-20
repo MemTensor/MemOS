@@ -265,7 +265,7 @@ class Topic(BaseModel):
     topic_summary: str
     topic_description: str
     # Assembled from project_entries: list_topics returns at most preview_size per type
-    # without history/conflicts; get_topics returns all entries.
+    # without history/conflicts; get_topics_detail returns all entries.
     decisions: list[Decision] = Field(default_factory=list)
     experiences: list[Experience] = Field(default_factory=list)
     timeline: list[Timeline] = Field(default_factory=list)
@@ -347,15 +347,9 @@ class TopicChangeResult(BaseModel):  # reported back as change events
 
 
 # ---------- search ----------
-class SearchHit(BaseModel):  # candidate topic from search_topics
+class SearchHit(BaseModel):  # candidate topic from vector or full-text recall
     topic: Topic
     score: float  # raw recall score; ranking is done by retrieval
-
-
-class EntryHit(BaseModel):  # candidate entry from search_entries
-    entry: AnyEntry
-    topic_id: str
-    score: float
 
 
 class Page(BaseModel, Generic[T]):

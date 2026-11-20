@@ -271,7 +271,7 @@ class FakeProjectDB(BaseProjectDB):
             chosen = [e.model_copy(deep=True) for e in entries[(page - 1) * size : page * size]]
             return Page(items=chosen, total=len(entries), page=page, size=size)
 
-    def get_topics(self, topic_ids):
+    def get_topics_detail(self, topic_ids):
         with self._lock:
             return [self._topic(k, None) for k in dict.fromkeys(topic_ids) if k in self._topics]
 
@@ -406,10 +406,12 @@ class FakeProjectDB(BaseProjectDB):
             )
 
     # ---------- search: not implemented yet ----------
-    def search_topics(
-        self, space_ids, query_vec, query_text=None, domains=None, filters=None, top_k=20
+    def search_topics_by_embedding(
+        self, space_ids, query_vec, domains=None, filters=None, top_k=20
     ):
         raise NotImplementedError
 
-    def search_entries(self, space_ids, topic_ids, query_vec, top_k=50):
+    def search_topics_by_fulltext(
+        self, space_ids, query_text, domains=None, filters=None, top_k=20
+    ):
         raise NotImplementedError

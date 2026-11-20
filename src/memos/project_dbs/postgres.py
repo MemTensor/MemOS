@@ -31,7 +31,6 @@ from memos.project_dbs.item import (
     Decision,
     Domain,
     DomainUpdate,
-    EntryHit,
     Experience,
     Page,
     SearchHit,
@@ -475,7 +474,7 @@ class PostgresProjectDB(BaseProjectDB):
             items = [self._entry(row) for row in cur.fetchall()]
         return Page[AnyEntry](items=items, total=total, page=page, size=size)
 
-    def get_topics(self, topic_ids: list[str]) -> list[Topic]:
+    def get_topics_detail(self, topic_ids: list[str]) -> list[Topic]:
         if not topic_ids:
             return []
         with self._tx() as cur:
@@ -607,6 +606,8 @@ class PostgresProjectDB(BaseProjectDB):
             if entry.id is None:
                 new_entries.append(entry)
                 continue
+            # TODO: Check the entry version read by the organizer before replacing it.
+            # Manual edits bump only the entry version, so a stale organizer can overwrite them.
             cur.execute(
                 f"""UPDATE {SCHEMA}.project_entries SET entry_type = %s, content = %s, time = %s,
                         user_ids = %s, history = %s::jsonb, conflicts = %s::jsonb,
@@ -706,22 +707,65 @@ class PostgresProjectDB(BaseProjectDB):
             return cur.rowcount
 
     # ---------- search ----------
-    def search_topics(
+    def _topic_recall_filter(
+        self,
+        space_ids: list[str],
+        domains: list[str] | None,
+        filters: list[TopicFilter] | None,
+    ) -> tuple[str, list[Any]]:
+        params: list[Any] = [space_ids]
+        where = "t.space_id = ANY(%s)"
+        if domains:
+            where += " AND d.domain = ANY(%s)"
+            params.append(domains)
+        where += self._filters_sql(filters, params)
+        return where, params
+
+    def search_topics_by_embedding(
         self,
         space_ids: list[str],
         query_vec: list[float],
-        query_text: str | None = None,
         domains: list[str] | None = None,
         filters: list[TopicFilter] | None = None,
         top_k: int = 20,
     ) -> list[SearchHit]:
-        raise NotImplementedError
+        if not space_ids or top_k <= 0:
+            return []
 
-    def search_entries(
+        where, params = self._topic_recall_filter(space_ids, domains, filters)
+        with self._tx() as cur:
+            cur.execute(
+                f"""SELECT {_TOPIC_COLS}, t.embedding <=> %s::vector AS distance
+                    FROM {SCHEMA}.topics t JOIN {SCHEMA}.domains d ON d.id = t.domain_id
+                    WHERE {where} AND t.embedding IS NOT NULL
+                    ORDER BY distance LIMIT %s""",
+                [query_vec, *params, top_k],
+            )
+            return [
+                SearchHit(topic=self._topic(row[:-1]), score=1.0 - row[-1])
+                for row in cur.fetchall()
+            ]
+
+    def search_topics_by_fulltext(
         self,
         space_ids: list[str],
-        topic_ids: list[str],
-        query_vec: list[float],
-        top_k: int = 50,
-    ) -> list[EntryHit]:
-        raise NotImplementedError
+        query_text: str,
+        domains: list[str] | None = None,
+        filters: list[TopicFilter] | None = None,
+        top_k: int = 20,
+    ) -> list[SearchHit]:
+        text = query_text.strip()
+        if not space_ids or not text or top_k <= 0:
+            return []
+
+        where, params = self._topic_recall_filter(space_ids, domains, filters)
+        with self._tx() as cur:
+            cur.execute(
+                f"""SELECT {_TOPIC_COLS}, ts_rank(t.search_tsv, q.value) AS rank
+                    FROM {SCHEMA}.topics t JOIN {SCHEMA}.domains d ON d.id = t.domain_id
+                    CROSS JOIN plainto_tsquery('{SCHEMA}.zh', %s) AS q(value)
+                    WHERE {where} AND t.search_tsv @@ q.value
+                    ORDER BY rank DESC, t.id COLLATE "C" LIMIT %s""",
+                [text, *params, top_k],
+            )
+            return [SearchHit(topic=self._topic(row[:-1]), score=row[-1]) for row in cur.fetchall()]
