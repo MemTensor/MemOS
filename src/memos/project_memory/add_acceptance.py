@@ -147,9 +147,10 @@ class AddAcceptance:
 
     def _scopes(self, cursor: Any, spaces: list[str], domains: list[str]) -> list[dict[str, Any]]:
         cursor.execute(
-            """SELECT s.id, s.resource_bindings,
+            """SELECT s.id, COALESCE(st.resource_bindings, '[]'::jsonb) AS resource_bindings,
                       ARRAY(SELECT domain FROM domains d WHERE d.space_id = s.id ORDER BY domain) AS domains
-               FROM spaces s WHERE s.project_id = %s AND s.id = ANY(%s::text[])
+               FROM spaces s LEFT JOIN add_space_state st ON st.space_id = s.id
+               WHERE s.project_id = %s AND s.id = ANY(%s::text[])
                ORDER BY s.id FOR SHARE OF s""",
             (self.store.project_id, spaces),
         )
@@ -261,9 +262,9 @@ class AddAcceptance:
                         project_id, conversation_key, conversation_id, message_id, turn_id,
                         turn_seq, msg_seq, role, role_id, role_name, content, tool_calls,
                         tool_call_id, experience_notes, chat_time, accepted_at, task_id, user_id,
-                        agent_id, raw_sha256, content_sha256
+                        agent_id, content_sha256
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s, %s)""",
+                              %s, %s, %s, %s, %s, %s)""",
                     (
                         self.store.project_id,
                         ctx.conversation_key,
@@ -284,7 +285,6 @@ class AddAcceptance:
                         ctx.task_id,
                         ctx.user_id,
                         json_value(ctx.agent_id),
-                        message["raw_sha256"],
                         message["content_sha256"],
                     ),
                 )

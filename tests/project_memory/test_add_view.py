@@ -19,14 +19,13 @@ def test_preserves_domain_identity_and_topic_reads(add_store):
         domain_id = cursor.fetchone()["id"]
         cursor.execute(
             """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary, topic_description,
-                                   create_time, update_time, decisions)
-               VALUES ('topic', 'space', %s, 'Release', 'Choose Python', 'Runtime', now(), now(),
-                 '[{"id": "decision", "content": "Choose Python", "user_ids": ["member"]}]')""",
+                                   create_time, update_time)
+               VALUES ('topic', 'space', %s, 'Release', 'Choose Python', 'Runtime', now(), now())""",
             (domain_id,),
         )
         cursor.execute(
-            """INSERT INTO topic_items (id, topic_id, space_id, kind, content, time, topic_version)
-               VALUES ('decision', 'topic', 'space', 'decision', 'Choose Python', now(), 1)"""
+            """INSERT INTO project_entries (id, topic_id, space_id, entry_type, content, time, user_ids)
+               VALUES ('decision', 'topic', 'space', 'decision', 'Choose Python', now(), '{member}')"""
         )
     space = view.get_space("space")
     space.domains[0].name = "deployment"

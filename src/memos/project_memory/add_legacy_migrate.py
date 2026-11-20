@@ -215,10 +215,8 @@ def plan_migration(
 
 
 _TABLES = ("spaces", "domains", "topics", "messages", "episodes", "episode_turns")
+_ENTRY_LISTS = ("decisions", "experiences", "timeline")
 _JSON_COLUMNS = {
-    "decisions",
-    "experiences",
-    "timeline",
     "sources",
     "tool_calls",
     "experience_notes",
@@ -259,16 +257,16 @@ def apply_migration(store: PostgresAddStore, plan: MigrationPlan) -> None:
                 "Legacy Space already exists in the destination; import would overwrite data"
             )
         for table in _TABLES:
-            _insert_rows(cursor, table, getattr(plan, table))
+            rows = getattr(plan, table)
+            if table == "topics":
+                # Entries are project_entries rows in the shared schema.
+                rows = [
+                    {key: value for key, value in row.items() if key not in _ENTRY_LISTS}
+                    for row in rows
+                ]
+            _insert_rows(cursor, table, rows)
         for topic in plan.topics:
-            index_text = "\n".join(
-                topic[key] for key in ("topic_name", "topic_summary", "topic_description")
-            )
-            cursor.execute(
-                "UPDATE topics SET search_tsv = to_tsvector('simple', %s) WHERE id = %s",
-                (index_text, topic["id"]),
-            )
-            refresh_topic_items(cursor, topic, 1)
+            refresh_topic_items(cursor, topic)
         if store.retrieval_index:
             cursor.execute("SELECT clock_timestamp() AS now")
             now = cursor.fetchone()["now"]

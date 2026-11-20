@@ -17,6 +17,7 @@ from memos.configs.graph_db import GraphDBConfigFactory
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.configs.llm import LLMConfigFactory
 from memos.configs.mem_reader import MemReaderConfigFactory
+from memos.configs.project_db import ProjectDBConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.memories.textual.prefer_text_memory.config import (
@@ -53,6 +54,19 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
             "config": graph_db_backend_map[graph_db_backend],
         }
     )
+
+
+def build_project_db_config() -> ProjectDBConfigFactory:
+    """Build and validate the selected project DB config."""
+    backend = os.getenv("PROJECT_DB_BACKEND", "postgres").lower()
+    project_db_backend_map = {
+        "postgres": APIConfig.get_project_postgres_config,
+    }
+    build_config = project_db_backend_map.get(backend)
+    if build_config is None:
+        raise ValueError(f"Unsupported project db backend: {backend}")
+
+    return ProjectDBConfigFactory.model_validate({"backend": backend, "config": build_config()})
 
 
 def build_vec_db_config() -> dict[str, Any]:

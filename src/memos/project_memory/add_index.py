@@ -64,15 +64,17 @@ def ranked_topics(
         except Exception as exc:
             logger.warning("Project memory overview embedding unavailable (%s)", type(exc).__name__)
     scope = (store.project_id, episode["space_id"], episode.get("domains") or [])
+    # The shared topics.search_tsv is generated with the schema's text search configuration.
+    config = getattr(store, "text_search_config", "simple")
     with store.transaction(readonly=True) as cursor:
         cursor.execute(
             """SELECT t.id FROM topics t JOIN spaces s ON t.space_id = s.id
                  JOIN domains d ON d.space_id = t.space_id AND d.id = t.domain_id
                WHERE s.project_id = %s AND t.space_id = %s AND d.domain = ANY(%s::text[])
-                 AND t.search_tsv @@ websearch_to_tsquery('simple', %s)
-               ORDER BY ts_rank(t.search_tsv, websearch_to_tsquery('simple', %s)) DESC, t.id
+                 AND t.search_tsv @@ websearch_to_tsquery(%s::regconfig, %s)
+               ORDER BY ts_rank(t.search_tsv, websearch_to_tsquery(%s::regconfig, %s)) DESC, t.id
                LIMIT %s""",
-            (*scope, query, query, limit),
+            (*scope, config, query, config, query, limit),
         )
         lexical = cursor.fetchall()
         semantic = []

@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .add_layout import load_topics
 from .index import Topic, Vector, replace_snapshot, set_embedding
 
 
@@ -35,7 +36,9 @@ CREATE TABLE IF NOT EXISTS memos_project.pm_domains (
 
 def install(cursor: Any) -> None:
     """Create the registry and, once, the retrieval tables of `schema.sql`."""
-    cursor.execute(REGISTRY_TABLES)
+    cursor.execute("SELECT to_regclass('memos_project.pm_domains') AS present")
+    if cursor.fetchone()["present"] is None:
+        cursor.execute(REGISTRY_TABLES)
     cursor.execute("SELECT to_regclass('memos_project.pm_retrieval_roots') AS present")
     if cursor.fetchone()["present"] is None:
         cursor.execute(Path(__file__).with_name("schema.sql").read_text())
@@ -155,13 +158,9 @@ def publish_topics(
     """Replace the index snapshot of each Topic at its committed version, with stored vectors."""
     if not topic_ids:
         return 0
-    cursor.execute(
-        """SELECT t.*, d.domain, t.embedding::text AS embedding_text FROM topics t
-             JOIN domains d ON d.id = t.domain_id AND d.space_id = t.space_id
-           WHERE t.space_id = %s AND t.id = ANY(%s::text[])""",
-        (space_id, list(topic_ids)),
+    rows = load_topics(
+        cursor, "t.space_id = %s AND t.id = ANY(%s::text[])", (space_id, list(topic_ids))
     )
-    rows = cursor.fetchall()
     published = 0
     for row in rows:
         if not replace_snapshot(
@@ -169,16 +168,17 @@ def publish_topics(
         ):
             continue
         published += 1
+        model = row.get("embedding_model_id")
         vectors = []
-        if vector := _vector(row["embedding_text"], row.get("embedding_model_id")):
+        if vector := _vector(row.get("embedding"), model):
             vectors.append((row["id"], vector))
         cursor.execute(
-            """SELECT id, embedding::text AS embedding_text, embedding_model_id FROM topic_items
+            """SELECT id, embedding::text AS embedding_text FROM project_entries
                WHERE space_id = %s AND topic_id = %s AND embedding IS NOT NULL""",
             (space_id, row["id"]),
         )
         for item in cursor.fetchall():
-            if vector := _vector(item["embedding_text"], item["embedding_model_id"]):
+            if vector := _vector(item["embedding_text"], model):
                 vectors.append((item["id"], vector))
         for memory_id, vector in vectors:
             set_embedding(cursor, tenant, space_id, row["id"], row["version"], memory_id, 0, vector)
