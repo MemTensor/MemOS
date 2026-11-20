@@ -111,8 +111,12 @@ def test_draft_rejects_numeric_value_missing_from_the_witness():
             ],
         }
     )
-    with pytest.raises(ModelError, match="no valid evidence"):
-        extract_episode(writer, {"id": "episode"}, [row("one", "user", "确认限制为 32 个连接")])
+    result = extract_episode(
+        writer, {"id": "episode"}, [row("one", "user", "确认限制为 32 个连接")]
+    )
+    assert result["drafts"] == []
+    assert result["extract_status"] == "skipped"
+    assert result["dropped_drafts"] == 1
 
 
 @pytest.mark.parametrize("role", ["user", "tool"])
@@ -132,13 +136,14 @@ def test_adoption_requires_a_prior_assistant_proposal(role):
             ],
         }
     )
-    with pytest.raises(ModelError, match="no valid evidence"):
-        extract_episode(
-            writer,
-            {"id": "episode"},
-            [row("adopt", "user", "同意")],
-            [row("earlier", role, "建议使用 PG17", "earlier-task")],
-        )
+    result = extract_episode(
+        writer,
+        {"id": "episode"},
+        [row("adopt", "user", "同意")],
+        [row("earlier", role, "建议使用 PG17", "earlier-task")],
+    )
+    assert result["drafts"] == []
+    assert result["dropped_drafts"] == 1
 
 
 def test_listed_disclosures_use_actual_assistant_text_before_authorization():
@@ -198,8 +203,7 @@ def test_extraction_prompt_preserves_the_source_numeral_and_unit():
     assert result["drafts"][0]["key_values"] == ["三次"]
     for unsupported in ("重试次数限制为 3 次", "重试次数限制为 4 次"):
         draft["content"] = unsupported
-        with pytest.raises(ModelError, match="no valid evidence"):
-            extract_episode(writer, {"id": "episode"}, [current, later])
+        assert extract_episode(writer, {"id": "episode"}, [current, later])["drafts"] == []
 
 
 def test_quote_ref_tolerates_whitespace_layout_but_never_guesses():

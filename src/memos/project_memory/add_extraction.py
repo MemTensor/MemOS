@@ -329,8 +329,16 @@ def extract_episode(
         draft = _draft(episode, item, row, member, prior_to[mid], anchors)
         if draft:
             valid[draft["draft_id"]] = draft
-    if raw_drafts and not valid:
-        raise ModelError("Episode extraction returned drafts with no valid evidence")
+    dropped = len(raw_drafts) - len(valid)
+    if dropped:
+        # Drafts whose evidence does not hold are dropped, never the whole Episode: retrying
+        # the same input reproduces the same drafts and would only fail the member's Task.
+        logger.warning(
+            "Project Episode extraction dropped %d of %d drafts without valid evidence",
+            dropped,
+            len(raw_drafts),
+        )
+    result["dropped_drafts"] = dropped
     if valid and not summary.strip():
         raise ModelError("An Episode with accepted drafts requires a summary")
     corpus = "\n".join(row.get("content") or "" for row in messages + previous_messages)
