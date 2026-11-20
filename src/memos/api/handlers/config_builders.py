@@ -56,35 +56,17 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
     )
 
 
-def build_project_db_config() -> ProjectDBConfigFactory | None:
-    """
-    Build project memory database configuration from PROJECT_DB_* env vars.
+def build_project_db_config() -> ProjectDBConfigFactory:
+    """Build and validate the selected project DB config."""
+    backend = os.getenv("PROJECT_DB_BACKEND", "postgres").lower()
+    project_db_backend_map = {
+        "postgres": APIConfig.get_project_postgres_config,
+    }
+    build_config = project_db_backend_map.get(backend)
+    if build_config is None:
+        raise ValueError(f"Unsupported project db backend: {backend}")
 
-    Returns:
-        Validated config, or None when PROJECT_DB_HOST is unset (project memory disabled)
-    """
-    host = os.getenv("PROJECT_DB_HOST")
-    if not host:
-        return None
-    return ProjectDBConfigFactory.model_validate(
-        {
-            "backend": os.getenv("PROJECT_DB_BACKEND", "postgres").lower(),
-            "config": {
-                "host": host,
-                "port": int(os.getenv("PROJECT_DB_PORT", "5432")),
-                "user": os.getenv("PROJECT_DB_USER", "postgres"),
-                "password": os.getenv("PROJECT_DB_PASSWORD", ""),
-                "db_name": os.getenv("PROJECT_DB_NAME", "memos_project"),
-                "minconn": int(os.getenv("PROJECT_DB_MIN_CONN", "1")),
-                "maxconn": int(os.getenv("PROJECT_DB_MAX_CONN", "10")),
-                "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
-                "text_search_parser": (os.getenv("PROJECT_DB_TEXT_SEARCH_PARSER") or "zhparser")
-                .strip()
-                .lower(),
-                "auto_init": os.getenv("PROJECT_DB_AUTO_INIT", "true").lower() == "true",
-            },
-        }
-    )
+    return ProjectDBConfigFactory.model_validate({"backend": backend, "config": build_config()})
 
 
 def build_vec_db_config() -> dict[str, Any]:

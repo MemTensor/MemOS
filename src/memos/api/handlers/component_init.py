@@ -40,6 +40,7 @@ from memos.memories.textual.tree_text_memory.organize.manager import MemoryManag
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 from memos.plugins.component_bootstrap import build_plugin_context
 from memos.plugins.manager import plugin_manager
+from memos.project_dbs.factory import ProjectDBFactory
 
 
 if TYPE_CHECKING:
@@ -159,6 +160,7 @@ def init_server() -> dict[str, Any]:
 
     # Build component configurations
     graph_db_config = build_graph_db_config()
+    project_db_config = build_project_db_config()
     llm_config = build_llm_config()
     feedback_llm_config = build_feedback_llm_config()
     suggestion_llm_config = build_suggestion_llm_config()
@@ -176,16 +178,7 @@ def init_server() -> dict[str, Any]:
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
-    project_db_config = build_project_db_config()
-    project_db = None
-    if project_db_config is not None:
-        from memos.project_dbs.factory import ProjectDBFactory
-
-        # Project memory is optional: keep the existing memory API up if its DB is down.
-        try:
-            project_db = ProjectDBFactory.from_config(project_db_config)
-        except Exception:
-            logger.exception("Failed to initialize project memory DB; project memory disabled")
+    project_db = ProjectDBFactory.from_config(project_db_config)
     llm = LLMFactory.from_config(llm_config)
     feedback_llm = LLMFactory.from_config(feedback_llm_config)
     suggestion_llm = LLMFactory.from_config(suggestion_llm_config)
