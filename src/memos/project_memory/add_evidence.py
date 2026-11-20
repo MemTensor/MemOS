@@ -63,9 +63,42 @@ def quote_ref(message: dict[str, Any], quote: Any, pointer: str = "/content") ->
     if not isinstance(quote, str) or not quote.strip() or text is None:
         return None
     start = text.find(quote)
-    if start < 0:
+    if start >= 0:
+        return source_ref(str(message["message_id"]), pointer, start, start + len(quote))
+    span = _loose_span(text, quote)
+    if span is None:
         return None
-    return source_ref(str(message["message_id"]), pointer, start, start + len(quote))
+    return source_ref(str(message["message_id"]), pointer, *span)
+
+
+def _squash(text: str) -> tuple[str, list[int]]:
+    """Collapse whitespace runs, keeping each kept character's offset in the original."""
+    chars: list[str] = []
+    offsets: list[int] = []
+    pending = False
+    for index, char in enumerate(text):
+        if char.isspace():
+            pending = bool(chars)
+            continue
+        if pending:
+            chars.append(" ")
+            offsets.append(index - 1)
+            pending = False
+        chars.append(char)
+        offsets.append(index)
+    return "".join(chars), offsets
+
+
+def _loose_span(text: str, quote: str) -> tuple[int, int] | None:
+    """Find a quote that differs from the original only in whitespace layout."""
+    flat, offsets = _squash(text)
+    needle, _ = _squash(quote)
+    if not needle:
+        return None
+    position = flat.find(needle)
+    if position < 0 or flat.find(needle, position + 1) >= 0:
+        return None  # Absent or ambiguous: never guess which occurrence was meant.
+    return offsets[position], offsets[position + len(needle) - 1] + 1
 
 
 def _observation(

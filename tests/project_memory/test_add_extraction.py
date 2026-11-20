@@ -200,3 +200,17 @@ def test_extraction_prompt_preserves_the_source_numeral_and_unit():
         draft["content"] = unsupported
         with pytest.raises(ModelError, match="no valid evidence"):
             extract_episode(writer, {"id": "episode"}, [current, later])
+
+
+def test_quote_ref_tolerates_whitespace_layout_but_never_guesses():
+    from memos.project_memory.add_evidence import quote_ref
+
+    message = {"message_id": "m1", "content": "早班 6 点发车，\n迟到 10 分钟\n  就取消。"}
+    ref = quote_ref(message, "迟到 10 分钟 就取消。")
+    assert ref is not None
+    assert message["content"][ref["start"] : ref["end"]] == "迟到 10 分钟\n  就取消。"
+    assert quote_ref(message, "早班 7 点发车") is None
+    repeated = {"message_id": "m2", "content": "好的\n好的"}
+    assert quote_ref(repeated, "好的 好的") is not None
+    assert quote_ref({"message_id": "m3", "content": "ok  ok"}, "ok") is not None
+    assert quote_ref({"message_id": "m4", "content": "a b\na b"}, "a  b") is None
