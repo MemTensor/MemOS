@@ -33,9 +33,12 @@ logger.info(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    with project_retrieval_lifespan(_app, server_router_module.components):
-        yield
-    shutdown_components(server_router_module.components)
+    try:
+        with project_retrieval_lifespan(_app, server_router_module.components):
+            yield
+    finally:
+        shutdown_components(server_router_module.components)
+        plugin_manager.shutdown()
 
 
 app = FastAPI(

@@ -5,6 +5,7 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, Field, model_validator
 
 # Import message types from core types module
+from memos.api.project_fields import ProjectAddFields, ProjectScopeFields, ProjectSearchFields
 from memos.log import get_logger
 from memos.types import MessageList, MessagesType, PermissionDict, SearchMode
 
@@ -363,7 +364,7 @@ class SearchRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
 
 
-class APISearchRequest(BaseRequest):
+class APISearchRequest(BaseRequest, ProjectSearchFields):
     """Request model for searching memories."""
 
     # ==== Basic inputs ====
@@ -373,21 +374,8 @@ class APISearchRequest(BaseRequest):
     )
     user_id: str = Field(..., description="User ID")
 
-    include_memory_view: list[str] | None = Field(
-        None, description="Explicit project, trajectory or personal recall channels"
-    )
-    project_item_types: list[str] | None = Field(
-        None, description="Requested topic, decision, experience and timeline components"
-    )
-    project_result_format: str = Field("topic", description="Grouped topic or flat item results")
-    space_ids: str | list[str] | None = Field(
-        None, description="Authorized project spaces, up to 20"
-    )
-    domains: str | list[str] | None = Field(None, description="Registered project domains")
-    conversation_id: str | None = Field(None, description="Cloud name for the current session")
-    memory_limit_number: int | None = Field(
-        None, description="Total project results; zero uses 9, values above 25 use 25"
-    )
+    # Project fields (include_memory_view, space_ids, domains, conversation_id,
+    # memory_limit_number, project_item_types, project_result_format) come from ProjectSearchFields.
 
     # ==== Cube scoping ====
     readable_cube_ids: list[str] | None = Field(
@@ -621,7 +609,7 @@ class APISearchRequest(BaseRequest):
         return self
 
 
-class APIADDRequest(BaseRequest):
+class APIADDRequest(BaseRequest, ProjectAddFields):
     """Request model for creating memories."""
 
     # Model-level example so the interactive docs (/docs) show a copy-paste-ready
@@ -972,7 +960,7 @@ class ProjectMessagesRequest(BaseRequest):
     user_id: str | None = None
 
 
-class GetMemoryRequest(BaseRequest):
+class GetMemoryRequest(BaseRequest, ProjectScopeFields):
     """Request model for getting memories."""
 
     mem_cube_id: str = Field(..., description="Cube ID")
@@ -1027,6 +1015,10 @@ class DeleteMemoryRequest(BaseRequest):
             "(Internal) Whether to automatically delete related WorkingMemory nodes "
             "based on working_binding metadata when deleting by memory_ids."
         ),
+    )
+    space_id: str | None = Field(
+        None,
+        description="Project memory: delete topics of this space (keeps the space itself).",
     )
 
     @model_validator(mode="after")

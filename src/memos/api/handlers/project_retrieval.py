@@ -27,7 +27,7 @@ from memos.project_memory.store import (
     Scope,
     UnknownDomainError,
 )
-from memos.project_memory.views import ITEM_TYPES
+from memos.project_memory.views import ITEM_TYPES, budget
 
 
 logger = get_logger(__name__)
@@ -47,7 +47,7 @@ _project_candidates: ContextVar[Future | None] = ContextVar("project_candidates"
 def _add_project_bucket(results: dict, **kwargs) -> dict:
     ready = _project_candidates.get()
     if ready is not None:
-        hits = ready.result(timeout=0.30)
+        hits = ready.result(timeout=budget(0.30))
         results["project_mem"] = [
             {
                 "cube_id": "project",
@@ -89,6 +89,13 @@ def _scope(request: Request, spaces: list[str] | None, domains: list[str]) -> Sc
     return Scope(tenant, None if spaces is None else tuple(spaces), tuple(domains))
 
 
+def _project_plugin_serves() -> bool:
+    """The project memory plugin answers project reads itself when no index is configured."""
+    from memos.api.handlers.project_view import project_enabled
+
+    return project_enabled()
+
+
 @contextmanager
 def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]:
     if getattr(app.state, "project_retrieval", None) is not None:
@@ -96,7 +103,7 @@ def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]
         return
     dsn = os.getenv("MEMOS_PROJECT_MEMORY_DSN")
     mock_setting = os.getenv("MEMOS_PROJECT_MEMORY_MOCK")
-    if mock_setting == "1" or (not mock_setting and not dsn):
+    if mock_setting == "1" or (not mock_setting and not dsn and not _project_plugin_serves()):
         from memos.project_memory.mock_store import MockProjectStore
 
         store = MockProjectStore(os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID") or "mock-tenant")
@@ -256,7 +263,7 @@ async def get_project(
     service = _service(request)
     try:
         data = await asyncio.wait_for(
-            asyncio.to_thread(service.store.get, scope, memory_id, view == "metadata"), 0.45
+            asyncio.to_thread(service.store.get, scope, memory_id, view == "metadata"), budget(0.45)
         )
     except AmbiguousMemoryError as exc:
         raise HTTPException(

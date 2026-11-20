@@ -1192,12 +1192,420 @@
           }
         }
       }
+    },
+    "/product/create_space": {
+      "post": {
+        "tags": [
+          "Project Memory"
+        ],
+        "summary": "Create a project space (memory view `project`)",
+        "operationId": "create_space_product_create_space_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSpaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/update_space": {
+      "post": {
+        "tags": [
+          "Project Memory"
+        ],
+        "summary": "Update space name / instructions",
+        "operationId": "update_space_product_update_space_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSpaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/get_space": {
+      "post": {
+        "tags": [
+          "Project Memory"
+        ],
+        "summary": "Get a project space",
+        "operationId": "get_space_product_get_space_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceIdRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/delete_space": {
+      "post": {
+        "tags": [
+          "Project Memory"
+        ],
+        "summary": "Delete a space with all its topics, instructions and domains",
+        "operationId": "delete_space_product_delete_space_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceIdRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/create_domains": {
+      "post": {
+        "tags": [
+          "Project Memory"
+        ],
+        "summary": "Register domains (whole batch validated)",
+        "operationId": "create_domains_product_create_domains_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDomainsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/update_domains": {
+      "post": {
+        "tags": [
+          "Project Memory"
+        ],
+        "summary": "Rename / re-describe domains; renames sync to topics",
+        "operationId": "update_domains_product_update_domains_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDomainsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/delete_domains": {
+      "post": {
+        "tags": [
+          "Project Memory"
+        ],
+        "summary": "Delete domains not referenced by any topic",
+        "operationId": "delete_domains_product_delete_domains_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteDomainsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/list_domains": {
+      "post": {
+        "tags": [
+          "Project Memory"
+        ],
+        "summary": "Full domain list of a space",
+        "operationId": "list_domains_product_list_domains_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceIdRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
       "APIADDRequest": {
         "properties": {
+          "allow_memory_view": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Memory View",
+            "description": "Memory views to generate. Include 'project' to build project memory; only 'project' means no personal memory is generated."
+          },
+          "space_ids": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Ids",
+            "description": "Project spaces to organise into. Required when 'project' is requested."
+          },
+          "domains": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domains",
+            "description": "Registered domain names for the write. Defaults to all Space domains."
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id",
+            "description": "Agent whose output is being recorded."
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id",
+            "description": "Conversation / session identifier (alias of session_id for project memory)."
+          },
+          "project_member_map": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Member Map",
+            "description": "Internal id -> caller's external id for the members and agents in this request; project memory stores the external ids."
+          },
           "user_id": {
             "type": "string",
             "title": "User Id",
@@ -1318,7 +1726,7 @@
               }
             ],
             "title": "Info",
-            "description": "Additional metadata for the add request. All keys can be used as filters in search. Example: {'agent_id': 'xxxxxx', 'app_id': 'xxxx', 'source_type': 'web', 'source_url': 'https://www.baidu.com', 'source_content': '\u897f\u6e56\u662f\u676d\u5dde\u6700\u8457\u540d\u7684\u666f\u70b9'}."
+            "description": "Additional metadata for the add request. All keys can be used as filters in search. Example: {'agent_id': 'xxxxxx', 'app_id': 'xxxx', 'source_type': 'web', 'source_url': 'https://www.baidu.com', 'source_content': '西湖是杭州最著名的景点'}."
           },
           "messages": {
             "anyOf": [
@@ -1906,16 +2314,6 @@
       },
       "APISearchRequest": {
         "properties": {
-          "query": {
-            "type": "string",
-            "title": "Query",
-            "description": "User search query"
-          },
-          "user_id": {
-            "type": "string",
-            "title": "User Id",
-            "description": "User ID"
-          },
           "include_memory_view": {
             "anyOf": [
               {
@@ -1929,28 +2327,7 @@
               }
             ],
             "title": "Include Memory View",
-            "description": "Explicit project, trajectory or personal recall channels"
-          },
-          "project_item_types": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Project Item Types",
-            "description": "Requested topic, decision, experience and timeline components"
-          },
-          "project_result_format": {
-            "type": "string",
-            "title": "Project Result Format",
-            "description": "Grouped topic or flat item results",
-            "default": "topic"
+            "description": "Memory views to search. Include 'project' to search project memory; 'project' is never included by default."
           },
           "space_ids": {
             "anyOf": [
@@ -1968,7 +2345,7 @@
               }
             ],
             "title": "Space Ids",
-            "description": "Authorized project spaces, up to 20"
+            "description": "Project spaces to search. Required when 'project' is requested."
           },
           "domains": {
             "anyOf": [
@@ -1986,7 +2363,7 @@
               }
             ],
             "title": "Domains",
-            "description": "Registered project domains"
+            "description": "Registered domain names to narrow project memory search."
           },
           "conversation_id": {
             "anyOf": [
@@ -1998,7 +2375,7 @@
               }
             ],
             "title": "Conversation Id",
-            "description": "Cloud name for the current session"
+            "description": "Current conversation; topics sourced from it are prioritised."
           },
           "memory_limit_number": {
             "anyOf": [
@@ -2010,7 +2387,38 @@
               }
             ],
             "title": "Memory Limit Number",
-            "description": "Total project results; zero uses 9, values above 25 use 25"
+            "description": "Max topics returned (project memory). Default 9; silently capped at 25. Does not affect other memory view quotas."
+          },
+          "project_item_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Item Types",
+            "description": "Project memory components to return: topic / decision / experience / timeline. Default all."
+          },
+          "project_result_format": {
+            "type": "string",
+            "title": "Project Result Format",
+            "description": "'topic' (default): topic_detail_list; 'item': flat project_item_list, one entry per component.",
+            "default": "topic"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "User search query"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID"
           },
           "readable_cube_ids": {
             "anyOf": [
@@ -2649,6 +3057,21 @@
             ],
             "title": "Refusal"
           },
+          "experience_notes": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experience Notes"
+          },
           "tool_calls": {
             "anyOf": [
               {
@@ -2694,6 +3117,28 @@
               }
             ],
             "title": "Message Id"
+          },
+          "role_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Id"
+          },
+          "role_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Name"
           }
         },
         "type": "object",
@@ -2871,6 +3316,28 @@
               }
             ],
             "title": "Message Id"
+          },
+          "role_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Id"
+          },
+          "role_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Name"
           }
         },
         "type": "object",
@@ -3032,6 +3499,28 @@
               }
             ],
             "title": "Message Id"
+          },
+          "role_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Id"
+          },
+          "role_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Name"
           }
         },
         "type": "object",
@@ -3662,6 +4151,59 @@
         "title": "CreateCubeResponseData",
         "description": "Data model for cube creation response."
       },
+      "CreateDomainsRequest": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "title": "Space Id"
+          },
+          "domains": {
+            "items": {
+              "$ref": "#/components/schemas/DomainItem"
+            },
+            "type": "array",
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "space_id",
+          "domains"
+        ],
+        "title": "CreateDomainsRequest"
+      },
+      "CreateSpaceRequest": {
+        "properties": {
+          "space_name": {
+            "type": "string",
+            "title": "Space Name"
+          },
+          "instructions": {
+            "type": "string",
+            "title": "Instructions",
+            "default": ""
+          },
+          "domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DomainItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "space_name"
+        ],
+        "title": "CreateSpaceRequest"
+      },
       "Custom": {
         "properties": {
           "input": {
@@ -3679,6 +4221,27 @@
           "name"
         ],
         "title": "Custom"
+      },
+      "DeleteDomainsRequest": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "title": "Space Id"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "space_id",
+          "domains"
+        ],
+        "title": "DeleteDomainsRequest"
       },
       "DeleteMemoryByRecordIdRequest": {
         "properties": {
@@ -3849,6 +4412,18 @@
             "title": "Auto Cleanup Working",
             "description": "(Internal) Whether to automatically delete related WorkingMemory nodes based on working_binding metadata when deleting by memory_ids.",
             "default": false
+          },
+          "space_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Id",
+            "description": "Project memory: delete topics of this space (keeps the space itself)."
           }
         },
         "type": "object",
@@ -3888,6 +4463,61 @@
         ],
         "title": "DeleteMemoryResponse",
         "description": "Response model for deleting memories."
+      },
+      "DomainItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DomainItem"
+      },
+      "DomainUpdateItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "现有名称"
+          },
+          "new_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Name",
+            "description": "改成的名称；不改名不传"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DomainUpdateItem"
       },
       "ExistMemCubeIdRequest": {
         "properties": {
@@ -3996,6 +4626,18 @@
       },
       "GetMemoryDashboardRequest": {
         "properties": {
+          "space_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Id",
+            "description": "Project memory: read or delete topics of this space. Mutually exclusive with mem_cube_id when used for project topics."
+          },
           "mem_cube_id": {
             "anyOf": [
               {
@@ -4146,6 +4788,18 @@
       },
       "GetMemoryRequest": {
         "properties": {
+          "space_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Id",
+            "description": "Project memory: read or delete topics of this space. Mutually exclusive with mem_cube_id when used for project topics."
+          },
           "mem_cube_id": {
             "type": "string",
             "title": "Mem Cube Id",
@@ -4742,6 +5396,19 @@
         "title": "SearchResponse",
         "description": "Response model for search operations."
       },
+      "SpaceIdRequest": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "title": "Space Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "space_id"
+        ],
+        "title": "SpaceIdRequest"
+      },
       "StatusResponse": {
         "properties": {
           "code": {
@@ -5078,6 +5745,62 @@
         "type": "object",
         "title": "TaskSummary",
         "description": "Aggregated counts of tasks by status."
+      },
+      "UpdateDomainsRequest": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "title": "Space Id"
+          },
+          "domains": {
+            "items": {
+              "$ref": "#/components/schemas/DomainUpdateItem"
+            },
+            "type": "array",
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "space_id",
+          "domains"
+        ],
+        "title": "UpdateDomainsRequest"
+      },
+      "UpdateSpaceRequest": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "title": "Space Id"
+          },
+          "space_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Name"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "space_id"
+        ],
+        "title": "UpdateSpaceRequest"
       },
       "ValidationError": {
         "properties": {

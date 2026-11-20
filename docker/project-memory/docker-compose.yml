@@ -1,0 +1,138 @@
+# 本地项目记忆服务。启动和双实例验证见同目录 README.md。
+name: memos-project-memory
+
+x-memos: &memos
+  image: memos-promem:local
+  build:
+    context: ../..
+    dockerfile: docker/project-memory/Dockerfile
+  env_file:
+    - ${MEMOS_LOCAL_ENV_FILE:-../../.env}
+  depends_on:
+    neo4j:
+      condition: service_healthy
+    qdrant:
+      condition: service_started
+    pm-postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  environment:
+    QDRANT_HOST: qdrant
+    QDRANT_PORT: "6333"
+    NEO4J_URI: bolt://neo4j:7687
+    PROJECT_MEMORY_POSTGRES_HOST: pm-postgres
+    PROJECT_MEMORY_POSTGRES_PORT: "5432"
+    PROJECT_MEMORY_PROJECT_ID: ${PROJECT_MEMORY_PROJECT_ID:-local-project}
+    MEMSCHEDULER_USE_REDIS_QUEUE: "true"
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    REDIS_DB: "0"
+    MEMSCHEDULER_REDIS_HOST: redis
+    MEMSCHEDULER_REDIS_PORT: "6379"
+    MEMSCHEDULER_REDIS_DB: "0"
+  volumes:
+    - promem_data:/data/project_memory
+  networks:
+    - memos_network
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3).close()"]
+    interval: 5s
+    timeout: 5s
+    retries: 30
+    start_period: 20s
+  restart: unless-stopped
+
+services:
+  memos:
+    <<: *memos
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}
+    ports:
+      - "127.0.0.1:${MEMOS_LOCAL_HTTP_PORT:-8000}:8000"
+
+  memos-peer:
+    <<: *memos
+    profiles: [replica]
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-peer
+    ports:
+      - "127.0.0.1:${MEMOS_LOCAL_PEER_HTTP_PORT:-8001}:8000"
+
+  neo4j:
+    image: neo4j:5.26.6
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-neo4j
+    ports:
+      - "127.0.0.1:${MEMOS_LOCAL_NEO4J_HTTP_PORT:-7474}:7474"
+      - "127.0.0.1:${MEMOS_LOCAL_NEO4J_BOLT_PORT:-7687}:7687"
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1
+      interval: 3s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+    environment:
+      NEO4J_AUTH: neo4j/projectmemory
+      NEO4J_server_memory_heap_max__size: 512m
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - memos_network
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.3
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-qdrant
+    ports:
+      - "127.0.0.1:${MEMOS_LOCAL_QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__SERVICE__HTTP_PORT: 6333
+    networks:
+      - memos_network
+
+  pm-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-postgres
+    ports:
+      - "127.0.0.1:${MEMOS_LOCAL_POSTGRES_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: memos
+      POSTGRES_PASSWORD: projectmemory
+      POSTGRES_DB: project_memory
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memos -d project_memory"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    volumes:
+      - pm_pg_data:/var/lib/postgresql/data
+    networks:
+      - memos_network
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: ${MEMOS_LOCAL_CONTAINER_PREFIX:-memos-promem}-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - redis_data:/data
+    networks:
+      - memos_network
+
+volumes:
+  pm_pg_data:
+  promem_data:
+  neo4j_data:
+  neo4j_logs:
+  qdrant_data:
+  redis_data:
+
+networks:
+  memos_network:
+    driver: bridge

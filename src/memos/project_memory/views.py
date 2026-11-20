@@ -10,6 +10,12 @@ ENTRY_FIELDS = {"decision": "decisions", "experience": "experiences", "timeline"
 ITEM_TYPES = ("topic", *ENTRY_FIELDS)
 
 
+def budget(seconds: float) -> float:
+    """Scale a retrieval time budget. MEMOS_PROJECT_RETRIEVAL_TIME_SCALE defaults to 1 (production
+    budgets); a remote database or embedding service in tests and evaluations may need more."""
+    return seconds * float(os.getenv("MEMOS_PROJECT_RETRIEVAL_TIME_SCALE") or 1)
+
+
 def default_timezone() -> ZoneInfo:
     return ZoneInfo(os.getenv("PROJECT_MEMORY_NAIVE_TZ", "Asia/Shanghai"))
 

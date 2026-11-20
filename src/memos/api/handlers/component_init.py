@@ -304,6 +304,7 @@ def init_server() -> dict[str, Any]:
     # Plugins keep a reference to the original context dict, so updating the shared
     # section here makes the runtime handles visible without adding a second init step.
     plugin_context["shared"]["mem_scheduler"] = mem_scheduler
+    plugin_context["shared"]["redis_client"] = redis_client
     plugin_context["shared"]["submit_scheduler_messages"] = mem_scheduler.submit_messages
     plugin_context["shared"]["api_module"] = api_module
 
@@ -349,4 +350,6 @@ def init_server() -> dict[str, Any]:
         "feedback_server": feedback_server,
         "redis_client": redis_client,
         "deepsearch_agent": deepsearch_agent,
+        # Read by the project retrieval service for /get_message; set by the project plugin.
+        "project_message_store": plugin_context.get("project_message_store"),
     }

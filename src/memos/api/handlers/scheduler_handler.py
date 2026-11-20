@@ -29,6 +29,7 @@ from memos.api.product_models import (
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
+from memos.mem_scheduler.schemas.task_schemas import PROJECT_ADD_TASK_LABELS
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
@@ -220,7 +221,11 @@ def handle_scheduler_allstatus(
 
 
 def handle_scheduler_status(
-    user_id: str, status_tracker: TaskStatusTracker, task_id: str | None = None
+    user_id: str,
+    status_tracker: TaskStatusTracker,
+    task_id: str | None = None,
+    *,
+    prefer_running: bool = False,
 ) -> StatusResponse:
     """
     Get scheduler running status for one or all tasks of a user.
@@ -245,15 +250,20 @@ def handle_scheduler_status(
     try:
         if task_id:
             # First try as business_task_id (aggregated query)
-            business_task_data = status_tracker.get_task_status_by_business_id(task_id, user_id)
+            business_task_data = status_tracker.get_task_status_by_business_id(
+                task_id, user_id, exclude_task_types=PROJECT_ADD_TASK_LABELS
+            )
             if business_task_data:
-                response_data.append(
-                    StatusResponseItem(task_id=task_id, status=business_task_data["status"])
-                )
+                status = business_task_data["status"]
+                if prefer_running and {"waiting", "in_progress"}.intersection(
+                    business_task_data.get("item_statuses", ())
+                ):
+                    status = "in_progress"
+                response_data.append(StatusResponseItem(task_id=task_id, status=status))
             else:
                 # Fallback: try as item_id (single item query)
                 item_task_data = status_tracker.get_task_status(task_id, user_id)
-                if not item_task_data:
+                if not item_task_data or item_task_data.get("task_type") in PROJECT_ADD_TASK_LABELS:
                     raise HTTPException(
                         status_code=404, detail=f"Task {task_id} not found for user {user_id}"
                     )
@@ -267,6 +277,7 @@ def handle_scheduler_status(
             response_data = [
                 StatusResponseItem(task_id=tid, status=t_data["status"])
                 for tid, t_data in all_tasks.items()
+                if t_data.get("task_type") not in PROJECT_ADD_TASK_LABELS
             ]
 
         return StatusResponse(data=response_data)

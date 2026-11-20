@@ -7,6 +7,7 @@ using dependency injection for better modularity and testability.
 
 from pydantic import validate_call
 
+from memos.api.handlers import project_view
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import APIADDRequest, APIFeedbackRequest, MemoryResponse
 from memos.memories.textual.item import (
@@ -40,21 +41,22 @@ class AddHandler(BaseHandler):
 
     @hookable("add")
     def handle_add_memories(self, add_req: APIADDRequest) -> MemoryResponse:
-        """
-        Main handler for add memories endpoint.
+        """Dispatch requested memory views under the same business task."""
+        project = None
+        if project_view.has_project_view(add_req):
+            project = dict(project_view.accept_add(add_req))
+            project.pop("_duplicate", None)
+            if project_view.only_project(add_req):
+                return MemoryResponse(message="Project memory task accepted", data=[project])
+            add_req.task_id = project["task_id"]
 
-        Orchestrates the addition of text memories,
-        supporting concurrent processing.
+        response = self._add_personal_memories(add_req)
+        if project is not None:
+            response.data = [*(response.data or []), project]
+        return response
 
-        Args:
-            add_req: Add memory request (deprecated fields are converted in model validator)
-
-        Returns:
-            MemoryResponse with added memory information
-        """
-        self.logger.info(
-            f"[DIAGNOSTIC] server_router -> add_handler.handle_add_memories called (Modified at 2025-11-29 18:46). Full request: {add_req.model_dump_json(indent=2)}"
-        )
+    def _add_personal_memories(self, add_req: APIADDRequest) -> MemoryResponse:
+        self.logger.debug("Adding personal memories with mode %s", add_req.async_mode)
 
         if add_req.info:
             exclude_fields = list_all_fields()

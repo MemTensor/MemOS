@@ -15,12 +15,14 @@ import os
 import random as _random
 import socket
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 
 from memos.api import handlers
+from memos.api.handlers import project_view
 from memos.api.handlers.add_handler import AddHandler
 from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.chat_handler import ChatHandler
@@ -121,6 +123,14 @@ graph_db = components["graph_db"]
 # =============================================================================
 
 
+def _plugin_serves(request: Request) -> bool:
+    """Without a retrieval service, the project memory plugin answers project reads itself."""
+    return (
+        getattr(request.app.state, "project_retrieval", None) is None
+        and project_view.project_enabled()
+    )
+
+
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
 async def search_memories(search_req: APISearchRequest, request: Request) -> SearchResponse | dict:
     """Search personal memory or explicitly request project and shared trajectory views.
@@ -129,8 +139,13 @@ async def search_memories(search_req: APISearchRequest, request: Request) -> Sea
     limit. Use project_result_format=item and project_item_types to select components. The response includes topic_detail_list or trajectory_detail_list for
     each requested project view and identifies unavailable channels in degraded.
     """
-    if PROJECT_GROUPS.keys() & set(search_req.include_memory_view or []):
-        return await search_project(request, search_req, search_handler.handle_search_memories)
+    if not _plugin_serves(request) and PROJECT_GROUPS.keys() & set(
+        search_req.include_memory_view or []
+    ):
+        # Project views come from the retrieval index; the plugin's search hooks stay out.
+        with project_view.retrieval_serves_project():
+            return await search_project(request, search_req, search_handler.handle_search_memories)
+    # Without the retrieval index the project plugin answers project views through its hooks.
     return await run_in_threadpool(search_handler.handle_search_memories, search_req)
 
 
@@ -225,6 +240,33 @@ def scheduler_status(
     task_id: str | None = Query(None, description="Optional Task ID to query a specific task"),
 ):
     """Get scheduler running status."""
+    if task_id:
+        # memory view `project`: tasks are tracked by the project-memory plugin
+        project_task = project_view.task_status(task_id=task_id, user_id=user_id)
+        if project_task is not None:
+            # The same task may also carry personal memory (one add with both views):
+            # merge the core status into it.
+            try:
+                core = handlers.scheduler_handler.handle_scheduler_status(
+                    user_id=user_id,
+                    task_id=task_id,
+                    status_tracker=status_tracker,
+                    prefer_running=True,
+                )
+                project_task = project_view.merge_task_status(project_task, core)
+            except Exception:
+                pass
+            # Project task status carries memory_views which StatusResponseItem
+            # does not model; return as raw JSON to bypass response_model validation.
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                content={
+                    "code": 200,
+                    "message": "Memory get status successfully",
+                    "data": [project_task],
+                }
+            )
     return handlers.scheduler_handler.handle_scheduler_status(
         user_id=user_id,
         task_id=task_id,
@@ -382,10 +424,28 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
         )
 
 
+# A body with space_id is a project listing; GetMemoryRequest would also accept it because its
+# validator fills mem_cube_id from space_id, so try ProjectListRequest first.
+ProjectOrPersonalList = Annotated[
+    ProjectListRequest | GetMemoryRequest, Field(union_mode="left_to_right")
+]
+
+
 @router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
-async def get_memories(memory_req: ProjectListRequest | GetMemoryRequest, request: Request):
+async def get_memories(memory_req: ProjectOrPersonalList, request: Request):
     if isinstance(memory_req, ProjectListRequest):
-        return await list_project(request, memory_req)
+        if not _plugin_serves(request):
+            return await list_project(request, memory_req)
+        # Without the retrieval index the project plugin serves the authoritative topics.
+        return GetMemoryResponse(
+            message="Memories retrieved successfully",
+            data=await run_in_threadpool(project_view.list_topics, memory_req),
+        )
+    if memory_req.space_id:
+        return GetMemoryResponse(
+            message="Memories retrieved successfully",
+            data=await run_in_threadpool(project_view.list_topics, memory_req),
+        )
     return await run_in_threadpool(
         handlers.memory_handler.handle_get_memories,
         get_mem_req=memory_req,
@@ -405,14 +465,16 @@ async def get_memory_by_id(
     Supply space_id or use the verified project scope from the gateway. Use
     view=metadata for an online cache check and view=content to read the object.
     """
-    if (
-        space_id is not None
-        or view is not None
-        or getattr(request.app.state, "project_retrieval", None) is not None
-    ):
+    retrieval = getattr(request.app.state, "project_retrieval", None)
+    if space_id is not None or view is not None or retrieval is not None:
         result = await get_project(request, memory_id, space_id, view)
         if result is not None:
             return result
+    elif project_view.project_enabled():
+        # Without the retrieval index the project plugin resolves topic and entry IDs.
+        found = await run_in_threadpool(project_view.get_by_id, memory_id)
+        if found is not None:
+            return GetMemoryResponse(message="Memory retrieved successfully", data=found)
     return await run_in_threadpool(
         handlers.memory_handler.handle_get_memory,
         memory_id=memory_id,
@@ -424,6 +486,10 @@ async def get_memory_by_id(
     "/get_message", summary="Read project conversation messages", response_model=GetMemoryResponse
 )
 async def get_project_messages(req: ProjectMessagesRequest, request: Request) -> dict:
+    if _plugin_serves(request):
+        # Without the retrieval service the project plugin reads its own message store.
+        data = await run_in_threadpool(project_view.get_messages, req)
+        return {"code": 200, "message": "ok", "data": data}
     return await project_messages(request, req)
 
 
@@ -439,6 +505,12 @@ def get_memory_by_ids(memory_ids: list[str]):
     "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
 )
 def delete_memories(memory_req: DeleteMemoryRequest):
+    if memory_req.space_id:
+        # memory view `project`: delete topics, keep the space, instructions and domains
+        return DeleteMemoryResponse(
+            message="Memories deleted successfully",
+            data=project_view.delete_topics(memory_req),
+        )
     return handlers.memory_handler.handle_delete_memories(
         delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
     )

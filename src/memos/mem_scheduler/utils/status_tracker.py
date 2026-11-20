@@ -8,6 +8,8 @@ from memos.dependency import require_python_package
 
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     import redis
 
 
@@ -138,7 +140,9 @@ class TaskStatusTracker:
         all_tasks = self.redis.hgetall(key)
         return {tid: json.loads(t_data) for tid, t_data in all_tasks.items()}
 
-    def get_task_status_by_business_id(self, business_task_id: str, user_id: str) -> dict | None:
+    def get_task_status_by_business_id(
+        self, business_task_id: str, user_id: str, *, exclude_task_types: "Collection[str]" = ()
+    ) -> dict | None:
         """
         Get aggregated status for a business-level task_id.
 
@@ -171,6 +175,8 @@ class TaskStatusTracker:
             item_data_json = self.redis.hget(key, item_id)
             if item_data_json:
                 item_data = json.loads(item_data_json)
+                if item_data.get("task_type") in exclude_task_types:
+                    continue
                 item_statuses.append(item_data["status"])
                 if item_data.get("status") == "failed" and "error" in item_data:
                     errors.append(item_data["error"])
@@ -192,7 +198,7 @@ class TaskStatusTracker:
         return {
             "status": aggregated_status,
             "business_task_id": business_task_id,
-            "item_count": len(item_ids),
+            "item_count": len(item_statuses),
             "item_statuses": item_statuses,
             "errors": errors,
         }

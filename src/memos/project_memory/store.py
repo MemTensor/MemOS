@@ -10,6 +10,7 @@ from memos.project_memory.index import Vector, terms
 from memos.project_memory.views import (
     ENTRY_FIELDS,
     ITEM_TYPES,
+    budget,
     component,
     default_timezone,
     parse_topic_filters,
@@ -84,7 +85,7 @@ class RetrievalStore:
         try:
             with conn, conn.cursor() as cur:
                 cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-                cur.execute("SET LOCAL statement_timeout = '240ms'")
+                cur.execute(f"SET LOCAL statement_timeout = '{round(budget(240))}ms'")
                 yield cur
         finally:
             self.pool.putconn(conn)
@@ -167,7 +168,7 @@ class RetrievalStore:
                            THEN 1-(i.embedding <=> %(vector)s::vector) END"""
         cur.execute("SAVEPOINT vector_recall")
         try:
-            cur.execute("SET LOCAL statement_timeout = '75ms'")
+            cur.execute(f"SET LOCAL statement_timeout = '{round(budget(75))}ms'")
             cur.execute(
                 "SELECT EXISTS(SELECT 1 "
                 + base
@@ -182,7 +183,7 @@ class RetrievalStore:
             cur.execute("ROLLBACK TO SAVEPOINT vector_recall")
             semantic, partial = [], True
         cur.execute("RELEASE SAVEPOINT vector_recall")
-        cur.execute("SET LOCAL statement_timeout = '240ms'")
+        cur.execute(f"SET LOCAL statement_timeout = '{round(budget(240))}ms'")
         return lexical, semantic, partial
 
     def query_index(
