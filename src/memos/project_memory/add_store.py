@@ -35,6 +35,7 @@ class PostgresAddStore:
         self.project_id = project_id
         self.schema_name = config.get("schema_name") or "project_memory"
         self.dim = int(config.get("embedding_dimension") or 1024)
+        self.retrieval_index = bool(config.get("retrieval_index"))
         if not 1 <= self.dim <= 16000:
             raise ValueError("Project memory embedding dimension must be between 1 and 16000")
         self._search_path = sql.SQL("SET LOCAL search_path TO {}, public").format(
@@ -67,6 +68,10 @@ class PostgresAddStore:
                 # pgvector HNSW on the vector type supports dimensions up to 2000.
                 if self.dim <= 2000:
                     cursor.execute(CREATE_VECTOR_INDEXES)
+                if self.retrieval_index:
+                    from .add_publish import install
+
+                    install(cursor)
         except Exception:
             self.close()
             raise

@@ -9,6 +9,7 @@ from memos.exceptions import MemOSError
 from .add_evidence import text_at
 from .add_index import topic_item_content
 from .add_merge import VersionConflictError
+from .add_publish import publish_topics, sync_space
 from .add_store import json_value
 from .types import time_key
 
@@ -382,6 +383,15 @@ def commit_changeset(
             _assert_witnesses(cursor, row)
         for edit in sorted(changeset["topics"], key=lambda value: value["topic"]["id"]):
             _topic_edit(cursor, edit, key, current, scoped)
+        if store.retrieval_index:
+            sync_space(cursor, project, space)
+            publish_topics(
+                cursor,
+                project,
+                space,
+                [edit["topic"]["id"] for edit in changeset["topics"]],
+                scope["commit_clock"],
+            )
         staged = _finish_staged(cursor, changeset, current)
         if formation:
             cursor.execute(

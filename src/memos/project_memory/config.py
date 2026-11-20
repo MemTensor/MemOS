@@ -156,6 +156,9 @@ def postgres_config(embedding_dimension: int | None = None) -> dict[str, Any]:
         "user_name": os.getenv("PROJECT_MEMORY_POSTGRES_USER_NAME", "project_memory"),
         "use_multi_db": False,
         "embedding_dimension": embedding_dimension or embedding_dims(),
+        # The retrieval service reads MEMOS_PROJECT_MEMORY_DSN; it must be this same database so
+        # Add can publish into its index inside each commit.
+        "retrieval_index": bool(os.getenv("MEMOS_PROJECT_MEMORY_DSN")),
     }
 
 

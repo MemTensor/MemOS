@@ -16,6 +16,7 @@ from .add_acceptance import AcceptanceSettings
 from .add_commit import refresh_topic_items
 from .add_legacy import LegacyArchive, read_legacy_postgres, read_legacy_sqlite
 from .add_legacy_episodes import rebuild_legacy_trajectories, recorded_time
+from .add_publish import publish_topics, sync_space
 from .add_store import PostgresAddStore, json_value
 from .config import postgres_config
 from .types import (
@@ -268,6 +269,18 @@ def apply_migration(store: PostgresAddStore, plan: MigrationPlan) -> None:
                 (index_text, topic["id"]),
             )
             refresh_topic_items(cursor, topic, 1)
+        if store.retrieval_index:
+            cursor.execute("SELECT clock_timestamp() AS now")
+            now = cursor.fetchone()["now"]
+            for space in plan.spaces:
+                sync_space(cursor, store.project_id, space["id"])
+                publish_topics(
+                    cursor,
+                    store.project_id,
+                    space["id"],
+                    [topic["id"] for topic in plan.topics if topic["space_id"] == space["id"]],
+                    now,
+                )
         for source in plan.messages:
             cursor.execute(
                 """SELECT content_sha256 FROM messages WHERE project_id = %s AND
