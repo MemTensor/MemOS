@@ -12,7 +12,7 @@ from memos.project_memory.views import (
     ITEM_TYPES,
     component,
     default_timezone,
-    timestamp,
+    parse_topic_filters,
     topic_detail,
 )
 
@@ -422,14 +422,8 @@ class RetrievalStore:
         params = scope.params()
         (space,) = scope.spaces
         where = VISIBLE + " AND i.kind='topic'"
-        if set(filters) - {"related_id", "create_time", "update_time"}:
-            raise ValueError("Unsupported project topic filter")
-        if "related_id" in filters:
-            related = filters["related_id"]
-            if isinstance(related, dict) and set(related) == {"contains"}:
-                related = related["contains"]
-            if not isinstance(related, str) or not related.strip():
-                raise ValueError("related_id must be a member or agent ID")
+        related, time_bounds = parse_topic_filters(filters)
+        if related is not None:
             params["related"] = related
             where += """ AND EXISTS(SELECT 1 FROM jsonb_array_elements(i.payload->'sources') src
                 WHERE (src->'user_id') ? %(related)s OR (src->'agent_id') ? %(related)s
@@ -442,18 +436,10 @@ class RetrievalStore:
                     WHEN {value} ~ '^[0-9]{{4}}-[0-9]{{2}}$' THEN {value}||'-01' ELSE {value} END)::timestamptz"""
 
         operators = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<", "eq": "="}
-        for field in ("create_time", "update_time"):
-            if field not in filters:
-                continue
-            bounds = filters[field]
-            if not isinstance(bounds, dict) or not bounds or set(bounds) - operators.keys():
-                raise ValueError("Invalid topic time filter")
-            for op, value in bounds.items():
-                if not isinstance(value, str):
-                    raise ValueError("Expected an ISO date or timestamp")
-                name = f"{field}_{op}"
-                params[name] = timestamp(value)
-                where += f" AND {time_column(field)} {operators[op]} %({name})s"
+        for field, op, bound in time_bounds:
+            name = f"{field}_{op}"
+            params[name] = bound
+            where += f" AND {time_column(field)} {operators[op]} %({name})s"
         with self.cursor() as cur:
             cur.execute("SELECT set_config('TimeZone',%s,true)", (str(default_timezone()),))
             cur.execute("SELECT count(*) " + where, params)

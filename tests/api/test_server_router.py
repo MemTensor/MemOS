@@ -415,3 +415,94 @@ class TestServerRouterGetAll:
         data = response.json()
         assert data["message"] == "Memories retrieved successfully"
         assert isinstance(data["data"], list)
+
+
+@pytest.fixture
+def project_mock_client(mock_init_server, monkeypatch):
+    import sys
+
+    monkeypatch.setenv("MEMOS_PROJECT_MEMORY_MOCK", "1")
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_DSN", raising=False)
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_TENANT_ID", raising=False)
+    monkeypatch.setitem(sys.modules, "psycopg2.pool", None)
+    with TestClient(mock_init_server) as http:
+        yield http
+    assert not hasattr(mock_init_server.state, "project_retrieval")
+
+
+def test_project_mock_search_to_detail_and_original_message(project_mock_client):
+    http = project_mock_client
+    body = {
+        "user_id": "tester",
+        "space_ids": ["mock-space"],
+        "query": "项目采用什么数据库？",
+        "include_memory_view": ["project", "trajectory"],
+        "session_id": "mock-session",
+    }
+    result = http.post("/product/search", json=body)
+    assert result.status_code == 200
+    data = result.json()["data"]
+    (topic,) = data["topic_detail_list"]
+    (turn,) = data["trajectory_detail_list"]
+    assert topic["id"] == "mock-topic" and turn["conversation_id"] == "mock-session"
+    for kind in ("decision", "experience"):
+        flat = http.post(
+            "/product/search",
+            json={
+                **body,
+                "include_memory_view": ["project"],
+                "project_result_format": "item",
+                "project_item_types": [kind],
+            },
+        ).json()["data"]
+        (row,) = flat["project_item_list"]
+        assert row["id"] == f"mock-{kind}" and row["topic_id"] == topic["id"]
+        (detail,) = http.get("/product/get_memory/" + row["id"]).json()["data"]["project_item_list"]
+        assert detail["content"] == row["content"]
+    meta = http.get("/product/get_memory/" + turn["id"], params={"view": "metadata"}).json()["data"]
+    assert meta["cache_policy"] == "immutable" and "content" not in meta
+    msgs = http.post("/product/get_message", json={"conversation_id": turn["conversation_id"]})
+    assert turn["message_ids"] == [
+        m["message_id"] for m in msgs.json()["data"]["message_detail_list"]
+    ]
+    assert data["channels"] == ["project", "trajectory"]
+
+
+def test_project_mock_scope_filter_and_page(project_mock_client):
+    http = project_mock_client
+    body = {
+        "user_id": "tester",
+        "space_ids": "mock-space",
+        "query": "test",
+        "include_memory_view": ["project"],
+    }
+    assert http.post("/product/search", json={**body, "space_ids": ["unknown"]}).status_code == 404
+    assert http.post("/product/search", json={**body, "space_ids": None}).status_code == 422
+    assert http.post("/product/search", json={**body, "domains": ["unknown"]}).status_code == 400
+    detail = http.get("/product/get_memory/mock-experience", params={"space_id": "unknown"})
+    assert detail.status_code == 404
+    listing = {"space_id": "mock-space", "size": 1}
+    data = http.post("/product/get_memory", json=listing).json()["data"]
+    assert data["total"] == 1 and data["topic_detail_list"][0]["id"] == "mock-topic"
+    page = http.post("/product/get_memory", json={**listing, "page": 2}).json()["data"]
+    assert page["total"] == 1 and page["topic_detail_list"] == []
+    unmatched = http.post(
+        "/product/get_memory", json={**listing, "filter": {"related_id": "unknown"}}
+    )
+    assert unmatched.json()["data"]["total"] == 0
+
+
+def test_project_mock_is_explicit_and_never_opens_the_project_database(
+    mock_init_server, monkeypatch
+):
+    import sys
+
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_MOCK", raising=False)
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_DSN", raising=False)
+    with TestClient(mock_init_server) as http:
+        assert http.post("/product/get_memory", json={"space_id": "mock-space"}).status_code == 500
+    monkeypatch.setenv("MEMOS_PROJECT_MEMORY_MOCK", "1")
+    monkeypatch.setenv("MEMOS_PROJECT_MEMORY_DSN", "postgresql://unused.invalid/db")
+    monkeypatch.setitem(sys.modules, "psycopg2.pool", None)
+    with TestClient(mock_init_server) as http:
+        assert http.post("/product/get_memory", json={"space_id": "mock-space"}).status_code == 200

@@ -5,7 +5,7 @@ import os
 
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
@@ -91,15 +91,36 @@ def _scope(request: Request, spaces: list[str] | None, domains: list[str]) -> Sc
 
 @contextmanager
 def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]:
-    dsn = os.getenv("MEMOS_PROJECT_MEMORY_DSN")
-    if not dsn or getattr(app.state, "project_retrieval", None) is not None:
+    if getattr(app.state, "project_retrieval", None) is not None:
         yield
         return
+    dsn = os.getenv("MEMOS_PROJECT_MEMORY_DSN")
+    if os.getenv("MEMOS_PROJECT_MEMORY_MOCK") == "1":
+        from memos.project_memory.mock_store import MockProjectStore
+
+        store = MockProjectStore(os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID") or "mock-tenant")
+        backend = nullcontext(ProjectRetrieval(store, message_store=store))
+        logger.info("Project memory mock enabled; serving the built-in mock-space fixture")
+    elif dsn:
+        backend = _postgres_retrieval(dsn, components)
+    else:
+        yield
+        return
+    with backend as service:
+        app.state.project_retrieval = service
+        try:
+            yield
+        finally:
+            del app.state.project_retrieval
+            service.close()
+
+
+@contextmanager
+def _postgres_retrieval(dsn: str, components: dict) -> Iterator[ProjectRetrieval]:
     try:
         from psycopg2.pool import ThreadedConnectionPool
     except ImportError as exc:
         raise ImportError("Project retrieval requires psycopg2-binary") from exc
-    pool = ThreadedConnectionPool(1, 16, dsn, connect_timeout=3)
     embedder = components.get("embedder")
     model = getattr(getattr(embedder, "config", None), "model_name_or_path", None)
 
@@ -114,14 +135,12 @@ def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]
     def embed(text: str) -> Vector:
         return Vector(model=model, values=embedder.embed([text])[0])
 
+    pool = ThreadedConnectionPool(1, 16, dsn, connect_timeout=3)
     try:
-        app.state.project_retrieval = ProjectRetrieval(
+        yield ProjectRetrieval(
             RetrievalStore(pool), embed if model else None, components.get("project_message_store")
         )
-        yield
     finally:
-        app.state.project_retrieval.close()
-        del app.state.project_retrieval
         pool.closeall()
 
 
