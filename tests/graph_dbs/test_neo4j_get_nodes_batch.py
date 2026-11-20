@@ -5,11 +5,9 @@ These tests pin the behavioral contract of the override:
    same ordering, identical Cypher and query params).
 2. The vector-DB call pattern: one batched ``get_by_ids`` call instead of
    N per-node ``get_by_id`` calls (the structural fix for the N+1 issue).
-3. A latency-injection smoke test proving the serial round trips are
-   eliminated (relative assertion, robust on slow CI machines).
+3. Tenant filtering, vector alignment and graceful degradation without
+   timing-dependent assertions.
 """
-
-import time
 
 from datetime import datetime
 from types import SimpleNamespace
@@ -96,6 +94,9 @@ def db():
         mock_gd.driver.return_value = MagicMock()
         factory.from_config.return_value = MagicMock()
         gdb = Neo4jCommunityGraphDB(_make_config())
+        # Exclude index-creation queries from assertions about get_nodes.
+        gdb.driver.reset_mock()
+        gdb.vec_db.reset_mock()
         yield gdb
 
 
@@ -192,39 +193,84 @@ def test_missing_vector_semantics_pinned(db):
         )
 
 
-def test_performance_latency_injection(db):
-    """Smoke test: injected per-call latency is paid once, not N times.
+@pytest.mark.parametrize(
+    ("configured_user", "kwargs", "expected_user"),
+    [
+        ("tester", {}, "tester"),
+        ("tester", {"user_name": "other"}, "other"),
+        ("tester", {"user_name": "other", "cube_name": "cube"}, "cube"),
+        ("tester", {"user_name": ""}, "tester"),
+        (None, {"user_name": "other"}, "other"),
+        (None, {}, None),
+    ],
+)
+@pytest.mark.parametrize("use_multi_db", [False, True])
+@pytest.mark.parametrize("backend", [Neo4jGraphDB, Neo4jCommunityGraphDB])
+def test_get_nodes_query_scope(db, configured_user, kwargs, expected_user, use_multi_db, backend):
+    """Assert the expected tenant filter independently of the shared builder."""
+    db.config.user_name = configured_user
+    db.config.use_multi_db = use_multi_db
+    session = _wire_session(db, [])
+    ids = ["node-1"]
 
-    Absolute timings are not asserted (CI machines vary); instead both paths
-    are timed in-process and the batched path must win by a wide margin that
-    only holds if the N serial round trips are gone.
-    """
-    ids = [f"node-{i}" for i in range(N)]
-    per_call = 0.01
+    backend.get_nodes(db, ids, **kwargs)
 
-    def _slow_get_by_id(id):
-        time.sleep(per_call)
-        return SimpleNamespace(id=id, vector=VECTOR)
+    expected_query = "MATCH (n:Memory) WHERE n.id IN $ids"
+    expected_params = {"ids": ids}
+    if not use_multi_db and expected_user is not None:
+        expected_query += " AND n.user_name = $user_name"
+        expected_params["user_name"] = expected_user
+    session.run.assert_called_once_with(expected_query + " RETURN n", expected_params)
+    db.driver.session.assert_called_with(database=db.db_name)
 
-    def _slow_get_by_ids(ids):
-        time.sleep(per_call)
-        return [SimpleNamespace(id=i, vector=VECTOR) for i in ids]
 
-    _wire_session(db, _make_records(N))
-    db.vec_db.get_by_id.side_effect = _slow_get_by_id
-    db.vec_db.get_by_ids.side_effect = _slow_get_by_ids
+def test_get_nodes_aligns_unordered_vectors_and_ignores_unmatched_ids(db):
+    """Vector-store response order must not change node order or vector ownership."""
+    records = _make_records(3)
+    _wire_session(db, [records[2], records[0], records[1]])
+    db.vec_db.get_by_ids.return_value = [
+        SimpleNamespace(id="node-1", vector=[0.2]),
+        SimpleNamespace(id="not-returned-by-graph", vector=[0.9]),
+        SimpleNamespace(id="node-2", vector=[0.3]),
+        SimpleNamespace(id="node-0", vector=[0.1]),
+    ]
 
-    start = time.perf_counter()
-    _run_inherited(db, ids)
-    inherited_elapsed = time.perf_counter() - start
+    result = db.get_nodes(["node-0", "node-1", "node-2", "not-found"])
 
-    start = time.perf_counter()
-    db.get_nodes(ids)
-    override_elapsed = time.perf_counter() - start
+    assert [node["id"] for node in result] == ["node-2", "node-0", "node-1"]
+    assert [node["metadata"]["embedding"] for node in result] == [[0.3], [0.1], [0.2]]
+    db.vec_db.get_by_ids.assert_called_once_with(["node-2", "node-0", "node-1"])
+    db.vec_db.get_by_id.assert_not_called()
 
-    assert db.vec_db.get_by_ids.call_count == 1
-    assert inherited_elapsed >= N * per_call * 0.9
-    assert override_elapsed * 5 < inherited_elapsed, (
-        f"batched path should be at least 5x faster: "
-        f"override={override_elapsed:.3f}s inherited={inherited_elapsed:.3f}s"
-    )
+
+def test_get_nodes_no_matching_nodes_skips_vector_store(db):
+    _wire_session(db, [])
+
+    assert db.get_nodes(["not-found"]) == []
+
+    db.vec_db.get_by_ids.assert_not_called()
+    db.vec_db.get_by_id.assert_not_called()
+
+
+def test_get_nodes_vector_failure_keeps_graph_results(db):
+    _wire_session(db, _make_records(2))
+    db.vec_db.get_by_ids.side_effect = TimeoutError("Synthetic vector-store timeout")
+
+    result = db.get_nodes(["node-0", "node-1"])
+
+    assert [node["id"] for node in result] == ["node-0", "node-1"]
+    assert [node["memory"] for node in result] == ["memory content 0", "memory content 1"]
+    assert all(node["metadata"]["embedding"] is None for node in result)
+    db.vec_db.get_by_ids.assert_called_once_with(["node-0", "node-1"])
+    db.vec_db.get_by_id.assert_not_called()
+
+
+def test_get_nodes_graph_failure_propagates_without_vector_lookup(db):
+    session = _wire_session(db, [])
+    session.run.side_effect = ConnectionError("Synthetic graph-store failure")
+
+    with pytest.raises(ConnectionError, match="Synthetic graph-store failure"):
+        db.get_nodes(["node-0"])
+
+    db.vec_db.get_by_ids.assert_not_called()
+    db.vec_db.get_by_id.assert_not_called()
