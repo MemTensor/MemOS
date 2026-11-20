@@ -60,7 +60,7 @@ export async function summarizeTaskAnthropic(
   log: Logger,
 ): Promise<string> {
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
-  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const model = cfg.model ?? "claude-haiku-4-5-20251001";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "x-api-key": cfg.apiKey ?? "",
@@ -108,7 +108,7 @@ export async function generateTaskTitleAnthropic(
   log: Logger,
 ): Promise<string> {
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
-  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const model = cfg.model ?? "claude-haiku-4-5-20251001";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "x-api-key": cfg.apiKey ?? "",
@@ -174,7 +174,7 @@ export async function judgeNewTopicAnthropic(
   log: Logger,
 ): Promise<boolean> {
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
-  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const model = cfg.model ?? "claude-haiku-4-5-20251001";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "x-api-key": cfg.apiKey ?? "",
@@ -236,7 +236,7 @@ export async function filterRelevantAnthropic(
   log: Logger,
 ): Promise<FilterResult> {
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
-  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const model = cfg.model ?? "claude-haiku-4-5-20251001";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "x-api-key": cfg.apiKey ?? "",
@@ -298,7 +298,7 @@ export async function summarizeAnthropic(
   log: Logger,
 ): Promise<string> {
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
-  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const model = cfg.model ?? "claude-haiku-4-5-20251001";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "x-api-key": cfg.apiKey ?? "",
@@ -365,7 +365,7 @@ async function callAnthropicMessagesTopic(
 ): Promise<string> {
   if (!cfg.apiKey) throw new Error(`Anthropic ${errorLabel}: apiKey is required`);
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
-  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const model = cfg.model ?? "claude-haiku-4-5-20251001";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...cfg.headers,
@@ -440,7 +440,7 @@ export async function judgeDedupAnthropic(
   log: Logger,
 ): Promise<DedupResult> {
   const endpoint = cfg.endpoint ?? "https://api.anthropic.com/v1/messages";
-  const model = cfg.model ?? "claude-3-haiku-20240307";
+  const model = cfg.model ?? "claude-haiku-4-5-20251001";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "x-api-key": cfg.apiKey ?? "",

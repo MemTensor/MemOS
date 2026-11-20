@@ -4006,7 +4006,7 @@ export class ViewerServer {
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
         },
-        body: JSON.stringify({ model: model || "claude-3-haiku-20240307", max_tokens: 5, messages: [{ role: "user", content: "hi" }] }),
+        body: JSON.stringify({ model: model || "claude-haiku-4-5-20251001", max_tokens: 5, messages: [{ role: "user", content: "hi" }] }),
         signal: AbortSignal.timeout(15_000),
       });
       if (!resp.ok) {

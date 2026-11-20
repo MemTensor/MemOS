@@ -1719,11 +1719,12 @@ describe('IPC Handlers Integration', () => {
 
     it('api-key:validate should return valid for 200 response', async () => {
       // Arrange
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
         json: () => Promise.resolve({}),
-      }));
+      });
+      vi.stubGlobal('fetch', mockFetch);
 
       // Act
       const result = await invokeHandler('api-key:validate', 'sk-test-key') as {
@@ -1732,6 +1733,10 @@ describe('IPC Handlers Integration', () => {
 
       // Assert
       expect(result.valid).toBe(true);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.anthropic.com/v1/models',
+        expect.objectContaining({ method: 'GET' })
+      );
     });
   });
 
@@ -1787,6 +1792,32 @@ describe('IPC Handlers Integration', () => {
           method: 'GET',
           headers: expect.objectContaining({
             Authorization: 'Bearer sk-openai-key',
+          }),
+        })
+      );
+    });
+
+    it('api-key:validate-provider should validate Anthropic key without calling a model', async () => {
+      // Arrange
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      // Act
+      const result = await invokeHandler('api-key:validate-provider', 'anthropic', 'sk-ant-key') as {
+        valid: boolean;
+      };
+
+      // Assert
+      expect(result.valid).toBe(true);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.anthropic.com/v1/models',
+        expect.objectContaining({
+          method: 'GET',
+          headers: expect.objectContaining({
+            'x-api-key': 'sk-ant-key',
           }),
         })
       );

@@ -189,7 +189,7 @@ Add the plugin config to `~/.openclaw/openclaw.json`:
 | Provider | `provider` value | Example `model` |
 |---|---|---|
 | OpenAI / compatible | `openai_compatible` | `gpt-4o-mini` |
-| Anthropic | `anthropic` | `claude-3-haiku-20240307` |
+| Anthropic | `anthropic` | `claude-haiku-4-5-20251001` |
 | Gemini | `gemini` | `gemini-1.5-flash` |
 | AWS Bedrock | `bedrock` | `anthropic.claude-3-haiku-20240307-v1:0` |
 
