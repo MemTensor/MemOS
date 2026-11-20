@@ -29,6 +29,10 @@ kind 是 decision（成员确定的团队做法）、experience（有场景与�
 decision 只记范围内的规则、对外约定和共同约定。对 Agent 回复格式或表达方式的要求、一次性的局部实现、
 执行步骤、未采纳的方案和未决事项都不是 decision，不要输出。成员对某个具体对象（配置、数值、时点、阈值）
 给出明确结论时才是 decision。
+成员的原话带有原因（因为、由于、考虑到某个具体问题）时，把原因随结论写进 content，只取原话里的原因。
+timeline 记 Agent 在这一段里明确报告的可验证结果：已新增、已修改、已撤回、已修复、已完成的具体产出，
+一件事一条，quote 取 Agent 的原话。尚未发生的计划不是 timeline。
+experience 记排查或试错后得到的、可复用的做法：先查什么、哪种做法行不通及原因，必须有这一段的证据。
 quote 是这次 Episode 的消息中逐字原话。成员授权优先引用本段用户确立或确认做法的原话。
 origin 取 member、adopted（成员明确采纳）、delegated（Agent 执行）；Agent 自述绝非成员决策。
 采纳或需要理解前文可附 context 数组，每项 message_id、quote，引用采纳前的消息。

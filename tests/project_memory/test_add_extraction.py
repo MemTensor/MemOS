@@ -221,3 +221,11 @@ def test_extraction_prompt_excludes_reply_style_and_execution_steps():
 
     assert "Agent 回复格式或表达方式的要求" in _EXTRACT
     assert "执行步骤" in _EXTRACT
+
+
+def test_extraction_prompt_keeps_stated_reasons_and_guides_timeline_and_experience():
+    from memos.project_memory.add_extraction import _EXTRACT
+
+    assert "把原因随结论写进 content" in _EXTRACT
+    assert "已撤回" in _EXTRACT
+    assert "排查或试错后得到的、可复用的做法" in _EXTRACT
