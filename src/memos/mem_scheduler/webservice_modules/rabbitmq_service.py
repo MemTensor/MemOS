@@ -10,6 +10,7 @@ from queue import Empty
 from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
 from memos.context.context import ContextThread
 from memos.dependency import require_python_package
+from memos.exceptions import MemOSError
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue
@@ -448,38 +449,34 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         self.rabbitmq_channel = None
         self.initialize_rabbitmq()
 
-    def rabbitmq_close(self):
-        """Gracefully shutdown connection."""
+    def rabbitmq_close(self) -> None:
+        """Stop the connection and surface incomplete cleanup for owner retry."""
+        errors = []
         with self._rabbitmq_lock:
             self._rabbitmq_stop_flag = True
-
-            # Close channel if open
+            callbacks = []
             if self.rabbitmq_channel and self.rabbitmq_channel.is_open:
-                try:
-                    self.rabbitmq_channel.close()
-                except Exception as e:
-                    logger.warning(f"Error closing channel: {e}")
-
-            # Close connection if open
+                callbacks.append(self.rabbitmq_channel.close)
             if self.rabbitmq_connection:
                 if self.rabbitmq_connection.is_open:
-                    try:
-                        self.rabbitmq_connection.close()
-                    except Exception as e:
-                        logger.warning(f"Error closing connection: {e}")
-
-                # Stop IOLoop if running
+                    callbacks.append(self.rabbitmq_connection.close)
+                callbacks.append(self.rabbitmq_connection.ioloop.stop)
+            for callback in callbacks:
                 try:
-                    self.rabbitmq_connection.ioloop.stop()
-                except Exception as e:
-                    logger.warning(f"Error stopping IOLoop: {e}")
-
-            # Wait for IOLoop thread to finish
-            if self._io_loop_thread and self._io_loop_thread.is_alive():
+                    callback()
+                except Exception as error:
+                    errors.append(error)
+                    logger.exception("RabbitMQ resource cleanup failed")
+        # Callbacks on the loop may need _rabbitmq_lock while it exits.
+        if self._io_loop_thread and self._io_loop_thread.is_alive():
+            if self._io_loop_thread is threading.current_thread():
+                errors.append(MemOSError("RabbitMQ cannot join its own IOLoop thread"))
+            else:
                 self._io_loop_thread.join(timeout=5)
                 if self._io_loop_thread.is_alive():
-                    logger.warning("IOLoop thread did not terminate cleanly")
-
+                    errors.append(MemOSError("RabbitMQ IOLoop thread has not exited"))
+        if errors:
+            raise MemOSError("RabbitMQ cleanup failed") from errors[0]
         logger.info("RabbitMQ connection closed")
 
     def _flush_cached_publish_messages(self):

@@ -1,4 +1,7 @@
+import pytest
+
 from memos.api.lifecycle import shutdown_components
+from memos.exceptions import MemOSError
 
 
 class SchedulerStub:
@@ -26,7 +29,8 @@ def test_shutdown_components_stops_scheduler_before_rabbitmq_close():
 def test_shutdown_components_still_closes_rabbitmq_when_stop_fails():
     scheduler = SchedulerStub(fail_stop=True)
 
-    shutdown_components({"mem_scheduler": scheduler})
+    with pytest.raises(MemOSError, match="shutdown failed"):
+        shutdown_components({"mem_scheduler": scheduler})
 
     assert scheduler.calls == ["stop", "rabbitmq_close"]
 

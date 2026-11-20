@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -59,13 +58,16 @@ class CompositeCubeView(MemCubeView):
             self.logger.info(f"[CompositeCubeView] fan-out search to cube={view.cube_id}")
             return view.search_memories(search_req)
 
-        # parallel search for each cube
+        # Submit together, then merge in the first requested order for stable ties.
+        ordered_views = {}
+        for view in self.cube_views:
+            ordered_views.setdefault(view.cube_id, view)
         with ContextThreadPoolExecutor(max_workers=2) as executor:
-            future_to_view = {
-                executor.submit(_search_single_cube, view): view for view in self.cube_views
-            }
+            futures = [
+                executor.submit(_search_single_cube, view) for view in ordered_views.values()
+            ]
 
-            for future in as_completed(future_to_view):
+            for future in futures:
                 cube_result = future.result()
                 merged_results["text_mem"].extend(cube_result.get("text_mem", []))
                 merged_results["act_mem"].extend(cube_result.get("act_mem", []))
@@ -88,6 +90,9 @@ class CompositeCubeView(MemCubeView):
         for view in self.cube_views:
             self.logger.info(f"[CompositeCubeView] fan-out add to cube={view.cube_id}")
             results = view.feedback_memories(feedback_req)
-            all_results.extend(results)
+            if isinstance(results, dict):
+                all_results.append(results)
+            else:
+                all_results.extend(results)
 
         return all_results

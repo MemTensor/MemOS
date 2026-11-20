@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memos.configs.memory import TreeTextMemoryConfig
+from memos.exceptions import MemoryError
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree import TreeTextMemory
 
@@ -116,8 +117,9 @@ def test_load_file_not_exists(mock_tree_text_memory, tmp_path):
     mock_tree_text_memory.graph_store.import_graph = MagicMock()
 
     result = tmp_path / "does_not_exist"
-    mock_tree_text_memory.load(str(result))
-    # Should log a warning but not raise
+    with pytest.raises(MemoryError):
+        mock_tree_text_memory.load(str(result))
+    mock_tree_text_memory.graph_store.import_graph.assert_not_called()
 
 
 def test_dump_and_load_success(tmp_path, mock_tree_text_memory):

@@ -4,6 +4,7 @@ Memory handler for retrieving and managing memories.
 This module handles retrieving all memories or specific subgraphs based on queries.
 """
 
+from copy import deepcopy
 from typing import Any, Literal
 
 from memos.api.product_models import (
@@ -14,6 +15,7 @@ from memos.api.product_models import (
     GetMemoryResponse,
     MemoryResponse,
 )
+from memos.graph_dbs.opengauss import OpenGaussGraphDB
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_os.utils.format_utils import (
@@ -23,6 +25,7 @@ from memos.mem_os.utils.format_utils import (
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
+from memos.memories.textual.tree_text_memory.organize.manager import extract_working_binding_ids
 
 
 logger = get_logger(__name__)
@@ -424,17 +427,7 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
                 memories = []
 
             if memories:
-                import re
-
-                pattern = re.compile(r"\[working_binding:([0-9a-fA-F-]{36})\]")
-                for mem in memories:
-                    metadata = mem.get("metadata") or {}
-                    bg = metadata.get("background") or ""
-                    if not isinstance(bg, str):
-                        continue
-                    match = pattern.search(bg)
-                    if match:
-                        working_ids_to_delete.add(match.group(1))
+                working_ids_to_delete = extract_working_binding_ids(memories)
 
         if delete_mem_req.memory_ids is not None:
             # Unified deletion from text_mem (includes preferences)
@@ -443,7 +436,7 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
             naive_mem_cube.text_mem.delete_by_filter(
                 writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
             )
-        elif has_filter_mode:
+        else:  # The validation above leaves only filter mode.
             merged_filter = _merge_delete_filter(delete_mem_req.filter, quick_constraints)
             naive_mem_cube.text_mem.delete_by_filter(
                 writable_cube_ids=delete_mem_req.writable_cube_ids,
@@ -479,168 +472,134 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
 # =============================================================================
 
 
+def _dashboard_scope(request: GetMemoryDashboardRequest) -> dict[str, Any]:
+    """Extract global range controls while preserving nonempty business subtrees."""
+    controls = {}
+
+    def nonblank(value, name):
+        if not isinstance(value, str) or not value.strip() or "\0" in value:
+            raise ValueError(f"{name} must be a nonblank Cube selection string")
+
+    def prune(condition, root=False, inside_or=False):
+        if root and (condition is None or condition == {}):
+            return None
+        if not isinstance(condition, dict) or not condition:
+            raise ValueError("Dashboard filter nodes must be nonempty objects")
+        remaining = {}
+        for key, value in condition.items():
+            if key in ("and", "or"):
+                if not isinstance(value, list) or not value:
+                    raise ValueError("Dashboard and/or filters require nonempty lists")
+                children = [prune(child, inside_or=inside_or or key == "or") for child in value]
+                children = [child for child in children if child is not None]
+                if children:
+                    remaining[key] = children
+            elif key in ("object_type", "mem_cube_id"):
+                if inside_or:
+                    raise ValueError("Dashboard scope controls are not allowed inside OR")
+                nonblank(value, key)
+                if key in controls and controls[key] != value:
+                    raise ValueError("Conflicting Dashboard scope controls")
+                controls[key] = value
+            else:
+                remaining[key] = deepcopy(value)
+        return remaining or None
+
+    business_filter = prune(request.filter, root=True)
+    if controls and set(controls) != {"object_type", "mem_cube_id"}:
+        raise ValueError("Dashboard scope requires object_type and mem_cube_id together")
+    kind = controls.get("object_type")
+    if kind is not None and kind not in ("public", "user"):
+        raise ValueError("Unknown Dashboard object_type")
+    owner = request.mem_cube_id
+    if owner is not None:
+        nonblank(owner, "mem_cube_id")
+    excluded = controls.get("mem_cube_id") if kind == "user" else None
+    if kind == "public":
+        if owner is not None and owner != controls["mem_cube_id"]:
+            raise ValueError("Conflicting Dashboard Cube selections")
+        owner = controls["mem_cube_id"]
+    elif kind == "user":
+        if owner is not None:
+            raise ValueError("User range conflicts with a single Cube selection")
+    all_cubes = kind == "user"
+    if request.all_cubes is True:
+        if request.mem_cube_id is not None or kind == "public":
+            raise ValueError("all_cubes=True conflicts with a single Cube selection")
+        all_cubes = True
+    elif request.all_cubes is False:
+        if kind == "user":
+            raise ValueError("all_cubes=False conflicts with user range selection")
+        all_cubes = False
+    if request.exclude_cube_id is not None:
+        nonblank(request.exclude_cube_id, "exclude_cube_id")
+        if excluded is not None and excluded != request.exclude_cube_id:
+            raise ValueError("Conflicting excluded Cubes")
+        excluded = request.exclude_cube_id
+    if excluded is not None and not all_cubes:
+        raise ValueError("Cube exclusion requires an all-Cube range")
+    return {
+        "user_name": owner,
+        "all_cubes": all_cubes,
+        "exclude_user_name": excluded,
+        "filter": business_filter,
+    }
+
+
 def handle_get_memories_dashboard(
     get_mem_req: GetMemoryDashboardRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
-    results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": [], "skill_mem": []}
-    # for statistics
-    total_text_nodes, total_tool_nodes, total_skill_nodes, total_preference_nodes = 0, 0, 0, 0
-    total_tool_nodes = 0
-    total_skill_nodes = 0
-    total_preference_nodes = 0
-
-    text_memory_type = ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
-    text_memories_info = naive_mem_cube.text_mem.get_all(
-        user_name=get_mem_req.mem_cube_id,
-        user_id=get_mem_req.user_id,
-        page=get_mem_req.page,
-        page_size=get_mem_req.page_size,
-        filter=get_mem_req.filter,
-        memory_type=text_memory_type,
-    )
-    text_memories, total_text_nodes = text_memories_info["nodes"], text_memories_info["total_nodes"]
-
-    # Group text memories by cube_id from metadata.user_name
-    text_mem_by_cube: dict[str, list] = {}
-    for memory in text_memories:
-        cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
-        if cube_id not in text_mem_by_cube:
-            text_mem_by_cube[cube_id] = []
-        text_mem_by_cube[cube_id].append(memory)
-
-    # If no memories found, create a default entry with the requested cube_id
-    if not text_mem_by_cube and get_mem_req.mem_cube_id:
-        text_mem_by_cube[get_mem_req.mem_cube_id] = []
-
-    results["text_mem"] = [
-        {
-            "cube_id": cube_id,
-            "memories": memories,
-            "total_nodes": len(memories),
-        }
-        for cube_id, memories in text_mem_by_cube.items()
+    """List actual records within one resolved Dashboard range, with total counts."""
+    memory = naive_mem_cube.text_mem
+    if isinstance(memory.graph_store, OpenGaussGraphDB):
+        scope = _dashboard_scope(get_mem_req)
+    else:
+        if get_mem_req.all_cubes is not None or get_mem_req.exclude_cube_id is not None:
+            raise ValueError("This graph backend does not support explicit Cube ranges")
+        scope = {"user_name": get_mem_req.mem_cube_id, "filter": get_mem_req.filter}
+    categories = [
+        (
+            "text_mem",
+            "total_text_nodes",
+            True,
+            ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"],
+        ),
+        (
+            "tool_mem",
+            "total_tool_nodes",
+            get_mem_req.include_tool_memory,
+            ["ToolSchemaMemory", "ToolTrajectoryMemory"],
+        ),
+        ("skill_mem", "total_skill_nodes", get_mem_req.include_skill_memory, ["SkillMemory"]),
+        (
+            "pref_mem",
+            "total_preference_nodes",
+            get_mem_req.include_preference,
+            ["PreferenceMemory"],
+        ),
     ]
-
-    if get_mem_req.include_tool_memory:
-        tool_memories_info = naive_mem_cube.text_mem.get_all(
-            user_name=get_mem_req.mem_cube_id,
+    results = {}
+    statistics = {}
+    for category, total_key, enabled, memory_types in categories:
+        results[category] = []
+        statistics[total_key] = 0
+        if not enabled:
+            continue
+        page = memory.get_all(
+            **scope,
             user_id=get_mem_req.user_id,
             page=get_mem_req.page,
             page_size=get_mem_req.page_size,
-            filter=get_mem_req.filter,
-            memory_type=["ToolSchemaMemory", "ToolTrajectoryMemory"],
+            memory_type=memory_types,
         )
-        tool_memories, total_tool_nodes = (
-            tool_memories_info["nodes"],
-            tool_memories_info["total_nodes"],
-        )
-
-        # Group tool memories by cube_id from metadata.user_name
-        tool_mem_by_cube: dict[str, list] = {}
-        for memory in tool_memories:
-            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
-            if cube_id not in tool_mem_by_cube:
-                tool_mem_by_cube[cube_id] = []
-            tool_mem_by_cube[cube_id].append(memory)
-
-        # If no memories found, create a default entry with the requested cube_id
-        if not tool_mem_by_cube and get_mem_req.mem_cube_id:
-            tool_mem_by_cube[get_mem_req.mem_cube_id] = []
-
-        results["tool_mem"] = [
-            {
-                "cube_id": cube_id,
-                "memories": memories,
-                "total_nodes": len(memories),
-            }
-            for cube_id, memories in tool_mem_by_cube.items()
+        buckets = {}
+        for node in page["nodes"]:
+            owner = node.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
+            buckets.setdefault(owner, []).append(node)
+        results[category] = [
+            {"cube_id": owner, "memories": nodes, "total_nodes": len(nodes)}
+            for owner, nodes in buckets.items()
         ]
-
-    if get_mem_req.include_skill_memory:
-        skill_memories_info = naive_mem_cube.text_mem.get_all(
-            user_name=get_mem_req.mem_cube_id,
-            user_id=get_mem_req.user_id,
-            page=get_mem_req.page,
-            page_size=get_mem_req.page_size,
-            filter=get_mem_req.filter,
-            memory_type=["SkillMemory"],
-        )
-        skill_memories, total_skill_nodes = (
-            skill_memories_info["nodes"],
-            skill_memories_info["total_nodes"],
-        )
-
-        # Group skill memories by cube_id from metadata.user_name
-        skill_mem_by_cube: dict[str, list] = {}
-        for memory in skill_memories:
-            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
-            if cube_id not in skill_mem_by_cube:
-                skill_mem_by_cube[cube_id] = []
-            skill_mem_by_cube[cube_id].append(memory)
-
-        # If no memories found, create a default entry with the requested cube_id
-        if not skill_mem_by_cube and get_mem_req.mem_cube_id:
-            skill_mem_by_cube[get_mem_req.mem_cube_id] = []
-
-        results["skill_mem"] = [
-            {
-                "cube_id": cube_id,
-                "memories": memories,
-                "total_nodes": len(memories),
-            }
-            for cube_id, memories in skill_mem_by_cube.items()
-        ]
-
-    if get_mem_req.include_preference:
-        pref_memories_info = naive_mem_cube.text_mem.get_all(
-            user_name=get_mem_req.mem_cube_id,
-            user_id=get_mem_req.user_id,
-            page=get_mem_req.page,
-            page_size=get_mem_req.page_size,
-            filter=get_mem_req.filter,
-            memory_type=["PreferenceMemory"],
-        )
-        pref_memories, total_preference_nodes = (
-            pref_memories_info["nodes"],
-            pref_memories_info["total_nodes"],
-        )
-
-        # Group preference memories by cube_id from metadata.user_name
-        pref_mem_by_cube: dict[str, list] = {}
-        for memory in pref_memories:
-            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
-            if cube_id not in pref_mem_by_cube:
-                pref_mem_by_cube[cube_id] = []
-            pref_mem_by_cube[cube_id].append(memory)
-
-        # If no memories found, create a default entry with the requested cube_id
-        if not pref_mem_by_cube and get_mem_req.mem_cube_id:
-            pref_mem_by_cube[get_mem_req.mem_cube_id] = []
-
-        results["pref_mem"] = [
-            {
-                "cube_id": cube_id,
-                "memories": memories,
-                "total_nodes": len(memories),
-            }
-            for cube_id, memories in pref_mem_by_cube.items()
-        ]
-
-    # Filter to only keep text_mem, pref_mem, tool_mem, skill_mem
-    filtered_results = {
-        "text_mem": results.get("text_mem", []),
-        "pref_mem": results.get("pref_mem", []),
-        "tool_mem": results.get("tool_mem", []),
-        "skill_mem": results.get("skill_mem", []),
-    }
-
-    # statistics
-    statistics = {
-        "total_text_nodes": total_text_nodes,
-        "total_tool_nodes": total_tool_nodes,
-        "total_skill_nodes": total_skill_nodes,
-        "total_preference_nodes": total_preference_nodes,
-    }
-    filtered_results["statistics"] = statistics
-
-    return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)
+        statistics[total_key] = page["total_nodes"]
+    results["statistics"] = statistics
+    return GetMemoryResponse(message="Memories retrieved successfully", data=results)

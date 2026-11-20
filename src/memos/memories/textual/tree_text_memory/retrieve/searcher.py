@@ -5,6 +5,7 @@ import traceback
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
+from memos.exceptions import GraphDBError
 from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger, summarize_textual_memories
@@ -680,6 +681,8 @@ class Searcher:
                     user_name=user_name,
                     tsquery_config="jiebaqry",
                 )
+            except (GraphDBError, ValueError):
+                raise
             except Exception:
                 logger.warning(
                     f"[PATH-KEYWORD] search_by_fulltext failed, scope={scope}, user_name={user_name}"

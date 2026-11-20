@@ -5,6 +5,7 @@ This module provides a class-based implementation of add handlers,
 using dependency injection for better modularity and testability.
 """
 
+from fastapi import HTTPException
 from pydantic import validate_call
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
@@ -104,7 +105,8 @@ class AddHandler(BaseHandler):
                     data=[process_record],
                 )
             except Exception as e:
-                self.logger.warning(f"[ADDFeedbackHandler] Running error: {e}")
+                self.logger.exception("Feedback processing failed")
+                raise HTTPException(status_code=500, detail="Feedback processing failed") from e
 
         results = cube_view.add_memories(add_req)
 
