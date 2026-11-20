@@ -453,10 +453,11 @@ def formation_reply(ids, name="Cache deployment"):
     }
 
 
-def test_formation_prompt_demands_one_decision_object_per_topic():
+def test_formation_prompt_follows_the_prd_same_work_rule():
     from memos.project_memory.add_algorithm import _FORMATION
 
-    assert "不同对象的规则或做法必须分别建 cluster" in _FORMATION
+    assert "互不影响、可分别交付的规则必须分别建 cluster" in _FORMATION
+    assert "同一功能或产出物的多个设置与子问题属于同一项工作" in _FORMATION
     assert "same_conversation 只说明发生在同一会话" in _FORMATION
     assert "拿不准时拆开" in _FORMATION
 
