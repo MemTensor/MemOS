@@ -72,7 +72,15 @@ class PostgresAddStore:
     def _install(self, cursor: Any, sql: Any) -> None:
         """Create what is missing. A shared deployment installs the schema with a privileged
         account; on later starts nothing here needs DDL privileges."""
-        required = ["vector"] + (["zhparser"] if self.text_search_parser == "zhparser" else [])
+        cursor.execute(
+            """SELECT 1 FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace
+               WHERE c.cfgname = 'zh' AND n.nspname = %s""",
+            (self.schema_name,),
+        )
+        # An installed zh configuration is used as is, whatever parser it was created with.
+        zh_installed = cursor.fetchone() is not None
+        needs_parser = self.text_search_parser == "zhparser" and not zh_installed
+        required = ["vector"] + (["zhparser"] if needs_parser else [])
         cursor.execute("SELECT extname FROM pg_extension WHERE extname = ANY(%s)", (required,))
         missing = sorted(set(required) - {row["extname"] for row in cursor.fetchall()})
         if missing:

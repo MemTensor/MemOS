@@ -191,3 +191,23 @@ def test_formation_recalls_immediate_predecessor_without_changing_task_receipt(a
     assert assignment["topic"]["id"] == "prior-topic"
     assert [episode["id"] for episode in assignment["episodes"]] == [staged_id]
     assert acceptance.status("original-task", "member") == original_status
+
+
+def test_an_installed_zh_configuration_is_used_without_zhparser():
+    dsn = os.getenv("PG_TEST_DSN")
+    if not dsn:
+        pytest.skip("PG_TEST_DSN is required for the relational project memory tests")
+    schema = f"test_add_{uuid.uuid4().hex}"
+    config = {"dsn": dsn, "schema_name": schema, "embedding_dimension": 3}
+    with pytest.raises(RuntimeError, match="zhparser"):
+        PostgresAddStore({**config, "text_search_parser": "zhparser"}, project_id="p")
+    PostgresAddStore({**config, "text_search_parser": "simple"}, project_id="p").close()
+    store = PostgresAddStore({**config, "text_search_parser": "zhparser"}, project_id="p")
+    try:
+        with store.transaction(readonly=True) as cursor:
+            cursor.execute("SELECT to_regclass(%s) AS present", (f"{schema}.project_entries",))
+            assert cursor.fetchone()["present"] is not None
+    finally:
+        with store.transaction() as cursor:
+            cursor.execute(f'DROP SCHEMA "{schema}" CASCADE')
+        store.close()
