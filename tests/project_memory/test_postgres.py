@@ -258,9 +258,6 @@ def test_space_domain_and_identity_validation(client):
     assert search(client, query="据").json()["data"]["topic_detail_list"][0]["id"] == TOPIC.id
     assert get(client, TURN.id, "C").status_code == 404
     assert search(client, space_ids="C").status_code == 404
-    client.headers.pop("Authorization")
-    client.headers["X-User-Name"] = "tenant"
-    assert get(client, TOPIC.id).status_code == 401
 
 
 def test_mixed_search_vector_ranking_budget_and_fallback(client, service):
@@ -456,7 +453,7 @@ def test_mismatched_vector_keeps_fulltext_results(client, service):
         assert not search(client, "unrelated").json()["data"]["topic_detail_list"]
 
 
-def test_configured_gateway_reads_through_normal_server_lifespan(client, service, monkeypatch):
+def test_engineering_requests_need_only_the_retrieval_database(client, service, monkeypatch):
     from contextlib import asynccontextmanager
 
     from memos.api.handlers.project_retrieval import project_retrieval_lifespan
@@ -467,8 +464,9 @@ def test_configured_gateway_reads_through_normal_server_lifespan(client, service
         monkeypatch.setenv("MEMOS_PROJECT_MEMORY_DSN", conn.dsn)
     finally:
         service.store.pool.putconn(conn)
-    monkeypatch.setenv("MEMOS_PROJECT_MEMORY_GATEWAY_KEY", "test-gateway")
-    monkeypatch.setenv("MEMOS_PROJECT_MEMORY_TENANT_ID", "tenant")
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_TENANT_ID", raising=False)
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_GATEWAY_KEY", raising=False)
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_INTERNAL", raising=False)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -477,12 +475,32 @@ def test_configured_gateway_reads_through_normal_server_lifespan(client, service
 
     app = FastAPI(lifespan=lifespan)
     app.include_router(server_router.router)
-    with TestClient(app, headers={"Authorization": "Token test-gateway"}) as gateway:
+    with TestClient(app) as gateway:
+        assert search(gateway).status_code == 200
         assert search(gateway).json()["data"]["topic_detail_list"][0]["id"] == TOPIC.id
         assert get(gateway, "exp-1").json()["data"]["content"] == TOPIC.experiences[0].content
-        assert get(gateway, "exp-1", "C").status_code == 404
-        gateway.headers["Authorization"] = "Token wrong"
-        assert get(gateway, "exp-1").status_code == 401
+        assert (
+            search(gateway, space_ids="C").json()["data"]["topic_detail_list"][0]["space_id"] == "C"
+        )
+        assert search(gateway, space_ids=["A", "C"]).status_code == 404
+        assert get(gateway, "exp-1", "missing").status_code == 404
+        assert (
+            gateway.post("/product/get_memory", json={"space_id": "B"}).json()["data"]["total"] == 1
+        )
+        assert gateway.get("/product/get_memory/exp-1").status_code == 409
+        unique = TOPIC.model_copy(
+            update={"id": "only-in-C", "decisions": [], "experiences": [], "timeline": []}
+        )
+        with service.store.cursor() as cur:
+            replace_snapshot(cur, "other", "C", unique.id, 1, NOW, unique)
+            cur.execute("SELECT DISTINCT tenant_id,space_id FROM memos_project.pm_retrieval_log")
+            assert set(cur.fetchall()) == {("tenant", "A"), ("other", "C")}
+        assert (
+            gateway.get("/product/get_memory/only-in-C").json()["data"]["topic_detail_list"][0][
+                "space_id"
+            ]
+            == "C"
+        )
 
 
 def test_review_read_contract(client):
@@ -755,11 +773,9 @@ def test_mixed_request_uses_core_threshold_and_unknown_id_falls_back(client):
         legacy.assert_called_once()
 
 
-def test_internal_algorithm_calls_are_scoped_without_a_public_token(client, service, monkeypatch):
+def test_fixed_tenant_still_restricts_internal_reads(client, service, monkeypatch):
     from memos.api.routers import server_router
 
-    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_GATEWAY_KEY", raising=False)
-    monkeypatch.setenv("MEMOS_PROJECT_MEMORY_INTERNAL", "1")
     monkeypatch.setenv("MEMOS_PROJECT_MEMORY_TENANT_ID", "tenant")
     new = TOPIC.model_copy(
         update={"id": "unique-topic", "decisions": [], "experiences": [], "timeline": []}
@@ -772,7 +788,6 @@ def test_internal_algorithm_calls_are_scoped_without_a_public_token(client, serv
         == new.id
     )
     assert search(client, space_ids="C").json()["reason"] == "SPACE_NOT_FOUND"
-    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_INTERNAL")
     with patch.object(
         server_router.handlers.memory_handler,
         "handle_get_memory",
@@ -780,3 +795,29 @@ def test_internal_algorithm_calls_are_scoped_without_a_public_token(client, serv
     ):
         client.headers["Authorization"] = "Token personal-key"
         assert client.get("/product/get_memory/personal-id").json()["data"] == {"id": "personal-id"}
+
+
+def test_internal_messages_without_tenant_or_credentials(client, service, monkeypatch):
+    from memos.api.routers import server_router
+
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_TENANT_ID", raising=False)
+    app = FastAPI()
+    app.state.project_retrieval = service
+    app.include_router(server_router.router)
+    message = {"message_id": "m1", "role": "user", "chat_time": "2026-02-01", "content": "hello"}
+    by_space = {"A": [message], "B": [message]}
+    service.message_store = Mock()
+    service.message_store.list_messages.side_effect = (
+        lambda space, conv: by_space.get(space, []) if conv == "conv" else []
+    )
+    with TestClient(app) as internal:
+
+        def read(**options):
+            return internal.post(
+                "/product/get_message", json={"conversation_id": "conv", **options}
+            )
+
+        assert read().json()["data"]["message_detail_list"] == [message]
+        by_space["C"] = [message]
+        assert read().status_code == 409
+        assert read(space_id="B").json()["data"]["message_detail_list"] == [message]

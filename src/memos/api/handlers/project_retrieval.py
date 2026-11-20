@@ -1,7 +1,6 @@
 """Project read adapter for the existing product endpoints."""
 
 import asyncio
-import hmac
 import os
 
 from collections.abc import Callable, Iterator
@@ -85,20 +84,8 @@ def _scope(request: Request, spaces: list[str] | None, domains: list[str]) -> Sc
         if not set(spaces) <= access.readable_space_ids:
             raise ProjectReadError(404, "SPACE_NOT_FOUND", "Space not found")
         return Scope(access.tenant_id, tuple(spaces), tuple(domains))
-    # Service-to-service deployment: the gateway checks membership and supplies space IDs.
-    token = os.getenv("MEMOS_PROJECT_MEMORY_GATEWAY_KEY")
-    tenant = os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID")
-    auth = request.headers.get("Authorization", "").split(" ", 1)
-    if tenant and not token and os.getenv("MEMOS_PROJECT_MEMORY_INTERNAL") == "1":
-        return Scope(tenant, None if spaces is None else tuple(spaces), tuple(domains))
-    if not (
-        token
-        and tenant
-        and len(auth) == 2
-        and auth[0] == "Token"
-        and hmac.compare_digest(auth[1].encode(), token.encode())
-    ):
-        raise HTTPException(401, "Project memory authentication required")
+    # The engineering gateway authenticates the caller before forwarding /product requests.
+    tenant = os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID") or None
     return Scope(tenant, None if spaces is None else tuple(spaces), tuple(domains))
 
 
@@ -245,12 +232,7 @@ async def search_project(
 async def get_project(
     request: Request, memory_id: str, space_id: str | None, view: str | None
 ) -> dict | None:
-    try:
-        scope = _scope(request, _names(space_id, "space_ids") if space_id is not None else None, [])
-    except HTTPException as exc:
-        if exc.status_code == 401 and space_id is None and view is None:
-            return None
-        raise
+    scope = _scope(request, _names(space_id, "space_ids") if space_id is not None else None, [])
     service = _service(request)
     try:
         data = await asyncio.wait_for(
@@ -302,12 +284,24 @@ async def project_messages(request: Request, req: ProjectMessagesRequest) -> dic
         request, _names(req.space_id, "space_ids") if req.space_id is not None else None, []
     )
     service = _service(request)
-    spaces = await asyncio.to_thread(service.store.visible_spaces, scope)
-    if req.space_id is not None and not spaces:
+    by_tenant = await asyncio.to_thread(service.store.spaces_by_tenant, scope)
+    if req.space_id is not None and not by_tenant:
         raise ProjectReadError(404, "SPACE_NOT_FOUND", "Space not found")
     if service.message_store is None:
         raise HTTPException(500, "Project message store is not configured")
-    msgs = await asyncio.to_thread(
-        read_messages, service.message_store, spaces, req.conversation_id, req.message_limit_number
-    )
+    msgs = []
+    for spaces in by_tenant.values():
+        batch = await asyncio.to_thread(
+            read_messages,
+            service.message_store,
+            spaces,
+            req.conversation_id,
+            req.message_limit_number,
+        )
+        if batch:
+            if msgs:
+                raise HTTPException(
+                    409, "Conversation ID exists in multiple tenants; supply space_id"
+                )
+            msgs = batch
     return {"code": 200, "message": "ok", "data": {"message_detail_list": msgs}}

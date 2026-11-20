@@ -115,7 +115,7 @@ class ProjectRetrieval:
     ) -> dict:
         deadline = asyncio.get_running_loop().time() + 0.46
         # Scope errors fail the entire request, including mixed searches.
-        await asyncio.wait_for(asyncio.to_thread(self.store.validate, scope), 0.25)
+        scope = await asyncio.wait_for(asyncio.to_thread(self.store.validate, scope), 0.25)
         degraded = set()
         lanes = {}
         project_ready = Future()
