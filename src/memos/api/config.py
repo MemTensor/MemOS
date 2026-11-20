@@ -927,11 +927,11 @@ class APIConfig:
         }
 
     @staticmethod
-    def get_project_postgres_config() -> dict[str, Any] | None:
-        """Read PostgreSQL settings for project memory when a host is configured."""
+    def get_project_postgres_config() -> dict[str, Any]:
+        """Read PostgreSQL settings for project memory."""
         host = os.getenv("PROJECT_DB_HOST")
         if not host:
-            return None
+            raise ValueError("PROJECT_DB_HOST is required for the postgres project DB backend")
         return {
             "host": host,
             "port": int(os.getenv("PROJECT_DB_PORT", "5432")),

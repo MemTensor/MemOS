@@ -56,8 +56,8 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
     )
 
 
-def build_project_db_config() -> ProjectDBConfigFactory | None:
-    """Build the selected project DB config, or return None if it is not configured."""
+def build_project_db_config() -> ProjectDBConfigFactory:
+    """Build and validate the selected project DB config."""
     backend = os.getenv("PROJECT_DB_BACKEND", "postgres").lower()
     project_db_backend_map = {
         "postgres": APIConfig.get_project_postgres_config,
@@ -66,10 +66,7 @@ def build_project_db_config() -> ProjectDBConfigFactory | None:
     if build_config is None:
         raise ValueError(f"Unsupported project db backend: {backend}")
 
-    config = build_config()
-    if config is None:
-        return None
-    return ProjectDBConfigFactory.model_validate({"backend": backend, "config": config})
+    return ProjectDBConfigFactory.model_validate({"backend": backend, "config": build_config()})
 
 
 def build_vec_db_config() -> dict[str, Any]:

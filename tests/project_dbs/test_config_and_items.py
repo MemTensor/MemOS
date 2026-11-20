@@ -35,11 +35,13 @@ def test_config_factory_rejects_unknown_backend():
         ProjectDBConfigFactory.model_validate({"backend": "mysql", "config": {}})
 
 
-def test_build_project_db_config_disabled_without_host(monkeypatch):
+def test_build_project_db_config_requires_host(monkeypatch):
     from memos.api.handlers.config_builders import build_project_db_config
 
+    monkeypatch.setenv("PROJECT_DB_BACKEND", "postgres")
     monkeypatch.delenv("PROJECT_DB_HOST", raising=False)
-    assert build_project_db_config() is None
+    with pytest.raises(ValueError, match="PROJECT_DB_HOST is required"):
+        build_project_db_config()
 
 
 def test_decision_defaults_and_embedding_excluded():
