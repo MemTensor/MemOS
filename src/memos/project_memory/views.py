@@ -25,6 +25,32 @@ def timestamp(value: str) -> datetime:
     return when if when.tzinfo else when.replace(tzinfo=default_timezone())
 
 
+def parse_topic_filters(filters: dict) -> tuple[str | None, list[tuple[str, str, datetime]]]:
+    if set(filters) - {"related_id", "create_time", "update_time"}:
+        raise ValueError("Unsupported project topic filter")
+    related = filters.get("related_id")
+    if "related_id" in filters:
+        if isinstance(related, dict) and set(related) == {"contains"}:
+            related = related["contains"]
+        if not isinstance(related, str) or not related.strip():
+            raise ValueError("related_id must be a member or agent ID")
+    time_bounds = []
+    for field in ("create_time", "update_time"):
+        if field in filters:
+            bounds = filters[field]
+            if (
+                not isinstance(bounds, dict)
+                or not bounds
+                or set(bounds) - {"gte", "gt", "lte", "lt", "eq"}
+            ):
+                raise ValueError("Invalid topic time filter")
+            for op, value in bounds.items():
+                if not isinstance(value, str):
+                    raise ValueError("Expected an ISO date or timestamp")
+                time_bounds.append((field, op, timestamp(value)))
+    return related, time_bounds
+
+
 def time_key(row: dict) -> tuple:
     value = row.get("time") or row.get("chat_time") or ""
     try:

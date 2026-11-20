@@ -7,12 +7,18 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
 from functools import partial
 from threading import BoundedSemaphore
+from typing import TYPE_CHECKING
 
 from memos.log import get_logger
 from memos.project_memory.index import Vector, terms
 from memos.project_memory.messages import MessageStore
-from memos.project_memory.store import Hit, RetrievalStore, Scope
+from memos.project_memory.store import Hit, Scope
 from memos.project_memory.views import ITEM_TYPES, budget
+
+
+if TYPE_CHECKING:
+    from memos.project_memory.mock_store import MockProjectStore
+    from memos.project_memory.store import RetrievalStore
 
 
 logger = get_logger(__name__)
@@ -74,7 +80,7 @@ def mix(lanes: list[list[Hit]], limit: int) -> tuple[list[Hit], bool]:
 class ProjectRetrieval:
     def __init__(
         self,
-        store: RetrievalStore,
+        store: "RetrievalStore | MockProjectStore",
         embed: Callable[[str], Vector] | None = None,
         message_store: MessageStore | None = None,
     ):
@@ -115,7 +121,7 @@ class ProjectRetrieval:
     ) -> dict:
         deadline = asyncio.get_running_loop().time() + budget(0.46)
         # Scope errors fail the entire request, including mixed searches.
-        await asyncio.wait_for(asyncio.to_thread(self.store.validate, scope), budget(0.25))
+        scope = await asyncio.wait_for(asyncio.to_thread(self.store.validate, scope), budget(0.25))
         degraded = set()
         lanes = {}
         project_ready = Future()
