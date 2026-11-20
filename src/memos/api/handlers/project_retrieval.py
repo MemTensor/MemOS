@@ -1,12 +1,11 @@
 """Project read adapter for the existing product endpoints."""
 
 import asyncio
-import hmac
 import os
 
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
@@ -85,34 +84,44 @@ def _scope(request: Request, spaces: list[str] | None, domains: list[str]) -> Sc
         if not set(spaces) <= access.readable_space_ids:
             raise ProjectReadError(404, "SPACE_NOT_FOUND", "Space not found")
         return Scope(access.tenant_id, tuple(spaces), tuple(domains))
-    # Service-to-service deployment: the gateway checks membership and supplies space IDs.
-    token = os.getenv("MEMOS_PROJECT_MEMORY_GATEWAY_KEY")
-    tenant = os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID")
-    auth = request.headers.get("Authorization", "").split(" ", 1)
-    if tenant and not token and os.getenv("MEMOS_PROJECT_MEMORY_INTERNAL") == "1":
-        return Scope(tenant, None if spaces is None else tuple(spaces), tuple(domains))
-    if not (
-        token
-        and tenant
-        and len(auth) == 2
-        and auth[0] == "Token"
-        and hmac.compare_digest(auth[1].encode(), token.encode())
-    ):
-        raise HTTPException(401, "Project memory authentication required")
+    # The engineering gateway authenticates the caller before forwarding /product requests.
+    tenant = os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID") or None
     return Scope(tenant, None if spaces is None else tuple(spaces), tuple(domains))
 
 
 @contextmanager
 def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]:
-    dsn = os.getenv("MEMOS_PROJECT_MEMORY_DSN")
-    if not dsn or getattr(app.state, "project_retrieval", None) is not None:
+    if getattr(app.state, "project_retrieval", None) is not None:
         yield
         return
+    dsn = os.getenv("MEMOS_PROJECT_MEMORY_DSN")
+    mock_setting = os.getenv("MEMOS_PROJECT_MEMORY_MOCK")
+    if mock_setting == "1" or (not mock_setting and not dsn):
+        from memos.project_memory.mock_store import MockProjectStore
+
+        store = MockProjectStore(os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID") or "mock-tenant")
+        backend = nullcontext(ProjectRetrieval(store, message_store=store))
+        logger.info("Project memory mock enabled; serving the built-in mock-space fixture")
+    elif dsn:
+        backend = _postgres_retrieval(dsn, components)
+    else:
+        yield
+        return
+    with backend as service:
+        app.state.project_retrieval = service
+        try:
+            yield
+        finally:
+            del app.state.project_retrieval
+            service.close()
+
+
+@contextmanager
+def _postgres_retrieval(dsn: str, components: dict) -> Iterator[ProjectRetrieval]:
     try:
         from psycopg2.pool import ThreadedConnectionPool
     except ImportError as exc:
         raise ImportError("Project retrieval requires psycopg2-binary") from exc
-    pool = ThreadedConnectionPool(1, 16, dsn, connect_timeout=3)
     embedder = components.get("embedder")
     model = getattr(getattr(embedder, "config", None), "model_name_or_path", None)
 
@@ -127,14 +136,12 @@ def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]
     def embed(text: str) -> Vector:
         return Vector(model=model, values=embedder.embed([text])[0])
 
+    pool = ThreadedConnectionPool(1, 16, dsn, connect_timeout=3)
     try:
-        app.state.project_retrieval = ProjectRetrieval(
+        yield ProjectRetrieval(
             RetrievalStore(pool), embed if model else None, components.get("project_message_store")
         )
-        yield
     finally:
-        app.state.project_retrieval.close()
-        del app.state.project_retrieval
         pool.closeall()
 
 
@@ -245,12 +252,7 @@ async def search_project(
 async def get_project(
     request: Request, memory_id: str, space_id: str | None, view: str | None
 ) -> dict | None:
-    try:
-        scope = _scope(request, _names(space_id, "space_ids") if space_id is not None else None, [])
-    except HTTPException as exc:
-        if exc.status_code == 401 and space_id is None and view is None:
-            return None
-        raise
+    scope = _scope(request, _names(space_id, "space_ids") if space_id is not None else None, [])
     service = _service(request)
     try:
         data = await asyncio.wait_for(
@@ -302,12 +304,24 @@ async def project_messages(request: Request, req: ProjectMessagesRequest) -> dic
         request, _names(req.space_id, "space_ids") if req.space_id is not None else None, []
     )
     service = _service(request)
-    spaces = await asyncio.to_thread(service.store.visible_spaces, scope)
-    if req.space_id is not None and not spaces:
+    by_tenant = await asyncio.to_thread(service.store.spaces_by_tenant, scope)
+    if req.space_id is not None and not by_tenant:
         raise ProjectReadError(404, "SPACE_NOT_FOUND", "Space not found")
     if service.message_store is None:
         raise HTTPException(500, "Project message store is not configured")
-    msgs = await asyncio.to_thread(
-        read_messages, service.message_store, spaces, req.conversation_id, req.message_limit_number
-    )
+    msgs = []
+    for spaces in by_tenant.values():
+        batch = await asyncio.to_thread(
+            read_messages,
+            service.message_store,
+            spaces,
+            req.conversation_id,
+            req.message_limit_number,
+        )
+        if batch:
+            if msgs:
+                raise HTTPException(
+                    409, "Conversation ID exists in multiple tenants; supply space_id"
+                )
+            msgs = batch
     return {"code": 200, "message": "ok", "data": {"message_detail_list": msgs}}

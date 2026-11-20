@@ -12,7 +12,7 @@ from memos.project_memory.views import (
     ITEM_TYPES,
     component,
     default_timezone,
-    timestamp,
+    parse_topic_filters,
     topic_detail,
 )
 
@@ -31,7 +31,7 @@ class UnknownDomainError(ValueError):
 
 @dataclass(frozen=True)
 class Scope:
-    tenant: str
+    tenant: str | None
     spaces: tuple[str, ...] | None
     domains: tuple[str, ...] = ()
 
@@ -48,7 +48,8 @@ VISIBLE = """
     FROM memos_project.pm_retrieval_items i
     JOIN memos_project.pm_retrieval_roots r USING (tenant_id,space_id,root_id)
     JOIN memos_project.pm_spaces s USING (tenant_id,space_id)
-    WHERE i.tenant_id=%(tenant)s AND (%(spaces)s::text[] IS NULL OR i.space_id=ANY(%(spaces)s))
+    WHERE (%(tenant)s::text IS NULL OR i.tenant_id=%(tenant)s)
+      AND (%(spaces)s::text[] IS NULL OR i.space_id=ANY(%(spaces)s))
       AND s.deleted_at IS NULL AND (s.cleared_at IS NULL OR r.accepted_at>s.cleared_at)
 """
 
@@ -88,27 +89,30 @@ class RetrievalStore:
         finally:
             self.pool.putconn(conn)
 
-    def validate(self, scope: Scope) -> None:
+    def validate(self, scope: Scope) -> Scope:
         if not scope.spaces:
             raise MissingSpaceError
         with self.cursor() as cur:
             cur.execute(
                 """
-                SELECT s.space_id, d.domain FROM memos_project.pm_spaces s
+                SELECT s.tenant_id, s.space_id, d.domain FROM memos_project.pm_spaces s
                 LEFT JOIN memos_project.pm_domains d USING(space_id)
-                WHERE s.tenant_id=%(tenant)s AND s.space_id=ANY(%(spaces)s)
+                WHERE (%(tenant)s::text IS NULL OR s.tenant_id=%(tenant)s)
+                    AND s.space_id=ANY(%(spaces)s)
                     AND s.deleted_at IS NULL
             """,
                 scope.params(),
             )
             rows = cur.fetchall()
-        if set(scope.spaces) != {space for space, _ in rows}:
+        tenants = {tenant for tenant, _, _ in rows}
+        if len(tenants) != 1 or set(scope.spaces) != {space for _, space, _ in rows}:
             raise MissingSpaceError
         if any(
-            set(scope.domains) - {domain for sid, domain in rows if sid == space}
+            set(scope.domains) - {domain for _, sid, domain in rows if sid == space}
             for space in scope.spaces
         ):
             raise UnknownDomainError
+        return Scope(tenants.pop(), scope.spaces, scope.domains)
 
     def _candidates(
         self,
@@ -194,7 +198,7 @@ class RetrievalStore:
         kinds = {"topic": ["topic"], "entry": list(ENTRY_FIELDS), "trajectory": ["trajectory"]}
         if index not in kinds or k < 1:
             raise ValueError("Expected topic, entry or trajectory and positive k")
-        self.validate(scope)
+        scope = self.validate(scope)
         results = []
         degraded = set()
         with self.cursor() as cur:
@@ -414,18 +418,12 @@ class RetrievalStore:
 
     def list_topics(self, scope: Scope, page: int, size: int | None, filters: dict) -> dict:
         """Count, page and hydrate the visible topics in one repeatable-read transaction."""
-        self.validate(scope)
+        scope = self.validate(scope)
         params = scope.params()
         (space,) = scope.spaces
         where = VISIBLE + " AND i.kind='topic'"
-        if set(filters) - {"related_id", "create_time", "update_time"}:
-            raise ValueError("Unsupported project topic filter")
-        if "related_id" in filters:
-            related = filters["related_id"]
-            if isinstance(related, dict) and set(related) == {"contains"}:
-                related = related["contains"]
-            if not isinstance(related, str) or not related.strip():
-                raise ValueError("related_id must be a member or agent ID")
+        related, time_bounds = parse_topic_filters(filters)
+        if related is not None:
             params["related"] = related
             where += """ AND EXISTS(SELECT 1 FROM jsonb_array_elements(i.payload->'sources') src
                 WHERE (src->'user_id') ? %(related)s OR (src->'agent_id') ? %(related)s
@@ -438,18 +436,10 @@ class RetrievalStore:
                     WHEN {value} ~ '^[0-9]{{4}}-[0-9]{{2}}$' THEN {value}||'-01' ELSE {value} END)::timestamptz"""
 
         operators = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<", "eq": "="}
-        for field in ("create_time", "update_time"):
-            if field not in filters:
-                continue
-            bounds = filters[field]
-            if not isinstance(bounds, dict) or not bounds or set(bounds) - operators.keys():
-                raise ValueError("Invalid topic time filter")
-            for op, value in bounds.items():
-                if not isinstance(value, str):
-                    raise ValueError("Expected an ISO date or timestamp")
-                name = f"{field}_{op}"
-                params[name] = timestamp(value)
-                where += f" AND {time_column(field)} {operators[op]} %({name})s"
+        for field, op, bound in time_bounds:
+            name = f"{field}_{op}"
+            params[name] = bound
+            where += f" AND {time_column(field)} {operators[op]} %({name})s"
         with self.cursor() as cur:
             cur.execute("SELECT set_config('TimeZone',%s,true)", (str(default_timezone()),))
             cur.execute("SELECT count(*) " + where, params)
@@ -484,15 +474,18 @@ class RetrievalStore:
                 ],
             }
 
-    def visible_spaces(self, scope: Scope) -> list[str]:
+    def spaces_by_tenant(self, scope: Scope) -> dict[str, list[str]]:
         with self.cursor() as cur:
             cur.execute(
-                """SELECT space_id FROM memos_project.pm_spaces
-                WHERE tenant_id=%(tenant)s AND deleted_at IS NULL
+                """SELECT tenant_id, space_id FROM memos_project.pm_spaces
+                WHERE (%(tenant)s::text IS NULL OR tenant_id=%(tenant)s) AND deleted_at IS NULL
                 AND (%(spaces)s::text[] IS NULL OR space_id=ANY(%(spaces)s)) ORDER BY space_id""",
                 scope.params(),
             )
-            return [s for (s,) in cur]
+            by_tenant = defaultdict(list)
+            for tenant, space in cur:
+                by_tenant[tenant].append(space)
+            return dict(by_tenant)
 
     def log_recall(self, scope: Scope, session: str, topics: list[dict]) -> None:
         with self.cursor() as cur:
