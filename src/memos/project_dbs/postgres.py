@@ -1,6 +1,8 @@
 """PostgreSQL + pgvector implementation of project memory storage."""
 
-from collections.abc import Iterator
+import uuid
+
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -9,8 +11,15 @@ from typing import Any
 from memos.configs.project_db import PostgresProjectDBConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
-from memos.project_dbs.base import BaseProjectDB
-from memos.project_dbs.exceptions import ProjectDBError
+from memos.project_dbs.base import MAX_DOMAINS_PER_SPACE, BaseProjectDB
+from memos.project_dbs.exceptions import (
+    DomainAlreadyExistsError,
+    DomainInUseError,
+    DomainLimitExceededError,
+    DomainNotFoundError,
+    ProjectDBError,
+    SpaceNotFoundError,
+)
 from memos.project_dbs.item import (
     AnyEntry,
     Decision,
@@ -72,17 +81,15 @@ class PostgresProjectDB(BaseProjectDB):
 
     # ---------- 连接与初始化 ----------
     @contextmanager
-    def _tx(self) -> Iterator[Any]:
+    def _tx(self) -> Generator[Any, None, None]:
         """One transaction per block: commit on success, rollback on error."""
         conn = self.pool.getconn()
-        if conn.closed:  # dropped by a DB restart or failover; replace it
-            self.pool.putconn(conn, close=True)
-            conn = self.pool.getconn()
         try:
             with conn, conn.cursor() as cur:
                 yield cur
         finally:
-            self.pool.putconn(conn, close=bool(conn.closed))
+            # The pool discards connections that were lost, e.g. after a DB restart.
+            self.pool.putconn(conn)
 
     def _check_vector_extension(self) -> None:
         with self._tx() as cur:
@@ -111,6 +118,57 @@ class PostgresProjectDB(BaseProjectDB):
         self.pool.closeall()
 
     # ---------- 空间 ----------
+    _SPACE_COLS = "id, project_id, space_name, instructions, create_time, update_time"
+    _DOMAIN_COLS = "id, space_id, domain, description"
+
+    @staticmethod
+    def _space(row: tuple) -> Space:
+        return Space(
+            id=row[0],
+            project_id=row[1],
+            space_name=row[2],
+            instructions=row[3],
+            create_time=row[4],
+            update_time=row[5],
+        )
+
+    @staticmethod
+    def _domain(row: tuple) -> Domain:
+        return Domain(id=row[0], space_id=row[1], domain=row[2], description=row[3])
+
+    def _lock_space(self, cur: Any, space_id: str, for_delete: bool = False) -> None:
+        """Lock the space row for this transaction so domain writers of one space run
+        one at a time (keeps the domain cap exact and avoids deadlocks). FOR NO KEY UPDATE
+        still lets topics be inserted; delete_space takes FOR UPDATE to block them, since
+        their foreign key takes a key-share lock on the same row."""
+        mode = "UPDATE" if for_delete else "NO KEY UPDATE"
+        cur.execute(f"SELECT 1 FROM {SCHEMA}.spaces WHERE id = %s FOR {mode}", (space_id,))
+        if cur.fetchone() is None:
+            raise SpaceNotFoundError(f"Space not found: {space_id}")
+
+    def _insert_domains(self, cur: Any, space_id: str, domains: list[Domain]) -> list[Domain]:
+        """Insert in one statement and return the newly registered rows; existing names
+        are skipped. The count check runs in the same transaction, so exceeding the cap
+        rolls the insert back."""
+        if not domains:
+            return []
+        from psycopg2.extras import execute_values
+
+        rows = execute_values(
+            cur,
+            f"""INSERT INTO {SCHEMA}.domains (id, space_id, domain, description)
+                VALUES %s ON CONFLICT (space_id, domain) DO NOTHING
+                RETURNING {self._DOMAIN_COLS}""",
+            [(str(uuid.uuid4()), space_id, item.domain, item.description) for item in domains],
+            fetch=True,
+        )
+        cur.execute(f"SELECT count(*) FROM {SCHEMA}.domains WHERE space_id = %s", (space_id,))
+        if cur.fetchone()[0] > MAX_DOMAINS_PER_SPACE:
+            raise DomainLimitExceededError(
+                f"Space {space_id} would exceed {MAX_DOMAINS_PER_SPACE} domains"
+            )
+        return [self._domain(row) for row in rows]
+
     def create_space(
         self,
         project_id: str,
@@ -118,36 +176,154 @@ class PostgresProjectDB(BaseProjectDB):
         instructions: str | None = None,
         domains: list[Domain] | None = None,
     ) -> Space:
-        raise NotImplementedError
+        space_id = str(uuid.uuid4())
+        with self._tx() as cur:
+            cur.execute(
+                f"""INSERT INTO {SCHEMA}.spaces (id, project_id, space_name, instructions)
+                    VALUES (%s, %s, %s, %s) RETURNING {self._SPACE_COLS}""",
+                (space_id, project_id, space_name, instructions or None),
+            )
+            space = self._space(cur.fetchone())
+            self._insert_domains(cur, space_id, domains or [])
+        return space
 
     def list_spaces(self, project_id: str, space_ids: list[str] | None = None) -> list[Space]:
-        raise NotImplementedError
+        query = f"SELECT {self._SPACE_COLS} FROM {SCHEMA}.spaces WHERE project_id = %s"
+        params: list[Any] = [project_id]
+        if space_ids is not None:
+            query += " AND id = ANY(%s)"
+            params.append(list(space_ids))
+        with self._tx() as cur:
+            cur.execute(query + " ORDER BY create_time DESC, id", params)
+            spaces = [self._space(row) for row in cur.fetchall()]
+        missing = set(space_ids or []) - {space.id for space in spaces}
+        if missing:
+            raise SpaceNotFoundError(f"Space not found: {sorted(missing)}")
+        return spaces
 
     def assert_spaces(
         self, project_id: str, space_ids: list[str], domains: list[str] | None = None
     ) -> list[Space]:
-        raise NotImplementedError
+        ordered = list(dict.fromkeys(space_ids))
+        if not ordered:
+            return []
+        with self._tx() as cur:
+            cur.execute(
+                f"""SELECT {self._SPACE_COLS} FROM {SCHEMA}.spaces
+                    WHERE project_id = %s AND id = ANY(%s)""",
+                (project_id, ordered),
+            )
+            found = {row[0]: self._space(row) for row in cur.fetchall()}
+            registered: set = set()
+            if domains:
+                cur.execute(
+                    f"""SELECT space_id, domain FROM {SCHEMA}.domains
+                        WHERE space_id = ANY(%s) AND domain = ANY(%s)""",
+                    (ordered, list(domains)),
+                )
+                registered = set(cur.fetchall())
+        missing_spaces = [s for s in ordered if s not in found]
+        if missing_spaces:
+            raise SpaceNotFoundError(f"Space not found: {missing_spaces}")
+        missing = [(s, d) for s in ordered for d in domains or [] if (s, d) not in registered]
+        if missing:
+            raise DomainNotFoundError(f"Domain not registered (space, domain): {missing}")
+        return [found[space_id] for space_id in ordered]
 
     def update_space(
         self, space_id: str, space_name: str | None = None, instructions: str | None = None
     ) -> Space:
-        raise NotImplementedError
+        sets, params = [], []
+        if space_name is not None:
+            sets.append("space_name = %s")
+            params.append(space_name)
+        if instructions is not None:
+            sets.append("instructions = %s")
+            params.append(instructions or None)
+        if not sets:
+            raise ValueError("update_space needs space_name or instructions")
+        with self._tx() as cur:
+            cur.execute(
+                f"""UPDATE {SCHEMA}.spaces SET {", ".join(sets)}, update_time = now()
+                    WHERE id = %s RETURNING {self._SPACE_COLS}""",
+                [*params, space_id],
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise SpaceNotFoundError(f"Space not found: {space_id}")
+        return self._space(row)
 
     def delete_space(self, space_id: str) -> None:
-        raise NotImplementedError
+        with self._tx() as cur:
+            try:
+                self._lock_space(cur, space_id, for_delete=True)
+            except SpaceNotFoundError:
+                return
+            cur.execute(f"DELETE FROM {SCHEMA}.topics WHERE space_id = %s", (space_id,))
+            cur.execute(f"DELETE FROM {SCHEMA}.domains WHERE space_id = %s", (space_id,))
+            cur.execute(f"DELETE FROM {SCHEMA}.spaces WHERE id = %s", (space_id,))
 
     # ---------- 领域 ----------
     def create_domains(self, space_id: str, domains: list[Domain]) -> list[Domain]:
-        raise NotImplementedError
+        with self._tx() as cur:
+            self._lock_space(cur, space_id)
+            return self._insert_domains(cur, space_id, domains)
 
     def update_domains(self, space_id: str, updates: list[DomainUpdate]) -> list[Domain]:
-        raise NotImplementedError
+        from psycopg2 import errors
+
+        updated: dict[str, Domain] = {}
+        with self._tx() as cur:
+            try:
+                self._lock_space(cur, space_id)
+            except SpaceNotFoundError as e:
+                raise DomainNotFoundError(f"Space not found: {space_id}") from e
+            for item in updates:
+                try:
+                    cur.execute(
+                        f"""UPDATE {SCHEMA}.domains
+                            SET domain = COALESCE(%s, domain),
+                                description = COALESCE(%s, description),
+                                update_time = now()
+                            WHERE space_id = %s AND domain = %s
+                            RETURNING {self._DOMAIN_COLS}""",
+                        (item.new_domain, item.description, space_id, item.domain),
+                    )
+                except errors.UniqueViolation as e:
+                    raise DomainAlreadyExistsError(
+                        f"Domain already exists in space {space_id}: {item.new_domain}"
+                    ) from e
+                row = cur.fetchone()
+                if row is None:
+                    raise DomainNotFoundError(
+                        f"Domain not found in space {space_id}: {item.domain}"
+                    )
+                updated[row[0]] = self._domain(row)
+        return list(updated.values())
 
     def delete_domains(self, space_id: str, names: list[str]) -> list[Domain]:
-        raise NotImplementedError
+        from psycopg2 import errors
+
+        try:
+            with self._tx() as cur:
+                cur.execute(
+                    f"""DELETE FROM {SCHEMA}.domains WHERE space_id = %s AND domain = ANY(%s)
+                        RETURNING {self._DOMAIN_COLS}""",
+                    (space_id, list(names)),
+                )
+                return [self._domain(row) for row in cur.fetchall()]
+        except errors.ForeignKeyViolation as e:
+            # topics.domain_id references domains: any referenced name rejects the batch.
+            raise DomainInUseError(f"Domain still referenced by topics in space {space_id}") from e
 
     def list_domains(self, space_id: str) -> list[Domain]:
-        raise NotImplementedError
+        with self._tx() as cur:
+            cur.execute(
+                f"""SELECT {self._DOMAIN_COLS} FROM {SCHEMA}.domains
+                    WHERE space_id = %s ORDER BY create_time, domain""",
+                (space_id,),
+            )
+            return [self._domain(row) for row in cur.fetchall()]
 
     # ---------- 主题与条目读取 ----------
     def list_topics(

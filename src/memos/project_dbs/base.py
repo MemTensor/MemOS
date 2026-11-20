@@ -26,6 +26,9 @@ from memos.project_dbs.item import (
 )
 
 
+MAX_DOMAINS_PER_SPACE = 20
+
+
 class BaseProjectDB(ABC):
     # ---------- spaces ----------
     @abstractmethod
@@ -40,7 +43,8 @@ class BaseProjectDB(ABC):
 
     @abstractmethod
     def list_spaces(self, project_id: str, space_ids: list[str] | None = None) -> list[Space]:
-        """All spaces of the project, or the given ones (SpaceNotFoundError if any is missing or foreign). Newest first."""
+        """All spaces of the project when space_ids is None, else only the given ones ([] gives []).
+        SpaceNotFoundError if any given space is missing or foreign. Newest first."""
 
     @abstractmethod
     def assert_spaces(
@@ -52,7 +56,8 @@ class BaseProjectDB(ABC):
     def update_space(
         self, space_id: str, space_name: str | None = None, instructions: str | None = None
     ) -> Space:
-        """Omitted fields are kept; an empty instructions string clears it."""
+        """Omitted fields are kept; an empty instructions string clears it.
+        ValueError if neither field is given."""
 
     @abstractmethod
     def delete_space(self, space_id: str) -> None:
@@ -61,19 +66,24 @@ class BaseProjectDB(ABC):
     # ---------- domains ----------
     @abstractmethod
     def create_domains(self, space_id: str, domains: list[Domain]) -> list[Domain]:
-        """Register in batch; existing names keep their values. DomainLimitExceededError over the cap."""
+        """Register in batch; existing names are skipped and keep their values. Returns only
+        the newly registered domains. DomainLimitExceededError if the space would exceed the cap."""
 
     @abstractmethod
     def update_domains(self, space_id: str, updates: list[DomainUpdate]) -> list[Domain]:
-        """Locate by current name. DomainNotFoundError / DomainAlreadyExistsError on errors."""
+        """Apply in order, locating each by its current name; returns the updated rows.
+        DomainNotFoundError (also for a missing space) / DomainAlreadyExistsError roll back
+        the whole batch."""
 
     @abstractmethod
     def delete_domains(self, space_id: str, names: list[str]) -> list[Domain]:
-        """Missing names are ignored; DomainInUseError rejects the whole batch."""
+        """Missing names (or a missing space) are ignored; returns the deleted rows.
+        DomainInUseError rejects the whole batch if any domain is used by a topic."""
 
     @abstractmethod
     def list_domains(self, space_id: str) -> list[Domain]:
-        """Full list, not paginated."""
+        """Full list, not paginated. Earlier batches come first; order within one batch is
+        unspecified. A missing space gives []."""
 
     # ---------- topic and entry reads ----------
     @abstractmethod
