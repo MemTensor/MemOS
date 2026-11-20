@@ -9,108 +9,6 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 T = TypeVar("T")
 
 
-class Message(BaseModel):
-    """Stored source message; shared by all spaces that reference its turn."""
-
-    project_id: str
-    conversation_key: str
-    message_id: str
-    conversation_id: str | None = None
-    turn_id: str
-    turn_seq: int
-    msg_seq: int
-    role: Literal["user", "assistant", "tool", "system"]
-    role_id: str | None = None
-    role_name: str | None = None
-    content: str
-    tool_calls: JsonValue = None
-    tool_call_id: str | None = None
-    experience_notes: JsonValue = None
-    chat_time: AwareDatetime
-    accepted_at: AwareDatetime
-    task_id: str
-    user_id: str
-    agent_id: str | list[str] | None = None
-    content_sha256: str
-
-
-class Episode(BaseModel):
-    """Accumulation, extraction, and commit state for a sequence of turns in one space."""
-
-    id: str
-    space_id: str
-    project_id: str
-    conversation_key: str
-    conversation_id: str | None = None
-    user_id: str
-    domains: list[str]
-    previous_episode_id: str | None = None
-    state: Literal["open", "closed", "extracting", "extracted"]
-    close_reason: (
-        Literal["task_boundary", "idle", "turn_count", "max_wait", "volume", "no_conversation"]
-        | None
-    ) = None
-    opened_at: AwareDatetime
-    last_turn_at: AwareDatetime
-    idle_due_at: AwareDatetime | None = None
-    max_wait_due_at: AwareDatetime | None = None
-    closed_at: AwareDatetime | None = None
-    dispatched_at: AwareDatetime | None = None
-    suspected_boundary_turn_ids: list[str] = Field(default_factory=list)
-    extract_status: Literal["drafted", "skipped", "failed"] | None = None
-    episode_summary: str | None = None
-    drafts: list[dict[str, JsonValue]] = Field(default_factory=list)
-    anchors: list[dict[str, JsonValue]] = Field(default_factory=list)
-    anchor_keys: list[str] = Field(default_factory=list)
-    extracted_at: AwareDatetime | None = None
-    stage: Literal[
-        "episode_open",
-        "extracting",
-        "organizing_queued",
-        "organizing",
-        "awaiting_merge",
-        "committing",
-        "retry_wait",
-        "done",
-    ]
-    attempt: int = 0
-    organize_result: dict[str, JsonValue] | None = None
-    commit_key: str | None = None
-    outcome: Literal["pending", "committed", "staged", "skipped", "failed"] = "pending"
-    result: dict[str, JsonValue] | None = None
-    created_topic_ids: list[str] = Field(default_factory=list)
-    next_retry_at: AwareDatetime | None = None
-    error: dict[str, JsonValue] | None = None
-    last_error: dict[str, JsonValue] | None = None
-    warnings: list[JsonValue] = Field(default_factory=list)
-    staged_status: Literal["active", "moved", "archived", "long_unassigned"] | None = None
-    staged_domain_id: str | None = None
-    staged_reason: str | None = None
-    staged_at: AwareDatetime | None = None
-    staged_attempts: int = 0
-    moved_to_topic_id: str | None = None
-    staged_tsv: str | None = None
-    staged_embedding: list[float] | None = None
-    updated_at: AwareDatetime
-
-
-class EpisodeTurn(BaseModel):
-    """A turn's episode and task assignment within one space."""
-
-    space_id: str
-    conversation_key: str
-    turn_id: str
-    project_id: str
-    episode_id: str
-    turn_seq: int
-    message_count: int
-    task_id: str
-    user_id: str
-    agent_id: str | list[str] | None = None
-    chat_time: AwareDatetime
-    accepted_at: AwareDatetime
-
-
 class Space(BaseModel):
     id: str
     project_id: str
@@ -357,3 +255,105 @@ class Page(BaseModel, Generic[T]):
     total: int
     page: int
     size: int
+
+
+class Message(BaseModel):
+    """Stored source message; shared by all spaces that reference its turn."""
+
+    project_id: str
+    conversation_key: str
+    message_id: str
+    conversation_id: str | None = None
+    turn_id: str
+    turn_seq: int
+    msg_seq: int
+    role: Literal["user", "assistant", "tool", "system"]
+    role_id: str | None = None
+    role_name: str | None = None
+    content: str
+    tool_calls: JsonValue = None
+    tool_call_id: str | None = None
+    experience_notes: JsonValue = None
+    chat_time: AwareDatetime
+    accepted_at: AwareDatetime
+    task_id: str
+    user_id: str
+    agent_id: str | list[str] | None = None
+    content_sha256: str
+
+
+class Episode(BaseModel):
+    """Accumulation, extraction, and commit state for a sequence of turns in one space."""
+
+    id: str
+    space_id: str
+    project_id: str
+    conversation_key: str
+    conversation_id: str | None = None
+    user_id: str
+    domains: list[str]
+    previous_episode_id: str | None = None
+    state: Literal["open", "closed", "extracting", "extracted"]
+    close_reason: (
+        Literal["task_boundary", "idle", "turn_count", "max_wait", "volume", "no_conversation"]
+        | None
+    ) = None
+    opened_at: AwareDatetime
+    last_turn_at: AwareDatetime
+    idle_due_at: AwareDatetime | None = None
+    max_wait_due_at: AwareDatetime | None = None
+    closed_at: AwareDatetime | None = None
+    dispatched_at: AwareDatetime | None = None
+    suspected_boundary_turn_ids: list[str] = Field(default_factory=list)
+    extract_status: Literal["drafted", "skipped", "failed"] | None = None
+    episode_summary: str | None = None
+    drafts: list[dict[str, JsonValue]] = Field(default_factory=list)
+    anchors: list[dict[str, JsonValue]] = Field(default_factory=list)
+    anchor_keys: list[str] = Field(default_factory=list)
+    extracted_at: AwareDatetime | None = None
+    stage: Literal[
+        "episode_open",
+        "extracting",
+        "organizing_queued",
+        "organizing",
+        "awaiting_merge",
+        "committing",
+        "retry_wait",
+        "done",
+    ]
+    attempt: int = 0
+    organize_result: dict[str, JsonValue] | None = None
+    commit_key: str | None = None
+    outcome: Literal["pending", "committed", "staged", "skipped", "failed"] = "pending"
+    result: dict[str, JsonValue] | None = None
+    created_topic_ids: list[str] = Field(default_factory=list)
+    next_retry_at: AwareDatetime | None = None
+    error: dict[str, JsonValue] | None = None
+    last_error: dict[str, JsonValue] | None = None
+    warnings: list[JsonValue] = Field(default_factory=list)
+    staged_status: Literal["active", "moved", "archived", "long_unassigned"] | None = None
+    staged_domain_id: str | None = None
+    staged_reason: str | None = None
+    staged_at: AwareDatetime | None = None
+    staged_attempts: int = 0
+    moved_to_topic_id: str | None = None
+    staged_tsv: str | None = None
+    staged_embedding: list[float] | None = None
+    updated_at: AwareDatetime
+
+
+class EpisodeTurn(BaseModel):
+    """A turn's episode and task assignment within one space."""
+
+    space_id: str
+    conversation_key: str
+    turn_id: str
+    project_id: str
+    episode_id: str
+    turn_seq: int
+    message_count: int
+    task_id: str
+    user_id: str
+    agent_id: str | list[str] | None = None
+    chat_time: AwareDatetime
+    accepted_at: AwareDatetime
