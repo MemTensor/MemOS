@@ -12,6 +12,9 @@ def test_init_creates_tables_and_is_idempotent(pg_db):
         )
         assert [r[0] for r in cur.fetchall()] == [
             "domains",
+            "episode_turns",
+            "episodes",
+            "messages",
             "project_entries",
             "spaces",
             "topics",

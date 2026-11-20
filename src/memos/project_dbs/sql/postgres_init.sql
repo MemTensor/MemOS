@@ -99,3 +99,117 @@ CREATE INDEX IF NOT EXISTS idx_entries_space_type ON project_memory.project_entr
 CREATE INDEX IF NOT EXISTS idx_entries_embedding  ON project_memory.project_entries USING hnsw (embedding vector_cosine_ops);
 -- 条目全文召回
 CREATE INDEX IF NOT EXISTS idx_entries_search_tsv ON project_memory.project_entries USING gin (search_tsv);
+
+-- 5. 原文：每条消息存一份，多个 Space 共用
+CREATE TABLE IF NOT EXISTS project_memory.messages (
+  project_id       text NOT NULL,
+  conversation_key text NOT NULL,                                     -- 有会话 ID 时等于它；没有时为 task:{task_id}
+  message_id       text NOT NULL,                                     -- 调用方 id；缺省由算法生成
+  conversation_id  text,                                              -- 对外会话 ID，未传为 NULL
+  turn_id          text NOT NULL,                                     -- 所在 Turn：Turn 第一条消息的 message_id
+  turn_seq         bigint NOT NULL,                                   -- Turn 在会话内的受理顺序
+  msg_seq          int    NOT NULL,                                   -- 消息在 Turn 内的顺序
+  role             text NOT NULL CHECK (role IN ('user','assistant','tool','system')),
+  role_id          text,
+  role_name        text,
+  content          text NOT NULL,                                     -- 清洗后的正文，完整保存，不截断
+  tool_calls       jsonb,
+  tool_call_id     text,
+  experience_notes jsonb,
+  chat_time        timestamptz NOT NULL,
+  accepted_at      timestamptz NOT NULL,
+  task_id          text NOT NULL,                                     -- 首次受理它的 Task
+  user_id          text NOT NULL,                                     -- 调用主体
+  agent_id         jsonb,                                             -- 字符串或数组，原样
+  content_sha256   text NOT NULL,                                     -- 同 ID 不同内容判 MESSAGE_ID_CONFLICT
+  PRIMARY KEY (project_id, conversation_key, message_id)
+);
+CREATE INDEX IF NOT EXISTS messages_turn_idx ON project_memory.messages (project_id, conversation_key, turn_seq, msg_seq);
+
+-- 6. Episode：一个 Space 内同一会话连续 Turn 的积累、抽取、归类、提交；也承载 Default Topic 暂存
+CREATE TABLE IF NOT EXISTS project_memory.episodes (
+  id                  text PRIMARY KEY,
+  space_id            text NOT NULL REFERENCES project_memory.spaces (id) ON DELETE CASCADE,
+  project_id          text NOT NULL,
+  conversation_key    text NOT NULL,
+  conversation_id     text,
+  user_id             text NOT NULL,                                  -- 第一个 Turn 的调用方；Stream 键用
+  domains             text[] NOT NULL,                                -- 本段候选领域
+  previous_episode_id text REFERENCES project_memory.episodes (id),                       -- reopen B：同 Space、同会话的前一段
+  -- 积累与关闭
+  state               text NOT NULL CHECK (state IN ('open','closed','extracting','extracted')),
+  close_reason        text CHECK (close_reason IN ('task_boundary','idle','turn_count','max_wait','volume','no_conversation')),
+  opened_at           timestamptz NOT NULL,
+  last_turn_at        timestamptz NOT NULL,
+  idle_due_at         timestamptz,
+  max_wait_due_at     timestamptz,
+  closed_at           timestamptz,
+  dispatched_at       timestamptz,                                    -- project_add_process 投递成功
+  suspected_boundary_turn_ids text[] NOT NULL DEFAULT '{}',
+  -- M02 抽取结果
+  extract_status      text CHECK (extract_status IN ('drafted','skipped','failed')),
+  episode_summary     text,
+  drafts              jsonb NOT NULL DEFAULT '[]',                    -- 各带 origin_task_id 与证据引用
+  anchors             jsonb NOT NULL DEFAULT '[]',                    -- 本段的锚点观察与解析结果
+  anchor_keys         text[] NOT NULL DEFAULT '{}',
+  extracted_at        timestamptz,
+  -- 归类与提交
+  stage               text NOT NULL CHECK (stage IN ('episode_open','extracting','organizing_queued','organizing',
+                                                     'awaiting_merge','committing','retry_wait','done')),
+  attempt             int  NOT NULL DEFAULT 0,
+  organize_result     jsonb,                                          -- 等 M05 期间的归类结果、基线 version
+  commit_key          text UNIQUE,                                    -- {episode_id}:{attempt}，只在提交事务里写
+  outcome             text NOT NULL DEFAULT 'pending' CHECK (outcome IN ('pending','committed','staged','skipped','failed')),
+  result              jsonb,                                          -- 提交回执（含 topic_ids），与 commit_key 同事务
+  created_topic_ids   text[] NOT NULL DEFAULT '{}',
+  next_retry_at       timestamptz,
+  error               jsonb,
+  last_error          jsonb,
+  warnings            jsonb NOT NULL DEFAULT '[]',
+  -- Default Topic 暂存（outcome = staged 时）
+  staged_status       text CHECK (staged_status IN ('active','moved','archived','long_unassigned')),
+  staged_domain_id    text,
+  staged_reason       text,
+  staged_at           timestamptz,
+  staged_attempts     int  NOT NULL DEFAULT 0,
+  moved_to_topic_id   text,
+  staged_tsv          tsvector,                                       -- episode_summary；不含 Draft 正文
+  staged_embedding    vector({embedding_dimension}),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (space_id, id),
+  FOREIGN KEY (space_id, staged_domain_id) REFERENCES project_memory.domains (space_id, id),
+  CHECK ((state = 'open') = (closed_at IS NULL)),
+  CHECK ((staged_status = 'moved') = (moved_to_topic_id IS NOT NULL)),
+  CHECK ((staged_status IS NULL) = (staged_at IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS episodes_one_open        ON project_memory.episodes (space_id, conversation_key) WHERE state = 'open';
+CREATE INDEX IF NOT EXISTS episodes_previous_idx           ON project_memory.episodes (space_id, conversation_key, closed_at DESC) WHERE state <> 'open';
+CREATE INDEX IF NOT EXISTS episodes_due_idx                ON project_memory.episodes (LEAST(idle_due_at, max_wait_due_at)) WHERE state = 'open';
+CREATE INDEX IF NOT EXISTS episodes_undispatched_idx       ON project_memory.episodes (dispatched_at NULLS FIRST) WHERE state = 'closed';
+CREATE INDEX IF NOT EXISTS episodes_retry_idx              ON project_memory.episodes (next_retry_at) WHERE stage = 'retry_wait';
+CREATE INDEX IF NOT EXISTS episodes_merge_wait_idx         ON project_memory.episodes (updated_at) WHERE stage = 'awaiting_merge';
+CREATE INDEX IF NOT EXISTS episodes_staged_active_idx      ON project_memory.episodes (space_id, staged_at DESC) WHERE staged_status = 'active';
+CREATE INDEX IF NOT EXISTS episodes_staged_fts_idx         ON project_memory.episodes USING gin (staged_tsv) WHERE staged_status = 'active';
+CREATE INDEX IF NOT EXISTS episodes_staged_embedding_idx   ON project_memory.episodes USING hnsw (staged_embedding vector_cosine_ops) WHERE staged_status = 'active';
+CREATE INDEX IF NOT EXISTS episodes_anchor_keys_idx        ON project_memory.episodes USING gin (anchor_keys);
+
+-- 7. Turn 在某个 Space 的归属与 Task 归属
+CREATE TABLE IF NOT EXISTS project_memory.episode_turns (
+  space_id         text NOT NULL,
+  conversation_key text NOT NULL,
+  turn_id          text NOT NULL,
+  project_id       text NOT NULL,
+  episode_id       text NOT NULL,
+  turn_seq         int  NOT NULL,                                     -- Episode 内顺序
+  message_count    int  NOT NULL,                                     -- 本 Turn 的消息数（open_episode_messages 用）
+  task_id          text NOT NULL,
+  user_id          text NOT NULL,
+  agent_id         jsonb,
+  chat_time        timestamptz NOT NULL,
+  accepted_at      timestamptz NOT NULL,
+  PRIMARY KEY (space_id, conversation_key, turn_id),                  -- 一个 Space 内一个 Turn 只有一个归属
+  FOREIGN KEY (space_id, episode_id) REFERENCES project_memory.episodes (space_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id, conversation_key, turn_id) REFERENCES project_memory.messages (project_id, conversation_key, message_id)
+);
+CREATE INDEX IF NOT EXISTS episode_turns_task_idx    ON project_memory.episode_turns (project_id, task_id);
+CREATE INDEX IF NOT EXISTS episode_turns_episode_idx ON project_memory.episode_turns (episode_id, turn_seq);
