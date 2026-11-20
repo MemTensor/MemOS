@@ -17,7 +17,8 @@
 | PROJECT_MEMORY_EMBEDDER_* | 核心的 embedder（MOS_EMBEDDER_*） | BACKEND / PROVIDER / MODEL / API_BASE / API_KEY / DIMENSION |
 | PROJECT_MEMORY_GRAPH_DB | sqlite | sqlite：自己的 SQLite 文件（单进程、本机试用）；postgres：项目记忆自己的 Postgres 表（pg_backend.py，多副本共享，带 rev 条件写与中文全文）；shared：直接用核心的 graph_db（须支持 search_by_fulltext 与 rev 条件写，neo4j 两种后端都不支持） |
 | PROJECT_MEMORY_SQLITE_PATH | $MEMOS_BASE_PATH/.memos/project_memory.db | |
-| PROJECT_MEMORY_POSTGRES_HOST / PORT / USER / PASSWORD / DB | 退回 POSTGRES_* | 也可用 PROJECT_MEMORY_POSTGRES_DSN 一次给全 |
+| PROJECT_DB_HOST / PORT / USER / PASSWORD / NAME | 退回 PROJECT_MEMORY_POSTGRES_*，再退回 POSTGRES_* | 与存储层 memos.project_dbs 共用；也可用 PROJECT_MEMORY_POSTGRES_DSN 一次给全 |
+| PROJECT_DB_TEXT_SEARCH_PARSER | zhparser | 共享表的中文全文配置；本地没有 zhparser 时设 simple |
 | PROJECT_MEMORY_POSTGRES_SCHEMA | project_memory | 表建在这个 schema 下，与核心的表分开 |
 | PROJECT_MEMORY_POSTGRES_MAX_CONNECTIONS | 10 | 连接池上限；并行整理时每个线程占一个 |
 | PROJECT_MEMORY_PARALLEL_EPISODE | true | 一段之内决策与经验两条线并行 |
@@ -138,24 +139,36 @@ def embedding_dims() -> int:
 
 
 def postgres_config(embedding_dimension: int | None = None) -> dict[str, Any]:
-    """项目记忆自己的 Postgres（与核心同一个实例、不同 schema，便于分开清理与迁移）。"""
-    user = os.getenv("PROJECT_MEMORY_POSTGRES_USER") or os.getenv("POSTGRES_USER", "postgres")
+    """The project memory PostgreSQL. PROJECT_DB_* (the shared storage layer, memos.project_dbs)
+    take precedence, then PROJECT_MEMORY_POSTGRES_*, then the core POSTGRES_*."""
+
+    def pick(name: str, legacy: str, core: str, default: str) -> str:
+        for key in (f"PROJECT_DB_{name}", f"PROJECT_MEMORY_POSTGRES_{legacy}", core):
+            value = os.getenv(key)
+            if value is not None and (value or key.endswith("PASSWORD")):
+                return value
+        return default
+
     return {
-        "host": os.getenv("PROJECT_MEMORY_POSTGRES_HOST") or os.getenv("POSTGRES_HOST", "postgres"),
-        "port": int(
-            os.getenv("PROJECT_MEMORY_POSTGRES_PORT") or os.getenv("POSTGRES_PORT", "5432")
-        ),
-        "user": user,
-        "password": os.getenv("PROJECT_MEMORY_POSTGRES_PASSWORD")
-        if os.getenv("PROJECT_MEMORY_POSTGRES_PASSWORD") is not None
-        else os.getenv("POSTGRES_PASSWORD", ""),
-        "db_name": os.getenv("PROJECT_MEMORY_POSTGRES_DB") or os.getenv("POSTGRES_DB", "postgres"),
+        "host": pick("HOST", "HOST", "POSTGRES_HOST", "postgres"),
+        "port": int(pick("PORT", "PORT", "POSTGRES_PORT", "5432")),
+        "user": pick("USER", "USER", "POSTGRES_USER", "postgres"),
+        "password": pick("PASSWORD", "PASSWORD", "POSTGRES_PASSWORD", ""),
+        "db_name": pick("NAME", "DB", "POSTGRES_DB", "postgres"),
+        # The shared storage layer uses the fixed schema project_memory.
         "schema_name": os.getenv("PROJECT_MEMORY_POSTGRES_SCHEMA", "project_memory"),
         "dsn": os.getenv("PROJECT_MEMORY_POSTGRES_DSN") or None,
-        "max_connections": int(os.getenv("PROJECT_MEMORY_POSTGRES_MAX_CONNECTIONS", "10")),
+        "max_connections": int(
+            os.getenv("PROJECT_DB_MAX_CONN")
+            or os.getenv("PROJECT_MEMORY_POSTGRES_MAX_CONNECTIONS", "10")
+        ),
         "user_name": os.getenv("PROJECT_MEMORY_POSTGRES_USER_NAME", "project_memory"),
         "use_multi_db": False,
         "embedding_dimension": embedding_dimension or embedding_dims(),
+        # zhparser in production; simple where the extension is not installed (tests).
+        "text_search_parser": (os.getenv("PROJECT_DB_TEXT_SEARCH_PARSER") or "zhparser")
+        .strip()
+        .lower(),
         # The retrieval service reads MEMOS_PROJECT_MEMORY_DSN; it must be this same database so
         # Add can publish into its index inside each commit.
         "retrieval_index": bool(os.getenv("MEMOS_PROJECT_MEMORY_DSN")),
