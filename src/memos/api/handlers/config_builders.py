@@ -17,6 +17,7 @@ from memos.configs.graph_db import GraphDBConfigFactory
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.configs.llm import LLMConfigFactory
 from memos.configs.mem_reader import MemReaderConfigFactory
+from memos.configs.project_db import ProjectDBConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.memories.textual.prefer_text_memory.config import (
@@ -51,6 +52,37 @@ def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
         {
             "backend": graph_db_backend,
             "config": graph_db_backend_map[graph_db_backend],
+        }
+    )
+
+
+def build_project_db_config() -> ProjectDBConfigFactory | None:
+    """
+    Build project memory database configuration from PROJECT_DB_* env vars.
+
+    Returns:
+        Validated config, or None when PROJECT_DB_HOST is unset (project memory disabled)
+    """
+    host = os.getenv("PROJECT_DB_HOST")
+    if not host:
+        return None
+    return ProjectDBConfigFactory.model_validate(
+        {
+            "backend": os.getenv("PROJECT_DB_BACKEND", "postgres").lower(),
+            "config": {
+                "host": host,
+                "port": int(os.getenv("PROJECT_DB_PORT", "5432")),
+                "user": os.getenv("PROJECT_DB_USER", "postgres"),
+                "password": os.getenv("PROJECT_DB_PASSWORD", ""),
+                "db_name": os.getenv("PROJECT_DB_NAME", "memos_project"),
+                "minconn": int(os.getenv("PROJECT_DB_MIN_CONN", "1")),
+                "maxconn": int(os.getenv("PROJECT_DB_MAX_CONN", "10")),
+                "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "1024")),
+                "text_search_parser": (os.getenv("PROJECT_DB_TEXT_SEARCH_PARSER") or "zhparser")
+                .strip()
+                .lower(),
+                "auto_init": os.getenv("PROJECT_DB_AUTO_INIT", "true").lower() == "true",
+            },
         }
     )
 
