@@ -12,6 +12,13 @@ def shutdown_components(components: Mapping[str, Any] | None) -> None:
     if not components:
         return
 
+    project_db = components.get("project_db")
+    if project_db is not None:
+        try:
+            project_db.close()
+        except Exception:
+            logger.exception("Failed to close project_db during API shutdown")
+
     mem_scheduler = components.get("mem_scheduler")
     if mem_scheduler is None:
         return

@@ -20,6 +20,7 @@ from memos.api.handlers.config_builders import (
     build_llm_config,
     build_mem_reader_config,
     build_nli_client_config,
+    build_project_db_config,
     build_reranker_config,
     build_scheduler_llm_config,
     build_suggestion_llm_config,
@@ -39,6 +40,7 @@ from memos.memories.textual.tree_text_memory.organize.manager import MemoryManag
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 from memos.plugins.component_bootstrap import build_plugin_context
 from memos.plugins.manager import plugin_manager
+from memos.project_dbs.factory import ProjectDBFactory
 
 
 if TYPE_CHECKING:
@@ -158,6 +160,7 @@ def init_server() -> dict[str, Any]:
 
     # Build component configurations
     graph_db_config = build_graph_db_config()
+    project_db_config = build_project_db_config()
     llm_config = build_llm_config()
     feedback_llm_config = build_feedback_llm_config()
     suggestion_llm_config = build_suggestion_llm_config()
@@ -175,6 +178,7 @@ def init_server() -> dict[str, Any]:
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
+    project_db = ProjectDBFactory.from_config(project_db_config)
     llm = LLMFactory.from_config(llm_config)
     feedback_llm = LLMFactory.from_config(feedback_llm_config)
     suggestion_llm = LLMFactory.from_config(suggestion_llm_config)
@@ -330,6 +334,7 @@ def init_server() -> dict[str, Any]:
     # Return all components as a dictionary for easy access and extension
     return {
         "graph_db": graph_db,
+        "project_db": project_db,
         "mem_reader": mem_reader,
         "llm": llm,
         "suggestion_llm": suggestion_llm,
