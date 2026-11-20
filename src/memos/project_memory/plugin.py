@@ -33,6 +33,16 @@ logger = get_logger(__name__)
 PROJECT_RESULT_KIND = "project_mem"  # 项目记忆在核心检索结果里的类别名
 
 
+class _PluginMessages:
+    """Message store adapter for `memos.project_memory.messages.read_messages`."""
+
+    def __init__(self, plugin: Any) -> None:
+        self.plugin = plugin
+
+    def list_messages(self, space_id: str, conversation_id: str) -> list:
+        return self.plugin.service.store.list_messages(space_id, conversation_id)
+
+
 class CommunityProjectMemoryPlugin(MemOSPlugin):
     name = "project_memory"
     version = "0.2.0"
@@ -87,6 +97,8 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
         # 保留同一个 dict 引用：调度器的 submit 句柄在核心启动后期才写进来（Dream 同样做法）
         self.context = context
         self._service = None
+        # The retrieval service's /get_message reads the messages this plugin stored.
+        context.setdefault("project_message_store", _PluginMessages(self))
 
     def init_app(self) -> None:
         from fastapi.responses import JSONResponse
