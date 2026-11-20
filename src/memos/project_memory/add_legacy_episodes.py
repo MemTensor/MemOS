@@ -76,7 +76,6 @@ def _message(
         "task_id": owner["task_id"],
         "user_id": owner["user_id"],
         "agent_id": meta.get("agent_id"),
-        "raw_sha256": None,
     }
     message["content_sha256"] = message_fingerprint(message)
     return message

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from .add_layout import load_topics
 from .add_publish import publish_topics, retract_topics, sync_space
 from .add_store import json_value
 from .graph_store import cosine, lexical_sim
@@ -220,10 +221,14 @@ class RelationalProjectView:
 
     def _clear_topics(self, cursor: Any, space_id: str, now: Any) -> list[str]:
         cursor.execute(
-            """UPDATE spaces SET cleared_at = %s, last_formation_at = NULL,
-                                 staged_since_last_formation = 0, formation_version = formation_version + 1
-               WHERE project_id = %s AND id = %s""",
+            "UPDATE spaces SET cleared_at = %s WHERE project_id = %s AND id = %s",
             (now, self.store.project_id, space_id),
+        )
+        cursor.execute(
+            """INSERT INTO add_space_state AS st (space_id, formation_version) VALUES (%s, 1)
+               ON CONFLICT (space_id) DO UPDATE SET last_formation_at = NULL,
+                   staged_since_last_formation = 0, formation_version = st.formation_version + 1""",
+            (space_id,),
         )
         cursor.execute(
             """UPDATE episodes SET state = CASE WHEN state = 'open' THEN 'closed' ELSE state END,
@@ -274,13 +279,12 @@ class RelationalProjectView:
 
     def _topic_by_id(self, topic_id: str, space_id: str | None = None) -> dict[str, Any] | None:
         with self.store.transaction(readonly=True) as cursor:
-            cursor.execute(
-                """SELECT t.*, d.domain FROM topics t JOIN spaces s ON s.id = t.space_id
-                     JOIN domains d ON d.id = t.domain_id AND d.space_id = t.space_id
-                   WHERE s.project_id = %s AND t.id = %s AND (%s::text IS NULL OR t.space_id = %s)""",
+            rows = load_topics(
+                cursor,
+                "s.project_id = %s AND t.id = %s AND (%s::text IS NULL OR t.space_id = %s)",
                 (self.store.project_id, topic_id, space_id, space_id),
             )
-            return cursor.fetchone()
+            return rows[0] if rows else None
 
     def get_topic(self, topic_id: str, space_id: str | None = None) -> Topic | None:
         row = self._topic_by_id(topic_id, space_id)
@@ -342,7 +346,7 @@ class RelationalProjectView:
     def _scoped_component(self, memory_id: str) -> dict[str, Any] | None:
         with self.store.transaction(readonly=True) as cursor:
             cursor.execute(
-                """SELECT i.kind, i.topic_id, i.space_id FROM topic_items i
+                """SELECT i.entry_type AS kind, i.topic_id, i.space_id FROM project_entries i
                      JOIN spaces s ON s.id = i.space_id
                    WHERE s.project_id = %s AND i.id = %s""",
                 (self.store.project_id, memory_id),

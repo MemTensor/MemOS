@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from memos.exceptions import MemOSError
 
 from .add_evidence import text_at
-from .add_index import topic_item_content
+from .add_layout import SPACE_STATE, write_entries
 from .add_merge import VersionConflictError
 from .add_publish import publish_topics, sync_space
 from .add_store import json_value
@@ -117,51 +117,10 @@ def _assert_witnesses(cursor: Any, episode: dict) -> None:
 
 
 def refresh_topic_items(
-    cursor: Any,
-    topic: dict,
-    version: int,
-    *,
-    item_embeddings: dict[str, str] | None = None,
-    model_id: str | None = None,
+    cursor: Any, topic: dict, *, item_embeddings: dict[str, str] | None = None
 ) -> None:
-    """Update the derived projection in the same transaction as its Topic."""
-    cursor.execute(
-        "DELETE FROM topic_items WHERE space_id = %s AND topic_id = %s",
-        (topic["space_id"], topic["id"]),
-    )
-    rows = []
-    for kind, field in (
-        ("decision", "decisions"),
-        ("experience", "experiences"),
-        ("timeline", "timeline"),
-    ):
-        for item in topic.get(field) or []:
-            if item.get("archived"):
-                continue
-            content = topic_item_content(kind, item)
-            vector = (item_embeddings or {}).get(item["id"])
-            rows.append(
-                (
-                    item["id"],
-                    topic["id"],
-                    topic["space_id"],
-                    kind,
-                    content,
-                    item.get("time") or topic["update_time"],
-                    item.get("user_ids") or [],
-                    version,
-                    content,
-                    vector,
-                    model_id if vector is not None else None,
-                )
-            )
-    if rows:
-        cursor.executemany(
-            """INSERT INTO topic_items (id, topic_id, space_id, kind, content, time, user_ids,
-                                        topic_version, search_tsv, embedding, embedding_model_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('simple', %s),%s::vector,%s)""",
-            rows,
-        )
+    """Write the Topic's entries as project_entries rows in the same transaction as the Topic."""
+    write_entries(cursor, topic, embeddings=item_embeddings)
 
 
 def _domain(cursor: Any, space: str, name: str | None) -> str | None:
@@ -184,63 +143,51 @@ def _topic_edit(cursor: Any, edit: dict, key: str, current: dict, scoped: dict[s
     if domain_id is None or topic.get("domain_id", domain_id) != domain_id:
         raise VersionConflictError("Prepared Topic Domain is no longer available")
 
-    content = (
-        topic["topic_summary"],
-        topic["topic_description"],
-        *(
-            json_value(topic.get(field) or [])
-            for field in ("decisions", "experiences", "timeline", "sources", "anchors")
-        ),
-        topic.get("anchor_keys") or [],
-        topic["update_time"],
-        key,
-    )
-    index_text = "\n".join(
-        (topic["topic_name"], topic["topic_summary"], topic["topic_description"])
-    )
     vector = edit.get("embedding")
     model_id = edit.get("embedding_model_id") if vector is not None else None
+    lists = (
+        topic["topic_summary"],
+        topic["topic_description"],
+        json_value(topic.get("sources") or []),
+        json_value(topic.get("anchors") or []),
+        topic.get("anchor_keys") or [],
+        topic["update_time"],
+    )
+    # Add's own Topic fields; the shared schema keeps them in topics.extra.
+    marks = {"last_commit_key": key, "embedding_model_id": model_id}
     expected = edit["expected_version"]
     if expected is None:
+        marks["created_by_episode_id"] = current["id"]
         cursor.execute(
             """INSERT INTO topics (id, space_id, domain_id, topic_name, topic_summary, topic_description,
-                                   decisions, experiences, timeline, sources, anchors, anchor_keys,
-                                   update_time, last_commit_key, search_tsv, create_time, created_by_episode_id,
-                                   embedding, embedding_model_id)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('simple',%s),%s,%s,%s::vector,%s)
+                                   sources, anchors, anchor_keys, update_time, create_time, extra, embedding)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                       %s::jsonb || jsonb_build_object('committed_at', clock_timestamp()), %s::vector)
                ON CONFLICT (id) DO NOTHING RETURNING version""",
             (
                 topic["id"],
                 space,
                 domain_id,
                 topic["topic_name"],
-                *content,
-                index_text,
+                *lists,
                 topic["create_time"],
-                current["id"],
+                json_value(marks),
                 vector,
-                model_id,
             ),
         )
     else:
         cursor.execute(
-            """UPDATE topics SET topic_summary = %s, topic_description = %s, decisions = %s,
-                     experiences = %s, timeline = %s, sources = %s, anchors = %s, anchor_keys = %s,
-                     update_time = %s, last_commit_key = %s, search_tsv = to_tsvector('simple',%s),
-                     embedding = %s::vector, embedding_model_id = %s, version = version + 1, committed_at = now()
+            """UPDATE topics SET topic_summary = %s, topic_description = %s, sources = %s,
+                     anchors = %s, anchor_keys = %s, update_time = %s,
+                     extra = extra || %s::jsonb || jsonb_build_object('committed_at', clock_timestamp()),
+                     embedding = %s::vector, version = version + 1
                WHERE id = %s AND space_id = %s AND domain_id = %s AND version = %s RETURNING version""",
-            (*content, index_text, vector, model_id, topic["id"], space, domain_id, expected),
+            (*lists, json_value(marks), vector, topic["id"], space, domain_id, expected),
         )
     written = cursor.fetchone()
     if written is None:
         raise VersionConflictError("A target Topic changed while preparing this Episode")
-    refresh_topic_items(
-        cursor,
-        topic,
-        written["version"],
-        item_embeddings=edit.get("item_embeddings"),
-        model_id=model_id,
-    )
+    refresh_topic_items(cursor, topic, item_embeddings=edit.get("item_embeddings"))
 
 
 def _staged_episodes(cursor: Any, changes: dict, episode: dict) -> dict[str, dict]:
@@ -349,7 +296,9 @@ def commit_changeset(
     with store.transaction() as cursor:
         # Lock in the same order as Space clear and domain maintenance.
         cursor.execute(
-            "SELECT *, clock_timestamp() AS commit_clock FROM spaces WHERE project_id = %s AND id = %s FOR UPDATE",
+            f"""SELECT s.*, {SPACE_STATE}, clock_timestamp() AS commit_clock
+                  FROM spaces s LEFT JOIN add_space_state st ON st.space_id = s.id
+                 WHERE s.project_id = %s AND s.id = %s FOR UPDATE OF s""",
             (project, space),
         )
         scope = cursor.fetchone()
@@ -395,15 +344,19 @@ def commit_changeset(
         staged = _finish_staged(cursor, changeset, current)
         if formation:
             cursor.execute(
-                """UPDATE spaces SET formation_version = formation_version + 1, last_formation_at = now(),
-                      staged_since_last_formation = greatest(0, staged_since_last_formation - %s)
-                   WHERE id = %s AND project_id = %s""",
-                (formation["consumed"], space, project),
+                """INSERT INTO add_space_state AS st (space_id, formation_version, last_formation_at)
+                   VALUES (%s, 1, now())
+                   ON CONFLICT (space_id) DO UPDATE SET formation_version = st.formation_version + 1,
+                       last_formation_at = now(),
+                       staged_since_last_formation = greatest(0, st.staged_since_last_formation - %s)""",
+                (space, formation["consumed"]),
             )
         elif staged:
             cursor.execute(
-                """UPDATE spaces SET staged_since_last_formation = staged_since_last_formation + 1
-                   WHERE id = %s AND project_id = %s""",
-                (space, project),
+                """INSERT INTO add_space_state AS st (space_id, staged_since_last_formation)
+                   VALUES (%s, 1)
+                   ON CONFLICT (space_id) DO UPDATE
+                   SET staged_since_last_formation = st.staged_since_last_formation + 1""",
+                (space,),
             )
         return _finalize_episode(cursor, changeset, current, key, staged)

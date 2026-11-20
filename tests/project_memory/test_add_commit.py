@@ -136,11 +136,11 @@ def test_topic_projection_and_receipt_commit_together_and_replay_once(store):
     (topic,) = store.read_topics("space")
     assert topic["version"] == 1
     with store.transaction(readonly=True) as cursor:
-        cursor.execute("SELECT kind, content, topic_version FROM topic_items")
+        cursor.execute("SELECT entry_type, content, version FROM project_entries")
         assert cursor.fetchone() == {
-            "kind": "timeline",
+            "entry_type": "timeline",
             "content": "池大小设为 16",
-            "topic_version": 1,
+            "version": 1,
         }
 
 
@@ -203,7 +203,10 @@ def test_vector_index_uses_same_commit_and_filters_domains(store):
     )
     assert not excluded
     with store.transaction(readonly=True) as cursor:
-        cursor.execute("SELECT embedding, embedding_model_id FROM topic_items")
+        cursor.execute(
+            """SELECT e.embedding, t.extra->>'embedding_model_id' AS embedding_model_id
+               FROM project_entries e JOIN topics t ON t.id = e.topic_id"""
+        )
         assert cursor.fetchone() == {
             "embedding": "[0.1,0.2,0.3]",
             "embedding_model_id": "local-fixture",

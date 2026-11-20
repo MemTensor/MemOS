@@ -166,7 +166,6 @@ def test_preserves_assistant_tool_link_and_full_original_output(add_store):
     _, call, output = episode["messages"]
     assert call["content"] == "调用工具"
     assert call["tool_calls"][0]["id"] == output["tool_call_id"] == "call"
-    assert call["raw_sha256"] != call["content_sha256"]
     assert output["content"] == raw_output
 
 

@@ -5,7 +5,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-from .add_migrations import CREATE_TABLES, CREATE_VECTOR_INDEXES
+from memos.project_dbs.postgres import _INIT_LOCK_KEY as INIT_LOCK_KEY
+
+from .add_layout import ADD_TABLES, SPACE_STATE, load_topics, render_shared_ddl
 
 
 if TYPE_CHECKING:
@@ -36,6 +38,9 @@ class PostgresAddStore:
         self.schema_name = config.get("schema_name") or "project_memory"
         self.dim = int(config.get("embedding_dimension") or 1024)
         self.retrieval_index = bool(config.get("retrieval_index"))
+        # The shared schema's full-text configuration; zhparser in production, simple in tests.
+        self.text_search_parser = config.get("text_search_parser") or "simple"
+        self.text_search_config = f"{self.schema_name}.zh"
         if not 1 <= self.dim <= 16000:
             raise ValueError("Project memory embedding dimension must be between 1 and 16000")
         self._search_path = sql.SQL("SET LOCAL search_path TO {}, public").format(
@@ -57,24 +62,57 @@ class PostgresAddStore:
         self.pool = ThreadedConnectionPool(1, int(config.get("max_connections", 10)), **parameters)
         try:
             with self.transaction() as cursor:
-                cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("pm-ddl",))
-                cursor.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
-                cursor.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        sql.Identifier(self.schema_name)
-                    )
-                )
-                cursor.execute(CREATE_TABLES.format(dimension=self.dim))
-                # pgvector HNSW on the vector type supports dimensions up to 2000.
-                if self.dim <= 2000:
-                    cursor.execute(CREATE_VECTOR_INDEXES)
-                if self.retrieval_index:
-                    from .add_publish import install
-
-                    install(cursor)
+                # Same lock as memos.project_dbs, so the two installers never race.
+                cursor.execute("SELECT pg_advisory_xact_lock(%s)", (INIT_LOCK_KEY,))
+                self._install(cursor, sql)
         except Exception:
             self.close()
             raise
+
+    def _install(self, cursor: Any, sql: Any) -> None:
+        """Create what is missing. A shared deployment installs the schema with a privileged
+        account; on later starts nothing here needs DDL privileges."""
+        required = ["vector"] + (["zhparser"] if self.text_search_parser == "zhparser" else [])
+        cursor.execute("SELECT extname FROM pg_extension WHERE extname = ANY(%s)", (required,))
+        missing = sorted(set(required) - {row["extname"] for row in cursor.fetchall()})
+        if missing:
+            raise RuntimeError(
+                f"PostgreSQL extensions {missing} are not installed; run CREATE EXTENSION with a "
+                "privileged account, or set PROJECT_DB_TEXT_SEARCH_PARSER=simple without zhparser"
+            )
+
+        def present(name: str) -> bool:
+            cursor.execute("SELECT to_regclass(%s) AS present", (f"{self.schema_name}.{name}",))
+            return cursor.fetchone()["present"] is not None
+
+        cursor.execute("SELECT 1 FROM pg_namespace WHERE nspname = %s", (self.schema_name,))
+        if cursor.fetchone() is None:
+            cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema_name)))
+        if not present("project_entries"):
+            if present("topics"):
+                raise RuntimeError(
+                    f"Schema {self.schema_name} has an older project memory layout; "
+                    "migrate it or use another PROJECT_MEMORY_POSTGRES_SCHEMA"
+                )
+            # Same DDL and guard as memos.project_dbs, so either side may install it.
+            cursor.execute(render_shared_ddl(self.schema_name, self.dim, self.text_search_parser))
+        cursor.execute(
+            """SELECT atttypmod FROM pg_attribute
+               WHERE attrelid = to_regclass(%s) AND attname = 'embedding'""",
+            (f"{self.schema_name}.topics",),
+        )
+        installed = cursor.fetchone()
+        if installed and installed["atttypmod"] > 0 and installed["atttypmod"] != self.dim:
+            raise RuntimeError(
+                f"{self.schema_name}.topics stores {installed['atttypmod']}-dimension vectors; "
+                f"the embedder is configured for {self.dim}"
+            )
+        if not present("add_space_state"):
+            cursor.execute(ADD_TABLES)
+        if self.retrieval_index:
+            from .add_publish import install
+
+            install(cursor)
 
     @contextmanager
     def transaction(self, *, readonly: bool = False) -> Iterator[Any]:
@@ -95,7 +133,9 @@ class PostgresAddStore:
     def read_space(self, space_id: str) -> dict[str, Any] | None:
         with self.transaction(readonly=True) as cursor:
             cursor.execute(
-                "SELECT * FROM spaces WHERE project_id = %s AND id = %s",
+                f"""SELECT s.*, {SPACE_STATE} FROM spaces s
+                      LEFT JOIN add_space_state st ON st.space_id = s.id
+                    WHERE s.project_id = %s AND s.id = %s""",
                 (self.project_id, space_id),
             )
             return cursor.fetchone()
@@ -114,8 +154,10 @@ class PostgresAddStore:
 
     def _load_episode(self, cursor: Any, episode_id: str) -> dict[str, Any] | None:
         cursor.execute(
-            """SELECT e.*, s.instructions, s.resource_bindings, s.cleared_at
+            """SELECT e.*, s.instructions, COALESCE(st.resource_bindings, '[]'::jsonb)
+                      AS resource_bindings, s.cleared_at
                FROM episodes e JOIN spaces s ON s.id = e.space_id AND s.project_id = e.project_id
+                 LEFT JOIN add_space_state st ON st.space_id = s.id
                WHERE e.project_id = %s AND e.id = %s""",
             (self.project_id, episode_id),
         )
@@ -149,14 +191,11 @@ class PostgresAddStore:
         topic_ids: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         with self.transaction(readonly=True) as cursor:
-            cursor.execute(
-                """SELECT t.*, d.domain FROM topics t
-                     JOIN spaces s ON s.id = t.space_id
-                     JOIN domains d ON d.space_id = t.space_id AND d.id = t.domain_id
-                   WHERE s.project_id = %s AND t.space_id = %s
-                     AND (%s::text[] IS NULL OR d.domain = ANY(%s::text[]))
-                     AND (%s::text[] IS NULL OR t.id = ANY(%s::text[]))
-                   ORDER BY t.update_time DESC, t.id""",
+            return load_topics(
+                cursor,
+                """s.project_id = %s AND t.space_id = %s
+                   AND (%s::text[] IS NULL OR d.domain = ANY(%s::text[]))
+                   AND (%s::text[] IS NULL OR t.id = ANY(%s::text[]))""",
                 (
                     self.project_id,
                     space_id,
@@ -166,7 +205,6 @@ class PostgresAddStore:
                     None if topic_ids is None else list(topic_ids),
                 ),
             )
-            return cursor.fetchall()
 
     def read_staged(self, space_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self.transaction(readonly=True) as cursor:
