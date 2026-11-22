@@ -1,6 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { probeLocalEmbedding } from "../../../server/routes/models.js";
+import { DEFAULT_GEMINI_MODEL } from "../../../core/llm/providers/gemini.js";
+import { probeChat, probeLocalEmbedding } from "../../../server/routes/models.js";
+
+describe("chat model probe", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // The Settings "test" button must probe the model real calls use when
+  // the model field is empty, or a passing test proves nothing.
+  it("probes the provider's default Gemini model when none is given", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "hi" }] } }] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(probeChat({ provider: "gemini", apiKey: "k" })).resolves.toBe(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      `/models/${DEFAULT_GEMINI_MODEL}:generateContent`,
+    );
+  });
+});
 
 describe("local embedding model probe", () => {
   it("tests unsaved local model source and offline settings", async () => {

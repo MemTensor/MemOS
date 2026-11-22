@@ -21,6 +21,7 @@
  */
 import { createEmbedder, type Embedder } from "../../core/embedding/index.js";
 import type { EmbeddingConfig } from "../../core/embedding/types.js";
+import { DEFAULT_GEMINI_MODEL } from "../../core/llm/providers/gemini.js";
 import type { ServerDeps } from "../types.js";
 import { parseJson, writeError, type Routes } from "./registry.js";
 
@@ -294,7 +295,7 @@ async function probeEmbedding(req: TestRequest): Promise<number> {
 
 // ─── Chat probe ──────────────────────────────────────────────────────────
 
-async function probeChat(req: TestRequest): Promise<number> {
+export async function probeChat(req: TestRequest): Promise<number> {
   const provider = req.provider ?? "";
   const endpoint = normUrl(req.endpoint ?? "");
   const apiKey = req.apiKey ?? "";
@@ -348,7 +349,7 @@ async function probeChat(req: TestRequest): Promise<number> {
       const base = endpoint || "https://generativelanguage.googleapis.com";
       const safeKey = /^[\x00-\x7F]*$/.test(apiKey) ? apiKey : "";
       const url = `${base.replace(/\/+$/, "")}/v1beta/models/${encodeURIComponent(
-        model || "gemini-2.5-flash",
+        model || DEFAULT_GEMINI_MODEL,
       )}:generateContent?key=${encodeURIComponent(safeKey)}`;
       const r = await fetchJson(url, {
         method: "POST",

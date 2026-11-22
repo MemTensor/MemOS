@@ -31,6 +31,9 @@ interface GemResp {
   };
 }
 
+/** Used when `config.llm.model` is empty. Must be a model Google still serves. */
+export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+
 export class GeminiLlmProvider implements LlmProvider {
   readonly name: LlmProviderName = "gemini";
 
@@ -47,7 +50,7 @@ export class GeminiLlmProvider implements LlmProvider {
         { provider: this.name },
       );
     }
-    const model = config.model && config.model.length > 0 ? config.model : "gemini-1.5-flash";
+    const model = config.model && config.model.length > 0 ? config.model : DEFAULT_GEMINI_MODEL;
     const base = getBase(config.endpoint);
     const url = `${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
 
@@ -94,7 +97,7 @@ export class GeminiLlmProvider implements LlmProvider {
         { provider: this.name },
       );
     }
-    const model = config.model && config.model.length > 0 ? config.model : "gemini-1.5-flash";
+    const model = config.model && config.model.length > 0 ? config.model : DEFAULT_GEMINI_MODEL;
     const base = getBase(config.endpoint);
     const url = `${base}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(config.apiKey)}`;
 
