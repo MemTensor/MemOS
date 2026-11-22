@@ -363,6 +363,23 @@ describe("llm/providers", () => {
       // The fetch mock only keeps the last call — but since we fired one,
       // the value is that one.
     });
+
+    // Google shut gemini-1.5-flash down on 2025-09-29, so a default naming it
+    // fails every call made without a configured model.
+    it("defaults to a served model when none is configured", async () => {
+      const p = new GeminiLlmProvider();
+      const noModel = ctxFor(cfg({ provider: "gemini", model: "" }));
+
+      const cap = captureFetch({ candidates: [{ content: { parts: [{ text: "x" }] } }] });
+      await p.complete(msgs, call(), noModel);
+      expect(cap.url).toContain("/models/gemini-3.6-flash:generateContent");
+
+      const streamCap = captureFetch({});
+      for await (const _chunk of p.stream(msgs, call(), noModel)) {
+        // drain
+      }
+      expect(streamCap.url).toContain("/models/gemini-3.6-flash:streamGenerateContent");
+    });
   });
 
   // ─── bedrock ───────────────────────────────────────────────────────────────
