@@ -32,7 +32,7 @@ interface GemResp {
 }
 
 /** Used when `config.llm.model` is empty. Must be a model Google still serves. */
-const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
 
 export class GeminiLlmProvider implements LlmProvider {
   readonly name: LlmProviderName = "gemini";
