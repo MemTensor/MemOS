@@ -175,16 +175,17 @@ def _task_topic_attribution(turns: list[dict], gold_field: str) -> dict[str, Any
         else:
             shape = "one_to_one"
 
-        complete = bool(topic_ids) and not unassigned[task]
+        omitted = not topic_ids
         passes = {
-            "strict_one_to_one": complete and shape == "one_to_one",
-            "allow_split": complete and shape in {"one_to_one", "split"},
-            "allow_merge": complete and shape in {"one_to_one", "merge"},
-            "allow_split_or_merge": complete and shape in {"one_to_one", "split", "merge"},
+            "strict_one_to_one": shape == "one_to_one",
+            "allow_split": shape in {"one_to_one", "split"},
+            "allow_merge": shape in {"one_to_one", "merge"},
+            "allow_split_or_merge": shape in {"one_to_one", "split", "merge"},
         }
         counts.update(rule for rule, passed in passes.items() if passed)
         tasks[task] = {
-            "complete": complete,
+            "complete": not unassigned[task],
+            "omitted": omitted,
             "shape": shape,
             "passes": passes,
             "topic_ids": sorted(topic_ids),

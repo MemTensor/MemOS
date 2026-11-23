@@ -176,11 +176,13 @@ def test_task_topic_rates_allow_pure_split_or_pure_merge_but_reject_mixed_compon
     rates = rubric["rates"]
     assert rates["strict_one_to_one"] == {"correct": 1, "total": 8, "rate": 0.125}
     assert rates["allow_split"]["correct"] == 2
-    assert rates["allow_merge"]["correct"] == 3
-    assert rates["allow_split_or_merge"]["correct"] == 4
+    assert rates["allow_merge"]["correct"] == 4
+    assert rates["allow_split_or_merge"]["correct"] == 5
+    assert rubric["tasks"]["missing"]["omitted"] is True
     assert rubric["tasks"]["mixed-a"]["shape"] == "mixed"
     assert rubric["tasks"]["mixed-b"]["shape"] == "mixed"
     assert rubric["tasks"]["merge-missing"]["shape"] == "merge"
+    assert rubric["tasks"]["merge-missing"]["omitted"] is False
     assert rubric["tasks"]["merge-missing"]["unassigned_turns"] == [
         {"turn_id": "merge-missing-1", "status": "staged"}
     ]
