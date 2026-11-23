@@ -68,12 +68,14 @@ def test_timeline_separates_queue_run_and_retry_wait():
             event("opened", 0),
             event("closed", 5),
             event("published", 5),
-            event("claimed", 6, label="p"),
-            event("stage_done", 6.5, run_ms=500, next_stage="retry_wait", usage=[]),
+            event("claimed", 6, label="p", token="a"),
+            event("stage_done", 6.5, token="a", run_ms=500, next_stage="retry_wait", applied=True),
             event("published", 9),
             event("published", 30),  # A stale redelivery does not restart the queue clock.
-            event("claimed", 10, label="p"),
-            event("stage_done", 11, run_ms=1000, next_stage="done", usage=[_row(calls=1)]),
+            event("claimed", 10, label="p", token="b"),
+            event(
+                "stage_done", 11, token="b", run_ms=1000, next_stage="done", usage=[_row(calls=1)]
+            ),
             event("finished", 11, outcome="skipped"),
         ],
     )
@@ -213,3 +215,115 @@ def test_usage_without_provider_counts_is_not_complete(store):
     assert metrics["completed_at"] is not None
     assert metrics["usage"]["models"][0]["calls_without_usage"] == 1
     assert metrics["usage"]["complete"] is False
+
+
+def _event(kind, seconds, **detail):
+    return {
+        "event": kind,
+        "at": T0 + timedelta(seconds=seconds),
+        "stage": "organizing",
+        "attempt": 1,
+        "detail": detail,
+    }
+
+
+def test_stage_end_pairs_with_its_claim_by_lease_token():
+    # Stage N+1 is claimed before stage N's worker records its end.
+    timeline = episode_timeline(
+        {"id": "e", "outcome": "pending"},
+        [
+            _event("published", 0),
+            _event("claimed", 1, label="space", token="n"),
+            _event("published", 3),
+            _event("claimed", 3.5, label="merge", token="n1"),
+            _event("stage_done", 4, token="n", run_ms=3000, next_stage="awaiting_merge"),
+            _event("stage_done", 6, token="n1", run_ms=2500, next_stage="committing"),
+        ],
+    )
+    assert [stage["label"] for stage in timeline["stages"]] == ["space", "merge"]
+    assert [stage["run_ms"] for stage in timeline["stages"]] == [3000, 2500]
+    assert timeline["unfinished_stages"] == 0
+
+
+def test_a_retry_that_did_not_apply_is_not_counted():
+    timeline = episode_timeline(
+        {"id": "e", "outcome": "pending"},
+        [
+            _event("claimed", 0, token="old"),
+            _event("claimed", 5, token="new"),
+            _event("stage_done", 6, token="old", next_stage="retry_wait", applied=False),
+            _event("published", 9),
+        ],
+    )
+    assert (timeline["retries"], timeline["retry_wait_ms"]) == (0, 0)
+
+
+def test_episode_finished_before_event_recording_uses_its_update_time():
+    timeline = episode_timeline(
+        {
+            "id": "e",
+            "outcome": "committed",
+            "opened_at": T0,
+            "closed_at": T0 + timedelta(seconds=1),
+            "updated_at": T0 + timedelta(seconds=9),
+        },
+        [],
+    )
+    assert timeline["finished_estimated"] is True
+    assert timeline["processing_ms"] == 8000
+
+
+def test_space_clear_finishes_the_adds_it_failed(store):
+    from memos.project_memory.add_view import RelationalProjectView
+
+    runtime = EpisodeAddRuntime(store, Mock(), Mock(), Mock(), RuntimeSettings())
+    task = runtime.accept(
+        SimpleNamespace(
+            user_id="member",
+            conversation_id="conversation",
+            space_ids=["test"],
+            messages=[{"role": "user", "content": "We decided to keep weekly reviews."}],
+        )
+    )["task_id"]
+    RelationalProjectView(store).clear_space_topics("test")
+    metrics = runtime.status(task, "member")["memory_views"]["project"]["metrics"]
+    (episode,) = metrics["episodes"]
+    assert episode["outcome"] == "failed" and not episode["finished_estimated"]
+    assert metrics["closed_at"] is not None and metrics["completed_at"] is not None
+
+
+def test_embedding_backends_without_usage_make_the_bill_incomplete(store):
+    from memos.llms.usage import meter_usage
+
+    runtime = EpisodeAddRuntime(
+        store,
+        Mock(),
+        Mock(),
+        Mock(),
+        RuntimeSettings(),
+        embedder=lambda texts: [[0.0, 0.0, 1.0] for _ in texts],
+        embedding_model_id="local-embed",
+    )
+    with meter_usage() as meter:
+        runtime.embedder(["text"])
+    assert meter.summary()[0]["model"] == "local-embed"
+    assert meter.summary()[0]["calls_without_usage"] == 1
+
+
+def test_upgrade_installs_the_event_table_on_an_existing_schema(store):
+    with store.transaction() as cur:
+        cur.execute("DROP TABLE add_episode_events")
+    upgraded = PostgresAddStore(
+        {
+            "dsn": os.environ["PG_TEST_DSN"],
+            "schema_name": store.schema_name,
+            "embedding_dimension": 3,
+        },
+        project_id="project",
+    )
+    try:
+        with upgraded.transaction(readonly=True) as cur:
+            cur.execute("SELECT to_regclass('add_episode_events') IS NOT NULL AS present")
+            assert cur.fetchone()["present"]
+    finally:
+        upgraded.close()

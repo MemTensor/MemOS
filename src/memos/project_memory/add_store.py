@@ -90,7 +90,8 @@ class PostgresAddStore:
 
     def _install(self, cursor: Any, sql: Any) -> None:
         """Create what is missing. A shared deployment installs the schema with a privileged
-        account; on later starts nothing here needs DDL privileges."""
+        account; on later starts nothing here needs DDL privileges unless an upgrade added an
+        Add-owned table (add_episode_events), which the first start after the upgrade creates."""
         cursor.execute(
             """SELECT 1 FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace
                WHERE c.cfgname = 'zh' AND n.nspname = %s""",

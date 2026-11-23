@@ -292,14 +292,16 @@ def test_episode_lifecycle_events_carry_stage_usage(store):
         events = cur.fetchall()
     assert [row["event"] for row in events] == [
         "opened",
+        "turn",
         "closed",
         "published",
         "claimed",
         "finished",
         "stage_done",
     ]
-    assert events[1]["detail"] == {"reason": "no_conversation"}
-    assert events[2]["detail"] == {"label": "project_add_process"}
+    assert events[1]["detail"]["chars"] == len("We decided to keep weekly reviews.")
+    assert events[2]["detail"] == {"reason": "no_conversation"}
+    assert events[3]["detail"] == {"label": "project_add_process"}
     done = events[-1]["detail"]
     assert done["next_stage"] == "done" and done["outcome"] == "skipped"
     assert done["usage"][0]["total_tokens"] == 42

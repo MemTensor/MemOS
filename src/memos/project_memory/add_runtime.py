@@ -279,12 +279,13 @@ class EpisodeAddRuntime:
                 )
 
     def _work(self, lease: StageLease, label: str) -> None:
-        episode = self.store.load_episode(lease.episode_id)
-        if episode is None:
-            return
         started = time.perf_counter()
         with meter_usage() as meter:
             try:
+                episode = self.store.load_episode(lease.episode_id)
+                if episode is None:
+                    lease.transition["error"] = "EpisodeNotFound"
+                    return
                 self._run_stage(lease, label, episode)
             finally:
                 self._stage_done(lease, label, started, meter.summary())
@@ -355,7 +356,7 @@ class EpisodeAddRuntime:
         except Exception as exc:
             lease.transition["error"] = type(exc).__name__
             if label == MERGE_RESULT and self._committed(lease):
-                lease.transition.setdefault("stage", "done")
+                lease.transition.update(stage="done", applied=True)
                 self._release(episode, lease.data.get("lock_token"))
                 return
             reason = "MODEL_UNAVAILABLE" if isinstance(exc, ModelError) else "STORE_UNAVAILABLE"
@@ -480,7 +481,9 @@ class EpisodeAddRuntime:
             receipt = commit_changeset(
                 self.store, lease.episode_id, lease.attempt, changeset, work_token=lease.token
             )
-            lease.transition.update(stage="done", outcome=(receipt or {}).get("outcome"))
+            lease.transition.update(
+                stage="done", applied=True, outcome=(receipt or {}).get("outcome")
+            )
         finally:
             self._release(episode, token)
 

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from .add_layout import load_topics
 from .add_publish import publish_topics, retract_topics, sync_space
-from .add_store import json_value
+from .add_store import json_value, record_event
 from .graph_store import cosine, lexical_sim
 from .types import (
     PROJECT_DECISION,
@@ -231,18 +231,44 @@ class RelationalProjectView:
             (space_id,),
         )
         cursor.execute(
-            """UPDATE episodes SET state = CASE WHEN state = 'open' THEN 'closed' ELSE state END,
-                      stage = 'done', outcome = 'failed', closed_at = COALESCE(closed_at, %s),
+            """WITH pending AS (
+                   SELECT id, state FROM episodes
+                   WHERE project_id = %s AND space_id = %s AND outcome = 'pending' FOR UPDATE
+               )
+               UPDATE episodes e SET
+                      state = CASE WHEN e.state = 'open' THEN 'closed' ELSE e.state END,
+                      stage = 'done', outcome = 'failed', closed_at = COALESCE(e.closed_at, %s),
                       updated_at = %s, error = %s
-               WHERE project_id = %s AND space_id = %s AND outcome = 'pending'""",
+               FROM pending WHERE e.id = pending.id
+               RETURNING e.id, e.attempt, pending.state AS previous_state""",
             (
+                self.store.project_id,
+                space_id,
                 now,
                 now,
                 json_value({"reason": "SPACE_CLEARED", "message": "Space was cleared"}),
-                self.store.project_id,
-                space_id,
             ),
         )
+        for row in cursor.fetchall():
+            if row["previous_state"] == "open":
+                record_event(
+                    cursor,
+                    self.store.project_id,
+                    row["id"],
+                    "closed",
+                    now,
+                    detail={"reason": "space_cleared"},
+                )
+            record_event(
+                cursor,
+                self.store.project_id,
+                row["id"],
+                "finished",
+                now,
+                stage="done",
+                attempt=row["attempt"],
+                detail={"outcome": "failed", "reason": "SPACE_CLEARED"},
+            )
         cursor.execute(
             """UPDATE episodes SET staged_status = 'archived', updated_at = %s
                WHERE project_id = %s AND space_id = %s AND staged_status = 'active'""",

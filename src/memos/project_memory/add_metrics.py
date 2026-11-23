@@ -7,8 +7,9 @@ stage and split among the Tasks of the Episode in proportion to the input charac
 Turns, with largest-remainder rounding so the Task shares of every counter add up exactly to the
 Episode's total.
 
-Event times come from the database clock (acceptance and commit) and the worker clock (dispatch
-and stages); components are clamped at zero so a small skew between them cannot go negative.
+Event times come from the API worker clock, except an Episode finished by a commit, which uses the
+database clock; components are clamped at zero so a small skew between them cannot go negative.
+Episodes finished before event recording fall back to the row's update time (`finished_estimated`).
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 
 ATTRIBUTION = "turn_characters"
+FALLBACK_ATTRIBUTION = "turn_count"
 
 
 def _ms(start: datetime | None, end: datetime | None) -> int | None:
@@ -37,16 +39,21 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def episode_timeline(episode: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
-    """Phases of one Episode: buffering, then queueing, running and retry waits per stage."""
+    """Phases of one Episode: buffering, then queueing, running and retry waits per stage.
+
+    A stage end is matched to its claim by lease token: the next stage can be claimed before the
+    previous worker records its end, so event order alone does not pair them.
+    """
     opened = episode.get("opened_at")
     closed = episode.get("closed_at")
     finished = None
+    finished_estimated = False
     outcome = episode.get("outcome")
     queue_ms = run_ms = retry_wait_ms = 0
     publishes = claims = retries = 0
     published_at = waiting_since = None
     stages: list[dict[str, Any]] = []
-    open_stage: dict[str, Any] | None = None
+    claimed: dict[str, dict[str, Any]] = {}
     usage: list[list[dict[str, Any]]] = []
     for event in events:
         kind, at, detail = event["event"], event["at"], event.get("detail") or {}
@@ -66,7 +73,7 @@ def episode_timeline(episode: dict[str, Any], events: list[dict[str, Any]]) -> d
             waited = _ms(published_at, at) or 0
             queue_ms += waited
             published_at = None
-            open_stage = {
+            stage = {
                 "label": detail.get("label"),
                 "stage": event.get("stage"),
                 "attempt": event.get("attempt"),
@@ -74,30 +81,39 @@ def episode_timeline(episode: dict[str, Any], events: list[dict[str, Any]]) -> d
                 "queue_ms": waited,
                 "run_ms": None,
             }
-            stages.append(open_stage)
+            stages.append(stage)
+            if detail.get("token"):
+                claimed[detail["token"]] = stage
         elif kind == "stage_done":
             rows = detail.get("usage") or []
             usage.append(rows)
             run = int(detail.get("run_ms") or 0)
             run_ms += run
-            if open_stage is None:  # A claim from before event recording; keep the run.
-                open_stage = {"label": detail.get("label"), "stage": event.get("stage")}
-                stages.append(open_stage)
-            open_stage.update(
+            stage = claimed.pop(detail.get("token"), None)
+            if stage is None:  # No recorded claim (e.g. claimed before event recording).
+                stage = {"label": detail.get("label"), "stage": event.get("stage")}
+                stages.append(stage)
+            stage.update(
                 run_ms=run,
                 next_stage=detail.get("next_stage"),
                 outcome=detail.get("outcome"),
+                applied=detail.get("applied"),
                 error=detail.get("error"),
                 reason=detail.get("reason"),
                 total_tokens=sum(int(row.get("total_tokens") or 0) for row in rows),
             )
-            open_stage = None
-            if detail.get("next_stage") == "retry_wait":
+            # A worker whose lease was taken over did not move the Episode into a retry.
+            if detail.get("next_stage") == "retry_wait" and detail.get("applied"):
                 retries += 1
                 waiting_since = at
         elif kind == "finished":
             finished = at
             outcome = detail.get("outcome") or outcome
+    if finished is None and episode.get("outcome") not in (None, "pending"):
+        # Finished without a recorded event (before event recording existed). The row's
+        # updated_at may move later (Formation archives staged Episodes), so flag it.
+        finished = episode.get("updated_at")
+        finished_estimated = finished is not None
     processing = _ms(closed, finished)
     return {
         "episode_id": episode["id"],
@@ -108,6 +124,7 @@ def episode_timeline(episode: dict[str, Any], events: list[dict[str, Any]]) -> d
         "opened_at": _iso(opened),
         "closed_at": _iso(closed),
         "finished_at": _iso(finished),
+        "finished_estimated": finished_estimated,
         "buffer_ms": _ms(opened, closed),
         "processing_ms": processing,
         "queue_ms": queue_ms,
@@ -158,9 +175,34 @@ def attribute(rows: list[dict[str, Any]], weights: dict[str, int]) -> dict[str, 
     return out
 
 
-def _usage_summary(rows: list[dict[str, Any]], complete: bool) -> dict[str, Any]:
+def turn_weights(
+    members: list[dict[str, Any]], sizes: dict[tuple[str, str], int]
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]], dict[str, str]]:
+    """Per Episode, each Task's weight and Turn count, and the attribution method used.
+
+    Weights are the Turns' input characters recorded at acceptance (at least 1 per Turn). An
+    Episode with any Turn accepted before size recording splits equally per Turn instead.
+    """
+    weights: dict[str, dict[str, int]] = defaultdict(dict)
+    turns: dict[str, dict[str, int]] = defaultdict(dict)
+    by_episode: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in members:
+        by_episode[row["episode_id"]].append(row)
+    methods = {}
+    for episode_id, rows in by_episode.items():
+        sized = all((episode_id, row["turn_id"]) in sizes for row in rows)
+        methods[episode_id] = ATTRIBUTION if sized else FALLBACK_ATTRIBUTION
+        for row in rows:
+            weight = max(1, sizes.get((episode_id, row["turn_id"]), 0)) if sized else 1
+            task = row["task_id"]
+            weights[episode_id][task] = weights[episode_id].get(task, 0) + weight
+            turns[episode_id][task] = turns[episode_id].get(task, 0) + 1
+    return weights, turns, methods
+
+
+def _usage_summary(rows: list[dict[str, Any]], complete: bool, methods: set[str]) -> dict[str, Any]:
     return {
-        "attribution": ATTRIBUTION,
+        "attribution": ATTRIBUTION if methods <= {ATTRIBUTION} else FALLBACK_ATTRIBUTION,
         "complete": complete,
         "total_tokens": sum(row["total_tokens"] for row in rows),
         "models": rows,
@@ -177,40 +219,32 @@ def task_metrics(cursor: Any, project_id: str, task_id: str, user_id: str) -> di
     own = cursor.fetchall()
     episode_ids = sorted({row["episode_id"] for row in own})
     cursor.execute(
-        """SELECT id, space_id, state, stage, outcome, close_reason, opened_at, closed_at
+        """SELECT id, space_id, state, stage, outcome, close_reason, opened_at, closed_at,
+                  updated_at
            FROM episodes WHERE project_id = %s AND id = ANY(%s::text[]) ORDER BY opened_at, id""",
         (project_id, episode_ids),
     )
     episodes = cursor.fetchall()
     cursor.execute(
-        """SELECT et.episode_id, et.task_id,
-                  SUM(GREATEST(1, COALESCE(m.size, 0))) AS weight, COUNT(*) AS turns
-           FROM episode_turns et
-           LEFT JOIN LATERAL (
-               SELECT SUM(char_length(content) + CASE
-                          WHEN tool_calls IS NULL OR tool_calls IN ('null', '[]') THEN 0
-                          ELSE char_length(tool_calls::text) END) AS size
-               FROM messages m
-               WHERE m.project_id = et.project_id AND m.conversation_key = et.conversation_key
-                 AND m.turn_id = et.turn_id AND m.role <> 'system'
-           ) m ON TRUE
-           WHERE et.project_id = %s AND et.episode_id = ANY(%s::text[])
-           GROUP BY et.episode_id, et.task_id""",
+        """SELECT episode_id, task_id, turn_id FROM episode_turns
+           WHERE project_id = %s AND episode_id = ANY(%s::text[])""",
         (project_id, episode_ids),
     )
-    weights: dict[str, dict[str, int]] = defaultdict(dict)
-    turns: dict[str, dict[str, int]] = defaultdict(dict)
-    for row in cursor.fetchall():
-        weights[row["episode_id"]][row["task_id"]] = int(row["weight"])
-        turns[row["episode_id"]][row["task_id"]] = int(row["turns"])
+    members = cursor.fetchall()
     cursor.execute(
         """SELECT episode_id, event, at, stage, attempt, detail FROM add_episode_events
            WHERE project_id = %s AND episode_id = ANY(%s::text[]) ORDER BY episode_id, at, id""",
         (project_id, episode_ids),
     )
     events: dict[str, list[dict]] = defaultdict(list)
+    sizes: dict[tuple[str, str], int] = {}
     for row in cursor.fetchall():
         events[row["episode_id"]].append(row)
+        if row["event"] == "turn":
+            sizes[(row["episode_id"], row["detail"].get("turn_id"))] = int(
+                row["detail"].get("chars") or 0
+            )
+    weights, turns, methods = turn_weights(members, sizes)
 
     accepted = min((row["accepted_at"] for row in own), default=None)
     timelines = []
@@ -221,6 +255,7 @@ def task_metrics(cursor: Any, project_id: str, task_id: str, user_id: str) -> di
         episode_weights = weights[episode["id"]]
         share = episode_weights.get(task_id, 0) / max(1, sum(episode_weights.values()))
         timeline.update(
+            attribution=methods.get(episode["id"], ATTRIBUTION),
             turns=sum(turns[episode["id"]].values()),
             task_turns=turns[episode["id"]].get(task_id, 0),
             tasks=len(episode_weights),
@@ -249,6 +284,10 @@ def task_metrics(cursor: Any, project_id: str, task_id: str, user_id: str) -> di
         "close_wait_ms": _ms(accepted, closed_at),
         "processing_ms": _ms(closed_at, completed_at),
         "latency_ms": _ms(accepted, completed_at),
-        "usage": _usage_summary(merge_usage(*task_usage), complete and all_finished),
+        "usage": _usage_summary(
+            merge_usage(*task_usage),
+            complete and all_finished,
+            {timeline["attribution"] for timeline in timelines},
+        ),
         "episodes": timelines,
     }

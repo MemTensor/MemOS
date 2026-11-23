@@ -484,6 +484,28 @@ class AddAcceptance:
                 episode["id"],
             ),
         )
+        # The Turn's input size weighs this Task's share of the Episode's model usage.
+        record_event(
+            cursor,
+            self.store.project_id,
+            episode["id"],
+            "turn",
+            ctx.now,
+            stage="episode_open",
+            detail={
+                "task_id": ctx.task_id,
+                "turn_id": first["message_id"],
+                "chars": sum(
+                    len(msg["content"])
+                    + (
+                        len(json.dumps(msg["tool_calls"], ensure_ascii=False))
+                        if msg["tool_calls"]
+                        else 0
+                    )
+                    for msg in processing
+                ),
+            },
+        )
         return sum(
             len(msg["content"]) + len(json.dumps(msg["tool_calls"], ensure_ascii=False))
             for msg in processing

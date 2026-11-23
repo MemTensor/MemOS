@@ -198,7 +198,10 @@ class EpisodeDispatch:
     def published(
         self, episode: dict[str, Any], now: datetime, *, label: str | None = None
     ) -> None:
-        """Mark a delivery; `now` is the time taken before submission, so it precedes a claim."""
+        """Record a submitted delivery and mark it dispatched if the stage has not moved on.
+
+        `now` is taken before submission, so the event precedes the claim it leads to.
+        """
         with self.store.transaction() as cursor:
             record_event(
                 cursor,
