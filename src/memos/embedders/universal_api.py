@@ -6,6 +6,7 @@ from openai import OpenAI as OpenAIClient
 
 from memos.configs.embedder import UniversalAPIEmbedderConfig
 from memos.embedders.base import BaseEmbedder, log_embedding_call
+from memos.llms.usage import EMBEDDING, record_usage
 from memos.log import get_logger
 
 
@@ -101,6 +102,7 @@ class UniversalAPIEmbedder(BaseEmbedder):
             response = client.embeddings.create(**kwargs, timeout=timeout)
         except BadRequestError as error:
             if embedding_dims is None or not self._is_dimensions_unsupported(error):
+                record_usage(EMBEDDING, model, failed=True)
                 raise
 
             logger.warning(
@@ -108,8 +110,16 @@ class UniversalAPIEmbedder(BaseEmbedder):
                 embedding_dims,
             )
             fallback_kwargs = self._build_embedding_kwargs(model, texts, None)
-            response = client.embeddings.create(**fallback_kwargs, timeout=timeout)
+            try:
+                response = client.embeddings.create(**fallback_kwargs, timeout=timeout)
+            except Exception:
+                record_usage(EMBEDDING, model, failed=True)
+                raise
+        except Exception:
+            record_usage(EMBEDDING, model, failed=True)
+            raise
 
+        record_usage(EMBEDDING, model, getattr(response, "usage", None))
         return [item.embedding for item in response.data]
 
     @log_embedding_call
