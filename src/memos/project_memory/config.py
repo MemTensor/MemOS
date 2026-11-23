@@ -169,9 +169,8 @@ def postgres_config(embedding_dimension: int | None = None) -> dict[str, Any]:
         "text_search_parser": (os.getenv("PROJECT_DB_TEXT_SEARCH_PARSER") or "zhparser")
         .strip()
         .lower(),
-        # The retrieval service reads MEMOS_PROJECT_MEMORY_DSN; it must be this same database so
-        # Add can publish into its index inside each commit.
-        "retrieval_index": bool(os.getenv("MEMOS_PROJECT_MEMORY_DSN")),
+        # Publish the search index in the same transaction as the PostgreSQL Add.
+        "retrieval_index": True,
     }
 
 

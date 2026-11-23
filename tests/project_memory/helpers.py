@@ -708,7 +708,7 @@ def make_test_db(kind: str, path: Any) -> Any:
             )
         )
     if kind == "postgres":
-        from .pg_backend import ProjectPostgresStore
+        from memos.project_memory.pg_backend import ProjectPostgresStore
 
         db = ProjectPostgresStore(
             {
@@ -761,7 +761,7 @@ def build_http_app(
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from .plugin import CommunityProjectMemoryPlugin
+    from memos.project_memory.plugin import CommunityProjectMemoryPlugin
 
     llm = llm or RuleLLM()
     graph_db = graph_db or FakeGraphDB()

@@ -2,7 +2,7 @@
 
 import pytest
 
-from memos.project_memory.testing import drop_test_dbs
+from tests.project_memory.helpers import drop_test_dbs
 
 
 @pytest.fixture(autouse=True)

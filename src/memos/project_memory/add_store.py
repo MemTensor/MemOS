@@ -24,7 +24,7 @@ def json_value(value: Any) -> Any:
 class PostgresAddStore:
     """A connection pool with an explicit project scope for each store instance."""
 
-    def __init__(self, config: dict[str, Any], *, project_id: str) -> None:
+    def __init__(self, config: dict[str, Any], *, project_id: str, pool: Any | None = None) -> None:
         try:
             from psycopg2 import sql
             from psycopg2.extras import RealDictCursor
@@ -59,7 +59,12 @@ class PostgresAddStore:
                 "dbname": config.get("db_name", "postgres"),
             }
         )
-        self.pool = ThreadedConnectionPool(1, int(config.get("max_connections", 10)), **parameters)
+        self._owns_pool = pool is None
+        self.pool = (
+            pool
+            if pool is not None
+            else ThreadedConnectionPool(1, int(config.get("max_connections", 10)), **parameters)
+        )
         try:
             with self.transaction() as cursor:
                 # Same lock as memos.project_dbs, so the two installers never race.
@@ -136,7 +141,8 @@ class PostgresAddStore:
             self.pool.putconn(connection)
 
     def close(self) -> None:
-        self.pool.closeall()
+        if self._owns_pool:
+            self.pool.closeall()
 
     def read_space(self, space_id: str) -> dict[str, Any] | None:
         with self.transaction(readonly=True) as cursor:

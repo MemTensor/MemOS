@@ -5,10 +5,11 @@ import os
 
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -31,6 +32,10 @@ from memos.project_memory.views import ITEM_TYPES, budget
 
 
 logger = get_logger(__name__)
+
+
+if TYPE_CHECKING:
+    from memos.embedders.base import BaseEmbedder
 
 
 class ProjectReadError(HTTPException):
@@ -89,47 +94,42 @@ def _scope(request: Request, spaces: list[str] | None, domains: list[str]) -> Sc
     return Scope(tenant, None if spaces is None else tuple(spaces), tuple(domains))
 
 
-def _project_plugin_serves() -> bool:
-    """The project memory plugin answers project reads itself when no index is configured."""
-    from memos.api.handlers.project_view import project_enabled
-
-    return project_enabled()
-
-
 @contextmanager
 def project_retrieval_lifespan(app: FastAPI, components: dict) -> Iterator[None]:
     if getattr(app.state, "project_retrieval", None) is not None:
         yield
         return
-    dsn = os.getenv("MEMOS_PROJECT_MEMORY_DSN")
-    mock_setting = os.getenv("MEMOS_PROJECT_MEMORY_MOCK")
-    if mock_setting == "1" or (not mock_setting and not dsn and not _project_plugin_serves()):
-        from memos.project_memory.mock_store import MockProjectStore
 
-        store = MockProjectStore(os.getenv("MEMOS_PROJECT_MEMORY_TENANT_ID") or "mock-tenant")
-        backend = nullcontext(ProjectRetrieval(store, message_store=store))
-        logger.info("Project memory mock enabled; serving the built-in mock-space fixture")
-    elif dsn:
-        backend = _postgres_retrieval(dsn, components)
-    else:
-        yield
-        return
-    with backend as service:
+    project_db = components.get("project_db")
+    with ExitStack() as cleanup:
+        if project_db is not None:
+            pool = project_db.pool
+        elif dsn := os.getenv("MEMOS_PROJECT_MEMORY_DSN"):
+            # Standalone read services may supply a DSN without initializing server components.
+            try:
+                from psycopg2.pool import ThreadedConnectionPool
+            except ImportError as exc:
+                raise ImportError("Project retrieval requires psycopg2-binary") from exc
+
+            pool = ThreadedConnectionPool(1, 16, dsn, connect_timeout=3)
+            cleanup.callback(pool.closeall)
+        else:
+            yield
+            return
+
+        embedder = components.get("project_embedder") or components.get("embedder")
+        service = ProjectRetrieval(
+            RetrievalStore(pool), _query_embedder(embedder), components.get("project_message_store")
+        )
+        cleanup.callback(service.close)
         app.state.project_retrieval = service
         try:
             yield
         finally:
             del app.state.project_retrieval
-            service.close()
 
 
-@contextmanager
-def _postgres_retrieval(dsn: str, components: dict) -> Iterator[ProjectRetrieval]:
-    try:
-        from psycopg2.pool import ThreadedConnectionPool
-    except ImportError as exc:
-        raise ImportError("Project retrieval requires psycopg2-binary") from exc
-    embedder = components.get("embedder")
+def _query_embedder(embedder: "BaseEmbedder | None") -> Callable[[str], Vector] | None:
     model = getattr(getattr(embedder, "config", None), "model_name_or_path", None)
 
     # The stock provider can silently switch models. Only compare vectors whose
@@ -143,19 +143,13 @@ def _postgres_retrieval(dsn: str, components: dict) -> Iterator[ProjectRetrieval
     def embed(text: str) -> Vector:
         return Vector(model=model, values=embedder.embed([text])[0])
 
-    pool = ThreadedConnectionPool(1, 16, dsn, connect_timeout=3)
-    try:
-        yield ProjectRetrieval(
-            RetrievalStore(pool), embed if model else None, components.get("project_message_store")
-        )
-    finally:
-        pool.closeall()
+    return embed if model else None
 
 
 def _service(request: Request) -> ProjectRetrieval:
     service = getattr(request.app.state, "project_retrieval", None)
     if service is None:
-        raise HTTPException(500, "Project retrieval is not configured")
+        raise HTTPException(503, "Project retrieval is not configured")
     return service
 
 

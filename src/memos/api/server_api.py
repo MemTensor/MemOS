@@ -37,8 +37,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         with project_retrieval_lifespan(_app, server_router_module.components):
             yield
     finally:
-        shutdown_components(server_router_module.components)
         plugin_manager.shutdown()
+        shutdown_components(server_router_module.components)
 
 
 app = FastAPI(
