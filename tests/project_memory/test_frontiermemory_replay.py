@@ -1,4 +1,18 @@
-from evaluation.frontiermemory_topic.replay import observe_turn, request_for_turn, witness_index
+import pytest
+
+from evaluation.frontiermemory_topic.replay import (
+    observe_turn,
+    request_for_turn,
+    validate_work_limit,
+    witness_index,
+)
+
+
+def test_work_limit_counts_distinct_gold_groups_before_replay():
+    turns = [{"gold_work": f"work-{i}"} for i in range(50)]
+    assert validate_work_limit([*turns, *turns]) == 50
+    with pytest.raises(ValueError, match="50"):
+        validate_work_limit([*turns, {"gold_work": "one-too-many"}])
 
 
 def test_request_preserves_ids_but_does_not_send_gold_labels():

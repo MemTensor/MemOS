@@ -33,6 +33,20 @@ if TYPE_CHECKING:
 SPACE = "frontier-pilot"
 DOMAIN = "engineering"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+MAX_WORK_GROUPS = 50
+
+
+def validate_work_limit(turns: list[dict[str, Any]]) -> int:
+    """Count gold work groups and enforce the experimental sample cap before replay."""
+    groups = set()
+    for turn in turns:
+        label = turn.get("gold_work")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("Each Turn must have a concrete gold_work label")
+        groups.add(label)
+    if len(groups) > MAX_WORK_GROUPS:
+        raise ValueError(f"Replay is limited to {MAX_WORK_GROUPS} concrete work groups")
+    return len(groups)
 
 
 def request_for_turn(turn: dict[str, Any]) -> SimpleNamespace:
@@ -230,6 +244,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--ledger", type=Path, required=True)
+    parser.add_argument("--budget-usd", type=float, default=1.0)
     parser.add_argument("--embedding-path", type=Path, required=True)
     parser.add_argument("--profile", type=Path, default=Path.home() / ".deepseek.env")
     parser.add_argument("--formation-count", type=int, default=RuntimeSettings.formation_count)
@@ -246,6 +261,10 @@ def main() -> int:
 
     manifest = json.loads(args.manifest.read_text())
     turns = manifest["turns"]
+    try:
+        work_count = validate_work_limit(turns)
+    except ValueError as exc:
+        parser.error(str(exc))
     requests = [request_for_turn(turn) for turn in turns]
     waves = [turn["wave"] for turn in turns]
     if not turns or waves != sorted(waves) or len({r.task_id for r in requests}) != len(turns):
@@ -283,7 +302,7 @@ def main() -> int:
                 "INSERT INTO domains (id, space_id, domain) VALUES (%s, %s, %s)",
                 (DOMAIN, SPACE, DOMAIN),
             )
-        llm = build_budgeted_llm(args.profile, args.ledger, cap_usd=1.0)
+        llm = build_budgeted_llm(args.profile, args.ledger, cap_usd=args.budget_usd)
         ledger = llm.ledger
 
         class RecordedHub(ModelHub):
@@ -351,6 +370,7 @@ def main() -> int:
                         ["git", "rev-parse", "HEAD"], text=True
                     ).strip(),
                     "formation_count": args.formation_count,
+                    "gold_work_count": work_count,
                     "embedding_model": EMBEDDING_MODEL,
                     "seconds": round(time.monotonic() - started, 3),
                     "budget": ledger.summary() if ledger is not None else None,
