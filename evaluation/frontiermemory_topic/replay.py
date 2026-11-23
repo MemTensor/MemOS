@@ -329,8 +329,9 @@ def main() -> int:
                     raise RuntimeError("Add did not accept a pilot Turn as a new request")
                 clock.advance(1)
             clock.advance(runtime.acceptance.settings.idle_seconds + 1)
-            runtime.acceptance.close_due()
-            drain_work(runtime, queue, clock, ledger)
+            # Close one due Episode at a time to preserve the manifest's arrival order.
+            while runtime.acceptance.close_due(limit=1):
+                drain_work(runtime, queue, clock, ledger)
             print(f"Wave {wave} completed", flush=True)
         complete = True
     except Exception as exc:
