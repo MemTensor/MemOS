@@ -464,7 +464,6 @@ def test_engineering_requests_need_only_the_retrieval_database(client, service, 
         monkeypatch.setenv("MEMOS_PROJECT_MEMORY_DSN", conn.dsn)
     finally:
         service.store.pool.putconn(conn)
-    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_MOCK", raising=False)
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_TENANT_ID", raising=False)
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_GATEWAY_KEY", raising=False)
     monkeypatch.delenv("MEMOS_PROJECT_MEMORY_INTERNAL", raising=False)
@@ -822,3 +821,32 @@ def test_internal_messages_without_tenant_or_credentials(client, service, monkey
         by_space["C"] = [message]
         assert read().status_code == 409
         assert read(space_id="B").json()["data"]["message_detail_list"] == [message]
+
+
+def test_project_database_is_used_for_search_and_add_without_separate_dsn(service, monkeypatch):
+    from types import SimpleNamespace
+
+    from memos.api.handlers.project_retrieval import project_retrieval_lifespan
+    from memos.plugins.manager import PluginManager
+    from memos.project_memory.config import postgres_config
+    from memos.project_memory.plugin import CommunityProjectMemoryPlugin
+    from memos.project_memory.store import Scope
+
+    monkeypatch.setenv("PROJECT_DB_BACKEND", "postgres")
+    monkeypatch.setenv("PROJECT_DB_HOST", "deployment-db")
+    monkeypatch.setenv("PROJECT_MEMORY_GRAPH_DB", "sqlite")
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_DSN", raising=False)
+    monkeypatch.delenv("MEMOS_ENABLED_PLUGINS", raising=False)
+    plugin = CommunityProjectMemoryPlugin()
+    assert PluginManager._is_plugin_enabled(plugin)
+    assert postgres_config()["retrieval_index"]
+    app = FastAPI()
+    pool = service.store.pool
+    components = {"project_db": SimpleNamespace(pool=pool)}
+    plugin.init_components({"shared": components})
+    assert plugin._uses_episode_store()
+    with project_retrieval_lifespan(app, components):
+        store = app.state.project_retrieval.store
+        assert store.pool is pool
+        assert store.get(Scope("tenant", ("A",), ()), "decision-1", False)["id"] == "decision-1"
+    assert not pool.closed

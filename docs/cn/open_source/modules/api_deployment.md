@@ -12,25 +12,10 @@
 - **`server_api_ext.py`** 和 **`Dockerfile.krolik`** 是某位开发者扩展后的 API 及部署配置，**仅供参考**。这些内容尚未与云服务集成，仍处于测试阶段。
 - 如需扩展或自定义行为，可参考上述文件，按需使用或改造。
 
-## 项目记忆接口联调
+## 项目记忆读写
 
-未配置项目数据库连接 `MEMOS_PROJECT_MEMORY_DSN` 时，MemOS 启动后默认提供联调空间 `mock-space`。不同测试者可以用自己的 `user_id` 检索同一组内置样例，无需建空间、准备数据或设置环境变量。部署后，把下面的地址换成联调服务的 IP 和端口即可。
+服务通过 `PROJECT_DB_BACKEND=postgres` 和 `PROJECT_DB_HOST`、`PROJECT_DB_PORT`、`PROJECT_DB_NAME`、`PROJECT_DB_USER`、`PROJECT_DB_PASSWORD` 连接 PostgreSQL。项目插件随这组配置启用。写入和检索共用这个数据库，整理任务提交主题和决策时会在同一事务中更新检索索引。
 
-```bash
-MEMOS_URL=http://127.0.0.1:9801
-curl -sS "$MEMOS_URL/product/search" \
-  -H 'Content-Type: application/json' \
-  -d '{"user_id":"tester","space_ids":["mock-space"],"include_memory_view":["project"],"project_result_format":"item","project_item_types":["decision"],"query":"项目采用什么数据库？"}'
+项目写入沿用现有的 `PROJECT_MEMORY_PROJECT_ID`，其值应与空间所属项目一致。部署时需要启用 Redis 调度队列及项目整理任务，并配置抽取模型和向量模型。数据库需安装 pgvector，默认中文分词还需要 zhparser。
 
-curl -sS "$MEMOS_URL/product/get_memory/mock-decision"
-```
-
-第一条响应的 `data.project_item_list` 里应有 `mock-decision`，第二条能用这个 ID 读到相同的决策内容。任意非空查询都使用同一组样例，适合核对请求参数和返回字段。其他读接口也可以直接测试。
-
-| 接口 | 请求示例 |
-| --- | --- |
-| `POST /product/get_memory` | `{"space_id":"mock-space","page":1,"page_size":10}` |
-| `GET /product/get_memory/mock-experience` | 按 ID 读经验 |
-| `POST /product/get_message` | `{"conversation_id":"mock-session","space_id":"mock-space"}` |
-
-接入项目数据库后，设置 `MEMOS_PROJECT_MEMORY_DSN` 并重启，默认使用真实数据。需要临时切回样例时可设置 `MEMOS_PROJECT_MEMORY_MOCK=1`。设置为 `0` 可关闭样例，此时项目检索需要数据库连接。
+在已有空间调用 `POST /product/add`，传入 `user_id`、`space_ids`、`allow_memory_view=["project"]` 和 `messages`。用返回的 `task_id` 查询 `GET /product/scheduler/status`。整理出主题后，用同一空间调用 `POST /product/search`。查决策可传 `include_memory_view=["project"]`、`project_result_format="item"`、`project_item_types=["decision"]` 和原问题。结果里的记忆 ID 可用于 `GET /product/get_memory/{id}?space_id=...`。

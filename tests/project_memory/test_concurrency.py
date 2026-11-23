@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from memos.project_memory.locks import InProcessLocks
-from memos.project_memory.testing import (
+from tests.project_memory.helpers import (
     DECISION_ROUNDS,
     FakeGraphDB,
     RuleLLM,
@@ -224,7 +224,7 @@ def test_two_replicas_share_storage_and_lock(kind, tmp_path):
     from memos.project_memory.graph_store import ProjectStore
     from memos.project_memory.judge import ModelHub
     from memos.project_memory.service import ProjectMemoryService
-    from memos.project_memory.testing import FakeEmbedder
+    from tests.project_memory.helpers import FakeEmbedder
 
     db1 = make_test_db(kind, tmp_path / "rep")
     db2 = _second_handle(kind, db1, tmp_path)

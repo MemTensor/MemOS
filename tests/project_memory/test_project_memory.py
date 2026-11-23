@@ -16,17 +16,6 @@ from memos.project_memory import experience as exp
 from memos.project_memory.graph_store import ProjectStore
 from memos.project_memory.judge import ModelError, ModelHub
 from memos.project_memory.service import ProjectMemoryService, parse_messages
-from memos.project_memory.testing import (
-    DECISION_ROUNDS,
-    EXPERIENCE_ROUNDS,
-    FakeEmbedder,
-    FakeGraphDB,
-    RuleLLM,
-    build_http_app,
-    make_test_db,
-    reset_project_hooks,
-    storage_kinds,
-)
 from memos.project_memory.types import (
     EXP_CANDIDATE,
     EXP_VERIFIED,
@@ -38,6 +27,17 @@ from memos.project_memory.types import (
     Msg,
     Source,
     time_key,
+)
+from tests.project_memory.helpers import (
+    DECISION_ROUNDS,
+    EXPERIENCE_ROUNDS,
+    FakeEmbedder,
+    FakeGraphDB,
+    RuleLLM,
+    build_http_app,
+    make_test_db,
+    reset_project_hooks,
+    storage_kinds,
 )
 
 

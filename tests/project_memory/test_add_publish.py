@@ -10,25 +10,27 @@ from memos.project_memory.add_index import index_changeset
 from memos.project_memory.add_merge import prepare_merge
 from memos.project_memory.add_store import PostgresAddStore, json_value
 from memos.project_memory.add_view import RelationalProjectView
+from memos.project_memory.config import postgres_config
 from memos.project_memory.index import Vector
 from memos.project_memory.store import RetrievalStore, Scope
 from memos.project_memory.types import Domain, Space
 
 
 @pytest.fixture
-def setup():
+def setup(monkeypatch):
     dsn = os.environ.get("PG_TEST_DSN")
     if not dsn:
         pytest.skip("PG_TEST_DSN is required for retrieval publishing")
     from psycopg2 import sql
 
     tenant, space = f"tenant-{uuid.uuid4().hex}", f"space-{uuid.uuid4().hex}"
+    monkeypatch.delenv("MEMOS_PROJECT_MEMORY_DSN", raising=False)
     store = PostgresAddStore(
         {
+            **postgres_config(3),
+            "text_search_parser": "simple",
             "dsn": dsn,
             "schema_name": f"test_add_publish_{uuid.uuid4().hex}",
-            "embedding_dimension": 3,
-            "retrieval_index": True,
         },
         project_id=tenant,
     )

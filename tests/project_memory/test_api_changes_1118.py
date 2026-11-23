@@ -10,14 +10,14 @@ import pytest
 from memos.plugins.result_kinds import apply_relativity_to_plugin_kinds
 from memos.project_memory import experience as exp
 from memos.project_memory.errors import REASONS, reason_of
-from memos.project_memory.testing import (
+from memos.project_memory.types import EXP_CANDIDATE, Episode, Msg
+from tests.project_memory.helpers import (
     DECISION_ROUNDS,
     EXPERIENCE_ROUNDS,
     build_http_app,
     make_test_db,
     reset_project_hooks,
 )
-from memos.project_memory.types import EXP_CANDIDATE, Episode, Msg
 
 
 @pytest.fixture(params=["fake", "sqlite"])
