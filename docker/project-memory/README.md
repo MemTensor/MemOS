@@ -37,7 +37,7 @@ python3 docker/project-memory/smoke.py \
 | `accepted_at` / `closed_at` / `completed_at` | 受理时间，含本次 Turn 的所有 Episode 都关段的时间，以及这些 Episode 都处理完的时间。任一 Episode 未关段或未完成时，后两项为 `null`。 |
 | `close_wait_ms` / `processing_ms` / `latency_ms` | 受理到关段、关段到完成、受理到完成。积攒等待由 Episode 策略决定，与后台处理分开统计。 |
 | `episodes[]` | 每个 Episode 的 `buffer_ms`（开段到关段）、`queue_ms`（投递到领取）、`run_ms`（阶段执行）、`retry_wait_ms`（重试退避与等锁）和 `other_ms`（关段后的其余间隔）。`stages[]` 逐次列出领取的阶段、次数、下一阶段和错误，阶段结束按租约 token 与领取配对。 |
-| `usage` | 本次 Add 分摊到的模型用量，按 `kind`（`chat` / `embedding`）和模型列出调用数、失败数、无 usage 的调用数，以及 prompt、completion、缓存和推理 token。 |
+| `usage` | 本次 Add 分摊到的模型用量，按 `kind`（`chat` / `embedding`）和模型列出 prompt、completion、缓存和推理 token，以及调用数、失败数和无 usage 的调用数。token 按份额分摊；调用不可拆分，计数是所在 Episode 的全部调用，共享同一 Episode 的多次 Add 不能相加。 |
 
 计量规则：
 
@@ -49,7 +49,7 @@ python3 docker/project-memory/smoke.py \
 - 事件时间取 API worker 时钟，只有提交完成的事件取数据库时钟。各分量最小取 0，避免两边时钟偏差产生负值。
 - `add_episode_events` 每个 Episode 约 6 到 12 行，随 Episode 级联删除，没有单独的保留期。
 
-冒烟脚本以 `metrics.completed_at` 判断完成，每次 Add 完成后打印一行 `METRIC`。加 `--metrics-out metrics.jsonl` 会把完整指标逐行写出。已有部署首次启动新版本时，会创建 Add 自有表 `add_episode_events`，需要对项目记忆 schema 的 CREATE 权限。服务账号没有该权限时，先用有权限的账号启动一次，或由管理员执行 `add_layout.ADD_TABLES` 中的建表语句。
+冒烟脚本以 `metrics.completed_at` 判断完成，每次 Add 完成后打印一行 `METRIC`。其中 `sum_*` 是各 Episode 分量之和，多个 Space 的 Episode 并行处理，所以可能大于 `latency_ms`。加 `--metrics-out metrics.jsonl` 会把完整指标逐行写出。已有部署首次启动新版本时，会创建 Add 自有表 `add_episode_events`，需要对项目记忆 schema 的 CREATE 权限。服务账号没有该权限时，先用有权限的账号启动一次，或由管理员执行 `add_layout.ADD_TABLES` 中的建表语句。
 
 ## 配置与数据
 

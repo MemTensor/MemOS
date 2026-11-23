@@ -44,12 +44,13 @@ def test_allocate_is_exact_and_deterministic():
         assert sum(allocate(total, {"a": 7, "b": 5, "c": 1}).values()) == total
 
 
-def test_attribute_splits_every_counter_without_loss():
+def test_attribute_splits_tokens_without_loss_and_keeps_calls_whole():
     rows = [_row(calls=3, prompt_tokens=1000, completion_tokens=7, total_tokens=1007)]
     shares = attribute(rows, {"t1": 2, "t2": 1})
-    for name in _COUNTERS:
+    for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
         assert shares["t1"][0][name] + shares["t2"][0][name] == rows[0][name]
     assert shares["t1"][0]["prompt_tokens"] == 667
+    assert shares["t1"][0]["calls"] == shares["t2"][0]["calls"] == 3
 
 
 def test_timeline_separates_queue_run_and_retry_wait():

@@ -3,9 +3,9 @@
 An Add request (Task) contributes Turns to one Episode per Space, and an Episode may also hold
 Turns of other Tasks. Timing is reported per Episode and for the Task as a whole: the Task is
 complete once every Episode holding its Turns has finished. Model usage is measured per Episode
-stage and split among the Tasks of the Episode in proportion to the input characters of their
-Turns, with largest-remainder rounding so the Task shares of every counter add up exactly to the
-Episode's total.
+stage and its tokens are split among the Tasks of the Episode in proportion to the input characters
+of their Turns, with largest-remainder rounding so the Task shares add up exactly to the Episode's
+total. Call counts are not split: each Task reports the calls of the Episodes it shares.
 
 Event times come from the API worker clock, except an Episode finished by a commit, which uses the
 database clock; components are clamped at zero so a small skew between them cannot go negative.
@@ -159,17 +159,26 @@ def allocate(total: int, weights: dict[str, int]) -> dict[str, int]:
     return shares
 
 
+CALL_COUNTERS = ("calls", "failed_calls", "calls_without_usage")
+TOKEN_COUNTERS = tuple(name for name in COUNTERS if name not in CALL_COUNTERS)
+
+
 def attribute(rows: list[dict[str, Any]], weights: dict[str, int]) -> dict[str, list[dict]]:
-    """Each Task's share of an Episode's usage rows, counter by counter."""
+    """Each Task's share of an Episode's usage rows.
+
+    Token counters are split by weight and sum exactly to the Episode's. A call cannot be split,
+    so every Task sharing the Episode reports the Episode's call counters in full.
+    """
     out: dict[str, list[dict]] = {task: [] for task in weights}
     for row in rows:
-        split = {name: allocate(int(row.get(name) or 0), weights) for name in COUNTERS}
+        split = {name: allocate(int(row.get(name) or 0), weights) for name in TOKEN_COUNTERS}
         for task in weights:
             out[task].append(
                 {
                     "kind": row["kind"],
                     "model": row["model"],
-                    **{name: split[name][task] for name in COUNTERS},
+                    **{name: int(row.get(name) or 0) for name in CALL_COUNTERS},
+                    **{name: split[name][task] for name in TOKEN_COUNTERS},
                 }
             )
     return out

@@ -70,7 +70,8 @@ def report_metrics(task_id: str, step: str, state: dict, out: list[dict] | None)
     print(
         f"METRIC {step} task={task_id} latency_ms={metrics['latency_ms']} "
         f"close_wait_ms={metrics['close_wait_ms']} processing_ms={metrics['processing_ms']} "
-        + " ".join(f"{name}={value}" for name, value in totals.items())
+        # Episodes of different Spaces run in parallel, so these sums can exceed latency_ms.
+        + " ".join(f"sum_{name}={value}" for name, value in totals.items())
         + f" episodes={len(episodes)} total_tokens={usage['total_tokens']} "
         f"usage_complete={usage['complete']}"
     )
