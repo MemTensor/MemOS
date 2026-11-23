@@ -149,6 +149,44 @@ def test_split_merge_and_undefined_metrics():
     assert all(work[field] is None for field in ("precision", "recall", "f1", "false_merge_rate"))
 
 
+def test_task_topic_rates_allow_pure_split_or_pure_merge_but_reject_mixed_components():
+    assignments = {
+        "exact": [("standalone",)],
+        "split": [("split-a",), ("split-b",)],
+        "merge-a": [("merge",)],
+        "merge-b": [("merge",)],
+        "merge-missing": [("merge",), ()],
+        "mixed-a": [("mixed",), ("mixed-private",)],
+        "mixed-b": [("mixed",)],
+        "missing": [()],
+    }
+    turns = []
+    observations = []
+    for work, parts in assignments.items():
+        for offset, ids in enumerate(parts):
+            turn_id = f"{work}-{offset}"
+            turns.append(turn(turn_id, turn_id, work, work))
+            observations.append(prediction(turn_id, ids, status="assigned" if ids else "staged"))
+    topics = sorted({topic for parts in assignments.values() for ids in parts for topic in ids})
+
+    rubric = score.score_replay({"turns": turns}, replay(observations, topics))["rubrics"][
+        "gold_work"
+    ]["task_topic_attribution"]
+
+    rates = rubric["rates"]
+    assert rates["strict_one_to_one"] == {"correct": 1, "total": 8, "rate": 0.125}
+    assert rates["allow_split"]["correct"] == 2
+    assert rates["allow_merge"]["correct"] == 3
+    assert rates["allow_split_or_merge"]["correct"] == 4
+    assert rubric["tasks"]["mixed-a"]["shape"] == "mixed"
+    assert rubric["tasks"]["mixed-b"]["shape"] == "mixed"
+    assert rubric["tasks"]["merge-missing"]["shape"] == "merge"
+    assert rubric["tasks"]["merge-missing"]["unassigned_turns"] == [
+        {"turn_id": "merge-missing-1", "status": "staged"}
+    ]
+    assert rubric["topic_turn_ids"]["mixed"]["mixed-b"] == ["mixed-b-0"]
+
+
 @pytest.mark.parametrize(
     "predictions,topic_ids,error",
     [

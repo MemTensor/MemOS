@@ -12,6 +12,7 @@ from typing import Any
 
 
 _RUBRICS = ("source_task", "gold_work")
+_ATTRIBUTION_RULES = ("strict_one_to_one", "allow_split", "allow_merge", "allow_split_or_merge")
 _STATUSES = {"assigned", "staged", "no_drafts", "failed", "unassigned", "pending", "missing"}
 _RESULT_DETAILS = (
     "episode_id",
@@ -139,6 +140,73 @@ def _group_coverage(turns: list[dict], gold_field: str) -> dict[str, Any]:
     return output
 
 
+def _task_topic_attribution(turns: list[dict], gold_field: str) -> dict[str, Any]:
+    task_topics: dict[str, set[str]] = defaultdict(set)
+    topic_turns: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    unassigned: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for turn in turns:
+        task, topic_ids = turn[gold_field], turn["topic_ids"]
+        task_topics[task].update(topic_ids)
+        if not topic_ids:
+            unassigned[task].append({"turn_id": turn["turn_id"], "status": turn["status"]})
+        for topic_id in topic_ids:
+            topic_turns[topic_id][task].append(turn["turn_id"])
+
+    tasks = {}
+    counts: Counter[str] = Counter()
+    for task, topic_ids in sorted(task_topics.items()):
+        shared = sorted(topic_id for topic_id in topic_ids if len(topic_turns[topic_id]) > 1)
+        split_neighbors = sorted(
+            {
+                other
+                for topic_id in shared
+                for other in topic_turns[topic_id]
+                if other != task and len(task_topics[other]) > 1
+            }
+        )
+        if not topic_ids:
+            shape = "unassigned"
+        elif shared and (len(topic_ids) > 1 or split_neighbors):
+            shape = "mixed"
+        elif shared:
+            shape = "merge"
+        elif len(topic_ids) > 1:
+            shape = "split"
+        else:
+            shape = "one_to_one"
+
+        complete = bool(topic_ids) and not unassigned[task]
+        passes = {
+            "strict_one_to_one": complete and shape == "one_to_one",
+            "allow_split": complete and shape in {"one_to_one", "split"},
+            "allow_merge": complete and shape in {"one_to_one", "merge"},
+            "allow_split_or_merge": complete and shape in {"one_to_one", "split", "merge"},
+        }
+        counts.update(rule for rule, passed in passes.items() if passed)
+        tasks[task] = {
+            "complete": complete,
+            "shape": shape,
+            "passes": passes,
+            "topic_ids": sorted(topic_ids),
+            "shared_topic_ids": shared,
+            "split_neighbors": split_neighbors,
+            "unassigned_turns": unassigned[task],
+        }
+
+    total = len(tasks)
+    return {
+        "rates": {
+            rule: {"correct": counts[rule], "total": total, "rate": _ratio(counts[rule], total)}
+            for rule in _ATTRIBUTION_RULES
+        },
+        "tasks": tasks,
+        "topic_turn_ids": {
+            topic_id: {task: sorted(ids) for task, ids in sorted(rows.items())}
+            for topic_id, rows in sorted(topic_turns.items())
+        },
+    }
+
+
 def _pair_records(turns: list[dict]) -> list[dict]:
     records = []
     for left, right in combinations(turns, 2):
@@ -182,6 +250,7 @@ def _score_rubric(turns: list[dict], pairs: list[dict], gold_field: str) -> dict
         "f1": _ratio(2 * tp, 2 * tp + fp + fn),
         "false_merge_rate": _ratio(fp, fp + tn),
         "groups": _group_coverage(turns, gold_field),
+        "task_topic_attribution": _task_topic_attribution(turns, gold_field),
         "errors": errors,
     }
 
