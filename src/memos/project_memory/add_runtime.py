@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from memos.llms.usage import meter_usage
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
@@ -202,7 +203,7 @@ class EpisodeAddRuntime:
                     )
                 ]
             )
-            self.dispatch.published(episode, now)
+            self.dispatch.published(episode, now, label=label)
         except Exception as exc:
             logger.warning(
                 "Project Add will recover publication for %s (%s)", episode_id, type(exc).__name__
@@ -269,6 +270,59 @@ class EpisodeAddRuntime:
         episode = self.store.load_episode(lease.episode_id)
         if episode is None:
             return
+        started = time.perf_counter()
+        with meter_usage() as meter:
+            try:
+                self._run_stage(lease, label, episode)
+            finally:
+                self._stage_done(lease, label, started, meter.summary())
+
+    def _stage_done(
+        self, lease: StageLease, label: str, started: float, usage: list[dict[str, Any]]
+    ) -> None:
+        """Persist the stage's run time and model usage, whatever the stage ended in."""
+        run_ms = round((time.perf_counter() - started) * 1000)
+        transition = lease.transition
+        detail = {
+            "label": label,
+            "token": lease.token,
+            "run_ms": run_ms,
+            "next_stage": transition.get("stage"),
+            "outcome": transition.get("outcome"),
+            "reason": transition.get("reason"),
+            "error": transition.get("error"),
+            "applied": transition.get("applied"),
+            "usage": usage,
+        }
+        logger.info(
+            "Project Add stage episode=%s label=%s attempt=%s run_ms=%d next=%s outcome=%s "
+            "calls=%d total_tokens=%d",
+            lease.episode_id,
+            label,
+            lease.attempt,
+            run_ms,
+            detail["next_stage"],
+            detail["outcome"],
+            sum(row["calls"] for row in usage),
+            sum(row["total_tokens"] for row in usage),
+        )
+        try:
+            self.store.record_event(
+                lease.episode_id,
+                "stage_done",
+                self.now(),
+                stage=lease.stage,
+                attempt=lease.attempt,
+                detail=detail,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Project Add could not record stage metrics for %s (%s)",
+                lease.episode_id,
+                type(exc).__name__,
+            )
+
+    def _run_stage(self, lease: StageLease, label: str, episode: dict) -> None:
         try:
             if label == PROCESS:
                 self._extract(lease, episode)
@@ -287,7 +341,9 @@ class EpisodeAddRuntime:
         except VersionConflictError:
             self._conflict(lease, episode)
         except Exception as exc:
+            lease.transition["error"] = type(exc).__name__
             if label == MERGE_RESULT and self._committed(lease):
+                lease.transition.setdefault("stage", "done")
                 self._release(episode, lease.data.get("lock_token"))
                 return
             reason = "MODEL_UNAVAILABLE" if isinstance(exc, ModelError) else "STORE_UNAVAILABLE"
@@ -409,9 +465,10 @@ class EpisodeAddRuntime:
                 self._wait(lease, episode, "lock", self.settings.lock_wait_seconds, 1)
                 return
         try:
-            commit_changeset(
+            receipt = commit_changeset(
                 self.store, lease.episode_id, lease.attempt, changeset, work_token=lease.token
             )
+            lease.transition.update(stage="done", outcome=(receipt or {}).get("outcome"))
         finally:
             self._release(episode, token)
 

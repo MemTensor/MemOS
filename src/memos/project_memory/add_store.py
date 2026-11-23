@@ -21,6 +21,25 @@ def json_value(value: Any) -> Any:
     return Json(value)
 
 
+def record_event(
+    cursor: Any,
+    project_id: str,
+    episode_id: str,
+    event: str,
+    at: Any | None = None,
+    *,
+    stage: str | None = None,
+    attempt: int | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Append one Episode lifecycle event in the caller's transaction (database clock if no time)."""
+    cursor.execute(
+        """INSERT INTO add_episode_events (project_id, episode_id, event, at, stage, attempt, detail)
+           VALUES (%s, %s, %s, COALESCE(%s, clock_timestamp()), %s, %s, %s)""",
+        (project_id, episode_id, event, at, stage, attempt, json_value(detail or {})),
+    )
+
+
 class PostgresAddStore:
     """A connection pool with an explicit project scope for each store instance."""
 
@@ -115,7 +134,7 @@ class PostgresAddStore:
                 f"{self.schema_name}.topics stores {installed['atttypmod']}-dimension vectors; "
                 f"the embedder is configured for {self.dim}"
             )
-        if not present("add_space_state"):
+        if not present("add_space_state") or not present("add_episode_events"):
             cursor.execute(ADD_TABLES)
         if self.retrieval_index:
             from .add_publish import install
@@ -213,6 +232,12 @@ class PostgresAddStore:
                     None if topic_ids is None else list(topic_ids),
                 ),
             )
+
+    def record_event(
+        self, episode_id: str, event: str, at: Any | None = None, **fields: Any
+    ) -> None:
+        with self.transaction() as cursor:
+            record_event(cursor, self.project_id, episode_id, event, at, **fields)
 
     def read_staged(self, space_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self.transaction(readonly=True) as cursor:

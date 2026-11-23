@@ -10,7 +10,7 @@ from .add_evidence import text_at
 from .add_layout import SPACE_STATE, write_entries
 from .add_merge import VersionConflictError
 from .add_publish import publish_topics, sync_space
-from .add_store import json_value
+from .add_store import json_value, record_event
 from .types import time_key
 
 
@@ -275,6 +275,15 @@ def _finalize_episode(cursor: Any, changes: dict, episode: dict, key: str, stage
             episode["project_id"],
             episode["space_id"],
         ),
+    )
+    record_event(
+        cursor,
+        episode["project_id"],
+        episode["id"],
+        "finished",
+        stage="done",
+        attempt=episode["attempt"],
+        detail={"outcome": receipt["outcome"]},
     )
     return receipt
 

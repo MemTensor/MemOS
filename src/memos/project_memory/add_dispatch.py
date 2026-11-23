@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -16,7 +16,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     PROJECT_ADD_SPACE_TASK_LABEL,
 )
 
-from .add_store import json_value
+from .add_store import json_value, record_event
 
 
 if TYPE_CHECKING:
@@ -34,8 +34,11 @@ class StageLease:
     token: str
     stage: str
     data: dict[str, Any]
+    # Filled by EpisodeDispatch.advance: where this stage handed the Episode next.
+    transition: dict[str, Any] = field(default_factory=dict, compare=False)
 
 
+TERMINAL_OUTCOMES = ("committed", "staged", "skipped", "failed")
 _JSON_FIELDS = {"organize_result", "result", "drafts", "anchors", "warnings", "error", "last_error"}
 
 
@@ -130,6 +133,16 @@ class EpisodeDispatch:
                    WHERE project_id = %s AND id = %s""",
                 (stage, state, attempt, json_value(data), now, self.store.project_id, episode_id),
             )
+            record_event(
+                cursor,
+                self.store.project_id,
+                episode_id,
+                "claimed",
+                now,
+                stage=stage,
+                attempt=attempt,
+                detail={"label": message.label, "token": token},
+            )
         return StageLease(episode_id, attempt, token, stage, data)
 
     def advance(self, lease: StageLease, now: datetime, **fields: Any) -> bool:
@@ -161,10 +174,42 @@ class EpisodeDispatch:
                     lease.token,
                 ),
             )
-            return cursor.rowcount == 1
+            applied = cursor.rowcount == 1
+            error = fields.get("error") or fields.get("last_error") or {}
+            lease.transition.update(
+                applied=applied,
+                stage=fields.get("stage", lease.stage),
+                outcome=fields.get("outcome"),
+                reason=error.get("reason") if isinstance(error, dict) else None,
+            )
+            if applied and fields.get("outcome") in TERMINAL_OUTCOMES:
+                record_event(
+                    cursor,
+                    self.store.project_id,
+                    lease.episode_id,
+                    "finished",
+                    now,
+                    stage=fields.get("stage", lease.stage),
+                    attempt=fields.get("attempt", lease.attempt),
+                    detail={"outcome": fields["outcome"], "reason": lease.transition["reason"]},
+                )
+            return applied
 
-    def published(self, episode: dict[str, Any], now: datetime) -> None:
+    def published(
+        self, episode: dict[str, Any], now: datetime, *, label: str | None = None
+    ) -> None:
+        """Mark a delivery; `now` is the time taken before submission, so it precedes a claim."""
         with self.store.transaction() as cursor:
+            record_event(
+                cursor,
+                self.store.project_id,
+                episode["id"],
+                "published",
+                now,
+                stage=episode["stage"],
+                attempt=episode["attempt"],
+                detail={"label": label} if label else None,
+            )
             cursor.execute(
                 """UPDATE episodes SET dispatched_at = %s
                    WHERE project_id = %s AND id = %s AND stage = %s AND attempt = %s

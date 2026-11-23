@@ -14,7 +14,7 @@ from memos.api.project_fields import PROJECT_MAX_SPACES, normalize_str_list
 
 from .add_ingestion import AddRequestError as AddRequestError
 from .add_ingestion import normalize_turns, task_boundary, turn_source
-from .add_store import json_value
+from .add_store import json_value, record_event
 
 
 if TYPE_CHECKING:
@@ -379,6 +379,7 @@ class AddAcceptance:
         self, cursor: Any, ctx: _Request, space: dict[str, Any], chat_time: datetime
     ) -> dict[str, Any]:
         project_id = self.store.project_id
+        episode_id = str(uuid4())
         cursor.execute(
             """INSERT INTO episodes (id, project_id, space_id, conversation_key, conversation_id,
                                       user_id, domains, previous_episode_id, state, stage, opened_at,
@@ -392,7 +393,7 @@ class AddAcceptance:
                ), 'open', 'episode_open', %s, %s, %s, %s)
                RETURNING id, domains, anchors, anchor_keys, idle_due_at""",
             (
-                str(uuid4()),
+                episode_id,
                 project_id,
                 space["id"],
                 ctx.conversation_key,
@@ -409,7 +410,9 @@ class AddAcceptance:
                 ctx.now + timedelta(seconds=self.settings.wait_seconds),
             ),
         )
-        return cursor.fetchone()
+        episode = cursor.fetchone()
+        record_event(cursor, project_id, episode_id, "opened", ctx.now, stage="episode_open")
+        return episode
 
     def _record_turn(
         self,
@@ -508,6 +511,16 @@ class AddAcceptance:
                WHERE project_id = %s AND id = %s AND state = 'open'""",
             (reason, now, now, self.store.project_id, episode_id),
         )
+        if cursor.rowcount == 1:
+            record_event(
+                cursor,
+                self.store.project_id,
+                episode_id,
+                "closed",
+                now,
+                stage="extracting",
+                detail={"reason": reason},
+            )
         return episode_id
 
     def close_due(self, limit: int = 100) -> list[str]:

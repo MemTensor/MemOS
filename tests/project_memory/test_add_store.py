@@ -40,6 +40,7 @@ def test_schema_and_rollback(add_store):
             "topics",
             "project_entries",
             "add_space_state",
+            "add_episode_events",
             "messages",
             "episodes",
             "episode_turns",

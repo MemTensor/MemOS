@@ -40,6 +40,20 @@ CREATE TABLE IF NOT EXISTS add_space_state (
   staged_since_last_formation int    NOT NULL DEFAULT 0,
   formation_version           bigint NOT NULL DEFAULT 0
 );
+-- One row per Episode lifecycle step: opened, closed, published, claimed, stage_done, finished.
+-- stage_done carries the stage's run time and provider-reported usage, so Add timing and
+-- token cost can be derived per Episode and attributed to the Turns of each Add request.
+CREATE TABLE IF NOT EXISTS add_episode_events (
+  id          bigserial PRIMARY KEY,
+  project_id  text NOT NULL,
+  episode_id  text NOT NULL REFERENCES episodes (id) ON DELETE CASCADE,
+  event       text NOT NULL,
+  at          timestamptz NOT NULL,
+  stage       text,
+  attempt     int,
+  detail      jsonb NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS add_episode_events_episode ON add_episode_events (episode_id, at, id);
 """
 
 # Space columns with the Add state; spaces without a state row read as defaults.

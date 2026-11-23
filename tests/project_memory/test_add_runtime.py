@@ -264,3 +264,43 @@ def test_formation_reuses_committed_topic_for_another_staged_domain(store, monke
     moved = store.load_episode(old["id"])
     assert moved["staged_status"] == "moved"
     assert moved["moved_to_topic_id"] == topic_before["id"]
+
+
+def test_episode_lifecycle_events_carry_stage_usage(store):
+    from memos.llms.usage import CHAT, record_usage
+
+    queue = []
+    hub = Mock()
+
+    def write(scope, _prompt, _inputs):
+        record_usage(CHAT, "chat-m", {"prompt_tokens": 40, "completion_tokens": 2})
+        return {"episode_summary": "", "drafts": []}
+
+    hub.write.side_effect = write
+    runtime = EpisodeAddRuntime(store, hub, queue.extend, Mock(), RuntimeSettings())
+    runtime.accept(
+        SimpleNamespace(
+            user_id="member",
+            space_ids=["test"],
+            messages=[{"role": "user", "content": "We decided to keep weekly reviews."}],
+        )
+    )
+    runtime.handle([queue.pop()])
+
+    with store.transaction(readonly=True) as cur:
+        cur.execute("SELECT event, stage, detail FROM add_episode_events ORDER BY at, id")
+        events = cur.fetchall()
+    assert [row["event"] for row in events] == [
+        "opened",
+        "closed",
+        "published",
+        "claimed",
+        "finished",
+        "stage_done",
+    ]
+    assert events[1]["detail"] == {"reason": "no_conversation"}
+    assert events[2]["detail"] == {"label": "project_add_process"}
+    done = events[-1]["detail"]
+    assert done["next_stage"] == "done" and done["outcome"] == "skipped"
+    assert done["usage"][0]["total_tokens"] == 42
+    assert events[-2]["detail"]["outcome"] == "skipped"
