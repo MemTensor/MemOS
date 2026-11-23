@@ -201,7 +201,6 @@ def _draft(
     author = member.get("role_id") or member.get("origin_user_id") or member.get("user_id")
     if not author:
         return None
-    reason = quote_ref(row, raw.get("reason_quote"))
     source = {
         "task_id": owner,
         "episode_id": episode["id"],
@@ -217,11 +216,16 @@ def _draft(
         x for x in raw.get("current_state_clues") or [] if isinstance(x, str) and x and x in text
     ]
     content = content.strip()[: 200 if kind == "experience" else 100]
-    evidence = [{"ref": ref, "quote": raw["quote"]}]
+    # A reference may match normalized whitespace, but commit checks the original slice.
+    source_quote = text[ref["start"] : ref["end"]]
+    evidence = [{"ref": ref, "quote": source_quote}]
     if origin == "adopted":
         evidence.extend(proposals)
-    if reason:
-        evidence.append({"ref": reason, "quote": raw["reason_quote"], "kind": "reason"})
+    reason_quote = None
+    if reason := quote_ref(row, raw.get("reason_quote")):
+        reason_text = text_at(row, reason["source_path"]) or ""
+        reason_quote = reason_text[reason["start"] : reason["end"]]
+        evidence.append({"ref": reason, "quote": reason_quote, "kind": "reason"})
     approved = [
         name for name in raw.get("approved_by") or [] if isinstance(name, str) and name in text
     ]
@@ -246,8 +250,8 @@ def _draft(
         "source_refs": [ref],
         "authorizing_evidence_refs": [ref] if member_statement else [],
         "context_refs": contexts,
-        "quote": raw["quote"],
-        "reason_quote": raw["reason_quote"] if reason else None,
+        "quote": source_quote,
+        "reason_quote": reason_quote,
         "authors": [str(author)],
         "author_name": member.get("role_name") or str(author),
         "chat_time": jsonable(row.get("chat_time")),

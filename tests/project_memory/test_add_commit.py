@@ -144,6 +144,59 @@ def test_topic_projection_and_receipt_commit_together_and_replay_once(store):
         }
 
 
+def test_commit_accepts_extracted_quote_with_source_whitespace(store):
+    source_quote = "Updated the\u00a0connection pool."
+    acceptance = AddAcceptance(store, AcceptanceSettings(max_turns=1))
+    (episode_id,) = acceptance.accept(
+        SimpleNamespace(
+            task_id="pool-task",
+            user_id="user",
+            space_ids=["space"],
+            conversation_id="pool",
+            messages=[
+                {"message_id": "request", "role": "user", "content": "Update the pool."},
+                {"message_id": "result", "role": "assistant", "content": f"Done. {source_quote}"},
+            ],
+        )
+    ).closed_episode_ids
+    current = store.load_episode(episode_id)
+    writer = SimpleNamespace(
+        write=lambda *_args: {
+            "episode_summary": "Connection pool updated",
+            "drafts": [
+                {
+                    "kind": "timeline",
+                    "content": "Connection pool updated",
+                    "message_id": "result",
+                    "quote": "Updated the connection pool.",
+                }
+            ],
+        }
+    )
+    (draft,) = extract_episode(writer, current, current["messages"])["drafts"]
+    with store.transaction() as cursor:
+        cursor.execute(
+            "UPDATE episodes SET state = 'extracted', stage = 'committing', attempt = 1, drafts = %s "
+            "WHERE id = %s",
+            (json_value([draft]), episode_id),
+        )
+    edit = changeset(
+        episode_id,
+        draft,
+        {
+            "id": "topic",
+            "space_id": "space",
+            "domain": "project",
+            "version": None,
+            "topic_name": "Connection pool",
+            "topic_summary": "",
+            "topic_description": "",
+        },
+    )
+
+    assert commit_changeset(store, episode_id, 1, edit)["topic_ids"] == ["topic"]
+
+
 def test_version_conflict_rolls_back_entire_episode_change(store):
     original = {
         "id": "topic",

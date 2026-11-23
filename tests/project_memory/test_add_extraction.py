@@ -220,6 +220,42 @@ def test_quote_ref_tolerates_whitespace_layout_but_never_guesses():
     assert quote_ref({"message_id": "m4", "content": "a b\na b"}, "a  b") is None
 
 
+def test_draft_preserves_original_whitespace_in_source_and_reason_quotes():
+    source_quote = "Updated the\u00a0connection pool."
+    reason_quote = "It was\n  saturated."
+    current = [
+        row("member", "user", "Update the pool."),
+        row(
+            "assistant",
+            "assistant",
+            f"Reason: {reason_quote}",
+            tool_calls=[
+                {"function": {"name": "record_result", "arguments": f"Result: {source_quote}"}}
+            ],
+        ),
+    ]
+    writer = Writer(
+        {
+            "episode_summary": "Connection pool updated",
+            "drafts": [
+                {
+                    "kind": "timeline",
+                    "content": "Connection pool updated",
+                    "message_id": "assistant",
+                    "source_path": "/tool_calls/0/function/arguments",
+                    "quote": "Updated the connection pool.",
+                    "reason_quote": "It was saturated.",
+                }
+            ],
+        }
+    )
+
+    (draft,) = extract_episode(writer, {"id": "episode"}, current)["drafts"]
+
+    assert draft["quote"] == draft["evidence"][0]["quote"] == source_quote
+    assert draft["reason_quote"] == draft["evidence"][1]["quote"] == reason_quote
+
+
 def test_extraction_prompt_excludes_reply_style_and_execution_steps():
     from memos.project_memory.add_extraction import _EXTRACT
 
