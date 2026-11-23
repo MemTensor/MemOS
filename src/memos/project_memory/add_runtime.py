@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from memos.llms.usage import meter_usage
+from memos.llms.usage import EMBEDDING, expect_usage, meter_usage
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
@@ -109,7 +109,7 @@ class EpisodeAddRuntime:
         self.redis = redis
         self.settings = settings or RuntimeSettings.from_env()
         self.now = clock or (lambda: datetime.now(timezone.utc))
-        self.embedder = embedder
+        self.embedder = self._metered(embedder, embedding_model_id) if embedder else None
         self.legacy_status = legacy_status
         self.embedding_model_id = embedding_model_id
         self.acceptance = AddAcceptance(
@@ -118,6 +118,18 @@ class EpisodeAddRuntime:
         self.dispatch = EpisodeDispatch(store, lease_seconds=self.settings.stage_lease_seconds)
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
+
+    @staticmethod
+    def _metered(
+        embedder: Callable[[list[str]], list[list[float]]], model: str | None
+    ) -> Callable[[list[str]], list[list[float]]]:
+        """Count embedding calls of backends that do not report usage as usage-less."""
+
+        def embed(texts: list[str]) -> list[list[float]]:
+            with expect_usage(EMBEDDING, model):
+                return embedder(texts)
+
+        return embed
 
     def accept(self, request: Any) -> dict[str, Any]:
         accepted = self.acceptance.accept(request)

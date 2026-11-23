@@ -11,6 +11,7 @@ from memos.context.context import get_current_trace_id
 from memos.dependency import require_python_package
 from memos.embedders.base import BaseEmbedder
 from memos.exceptions import EmbedderError
+from memos.llms.usage import EMBEDDING, record_usage
 from memos.log import get_logger
 
 
@@ -182,6 +183,10 @@ class CachingEmbedder(BaseEmbedder):
                     self._inflight.pop(text, None)
                     owned[text].set_result(vector)
 
+        if not owned:
+            # Served from cache or another request's in-flight call: no provider tokens spent here.
+            model = getattr(getattr(self._backend, "config", None), "model_name_or_path", None)
+            record_usage(EMBEDDING, model, {})
         for text, future in waiting.items():
             vector = future.result()
             resolved[text] = vector
