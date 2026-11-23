@@ -18,7 +18,7 @@ def _spaces(store, *names):
         for name in names:
             cursor.execute(
                 "INSERT INTO spaces (id, project_id, space_name) VALUES (%s, %s, %s)",
-                (name, store.project_id, name),
+                (name, "project-a", name),
             )
             cursor.execute(
                 "INSERT INTO domains (id, space_id, domain) VALUES (%s, %s, 'development')",
@@ -28,6 +28,7 @@ def _spaces(store, *names):
 
 def _request(task_id, message_id, *, spaces=None, conversation_id="chat", text="Ship the text"):
     return SimpleNamespace(
+        project_id="project-a",
         task_id=task_id,
         user_id="member-a",
         space_ids=spaces or ["space-a"],
@@ -196,3 +197,41 @@ def test_keeps_system_source_without_turn_or_anchor_authority(add_store):
     with pytest.raises(AddRequestError) as error:
         accept.accept(request)
     assert error.value.reason == "INVALID_PARAMS"
+
+
+def test_project_comes_from_the_spaces(add_store):
+    """project_id is optional: the write lands in the Spaces' project; a named project must match."""
+    _spaces(add_store, "space-a")
+    with add_store.transaction() as cursor:
+        cursor.execute(
+            "INSERT INTO spaces (id, project_id, space_name) VALUES ('space-x', 'project-x', 'X')"
+        )
+        cursor.execute(
+            "INSERT INTO domains (id, space_id, domain) VALUES ('x-domain', 'space-x', 'development')"
+        )
+    accept = AddAcceptance(add_store)
+
+    with pytest.raises(AddRequestError) as error:
+        accept.accept(_request("task-a", "message-a", spaces=["space-a", "space-x"]))
+    assert error.value.reason == "SPACE_NOT_FOUND"
+    with pytest.raises(AddRequestError) as error:
+        accept.accept(_request("task-a", "message-a", spaces=["space-x"]))
+    assert error.value.reason == "SPACE_NOT_FOUND"
+    mixed = _request("task-a", "message-a", spaces=["space-a", "space-x"])
+    mixed.project_id = None
+    with pytest.raises(AddRequestError) as error:
+        accept.accept(mixed)
+    assert error.value.reason == "INVALID_PARAMS"
+
+    unnamed = _request("task-x", "message-a", spaces=["space-x"])
+    unnamed.project_id = None
+    accept.accept(unnamed)
+    accept.accept(_request("task-a", "message-a"))
+    with add_store.transaction(readonly=True) as cursor:
+        cursor.execute("SELECT project_id, space_id FROM episodes ORDER BY space_id")
+        assert [(row["project_id"], row["space_id"]) for row in cursor.fetchall()] == [
+            ("project-a", "space-a"),
+            ("project-x", "space-x"),
+        ]
+        cursor.execute("SELECT project_id FROM messages ORDER BY project_id")
+        assert [row["project_id"] for row in cursor.fetchall()] == ["project-a", "project-x"]

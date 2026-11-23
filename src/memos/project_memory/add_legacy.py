@@ -119,11 +119,13 @@ class LegacyArchive:
             file.write("\n")
 
     @classmethod
-    def read(cls, path: Path, project_id: str) -> LegacyArchive:
+    def read(cls, path: Path, project_id: str | None = None) -> LegacyArchive:
+        """Load an archive; with `project_id`, also require it to be that project's archive."""
         with path.open(encoding="utf-8") as file:
             payload = json.load(file)
-        if payload["project_id"] != project_id or payload["version"] != 1:
+        if payload["version"] != 1 or project_id not in (None, payload["project_id"]):
             raise ValueError("Legacy archive version or project scope does not match")
+        project_id = payload["project_id"]
         archive = cls(
             project_id,
             payload["nodes"],

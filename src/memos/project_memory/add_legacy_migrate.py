@@ -241,12 +241,11 @@ def _insert_rows(cursor: Any, table: str, rows: list[dict[str, Any]]) -> None:
 
 
 def apply_migration(store: PostgresAddStore, plan: MigrationPlan) -> None:
-    if store.project_id != plan.archive.project_id:
-        raise ValueError("Migration target project does not match the archive scope")
+    project_id = plan.archive.project_id
     with store.transaction() as cursor:
         cursor.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (json.dumps([store.schema_name, store.project_id, "legacy-migration"]),),
+            (json.dumps([store.schema_name, project_id, "legacy-migration"]),),
         )
         cursor.execute(
             "SELECT id FROM spaces WHERE id = ANY(%s::text[])",
@@ -271,10 +270,10 @@ def apply_migration(store: PostgresAddStore, plan: MigrationPlan) -> None:
             cursor.execute("SELECT clock_timestamp() AS now")
             now = cursor.fetchone()["now"]
             for space in plan.spaces:
-                sync_space(cursor, store.project_id, space["id"])
+                sync_space(cursor, project_id, space["id"])
                 publish_topics(
                     cursor,
-                    store.project_id,
+                    project_id,
                     space["id"],
                     [topic["id"] for topic in plan.topics if topic["space_id"] == space["id"]],
                     now,
@@ -283,7 +282,7 @@ def apply_migration(store: PostgresAddStore, plan: MigrationPlan) -> None:
             cursor.execute(
                 """SELECT content_sha256 FROM messages WHERE project_id = %s AND
                    conversation_key = %s AND message_id = %s""",
-                (store.project_id, source["conversation_key"], source["message_id"]),
+                (project_id, source["conversation_key"], source["message_id"]),
             )
             if cursor.fetchone()["content_sha256"] != source["content_sha256"]:
                 raise ValueError("Migration source digest verification failed")
@@ -331,7 +330,7 @@ def main() -> None:
                 parser.error("archive is occupied by a different snapshot")
         else:
             plan.archive.write(args.archive)
-        store = PostgresAddStore(postgres_config(), project_id=args.project_id)
+        store = PostgresAddStore(postgres_config())
         try:
             apply_migration(store, plan)
         finally:

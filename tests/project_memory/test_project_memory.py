@@ -78,6 +78,7 @@ def _space(client, domains=("代码开发", "产品设计")) -> str:
     r = client.post(
         "/product/create_space",
         json={
+            "project_id": "project",
             "space_name": "MemOS 云服务",
             "instructions": "术语以 PRD 为准",
             "domains": [{"name": d} for d in domains],
@@ -158,7 +159,11 @@ def test_space_and_domain_crud(app):
         assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_DUPLICATE", path
     r = client.post(
         "/product/create_space",
-        json={"space_name": "x", "domains": [{"name": "甲"}, {"name": "甲"}]},
+        json={
+            "project_id": "project",
+            "space_name": "x",
+            "domains": [{"name": "甲"}, {"name": "甲"}],
+        },
     )
     assert r.status_code == 400 and r.json()["reason"] == "DOMAIN_DUPLICATE"
     assert [
@@ -601,7 +606,7 @@ def test_service_runs_inline_without_scheduler():
     svc = ProjectMemoryService(
         ProjectStore(FakeGraphDB(), FakeEmbedder().embed), ModelHub(RuleLLM())
     )
-    sp = svc.create_space("s", "", [{"name": "代码开发"}])
+    sp = svc.create_space("project", "s", "", [{"name": "代码开发"}])
     rnd = DECISION_ROUNDS[0]
     out = svc.accept(
         APIADDRequest(
@@ -689,7 +694,7 @@ def test_concurrent_write_is_retried(kind, tmp_path):
     db = make_test_db(kind, tmp_path)
     store = ProjectStore(db, FakeEmbedder().embed)
     svc = ProjectMemoryService(store, ModelHub(RuleLLM(), graph_db=db))
-    sp = svc.create_space("s", "", [{"name": "代码开发"}])
+    sp = svc.create_space("project", "s", "", [{"name": "代码开发"}])
     from memos.api.product_models import APIADDRequest
 
     rnd = DECISION_ROUNDS[0]

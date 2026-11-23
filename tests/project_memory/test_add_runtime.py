@@ -18,7 +18,6 @@ def store():
         pytest.skip("PG_TEST_DSN is required")
     db = PostgresAddStore(
         {"dsn": dsn, "schema_name": f"add_pipeline_{uuid4().hex}", "embedding_dimension": 3},
-        project_id="project",
     )
     with db.transaction() as cur:
         cur.execute("INSERT INTO spaces (id, space_name, project_id) VALUES ('test','T','project')")
@@ -37,6 +36,7 @@ def test_raw_messages_are_durable_if_queue_submission_fails(store):
     queue = Mock(side_effect=ConnectionError("unavailable"))
     runtime = EpisodeAddRuntime(store, Mock(), queue, Mock(), RuntimeSettings())
     request = SimpleNamespace(
+        project_id="project",
         user_id="member",
         space_ids=["test"],
         messages=[{"role": "user", "content": "We use the new API."}],
@@ -101,6 +101,7 @@ def test_recover_merge_handoff_and_lost_commit_reply(store, monkeypatch):
     runtime = EpisodeAddRuntime(store, hub, submit, client, RuntimeSettings(formation_count=1))
     task = runtime.accept(
         SimpleNamespace(
+            project_id="project",
             user_id="member",
             space_ids=["test"],
             messages=[{"message_id": "user-1", "role": "user", "content": quote}],
@@ -226,6 +227,7 @@ def test_formation_reuses_committed_topic_for_another_staged_domain(store, monke
     def add(worker, user, domain, content):
         task = worker.accept(
             SimpleNamespace(
+                project_id="project",
                 user_id=user,
                 space_ids=["test"],
                 domains=[domain],

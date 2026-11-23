@@ -32,10 +32,11 @@ def setup(monkeypatch):
             "dsn": dsn,
             "schema_name": f"test_add_publish_{uuid.uuid4().hex}",
         },
-        project_id=tenant,
     )
     view = RelationalProjectView(store)
-    view.put_space(Space(space_id=space, space_name="Ledger", domains=[Domain("开发")]))
+    view.put_space(
+        Space(space_id=space, project_id=tenant, space_name="Ledger", domains=[Domain("开发")])
+    )
     try:
         yield store, view, RetrievalStore(store.pool), tenant, space
     finally:
@@ -53,23 +54,25 @@ def setup(monkeypatch):
 
 def _episode(store, space, eid, text, domain):
     with store.transaction() as cursor:
+        cursor.execute("SELECT project_id FROM spaces WHERE id = %s", (space,))
+        project_id = cursor.fetchone()["project_id"]
         cursor.execute(
             """INSERT INTO episodes(id, project_id, space_id, conversation_key, user_id, domains,
                           state, opened_at, last_turn_at, closed_at, stage, attempt, drafts, organize_result)
                VALUES (%s,%s,%s,%s,'user',%s,'extracted',now(),now(),now(),'committing',1,'[]',%s)""",
-            (eid, store.project_id, space, eid, [domain], json_value({"work": {"token": "t"}})),
+            (eid, project_id, space, eid, [domain], json_value({"work": {"token": "t"}})),
         )
         cursor.execute(
             """INSERT INTO messages(project_id, conversation_key, message_id, turn_id, turn_seq, msg_seq,
                           role, content, chat_time, accepted_at, task_id, user_id, content_sha256)
                VALUES (%s,%s,%s,%s,1,1,'user',%s,now(),now(),'task','user','fixture')""",
-            (store.project_id, eid, eid, eid, text),
+            (project_id, eid, eid, eid, text),
         )
         cursor.execute(
             """INSERT INTO episode_turns(project_id,space_id,conversation_key,episode_id,turn_id,
                           turn_seq,message_count,task_id,user_id,chat_time,accepted_at)
                VALUES (%s,%s,%s,%s,%s,1,1,'task','user',now(),now())""",
-            (store.project_id, space, eid, eid, eid),
+            (project_id, space, eid, eid, eid),
         )
 
 

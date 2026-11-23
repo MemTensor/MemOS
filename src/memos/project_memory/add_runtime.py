@@ -230,7 +230,8 @@ class EpisodeAddRuntime:
             self._thread = None
 
     def _run_timer(self) -> None:
-        scan_key = f"project_episode_scan_lock:{self.store.project_id}"
+        # One scanner per schema: the due scan covers every project stored in it.
+        scan_key = f"project_episode_scan_lock:{self.store.schema_name}"
         next_close = 0.0
         while not self._stopped.is_set():
             try:
@@ -527,7 +528,7 @@ class EpisodeAddRuntime:
         }
 
     def _space_key(self, episode: dict) -> str:
-        return f"project_space_lock:{self.store.project_id}:{episode['space_id']}"
+        return f"project_space_lock:{episode['project_id']}:{episode['space_id']}"
 
     @staticmethod
     def _new_lock_token(lease: StageLease) -> str:

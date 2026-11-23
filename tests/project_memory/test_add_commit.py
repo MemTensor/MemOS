@@ -27,7 +27,6 @@ def store():
             "schema_name": f"test_add_commit_{uuid.uuid4().hex}",
             "embedding_dimension": 3,
         },
-        project_id="project",
     )
     try:
         with db.transaction() as cursor:
@@ -271,6 +270,7 @@ def test_commit_checks_adoption_in_conversation_order_across_episodes(store, pro
     authorization = "同意，按这个方案执行。"
     (earlier_id,) = acceptance.accept(
         SimpleNamespace(
+            project_id="project",
             task_id="proposal-task",
             user_id="user",
             space_ids=["space"],
@@ -284,6 +284,7 @@ def test_commit_checks_adoption_in_conversation_order_across_episodes(store, pro
     now += timedelta(seconds=1)
     (current_id,) = acceptance.accept(
         SimpleNamespace(
+            project_id="project",
             task_id="authorization-task",
             user_id="user",
             space_ids=["space"],

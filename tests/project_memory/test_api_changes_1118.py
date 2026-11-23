@@ -31,7 +31,11 @@ def app(request, tmp_path):
 def _space(client, domains=("代码开发", "产品设计")) -> str:
     r = client.post(
         "/product/create_space",
-        json={"space_name": "S", "domains": [{"name": d} for d in domains]},
+        json={
+            "project_id": "project",
+            "space_name": "S",
+            "domains": [{"name": d} for d in domains],
+        },
     )
     assert r.status_code == 200, r.text
     return r.json()["data"]["space_id"]

@@ -177,20 +177,17 @@ class CommunityProjectMemoryPlugin(MemOSPlugin):
             raise RuntimeError("Project memory Add requires all four configured scheduler stages")
         postgres = shared.get("project_add_store")
         if postgres is None:
-            project_id = os.getenv("PROJECT_MEMORY_PROJECT_ID", "")
             config = pm_config.postgres_config()
             project_db = shared.get("project_db")
             postgres = PostgresAddStore(
-                config,
-                project_id=project_id,
-                pool=project_db.pool if project_db is not None else None,
+                config, pool=project_db.pool if project_db is not None else None
             )
         try:
             archive = None
             if archive_path := os.getenv("PROJECT_MEMORY_LEGACY_ARCHIVE"):
                 from .add_legacy import LegacyArchive
 
-                archive = LegacyArchive.read(Path(archive_path), postgres.project_id)
+                archive = LegacyArchive.read(Path(archive_path))
             view = RelationalProjectView(postgres, embedder=project_embed, legacy=archive)
             hub = ModelHub(llm=llm, judge_llm=judge_llm, graph_db=None)
             self._runtime = EpisodeAddRuntime(

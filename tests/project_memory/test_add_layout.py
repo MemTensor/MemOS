@@ -76,7 +76,6 @@ def store():
 
     db = PostgresAddStore(
         {"dsn": dsn, "schema_name": f"test_layout_{uuid.uuid4().hex}", "embedding_dimension": 3},
-        project_id="project",
     )
     with db.transaction() as cursor:
         cursor.execute(
