@@ -14,6 +14,7 @@ from memos.api.project_fields import PROJECT_MAX_SPACES, normalize_str_list
 
 from .add_ingestion import AddRequestError as AddRequestError
 from .add_ingestion import normalize_turns, task_boundary, turn_source
+from .add_metrics import task_metrics
 from .add_store import json_value, record_event
 
 
@@ -550,8 +551,9 @@ class AddAcceptance:
                 (self.store.project_id, task_id, user_id),
             )
             rows = cursor.fetchall()
-        if not rows:
-            return None
+            if not rows:
+                return None
+            metrics = task_metrics(cursor, self.store.project_id, task_id, user_id)
         status = "completed"
         if any(row["outcome"] == "pending" and row["stage"] != "episode_open" for row in rows):
             status = "in_progress"
@@ -568,6 +570,8 @@ class AddAcceptance:
         project = {
             "memory_ids": memory_ids,
             "open_episode_messages": sum(open_turn_counts.values()),
+            # Timing and attributed model usage; completed_at stays null while an Episode is open.
+            "metrics": metrics,
         }
         if status == "failed":
             first_error = next((row["error"] for row in rows if row["error"]), None)
