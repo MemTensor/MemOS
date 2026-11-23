@@ -80,11 +80,13 @@ class AddAcceptance:
 
     def accept(self, request: Any) -> AcceptedAdd:
         """Commit messages and ownership before handing any closed Episode to the scheduler."""
-        # The project comes from the request (the gateway sets it); Spaces outside it are not found.
-        project_id = getattr(request, "project_id", None)
-        if not isinstance(project_id, str) or not project_id.strip():
-            raise AddRequestError("SCOPE_REQUIRED", "project_id is required for project memory")
-        project_id = project_id.strip()
+        # project_id is optional: the project is the one the Spaces belong to. When the request
+        # names a project, Spaces outside it are not found.
+        requested_project = getattr(request, "project_id", None)
+        if not isinstance(requested_project, str) or not requested_project.strip():
+            requested_project = None
+        else:
+            requested_project = requested_project.strip()
         user_id = request.user_id
         task_id = getattr(request, "task_id", None) or str(uuid4())
         try:
@@ -114,9 +116,10 @@ class AddAcceptance:
             agent_id = member_map.get(agent_id, agent_id)
         conversation_key = conversation_id or f"task:{task_id}"
         with self.store.transaction() as cursor:
-            self._lock(cursor, project_id, "task", task_id)
-            self._lock(cursor, project_id, "conversation", conversation_key)
-            scopes = self._scopes(cursor, project_id, spaces, domains)
+            self._lock(cursor, "task", task_id)
+            self._lock(cursor, "conversation", conversation_key)
+            scopes = self._scopes(cursor, spaces, domains)
+            project_id = self._project(scopes, requested_project)
             now = self._now(cursor)
             ctx = _Request(
                 project_id, task_id, user_id, agent_id, conversation_id, conversation_key, now
@@ -140,8 +143,8 @@ class AddAcceptance:
                     closed.extend(self._append_space(cursor, ctx, space, new_turns))
             return AcceptedAdd(task_id, closed)
 
-    def _lock(self, cursor: Any, project_id: str, key_type: str, key: str) -> None:
-        lock_id = json.dumps([self.store.schema_name, project_id, key_type, key])
+    def _lock(self, cursor: Any, key_type: str, key: str) -> None:
+        lock_id = json.dumps([self.store.schema_name, key_type, key])
         cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_id,))
 
     def _now(self, cursor: Any) -> datetime:
@@ -150,16 +153,14 @@ class AddAcceptance:
         cursor.execute("SELECT clock_timestamp() AS current_time")
         return cursor.fetchone()["current_time"]
 
-    def _scopes(
-        self, cursor: Any, project_id: str, spaces: list[str], domains: list[str]
-    ) -> list[dict[str, Any]]:
+    def _scopes(self, cursor: Any, spaces: list[str], domains: list[str]) -> list[dict[str, Any]]:
         cursor.execute(
-            """SELECT s.id, COALESCE(st.resource_bindings, '[]'::jsonb) AS resource_bindings,
+            """SELECT s.id, s.project_id, COALESCE(st.resource_bindings, '[]'::jsonb) AS resource_bindings,
                       ARRAY(SELECT domain FROM domains d WHERE d.space_id = s.id ORDER BY domain) AS domains
                FROM spaces s LEFT JOIN add_space_state st ON st.space_id = s.id
-               WHERE s.project_id = %s AND s.id = ANY(%s::text[])
+               WHERE s.id = ANY(%s::text[])
                ORDER BY s.id FOR SHARE OF s""",
-            (project_id, spaces),
+            (spaces,),
         )
         scopes = cursor.fetchall()
         if len(scopes) != len(spaces):
@@ -175,6 +176,16 @@ class AddAcceptance:
                 )
             scope["domains"] = sorted(domains) if domains else scope["domains"]
         return scopes
+
+    @staticmethod
+    def _project(scopes: list[dict[str, Any]], requested: str | None) -> str:
+        """The project the Spaces belong to; a request naming another project sees no Space."""
+        projects = {scope["project_id"] for scope in scopes}
+        if requested is not None and projects != {requested}:
+            raise AddRequestError("SPACE_NOT_FOUND", "Project memory Space was not found", 404)
+        if len(projects) != 1:
+            raise AddRequestError("INVALID_PARAMS", "space_ids must belong to one project")
+        return projects.pop()
 
     def _owners(
         self, cursor: Any, ctx: _Request, spaces: list[str], turns: list[list[dict[str, Any]]]

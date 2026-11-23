@@ -199,8 +199,8 @@ def test_keeps_system_source_without_turn_or_anchor_authority(add_store):
     assert error.value.reason == "INVALID_PARAMS"
 
 
-def test_request_project_scopes_the_write(add_store):
-    """The project comes from the request: it is required, and Spaces outside it are not found."""
+def test_project_comes_from_the_spaces(add_store):
+    """project_id is optional: the write lands in the Spaces' project; a named project must match."""
     _spaces(add_store, "space-a")
     with add_store.transaction() as cursor:
         cursor.execute(
@@ -211,19 +211,21 @@ def test_request_project_scopes_the_write(add_store):
         )
     accept = AddAcceptance(add_store)
 
-    missing = _request("task-a", "message-a")
-    missing.project_id = None
-    with pytest.raises(AddRequestError) as error:
-        accept.accept(missing)
-    assert error.value.reason == "SCOPE_REQUIRED"
-
     with pytest.raises(AddRequestError) as error:
         accept.accept(_request("task-a", "message-a", spaces=["space-a", "space-x"]))
     assert error.value.reason == "SPACE_NOT_FOUND"
+    with pytest.raises(AddRequestError) as error:
+        accept.accept(_request("task-a", "message-a", spaces=["space-x"]))
+    assert error.value.reason == "SPACE_NOT_FOUND"
+    mixed = _request("task-a", "message-a", spaces=["space-a", "space-x"])
+    mixed.project_id = None
+    with pytest.raises(AddRequestError) as error:
+        accept.accept(mixed)
+    assert error.value.reason == "INVALID_PARAMS"
 
-    other = _request("task-x", "message-a", spaces=["space-x"])
-    other.project_id = "project-x"
-    accept.accept(other)
+    unnamed = _request("task-x", "message-a", spaces=["space-x"])
+    unnamed.project_id = None
+    accept.accept(unnamed)
     accept.accept(_request("task-a", "message-a"))
     with add_store.transaction(readonly=True) as cursor:
         cursor.execute("SELECT project_id, space_id FROM episodes ORDER BY space_id")
