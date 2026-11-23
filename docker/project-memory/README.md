@@ -28,6 +28,27 @@ python3 docker/project-memory/smoke.py \
 
 若要在少量样例中验证 Topic 正式提交，可在专用测试环境的 `.env` 设置 `PROJECT_MEMORY_FORMATION_COUNT=1` 并重新启动，随后冒烟时加 `--require-topic`。默认 Formation 在条件满足前允许返回暂存的成功回执。
 
+## Add 耗时与 token 计量
+
+`/product/add` 异步返回只代表已受理。Episode 仍在积攒 Turn 时，任务状态也会是 `completed`，所以 Add 是否处理完以 `GET /product/scheduler/status` 里的 `memory_views.project.metrics` 为准。
+
+| 字段 | 含义 |
+| --- | --- |
+| `accepted_at` / `closed_at` / `completed_at` | 受理时间，含本次 Turn 的所有 Episode 都关段的时间，以及这些 Episode 都处理完的时间。任一 Episode 未关段或未完成时，后两项为 `null`。 |
+| `close_wait_ms` / `processing_ms` / `latency_ms` | 受理到关段、关段到完成、受理到完成。积攒等待由 Episode 策略决定，与后台处理分开统计。 |
+| `episodes[]` | 每个 Episode 的 `buffer_ms`（开段到关段）、`queue_ms`（投递到领取）、`run_ms`（阶段执行）、`retry_wait_ms`（重试退避与等锁）和 `other_ms`（关段后的其余间隔）。`stages[]` 逐次列出领取的阶段、次数、下一阶段和错误。 |
+| `usage` | 本次 Add 分摊到的模型用量，按 `kind`（`chat` / `embedding`）和模型列出调用数、失败数、无 usage 的调用数，以及 prompt、completion、缓存和推理 token。 |
+
+计量规则：
+
+- 每个阶段运行时，OpenAI 兼容聊天适配器和 `universal_api` embedding 适配器记录供应商返回的 `usage`。阶段结束后，运行时把运行时长和用量写入 `add_episode_events` 的 `stage_done` 事件。领取、投递、关段和完成事件与对应的状态变化在同一事务中写入。
+- 一个 Episode 可能合并多次 Add 的 Turn，用量按各 Add 的 Turn 输入字符数分摊（`attribution: turn_characters`）。各计数按最大余数取整，各 Add 份额之和等于 Episode 总量。一次 Add 写入多个 Space 时，各 Space 的 Episode 用量相加。
+- `usage.complete` 为 `false` 表示账单还不完整，包括这几种情况：处理未完成；有调用未返回 usage（例如不上报的本地模型）；有调用失败（供应商可能已计费但没有返回数量）；某个阶段领取后 worker 中断，没有写入结束事件。
+- Formation 会顺带重判其他暂存 Episode，这部分用量计入触发它的 Episode。embedding 缓存命中不调用供应商，不计用量。除 `universal_api` 外的 embedding 后端不上报用量。
+- 受理和提交事件使用数据库时钟，投递和阶段事件使用 worker 时钟。各分量最小取 0，避免两边时钟偏差产生负值。
+
+冒烟脚本以 `metrics.completed_at` 判断完成，每次 Add 完成后打印一行 `METRIC`。加 `--metrics-out metrics.jsonl` 会把完整指标逐行写出。已有部署首次启动新版本时，会创建 Add 自有表 `add_episode_events`。
+
 ## 配置与数据
 
 | 用途 | 关键配置与默认值 |

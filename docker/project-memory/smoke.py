@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -57,13 +58,50 @@ def project_result(status: dict) -> dict:
     return status["memory_views"]["project"]
 
 
-def wait_closed(client: httpx.Client, task_id: str, timeout: float) -> dict:
-    """Wait for a closed Episode even when an open one reports completed."""
+def report_metrics(task_id: str, step: str, state: dict, out: list[dict] | None) -> None:
+    """Print the server's timing and attributed usage for one finished Add."""
+    metrics = project_result(state)["metrics"]
+    episodes = metrics["episodes"]
+    usage = metrics["usage"]
+    totals = {
+        name: sum(episode[name] or 0 for episode in episodes)
+        for name in ("queue_ms", "run_ms", "retry_wait_ms")
+    }
+    print(
+        f"METRIC {step} task={task_id} latency_ms={metrics['latency_ms']} "
+        f"close_wait_ms={metrics['close_wait_ms']} processing_ms={metrics['processing_ms']} "
+        + " ".join(f"{name}={value}" for name, value in totals.items())
+        + f" episodes={len(episodes)} total_tokens={usage['total_tokens']} "
+        f"usage_complete={usage['complete']}"
+    )
+    if out is not None:
+        out.append({"step": step, "task_id": task_id, **metrics})
+
+
+def wait_closed(
+    client: httpx.Client,
+    task_id: str,
+    timeout: float,
+    *,
+    step: str = "",
+    metrics: list[dict] | None = None,
+) -> dict:
+    """Wait until the server reports the Add complete: every Episode holding it has finished.
+
+    Status alone reads completed while an Episode is still collecting Turns, so completion is
+    taken from `metrics.completed_at`, and an open Episode must also report no open messages.
+    """
     deadline = time.monotonic() + timeout
     while True:
         state = task_status(client, task_id)
         require(state["status"] != "failed", f"Project Add failed: {project_result(state)}")
-        if state["status"] == "completed" and project_result(state)["open_episode_messages"] == 0:
+        result = project_result(state)
+        if (
+            state["status"] == "completed"
+            and result["open_episode_messages"] == 0
+            and result["metrics"]["completed_at"]
+        ):
+            report_metrics(task_id, step or task_id, state, metrics)
             return state
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -114,6 +152,8 @@ def assert_open(client: httpx.Client, task_id: str) -> None:
     require(state["status"] == "completed", f"Open Episode should remain buffered: {state}")
     count = project_result(state)["open_episode_messages"]
     require(count == 2, f"One Turn in two Spaces should report two open messages, got {count}")
+    metrics = project_result(state)["metrics"]
+    require(metrics["completed_at"] is None, f"An open Episode reported completion: {metrics}")
 
 
 def assert_source(
@@ -135,6 +175,7 @@ def run_smoke(
     wait_seconds: float,
     keep: bool,
     require_topic: bool,
+    metrics: list[dict] | None = None,
 ) -> None:
     for endpoint in (client, peer):
         endpoint.get("/health").raise_for_status()
@@ -161,7 +202,9 @@ def run_smoke(
             one_shot = payload(run_id, f"standalone-{index}", texts, spaces, now, sync=True)
             receipt = add(client, one_shot)
             require(receipt["task_id"] == one_shot["task_id"], "Standalone Task ID changed")
-            result = wait_closed(peer, receipt["task_id"], wait_seconds)
+            result = wait_closed(
+                peer, receipt["task_id"], wait_seconds, step=f"standalone-{index}", metrics=metrics
+            )
             topic_ids.update(project_result(result)["memory_ids"])
         print("PASS standalone Add closed in both Spaces")
 
@@ -191,9 +234,9 @@ def run_smoke(
             conversation_id=conversation,
         )
         ending = add(peer, end)["task_id"]
-        completed = wait_closed(client, task, wait_seconds)
+        completed = wait_closed(client, task, wait_seconds, step="open", metrics=metrics)
         topic_ids.update(project_result(completed)["memory_ids"])
-        wait_closed(client, ending, wait_seconds)
+        wait_closed(client, ending, wait_seconds, step="end", metrics=metrics)
         continued = payload(
             run_id,
             "continued",
@@ -245,7 +288,11 @@ def main() -> int:
     parser.add_argument(
         "--require-topic", action="store_true", help="also require both Topics to commit"
     )
+    parser.add_argument(
+        "--metrics-out", help="write each finished Add's server metrics as JSON lines to this file"
+    )
     args = parser.parse_args()
+    metrics: list[dict] | None = [] if args.metrics_out else None
     headers = (
         {"Authorization": f"Bearer {token}"} if (token := os.getenv("MEMOS_SMOKE_TOKEN")) else {}
     )
@@ -263,10 +310,16 @@ def main() -> int:
                 wait_seconds=args.wait,
                 keep=args.keep,
                 require_topic=args.require_topic,
+                metrics=metrics,
             )
     except (httpx.HTTPError, KeyError, SmokeError, ValueError) as exc:
         print(f"FAIL project-memory smoke: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if metrics:
+            with open(args.metrics_out, "w", encoding="utf-8") as handle:
+                for row in metrics:
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
     return 0
 
 
